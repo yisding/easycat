@@ -48,6 +48,16 @@ agent.delta(text), agent.final(text) (optional, depending on workflow)
 
 tts.audio(chunk), tts.markers(...)
 
+bot.started_speaking, bot.stopped_speaking
+
+turn.started, turn.ended
+
+interruption(details) (user barged in while bot was speaking)
+
+tool.call_started(tool_name, call_id), tool.call_delta(call_id, delta), tool.call_result(call_id, result)
+
+reconnect.attempt(provider, attempt), reconnect.success(provider), reconnect.failure(provider, error)
+
 dtmf(digit) + dtmf.aggregated(sequence)
 
 voicemail.detected(type=human|machine|unknown)
@@ -277,7 +287,7 @@ Accept and convert:
 
 Features:
 
-resampling (8k↔16k at minimum)
+resampling (8k/16k/24k/48k — arbitrary rate support to accommodate noise reduction and provider requirements)
 
 mono downmix
 

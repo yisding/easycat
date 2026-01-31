@@ -23,6 +23,7 @@ Implement the audio processing stages that sit between raw audio input and STT: 
 - Integrate RNNoise for noise suppression
 - Local processing, no external dependencies
 - Auto-fallback: if Krisp is not configured/licensed, use RNNoise transparently
+- **Sample rate:** RNNoise expects 48 kHz float32 input. WS1's resampler must support 16k↔48k conversion. Confirm the exact framing and input requirements before implementing.
 
 #### Configuration
 
@@ -52,17 +53,19 @@ Implement the audio processing stages that sit between raw audio input and STT: 
 
 #### VAD-Based Turn Management
 
-- Turn start: triggered by `vad.start_speaking`
-- End-of-turn: silence-based timeout (configurable)
+- Turn start: triggered by `vad.start_speaking`; emit `turn.started`
+- End-of-turn: silence-based timeout (configurable); emit `turn.ended` (Session then calls `end_stream()` on STT)
 - Optional push-to-talk / manual end-of-turn mode for testing
+- **Pre-roll audio:** TurnManager must consume raw `audio_in` frames (not just VAD events) so it can buffer and prepend N ms of pre-roll audio into the STT capture buffer when speech starts
+- **Responsibility boundary:** TurnManager emits `turn.ended`, not `stt.final`. The Session handles calling `end_stream()` on the STT provider, which then produces its final transcript via the `events()` iterator.
 
 #### Barge-In / Interruption
 
 - If bot is speaking and VAD detects user speech:
   - Immediately stop local playback / outbound audio stream
-  - Cancel current TTS request
+  - Cancel current TTS request and ongoing agent streaming (via WS1 cancel token)
   - Begin next user turn capture
-- Emit appropriate events for the session to coordinate
+- Emit `interruption` event for observability + `turn.started` for the new turn
 
 ## Testing Strategy
 
@@ -79,5 +82,6 @@ Implement the audio processing stages that sit between raw audio input and STT: 
 - [ ] Silero VAD fallback works when Krisp is absent
 - [ ] Turn-taking correctly identifies turn boundaries from VAD events
 - [ ] Barge-in stops playback and cancels TTS when user interrupts
-- [ ] Pre-roll buffering captures audio before VAD triggers
+- [ ] Pre-roll buffering captures audio before VAD triggers (TurnManager sees raw audio frames)
+- [ ] TurnManager emits `turn.ended` (not `stt.final`) — Session handles STT finalization
 - [ ] Push-to-talk mode works for testing scenarios

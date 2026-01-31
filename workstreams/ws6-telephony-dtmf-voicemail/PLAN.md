@@ -6,10 +6,9 @@
 
 ## Phase 1: DTMF Input
 
-### Task 6.1: DTMF event parser for Twilio Media Streams
-- Parse `dtmf` messages from Twilio's bidirectional Media Streams WebSocket
-- Extract digit from the message payload
-- Emit `dtmf(digit)` event into the session event bus
+### Task 6.1: DTMF event consumer for Twilio Media Streams
+- **Handoff from WS5:** `TwilioTransport` (WS5) parses Twilio `dtmf` WebSocket messages and emits `dtmf(digit)` events into the Session event bus. WS6 subscribes to these events for aggregation and processing.
+- If WS5 is not yet available, implement parsing against mocked Twilio WebSocket messages for standalone development
 - Unit tests with sample Twilio DTMF WebSocket messages
 
 ### Task 6.2: TwiML Gather fallback for DTMF input
@@ -45,10 +44,13 @@
 ## Phase 4: Voicemail / Answering Machine Detection
 
 ### Task 6.5: Twilio AMD result consumer
-- Consume Twilio Answering Machine Detection (AMD) callback results
+- **AMD delivery mechanism:** Twilio AMD results arrive via HTTP status callbacks, not the Media Streams WebSocket. Implement a framework-agnostic HTTP callback handler function:
+  - Accepts the Twilio webhook payload (POST form data)
+  - Parses the `AnsweredBy` field
+  - Emits `voicemail.detected` into the Session event bus
+- This handler can be mounted alongside WS5's Twilio WebSocket server, or in any user-provided web framework (FastAPI, Flask, etc.)
 - Map Twilio's result (`human`, `machine_start`, `machine_end_beep`, `machine_end_silence`, `machine_end_other`, `fax`) to `voicemail.detected(human|machine|unknown)`
-- Emit event into session event bus
-- Unit tests with each AMD result type
+- Unit tests with each AMD result type (mock HTTP payloads)
 
 ### Task 6.6: Heuristic voicemail detection (audio-based)
 - Implement `VoicemailDetector` that analyzes audio for voicemail patterns:
@@ -60,12 +62,12 @@
 - Unit tests with recorded voicemail greetings and human pickups
 
 ### Task 6.7: Voicemail policy handler
-- On `voicemail.detected`, apply a configurable policy:
-  - **hang_up** — end the call
-  - **leave_message** — wait for beep, then trigger agent to speak a message
-  - **transfer** — invoke an agent tool to transfer the call
+- On `voicemail.detected`, apply a configurable policy with concrete mechanisms:
+  - **hang_up** — end the call via TwiML `<Hangup>` or Twilio REST API (`calls/{sid}/update` with `status=completed`)
+  - **leave_message** — wait for beep detection (from Task 6.6) to confirm the voicemail recording has started, then trigger agent/TTS to speak a pre-configured message, then hang up. Requires coordination with TTS playback and beep detection finalization.
+  - **transfer** — invoke an agent tool to transfer the call (e.g., generate TwiML `<Dial>` or use Twilio REST API)
 - Policy is set in session config
-- Unit tests for each policy action
+- Unit tests for each policy action (mock Twilio API calls, verify TwiML generation, verify TTS trigger)
 
 ## Phase 5: Integration
 

@@ -13,10 +13,10 @@ Build reliability primitives (reconnection, timeouts, backpressure) and observab
 
 ### WebSocket Reconnect Strategy
 
-- Reconnect logic for streaming STT/TTS provider WebSockets
+- `ReconnectingWebSocket` wrapper that WS2 (STT), WS3 (TTS), and WS5 (Twilio transport) **must use** — individual workstreams should not implement bespoke reconnect logic
 - Exponential backoff with jitter
 - Configurable max retries
-- Emit `reconnect` events for observability
+- Emit `reconnect.attempt`, `reconnect.success`, `reconnect.failure` events (defined in WS1 event model) for observability
 
 ### Timeouts
 

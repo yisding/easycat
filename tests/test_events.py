@@ -8,13 +8,28 @@ from easycat.events import (
     AgentDelta,
     AgentFinal,
     AudioIn,
+    BotStartedSpeaking,
+    BotStoppedSpeaking,
     DTMFAggregated,
     Error,
     EventBus,
+    Interruption,
+    ReconnectAttempt,
+    ReconnectFailure,
+    ReconnectSuccess,
+    STTEvent,
+    STTEventType,
     STTFinal,
     STTPartial,
+    ToolCallDelta,
+    ToolCallResult,
+    ToolCallStarted,
     TTSAudio,
+    TTSEvent,
+    TTSEventType,
     TTSMarkers,
+    TurnEnded,
+    TurnStarted,
     VADStartSpeaking,
     VADStopSpeaking,
     VoicemailDetected,
@@ -59,6 +74,42 @@ def test_tts_events():
     assert len(markers.markers) == 1
 
 
+def test_lifecycle_events():
+    bot_start = BotStartedSpeaking()
+    bot_stop = BotStoppedSpeaking()
+    turn_start = TurnStarted()
+    turn_end = TurnEnded()
+    assert bot_start.timestamp > 0
+    assert bot_stop.timestamp > 0
+    assert turn_start.timestamp > 0
+    assert turn_end.timestamp > 0
+
+
+def test_interruption_event():
+    event = Interruption()
+    assert event.timestamp > 0
+
+
+def test_tool_events():
+    started = ToolCallStarted(tool_name="search", call_id="abc123")
+    delta = ToolCallDelta(call_id="abc123", delta="partial")
+    result = ToolCallResult(call_id="abc123", result="done")
+    assert started.tool_name == "search"
+    assert started.call_id == "abc123"
+    assert delta.delta == "partial"
+    assert result.result == "done"
+
+
+def test_reconnect_events():
+    attempt = ReconnectAttempt(provider="deepgram", attempt=1)
+    success = ReconnectSuccess(provider="deepgram")
+    failure = ReconnectFailure(provider="deepgram", error="timeout")
+    assert attempt.provider == "deepgram"
+    assert attempt.attempt == 1
+    assert success.provider == "deepgram"
+    assert failure.error == "timeout"
+
+
 def test_dtmf_events():
     dtmf = DTMF(digit="5")
     agg = DTMFAggregated(sequence="1234#")
@@ -76,6 +127,37 @@ def test_error_event():
     event = Error(exception=exc, context="stt")
     assert event.exception is exc
     assert event.context == "stt"
+
+
+# ── Provider-scoped event tests ────────────────────────────────────
+
+
+def test_stt_event_partial():
+    event = STTEvent(type=STTEventType.PARTIAL, text="hel")
+    assert event.type == STTEventType.PARTIAL
+    assert event.text == "hel"
+
+
+def test_stt_event_final():
+    event = STTEvent(type=STTEventType.FINAL, text="hello")
+    assert event.type == STTEventType.FINAL
+    assert event.text == "hello"
+
+
+def test_tts_event_audio():
+    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+    event = TTSEvent(type=TTSEventType.AUDIO, audio=chunk)
+    assert event.type == TTSEventType.AUDIO
+    assert event.audio is chunk
+    assert event.markers is None
+
+
+def test_tts_event_markers():
+    markers = [{"word": "hi", "offset": 0.0}]
+    event = TTSEvent(type=TTSEventType.MARKERS, markers=markers)
+    assert event.type == TTSEventType.MARKERS
+    assert event.markers == markers
+    assert event.audio is None
 
 
 # ── EventBus tests ─────────────────────────────────────────────────

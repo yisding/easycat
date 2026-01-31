@@ -17,7 +17,9 @@ All providers must support:
 - Input: text chunks or full text
 - Output: streaming audio frames/chunks + optional alignment/markers
 - `stop()` / `cancel()` mid-utterance (for barge-in support)
-- Output format: PCM16 preferred internally; convert from provider format as needed
+- Output format: PCM16 preferred internally. **Request PCM/linear16 directly from each provider** when supported to avoid introducing ffmpeg/system dependencies for MP3/Opus decoding. Only decode compressed formats when no PCM option exists.
+
+**Reconnect:** Providers with WebSocket connections (Deepgram, ElevenLabs) must use WS8's `ReconnectingWebSocket` wrapper rather than implementing bespoke reconnect logic.
 
 ### Provider: OpenAI TTS
 

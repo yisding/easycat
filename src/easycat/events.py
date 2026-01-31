@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import enum
 import logging
 import time
 from collections import defaultdict
@@ -18,9 +19,10 @@ logger = logging.getLogger(__name__)
 EventHandler = Callable[..., None] | Callable[..., Coroutine[Any, Any, None]]
 
 
-# ── Event dataclasses ──────────────────────────────────────────────
+# ── EasyCat-level event dataclasses ────────────────────────────────
 
 
+# Audio
 @dataclass(frozen=True)
 class AudioIn:
     """Raw audio chunk received from transport."""
@@ -29,6 +31,7 @@ class AudioIn:
     timestamp: float = field(default_factory=time.monotonic)
 
 
+# VAD
 @dataclass(frozen=True)
 class VADStartSpeaking:
     """VAD detected start of user speech."""
@@ -43,6 +46,7 @@ class VADStopSpeaking:
     timestamp: float = field(default_factory=time.monotonic)
 
 
+# STT
 @dataclass(frozen=True)
 class STTPartial:
     """Partial transcript from STT provider."""
@@ -59,6 +63,7 @@ class STTFinal:
     timestamp: float = field(default_factory=time.monotonic)
 
 
+# Agent
 @dataclass(frozen=True)
 class AgentDelta:
     """Streaming text delta from the agent."""
@@ -75,6 +80,7 @@ class AgentFinal:
     timestamp: float = field(default_factory=time.monotonic)
 
 
+# TTS
 @dataclass(frozen=True)
 class TTSAudio:
     """Audio chunk produced by TTS provider."""
@@ -91,6 +97,99 @@ class TTSMarkers:
     timestamp: float = field(default_factory=time.monotonic)
 
 
+# Lifecycle
+@dataclass(frozen=True)
+class BotStartedSpeaking:
+    """Bot began playing TTS audio."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class BotStoppedSpeaking:
+    """Bot finished playing TTS audio."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class TurnStarted:
+    """A new user turn has begun (VAD triggered)."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class TurnEnded:
+    """A turn has completed (agent response fully delivered)."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Interruption
+@dataclass(frozen=True)
+class Interruption:
+    """User barged in while bot was speaking."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Tools
+@dataclass(frozen=True)
+class ToolCallStarted:
+    """An agent tool call has started."""
+
+    tool_name: str
+    call_id: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class ToolCallDelta:
+    """Streaming delta from an in-progress tool call."""
+
+    call_id: str
+    delta: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class ToolCallResult:
+    """A tool call has completed with a result."""
+
+    call_id: str
+    result: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Reconnect
+@dataclass(frozen=True)
+class ReconnectAttempt:
+    """A provider reconnection attempt is being made."""
+
+    provider: str
+    attempt: int
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class ReconnectSuccess:
+    """A provider reconnection succeeded."""
+
+    provider: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class ReconnectFailure:
+    """A provider reconnection failed."""
+
+    provider: str
+    error: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Telephony
 @dataclass(frozen=True)
 class DTMF:
     """Single DTMF digit detected."""
@@ -115,6 +214,7 @@ class VoicemailDetected:
     timestamp: float = field(default_factory=time.monotonic)
 
 
+# Error
 @dataclass(frozen=True)
 class Error:
     """Error event wrapping an exception."""
@@ -124,7 +224,7 @@ class Error:
     timestamp: float = field(default_factory=time.monotonic)
 
 
-# Union of all event types for type-checking convenience
+# Union of all EasyCat-level event types
 Event = (
     AudioIn
     | VADStartSpeaking
@@ -135,11 +235,55 @@ Event = (
     | AgentFinal
     | TTSAudio
     | TTSMarkers
+    | BotStartedSpeaking
+    | BotStoppedSpeaking
+    | TurnStarted
+    | TurnEnded
+    | Interruption
+    | ToolCallStarted
+    | ToolCallDelta
+    | ToolCallResult
+    | ReconnectAttempt
+    | ReconnectSuccess
+    | ReconnectFailure
     | DTMF
     | DTMFAggregated
     | VoicemailDetected
     | Error
 )
+
+
+# ── Provider-scoped event types ────────────────────────────────────
+# Internal to provider implementations. Session maps these to EasyCat events.
+
+
+class STTEventType(enum.Enum):
+    PARTIAL = "partial"
+    FINAL = "final"
+
+
+@dataclass(frozen=True)
+class STTEvent:
+    """Provider-scoped STT event produced by STT provider async iterators."""
+
+    type: STTEventType
+    text: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+class TTSEventType(enum.Enum):
+    AUDIO = "audio"
+    MARKERS = "markers"
+
+
+@dataclass(frozen=True)
+class TTSEvent:
+    """Provider-scoped TTS event produced by TTS provider async iterators."""
+
+    type: TTSEventType
+    audio: AudioChunk | None = None
+    markers: list[dict[str, Any]] | None = None
+    timestamp: float = field(default_factory=time.monotonic)
 
 
 # ── EventBus ───────────────────────────────────────────────────────

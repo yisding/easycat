@@ -28,6 +28,8 @@ class AudioFormat:
 # Standard format constants
 PCM16_MONO_8K = AudioFormat(sample_rate=8000, channels=1, sample_width=2)
 PCM16_MONO_16K = AudioFormat(sample_rate=16000, channels=1, sample_width=2)
+PCM16_MONO_24K = AudioFormat(sample_rate=24000, channels=1, sample_width=2)
+PCM16_MONO_48K = AudioFormat(sample_rate=48000, channels=1, sample_width=2)
 
 
 @dataclass

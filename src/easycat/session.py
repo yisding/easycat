@@ -12,14 +12,24 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
     AgentFinal,
     AudioIn,
+    BotStartedSpeaking,
+    BotStoppedSpeaking,
     Error,
     EventBus,
+    Interruption,
+    STTEventType,
     STTFinal,
+    STTPartial,
     TTSAudio,
+    TTSEventType,
+    TTSMarkers,
+    TurnEnded,
+    TurnStarted,
     VADStartSpeaking,
     VADStopSpeaking,
 )
@@ -109,6 +119,9 @@ class Session:
         self._stt_task: asyncio.Task[None] | None = None
         self._current_tts_task: asyncio.Task[None] | None = None
 
+        # Cooperative cancellation: one token per turn
+        self._cancel_token: CancelToken | None = None
+
     # ── Properties ─────────────────────────────────────────────
 
     @property
@@ -126,6 +139,10 @@ class Session:
     @property
     def is_bot_speaking(self) -> bool:
         return self._turn_state == TurnState.BOT_SPEAKING
+
+    @property
+    def cancel_token(self) -> CancelToken | None:
+        return self._cancel_token
 
     # ── Lifecycle ──────────────────────────────────────────────
 
@@ -145,6 +162,9 @@ class Session:
             return
         self._is_running = False
 
+        if self._cancel_token:
+            self._cancel_token.cancel()
+
         if self._pipeline_task and not self._pipeline_task.done():
             self._pipeline_task.cancel()
             try:
@@ -160,6 +180,9 @@ class Session:
     async def shutdown(self) -> None:
         """Force-close everything and release resources."""
         self._is_running = False
+
+        if self._cancel_token:
+            self._cancel_token.cancel()
 
         tasks: list[asyncio.Task[Any]] = []
         if self._pipeline_task and not self._pipeline_task.done():
@@ -183,19 +206,35 @@ class Session:
 
     # ── Cancellation ───────────────────────────────────────────
 
-    async def cancel_turn(self) -> None:
-        """Abort current STT stream, discard partial results, reset turn state."""
+    async def cancel_turn(self, *, barge_in: bool = False) -> None:
+        """Trigger cancel token, abort STT/agent/TTS, reset turn state.
+
+        If barge_in is True, emits an Interruption event.
+        """
+        if self._cancel_token:
+            self._cancel_token.cancel()
+
+        if barge_in:
+            await self.event_bus.emit(Interruption())
+
         await self._cancel_stt()
+        await self._cancel_tts()
         self._turn_state = TurnState.IDLE
 
     async def cancel_tts_playback(self) -> None:
         """Stop TTS provider and flush outbound audio."""
+        if self._cancel_token:
+            self._cancel_token.cancel()
+
         await self._cancel_tts()
         if self._turn_state == TurnState.BOT_SPEAKING:
             self._turn_state = TurnState.IDLE
 
     async def reset_state(self) -> None:
         """Cancel everything and return to idle/listening state."""
+        if self._cancel_token:
+            self._cancel_token.cancel()
+
         await self._cancel_stt()
         await self._cancel_tts()
         self._turn_state = TurnState.IDLE
@@ -224,8 +263,14 @@ class Session:
                         await self.event_bus.emit(vad_event)
 
                         if isinstance(vad_event, VADStartSpeaking):
+                            # If bot is speaking, this is a barge-in
+                            if self._turn_state == TurnState.BOT_SPEAKING:
+                                await self.cancel_turn(barge_in=True)
+
+                            self._cancel_token = CancelToken()
                             self._turn_state = TurnState.LISTENING
-                            self._stt_stream_iter = self.stt.start_stream()
+                            await self.stt.start_stream()
+                            await self.event_bus.emit(TurnStarted())
                         elif isinstance(vad_event, VADStopSpeaking):
                             await self._handle_end_of_speech()
 
@@ -244,37 +289,54 @@ class Session:
         self._turn_state = TurnState.PROCESSING
         await self.stt.end_stream()
 
-        # Collect STT events (looking for final transcript)
-        transcript = ""
-        if hasattr(self, "_stt_stream_iter") and self._stt_stream_iter is not None:
-            async for stt_event in self._stt_stream_iter:
-                await self.event_bus.emit(stt_event)
-                if isinstance(stt_event, STTFinal):
-                    transcript = stt_event.text
-                    break
+        token = self._cancel_token
 
-        if not transcript:
+        # Consume provider-scoped STT events and map to EasyCat events
+        transcript = ""
+        async for stt_event in self.stt.events():
+            if token and token.is_cancelled:
+                break
+            if stt_event.type == STTEventType.PARTIAL:
+                await self.event_bus.emit(STTPartial(text=stt_event.text))
+            elif stt_event.type == STTEventType.FINAL:
+                await self.event_bus.emit(STTFinal(text=stt_event.text))
+                transcript = stt_event.text
+                break
+
+        if not transcript or (token and token.is_cancelled):
             self._turn_state = TurnState.IDLE
             return
 
         # Run agent
         agent_response = await self.agent.run(transcript)
+        if token and token.is_cancelled:
+            self._turn_state = TurnState.IDLE
+            return
+
         await self.event_bus.emit(AgentDelta(text=agent_response))
         await self.event_bus.emit(AgentFinal(text=agent_response))
 
-        # Synthesize TTS and send audio out
+        # Synthesize TTS: consume provider-scoped TTSEvent and map to EasyCat events
         self._turn_state = TurnState.BOT_SPEAKING
+        await self.event_bus.emit(BotStartedSpeaking())
         try:
-            async for audio_chunk in self.tts.synthesize(agent_response):
+            async for tts_event in self.tts.synthesize(agent_response):
+                if token and token.is_cancelled:
+                    break
                 if self._turn_state != TurnState.BOT_SPEAKING:
                     break
-                await self.event_bus.emit(TTSAudio(chunk=audio_chunk))
-                await self.transport.send_audio(audio_chunk)
+                if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
+                    await self.event_bus.emit(TTSAudio(chunk=tts_event.audio))
+                    await self.transport.send_audio(tts_event.audio)
+                elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
+                    await self.event_bus.emit(TTSMarkers(markers=tts_event.markers))
         except asyncio.CancelledError:
             pass
 
         if self._turn_state == TurnState.BOT_SPEAKING:
+            await self.event_bus.emit(BotStoppedSpeaking())
             self._turn_state = TurnState.IDLE
+            await self.event_bus.emit(TurnEnded())
 
     # ── Internal helpers ───────────────────────────────────────
 
