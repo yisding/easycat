@@ -69,6 +69,23 @@ class RNNoiseReducer:
                     "Install librnnoise-dev or place librnnoise.so on the library path."
                 )
             self._rnnoise = ctypes.CDLL(lib_path)
+
+            # Set proper restype/argtypes so ctypes handles 64-bit
+            # pointers correctly instead of truncating to c_int.
+            # DenoiseState* rnnoise_create(RNNModel *model)
+            self._rnnoise.rnnoise_create.restype = ctypes.c_void_p
+            self._rnnoise.rnnoise_create.argtypes = [ctypes.c_void_p]
+            # float rnnoise_process_frame(DenoiseState *st, float *out, const float *in)
+            self._rnnoise.rnnoise_process_frame.restype = ctypes.c_float
+            self._rnnoise.rnnoise_process_frame.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.c_float),
+            ]
+            # void rnnoise_destroy(DenoiseState *st)
+            self._rnnoise.rnnoise_destroy.restype = None
+            self._rnnoise.rnnoise_destroy.argtypes = [ctypes.c_void_p]
+
             self._state = self._rnnoise.rnnoise_create(None)
             if not self._state:
                 raise RuntimeError("Failed to create RNNoise state.")
