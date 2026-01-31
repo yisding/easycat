@@ -176,10 +176,19 @@ class LocalTransport:
             yield chunk
 
     async def send_audio(self, chunk: AudioChunk) -> None:
-        """Queue an audio chunk for speaker playback."""
+        """Queue an audio chunk for speaker playback.
+
+        Chunks larger than one callback frame are split so each enqueued
+        piece fits exactly into the output buffer without truncation.
+        """
         if not self._connected:
             return
-        self._out_queue.put_nowait(chunk.data)
+        frame_bytes = self._frame_samples * self._audio_format.frame_size
+        data = chunk.data
+        offset = 0
+        while offset < len(data):
+            self._out_queue.put_nowait(data[offset : offset + frame_bytes])
+            offset += frame_bytes
 
     # ── Helpers ────────────────────────────────────────────────────
 
