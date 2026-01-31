@@ -1,0 +1,327 @@
+"""Event types and EventBus dispatch system for EasyCat."""
+
+from __future__ import annotations
+
+import asyncio
+import enum
+import logging
+import time
+from collections import defaultdict
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, field
+from typing import Any
+
+from easycat.audio_format import AudioChunk
+
+logger = logging.getLogger(__name__)
+
+# Type alias for event handlers
+EventHandler = Callable[..., None] | Callable[..., Coroutine[Any, Any, None]]
+
+
+# ── EasyCat-level event dataclasses ────────────────────────────────
+
+
+# Audio
+@dataclass(frozen=True)
+class AudioIn:
+    """Raw audio chunk received from transport."""
+
+    chunk: AudioChunk
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# VAD
+@dataclass(frozen=True)
+class VADStartSpeaking:
+    """VAD detected start of user speech."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class VADStopSpeaking:
+    """VAD detected end of user speech."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# STT
+@dataclass(frozen=True)
+class STTPartial:
+    """Partial transcript from STT provider."""
+
+    text: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class STTFinal:
+    """Final transcript from STT provider for a completed turn."""
+
+    text: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Agent
+@dataclass(frozen=True)
+class AgentDelta:
+    """Streaming text delta from the agent."""
+
+    text: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class AgentFinal:
+    """Final complete response from the agent."""
+
+    text: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# TTS
+@dataclass(frozen=True)
+class TTSAudio:
+    """Audio chunk produced by TTS provider."""
+
+    chunk: AudioChunk
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class TTSMarkers:
+    """Word/viseme alignment markers from TTS."""
+
+    markers: list[dict[str, Any]]
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Lifecycle
+@dataclass(frozen=True)
+class BotStartedSpeaking:
+    """Bot began playing TTS audio."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class BotStoppedSpeaking:
+    """Bot finished playing TTS audio."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class TurnStarted:
+    """A new user turn has begun (VAD triggered)."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class TurnEnded:
+    """A turn has completed (agent response fully delivered)."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Interruption
+@dataclass(frozen=True)
+class Interruption:
+    """User barged in while bot was speaking."""
+
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Tools
+@dataclass(frozen=True)
+class ToolCallStarted:
+    """An agent tool call has started."""
+
+    tool_name: str
+    call_id: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class ToolCallDelta:
+    """Streaming delta from an in-progress tool call."""
+
+    call_id: str
+    delta: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class ToolCallResult:
+    """A tool call has completed with a result."""
+
+    call_id: str
+    result: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Reconnect
+@dataclass(frozen=True)
+class ReconnectAttempt:
+    """A provider reconnection attempt is being made."""
+
+    provider: str
+    attempt: int
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class ReconnectSuccess:
+    """A provider reconnection succeeded."""
+
+    provider: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class ReconnectFailure:
+    """A provider reconnection failed."""
+
+    provider: str
+    error: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Telephony
+@dataclass(frozen=True)
+class DTMF:
+    """Single DTMF digit detected."""
+
+    digit: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class DTMFAggregated:
+    """Aggregated DTMF digit sequence."""
+
+    sequence: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class VoicemailDetected:
+    """Voicemail / answering machine detection result."""
+
+    result: str  # "human" | "machine" | "unknown"
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Error
+@dataclass(frozen=True)
+class Error:
+    """Error event wrapping an exception."""
+
+    exception: BaseException
+    context: str = ""
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Union of all EasyCat-level event types
+Event = (
+    AudioIn
+    | VADStartSpeaking
+    | VADStopSpeaking
+    | STTPartial
+    | STTFinal
+    | AgentDelta
+    | AgentFinal
+    | TTSAudio
+    | TTSMarkers
+    | BotStartedSpeaking
+    | BotStoppedSpeaking
+    | TurnStarted
+    | TurnEnded
+    | Interruption
+    | ToolCallStarted
+    | ToolCallDelta
+    | ToolCallResult
+    | ReconnectAttempt
+    | ReconnectSuccess
+    | ReconnectFailure
+    | DTMF
+    | DTMFAggregated
+    | VoicemailDetected
+    | Error
+)
+
+
+# ── Provider-scoped event types ────────────────────────────────────
+# Internal to provider implementations. Session maps these to EasyCat events.
+
+
+class STTEventType(enum.Enum):
+    PARTIAL = "partial"
+    FINAL = "final"
+
+
+@dataclass(frozen=True)
+class STTEvent:
+    """Provider-scoped STT event produced by STT provider async iterators."""
+
+    type: STTEventType
+    text: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+class TTSEventType(enum.Enum):
+    AUDIO = "audio"
+    MARKERS = "markers"
+
+
+@dataclass(frozen=True)
+class TTSEvent:
+    """Provider-scoped TTS event produced by TTS provider async iterators."""
+
+    type: TTSEventType
+    audio: AudioChunk | None = None
+    markers: list[dict[str, Any]] | None = None
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# ── EventBus ───────────────────────────────────────────────────────
+
+
+class EventBus:
+    """Publish/subscribe event dispatcher supporting sync and async handlers."""
+
+    def __init__(self) -> None:
+        self._handlers: defaultdict[type, list[EventHandler]] = defaultdict(list)
+
+    def subscribe(self, event_type: type, handler: EventHandler) -> None:
+        """Register a handler for a specific event type."""
+        self._handlers[event_type].append(handler)
+
+    def unsubscribe(self, event_type: type, handler: EventHandler) -> None:
+        """Remove a handler for a specific event type."""
+        handlers = self._handlers[event_type]
+        try:
+            handlers.remove(handler)
+        except ValueError:
+            pass
+
+    async def emit(self, event: Event) -> None:
+        """Emit an event to all registered handlers for its type.
+
+        Sync handlers are called directly; async handlers are awaited.
+        Exceptions in handlers are logged but do not prevent other handlers from running.
+        """
+        event_type = type(event)
+        for handler in list(self._handlers[event_type]):
+            try:
+                result = handler(event)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.exception(
+                    "Error in handler %s for event %s",
+                    handler.__name__,
+                    event_type.__name__,
+                )
