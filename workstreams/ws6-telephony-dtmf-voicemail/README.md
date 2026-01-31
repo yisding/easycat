@@ -61,11 +61,11 @@ Implement DTMF input/output, digit aggregation, and voicemail/answering machine 
 
 ## Acceptance Criteria
 
-- [ ] DTMF digits parsed from Twilio Media Streams messages
-- [ ] `dtmf(digit)` events emitted correctly
-- [ ] DTMF aggregator collects sequences with timeout, terminators, max length
-- [ ] `dtmf.aggregated(sequence)` event emitted with complete digit string
-- [ ] DTMF output sends tones via TwiML
-- [ ] Twilio AMD results mapped to `voicemail.detected` events
-- [ ] Heuristic voicemail detection identifies long monologues and beeps
-- [ ] Policy actions (hang up, leave message, transfer) are configurable
+- [x] DTMF digits parsed from Twilio Media Streams messages
+- [x] `dtmf(digit)` events emitted correctly
+- [x] DTMF aggregator collects sequences with timeout, terminators, max length
+- [x] `dtmf.aggregated(sequence)` event emitted with complete digit string
+- [x] DTMF output sends tones via TwiML
+- [x] Twilio AMD results mapped to `voicemail.detected` events
+- [x] Heuristic voicemail detection identifies long monologues and beeps
+- [x] Policy actions (hang up, leave message, transfer) are configurable

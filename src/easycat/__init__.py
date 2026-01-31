@@ -64,6 +64,16 @@ from easycat.stt import (
     create_stt_provider,
     pcm_to_wav,
 )
+from easycat.telephony import (
+    DTMFAggregator,
+    DTMFAggregatorConfig,
+    VoicemailDetector,
+    VoicemailDetectorConfig,
+    VoicemailPolicy,
+    VoicemailPolicyConfig,
+    VoicemailPolicyHandler,
+    parse_twilio_dtmf_message,
+)
 from easycat.tts.base import TTSBase
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode, ElevenLabsTTS, ElevenLabsTTSConfig
@@ -171,4 +181,13 @@ __all__ = [
     "ElevenLabsStreamMode",
     "TTSProviderConfig",
     "create_tts_provider",
+    # Telephony (WS6)
+    "DTMFAggregator",
+    "DTMFAggregatorConfig",
+    "VoicemailDetector",
+    "VoicemailDetectorConfig",
+    "VoicemailPolicy",
+    "VoicemailPolicyConfig",
+    "VoicemailPolicyHandler",
+    "parse_twilio_dtmf_message",
 ]
