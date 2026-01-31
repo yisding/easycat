@@ -263,11 +263,23 @@ class STTEventType(enum.Enum):
 
 
 @dataclass(frozen=True)
+class WordTimestamp:
+    """Timestamp for a single word in an STT transcript."""
+
+    word: str
+    start: float
+    end: float
+
+
+@dataclass(frozen=True)
 class STTEvent:
     """Provider-scoped STT event produced by STT provider async iterators."""
 
     type: STTEventType
     text: str
+    confidence: float | None = None
+    language: str | None = None
+    word_timestamps: list[WordTimestamp] | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
