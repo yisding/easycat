@@ -158,6 +158,8 @@ class WebSocketTransport:
         finally:
             self._ws = None
             self._client_connected.clear()
+            # Reset negotiated format so the next client starts fresh.
+            self._audio_format = self._config.audio_format
             # Signal end of stream.
             try:
                 self._in_queue.put_nowait(None)

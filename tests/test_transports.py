@@ -120,6 +120,28 @@ class TestLocalTransport:
         await asyncio.wait_for(task, timeout=2.0)
         # Should have exited cleanly.
 
+    @pytest.mark.asyncio
+    async def test_send_audio_splits_oversized_chunks(self):
+        """Chunks larger than one frame are split into frame-sized pieces."""
+        transport = LocalTransport()
+        await transport.connect()
+
+        # Default: 16kHz, 20ms frames → 320 samples → 640 bytes per frame.
+        # Send a 4800-byte chunk (typical TTS size) — should produce 8 pieces.
+        big_chunk = _make_chunk(4800, sample_rate=16000)
+        await transport.send_audio(big_chunk)
+
+        pieces: list[bytes] = []
+        while not transport._out_queue.empty():
+            pieces.append(transport._out_queue.get_nowait())
+
+        # 4800 / 640 = 7.5 → 8 pieces (last one is a 320-byte remainder).
+        assert len(pieces) == 8
+        assert all(len(p) == 640 for p in pieces[:7])
+        assert len(pieces[7]) == 320  # 4800 - 7*640 = 320
+
+        await transport.disconnect()
+
 
 # ── WebSocketTransport tests ─────────────────────────────────────
 
@@ -236,6 +258,27 @@ class TestWebSocketTransport:
         # Client disconnected; collect should finish.
         await asyncio.wait_for(collect_task, timeout=2.0)
         assert len(received) == 1
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_audio_format_resets_after_client_disconnect(self):
+        """Negotiated audio format resets to default when client disconnects."""
+        port = _find_free_port()
+        config = WebSocketTransportConfig(host="127.0.0.1", port=port)
+        transport = WebSocketTransport(config)
+        await transport.connect()
+
+        # First client negotiates 24kHz.
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.recv()  # ready
+            await ws.send(json.dumps({"type": "config", "sample_rate": 24000}))
+            await asyncio.sleep(0.1)
+            assert transport._audio_format.sample_rate == 24000
+
+        # Client disconnected — format should reset to 16kHz default.
+        await asyncio.sleep(0.1)
+        assert transport._audio_format.sample_rate == 16000
 
         await transport.disconnect()
 
