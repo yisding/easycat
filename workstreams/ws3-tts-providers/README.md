@@ -50,9 +50,9 @@ Each provider can be tested independently:
 
 ## Acceptance Criteria
 
-- [ ] OpenAI TTS: generates streaming audio from text
-- [ ] Deepgram TTS: streams audio over WebSocket from text input
-- [ ] ElevenLabs TTS: supports both chunked and WebSocket streaming
-- [ ] All providers output PCM16 audio (converting if necessary)
-- [ ] All providers support `stop()` / `cancel()` for barge-in
-- [ ] All providers handle connection errors gracefully
+- [x] OpenAI TTS: generates streaming audio from text
+- [x] Deepgram TTS: streams audio over WebSocket from text input
+- [x] ElevenLabs TTS: supports both chunked and WebSocket streaming
+- [x] All providers output PCM16 audio (converting if necessary)
+- [x] All providers support `stop()` / `cancel()` for barge-in
+- [x] All providers handle connection errors gracefully
