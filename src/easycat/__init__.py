@@ -41,10 +41,22 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
     VoicemailDetected,
+    WordTimestamp,
 )
 from easycat.providers import NoiseReducer, STTProvider, Transport, TTSProvider, VADProvider
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.session import Session, SessionConfig, TurnState
+from easycat.stt import (
+    DeepgramSTT,
+    DeepgramSTTConfig,
+    ElevenLabsSTT,
+    ElevenLabsSTTConfig,
+    OpenAISTT,
+    OpenAISTTConfig,
+    STTBase,
+    create_stt_provider,
+    pcm_to_wav,
+)
 from easycat.tts.base import TTSBase
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode, ElevenLabsTTS, ElevenLabsTTSConfig
@@ -99,6 +111,7 @@ __all__ = [
     "STTEventType",
     "TTSEvent",
     "TTSEventType",
+    "WordTimestamp",
     # Providers
     "NoiseReducer",
     "STTProvider",
@@ -112,6 +125,16 @@ __all__ = [
     # ReconnectingWebSocket
     "ReconnectConfig",
     "ReconnectingWebSocket",
+    # STT providers
+    "STTBase",
+    "OpenAISTT",
+    "OpenAISTTConfig",
+    "DeepgramSTT",
+    "DeepgramSTTConfig",
+    "ElevenLabsSTT",
+    "ElevenLabsSTTConfig",
+    "create_stt_provider",
+    "pcm_to_wav",
     # TTS providers
     "TTSBase",
     "OpenAITTS",
