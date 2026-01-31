@@ -3,7 +3,14 @@
 from collections.abc import AsyncIterator
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.events import Event, STTFinal, VADStartSpeaking
+from easycat.events import (
+    Event,
+    STTEvent,
+    STTEventType,
+    TTSEvent,
+    TTSEventType,
+    VADStartSpeaking,
+)
 from easycat.providers import (
     NoiseReducer,
     STTProvider,
@@ -16,8 +23,8 @@ from easycat.providers import (
 
 
 class StubSTT:
-    async def start_stream(self) -> AsyncIterator[Event]:
-        yield STTFinal(text="stub")
+    async def start_stream(self) -> None:
+        pass
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         pass
@@ -25,10 +32,16 @@ class StubSTT:
     async def end_stream(self) -> None:
         pass
 
+    async def events(self) -> AsyncIterator[STTEvent]:
+        yield STTEvent(type=STTEventType.FINAL, text="stub")
+
 
 class StubTTS:
-    async def synthesize(self, text: str) -> AsyncIterator[AudioChunk]:
-        yield AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        yield TTSEvent(
+            type=TTSEventType.AUDIO,
+            audio=AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K),
+        )
 
     async def stop(self) -> None:
         pass

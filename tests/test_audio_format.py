@@ -1,4 +1,11 @@
-from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.audio_format import (
+    PCM16_MONO_8K,
+    PCM16_MONO_16K,
+    PCM16_MONO_24K,
+    PCM16_MONO_48K,
+    AudioChunk,
+    AudioFormat,
+)
 
 
 def test_audio_format_frame_size():
@@ -12,6 +19,8 @@ def test_audio_format_frame_size():
 def test_audio_format_bytes_per_second():
     assert PCM16_MONO_8K.bytes_per_second == 16000
     assert PCM16_MONO_16K.bytes_per_second == 32000
+    assert PCM16_MONO_24K.bytes_per_second == 48000
+    assert PCM16_MONO_48K.bytes_per_second == 96000
 
 
 def test_pcm16_mono_constants():
@@ -23,6 +32,14 @@ def test_pcm16_mono_constants():
     assert PCM16_MONO_16K.sample_rate == 16000
     assert PCM16_MONO_16K.channels == 1
     assert PCM16_MONO_16K.sample_width == 2
+
+    assert PCM16_MONO_24K.sample_rate == 24000
+    assert PCM16_MONO_24K.channels == 1
+    assert PCM16_MONO_24K.sample_width == 2
+
+    assert PCM16_MONO_48K.sample_rate == 48000
+    assert PCM16_MONO_48K.channels == 1
+    assert PCM16_MONO_48K.sample_width == 2
 
 
 def test_audio_chunk_num_samples():

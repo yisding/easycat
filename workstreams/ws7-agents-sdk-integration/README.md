@@ -21,8 +21,14 @@ Integrate EasyCat with the OpenAI Agents SDK so that each user turn triggers an 
 
 - Support streaming where available using Agents SDK primitives:
   - Text deltas -> emit `agent.delta(text)` events
-  - Tool events -> pass through to session
+  - Tool events -> emit `tool.call_started`, `tool.call_delta`, `tool.call_result` events (defined in WS1)
 - Feed streaming text deltas to TTS for incremental synthesis (reduces latency)
+
+### Barge-In Cancellation
+
+- If the user interrupts (barge-in) while the agent is still streaming text/audio, cancel the agent run (or at minimum, ignore further deltas)
+- Connect to WS1's cancel token: when the token is triggered, stop consuming agent stream output and clean up
+- This prevents wasted API calls and ensures the agent doesn't continue generating after the user has interrupted
 
 ### Tracing Pass-Through
 
@@ -38,6 +44,7 @@ EasyCat does NOT reimplement:
 - Handoffs
 - Guardrails
 - Agent memory
+- **Conversation history management** — the Agents SDK has its own context patterns; do not build a second "context manager" that conflicts with it. Use the Agents SDK's built-in mechanisms for passing conversation history.
 
 These stay in the Agents SDK. EasyCat is the audio I/O and voice pipeline layer.
 
@@ -56,4 +63,6 @@ These stay in the Agents SDK. EasyCat is the audio I/O and voice pipeline layer.
 - [ ] Streaming deltas are fed to TTS incrementally
 - [ ] Agents SDK tracing hooks are passed through
 - [ ] Agent errors produce `error` events
-- [ ] Tool events from the agent are visible in the session
+- [ ] Tool events from the agent are visible in the session as `tool.call_started`/`tool.call_delta`/`tool.call_result`
+- [ ] Barge-in cancels the agent streaming run (via WS1 cancel token)
+- [ ] Conversation history uses Agents SDK built-in mechanisms (no duplicate context manager)

@@ -2,7 +2,16 @@
 
 import struct
 
-from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
+import pytest
+
+from easycat.audio_format import (
+    PCM16_MONO_8K,
+    PCM16_MONO_16K,
+    PCM16_MONO_24K,
+    PCM16_MONO_48K,
+    AudioChunk,
+    AudioFormat,
+)
 from easycat.audio_utils import (
     chunk_frames,
     resample,
@@ -21,7 +30,6 @@ def test_resample_same_rate_noop():
 
 
 def test_resample_8k_to_16k_doubles_samples():
-    # 4 samples at 8kHz -> 8 samples at 16kHz
     data = struct.pack("<4h", 0, 1000, 2000, 3000)
     result = resample(data, 8000, 16000)
     num_out = len(result) // 2
@@ -29,7 +37,6 @@ def test_resample_8k_to_16k_doubles_samples():
 
 
 def test_resample_16k_to_8k_halves_samples():
-    # 8 samples at 16kHz -> 4 samples at 8kHz
     data = struct.pack("<8h", 0, 500, 1000, 1500, 2000, 2500, 3000, 3500)
     result = resample(data, 16000, 8000)
     num_out = len(result) // 2
@@ -37,7 +44,6 @@ def test_resample_16k_to_8k_halves_samples():
 
 
 def test_resample_preserves_dc_signal():
-    # Constant signal should remain constant after resampling
     value = 1234
     data = struct.pack("<100h", *([value] * 100))
     result = resample(data, 8000, 16000)
@@ -61,6 +67,62 @@ def test_resample_chunk_same_rate_returns_same():
     assert result is chunk
 
 
+# ── Extended resampling: 24k and 48k rates ────────────────────────
+
+
+RATE_PAIRS = [
+    (8000, 24000),
+    (8000, 48000),
+    (16000, 24000),
+    (16000, 48000),
+    (24000, 8000),
+    (24000, 16000),
+    (24000, 48000),
+    (48000, 8000),
+    (48000, 16000),
+    (48000, 24000),
+]
+
+
+@pytest.mark.parametrize("from_rate,to_rate", RATE_PAIRS)
+def test_resample_rate_pairs_sample_count(from_rate: int, to_rate: int):
+    """Verify output sample count is correct for all supported rate pairs."""
+    n_input = 480  # enough for any rate
+    data = struct.pack(f"<{n_input}h", *([500] * n_input))
+    result = resample(data, from_rate, to_rate)
+    n_output = len(result) // 2
+    expected = int(n_input * to_rate / from_rate)
+    assert n_output == expected
+
+
+@pytest.mark.parametrize("from_rate,to_rate", RATE_PAIRS)
+def test_resample_rate_pairs_dc_preservation(from_rate: int, to_rate: int):
+    """DC signal should be preserved across all rate pairs."""
+    value = 2000
+    n_input = 480
+    data = struct.pack(f"<{n_input}h", *([value] * n_input))
+    result = resample(data, from_rate, to_rate)
+    samples = struct.unpack(f"<{len(result) // 2}h", result)
+    for s in samples:
+        assert abs(s - value) <= 1
+
+
+def test_resample_chunk_to_48k():
+    data = struct.pack("<100h", *([1000] * 100))
+    chunk = AudioChunk(data=data, format=PCM16_MONO_16K)
+    result = resample_chunk(chunk, 48000)
+    assert result.format.sample_rate == 48000
+    assert result.format == PCM16_MONO_48K
+
+
+def test_resample_chunk_to_24k():
+    data = struct.pack("<100h", *([1000] * 100))
+    chunk = AudioChunk(data=data, format=PCM16_MONO_8K)
+    result = resample_chunk(chunk, 24000)
+    assert result.format.sample_rate == 24000
+    assert result.format == PCM16_MONO_24K
+
+
 # ── Mono downmix tests ────────────────────────────────────────────
 
 
@@ -71,7 +133,6 @@ def test_to_mono_already_mono():
 
 
 def test_to_mono_stereo():
-    # Stereo: L=100 R=300, L=200 R=400 -> mono: 200, 300
     data = struct.pack("<4h", 100, 300, 200, 400)
     result = to_mono(data, channels=2)
     samples = struct.unpack(f"<{len(result) // 2}h", result)
@@ -79,7 +140,6 @@ def test_to_mono_stereo():
 
 
 def test_to_mono_stereo_symmetric():
-    # Same value on both channels -> same mono output
     data = struct.pack("<4h", 500, 500, -1000, -1000)
     result = to_mono(data, channels=2)
     samples = struct.unpack(f"<{len(result) // 2}h", result)
@@ -105,23 +165,20 @@ def test_to_mono_chunk_already_mono():
 
 
 def test_chunk_frames_10ms_at_16k():
-    # 10ms at 16kHz mono PCM16 = 160 samples = 320 bytes
-    audio = bytes(640)  # 20ms worth
+    audio = bytes(640)
     frames = list(chunk_frames(audio, frame_duration_ms=10, sample_rate=16000))
     assert len(frames) == 2
     assert all(len(f) == 320 for f in frames)
 
 
 def test_chunk_frames_20ms_at_16k():
-    # 20ms at 16kHz = 320 samples = 640 bytes
-    audio = bytes(1280)  # 40ms worth
+    audio = bytes(1280)
     frames = list(chunk_frames(audio, frame_duration_ms=20, sample_rate=16000))
     assert len(frames) == 2
     assert all(len(f) == 640 for f in frames)
 
 
 def test_chunk_frames_30ms_at_16k():
-    # 30ms at 16kHz = 480 samples = 960 bytes
     audio = bytes(960)
     frames = list(chunk_frames(audio, frame_duration_ms=30, sample_rate=16000))
     assert len(frames) == 1
@@ -129,17 +186,15 @@ def test_chunk_frames_30ms_at_16k():
 
 
 def test_chunk_frames_partial_final_frame():
-    # 500 bytes with 320-byte frames -> 1 full + 1 partial
     audio = bytes(500)
     frames = list(chunk_frames(audio, frame_duration_ms=10, sample_rate=16000))
     assert len(frames) == 2
     assert len(frames[0]) == 320
-    assert len(frames[1]) == 180  # partial
+    assert len(frames[1]) == 180
 
 
 def test_chunk_frames_8k_10ms():
-    # 10ms at 8kHz mono PCM16 = 80 samples = 160 bytes
-    audio = bytes(480)  # 30ms
+    audio = bytes(480)
     frames = list(chunk_frames(audio, frame_duration_ms=10, sample_rate=8000))
     assert len(frames) == 3
     assert all(len(f) == 160 for f in frames)

@@ -25,9 +25,10 @@
 ### Task 3.3: Deepgram TTS (Aura) provider
 - Implement `DeepgramTTS(TTSProvider)`
 - WebSocket streaming TTS: open connection, send text continuously, receive audio stream
+- **Use WS8's `ReconnectingWebSocket`** wrapper for WebSocket lifecycle — do not implement bespoke reconnection
 - `synthesize(text)` sends text over the WebSocket and yields audio chunks
 - Support `stop()` / `cancel()` by sending close/flush message and discarding remaining audio
-- Convert from Deepgram audio format to PCM16
+- Request PCM/linear16 output format from Deepgram directly if supported; convert only if not available
 - Config: model, encoding, sample_rate
 - Unit tests with mocked WebSocket
 - Integration test (gated behind `DEEPGRAM_API_KEY`)
@@ -35,8 +36,9 @@
 ### Task 3.4: ElevenLabs TTS provider
 - Implement `ElevenLabsTTS(TTSProvider)`
 - Support streaming TTS via chunked transfer encoding (HTTP)
-- Also support WebSocket streaming option
+- Also support WebSocket streaming option — **use WS8's `ReconnectingWebSocket`** for WebSocket lifecycle
 - `synthesize(text)` returns async iterator of PCM16 audio chunks
+- Request PCM output format from ElevenLabs if supported; convert only if not available
 - Support `stop()` / `cancel()` by aborting the stream
 - Config: voice_id, model_id, stability, similarity_boost, output_format
 - Unit tests with mocked HTTP/WebSocket responses
@@ -45,8 +47,9 @@
 ## Phase 3: Output Handling & Validation
 
 ### Task 3.5: Audio output format normalization
+- **Prefer requesting PCM/linear16 directly from each provider** when supported — avoid introducing ffmpeg or system-level audio decoding dependencies for MP3/Opus unless no PCM output option exists for a given provider
 - Ensure all providers output PCM16 mono at a consistent sample rate
-- Implement format conversion in the base class if provider returns MP3, opus, mulaw, etc.
+- Implement format conversion in the base class only for providers that cannot return PCM directly (e.g., mulaw from telephony paths)
 - Use the audio utilities from WS1 (Task 1.4) for resampling
 
 ### Task 3.6: Mid-utterance cancellation tests

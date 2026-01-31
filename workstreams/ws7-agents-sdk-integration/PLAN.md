@@ -15,8 +15,8 @@
 - Handle agent exceptions: catch errors, emit `error(exception)` event, don't crash the session
 
 ### Task 7.2: Conversation context management
-- Maintain conversation history across turns within a session
-- Pass prior turns to the agent on each invocation (or use Agents SDK's built-in context mechanism)
+- **Prefer the Agents SDK's built-in context/history mechanism** over building a separate context manager — avoid duplicating conversation state management that the SDK already handles
+- If the Agents SDK requires explicit history passing, maintain a minimal transcript list (user/assistant turns) and pass it on each invocation
 - Clear context on `session.reset_state()`
 - Test: multi-turn conversation, verify agent sees prior context
 
@@ -36,10 +36,19 @@
 - Test: mock agent streams "Hello " + "world" -> verify two delta events + one final event
 
 ### Task 7.5: Streaming tool event pass-through
-- When the agent invokes tools during streaming, pass tool events through to the session
+- When the agent invokes tools during streaming, emit `tool.call_started`, `tool.call_delta`, `tool.call_result` events (defined in WS1 event model)
 - Allow the session/application to observe tool calls (e.g., for UI display or logging)
 - Do not interfere with tool execution — the Agents SDK handles tool logic
-- Test: mock agent calls a tool -> verify tool event is visible on the session
+- Test: mock agent calls a tool -> verify tool events are visible on the session
+
+### Task 7.5b: Agent cancellation on barge-in
+- Subscribe to WS1's cancel token for the current turn
+- When the cancel token fires (barge-in), stop consuming agent stream output:
+  - If the Agents SDK supports cancellation, cancel the run
+  - Otherwise, stop reading from the stream iterator and discard remaining output
+- Emit `agent.final(text)` with whatever partial text was received before cancellation (or skip if nothing meaningful)
+- Clean up any resources from the agent invocation
+- Test: mock agent streaming + simulate barge-in -> verify agent output stops being consumed
 
 ## Phase 3: Tracing
 

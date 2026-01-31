@@ -7,6 +7,8 @@ Runs a full session lifecycle:
 Verifies:
   - All expected events fire in correct order
   - Session state transitions are correct
+  - Provider-scoped events (STTEvent, TTSEvent) are consumed by Session
+    and mapped to EasyCat-level events
 """
 
 import asyncio
@@ -19,9 +21,17 @@ from easycat.events import (
     AgentDelta,
     AgentFinal,
     AudioIn,
+    BotStartedSpeaking,
+    BotStoppedSpeaking,
     Event,
+    STTEvent,
+    STTEventType,
     STTFinal,
     TTSAudio,
+    TTSEvent,
+    TTSEventType,
+    TurnEnded,
+    TurnStarted,
     VADStartSpeaking,
     VADStopSpeaking,
 )
@@ -72,24 +82,27 @@ class SmokeVAD:
 
 
 class SmokeSTT:
-    """Queues final transcript on end_stream."""
+    """STT using provider-scoped STTEvent via events() iterator."""
 
     def __init__(self) -> None:
-        self._q: asyncio.Queue[Event | None] = asyncio.Queue()
+        self._queue: asyncio.Queue[STTEvent | None] = asyncio.Queue()
 
-    async def start_stream(self) -> AsyncIterator[Event]:
-        while True:
-            ev = await self._q.get()
-            if ev is None:
-                break
-            yield ev
+    async def start_stream(self) -> None:
+        pass
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         pass
 
     async def end_stream(self) -> None:
-        await self._q.put(STTFinal(text="good morning"))
-        await self._q.put(None)
+        await self._queue.put(STTEvent(type=STTEventType.FINAL, text="good morning"))
+        await self._queue.put(None)
+
+    async def events(self) -> AsyncIterator[STTEvent]:
+        while True:
+            event = await self._queue.get()
+            if event is None:
+                break
+            yield event
 
 
 class SmokeAgent:
@@ -98,9 +111,11 @@ class SmokeAgent:
 
 
 class SmokeTTS:
-    async def synthesize(self, text: str) -> AsyncIterator[AudioChunk]:
-        yield _chunk()
-        yield _chunk()
+    """TTS using provider-scoped TTSEvent."""
+
+    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
 
     async def stop(self) -> None:
         pass
@@ -138,10 +153,14 @@ async def test_full_session_smoke():
         AudioIn,
         VADStartSpeaking,
         VADStopSpeaking,
+        TurnStarted,
         STTFinal,
         AgentDelta,
         AgentFinal,
+        BotStartedSpeaking,
         TTSAudio,
+        BotStoppedSpeaking,
+        TurnEnded,
     ]:
         session.event_bus.subscribe(event_type, lambda e: timeline.append(e))
 
@@ -162,24 +181,36 @@ async def test_full_session_smoke():
     assert "AudioIn" in type_names, f"Missing AudioIn in {type_names}"
     assert "VADStartSpeaking" in type_names, f"Missing VADStartSpeaking in {type_names}"
     assert "VADStopSpeaking" in type_names, f"Missing VADStopSpeaking in {type_names}"
+    assert "TurnStarted" in type_names, f"Missing TurnStarted in {type_names}"
     assert "STTFinal" in type_names, f"Missing STTFinal in {type_names}"
     assert "AgentDelta" in type_names, f"Missing AgentDelta in {type_names}"
     assert "AgentFinal" in type_names, f"Missing AgentFinal in {type_names}"
+    assert "BotStartedSpeaking" in type_names, f"Missing BotStartedSpeaking in {type_names}"
     assert "TTSAudio" in type_names, f"Missing TTSAudio in {type_names}"
+    assert "BotStoppedSpeaking" in type_names, f"Missing BotStoppedSpeaking in {type_names}"
+    assert "TurnEnded" in type_names, f"Missing TurnEnded in {type_names}"
 
-    # Verify ordering: AudioIn before VADStart, VADStart before VADStop, etc.
+    # Verify ordering: key events must appear in the correct sequence
     ai_idx = type_names.index("AudioIn")
     vs_idx = type_names.index("VADStartSpeaking")
+    ts_idx = type_names.index("TurnStarted")
     ve_idx = type_names.index("VADStopSpeaking")
     sf_idx = type_names.index("STTFinal")
     af_idx = type_names.index("AgentFinal")
+    bs_idx = type_names.index("BotStartedSpeaking")
     ta_idx = type_names.index("TTSAudio")
+    be_idx = type_names.index("BotStoppedSpeaking")
+    te_idx = type_names.index("TurnEnded")
 
     assert ai_idx < vs_idx, "AudioIn should come before VADStartSpeaking"
     assert vs_idx < ve_idx, "VADStartSpeaking should come before VADStopSpeaking"
+    assert ts_idx < ve_idx, "TurnStarted should come before VADStopSpeaking"
     assert ve_idx < sf_idx, "VADStopSpeaking should come before STTFinal"
     assert sf_idx < af_idx, "STTFinal should come before AgentFinal"
-    assert af_idx < ta_idx, "AgentFinal should come before TTSAudio"
+    assert af_idx < bs_idx, "AgentFinal should come before BotStartedSpeaking"
+    assert bs_idx < ta_idx, "BotStartedSpeaking should come before TTSAudio"
+    assert ta_idx < be_idx, "TTSAudio should come before BotStoppedSpeaking"
+    assert be_idx < te_idx, "BotStoppedSpeaking should come before TurnEnded"
 
     # ── Verify content ─────────────────────────────────────────
     stt_finals = [e for e in timeline if isinstance(e, STTFinal)]

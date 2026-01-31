@@ -14,10 +14,11 @@ Implement three STT providers behind the unified `STTProvider` interface. Each p
 
 All providers must implement:
 
-- `start_stream()` / `send_audio(chunk)` / `end_stream()`
-- Emit `stt.partial(text)` when provider supports partial transcripts
-- Emit `stt.final(text)` per detected turn
+- `start_stream()` / `send_audio(chunk)` / `end_stream()` / `events() -> AsyncIterator[STTEvent]`
+- Produce `STTEvent` objects (partial/final variants) via the `events()` async iterator — providers do **not** emit EasyCat-level events directly; the Session consumes `events()` and emits `stt.partial`/`stt.final`
 - Normalize output: timestamps (optional), confidence (optional), language code (optional)
+
+**Reconnect:** Providers with WebSocket connections (Deepgram, ElevenLabs) must use WS8's `ReconnectingWebSocket` wrapper rather than implementing bespoke reconnect logic.
 
 ### Provider: OpenAI STT
 

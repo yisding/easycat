@@ -8,9 +8,12 @@
 ### Task 4.1: RNNoise integration (open-source fallback)
 - Integrate RNNoise for noise suppression
 - Implement `RNNoiseReducer(NoiseReducer)`: `process(chunk) -> chunk`
-- Handle RNNoise's expected input format (48kHz float32) with internal conversion from/to PCM16
+- **Sample rate:** RNNoise expects 48 kHz float32 input. Before implementing, confirm the exact framing and input requirements from the RNNoise documentation/source.
+- Internal conversion pipeline: PCM16 (at pipeline rate, e.g., 16 kHz) → resample to 48 kHz → convert to float32 → RNNoise → convert back to PCM16 → resample to pipeline rate
+- **Depends on:** WS1 Task 1.4 must support 16k↔48k resampling (not just 8k↔16k)
 - Initialize and release RNNoise state properly
 - Unit tests: process noisy audio, verify output is valid audio (basic SNR improvement check or just format correctness)
+- Unit test: verify the resample round-trip preserves audio quality
 
 ### Task 4.2: Krisp noise reduction integration (commercial)
 - Implement `KrispNoiseReducer(NoiseReducer)`
@@ -53,19 +56,24 @@
 ## Phase 3: Turn-Taking
 
 ### Task 4.7: Turn-taking state machine
-- Implement `TurnManager` that consumes VAD events and manages turn state:
+- Implement `TurnManager` that consumes **both VAD events and raw `audio_in` frames** and manages turn state:
   - **Idle** — waiting for speech
   - **UserSpeaking** — VAD detected speech, capturing audio
   - **UserPaused** — silence detected, waiting for end-of-turn timeout
   - **Processing** — user turn complete, waiting for agent + TTS
   - **BotSpeaking** — TTS audio playing back
+- **Audio frame consumption:** TurnManager receives raw audio frames (via subscription to `audio_in` or a direct feed) so it can:
+  - Maintain a rolling pre-roll buffer (N ms of recent audio before VAD trigger)
+  - Prepend pre-roll frames into the STT capture stream when speech starts
+  - Without raw audio access, pre-roll buffering is impossible since VAD events alone don't carry the audio data
 - Transitions:
-  - `vad.start_speaking` -> Idle to UserSpeaking
+  - `vad.start_speaking` -> Idle to UserSpeaking (emit `turn.started`, flush pre-roll buffer to STT)
   - `vad.stop_speaking` -> UserSpeaking to UserPaused
-  - Silence timeout expires -> UserPaused to Processing (emit `stt.final` trigger)
+  - Silence timeout expires -> UserPaused to Processing (emit `turn.ended`; **Session** then calls `end_stream()` on STT, which produces `stt.final` via its event iterator)
   - Speech resumes before timeout -> UserPaused back to UserSpeaking
-  - Agent + TTS complete -> Processing to BotSpeaking
-  - TTS playback complete -> BotSpeaking to Idle
+  - Agent + TTS complete -> Processing to BotSpeaking (emit `bot.started_speaking`)
+  - TTS playback complete -> BotSpeaking to Idle (emit `bot.stopped_speaking`)
+- **Responsibility boundary:** TurnManager emits `turn.ended`, not `stt.final`. STT providers produce their final transcript only after their `end_stream()` is called. This avoids blurring responsibility and prevents breakage of STT providers that only produce a final transcript after the API call completes (e.g., OpenAI STT).
 - Configurable: end-of-turn silence timeout (e.g., 500ms–2000ms)
 
 ### Task 4.8: Push-to-talk / manual end-of-turn mode
@@ -76,11 +84,11 @@
 
 ### Task 4.9: Barge-in / interruption handling
 - If state is **BotSpeaking** and `vad.start_speaking` fires:
-  - Immediately call `session.cancel_tts_playback()` to stop outbound audio
-  - Cancel the current TTS request
+  - Trigger WS1's cancel token for the current turn (cancels TTS playback, agent streaming, and queued outbound audio)
   - Transition to **UserSpeaking** and begin capturing the new turn
-- Emit an interruption event for observability (metrics can count interruptions)
-- Test: simulate bot speaking + user interrupt -> verify playback stops, new turn starts
+- Emit `interruption` event (defined in WS1 event model) for observability (metrics can count interruptions)
+- Emit `turn.started` for the new user turn
+- Test: simulate bot speaking + user interrupt -> verify playback stops, agent streaming stops, new turn starts
 
 ## Phase 4: Integration
 

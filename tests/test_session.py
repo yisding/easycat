@@ -1,4 +1,4 @@
-"""Tests for Session lifecycle, cancellation, and pipeline orchestration."""
+"""Tests for Session lifecycle, cancellation, pipeline, and CancelToken."""
 
 import asyncio
 from collections.abc import AsyncIterator
@@ -6,12 +6,22 @@ from collections.abc import AsyncIterator
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.cancel import CancelToken
 from easycat.events import (
     AgentFinal,
     AudioIn,
+    BotStartedSpeaking,
+    BotStoppedSpeaking,
     Event,
+    Interruption,
+    STTEvent,
+    STTEventType,
     STTFinal,
     TTSAudio,
+    TTSEvent,
+    TTSEventType,
+    TurnEnded,
+    TurnStarted,
     VADStartSpeaking,
     VADStopSpeaking,
 )
@@ -26,8 +36,6 @@ def _make_chunk(n_bytes: int = 320) -> AudioChunk:
 
 
 class FakeTransport:
-    """Transport that yields a fixed sequence of audio chunks, then stops."""
-
     def __init__(self, chunks: list[AudioChunk] | None = None) -> None:
         self.chunks = chunks or []
         self.sent: list[AudioChunk] = []
@@ -49,8 +57,6 @@ class FakeTransport:
 
 
 class FakeVAD:
-    """VAD that emits start on first chunk, stop on second chunk."""
-
     def __init__(self) -> None:
         self._call_count = 0
 
@@ -66,46 +72,77 @@ class FakeVAD:
 
 
 class FakeSTT:
-    """STT that returns a fixed transcript on end_stream."""
+    """STT that uses provider-scoped STTEvent via events() iterator."""
 
     def __init__(self, transcript: str = "hello world") -> None:
         self._transcript = transcript
-        self._queue: asyncio.Queue[Event | None] = asyncio.Queue()
+        self._queue: asyncio.Queue[STTEvent | None] = asyncio.Queue()
 
-    async def start_stream(self) -> AsyncIterator[Event]:
-        while True:
-            event = await self._queue.get()
-            if event is None:
-                break
-            yield event
+    async def start_stream(self) -> None:
+        pass
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         pass
 
     async def end_stream(self) -> None:
         if self._transcript:
-            await self._queue.put(STTFinal(text=self._transcript))
-        await self._queue.put(None)  # sentinel to end iteration
+            await self._queue.put(STTEvent(type=STTEventType.FINAL, text=self._transcript))
+        await self._queue.put(None)
+
+    async def events(self) -> AsyncIterator[STTEvent]:
+        while True:
+            event = await self._queue.get()
+            if event is None:
+                break
+            yield event
 
 
 class FakeAgent:
-    """Agent that uppercases input text."""
-
     async def run(self, text: str) -> str:
         return text.upper()
 
 
 class FakeTTS:
-    """TTS that returns a single audio chunk for any input."""
+    """TTS that uses provider-scoped TTSEvent."""
 
-    async def synthesize(self, text: str) -> AsyncIterator[AudioChunk]:
-        yield _make_chunk()
+    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        yield TTSEvent(
+            type=TTSEventType.AUDIO,
+            audio=_make_chunk(),
+        )
 
     async def stop(self) -> None:
         pass
 
     async def cancel(self) -> None:
         pass
+
+
+# ── CancelToken tests ──────────────────────────────────────────────
+
+
+def test_cancel_token_initial_state():
+    token = CancelToken()
+    assert not token.is_cancelled
+
+
+def test_cancel_token_cancel():
+    token = CancelToken()
+    token.cancel()
+    assert token.is_cancelled
+
+
+@pytest.mark.asyncio
+async def test_cancel_token_wait():
+    token = CancelToken()
+
+    async def cancel_later():
+        await asyncio.sleep(0.01)
+        token.cancel()
+
+    asyncio.create_task(cancel_later())
+    await token.wait()
+    assert token.is_cancelled
 
 
 # ── Session lifecycle tests ────────────────────────────────────────
@@ -116,6 +153,7 @@ async def test_session_default_construction():
     session = Session()
     assert session.turn_state == TurnState.IDLE
     assert not session.is_running
+    assert session.cancel_token is None
 
 
 @pytest.mark.asyncio
@@ -151,7 +189,7 @@ async def test_session_shutdown():
 async def test_session_start_idempotent():
     session = Session()
     await session.start()
-    await session.start()  # second start is a no-op
+    await session.start()
     assert session.is_running
     await session.stop()
 
@@ -159,7 +197,7 @@ async def test_session_start_idempotent():
 @pytest.mark.asyncio
 async def test_session_stop_idempotent():
     session = Session()
-    await session.stop()  # stop before start is a no-op
+    await session.stop()
     assert not session.is_running
 
 
@@ -170,7 +208,23 @@ async def test_session_stop_idempotent():
 async def test_cancel_turn_resets_state():
     session = Session()
     session._turn_state = TurnState.LISTENING
+    session._cancel_token = CancelToken()
     await session.cancel_turn()
+    assert session.turn_state == TurnState.IDLE
+    assert session._cancel_token.is_cancelled
+
+
+@pytest.mark.asyncio
+async def test_cancel_turn_barge_in_emits_interruption():
+    session = Session()
+    session._turn_state = TurnState.BOT_SPEAKING
+    session._cancel_token = CancelToken()
+
+    received: list = []
+    session.event_bus.subscribe(Interruption, lambda e: received.append(e))
+
+    await session.cancel_turn(barge_in=True)
+    assert len(received) == 1
     assert session.turn_state == TurnState.IDLE
 
 
@@ -178,16 +232,20 @@ async def test_cancel_turn_resets_state():
 async def test_cancel_tts_playback_resets_state():
     session = Session()
     session._turn_state = TurnState.BOT_SPEAKING
+    session._cancel_token = CancelToken()
     await session.cancel_tts_playback()
     assert session.turn_state == TurnState.IDLE
+    assert session._cancel_token.is_cancelled
 
 
 @pytest.mark.asyncio
 async def test_reset_state():
     session = Session()
     session._turn_state = TurnState.PROCESSING
+    session._cancel_token = CancelToken()
     await session.reset_state()
     assert session.turn_state == TurnState.IDLE
+    assert session._cancel_token.is_cancelled
 
 
 # ── Pipeline orchestration tests ───────────────────────────────────
@@ -204,7 +262,6 @@ async def test_pipeline_emits_audio_in_events():
     session.event_bus.subscribe(AudioIn, lambda e: received.append(e))
 
     await session.start()
-    # Let the pipeline process
     await asyncio.sleep(0.05)
     await session.stop()
 
@@ -236,8 +293,8 @@ async def test_pipeline_noise_reduction():
 
 
 @pytest.mark.asyncio
-async def test_pipeline_full_turn_with_stubs():
-    """Full pipeline: audio in -> VAD start -> STT -> agent -> TTS -> audio out."""
+async def test_pipeline_full_turn_with_provider_events():
+    """Full pipeline using provider-scoped events (STTEvent, TTSEvent)."""
     chunks = [_make_chunk(), _make_chunk()]
     transport = FakeTransport(chunks=chunks)
     vad = FakeVAD()
@@ -256,25 +313,35 @@ async def test_pipeline_full_turn_with_stubs():
     session = Session(config)
 
     events_received: list[Event] = []
-    session.event_bus.subscribe(AudioIn, lambda e: events_received.append(e))
-    session.event_bus.subscribe(VADStartSpeaking, lambda e: events_received.append(e))
-    session.event_bus.subscribe(VADStopSpeaking, lambda e: events_received.append(e))
-    session.event_bus.subscribe(STTFinal, lambda e: events_received.append(e))
-    session.event_bus.subscribe(AgentFinal, lambda e: events_received.append(e))
-    session.event_bus.subscribe(TTSAudio, lambda e: events_received.append(e))
+    for et in [
+        AudioIn,
+        VADStartSpeaking,
+        VADStopSpeaking,
+        TurnStarted,
+        STTFinal,
+        AgentFinal,
+        BotStartedSpeaking,
+        TTSAudio,
+        BotStoppedSpeaking,
+        TurnEnded,
+    ]:
+        session.event_bus.subscribe(et, lambda e: events_received.append(e))
 
     await session.start()
     await asyncio.sleep(0.2)
     await session.stop()
 
-    # Verify the event sequence
-    event_types = [type(e).__name__ for e in events_received]
-    assert "AudioIn" in event_types
-    assert "VADStartSpeaking" in event_types
-    assert "VADStopSpeaking" in event_types
-    assert "STTFinal" in event_types
-    assert "AgentFinal" in event_types
-    assert "TTSAudio" in event_types
+    type_names = [type(e).__name__ for e in events_received]
+    assert "AudioIn" in type_names
+    assert "VADStartSpeaking" in type_names
+    assert "VADStopSpeaking" in type_names
+    assert "TurnStarted" in type_names
+    assert "STTFinal" in type_names
+    assert "AgentFinal" in type_names
+    assert "BotStartedSpeaking" in type_names
+    assert "TTSAudio" in type_names
+    assert "BotStoppedSpeaking" in type_names
+    assert "TurnEnded" in type_names
 
     # Verify agent uppercased the transcript
     agent_finals = [e for e in events_received if isinstance(e, AgentFinal)]
@@ -287,7 +354,6 @@ async def test_pipeline_full_turn_with_stubs():
 
 @pytest.mark.asyncio
 async def test_pipeline_skips_empty_transcript():
-    """If STT returns empty text, agent and TTS should not run."""
     chunks = [_make_chunk(), _make_chunk()]
     transport = FakeTransport(chunks=chunks)
     vad = FakeVAD()
@@ -320,7 +386,6 @@ async def test_pipeline_skips_empty_transcript():
 async def test_session_event_bus_accessible():
     session = Session()
     assert session.event_bus is not None
-    # Can subscribe
     received: list = []
     session.event_bus.subscribe(STTFinal, lambda e: received.append(e))
     await session.event_bus.emit(STTFinal(text="test"))

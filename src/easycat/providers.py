@@ -2,6 +2,9 @@
 
 All providers are defined as typing.Protocol classes so that implementations
 use structural subtyping (duck typing) rather than requiring inheritance.
+
+Providers produce provider-scoped events (STTEvent, TTSEvent) via async
+iterators. The Session is the single place that maps these to EasyCat events.
 """
 
 from __future__ import annotations
@@ -10,7 +13,7 @@ from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 from easycat.audio_format import AudioChunk
-from easycat.events import Event
+from easycat.events import Event, STTEvent, TTSEvent
 
 # ── STT Provider ───────────────────────────────────────────────────
 
@@ -19,12 +22,14 @@ from easycat.events import Event
 class STTProvider(Protocol):
     """Speech-to-text provider interface.
 
-    Providers stream audio in via `send_audio` and yield transcript events
-    (STTPartial / STTFinal) from the async iterator returned by `start_stream`.
+    Providers stream audio in via `send_audio` and produce `STTEvent` objects
+    via the `events()` async iterator. Session consumes these and emits
+    EasyCat-level STTPartial/STTFinal events. Providers never emit EasyCat
+    events directly.
     """
 
-    async def start_stream(self) -> AsyncIterator[Event]:
-        """Begin a new STT stream session and return an iterator of transcript events."""
+    async def start_stream(self) -> None:
+        """Begin a new STT stream session."""
         ...
 
     async def send_audio(self, chunk: AudioChunk) -> None:
@@ -35,6 +40,10 @@ class STTProvider(Protocol):
         """Signal that no more audio will be sent for the current stream."""
         ...
 
+    def events(self) -> AsyncIterator[STTEvent]:
+        """Return an async iterator of provider-scoped STT events."""
+        ...
+
 
 # ── TTS Provider ───────────────────────────────────────────────────
 
@@ -43,12 +52,12 @@ class STTProvider(Protocol):
 class TTSProvider(Protocol):
     """Text-to-speech provider interface.
 
-    Call `synthesize` with text to get an async iterator of audio chunks.
-    Call `stop` or `cancel` to halt synthesis (e.g. on barge-in).
+    Call `synthesize` with text to get an async iterator of TTSEvent objects.
+    Session maps these to EasyCat-level TTSAudio/TTSMarkers events.
     """
 
-    def synthesize(self, text: str) -> AsyncIterator[AudioChunk]:
-        """Synthesize text into streaming audio chunks."""
+    def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        """Synthesize text into streaming TTSEvent objects."""
         ...
 
     async def stop(self) -> None:
