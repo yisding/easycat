@@ -41,9 +41,21 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
     VoicemailDetected,
+    WordTimestamp,
 )
 from easycat.providers import NoiseReducer, STTProvider, Transport, TTSProvider, VADProvider
 from easycat.session import Session, SessionConfig, TurnState
+from easycat.stt import (
+    DeepgramSTT,
+    DeepgramSTTConfig,
+    ElevenLabsSTT,
+    ElevenLabsSTTConfig,
+    OpenAISTT,
+    OpenAISTTConfig,
+    STTBase,
+    create_stt_provider,
+    pcm_to_wav,
+)
 
 __all__ = [
     # Audio format
@@ -93,6 +105,7 @@ __all__ = [
     "STTEventType",
     "TTSEvent",
     "TTSEventType",
+    "WordTimestamp",
     # Providers
     "NoiseReducer",
     "STTProvider",
@@ -103,4 +116,14 @@ __all__ = [
     "Session",
     "SessionConfig",
     "TurnState",
+    # STT providers
+    "STTBase",
+    "OpenAISTT",
+    "OpenAISTTConfig",
+    "DeepgramSTT",
+    "DeepgramSTTConfig",
+    "ElevenLabsSTT",
+    "ElevenLabsSTTConfig",
+    "create_stt_provider",
+    "pcm_to_wav",
 ]
