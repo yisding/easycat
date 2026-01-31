@@ -32,8 +32,12 @@ Implement three transport layers that handle audio I/O for different deployment 
 - Receive inbound call audio from Twilio
 - Send audio back to caller in real-time
 - TwiML `<Stream>` / `<Connect><Stream>` compatible session bootstrap
-- Handle Twilio-specific message formats (connected, start, media, stop)
+- Handle Twilio-specific message formats (connected, start, media, stop, **dtmf**, mark)
 - Audio format conversion (Twilio uses mulaw 8kHz -> internal PCM16)
+- **Non-audio message handling:** Twilio Media Streams carries DTMF digits, call status, and other control messages alongside audio. `TwilioTransport` must expose these as *transport control events* (not just audio bytes) so WS6 can consume them. Two options:
+  1. `TwilioTransport` emits `dtmf` and control events directly into the Session event bus (simplest)
+  2. `TwilioTransport` exposes a separate `control_events() -> AsyncIterator[TransportControlEvent]` alongside `receive_audio()`
+  - **Decision:** Option 1 (emit directly) is recommended for MVP to keep the interface simple.
 
 ## Testing Strategy
 
@@ -49,4 +53,5 @@ Implement three transport layers that handle audio I/O for different deployment 
 - [ ] Twilio transport handles Media Streams protocol (connected/start/media/stop)
 - [ ] Twilio transport correctly converts mulaw 8kHz <-> PCM16
 - [ ] All transports conform to the Transport interface from WS1
+- [ ] Twilio transport emits DTMF and control events for WS6 consumption
 - [ ] Session connect/disconnect lifecycle works for all transports

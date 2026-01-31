@@ -6,12 +6,13 @@
 ## Phase 1: Reconnection
 
 ### Task 8.1: WebSocket reconnect strategy
-- Implement `ReconnectingWebSocket` wrapper that other workstreams (STT, TTS, transports) can use
+- Implement `ReconnectingWebSocket` wrapper that **WS2 (STT), WS3 (TTS), and WS5 (transports) must use** — this is the single source of reconnect logic in the project
 - Exponential backoff with jitter (base delay, max delay, jitter factor — all configurable)
 - Configurable max retry count (with option for unlimited)
-- Emit `reconnect` events on each attempt (success and failure)
+- Emit `reconnect.attempt`, `reconnect.success`, `reconnect.failure` events (defined in WS1 event model) into the Session event bus
 - Preserve any pending state (e.g., re-send audio stream config on reconnect for STT providers)
 - Callbacks: `on_reconnect`, `on_give_up` for provider-specific recovery logic
+- **Cross-workstream note:** WS2 (Deepgram, ElevenLabs STT), WS3 (Deepgram, ElevenLabs TTS), and WS5 (Twilio transport) should be updated to depend on this wrapper. Their PLANs already reference this dependency.
 - Unit tests: simulate disconnect -> verify reconnect attempts with correct backoff timing
 
 ### Task 8.2: Provider health check pattern

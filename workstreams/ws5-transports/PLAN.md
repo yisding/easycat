@@ -53,8 +53,9 @@
 
 ### Task 5.7: Twilio Media Streams WebSocket handler
 - Implement `TwilioTransport(Transport)` handling Twilio's bidirectional WebSocket protocol
-- Parse Twilio message types: `connected`, `start`, `media`, `stop`, `mark`
+- Parse Twilio message types: `connected`, `start`, `media`, `stop`, `mark`, **`dtmf`**
 - Extract audio from `media` messages (base64-encoded mulaw)
+- **Non-audio messages:** Emit DTMF digits and control events (call status, etc.) into the Session event bus so WS6 can consume them — this is the explicit handoff design between WS5 and WS6
 - Send audio back in Twilio's expected format (base64-encoded mulaw `media` messages)
 
 ### Task 5.8: Twilio audio format conversion

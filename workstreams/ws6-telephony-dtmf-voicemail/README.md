@@ -13,8 +13,8 @@ Implement DTMF input/output, digit aggregation, and voicemail/answering machine 
 
 ### DTMF Input
 
-- Parse DTMF events from Twilio Media Streams WebSocket `dtmf` messages
-- Emit `dtmf(digit)` events into the session
+- Consume DTMF events emitted by `TwilioTransport` (WS5) into the Session event bus — WS5 handles parsing Twilio WebSocket `dtmf` messages and emitting them; WS6 subscribes to those events
+- Emit `dtmf(digit)` events into the session (or consume them from WS5's emission)
 - Optional fallback: TwiML `<Gather>` for non-stream / legacy call flows
 
 ### DTMF Output
@@ -35,6 +35,7 @@ Implement DTMF input/output, digit aggregation, and voicemail/answering machine 
 #### Twilio AMD (Primary, Outbound Calls)
 
 - Consume Twilio Answering Machine Detection results
+- **Note:** AMD results are typically delivered via Twilio HTTP status callbacks, not the Media Streams WebSocket. Define a framework-agnostic HTTP callback handler (a function that accepts the webhook payload and emits the event) — this can live alongside WS5's Twilio WebSocket server or be mounted in the user's web framework.
 - Map to `voicemail.detected(human|machine|unknown)` event
 
 #### Heuristic Fallback (Any Audio)
@@ -46,10 +47,10 @@ Implement DTMF input/output, digit aggregation, and voicemail/answering machine 
 
 #### Policy Actions
 
-- Support configurable response to voicemail detection:
-  - Hang up
-  - Leave message
-  - Transfer to agent tool
+- Support configurable response to voicemail detection with concrete mechanisms:
+  - **Hang up** — return TwiML `<Hangup>` or call the Twilio REST API (`calls/{sid}/update` with `status=completed`) to end the call
+  - **Leave message** — coordinate with TTS to speak a message after beep detection signals the recording prompt; requires: wait for `voicemail.detected(machine)` → wait for beep → trigger agent/TTS to speak the message → hang up
+  - **Transfer** — invoke an agent tool to transfer the call (e.g., via TwiML `<Dial>` or Twilio REST API)
 
 ## Testing Strategy
 

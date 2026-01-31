@@ -6,8 +6,9 @@
 ## Phase 1: Shared Utilities
 
 ### Task 2.1: STT base class and test harness
-- Implement a concrete base class extending `STTProvider` with shared logic: event emission, error wrapping, audio format validation
-- Create a test harness: feed recorded WAV audio through any STT provider and collect events
+- Implement a concrete base class extending `STTProvider` with shared logic: `STTEvent` production via `events()` async iterator, error wrapping, audio format validation
+- Providers produce `STTEvent` objects (not EasyCat events) — the Session is responsible for mapping these to `stt.partial`/`stt.final`
+- Create a test harness: feed recorded WAV audio through any STT provider and collect `STTEvent` objects
 - Provide sample audio files (short utterances, silence, noisy speech) in a test fixtures directory
 
 ## Phase 2: Provider Implementations (parallel)
@@ -17,6 +18,7 @@
 - Use the Audio API transcriptions endpoint (`gpt-4o-transcribe` model)
 - Turn-based: accept complete audio buffers (from VAD-segmented turns), submit via API, return final transcript
 - Since this is turn-based (not streaming), `send_audio(chunk)` buffers internally; `end_stream()` triggers the API call
+- **Important:** WS4/WS1 must provide a turn-finalization trigger (e.g., `TurnEnded` event or direct `end_stream()` call) at the right moment to submit the buffered audio — coordinate with WS4's TurnManager design
 - Handle: API errors, rate limits, retries with backoff
 - Config: model, language, prompt (optional context)
 - Unit tests with mocked HTTP responses
@@ -28,7 +30,8 @@
 - Forward audio chunks via `send_audio(chunk)`
 - Parse incoming WebSocket messages for partial and final transcript events
 - Emit `stt.partial(text)` and `stt.final(text)` as they arrive
-- Handle WebSocket lifecycle: connect, keepalive, reconnect on disconnect, close on `end_stream()`
+- Handle WebSocket lifecycle: connect, keepalive, close on `end_stream()`
+- **Use WS8's `ReconnectingWebSocket`** wrapper for reconnect logic — do not implement bespoke reconnection
 - Config: model, language, encoding, sample_rate, punctuate, interim_results
 - Unit tests with mocked WebSocket
 - Integration test (gated behind `DEEPGRAM_API_KEY`)
@@ -51,7 +54,7 @@
   - `confidence: Optional[float]`
   - `language: Optional[str]`
   - `timestamps: Optional[List[WordTimestamp]]`
-- Write comparison tests: same audio through all providers, verify output schema is consistent
+- Write comparison tests: same audio through all providers, verify output **schema and contract** are consistent (field types, presence of is_final, etc.) — do **not** assert text equivalence across providers, as vendor transcription results differ
 
 ### Task 2.6: Provider selection and factory
 - Implement `create_stt_provider(config) -> STTProvider` factory function
