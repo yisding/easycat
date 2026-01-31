@@ -41,6 +41,7 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
     VoicemailDetected,
+    WordTimestamp,
 )
 from easycat.noise_reduction import (
     KrispNoiseReducer,
@@ -50,7 +51,24 @@ from easycat.noise_reduction import (
     create_noise_reducer,
 )
 from easycat.providers import NoiseReducer, STTProvider, Transport, TTSProvider, VADProvider
+from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.session import Session, SessionConfig, TurnState
+from easycat.stt import (
+    DeepgramSTT,
+    DeepgramSTTConfig,
+    ElevenLabsSTT,
+    ElevenLabsSTTConfig,
+    OpenAISTT,
+    OpenAISTTConfig,
+    STTBase,
+    create_stt_provider,
+    pcm_to_wav,
+)
+from easycat.tts.base import TTSBase
+from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
+from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode, ElevenLabsTTS, ElevenLabsTTSConfig
+from easycat.tts.factory import TTSProviderConfig, create_tts_provider
+from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState, TurnMode
 from easycat.vad import KrispVAD, SileroVAD, VADConfig, create_vad
 
@@ -102,6 +120,7 @@ __all__ = [
     "STTEventType",
     "TTSEvent",
     "TTSEventType",
+    "WordTimestamp",
     # Providers
     "NoiseReducer",
     "STTProvider",
@@ -128,4 +147,28 @@ __all__ = [
     "Session",
     "SessionConfig",
     "TurnState",
+    # ReconnectingWebSocket
+    "ReconnectConfig",
+    "ReconnectingWebSocket",
+    # STT providers
+    "STTBase",
+    "OpenAISTT",
+    "OpenAISTTConfig",
+    "DeepgramSTT",
+    "DeepgramSTTConfig",
+    "ElevenLabsSTT",
+    "ElevenLabsSTTConfig",
+    "create_stt_provider",
+    "pcm_to_wav",
+    # TTS providers
+    "TTSBase",
+    "OpenAITTS",
+    "OpenAITTSConfig",
+    "DeepgramTTS",
+    "DeepgramTTSConfig",
+    "ElevenLabsTTS",
+    "ElevenLabsTTSConfig",
+    "ElevenLabsStreamMode",
+    "TTSProviderConfig",
+    "create_tts_provider",
 ]
