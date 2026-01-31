@@ -42,8 +42,17 @@ from easycat.events import (
     VADStopSpeaking,
     VoicemailDetected,
 )
+from easycat.noise_reduction import (
+    KrispNoiseReducer,
+    NoiseReducerConfig,
+    PassthroughNoiseReducer,
+    RNNoiseReducer,
+    create_noise_reducer,
+)
 from easycat.providers import NoiseReducer, STTProvider, Transport, TTSProvider, VADProvider
 from easycat.session import Session, SessionConfig, TurnState
+from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState, TurnMode
+from easycat.vad import KrispVAD, SileroVAD, VADConfig, create_vad
 
 __all__ = [
     # Audio format
@@ -99,6 +108,22 @@ __all__ = [
     "Transport",
     "TTSProvider",
     "VADProvider",
+    # Noise reduction (WS4)
+    "RNNoiseReducer",
+    "KrispNoiseReducer",
+    "PassthroughNoiseReducer",
+    "NoiseReducerConfig",
+    "create_noise_reducer",
+    # VAD (WS4)
+    "SileroVAD",
+    "KrispVAD",
+    "VADConfig",
+    "create_vad",
+    # Turn-taking (WS4)
+    "TurnManager",
+    "TurnManagerConfig",
+    "TurnManagerState",
+    "TurnMode",
     # Session
     "Session",
     "SessionConfig",
