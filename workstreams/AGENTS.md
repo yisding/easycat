@@ -21,7 +21,7 @@ All code in this project must use the following tools. Do not deviate from these
 
 ### Python
 
-- **Python 3.14** — use 3.14 features where appropriate (e.g., deferred evaluation of annotations is the default, new `type` statement syntax).
+- **Python 3.12+** (3.12 or 3.13 recommended) — vendor SDK support (PyTorch, audio libraries, provider SDKs) often lags behind the newest Python release, so pinning to a widely supported version avoids friction. Use `from __future__ import annotations` for deferred evaluation. If you have a strong reason to require 3.14, document it explicitly and verify all dependencies support it.
 
 ### Package & Project Management: uv
 
