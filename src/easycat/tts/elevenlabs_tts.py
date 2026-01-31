@@ -63,10 +63,16 @@ class ElevenLabsTTS(TTSBase):
     def __init__(self, config: ElevenLabsTTSConfig) -> None:
         super().__init__(output_format=config.audio_format)
         self._config = config
-        self._source_format = _ELEVENLABS_FORMAT_MAP.get(
-            config.output_format,
-            PCM16_MONO_24K,
-        )
+
+        if config.output_format not in _ELEVENLABS_FORMAT_MAP:
+            supported = ", ".join(sorted(_ELEVENLABS_FORMAT_MAP))
+            raise ValueError(
+                f"Unsupported ElevenLabs output_format: {config.output_format!r}. "
+                f"Only PCM formats are supported: {supported}. "
+                f"Non-PCM formats (mp3, opus, etc.) would require a decoder."
+            )
+
+        self._source_format = _ELEVENLABS_FORMAT_MAP[config.output_format]
         self._client: httpx.AsyncClient | None = None
         self._response: httpx.Response | None = None
         self._ws: ReconnectingWebSocket | None = None
