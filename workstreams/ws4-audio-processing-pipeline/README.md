@@ -76,12 +76,12 @@ Implement the audio processing stages that sit between raw audio input and STT: 
 
 ## Acceptance Criteria
 
-- [ ] Krisp noise reduction processes audio chunks (when configured)
-- [ ] RNNoise fallback works when Krisp is absent
-- [ ] Krisp VAD detects speech start/stop with configurable thresholds
-- [ ] Silero VAD fallback works when Krisp is absent
-- [ ] Turn-taking correctly identifies turn boundaries from VAD events
-- [ ] Barge-in stops playback and cancels TTS when user interrupts
-- [ ] Pre-roll buffering captures audio before VAD triggers (TurnManager sees raw audio frames)
-- [ ] TurnManager emits `turn.ended` (not `stt.final`) — Session handles STT finalization
-- [ ] Push-to-talk mode works for testing scenarios
+- [x] Krisp noise reduction processes audio chunks (when configured)
+- [x] RNNoise fallback works when Krisp is absent
+- [x] Krisp VAD detects speech start/stop with configurable thresholds
+- [x] Silero VAD fallback works when Krisp is absent
+- [x] Turn-taking correctly identifies turn boundaries from VAD events
+- [x] Barge-in stops playback and cancels TTS when user interrupts
+- [x] Pre-roll buffering captures audio before VAD triggers (TurnManager sees raw audio frames)
+- [x] TurnManager emits `turn.ended` (not `stt.final`) — Session handles STT finalization
+- [x] Push-to-talk mode works for testing scenarios

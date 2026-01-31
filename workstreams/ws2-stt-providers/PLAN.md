@@ -31,7 +31,7 @@
 - Parse incoming WebSocket messages for partial and final transcript events
 - Emit `stt.partial(text)` and `stt.final(text)` as they arrive
 - Handle WebSocket lifecycle: connect, keepalive, close on `end_stream()`
-- **Use WS8's `ReconnectingWebSocket`** wrapper for reconnect logic — do not implement bespoke reconnection
+- Plan to use WS8's `ReconnectingWebSocket` wrapper for reconnect logic; current implementation uses direct `websockets` with a `ws_connect` override and will be swapped once WS8 is available
 - Config: model, language, encoding, sample_rate, punctuate, interim_results
 - Unit tests with mocked WebSocket
 - Integration test (gated behind `DEEPGRAM_API_KEY`)

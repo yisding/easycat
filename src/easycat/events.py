@@ -121,7 +121,7 @@ class TurnStarted:
 
 @dataclass(frozen=True)
 class TurnEnded:
-    """A turn has completed (agent response fully delivered)."""
+    """User turn has ended (speech capture complete)."""
 
     timestamp: float = field(default_factory=time.monotonic)
 

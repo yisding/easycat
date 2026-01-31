@@ -336,12 +336,18 @@ async def test_pipeline_full_turn_with_provider_events():
     assert "VADStartSpeaking" in type_names
     assert "VADStopSpeaking" in type_names
     assert "TurnStarted" in type_names
+    assert "TurnEnded" in type_names
     assert "STTFinal" in type_names
     assert "AgentFinal" in type_names
     assert "BotStartedSpeaking" in type_names
     assert "TTSAudio" in type_names
     assert "BotStoppedSpeaking" in type_names
-    assert "TurnEnded" in type_names
+
+    turn_end_idx = type_names.index("TurnEnded")
+    bot_start_idx = type_names.index("BotStartedSpeaking")
+    bot_stop_idx = type_names.index("BotStoppedSpeaking")
+    assert turn_end_idx < bot_start_idx
+    assert turn_end_idx < bot_stop_idx
 
     # Verify agent uppercased the transcript
     agent_finals = [e for e in events_received if isinstance(e, AgentFinal)]

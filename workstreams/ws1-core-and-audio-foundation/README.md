@@ -82,10 +82,10 @@ Prioritize shipping the **interface definitions** (ABCs/Protocols + event types)
 
 ## Acceptance Criteria
 
-- [ ] Session lifecycle works (start/stop/shutdown) with no-op provider stubs
-- [ ] Events can be dispatched and subscribed to
-- [ ] Pipeline runs end-to-end with stub providers (audio in -> stub noise -> stub VAD -> stub STT -> stub agent -> stub TTS -> audio out)
-- [ ] Audio resampling works for all supported rates (8k, 16k, 24k, 48k)
-- [ ] Chunk sizing produces correct frame sizes for VAD
-- [ ] Cancel token propagates across all pipeline stages
-- [ ] Provider event iterators are consumed by Session and mapped to EasyCat events
+- [x] Session lifecycle works (start/stop/shutdown) with no-op provider stubs
+- [x] Events can be dispatched and subscribed to
+- [x] Pipeline runs end-to-end with stub providers (audio in -> stub noise -> stub VAD -> stub STT -> stub agent -> stub TTS -> audio out)
+- [x] Audio resampling works for all supported rates (8k, 16k, 24k, 48k)
+- [x] Chunk sizing produces correct frame sizes for VAD
+- [x] Cancel token propagates across all pipeline stages
+- [x] Provider event iterators are consumed by Session and mapped to EasyCat events

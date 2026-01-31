@@ -287,6 +287,7 @@ class Session:
     async def _handle_end_of_speech(self) -> None:
         """Called when VAD signals end of speech: finalize STT, run agent, synthesize TTS."""
         self._turn_state = TurnState.PROCESSING
+        await self.event_bus.emit(TurnEnded())
         await self.stt.end_stream()
 
         token = self._cancel_token
@@ -336,7 +337,6 @@ class Session:
         if self._turn_state == TurnState.BOT_SPEAKING:
             await self.event_bus.emit(BotStoppedSpeaking())
             self._turn_state = TurnState.IDLE
-            await self.event_bus.emit(TurnEnded())
 
     # ── Internal helpers ───────────────────────────────────────
 
