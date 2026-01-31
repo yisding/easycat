@@ -118,9 +118,7 @@ class RNNoiseReducer:
                 frame = frame + [0.0] * (_RNNOISE_FRAME_SAMPLES - len(frame))
 
             # RNNoise expects float* input/output scaled to [-32768, 32767]
-            in_buf = (ctypes.c_float * _RNNOISE_FRAME_SAMPLES)(
-                *(s * 32768.0 for s in frame)
-            )
+            in_buf = (ctypes.c_float * _RNNOISE_FRAME_SAMPLES)(*(s * 32768.0 for s in frame))
             out_buf = (ctypes.c_float * _RNNOISE_FRAME_SAMPLES)()
             self._rnnoise.rnnoise_process_frame(self._state, out_buf, in_buf)
 
