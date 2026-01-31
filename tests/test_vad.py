@@ -52,6 +52,7 @@ async def test_silero_process_mocked():
 
     # Manually construct SileroVAD with mocked model
     import sys
+
     mock_torch = MagicMock()
     mock_torch.hub.load.return_value = (mock_model, None)
     mock_torch.FloatTensor = lambda x: MagicMock()
@@ -93,6 +94,7 @@ async def test_krisp_vad_process_mocked():
     mock_module.vad_process.return_value = 0.9  # Speech probability
 
     import sys
+
     sys.modules["krisp_audio"] = mock_module
 
     try:
@@ -120,6 +122,7 @@ async def test_krisp_vad_silence():
     mock_module.vad_process.return_value = 0.1  # Low probability = silence
 
     import sys
+
     sys.modules["krisp_audio"] = mock_module
 
     try:
@@ -144,6 +147,7 @@ async def test_krisp_vad_configure():
     mock_module.create_vad_session.return_value = MagicMock()
 
     import sys
+
     sys.modules["krisp_audio"] = mock_module
 
     try:
@@ -192,6 +196,7 @@ def test_vad_factory_krisp_preferred():
     mock_module.create_vad_session.return_value = MagicMock()
 
     import sys
+
     sys.modules["krisp_audio"] = mock_module
 
     try:
@@ -207,6 +212,7 @@ def test_vad_factory_applies_config():
     mock_module.create_vad_session.return_value = MagicMock()
 
     import sys
+
     sys.modules["krisp_audio"] = mock_module
 
     try:
@@ -244,6 +250,7 @@ async def test_short_noise_burst_no_event():
     mock_module.vad_process.side_effect = mock_vad_process
 
     import sys
+
     sys.modules["krisp_audio"] = mock_module
 
     try:
