@@ -1,0 +1,130 @@
+"""Tests for TTS provider factory."""
+
+from __future__ import annotations
+
+import pytest
+
+from easycat.tts.deepgram_tts import DeepgramTTS
+from easycat.tts.elevenlabs_tts import ElevenLabsTTS
+from easycat.tts.factory import TTSProviderConfig, create_tts_provider
+from easycat.tts.openai_tts import OpenAITTS
+
+
+class TestTTSProviderConfig:
+    def test_basic_config(self):
+        config = TTSProviderConfig(provider="openai")
+        assert config.provider == "openai"
+        assert config.settings is None
+
+    def test_config_with_settings(self):
+        config = TTSProviderConfig(
+            provider="openai",
+            settings={"api_key": "test", "model": "tts-1-hd"},
+        )
+        assert config.settings["api_key"] == "test"
+
+
+class TestCreateTTSProvider:
+    def test_create_openai(self):
+        config = TTSProviderConfig(
+            provider="openai",
+            settings={"api_key": "test-key"},
+        )
+        provider = create_tts_provider(config)
+        assert isinstance(provider, OpenAITTS)
+
+    def test_create_deepgram(self):
+        config = TTSProviderConfig(
+            provider="deepgram",
+            settings={"api_key": "test-key"},
+        )
+        provider = create_tts_provider(config)
+        assert isinstance(provider, DeepgramTTS)
+
+    def test_create_elevenlabs(self):
+        config = TTSProviderConfig(
+            provider="elevenlabs",
+            settings={"api_key": "test-key"},
+        )
+        provider = create_tts_provider(config)
+        assert isinstance(provider, ElevenLabsTTS)
+
+    def test_case_insensitive_provider_name(self):
+        config = TTSProviderConfig(
+            provider="OpenAI",
+            settings={"api_key": "test"},
+        )
+        provider = create_tts_provider(config)
+        assert isinstance(provider, OpenAITTS)
+
+    def test_unknown_provider_raises(self):
+        config = TTSProviderConfig(provider="unknown_provider")
+        with pytest.raises(ValueError, match="Unknown TTS provider"):
+            create_tts_provider(config)
+
+    def test_error_message_lists_available(self):
+        config = TTSProviderConfig(provider="bad")
+        with pytest.raises(ValueError, match="deepgram.*elevenlabs.*openai"):
+            create_tts_provider(config)
+
+    def test_invalid_settings_raises(self):
+        config = TTSProviderConfig(
+            provider="openai",
+            settings={"nonexistent_param": "value"},
+        )
+        with pytest.raises(ValueError, match="Invalid settings"):
+            create_tts_provider(config)
+
+    def test_empty_settings_uses_defaults(self):
+        config = TTSProviderConfig(provider="openai", settings={})
+        provider = create_tts_provider(config)
+        assert isinstance(provider, OpenAITTS)
+
+    def test_none_settings_uses_defaults(self):
+        config = TTSProviderConfig(provider="openai")
+        provider = create_tts_provider(config)
+        assert isinstance(provider, OpenAITTS)
+
+    def test_openai_with_custom_settings(self):
+        config = TTSProviderConfig(
+            provider="openai",
+            settings={
+                "api_key": "sk-test",
+                "model": "tts-1-hd",
+                "voice": "nova",
+                "speed": 1.5,
+            },
+        )
+        provider = create_tts_provider(config)
+        assert isinstance(provider, OpenAITTS)
+        assert provider._config.model == "tts-1-hd"
+        assert provider._config.voice == "nova"
+        assert provider._config.speed == 1.5
+
+    def test_deepgram_with_custom_settings(self):
+        config = TTSProviderConfig(
+            provider="deepgram",
+            settings={
+                "api_key": "dg-test",
+                "model": "aura-orpheus-en",
+                "sample_rate": 16000,
+            },
+        )
+        provider = create_tts_provider(config)
+        assert isinstance(provider, DeepgramTTS)
+        assert provider._config.model == "aura-orpheus-en"
+        assert provider._config.sample_rate == 16000
+
+    def test_elevenlabs_with_custom_settings(self):
+        config = TTSProviderConfig(
+            provider="elevenlabs",
+            settings={
+                "api_key": "el-test",
+                "voice_id": "custom-voice",
+                "stability": 0.9,
+            },
+        )
+        provider = create_tts_provider(config)
+        assert isinstance(provider, ElevenLabsTTS)
+        assert provider._config.voice_id == "custom-voice"
+        assert provider._config.stability == 0.9

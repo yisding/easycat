@@ -1,0 +1,246 @@
+"""ElevenLabs TTS provider implementation."""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from enum import Enum
+
+import httpx
+
+from easycat.audio_format import PCM16_MONO_24K, AudioFormat
+from easycat.events import TTSEvent
+from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
+from easycat.tts.base import TTSBase
+
+logger = logging.getLogger(__name__)
+
+
+class ElevenLabsStreamMode(str, Enum):
+    """Streaming mode for ElevenLabs TTS."""
+
+    HTTP = "http"
+    WEBSOCKET = "websocket"
+
+
+@dataclass
+class ElevenLabsTTSConfig:
+    """Configuration for the ElevenLabs TTS provider."""
+
+    api_key: str = ""
+    voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel (default)
+    model_id: str = "eleven_monolingual_v1"
+    stability: float = 0.5
+    similarity_boost: float = 0.75
+    output_format: str = "pcm_24000"
+    stream_mode: ElevenLabsStreamMode = ElevenLabsStreamMode.HTTP
+    base_url: str = "https://api.elevenlabs.io/v1"
+    ws_base_url: str = "wss://api.elevenlabs.io/v1"
+    audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_24K)
+
+
+# Map ElevenLabs output_format strings to AudioFormat
+_ELEVENLABS_FORMAT_MAP: dict[str, AudioFormat] = {
+    "pcm_16000": AudioFormat(sample_rate=16000, channels=1, sample_width=2),
+    "pcm_22050": AudioFormat(sample_rate=22050, channels=1, sample_width=2),
+    "pcm_24000": AudioFormat(sample_rate=24000, channels=1, sample_width=2),
+    "pcm_44100": AudioFormat(sample_rate=44100, channels=1, sample_width=2),
+}
+
+
+class ElevenLabsTTS(TTSBase):
+    """TTS provider using ElevenLabs API.
+
+    Supports two streaming modes:
+    - HTTP: Chunked transfer encoding via the streaming endpoint
+    - WebSocket: Real-time streaming via WebSocket using ReconnectingWebSocket
+
+    Requests PCM output format directly from ElevenLabs to avoid MP3 decoding.
+    """
+
+    def __init__(self, config: ElevenLabsTTSConfig) -> None:
+        super().__init__(output_format=config.audio_format)
+        self._config = config
+
+        if config.output_format not in _ELEVENLABS_FORMAT_MAP:
+            supported = ", ".join(sorted(_ELEVENLABS_FORMAT_MAP))
+            raise ValueError(
+                f"Unsupported ElevenLabs output_format: {config.output_format!r}. "
+                f"Only PCM formats are supported: {supported}. "
+                f"Non-PCM formats (mp3, opus, etc.) would require a decoder."
+            )
+
+        self._source_format = _ELEVENLABS_FORMAT_MAP[config.output_format]
+        self._client: httpx.AsyncClient | None = None
+        self._response: httpx.Response | None = None
+        self._ws: ReconnectingWebSocket | None = None
+
+    def _get_http_client(self) -> httpx.AsyncClient:
+        """Get or create the HTTP client."""
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self._config.base_url,
+                headers={
+                    "xi-api-key": self._config.api_key,
+                    "Content-Type": "application/json",
+                },
+                timeout=httpx.Timeout(30.0, connect=10.0),
+            )
+        return self._client
+
+    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        """Synthesize text using the configured streaming mode."""
+        if self._config.stream_mode == ElevenLabsStreamMode.WEBSOCKET:
+            async for event in self._synthesize_ws(text):
+                yield event
+        else:
+            async for event in self._synthesize_http(text):
+                yield event
+
+    async def _synthesize_http(self, text: str) -> AsyncIterator[TTSEvent]:
+        """Synthesize via HTTP chunked transfer encoding."""
+        self._start_synthesis()
+        client = self._get_http_client()
+
+        try:
+            request_body = {
+                "text": text,
+                "model_id": self._config.model_id,
+                "voice_settings": {
+                    "stability": self._config.stability,
+                    "similarity_boost": self._config.similarity_boost,
+                },
+            }
+
+            url = f"/text-to-speech/{self._config.voice_id}/stream"
+            params = {"output_format": self._config.output_format}
+
+            async with client.stream(
+                "POST",
+                url,
+                json=request_body,
+                params=params,
+            ) as response:
+                self._response = response
+                response.raise_for_status()
+
+                async for chunk in response.aiter_bytes(chunk_size=4800):
+                    if self._cancelled:
+                        break
+                    if chunk:
+                        yield self._make_audio_event(chunk, self._source_format)
+
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "ElevenLabs TTS API error: %s %s",
+                exc.response.status_code,
+                exc.response.text,
+            )
+            raise
+        except httpx.HTTPError as exc:
+            if not self._cancelled:
+                logger.error("ElevenLabs TTS HTTP error: %s", exc)
+                raise
+        finally:
+            self._response = None
+            self._end_synthesis()
+
+    async def _synthesize_ws(self, text: str) -> AsyncIterator[TTSEvent]:
+        """Synthesize via WebSocket streaming."""
+        self._start_synthesis()
+
+        ws_url = (
+            f"{self._config.ws_base_url}"
+            f"/text-to-speech/{self._config.voice_id}"
+            f"/stream-input?model_id={self._config.model_id}"
+            f"&output_format={self._config.output_format}"
+        )
+
+        self._ws = ReconnectingWebSocket(
+            url=ws_url,
+            config=ReconnectConfig(
+                extra_headers={"xi-api-key": self._config.api_key},
+            ),
+        )
+
+        try:
+            await self._ws.connect()
+
+            # Send initial message with voice settings
+            init_msg = {
+                "text": " ",
+                "voice_settings": {
+                    "stability": self._config.stability,
+                    "similarity_boost": self._config.similarity_boost,
+                },
+            }
+            await self._ws.send(json.dumps(init_msg))
+
+            # Send the actual text
+            await self._ws.send(json.dumps({"text": text}))
+
+            # Send empty string to signal end of input
+            await self._ws.send(json.dumps({"text": ""}))
+
+            # Receive audio chunks
+            async for message in self._ws.recv_iter():
+                if self._cancelled:
+                    break
+
+                if isinstance(message, str):
+                    try:
+                        data = json.loads(message)
+                        if data.get("audio"):
+                            import base64
+
+                            audio_bytes = base64.b64decode(data["audio"])
+                            if audio_bytes:
+                                yield self._make_audio_event(audio_bytes, self._source_format)
+                        if data.get("alignment"):
+                            yield self._make_markers_event([data["alignment"]])
+                        if data.get("isFinal"):
+                            break
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
+        except Exception as exc:
+            if not self._cancelled:
+                logger.error("ElevenLabs TTS WebSocket error: %s", exc)
+                raise
+        finally:
+            await self._close_ws()
+            self._end_synthesis()
+
+    async def _close_ws(self) -> None:
+        """Close the WebSocket connection."""
+        if self._ws is not None:
+            try:
+                await self._ws.close()
+            except Exception:
+                logger.debug("Error closing ElevenLabs WebSocket", exc_info=True)
+            finally:
+                self._ws = None
+
+    async def stop(self) -> None:
+        """Gracefully stop synthesis."""
+        await super().stop()
+        if self._response is not None:
+            await self._response.aclose()
+
+    async def cancel(self) -> None:
+        """Immediately cancel synthesis and close connections."""
+        await super().cancel()
+        resp = self._response
+        self._response = None
+        if resp is not None:
+            await resp.aclose()
+        await self._close_ws()
+
+    async def close(self) -> None:
+        """Close all underlying connections."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+        await self._close_ws()
