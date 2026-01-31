@@ -25,6 +25,17 @@ class ElevenLabsStreamMode(str, Enum):
     WEBSOCKET = "websocket"
 
 
+# Map ElevenLabs output_format strings to AudioFormat.
+# Only raw PCM formats are supported; compressed formats (mp3, opus, ulaw)
+# would require a decoder and must not be silently treated as PCM.
+_ELEVENLABS_FORMAT_MAP: dict[str, AudioFormat] = {
+    "pcm_16000": AudioFormat(sample_rate=16000, channels=1, sample_width=2),
+    "pcm_22050": AudioFormat(sample_rate=22050, channels=1, sample_width=2),
+    "pcm_24000": AudioFormat(sample_rate=24000, channels=1, sample_width=2),
+    "pcm_44100": AudioFormat(sample_rate=44100, channels=1, sample_width=2),
+}
+
+
 @dataclass
 class ElevenLabsTTSConfig:
     """Configuration for the ElevenLabs TTS provider."""
@@ -40,14 +51,14 @@ class ElevenLabsTTSConfig:
     ws_base_url: str = "wss://api.elevenlabs.io/v1"
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_24K)
 
-
-# Map ElevenLabs output_format strings to AudioFormat
-_ELEVENLABS_FORMAT_MAP: dict[str, AudioFormat] = {
-    "pcm_16000": AudioFormat(sample_rate=16000, channels=1, sample_width=2),
-    "pcm_22050": AudioFormat(sample_rate=22050, channels=1, sample_width=2),
-    "pcm_24000": AudioFormat(sample_rate=24000, channels=1, sample_width=2),
-    "pcm_44100": AudioFormat(sample_rate=44100, channels=1, sample_width=2),
-}
+    def __post_init__(self) -> None:
+        if self.output_format not in _ELEVENLABS_FORMAT_MAP:
+            supported = ", ".join(sorted(_ELEVENLABS_FORMAT_MAP))
+            raise ValueError(
+                f"Unsupported ElevenLabs output_format: {self.output_format!r}. "
+                f"Only PCM formats are supported: {supported}. "
+                f"Non-PCM formats (mp3, opus, etc.) would require a decoder."
+            )
 
 
 class ElevenLabsTTS(TTSBase):
@@ -63,15 +74,6 @@ class ElevenLabsTTS(TTSBase):
     def __init__(self, config: ElevenLabsTTSConfig) -> None:
         super().__init__(output_format=config.audio_format)
         self._config = config
-
-        if config.output_format not in _ELEVENLABS_FORMAT_MAP:
-            supported = ", ".join(sorted(_ELEVENLABS_FORMAT_MAP))
-            raise ValueError(
-                f"Unsupported ElevenLabs output_format: {config.output_format!r}. "
-                f"Only PCM formats are supported: {supported}. "
-                f"Non-PCM formats (mp3, opus, etc.) would require a decoder."
-            )
-
         self._source_format = _ELEVENLABS_FORMAT_MAP[config.output_format]
         self._client: httpx.AsyncClient | None = None
         self._response: httpx.Response | None = None

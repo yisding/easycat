@@ -105,14 +105,14 @@ class TestElevenLabsTTSConfig:
 
 
 class TestElevenLabsTTSValidation:
-    def test_non_pcm_output_format_raises(self):
-        """Non-PCM formats (mp3, opus, etc.) must be rejected at construction."""
+    def test_non_pcm_output_format_rejected_at_config(self):
+        """Non-PCM formats (mp3, opus, etc.) must be rejected at config creation."""
         with pytest.raises(ValueError, match="Unsupported ElevenLabs output_format"):
-            ElevenLabsTTS(ElevenLabsTTSConfig(api_key="key", output_format="mp3_44100"))
+            ElevenLabsTTSConfig(api_key="key", output_format="mp3_44100")
 
-    def test_unknown_format_raises(self):
+    def test_unknown_format_rejected_at_config(self):
         with pytest.raises(ValueError, match="Only PCM formats are supported"):
-            ElevenLabsTTS(ElevenLabsTTSConfig(api_key="key", output_format="ulaw_8000"))
+            ElevenLabsTTSConfig(api_key="key", output_format="ulaw_8000")
 
     def test_all_pcm_formats_accepted(self):
         for fmt in ("pcm_16000", "pcm_22050", "pcm_24000", "pcm_44100"):
