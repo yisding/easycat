@@ -32,7 +32,6 @@ from easycat.events import (
     BotStartedSpeaking,
     BotStoppedSpeaking,
     EventBus,
-    Interruption,
     TurnEnded,
     TurnStarted,
     VADStartSpeaking,
@@ -95,7 +94,8 @@ class TurnManager:
         self._event_bus = event_bus
         self._config = config or TurnManagerConfig()
 
-        # Callback for barge-in: should call session.cancel_turn(barge_in=True)
+        # Callback for barge-in: expected to call session.cancel_turn(barge_in=True).
+        # The callback is the sole emitter of the Interruption event.
         self._cancel_turn_callback = cancel_turn_callback
 
         # State
@@ -236,17 +236,17 @@ class TurnManager:
     async def _handle_barge_in(self) -> None:
         """Handle user speech during bot playback (barge-in).
 
-        Triggers the cancel callback to stop TTS/agent, emits Interruption,
-        and starts a new user turn.
+        Triggers the cancel callback to stop TTS/agent, then starts a new
+        user turn.  The callback (typically ``session.cancel_turn(barge_in=True)``)
+        is responsible for emitting the ``Interruption`` event so that it is
+        emitted exactly once per barge-in.
         """
         logger.debug("Turn: BotSpeaking -> UserSpeaking (barge-in)")
 
-        # Cancel current bot output via the session callback
+        # Cancel current bot output via the session callback.
+        # The callback is responsible for emitting the Interruption event.
         if self._cancel_turn_callback:
             await self._cancel_turn_callback()
-
-        # Emit interruption event for observability
-        await self._event_bus.emit(Interruption())
 
         # Start new turn
         self._cancel_token = CancelToken()

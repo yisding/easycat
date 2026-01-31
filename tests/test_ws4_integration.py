@@ -156,6 +156,7 @@ async def test_pipeline_barge_in_scenario():
 
     async def mock_cancel():
         cancel_called[0] = True
+        await bus.emit(Interruption())  # Real callback emits Interruption
 
     tm = TurnManager(bus, config=config, cancel_turn_callback=mock_cancel)
 
