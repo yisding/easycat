@@ -80,9 +80,7 @@ class SileroVAD:
             self._model = model
             logger.info("Silero VAD model loaded successfully")
         except ImportError as exc:
-            raise RuntimeError(
-                "PyTorch not installed. Install torch to use Silero VAD."
-            ) from exc
+            raise RuntimeError("PyTorch not installed. Install torch to use Silero VAD.") from exc
         except Exception as exc:
             raise RuntimeError(f"Failed to load Silero VAD model: {exc}") from exc
 
@@ -139,8 +137,7 @@ class SileroVAD:
                     if (
                         self._speech_start_time is not None
                         and not self._speech_confirmed
-                        and (now - self._speech_start_time) * 1000
-                        >= self._min_speech_duration_ms
+                        and (now - self._speech_start_time) * 1000 >= self._min_speech_duration_ms
                     ):
                         self._is_speaking = True
                         self._speech_confirmed = True
@@ -152,10 +149,7 @@ class SileroVAD:
                 if self._is_speaking:
                     if self._silence_start_time is None:
                         self._silence_start_time = now
-                    elif (
-                        (now - self._silence_start_time) * 1000
-                        >= self._min_silence_duration_ms
-                    ):
+                    elif (now - self._silence_start_time) * 1000 >= self._min_silence_duration_ms:
                         self._is_speaking = False
                         self._silence_start_time = None
                         yield VADStopSpeaking()
@@ -241,9 +235,7 @@ class KrispVAD:
         """Process audio through Krisp VAD and yield events."""
         import krisp_audio  # type: ignore[import-not-found]
 
-        speech_prob = krisp_audio.vad_process(
-            self._session, chunk.data, chunk.format.sample_rate
-        )
+        speech_prob = krisp_audio.vad_process(self._session, chunk.data, chunk.format.sample_rate)
         now = time.monotonic()
 
         if speech_prob >= self._threshold:
@@ -254,8 +246,7 @@ class KrispVAD:
                 if (
                     self._speech_start_time is not None
                     and not self._speech_confirmed
-                    and (now - self._speech_start_time) * 1000
-                    >= self._min_speech_duration_ms
+                    and (now - self._speech_start_time) * 1000 >= self._min_speech_duration_ms
                 ):
                     self._is_speaking = True
                     self._speech_confirmed = True
@@ -266,10 +257,7 @@ class KrispVAD:
             if self._is_speaking:
                 if self._silence_start_time is None:
                     self._silence_start_time = now
-                elif (
-                    (now - self._silence_start_time) * 1000
-                    >= self._min_silence_duration_ms
-                ):
+                elif (now - self._silence_start_time) * 1000 >= self._min_silence_duration_ms:
                     self._is_speaking = False
                     self._silence_start_time = None
                     yield VADStopSpeaking()

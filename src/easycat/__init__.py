@@ -1,5 +1,14 @@
 """EasyCat — slim, batteries-included voice bot framework."""
 
+from easycat.agent_runner import (
+    AgentRunner,
+    AgentRunnerConfig,
+    AgentStreamEvent,
+    AgentStreamEventType,
+    AgentTimeoutError,
+    StreamingAgent,
+    TracingSpan,
+)
 from easycat.audio_format import (
     PCM16_MONO_8K,
     PCM16_MONO_16K,
@@ -73,6 +82,14 @@ from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerStat
 from easycat.vad import KrispVAD, SileroVAD, VADConfig, create_vad
 
 __all__ = [
+    # Agent runner (WS7)
+    "AgentRunner",
+    "AgentRunnerConfig",
+    "AgentStreamEvent",
+    "AgentStreamEventType",
+    "AgentTimeoutError",
+    "StreamingAgent",
+    "TracingSpan",
     # Audio format
     "AudioChunk",
     "AudioFormat",
