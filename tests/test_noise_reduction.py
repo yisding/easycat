@@ -105,6 +105,31 @@ async def test_rnnoise_process_mocked():
     assert mock_lib.rnnoise_process_frame.called
 
 
+def test_rnnoise_sets_ctypes_argtypes():
+    """RNNoiseReducer must set restype/argtypes for 64-bit pointer safety."""
+    import ctypes
+
+    mock_lib = MagicMock()
+    mock_lib.rnnoise_create.return_value = 0xDEADBEEF
+
+    with patch("ctypes.util.find_library", return_value="/fake/librnnoise.so"), \
+         patch("ctypes.CDLL", return_value=mock_lib):
+        RNNoiseReducer()
+
+    # rnnoise_create must return c_void_p (pointer), not the default c_int
+    assert mock_lib.rnnoise_create.restype == ctypes.c_void_p
+    # rnnoise_destroy must accept a pointer and return nothing
+    assert mock_lib.rnnoise_destroy.restype is None
+    assert mock_lib.rnnoise_destroy.argtypes == [ctypes.c_void_p]
+    # rnnoise_process_frame must accept pointer + two float pointers
+    assert mock_lib.rnnoise_process_frame.restype == ctypes.c_float
+    assert mock_lib.rnnoise_process_frame.argtypes == [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_float),
+        ctypes.POINTER(ctypes.c_float),
+    ]
+
+
 # ── KrispNoiseReducer tests ─────────────────────────────────────────
 
 
