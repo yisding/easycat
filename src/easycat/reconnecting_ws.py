@@ -98,14 +98,34 @@ class ReconnectingWebSocket:
         return await self._ws.recv()
 
     async def recv_iter(self) -> AsyncIterator[str | bytes]:
-        """Iterate over incoming messages until the connection closes."""
+        """Iterate over incoming messages, reconnecting on transient drops.
+
+        On ``ConnectionClosed``, attempts to re-establish the connection
+        using the same retry/backoff policy as the initial ``connect()``.
+        If reconnection fails (or the socket was explicitly closed via
+        ``close()``), the iterator ends.
+        """
         if self._ws is None:
             raise RuntimeError("WebSocket is not connected")
-        try:
-            async for message in self._ws:
-                yield message
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("WebSocket connection closed during recv_iter")
+
+        while True:
+            try:
+                async for message in self._ws:
+                    yield message
+                # Clean end-of-stream (server closed normally) — done.
+                return
+            except websockets.exceptions.ConnectionClosed as exc:
+                if self._closed:
+                    return
+                logger.warning(
+                    "WebSocket connection lost (code=%s). Attempting reconnect…",
+                    exc.code,
+                )
+                try:
+                    await self._connect_with_retry()
+                except ConnectionError:
+                    logger.error("Reconnection failed; ending recv_iter")
+                    return
 
     async def close(self) -> None:
         """Close the WebSocket connection permanently."""
