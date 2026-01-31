@@ -303,6 +303,7 @@ async def test_barge_in_during_bot_speaking():
 
     async def mock_cancel():
         cancel_called[0] = True
+        await bus.emit(Interruption())  # Real callback emits Interruption
 
     tm = TurnManager(bus, config=config, cancel_turn_callback=mock_cancel)
     collector = EventCollector(bus)
@@ -336,6 +337,7 @@ async def test_barge_in_starts_new_turn():
 
     async def mock_cancel():
         cancel_called[0] = True
+        await bus.emit(Interruption())  # Real callback emits Interruption
 
     tm = TurnManager(bus, cancel_turn_callback=mock_cancel)
 
@@ -363,6 +365,7 @@ async def test_barge_in_via_push_to_talk():
 
     async def mock_cancel():
         cancel_called[0] = True
+        await bus.emit(Interruption())  # Real callback emits Interruption
 
     tm = TurnManager(bus, cancel_turn_callback=mock_cancel)
     collector = EventCollector(bus)
