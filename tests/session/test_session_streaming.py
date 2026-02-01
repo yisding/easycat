@@ -1,4 +1,4 @@
-"""WS7 integration tests: Session with AgentRunner, streaming, incremental TTS, and barge-in."""
+"""Session streaming integration tests: AgentRunner, incremental TTS, tool events, and barge-in."""
 
 from __future__ import annotations
 

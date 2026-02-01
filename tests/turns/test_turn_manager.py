@@ -1,4 +1,4 @@
-"""Tests for WS4 TurnManager: state machine, push-to-talk, barge-in, pre-roll."""
+"""TurnManager tests: state machine, push-to-talk, barge-in, pre-roll."""
 
 import asyncio
 

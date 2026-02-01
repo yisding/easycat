@@ -13,7 +13,7 @@
 **Files:**
 - `src/easycat/tts/base.py` — `TTSBase` class with shared normalization, event helpers, and cancel tracking
 - `src/easycat/tts/test_harness.py` — `collect_tts_output`, `extract_audio_chunks`, `write_wav`, `verify_pcm16_audio`
-- `tests/test_tts_base.py` — 19 tests covering base class, FakeTTS, and harness utilities
+- `tests/tts/test_tts_base.py` — 19 tests covering base class, FakeTTS, and harness utilities
 
 ## Phase 2: Provider Implementations (parallel)
 
@@ -29,7 +29,7 @@
 
 **Files:**
 - `src/easycat/tts/openai_tts.py` — `OpenAITTS` and `OpenAITTSConfig`
-- `tests/test_tts_openai.py` — 9 tests (7 unit + 1 integration + config tests)
+- `tests/tts/test_tts_openai.py` — 9 tests (7 unit + 1 integration + config tests)
 
 ### Task 3.3: Deepgram TTS (Aura) provider ✅
 - [x] Implement `DeepgramTTS(TTSProvider)`
@@ -44,7 +44,7 @@
 
 **Files:**
 - `src/easycat/tts/deepgram_tts.py` — `DeepgramTTS` and `DeepgramTTSConfig`
-- `tests/test_tts_deepgram.py` — 10 tests (8 unit + 1 integration + config tests)
+- `tests/tts/test_tts_deepgram.py` — 10 tests (8 unit + 1 integration + config tests)
 
 ### Task 3.4: ElevenLabs TTS provider ✅
 - [x] Implement `ElevenLabsTTS(TTSProvider)`
@@ -59,7 +59,7 @@
 
 **Files:**
 - `src/easycat/tts/elevenlabs_tts.py` — `ElevenLabsTTS`, `ElevenLabsTTSConfig`, `ElevenLabsStreamMode`
-- `tests/test_tts_elevenlabs.py` — 14 tests (12 unit + 1 integration + config tests)
+- `tests/tts/test_tts_elevenlabs.py` — 14 tests (12 unit + 1 integration + config tests)
 
 ## Phase 3: Output Handling & Validation
 
@@ -79,7 +79,7 @@
   - [x] Verify the provider connection is cleaned up (no resource leaks)
 
 **Files:**
-- `tests/test_tts_cancellation.py` — 10 tests covering all providers (OpenAI, Deepgram, ElevenLabs HTTP, ElevenLabs WS)
+- `tests/tts/test_tts_cancellation.py` — 10 tests covering all providers (OpenAI, Deepgram, ElevenLabs HTTP, ElevenLabs WS)
 
 ### Task 3.7: Provider selection and factory ✅
 - [x] Implement `create_tts_provider(config) -> TTSProvider` factory function
@@ -88,7 +88,7 @@
 
 **Files:**
 - `src/easycat/tts/factory.py` — `create_tts_provider`, `TTSProviderConfig`
-- `tests/test_tts_factory.py` — 13 tests covering creation, validation, and settings
+- `tests/tts/test_tts_factory.py` — 13 tests covering creation, validation, and settings
 
 ## Additional Infrastructure
 
@@ -100,7 +100,7 @@
 
 **Files:**
 - `src/easycat/reconnecting_ws.py` — `ReconnectingWebSocket`, `ReconnectConfig`
-- `tests/test_reconnecting_ws.py` — 13 tests
+- `tests/websocket/test_reconnecting_ws.py` — 13 tests
 
 ## Summary
 

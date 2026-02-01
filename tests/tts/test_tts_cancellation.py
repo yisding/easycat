@@ -1,6 +1,6 @@
 """Mid-utterance cancellation tests for all TTS providers.
 
-Task 3.6: For each provider, verify:
+For each provider, verify:
 - Start synthesis of a long text
 - Cancel partway through
 - No more audio chunks are yielded after cancel
