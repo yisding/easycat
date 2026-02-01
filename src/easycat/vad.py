@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import struct
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,10 +29,89 @@ _SILERO_SAMPLE_RATE = 16000
 _SILERO_FRAME_SAMPLES = 512
 
 
+# ── VAD base class ────────────────────────────────────────────────
+
+
+class _VADBase:
+    """Internal base class holding the shared VAD state machine.
+
+    Provides the threshold + timing state, ``configure()``, the synchronous
+    ``_evaluate_speech()`` generator, and ``reset()`` for the common variables.
+    """
+
+    def __init__(self) -> None:
+        self._threshold: float = 0.5
+        self._min_speech_duration_ms: int = 250
+        self._min_silence_duration_ms: int = 300
+        self._pre_roll_ms: int = 100
+        self._post_roll_ms: int = 100
+
+        # Internal state
+        self._is_speaking: bool = False
+        self._speech_start_time: float | None = None
+        self._silence_start_time: float | None = None
+        self._speech_confirmed: bool = False
+
+    def configure(
+        self,
+        *,
+        min_speech_duration_ms: int = 250,
+        min_silence_duration_ms: int = 300,
+        sensitivity: float = 0.5,
+        pre_roll_ms: int = 100,
+        post_roll_ms: int = 100,
+    ) -> None:
+        """Configure VAD thresholds and buffering parameters."""
+        self._min_speech_duration_ms = min_speech_duration_ms
+        self._min_silence_duration_ms = min_silence_duration_ms
+        # Sensitivity maps inversely to threshold: higher sensitivity = lower threshold
+        self._threshold = 1.0 - sensitivity
+        self._pre_roll_ms = pre_roll_ms
+        self._post_roll_ms = post_roll_ms
+
+    def _evaluate_speech(self, speech_prob: float, now: float) -> Iterator[Event]:
+        """Evaluate a single speech probability against the state machine.
+
+        Yields VADStartSpeaking / VADStopSpeaking events as appropriate.
+        """
+        if speech_prob >= self._threshold:
+            # Speech detected
+            self._silence_start_time = None
+            if not self._is_speaking:
+                if self._speech_start_time is None:
+                    self._speech_start_time = now
+                if (
+                    self._speech_start_time is not None
+                    and not self._speech_confirmed
+                    and (now - self._speech_start_time) * 1000 >= self._min_speech_duration_ms
+                ):
+                    self._is_speaking = True
+                    self._speech_confirmed = True
+                    yield VADStartSpeaking()
+        else:
+            # Silence detected
+            self._speech_start_time = None
+            self._speech_confirmed = False
+            if self._is_speaking:
+                if self._silence_start_time is None:
+                    self._silence_start_time = now
+                elif (now - self._silence_start_time) * 1000 >= self._min_silence_duration_ms:
+                    self._is_speaking = False
+                    self._silence_start_time = None
+                    yield VADStopSpeaking()
+
+    def reset(self) -> None:
+        """Reset the common VAD state variables."""
+        self._is_speaking = False
+        self._speech_start_time = None
+        self._silence_start_time = None
+        self._speech_confirmed = False
+
+
 # ── Silero VAD (open-source) ────────────────────────────────────────
 
 
-class SileroVAD:
+class SileroVAD(_VADBase):
     """Voice activity detection using the Silero VAD model.
 
     Loads the Silero VAD model (PyTorch or ONNX) and processes audio
@@ -48,18 +127,8 @@ class SileroVAD:
     """
 
     def __init__(self) -> None:
+        super().__init__()
         self._model: Any = None
-        self._threshold: float = 0.5
-        self._min_speech_duration_ms: int = 250
-        self._min_silence_duration_ms: int = 300
-        self._pre_roll_ms: int = 100
-        self._post_roll_ms: int = 100
-
-        # Internal state
-        self._is_speaking: bool = False
-        self._speech_start_time: float | None = None
-        self._silence_start_time: float | None = None
-        self._speech_confirmed: bool = False
 
         # Accumulation buffer for sub-frame chunks
         self._buffer: bytes = b""
@@ -83,23 +152,6 @@ class SileroVAD:
             raise RuntimeError("PyTorch not installed. Install torch to use Silero VAD.") from exc
         except Exception as exc:
             raise RuntimeError(f"Failed to load Silero VAD model: {exc}") from exc
-
-    def configure(
-        self,
-        *,
-        min_speech_duration_ms: int = 250,
-        min_silence_duration_ms: int = 300,
-        sensitivity: float = 0.5,
-        pre_roll_ms: int = 100,
-        post_roll_ms: int = 100,
-    ) -> None:
-        """Configure VAD thresholds and buffering parameters."""
-        self._min_speech_duration_ms = min_speech_duration_ms
-        self._min_silence_duration_ms = min_silence_duration_ms
-        # Sensitivity maps inversely to threshold: higher sensitivity = lower threshold
-        self._threshold = 1.0 - sensitivity
-        self._pre_roll_ms = pre_roll_ms
-        self._post_roll_ms = post_roll_ms
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process an audio chunk and yield VAD events."""
@@ -128,38 +180,12 @@ class SileroVAD:
             speech_prob = self._model(tensor, _SILERO_SAMPLE_RATE).item()
             now = time.monotonic()
 
-            if speech_prob >= self._threshold:
-                # Speech detected
-                self._silence_start_time = None
-                if not self._is_speaking:
-                    if self._speech_start_time is None:
-                        self._speech_start_time = now
-                    if (
-                        self._speech_start_time is not None
-                        and not self._speech_confirmed
-                        and (now - self._speech_start_time) * 1000 >= self._min_speech_duration_ms
-                    ):
-                        self._is_speaking = True
-                        self._speech_confirmed = True
-                        yield VADStartSpeaking()
-            else:
-                # Silence detected
-                self._speech_start_time = None
-                self._speech_confirmed = False
-                if self._is_speaking:
-                    if self._silence_start_time is None:
-                        self._silence_start_time = now
-                    elif (now - self._silence_start_time) * 1000 >= self._min_silence_duration_ms:
-                        self._is_speaking = False
-                        self._silence_start_time = None
-                        yield VADStopSpeaking()
+            for event in self._evaluate_speech(speech_prob, now):
+                yield event
 
     def reset(self) -> None:
         """Reset VAD internal state."""
-        self._is_speaking = False
-        self._speech_start_time = None
-        self._silence_start_time = None
-        self._speech_confirmed = False
+        super().reset()
         self._buffer = b""
         if self._model is not None:
             try:
@@ -171,7 +197,7 @@ class SileroVAD:
 # ── Krisp VAD (commercial) ──────────────────────────────────────────
 
 
-class KrispVAD:
+class KrispVAD(_VADBase):
     """Voice activity detection using Krisp VIVA VAD SDK.
 
     Requires the Krisp SDK with a valid license.
@@ -179,19 +205,9 @@ class KrispVAD:
     """
 
     def __init__(self, model_path: str | None = None) -> None:
+        super().__init__()
         self._session: Any = None
         self._model_path = model_path
-        self._threshold: float = 0.5
-        self._min_speech_duration_ms: int = 250
-        self._min_silence_duration_ms: int = 300
-        self._pre_roll_ms: int = 100
-        self._post_roll_ms: int = 100
-
-        # Internal state
-        self._is_speaking: bool = False
-        self._speech_start_time: float | None = None
-        self._silence_start_time: float | None = None
-        self._speech_confirmed: bool = False
 
         self._initialize()
 
@@ -215,22 +231,6 @@ class KrispVAD:
                 f"Krisp VAD initialization failed (license or config issue): {exc}"
             ) from exc
 
-    def configure(
-        self,
-        *,
-        min_speech_duration_ms: int = 250,
-        min_silence_duration_ms: int = 300,
-        sensitivity: float = 0.5,
-        pre_roll_ms: int = 100,
-        post_roll_ms: int = 100,
-    ) -> None:
-        """Configure VAD thresholds and buffering parameters."""
-        self._min_speech_duration_ms = min_speech_duration_ms
-        self._min_silence_duration_ms = min_silence_duration_ms
-        self._threshold = 1.0 - sensitivity
-        self._pre_roll_ms = pre_roll_ms
-        self._post_roll_ms = post_roll_ms
-
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process audio through Krisp VAD and yield events."""
         import krisp_audio  # type: ignore[import-not-found]
@@ -238,36 +238,12 @@ class KrispVAD:
         speech_prob = krisp_audio.vad_process(self._session, chunk.data, chunk.format.sample_rate)
         now = time.monotonic()
 
-        if speech_prob >= self._threshold:
-            self._silence_start_time = None
-            if not self._is_speaking:
-                if self._speech_start_time is None:
-                    self._speech_start_time = now
-                if (
-                    self._speech_start_time is not None
-                    and not self._speech_confirmed
-                    and (now - self._speech_start_time) * 1000 >= self._min_speech_duration_ms
-                ):
-                    self._is_speaking = True
-                    self._speech_confirmed = True
-                    yield VADStartSpeaking()
-        else:
-            self._speech_start_time = None
-            self._speech_confirmed = False
-            if self._is_speaking:
-                if self._silence_start_time is None:
-                    self._silence_start_time = now
-                elif (now - self._silence_start_time) * 1000 >= self._min_silence_duration_ms:
-                    self._is_speaking = False
-                    self._silence_start_time = None
-                    yield VADStopSpeaking()
+        for event in self._evaluate_speech(speech_prob, now):
+            yield event
 
     def reset(self) -> None:
         """Reset VAD internal state."""
-        self._is_speaking = False
-        self._speech_start_time = None
-        self._silence_start_time = None
-        self._speech_confirmed = False
+        super().reset()
 
     def close(self) -> None:
         """Release Krisp session resources."""
