@@ -1,4 +1,4 @@
-"""Tests for the STT provider factory — Task 2.6."""
+"""Tests for the STT provider factory."""
 
 from __future__ import annotations
 

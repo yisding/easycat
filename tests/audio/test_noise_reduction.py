@@ -1,4 +1,4 @@
-"""Tests for WS4 noise reduction: RNNoise, Krisp, factory, and helpers."""
+"""Noise reduction tests: RNNoise, Krisp, factory, and helpers."""
 
 import struct
 from unittest.mock import MagicMock, patch

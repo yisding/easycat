@@ -114,8 +114,8 @@ have non-None `end_time` and `duration_ms`.
 - [x] Verify all events fired in correct order
 - [ ] Integration test with a real Agents SDK agent (gated behind `OPENAI_API_KEY`)
 
-**Implementation:** Comprehensive test suites in `tests/test_agent_runner.py` (unit tests)
-and `tests/test_ws7_integration.py` (session integration tests). Tests cover: basic agent
+**Implementation:** Comprehensive test suites in `tests/agent/test_agent_runner.py` (unit tests)
+and `tests/session/test_session_streaming.py` (session integration tests). Tests cover: basic agent
 invocation, streaming deltas, tool events, barge-in cancellation, incremental TTS,
 context management, timeout handling, error emission, tracing spans, and full event
 ordering. Real Agents SDK integration test deferred until WS9 (requires API key gating).

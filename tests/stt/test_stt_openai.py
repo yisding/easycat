@@ -10,7 +10,7 @@ import pytest
 from easycat.events import STTEventType
 from easycat.providers import STTProvider
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
-from tests.stt_helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
+from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
 
 def _make_mock_client(text: str = "hello world", status_code: int = 200) -> httpx.AsyncClient:
