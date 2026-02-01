@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape, quoteattr
 
 from easycat.events import DTMF, EventBus
 
@@ -75,8 +75,8 @@ def twiml_play_digits(digits: str) -> str:
     Returns:
         Complete TwiML ``<Response>`` document as a string.
     """
-    safe = escape(digits)
-    return f'<?xml version="1.0" encoding="UTF-8"?><Response><Play digits="{safe}"/></Response>'
+    safe = quoteattr(digits)
+    return f'<?xml version="1.0" encoding="UTF-8"?><Response><Play digits={safe}/></Response>'
 
 
 def twiml_dial_send_digits(
@@ -98,15 +98,15 @@ def twiml_dial_send_digits(
     Returns:
         Complete TwiML ``<Response>`` document as a string.
     """
-    safe_digits = escape(send_digits)
+    safe_digits = quoteattr(send_digits)
     safe_number = escape(phone_number)
     dial_attrs = ""
     if caller_id:
-        dial_attrs = f' callerId="{escape(caller_id)}"'
+        dial_attrs = f" callerId={quoteattr(caller_id)}"
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         f"<Response><Dial{dial_attrs}>"
-        f'<Number sendDigits="{safe_digits}">{safe_number}</Number>'
+        f"<Number sendDigits={safe_digits}>{safe_number}</Number>"
         "</Dial></Response>"
     )
 
@@ -134,10 +134,10 @@ def twiml_gather(
         Complete TwiML ``<Response>`` document as a string.
     """
     attrs = [
-        f'action="{escape(action_url)}"',
+        f"action={quoteattr(action_url)}",
         f'timeout="{timeout}"',
-        f'finishOnKey="{escape(finish_on_key)}"',
-        f'input="{escape(input_type)}"',
+        f"finishOnKey={quoteattr(finish_on_key)}",
+        f"input={quoteattr(input_type)}",
     ]
     if num_digits is not None:
         attrs.append(f'numDigits="{num_digits}"')

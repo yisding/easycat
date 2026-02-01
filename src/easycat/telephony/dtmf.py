@@ -163,9 +163,14 @@ class DTMFAggregator:
         """Wait for the idle timeout, then emit."""
         try:
             await asyncio.sleep(self._config.timeout_ms / 1000.0)
+            # Clear self-reference before emitting so _emit()'s
+            # _cancel_timer() doesn't cancel this (the current) task.
+            self._timer_task = None
             if self._buffer:
                 await self._emit()
         except asyncio.CancelledError:
+            # Cancellation is expected when a new DTMF digit arrives or the
+            # aggregator is stopped; we deliberately ignore it.
             pass
 
     async def _emit(self) -> None:
