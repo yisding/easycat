@@ -11,13 +11,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 import websockets
-from websockets.asyncio.server import Server, ServerConnection
+from websockets.asyncio.server import ServerConnection
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.transports._base import _ServerTransportBase
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class WebSocketTransportConfig:
     max_pending_chunks: int = 200
 
 
-class WebSocketTransport:
+class WebSocketTransport(_ServerTransportBase):
     """Transport that accepts a single WebSocket client connection.
 
     Implements the ``Transport`` protocol from :mod:`easycat.providers`.
@@ -51,74 +51,24 @@ class WebSocketTransport:
       - Text frame: JSON control message (e.g., ``{"type": "ready"}``).
     """
 
+    _transport_name = "WebSocket"
+
     def __init__(self, config: WebSocketTransportConfig | None = None) -> None:
         self._config = config or WebSocketTransportConfig()
-        self._audio_format = self._config.audio_format
-        self._server: Server | None = None
-        self._ws: ServerConnection | None = None
-        self._connected = False
-        self._client_connected = asyncio.Event()
-
-        self._in_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
-            maxsize=self._config.max_pending_chunks,
+        super().__init__(
+            host=self._config.host,
+            port=self._config.port,
+            max_pending_chunks=self._config.max_pending_chunks,
         )
+        self._audio_format = self._config.audio_format
+        self._client_connected = asyncio.Event()
 
     # ── Transport protocol ────────────────────────────────────────
 
-    async def connect(self) -> None:
-        """Start the WebSocket server and wait for one client to connect."""
-        if self._connected:
-            return
-
-        # Reinitialize queue to clear any stale sentinels from a previous session.
-        self._in_queue = asyncio.Queue(maxsize=self._config.max_pending_chunks)
-
-        self._server = await websockets.serve(
-            self._handle_client,
-            self._config.host,
-            self._config.port,
-        )
-        self._connected = True
-        logger.info(
-            "WebSocket transport listening on ws://%s:%d",
-            self._config.host,
-            self._config.port,
-        )
-
     async def disconnect(self) -> None:
         """Disconnect the current client and stop the server."""
-        if not self._connected:
-            return
-
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception:
-                logger.debug("Error closing client WebSocket", exc_info=True)
-            self._ws = None
-
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
-
-        # Signal end of audio to any pending receive_audio iterators.
-        try:
-            self._in_queue.put_nowait(None)
-        except asyncio.QueueFull:
-            # Sentinel already enqueued or consumers stopped reading; safe to ignore.
-            logger.debug("Input queue full when enqueueing sentinel; ignoring")
-
-        self._connected = False
+        await super().disconnect()
         self._client_connected.clear()
-
-    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
-        """Yield audio chunks received from the WebSocket client."""
-        while self._connected or not self._in_queue.empty():
-            chunk = await self._in_queue.get()
-            if chunk is None:
-                break
-            yield chunk
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         """Send an audio chunk to the connected WebSocket client as a binary frame."""
@@ -132,7 +82,7 @@ class WebSocketTransport:
 
     # ── Server helpers ────────────────────────────────────────────
 
-    async def _handle_client(self, ws: ServerConnection) -> None:
+    async def _handle_connection(self, ws: ServerConnection) -> None:
         """Handle a single client connection."""
         if self._ws is not None:
             logger.warning("Rejecting additional WebSocket client (only one session supported)")
@@ -199,10 +149,6 @@ class WebSocketTransport:
             logger.debug("Unknown control message type: %s", msg_type)
 
     # ── Properties ────────────────────────────────────────────────
-
-    @property
-    def is_connected(self) -> bool:
-        return self._connected
 
     @property
     def has_client(self) -> bool:
