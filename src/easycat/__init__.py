@@ -64,6 +64,16 @@ from easycat.stt import (
     create_stt_provider,
     pcm_to_wav,
 )
+from easycat.telephony import (
+    DTMFAggregator,
+    DTMFAggregatorConfig,
+    VoicemailDetector,
+    VoicemailDetectorConfig,
+    VoicemailPolicy,
+    VoicemailPolicyConfig,
+    VoicemailPolicyHandler,
+    parse_twilio_dtmf_message,
+)
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import (
     TwilioTransport,
@@ -192,4 +202,13 @@ __all__ = [
     "pcm16_to_mulaw",
     "twiml_connect_stream",
     "twiml_stream",
+    # Telephony (WS6)
+    "DTMFAggregator",
+    "DTMFAggregatorConfig",
+    "VoicemailDetector",
+    "VoicemailDetectorConfig",
+    "VoicemailPolicy",
+    "VoicemailPolicyConfig",
+    "VoicemailPolicyHandler",
+    "parse_twilio_dtmf_message",
 ]
