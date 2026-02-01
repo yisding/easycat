@@ -72,7 +72,7 @@ async def collect_stt_events(
 ) -> list[STTEvent]:
     """Feed audio through an STT provider and collect all emitted events.
 
-    This is the test harness described in Task 2.1. Works with both
+    Test harness that works with both
     streaming providers (Deepgram, ElevenLabs realtime) and turn-based
     providers (OpenAI, ElevenLabs batch).
     """

@@ -163,9 +163,11 @@ class ReconnectingWebSocket:
             except websockets.exceptions.ConnectionClosed as exc:
                 if self._closed:
                     return
+                rcvd = getattr(exc, "rcvd", None)
+                close_code = rcvd.code if rcvd is not None else getattr(exc, "close_code", None)
                 logger.warning(
                     "WebSocket connection lost (code=%s). Attempting reconnect…",
-                    exc.code,
+                    close_code,
                 )
                 try:
                     await self._connect_with_retry()

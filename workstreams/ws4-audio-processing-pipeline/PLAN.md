@@ -15,7 +15,7 @@
 - [x] Unit tests: mocked RNNoise C library, format correctness verification
 - [x] Unit test: verify the resample round-trip preserves audio quality
 - **Implementation:** `src/easycat/noise_reduction.py` — `RNNoiseReducer` class
-- **Tests:** `tests/test_noise_reduction.py` — `test_rnnoise_*`, `test_resample_roundtrip_quality`
+- **Tests:** `tests/audio/test_noise_reduction.py` — `test_rnnoise_*`, `test_resample_roundtrip_quality`
 
 ### Task 4.2: Krisp noise reduction integration (commercial) ✅
 - [x] Implement `KrispNoiseReducer(NoiseReducer)`
@@ -24,7 +24,7 @@
 - [x] If Krisp is not configured or license is missing, raise a clear error (auto-fallback is handled at the factory level)
 - [x] Unit tests with mocked Krisp SDK
 - **Implementation:** `src/easycat/noise_reduction.py` — `KrispNoiseReducer` class
-- **Tests:** `tests/test_noise_reduction.py` — `test_krisp_*`
+- **Tests:** `tests/audio/test_noise_reduction.py` — `test_krisp_*`
 
 ### Task 4.3: Noise reducer factory with auto-fallback ✅
 - [x] Implement `create_noise_reducer(config) -> NoiseReducer`
@@ -34,7 +34,7 @@
 - [x] No application code changes needed for fallback — it's transparent
 - [x] Test: verify fallback triggers when Krisp is absent
 - **Implementation:** `src/easycat/noise_reduction.py` — `create_noise_reducer()`, `NoiseReducerConfig`, `PassthroughNoiseReducer`
-- **Tests:** `tests/test_noise_reduction.py` — `test_factory_*`
+- **Tests:** `tests/audio/test_noise_reduction.py` — `test_factory_*`
 
 ## Phase 2: Voice Activity Detection
 
@@ -47,7 +47,7 @@
 - [x] Accumulation buffer for sub-frame chunks
 - [x] Unit tests: speech audio -> start event; short noise bursts -> no event (below min duration)
 - **Implementation:** `src/easycat/vad.py` — `SileroVAD` class
-- **Tests:** `tests/test_vad.py` — `test_silero_*`
+- **Tests:** `tests/vad/test_vad.py` — `test_silero_*`
 
 ### Task 4.5: Krisp VAD integration (commercial) ✅
 - [x] Implement `KrispVAD(VADProvider)`
@@ -56,7 +56,7 @@
 - [x] Handle SDK initialization, licensing
 - [x] Unit tests with mocked Krisp SDK
 - **Implementation:** `src/easycat/vad.py` — `KrispVAD` class
-- **Tests:** `tests/test_vad.py` — `test_krisp_vad_*`
+- **Tests:** `tests/vad/test_vad.py` — `test_krisp_vad_*`
 
 ### Task 4.6: VAD factory with auto-fallback ✅
 - [x] Implement `create_vad(config) -> VADProvider`
@@ -65,7 +65,7 @@
 - [x] Factory applies configuration (thresholds, sensitivity) to created VAD
 - [x] Test: verify fallback behavior
 - **Implementation:** `src/easycat/vad.py` — `create_vad()`, `VADConfig`
-- **Tests:** `tests/test_vad.py` — `test_vad_factory_*`
+- **Tests:** `tests/vad/test_vad.py` — `test_vad_factory_*`
 
 ## Phase 3: Turn-Taking
 
@@ -90,7 +90,7 @@
 - [x] **Responsibility boundary:** TurnManager emits `turn.ended`, not `stt.final`. STT providers produce their final transcript only after their `end_stream()` is called.
 - [x] Configurable: end-of-turn silence timeout (default 1000ms)
 - **Implementation:** `src/easycat/turn_manager.py` — `TurnManager`, `TurnManagerState`, `TurnManagerConfig`
-- **Tests:** `tests/test_turn_manager.py` — state machine transitions, pre-roll buffer, silence timeout
+- **Tests:** `tests/turns/test_turn_manager.py` — state machine transitions, pre-roll buffer, silence timeout
 
 ### Task 4.8: Push-to-talk / manual end-of-turn mode ✅
 - [x] Alternative turn mode for testing and specific use cases
@@ -99,7 +99,7 @@
 - [x] In push-to-talk mode, VAD events are ignored
 - [x] Unit tests for manual turn ending
 - **Implementation:** `src/easycat/turn_manager.py` — `TurnMode.PUSH_TO_TALK`, `start_turn()`, `end_turn()`
-- **Tests:** `tests/test_turn_manager.py` — `test_push_to_talk_*`, `test_mode_switching`
+- **Tests:** `tests/turns/test_turn_manager.py` — `test_push_to_talk_*`, `test_mode_switching`
 
 ### Task 4.9: Barge-in / interruption handling ✅
 - [x] If state is **BotSpeaking** and `vad.start_speaking` fires:
@@ -110,7 +110,7 @@
 - [x] Pre-roll buffer flushed into new turn audio on barge-in
 - [x] Test: simulate bot speaking + user interrupt -> verify cancel callback called, new turn starts
 - **Implementation:** `src/easycat/turn_manager.py` — `_handle_barge_in()`, `cancel_turn_callback`
-- **Tests:** `tests/test_turn_manager.py` — `test_barge_in_*`
+- **Tests:** `tests/turns/test_turn_manager.py` — `test_barge_in_*`
 
 ## Phase 4: Integration
 
@@ -123,7 +123,7 @@
 - [x] Verify: push-to-talk mode works through pipeline
 - [x] Verify: multiple consecutive turns handled correctly
 - [x] Verify: passthrough noise reducer (auto fallback) does not affect VAD
-- **Tests:** `tests/test_ws4_integration.py` — 7 integration tests
+- **Tests:** `tests/turns/test_turn_pipeline.py` — 7 integration tests
 
 ---
 
@@ -139,10 +139,10 @@ All 10 tasks across 4 phases implemented and tested.
 | `src/easycat/noise_reduction.py` | RNNoiseReducer, KrispNoiseReducer, PassthroughNoiseReducer, factory |
 | `src/easycat/vad.py` | SileroVAD, KrispVAD, factory |
 | `src/easycat/turn_manager.py` | TurnManager state machine, push-to-talk, barge-in |
-| `tests/test_noise_reduction.py` | 16 tests for noise reduction |
-| `tests/test_vad.py` | 12 tests for VAD |
-| `tests/test_turn_manager.py` | 21 tests for turn-taking |
-| `tests/test_ws4_integration.py` | 7 integration tests |
+| `tests/audio/test_noise_reduction.py` | 16 tests for noise reduction |
+| `tests/vad/test_vad.py` | 12 tests for VAD |
+| `tests/turns/test_turn_manager.py` | 21 tests for turn-taking |
+| `tests/turns/test_turn_pipeline.py` | 7 integration tests |
 
 ### Files Modified
 | File | Change |

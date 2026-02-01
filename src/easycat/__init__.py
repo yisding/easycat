@@ -1,5 +1,14 @@
 """EasyCat — slim, batteries-included voice bot framework."""
 
+from easycat.agent_runner import (
+    AgentRunner,
+    AgentRunnerConfig,
+    AgentStreamEvent,
+    AgentStreamEventType,
+    AgentTimeoutError,
+    StreamingAgent,
+    TracingSpan,
+)
 from easycat.audio_format import (
     PCM16_MONO_8K,
     PCM16_MONO_16K,
@@ -81,8 +90,17 @@ from easycat.stt import (
     create_stt_provider,
     pcm_to_wav,
 )
+from easycat.telephony import (
+    DTMFAggregator,
+    DTMFAggregatorConfig,
+    VoicemailDetector,
+    VoicemailDetectorConfig,
+    VoicemailPolicy,
+    VoicemailPolicyConfig,
+    VoicemailPolicyHandler,
+    parse_twilio_dtmf_message,
+)
 from easycat.timeouts import (
-    AgentTimeoutError,
     STTTimeoutError,
     TimeoutConfig,
     TTSTimeoutError,
@@ -98,6 +116,16 @@ from easycat.tracing import (
     TraceExporter,
     Tracer,
 )
+from easycat.transports.local import LocalTransport, LocalTransportConfig
+from easycat.transports.twilio_media import (
+    TwilioTransport,
+    TwilioTransportConfig,
+    mulaw_to_pcm16,
+    pcm16_to_mulaw,
+    twiml_connect_stream,
+    twiml_stream,
+)
+from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
 from easycat.tts.base import TTSBase
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode, ElevenLabsTTS, ElevenLabsTTSConfig
@@ -107,6 +135,14 @@ from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerStat
 from easycat.vad import KrispVAD, SileroVAD, VADConfig, create_vad
 
 __all__ = [
+    # Agent runner (WS7)
+    "AgentRunner",
+    "AgentRunnerConfig",
+    "AgentStreamEvent",
+    "AgentStreamEventType",
+    "AgentTimeoutError",
+    "StreamingAgent",
+    "TracingSpan",
     # Audio format
     "AudioChunk",
     "AudioFormat",
@@ -189,7 +225,6 @@ __all__ = [
     "PeriodicHealthChecker",
     # Timeouts (WS8)
     "STTTimeoutError",
-    "AgentTimeoutError",
     "TTSTimeoutError",
     "TimeoutConfig",
     "with_stt_timeout",
@@ -240,4 +275,24 @@ __all__ = [
     "ElevenLabsStreamMode",
     "TTSProviderConfig",
     "create_tts_provider",
+    # Transports (WS5)
+    "LocalTransport",
+    "LocalTransportConfig",
+    "WebSocketTransport",
+    "WebSocketTransportConfig",
+    "TwilioTransport",
+    "TwilioTransportConfig",
+    "mulaw_to_pcm16",
+    "pcm16_to_mulaw",
+    "twiml_connect_stream",
+    "twiml_stream",
+    # Telephony (WS6)
+    "DTMFAggregator",
+    "DTMFAggregatorConfig",
+    "VoicemailDetector",
+    "VoicemailDetectorConfig",
+    "VoicemailPolicy",
+    "VoicemailPolicyConfig",
+    "VoicemailPolicyHandler",
+    "parse_twilio_dtmf_message",
 ]

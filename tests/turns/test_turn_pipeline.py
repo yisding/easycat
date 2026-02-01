@@ -1,4 +1,4 @@
-"""WS4 Task 4.10: End-to-end pipeline integration test.
+"""End-to-end turn pipeline integration tests.
 
 Verifies the full audio processing pipeline:
   Noise Reduction -> VAD -> Turn-Taking
