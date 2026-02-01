@@ -12,16 +12,16 @@ import audioop
 import base64
 import json
 import logging
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
 import websockets
-from websockets.asyncio.server import Server, ServerConnection
+from websockets.asyncio.server import ServerConnection
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.audio_utils import resample
 from easycat.events import DTMF, EventBus
+from easycat.transports._base import _ServerTransportBase
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class TwilioTransportConfig:
     max_pending_chunks: int = 200
 
 
-class TwilioTransport:
+class TwilioTransport(_ServerTransportBase):
     """Transport for Twilio Media Streams bidirectional WebSocket.
 
     Implements the ``Transport`` protocol from :mod:`easycat.providers`.
@@ -57,84 +57,34 @@ class TwilioTransport:
     format (default 16 kHz) on ingest, and back on egress.
     """
 
+    _transport_name = "Twilio"
+
     def __init__(
         self,
         config: TwilioTransportConfig | None = None,
         event_bus: EventBus | None = None,
     ) -> None:
         self._config = config or TwilioTransportConfig()
+        super().__init__(
+            host=self._config.host,
+            port=self._config.port,
+            max_pending_chunks=self._config.max_pending_chunks,
+        )
         self._internal_format = self._config.internal_format
         self._event_bus = event_bus
 
-        self._server: Server | None = None
-        self._ws: ServerConnection | None = None
-        self._connected = False
-
         self._stream_sid: str | None = None
         self._call_sid: str | None = None
-
-        self._in_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
-            maxsize=self._config.max_pending_chunks,
-        )
 
         self._mark_counter = 0
 
     # ── Transport protocol ────────────────────────────────────────
 
-    async def connect(self) -> None:
-        """Start the WebSocket server that Twilio will connect to."""
-        if self._connected:
-            return
-
-        # Reinitialize queue to clear any stale sentinels from a previous session.
-        self._in_queue = asyncio.Queue(maxsize=self._config.max_pending_chunks)
-
-        self._server = await websockets.serve(
-            self._handle_twilio,
-            self._config.host,
-            self._config.port,
-        )
-        self._connected = True
-        logger.info(
-            "Twilio transport listening on ws://%s:%d",
-            self._config.host,
-            self._config.port,
-        )
-
     async def disconnect(self) -> None:
         """Disconnect Twilio and stop the server."""
-        if not self._connected:
-            return
-
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception:
-                logger.debug("Error closing Twilio WebSocket", exc_info=True)
-            self._ws = None
-
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
-
-        try:
-            self._in_queue.put_nowait(None)
-        except asyncio.QueueFull:
-            # Sentinel already enqueued or consumers stopped reading; safe to ignore.
-            logger.debug("Input queue full when enqueueing sentinel; ignoring")
-
-        self._connected = False
+        await super().disconnect()
         self._stream_sid = None
         self._call_sid = None
-
-    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
-        """Yield PCM16 audio chunks converted from Twilio mulaw."""
-        while self._connected or not self._in_queue.empty():
-            chunk = await self._in_queue.get()
-            if chunk is None:
-                break
-            yield chunk
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         """Convert a PCM16 chunk to mulaw 8 kHz and send to Twilio."""
@@ -201,7 +151,7 @@ class TwilioTransport:
 
     # ── Twilio WebSocket handler ──────────────────────────────────
 
-    async def _handle_twilio(self, ws: ServerConnection) -> None:
+    async def _handle_connection(self, ws: ServerConnection) -> None:
         """Handle the Twilio Media Streams WebSocket connection."""
         if self._ws is not None:
             logger.warning("Rejecting additional Twilio connection")
@@ -299,10 +249,6 @@ class TwilioTransport:
             await self._event_bus.emit(DTMF(digit=digit))
 
     # ── Properties ────────────────────────────────────────────────
-
-    @property
-    def is_connected(self) -> bool:
-        return self._connected
 
     @property
     def stream_sid(self) -> str | None:
