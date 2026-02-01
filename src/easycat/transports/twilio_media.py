@@ -86,6 +86,9 @@ class TwilioTransport:
         if self._connected:
             return
 
+        # Reinitialize queue to clear any stale sentinels from a previous session.
+        self._in_queue = asyncio.Queue(maxsize=self._config.max_pending_chunks)
+
         self._server = await websockets.serve(
             self._handle_twilio,
             self._config.host,
@@ -118,7 +121,8 @@ class TwilioTransport:
         try:
             self._in_queue.put_nowait(None)
         except asyncio.QueueFull:
-            pass
+            # Sentinel already enqueued or consumers stopped reading; safe to ignore.
+            logger.debug("Input queue full when enqueueing sentinel; ignoring")
 
         self._connected = False
         self._stream_sid = None
@@ -193,7 +197,7 @@ class TwilioTransport:
         try:
             await ws.send(message)
         except websockets.exceptions.ConnectionClosed:
-            pass
+            logger.debug("Cannot clear audio: Twilio disconnected")
 
     # ── Twilio WebSocket handler ──────────────────────────────────
 
@@ -220,7 +224,8 @@ class TwilioTransport:
             try:
                 self._in_queue.put_nowait(None)
             except asyncio.QueueFull:
-                pass
+                # Sentinel already enqueued or consumer stopped reading; safe to ignore.
+                logger.debug("Input queue full during Twilio disconnect; dropping sentinel")
 
     async def _handle_message(self, raw: str) -> None:
         """Route a Twilio JSON message to the appropriate handler."""
@@ -239,6 +244,13 @@ class TwilioTransport:
             await self._handle_media(msg)
         elif event == "stop":
             logger.info("Twilio stream stopped (streamSid=%s)", self._stream_sid)
+            # Explicitly end the current audio stream so receive_audio() can terminate.
+            self._stream_sid = None
+            self._call_sid = None
+            try:
+                self._in_queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
         elif event == "mark":
             mark_name = msg.get("mark", {}).get("name", "")
             logger.debug("Twilio mark acknowledged: %s", mark_name)
@@ -265,7 +277,11 @@ class TwilioTransport:
         if not payload:
             return
 
-        mulaw_data = base64.b64decode(payload)
+        try:
+            mulaw_data = base64.b64decode(payload)
+        except Exception:
+            logger.warning("Ignoring Twilio media frame with invalid base64 payload")
+            return
         pcm_data = mulaw_to_pcm16(mulaw_data, self._internal_format.sample_rate)
 
         chunk = AudioChunk(data=pcm_data, format=self._internal_format)
@@ -336,15 +352,17 @@ def twiml_connect_stream(
     status_callback_url:
         Optional URL for Twilio to POST call status updates.
     """
+    from xml.sax.saxutils import quoteattr
+
     status_attr = ""
     if status_callback_url:
-        status_attr = f' statusCallback="{status_callback_url}"'
+        status_attr = f" statusCallback={quoteattr(status_callback_url)}"
 
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
-        f"<Response{status_attr}>\n"
+        "<Response>\n"
         "  <Connect>\n"
-        f'    <Stream url="{websocket_url}" track="{track}" />\n'
+        f"    <Stream url={quoteattr(websocket_url)} track={quoteattr(track)}{status_attr} />\n"
         "  </Connect>\n"
         "</Response>"
     )
@@ -364,11 +382,13 @@ def twiml_stream(
     track:
         Which track to stream (``inbound_track`` or ``outbound_track``).
     """
+    from xml.sax.saxutils import quoteattr
+
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<Response>\n"
         "  <Start>\n"
-        f'    <Stream url="{websocket_url}" track="{track}" />\n'
+        f"    <Stream url={quoteattr(websocket_url)} track={quoteattr(track)} />\n"
         "  </Start>\n"
         '  <Pause length="60" />\n'
         "</Response>"

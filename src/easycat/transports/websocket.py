@@ -63,15 +63,15 @@ class WebSocketTransport:
             maxsize=self._config.max_pending_chunks,
         )
 
-        # Task running the per-client receive loop.
-        self._recv_task: asyncio.Task[None] | None = None
-
     # ── Transport protocol ────────────────────────────────────────
 
     async def connect(self) -> None:
         """Start the WebSocket server and wait for one client to connect."""
         if self._connected:
             return
+
+        # Reinitialize queue to clear any stale sentinels from a previous session.
+        self._in_queue = asyncio.Queue(maxsize=self._config.max_pending_chunks)
 
         self._server = await websockets.serve(
             self._handle_client,
@@ -90,14 +90,6 @@ class WebSocketTransport:
         if not self._connected:
             return
 
-        if self._recv_task and not self._recv_task.done():
-            self._recv_task.cancel()
-            try:
-                await self._recv_task
-            except asyncio.CancelledError:
-                pass
-            self._recv_task = None
-
         if self._ws is not None:
             try:
                 await self._ws.close()
@@ -114,7 +106,8 @@ class WebSocketTransport:
         try:
             self._in_queue.put_nowait(None)
         except asyncio.QueueFull:
-            pass
+            # Sentinel already enqueued or consumers stopped reading; safe to ignore.
+            logger.debug("Input queue full when enqueueing sentinel; ignoring")
 
         self._connected = False
         self._client_connected.clear()
@@ -164,7 +157,8 @@ class WebSocketTransport:
             try:
                 self._in_queue.put_nowait(None)
             except asyncio.QueueFull:
-                pass
+                # Sentinel already enqueued or consumer stopped reading; safe to ignore.
+                logger.debug("Input queue full during client disconnect; dropping sentinel")
 
     async def _receive_loop(self, ws: ServerConnection) -> None:
         """Read messages from the client connection."""
