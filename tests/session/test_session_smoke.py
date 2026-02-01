@@ -1,4 +1,4 @@
-"""Task 1.10: End-to-end smoke test with stub providers.
+"""End-to-end smoke test with stub providers.
 
 Runs a full session lifecycle:
   start -> feed audio -> stub VAD triggers -> stub STT returns text ->
@@ -210,7 +210,7 @@ async def test_full_session_smoke():
     assert af_idx < bs_idx, "AgentFinal should come before BotStartedSpeaking"
     assert bs_idx < ta_idx, "BotStartedSpeaking should come before TTSAudio"
     assert ta_idx < be_idx, "TTSAudio should come before BotStoppedSpeaking"
-    assert be_idx < te_idx, "BotStoppedSpeaking should come before TurnEnded"
+    assert te_idx < be_idx, "TurnEnded should come before BotStoppedSpeaking"
 
     # ── Verify content ─────────────────────────────────────────
     stt_finals = [e for e in timeline if isinstance(e, STTFinal)]

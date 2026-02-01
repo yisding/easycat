@@ -1,4 +1,4 @@
-"""Tests for WS4 noise reduction: RNNoise, Krisp, factory, and helpers."""
+"""Noise reduction tests: RNNoise, Krisp, factory, and helpers."""
 
 import struct
 from unittest.mock import MagicMock, patch
@@ -87,8 +87,10 @@ async def test_rnnoise_process_mocked():
 
     mock_lib.rnnoise_process_frame.side_effect = mock_process_frame
 
-    with patch("ctypes.util.find_library", return_value="/fake/librnnoise.so"), \
-         patch("ctypes.CDLL", return_value=mock_lib):
+    with (
+        patch("ctypes.util.find_library", return_value="/fake/librnnoise.so"),
+        patch("ctypes.CDLL", return_value=mock_lib),
+    ):
         reducer = RNNoiseReducer()
 
     # Create a 16 kHz chunk (320 samples = 20ms)
@@ -112,8 +114,10 @@ def test_rnnoise_sets_ctypes_argtypes():
     mock_lib = MagicMock()
     mock_lib.rnnoise_create.return_value = 0xDEADBEEF
 
-    with patch("ctypes.util.find_library", return_value="/fake/librnnoise.so"), \
-         patch("ctypes.CDLL", return_value=mock_lib):
+    with (
+        patch("ctypes.util.find_library", return_value="/fake/librnnoise.so"),
+        patch("ctypes.CDLL", return_value=mock_lib),
+    ):
         RNNoiseReducer()
 
     # rnnoise_create must return c_void_p (pointer), not the default c_int
@@ -150,6 +154,7 @@ async def test_krisp_process_mocked():
     mock_module.process_frame.return_value = data
 
     import sys
+
     sys.modules["krisp_audio"] = mock_module
     try:
         reducer = KrispNoiseReducer()
@@ -211,6 +216,7 @@ def test_factory_krisp_preferred_in_auto():
     mock_module.create_noise_cancellation_session.return_value = MagicMock()
 
     import sys
+
     sys.modules["krisp_audio"] = mock_module
     try:
         reducer = create_noise_reducer(NoiseReducerConfig(backend="auto"))
@@ -245,7 +251,7 @@ def test_resample_roundtrip_quality():
     # Values should be close (linear interpolation introduces some error)
     orig = list(struct.unpack(f"<{orig_samples}h", data_16k))
     n = min(orig_samples, back_samples)
-    back = list(struct.unpack(f"<{n}h", data_back[:n * 2]))
+    back = list(struct.unpack(f"<{n}h", data_back[: n * 2]))
     errors = [abs(a - b) for a, b in zip(orig[:n], back)]
     avg_error = sum(errors) / len(errors)
     # Average error should be small relative to signal

@@ -1,7 +1,8 @@
 """Session: the core runtime for a single voice conversation.
 
 Manages the voice pipeline lifecycle, wires provider stages together,
-and handles turn state and cancellation.
+and handles turn state and cancellation. Supports both basic and
+streaming agent interfaces with incremental TTS synthesis.
 """
 
 from __future__ import annotations
@@ -9,9 +10,11 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from easycat.agent_runner import AgentStreamEventType
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
@@ -25,6 +28,9 @@ from easycat.events import (
     STTEventType,
     STTFinal,
     STTPartial,
+    ToolCallDelta,
+    ToolCallResult,
+    ToolCallStarted,
     TTSAudio,
     TTSEventType,
     TTSMarkers,
@@ -43,6 +49,9 @@ from easycat.stubs import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Sentence boundary regex: matches whitespace after sentence-ending punctuation
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 # ── Agent protocol (lightweight — WS7 provides real implementations) ──
@@ -84,6 +93,23 @@ class SessionConfig:
     enable_vad: bool = True
 
 
+# ── Helpers ────────────────────────────────────────────────────────
+
+
+def _split_at_sentence_boundaries(text: str) -> tuple[str, str]:
+    """Split text at the last sentence boundary.
+
+    Returns (ready_text, remaining_buffer). ``ready_text`` contains complete
+    sentences to send to TTS; ``remaining_buffer`` holds any trailing text
+    that hasn't reached a sentence boundary yet.
+    """
+    matches = list(_SENTENCE_END_RE.finditer(text))
+    if not matches:
+        return "", text
+    last_match = matches[-1]
+    return text[: last_match.start()], text[last_match.end() :]
+
+
 # ── Session ────────────────────────────────────────────────────────
 
 
@@ -92,6 +118,10 @@ class Session:
 
     Manages the full pipeline: Audio In -> Noise Reduction -> VAD -> STT ->
     Agent -> TTS -> Audio Out. Each stage is a pluggable provider.
+
+    When the configured agent supports streaming (has a ``run_streaming``
+    method), the session consumes text deltas incrementally and begins
+    TTS synthesis on sentence boundaries for lower latency.
     """
 
     def __init__(self, config: SessionConfig | None = None) -> None:
@@ -170,7 +200,9 @@ class Session:
             try:
                 await self._pipeline_task
             except asyncio.CancelledError:
-                pass
+                logger.debug(
+                    "TTS processing task was cancelled; ensuring BotStoppedSpeaking is emitted if needed."
+                )
 
         await self._cancel_stt()
         await self._cancel_tts()
@@ -231,12 +263,20 @@ class Session:
             self._turn_state = TurnState.IDLE
 
     async def reset_state(self) -> None:
-        """Cancel everything and return to idle/listening state."""
+        """Cancel everything and return to idle/listening state.
+
+        Also clears agent conversation history if the agent supports it.
+        """
         if self._cancel_token:
             self._cancel_token.cancel()
 
         await self._cancel_stt()
         await self._cancel_tts()
+
+        # Clear agent history if supported (e.g., AgentRunner)
+        if hasattr(self.agent, "clear_history"):
+            self.agent.clear_history()
+
         self._turn_state = TurnState.IDLE
 
     # ── Pipeline ───────────────────────────────────────────────
@@ -308,8 +348,24 @@ class Session:
             self._turn_state = TurnState.IDLE
             return
 
-        # Run agent
-        agent_response = await self.agent.run(transcript)
+        # Route to streaming or basic agent path
+        if hasattr(self.agent, "run_streaming"):
+            await self._run_streaming_agent(transcript, token)
+        else:
+            await self._run_basic_agent(transcript, token)
+
+    # ── Basic agent path ───────────────────────────────────────
+
+    async def _run_basic_agent(self, transcript: str, token: CancelToken | None) -> None:
+        """Non-streaming agent path: invoke run(), emit events, synthesize TTS."""
+        try:
+            agent_response = await self.agent.run(transcript)
+        except Exception as exc:
+            logger.exception("Agent error")
+            await self.event_bus.emit(Error(exception=exc, context="agent"))
+            self._turn_state = TurnState.IDLE
+            return
+
         if token and token.is_cancelled:
             self._turn_state = TurnState.IDLE
             return
@@ -317,11 +373,121 @@ class Session:
         await self.event_bus.emit(AgentDelta(text=agent_response))
         await self.event_bus.emit(AgentFinal(text=agent_response))
 
-        # Synthesize TTS: consume provider-scoped TTSEvent and map to EasyCat events
+        await self._synthesize_tts(agent_response, token)
+
+    # ── Streaming agent path ───────────────────────────────────
+
+    async def _run_streaming_agent(self, transcript: str, token: CancelToken | None) -> None:
+        """Streaming agent path with incremental TTS on sentence boundaries.
+
+        Runs agent stream consumption and TTS synthesis concurrently:
+        - Agent task: consumes stream events, emits EasyCat events, and queues
+          complete sentences for TTS synthesis.
+        - TTS task: dequeues text chunks and synthesizes them sequentially.
+        """
+        tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        accumulated_text = ""
+        agent_error: BaseException | None = None
+
+        async def _consume_agent() -> None:
+            nonlocal accumulated_text, agent_error
+            text_buffer = ""
+            try:
+                async for event in self.agent.run_streaming(transcript, cancel_token=token):
+                    if token and token.is_cancelled:
+                        break
+
+                    if event.type == AgentStreamEventType.TEXT_DELTA:
+                        accumulated_text += event.text
+                        text_buffer += event.text
+                        await self.event_bus.emit(AgentDelta(text=event.text))
+
+                        # Flush complete sentences to TTS queue
+                        ready, text_buffer = _split_at_sentence_boundaries(text_buffer)
+                        if ready:
+                            await tts_queue.put(ready)
+
+                    elif event.type == AgentStreamEventType.TOOL_STARTED:
+                        await self.event_bus.emit(
+                            ToolCallStarted(tool_name=event.tool_name, call_id=event.call_id)
+                        )
+                    elif event.type == AgentStreamEventType.TOOL_DELTA:
+                        await self.event_bus.emit(
+                            ToolCallDelta(call_id=event.call_id, delta=event.text)
+                        )
+                    elif event.type == AgentStreamEventType.TOOL_RESULT:
+                        await self.event_bus.emit(
+                            ToolCallResult(call_id=event.call_id, result=event.result)
+                        )
+                    elif event.type == AgentStreamEventType.DONE and event.text:
+                        accumulated_text = event.text
+
+            except Exception as exc:
+                agent_error = exc
+                logger.exception("Agent streaming error")
+                await self.event_bus.emit(Error(exception=exc, context="agent"))
+            finally:
+                # Flush any remaining buffered text
+                if text_buffer.strip():
+                    await tts_queue.put(text_buffer.strip())
+                await tts_queue.put(None)  # sentinel to stop TTS task
+
+        async def _process_tts() -> None:
+            started = False
+            try:
+                while True:
+                    text = await tts_queue.get()
+                    if text is None:
+                        break
+                    if token and token.is_cancelled:
+                        break
+
+                    if not started:
+                        self._turn_state = TurnState.BOT_SPEAKING
+                        await self.event_bus.emit(BotStartedSpeaking())
+                        started = True
+
+                    async for tts_event in self.tts.synthesize(text):
+                        if token and token.is_cancelled:
+                            break
+                        if self._turn_state != TurnState.BOT_SPEAKING:
+                            break
+                        if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
+                            await self.event_bus.emit(TTSAudio(chunk=tts_event.audio))
+                            await self.transport.send_audio(tts_event.audio)
+                        elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
+                            await self.event_bus.emit(TTSMarkers(markers=tts_event.markers))
+            except asyncio.CancelledError:
+                pass
+
+            if started and self._turn_state == TurnState.BOT_SPEAKING:
+                await self.event_bus.emit(BotStoppedSpeaking())
+                self._turn_state = TurnState.IDLE
+
+        # Run agent consumption and TTS synthesis concurrently
+        agent_task = asyncio.create_task(_consume_agent())
+        tts_task = asyncio.create_task(_process_tts())
+
+        await agent_task
+
+        # Emit AgentFinal after agent stream is fully consumed
+        if accumulated_text and agent_error is None and not (token and token.is_cancelled):
+            await self.event_bus.emit(AgentFinal(text=accumulated_text))
+
+        await tts_task
+
+        # If agent errored or was cancelled with no TTS started, ensure IDLE
+        if self._turn_state != TurnState.IDLE:
+            self._turn_state = TurnState.IDLE
+
+    # ── TTS synthesis helper ───────────────────────────────────
+
+    async def _synthesize_tts(self, text: str, token: CancelToken | None) -> None:
+        """Synthesize TTS for a complete text and emit audio events."""
         self._turn_state = TurnState.BOT_SPEAKING
         await self.event_bus.emit(BotStartedSpeaking())
         try:
-            async for tts_event in self.tts.synthesize(agent_response):
+            async for tts_event in self.tts.synthesize(text):
                 if token and token.is_cancelled:
                     break
                 if self._turn_state != TurnState.BOT_SPEAKING:

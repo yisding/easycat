@@ -1,4 +1,4 @@
-"""Tests for STT transcript normalization — Task 2.5.
+"""Tests for STT transcript normalization.
 
 Verifies that all three STT providers normalize output to the common
 STTEvent format with consistent fields:
@@ -25,7 +25,7 @@ from easycat.events import STTEvent, STTEventType, WordTimestamp
 from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
-from tests.stt_helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
+from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
 # ── Fixture helpers ──────────────────────────────────────────────
 

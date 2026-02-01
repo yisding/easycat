@@ -9,7 +9,7 @@ import pytest
 from easycat.events import STTEventType
 from easycat.providers import STTProvider
 from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
-from tests.stt_helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
+from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
 
 class MockWebSocket:
