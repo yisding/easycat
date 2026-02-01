@@ -1,4 +1,4 @@
-"""Transport conformance and unit tests for WS5.
+"""Transport conformance and unit tests.
 
 Tests cover:
   - LocalTransport (basic lifecycle without sounddevice hardware)
@@ -12,7 +12,6 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
-import audioop
 import base64
 import json
 import struct
@@ -396,7 +395,7 @@ class TestTwilioTransport:
 
             # Create some mulaw audio (160 samples = 20ms at 8kHz).
             pcm_silence = bytes(320)  # 160 samples * 2 bytes
-            mulaw_data = audioop.lin2ulaw(pcm_silence, 2)
+            mulaw_data = pcm16_to_mulaw(pcm_silence, source_rate=8000)
             await ws.send(_twilio_media_msg(mulaw_data))
 
             await asyncio.wait_for(collect_task, timeout=2.0)

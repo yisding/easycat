@@ -1,4 +1,4 @@
-"""Tests for WS4 VAD: Silero, Krisp, factory, and configuration."""
+"""VAD tests: Silero, Krisp, factory, and configuration."""
 
 import struct
 from unittest.mock import MagicMock
