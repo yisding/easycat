@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import queue as thread_queue
 import struct
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -29,6 +30,8 @@ class LocalTransportConfig:
     frame_duration_ms: int = _DEFAULT_FRAME_MS
     input_device: int | str | None = None
     output_device: int | str | None = None
+    max_pending_in_chunks: int = 200
+    max_pending_out_chunks: int = 200
 
 
 class LocalTransport:
@@ -48,8 +51,14 @@ class LocalTransport:
         self._audio_format = self._config.audio_format
 
         # Queues bridging the sounddevice callback threads and asyncio.
-        self._in_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue()
-        self._out_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._in_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
+            maxsize=self._config.max_pending_in_chunks,
+        )
+        # Output queue uses stdlib thread-safe queue because the sounddevice
+        # output callback runs on a separate audio thread.
+        self._out_queue: thread_queue.Queue[bytes | None] = thread_queue.Queue(
+            maxsize=self._config.max_pending_out_chunks,
+        )
 
         self._input_stream: object | None = None
         self._output_stream: object | None = None
@@ -66,6 +75,10 @@ class LocalTransport:
         """Open audio devices and start capture / playback streams."""
         if self._connected:
             return
+
+        # Reinitialize queues to clear any stale sentinels from a previous session.
+        self._in_queue = asyncio.Queue(maxsize=self._config.max_pending_in_chunks)
+        self._out_queue = thread_queue.Queue(maxsize=self._config.max_pending_out_chunks)
 
         try:
             import sounddevice as sd  # type: ignore[import-untyped]
@@ -112,7 +125,7 @@ class LocalTransport:
 
             try:
                 pcm = self._out_queue.get_nowait()
-            except asyncio.QueueEmpty:
+            except thread_queue.Empty:
                 pcm = None
 
             if pcm is None:
@@ -156,15 +169,24 @@ class LocalTransport:
         self._input_stream = None
         self._output_stream = None
 
-        # Drain queues.
+        # Drain both queues.
         while not self._in_queue.empty():
             try:
                 self._in_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+        while not self._out_queue.empty():
+            try:
+                self._out_queue.get_nowait()
+            except thread_queue.Empty:
+                break
 
         # Signal end of stream to any pending receive_audio iterators.
-        self._in_queue.put_nowait(None)
+        try:
+            self._in_queue.put_nowait(None)
+        except asyncio.QueueFull:
+            logger.debug("Input queue full when enqueueing sentinel; ignoring")
+
         self._connected = False
 
     async def receive_audio(self) -> AsyncIterator[AudioChunk]:
@@ -187,7 +209,10 @@ class LocalTransport:
         data = chunk.data
         offset = 0
         while offset < len(data):
-            self._out_queue.put_nowait(data[offset : offset + frame_bytes])
+            try:
+                self._out_queue.put_nowait(data[offset : offset + frame_bytes])
+            except thread_queue.Full:
+                logger.warning("Output audio queue full — dropping frame")
             offset += frame_bytes
 
     # ── Helpers ────────────────────────────────────────────────────
