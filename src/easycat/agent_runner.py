@@ -73,10 +73,15 @@ class StreamingAgent(Protocol):
 
     Implementations yield ``AgentStreamEvent`` objects as the agent produces
     output. The optional ``context`` parameter carries conversation history.
+    ``cancel_token`` supports cooperative cancellation.
     """
 
     def run_streaming(
-        self, text: str, *, context: list[dict[str, str]] | None = None
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]: ...
 
 
@@ -252,23 +257,38 @@ class AgentRunner:
         exec_span = self._record_span("agent_execution") if self._config.enable_tracing else None
 
         accumulated = ""
-        errored = False
+        stream: AsyncIterator[AgentStreamEvent] | None = None
 
         try:
             if self._is_streaming:
                 context = list(self._history[:-1])
-                stream = self._agent.run_streaming(text, context=context)
-                async for event in stream:
-                    if cancel_token and cancel_token.is_cancelled:
-                        # Try to close the stream gracefully
-                        if hasattr(stream, "aclose"):
-                            await stream.aclose()
-                        break
-                    if event.type == AgentStreamEventType.TEXT_DELTA:
-                        accumulated += event.text
-                    elif event.type == AgentStreamEventType.DONE and event.text:
-                        accumulated = event.text
-                    yield event
+                stream = self._agent.run_streaming(
+                    text,
+                    context=context,
+                    cancel_token=cancel_token,
+                )
+
+                async def _iter_stream() -> AsyncIterator[AgentStreamEvent]:
+                    nonlocal accumulated
+                    async for event in stream:
+                        if cancel_token and cancel_token.is_cancelled:
+                            # Try to close the stream gracefully
+                            if hasattr(stream, "aclose"):
+                                await stream.aclose()
+                            break
+                        if event.type == AgentStreamEventType.TEXT_DELTA:
+                            accumulated += event.text
+                        elif event.type == AgentStreamEventType.DONE and event.text:
+                            accumulated = event.text
+                        yield event
+
+                if self._config.timeout:
+                    async with asyncio.timeout(self._config.timeout):
+                        async for event in _iter_stream():
+                            yield event
+                else:
+                    async for event in _iter_stream():
+                        yield event
             else:
                 # Non-streaming fallback: wrap run() result
                 if self._config.timeout:
@@ -291,7 +311,8 @@ class AgentRunner:
                         text=response,
                     )
         except TimeoutError:
-            errored = True
+            if stream and hasattr(stream, "aclose"):
+                await stream.aclose()
             if exec_span:
                 exec_span.metadata["error"] = "timeout"
                 exec_span.finish()
@@ -304,17 +325,15 @@ class AgentRunner:
             self._history.append({"role": "assistant", "content": accumulated})
             return
         except Exception:
-            errored = True
             if exec_span:
                 exec_span.metadata["error"] = "exception"
                 exec_span.finish()
             self._history.pop()
             raise
 
-        if not errored:
-            if exec_span:
-                exec_span.finish()
-            if self._config.enable_tracing:
-                agent_to_tts = self._record_span("agent_to_tts")
-                agent_to_tts.finish()
-            self._history.append({"role": "assistant", "content": accumulated})
+        if exec_span:
+            exec_span.finish()
+        if self._config.enable_tracing:
+            agent_to_tts = self._record_span("agent_to_tts")
+            agent_to_tts.finish()
+        self._history.append({"role": "assistant", "content": accumulated})

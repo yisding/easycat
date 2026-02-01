@@ -134,7 +134,11 @@ class StreamingUpperAgent:
         return text.upper()
 
     async def run_streaming(
-        self, text: str, *, cancel_token: CancelToken | None = None
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         words = text.upper().split()
         for i, word in enumerate(words):
@@ -153,7 +157,11 @@ class StreamingSentenceAgent:
         return "Hello world. How are you? I am fine."
 
     async def run_streaming(
-        self, text: str, *, cancel_token: CancelToken | None = None
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         chunks = ["Hello world. ", "How are you? ", "I am fine."]
         for chunk in chunks:
@@ -173,7 +181,11 @@ class StreamingToolCallingAgent:
         return "The result is 42."
 
     async def run_streaming(
-        self, text: str, *, cancel_token: CancelToken | None = None
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         yield AgentStreamEvent(
             type=AgentStreamEventType.TOOL_STARTED,
@@ -207,7 +219,11 @@ class SlowStreamingAgent:
         return "slow response"
 
     async def run_streaming(
-        self, text: str, *, cancel_token: CancelToken | None = None
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         for word in ["slow ", "response"]:
             if cancel_token and cancel_token.is_cancelled:
@@ -224,7 +240,11 @@ class FailingStreamingAgent:
         return "won't get here"
 
     async def run_streaming(
-        self, text: str, *, cancel_token: CancelToken | None = None
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="start ")
         raise RuntimeError("agent failed mid-stream")
@@ -493,7 +513,11 @@ async def test_session_streaming_barge_in_cancellation():
             return "full response"
 
         async def run_streaming(
-            self, text: str, *, cancel_token: CancelToken | None = None
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
         ) -> AsyncIterator[AgentStreamEvent]:
             for word in ["Hello ", "world. ", "This ", "is ", "a ", "long ", "response."]:
                 if cancel_token and cancel_token.is_cancelled:
@@ -576,7 +600,11 @@ async def test_session_with_agent_runner_streaming():
             return f"Reply: {text}"
 
         async def run_streaming(
-            self, text: str, *, context: list[dict[str, str]] | None = None
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
         ) -> AsyncIterator[AgentStreamEvent]:
             response = f"Reply: {text}"
             yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=response)

@@ -57,7 +57,11 @@ class StreamingEchoAgent:
         return f"Echo: {text}"
 
     async def run_streaming(
-        self, text: str, *, context: list[dict[str, str]] | None = None
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         words = text.split()
         for i, word in enumerate(words):
@@ -73,7 +77,11 @@ class StreamingToolAgent:
         return f"Result for {text}"
 
     async def run_streaming(
-        self, text: str, *, context: list[dict[str, str]] | None = None
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         yield AgentStreamEvent(
             type=AgentStreamEventType.TOOL_STARTED,
@@ -101,7 +109,11 @@ class SlowStreamingAgent:
         return text
 
     async def run_streaming(
-        self, text: str, *, context: list[dict[str, str]] | None = None
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello ")
         await asyncio.sleep(0.05)
@@ -116,7 +128,11 @@ class FailingStreamingAgent:
         return text
 
     async def run_streaming(
-        self, text: str, *, context: list[dict[str, str]] | None = None
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="start ")
         raise RuntimeError("stream broke")
@@ -134,7 +150,11 @@ class ContextAwareAgent:
         return f"reply to {text}"
 
     async def run_streaming(
-        self, text: str, *, context: list[dict[str, str]] | None = None
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         self.received_contexts.append(context)
         response = f"reply to {text}"
