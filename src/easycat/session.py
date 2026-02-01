@@ -200,7 +200,9 @@ class Session:
             try:
                 await self._pipeline_task
             except asyncio.CancelledError:
-                pass
+                logger.debug(
+                    "TTS processing task was cancelled; ensuring BotStoppedSpeaking is emitted if needed."
+                )
 
         await self._cancel_stt()
         await self._cancel_tts()
