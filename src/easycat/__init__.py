@@ -64,6 +64,16 @@ from easycat.stt import (
     create_stt_provider,
     pcm_to_wav,
 )
+from easycat.transports.local import LocalTransport, LocalTransportConfig
+from easycat.transports.twilio_media import (
+    TwilioTransport,
+    TwilioTransportConfig,
+    mulaw_to_pcm16,
+    pcm16_to_mulaw,
+    twiml_connect_stream,
+    twiml_stream,
+)
+from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
 from easycat.tts.base import TTSBase
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode, ElevenLabsTTS, ElevenLabsTTSConfig
@@ -171,4 +181,15 @@ __all__ = [
     "ElevenLabsStreamMode",
     "TTSProviderConfig",
     "create_tts_provider",
+    # Transports (WS5)
+    "LocalTransport",
+    "LocalTransportConfig",
+    "WebSocketTransport",
+    "WebSocketTransportConfig",
+    "TwilioTransport",
+    "TwilioTransportConfig",
+    "mulaw_to_pcm16",
+    "pcm16_to_mulaw",
+    "twiml_connect_stream",
+    "twiml_stream",
 ]
