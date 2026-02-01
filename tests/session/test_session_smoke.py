@@ -1,4 +1,4 @@
-"""Task 1.10: End-to-end smoke test with stub providers.
+"""End-to-end smoke test with stub providers.
 
 Runs a full session lifecycle:
   start -> feed audio -> stub VAD triggers -> stub STT returns text ->

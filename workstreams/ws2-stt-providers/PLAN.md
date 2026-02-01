@@ -76,12 +76,12 @@ All 6 tasks completed. 171 tests passing (90 WS1 + 81 WS2), ruff lint and format
 - `src/easycat/stt/factory.py` — `create_stt_provider()` factory with config validation and `STTProviderConfig` dataclass
 - `src/easycat/stt/__init__.py` — Package exports
 - `tests/stt_helpers.py` — Test harness (`collect_stt_events`), PCM audio generators (sine, silence, noise), chunk splitter
-- `tests/test_stt_base.py` — 18 tests: base class lifecycle, validation, WAV conversion, harness functions, protocol conformance
-- `tests/test_stt_openai.py` — 10 tests: transcription, config, auth, errors, reusability
-- `tests/test_stt_deepgram.py` — 12 tests: streaming, partial/final, metadata, URL building, reusability
-- `tests/test_stt_elevenlabs.py` — 18 tests: realtime + batch modes, auth, confidence, word timestamps, errors
-- `tests/test_stt_normalization.py` — 10 tests: schema consistency across all providers, confidence/timestamp coverage
-- `tests/test_stt_factory.py` — 10 tests: provider creation, param forwarding, validation, protocol conformance
+- `tests/stt/test_stt_base.py` — 18 tests: base class lifecycle, validation, WAV conversion, harness functions, protocol conformance
+- `tests/stt/test_stt_openai.py` — 10 tests: transcription, config, auth, errors, reusability
+- `tests/stt/test_stt_deepgram.py` — 12 tests: streaming, partial/final, metadata, URL building, reusability
+- `tests/stt/test_stt_elevenlabs.py` — 18 tests: realtime + batch modes, auth, confidence, word timestamps, errors
+- `tests/stt/test_stt_normalization.py` — 10 tests: schema consistency across all providers, confidence/timestamp coverage
+- `tests/stt/test_stt_factory.py` — 10 tests: provider creation, param forwarding, validation, protocol conformance
 
 ### Notes:
 - WebSocket providers (Deepgram, ElevenLabs) accept a `ws_connect` override for testing; will switch to WS8's `ReconnectingWebSocket` when available

@@ -9,7 +9,7 @@ import pytest
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType
 from easycat.stt.base import STTBase, pcm_to_wav
-from tests.stt_helpers import (
+from tests.stt.helpers import (
     collect_stt_events,
     generate_pcm_noise,
     generate_pcm_silence,

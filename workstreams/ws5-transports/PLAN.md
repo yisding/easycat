@@ -32,7 +32,7 @@
 - `send_audio(chunk)` — queues audio for speaker playback
 - End-to-end test: loopback (mic -> speaker) to verify the transport works
 
-**Implementation:** `src/easycat/transports/local.py` — `LocalTransport` class with `LocalTransportConfig` for device selection and audio format. Tests in `tests/test_transports.py::TestLocalTransport`.
+**Implementation:** `src/easycat/transports/local.py` — `LocalTransport` class with `LocalTransportConfig` for device selection and audio format. Tests in `tests/transports/test_transports.py::TestLocalTransport`.
 
 ## Phase 2: WebSocket Transport
 
@@ -59,7 +59,7 @@
 - Support optional audio format negotiation (client specifies sample rate, encoding)
 - Write a minimal test client (Python script) that connects, sends audio, receives audio
 
-**Implementation:** Protocol documented in docstring. Format negotiation via `{"type": "config", "sample_rate": N}`. Test client exercised in `tests/test_transports.py::TestWebSocketTransport`.
+**Implementation:** Protocol documented in docstring. Format negotiation via `{"type": "config", "sample_rate": N}`. Test client exercised in `tests/transports/test_transports.py::TestWebSocketTransport`.
 
 ## Phase 3: Twilio Media Streams Transport
 
@@ -79,7 +79,7 @@
 - Handle the `streamSid` for outbound message routing
 - Unit tests: round-trip mulaw <-> PCM16 conversion
 
-**Implementation:** `mulaw_to_pcm16()` and `pcm16_to_mulaw()` helper functions using `audioop` for mulaw encoding and WS1's `resample()` for rate conversion. Round-trip tests in `tests/test_transports.py::TestAudioConversion`.
+**Implementation:** `mulaw_to_pcm16()` and `pcm16_to_mulaw()` helper functions with a local mu-law codec and WS1's `resample()` for rate conversion. Round-trip tests in `tests/transports/test_transports.py::TestAudioConversion`.
 
 ### Task 5.9: TwiML session bootstrap ✅
 - Provide helpers to generate TwiML for `<Stream>` / `<Connect><Stream>` setup
@@ -87,7 +87,7 @@
 - Document the Twilio webhook + WebSocket setup flow
 - Test with a mock TwiML request
 
-**Implementation:** `twiml_connect_stream()` for bidirectional `<Connect><Stream>` and `twiml_stream()` for one-way `<Start><Stream>`. Both accept URL, track, and optional parameters. Tests in `tests/test_transports.py::TestTwiML`.
+**Implementation:** `twiml_connect_stream()` for bidirectional `<Connect><Stream>` and `twiml_stream()` for one-way `<Start><Stream>`. Both accept URL, track, and optional parameters. Tests in `tests/transports/test_transports.py::TestTwiML`.
 
 ## Phase 4: Validation
 
@@ -99,4 +99,4 @@
   - Graceful handling of disconnect during active streaming
 - Run the suite against all three transports
 
-**Implementation:** `tests/test_transports.py::TestTransportConformance` — Verifies all three transports have the required protocol methods and pass `isinstance(t, Transport)` checks using `runtime_checkable` Protocol. Full integration tests per transport cover lifecycle, send/receive, and disconnect behavior. **31 tests total, all passing.**
+**Implementation:** `tests/transports/test_transports.py::TestTransportConformance` — Verifies all three transports have the required protocol methods and pass `isinstance(t, Transport)` checks using `runtime_checkable` Protocol. Full integration tests per transport cover lifecycle, send/receive, and disconnect behavior. **31 tests total, all passing.**
