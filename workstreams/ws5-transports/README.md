@@ -48,10 +48,10 @@ Implement three transport layers that handle audio I/O for different deployment 
 
 ## Acceptance Criteria
 
-- [ ] Local transport captures mic audio and plays back speaker audio
-- [ ] WebSocket transport accepts connections and streams audio bidirectionally
-- [ ] Twilio transport handles Media Streams protocol (connected/start/media/stop)
-- [ ] Twilio transport correctly converts mulaw 8kHz <-> PCM16
-- [ ] All transports conform to the Transport interface from WS1
-- [ ] Twilio transport emits DTMF and control events for WS6 consumption
-- [ ] Session connect/disconnect lifecycle works for all transports
+- [x] Local transport captures mic audio and plays back speaker audio
+- [x] WebSocket transport accepts connections and streams audio bidirectionally
+- [x] Twilio transport handles Media Streams protocol (connected/start/media/stop)
+- [x] Twilio transport correctly converts mulaw 8kHz <-> PCM16
+- [x] All transports conform to the Transport interface from WS1
+- [x] Twilio transport emits DTMF and control events for WS6 consumption
+- [x] Session connect/disconnect lifecycle works for all transports
