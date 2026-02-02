@@ -47,6 +47,7 @@ class BoundedAudioQueue:
         self._not_empty = asyncio.Event()
         self._not_full = asyncio.Event()
         self._not_full.set()
+        self._put_lock = asyncio.Lock()
         self._closed = False
         self._drops = 0
         self._turn_id: int = 0
@@ -111,7 +112,7 @@ class BoundedAudioQueue:
         elif self._policy == DropPolicy.BLOCK:
             try:
                 await asyncio.wait_for(self._not_full.wait(), timeout=self._block_timeout)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 self._drops += 1
                 logger.debug(
                     "Queue '%s' block timed out, dropping (total drops: %d)",
@@ -119,11 +120,23 @@ class BoundedAudioQueue:
                     self._drops,
                 )
                 return False
-            self._queue.append(chunk)
-            self._not_empty.set()
-            if self.full():
-                self._not_full.clear()
-            return True
+            # Serialize the append under a lock and re-check fullness:
+            # multiple producers may have been woken by a single get(),
+            # so only the first to acquire the lock should append.
+            async with self._put_lock:
+                if self.full():
+                    self._drops += 1
+                    logger.debug(
+                        "Queue '%s' lost race after BLOCK wait, dropping (total drops: %d)",
+                        self._name,
+                        self._drops,
+                    )
+                    return False
+                self._queue.append(chunk)
+                self._not_empty.set()
+                if self.full():
+                    self._not_full.clear()
+                return True
 
         return False  # pragma: no cover
 
