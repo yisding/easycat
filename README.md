@@ -1,3 +1,38 @@
 # EasyCat
 
-The world's easiest to use voice agent framework.
+Slim, batteries-included voice bot framework for the OpenAI Agents SDK.
+
+## Current capabilities
+- Session runtime that wires the audio pipeline (noise reduction -> VAD -> STT -> agent -> TTS)
+- Typed event system with an EventBus for streaming-first voice events
+- STT providers: OpenAI, Deepgram, ElevenLabs
+- TTS providers: OpenAI, Deepgram, ElevenLabs
+- VAD providers: Silero (open-source) and Krisp (commercial)
+- Noise reduction: RNNoise (open-source), Krisp (commercial), passthrough fallback
+- Transports: Local (sounddevice), WebSocket server, Twilio Media Streams server
+- Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers
+- Reliability/observability: reconnecting WebSocket, timeouts, bounded queues, metrics/tracing
+
+## Not yet in this repo
+- EasyCatConfig / create_session convenience layer (planned in workstreams)
+- Runnable examples or CLI
+- Optional dependency extras in packaging
+
+## Repo layout
+- src/easycat: library code
+- tests: unit/integration tests (some are skipped without API keys)
+- workstreams: design notes and task plans for upcoming work
+
+## Install
+Python 3.11+ is required.
+
+```
+python -m pip install -e .
+```
+
+Optional dependencies you may need depending on providers/transports:
+- sounddevice (LocalTransport)
+- torch (Silero VAD)
+- RNNoise shared library (rnnoise)
+- Krisp SDK (krisp_audio)
+- Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs
