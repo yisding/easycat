@@ -62,7 +62,7 @@ class PeriodicHealthChecker:
             try:
                 await self._task
             except asyncio.CancelledError:
-                pass
+                pass  # Expected: we just cancelled the task above
         self._task = None
 
     async def check_once(self) -> bool:
@@ -85,7 +85,7 @@ class PeriodicHealthChecker:
                     break
                 await self.check_once()
         except asyncio.CancelledError:
-            pass
+            pass  # Graceful shutdown via stop()
 
     async def _report_failure(self, reason: str) -> None:
         """Log and optionally emit an event on health check failure."""
