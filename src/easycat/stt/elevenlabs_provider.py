@@ -10,10 +10,10 @@ from typing import Any
 
 import httpx
 import websockets
-from websockets.asyncio.client import ClientConnection
 
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType, WordTimestamp
+from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase, pcm_to_wav
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ class ElevenLabsSTTConfig:
     # Optional overrides for testing
     http_client: httpx.AsyncClient | None = field(default=None, repr=False)
     ws_connect: Any = field(default=None, repr=False)
+    event_bus: Any = field(default=None, repr=False)
 
 
 class ElevenLabsSTT(STTBase):
@@ -52,7 +53,7 @@ class ElevenLabsSTT(STTBase):
         self._buffer = bytearray()
         self._audio_format: AudioFormat | None = None
         # Realtime mode state
-        self._ws: ClientConnection | None = None
+        self._ws: ReconnectingWebSocket | None = None
         self._receive_task: asyncio.Task[None] | None = None
 
     @property
@@ -86,8 +87,14 @@ class ElevenLabsSTT(STTBase):
 
     async def _start_realtime(self) -> None:
         headers = {"xi-api-key": self._config.api_key}
-        connect_fn = self._config.ws_connect or websockets.connect
-        self._ws = await connect_fn(self._config.ws_url, additional_headers=headers)
+        self._ws = ReconnectingWebSocket(
+            url=self._config.ws_url,
+            config=ReconnectConfig(extra_headers=headers),
+            event_bus=self._config.event_bus,
+            provider_name="elevenlabs_stt",
+            connect_fn=self._config.ws_connect,
+        )
+        await self._ws.connect()
 
         # Send initial configuration
         init_msg: dict[str, Any] = {"type": "start"}
@@ -120,10 +127,7 @@ class ElevenLabsSTT(STTBase):
                     self._receive_task.cancel()
                     logger.warning("ElevenLabs receive loop timed out on close")
 
-            try:
-                await self._ws.close()
-            except Exception:
-                logger.debug("Error closing WebSocket", exc_info=True)
+            await self._ws.close()
 
         self._ws = None
         self._receive_task = None
@@ -131,7 +135,7 @@ class ElevenLabsSTT(STTBase):
     async def _receive_loop(self) -> None:
         assert self._ws is not None
         try:
-            async for raw_message in self._ws:
+            async for raw_message in self._ws.recv_iter():
                 if isinstance(raw_message, bytes):
                     continue
                 msg = json.loads(raw_message)

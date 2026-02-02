@@ -36,6 +36,9 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.session import Session, SessionConfig, _split_at_sentence_boundaries
+from easycat.turn_manager import TurnManagerConfig
+
+_FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
 
 # ── Test helpers ───────────────────────────────────────────────────
 
@@ -300,6 +303,7 @@ async def test_session_basic_agent_still_works():
         agent=BasicAgent(),
         tts=FakeTTS(),
         noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 
@@ -337,6 +341,7 @@ async def test_session_basic_agent_error_emits_event():
         agent=BrokenAgent(),
         tts=FakeTTS(),
         noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 
@@ -366,6 +371,7 @@ async def test_session_streaming_agent_emits_deltas():
         agent=StreamingUpperAgent(),
         tts=FakeTTS(),
         noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 
@@ -400,6 +406,7 @@ async def test_session_streaming_agent_tts_receives_text():
         agent=StreamingUpperAgent(),
         tts=tts,
         noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 
@@ -426,6 +433,7 @@ async def test_session_streaming_incremental_tts():
         agent=StreamingSentenceAgent(),
         tts=tts,
         noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 
@@ -451,6 +459,7 @@ async def test_session_streaming_tool_events():
         agent=StreamingToolCallingAgent(),
         tts=FakeTTS(),
         noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 
@@ -487,6 +496,7 @@ async def test_session_streaming_agent_error_emits_event():
         agent=FailingStreamingAgent(),
         tts=FakeTTS(),
         noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 
@@ -552,6 +562,7 @@ async def test_session_streaming_barge_in_cancellation():
         agent=agent,
         tts=FakeTTS(),
         noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 
@@ -581,7 +592,7 @@ async def test_session_reset_clears_agent_history():
     await runner.run("hello")
     assert len(runner.history) == 2
 
-    config = SessionConfig(agent=runner)
+    config = SessionConfig(agent=runner, turn_manager_config=_FAST_TURN)
     session = Session(config)
     await session.reset_state()
 
@@ -620,6 +631,7 @@ async def test_session_with_agent_runner_streaming():
         agent=runner,
         tts=tts,
         noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 
@@ -668,6 +680,7 @@ async def test_full_streaming_turn_event_order():
         agent=StreamingUpperAgent(),
         tts=FakeTTS(),
         noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 

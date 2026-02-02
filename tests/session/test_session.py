@@ -26,6 +26,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.session import Session, SessionConfig, TurnState
+from easycat.turn_manager import TurnManagerConfig
 from easycat.stubs import NoopNoiseReducer
 
 # ── Test helpers ───────────────────────────────────────────────────
@@ -116,6 +117,9 @@ class FakeTTS:
 
     async def cancel(self) -> None:
         pass
+
+
+_FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
 
 
 # ── CancelToken tests ──────────────────────────────────────────────
@@ -309,6 +313,7 @@ async def test_pipeline_full_turn_with_provider_events():
         agent=agent,
         tts=tts,
         noise_reducer=NoopNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 
@@ -378,6 +383,7 @@ async def test_pipeline_skips_empty_transcript():
         vad=vad,
         stt=stt,
         agent=TrackingAgent(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 

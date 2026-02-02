@@ -7,7 +7,6 @@ from easycat.agent_runner import (
     AgentStreamEventType,
     AgentTimeoutError,
     StreamingAgent,
-    TracingSpan,
 )
 from easycat.audio_format import (
     PCM16_MONO_8K,
@@ -142,7 +141,6 @@ __all__ = [
     "AgentStreamEventType",
     "AgentTimeoutError",
     "StreamingAgent",
-    "TracingSpan",
     # Audio format
     "AudioChunk",
     "AudioFormat",

@@ -25,6 +25,7 @@ class DeepgramTTSConfig:
     sample_rate: int = 24000
     base_url: str = "wss://api.deepgram.com/v1/speak"
     output_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_24K)
+    event_bus: object | None = None
 
 
 class DeepgramTTS(TTSBase):
@@ -65,6 +66,8 @@ class DeepgramTTS(TTSBase):
             config=ReconnectConfig(
                 extra_headers={"Authorization": f"Token {self._config.api_key}"},
             ),
+            event_bus=self._config.event_bus,
+            provider_name="deepgram_tts",
         )
 
     async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
