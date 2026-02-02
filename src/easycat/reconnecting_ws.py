@@ -52,6 +52,7 @@ class ReconnectingWebSocket:
         config: ReconnectConfig | None = None,
         event_bus: Any | None = None,
         provider_name: str = "websocket",
+        connect_fn: Callable[..., Coroutine[Any, Any, ClientConnection]] | None = None,
         on_reconnect: ReconnectCallback | None = None,
         on_give_up: ReconnectCallback | None = None,
     ) -> None:
@@ -59,6 +60,7 @@ class ReconnectingWebSocket:
         self._config = config or ReconnectConfig()
         self._event_bus = event_bus
         self._provider_name = provider_name
+        self._connect_fn = connect_fn
         self._on_reconnect = on_reconnect
         self._on_give_up = on_give_up
         self._ws: ClientConnection | None = None
@@ -100,7 +102,8 @@ class ReconnectingWebSocket:
         while True:
             try:
                 await self._emit_reconnect_attempt(attempt + 1)
-                self._ws = await websockets.connect(
+                connect_fn = self._connect_fn or websockets.connect
+                self._ws = await connect_fn(
                     self._url,
                     additional_headers=self._config.extra_headers,
                 )

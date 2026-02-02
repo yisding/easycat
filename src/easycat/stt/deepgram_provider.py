@@ -10,11 +10,10 @@ from typing import Any
 from urllib.parse import urlencode
 
 import websockets
-import websockets.frames
-from websockets.asyncio.client import ClientConnection
 
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType, WordTimestamp
+from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase
 
 logger = logging.getLogger(__name__)
@@ -37,6 +36,8 @@ class DeepgramSTTConfig:
     # Optional WebSocket factory override for testing.
     # Signature: async (url, **kwargs) -> connection
     ws_connect: Any = field(default=None, repr=False)
+    # Optional EventBus for reconnect observability
+    event_bus: Any = field(default=None, repr=False)
 
 
 class DeepgramSTT(STTBase):
@@ -50,15 +51,21 @@ class DeepgramSTT(STTBase):
     def __init__(self, config: DeepgramSTTConfig) -> None:
         super().__init__(expected_sample_rate=config.sample_rate)
         self._config = config
-        self._ws: ClientConnection | None = None
+        self._ws: ReconnectingWebSocket | None = None
         self._receive_task: asyncio.Task[None] | None = None
 
     async def _on_start(self) -> None:
         url = self._build_url()
         headers = {"Authorization": f"Token {self._config.api_key}"}
 
-        connect_fn = self._config.ws_connect or websockets.connect
-        self._ws = await connect_fn(url, additional_headers=headers)
+        self._ws = ReconnectingWebSocket(
+            url=url,
+            config=ReconnectConfig(extra_headers=headers),
+            event_bus=self._config.event_bus,
+            provider_name="deepgram_stt",
+            connect_fn=self._config.ws_connect,
+        )
+        await self._ws.connect()
         self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
@@ -79,10 +86,7 @@ class DeepgramSTT(STTBase):
                     self._receive_task.cancel()
                     logger.warning("Deepgram receive loop timed out on close")
 
-            try:
-                await self._ws.close()
-            except Exception:
-                logger.debug("Error closing WebSocket", exc_info=True)
+            await self._ws.close()
 
         self._ws = None
         self._receive_task = None
@@ -90,7 +94,7 @@ class DeepgramSTT(STTBase):
     async def _receive_loop(self) -> None:
         assert self._ws is not None
         try:
-            async for raw_message in self._ws:
+            async for raw_message in self._ws.recv_iter():
                 if isinstance(raw_message, bytes):
                     continue
                 msg = json.loads(raw_message)

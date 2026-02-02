@@ -14,9 +14,9 @@ from easycat.agent_runner import (
     AgentStreamEventType,
     AgentTimeoutError,
     StreamingAgent,
-    TracingSpan,
 )
 from easycat.cancel import CancelToken
+from easycat.tracing import TraceContext
 
 # ── Test agents ────────────────────────────────────────────────────
 
@@ -263,7 +263,7 @@ async def test_run_tracing_on_timeout():
         await runner.run("test")
     spans = runner.spans
     assert len(spans) == 1
-    assert spans[0].metadata.get("error") == "timeout"
+    assert spans[0].metadata.get("error_type") == "AgentTimeoutError"
     assert spans[0].end_time is not None
 
 
@@ -274,7 +274,7 @@ async def test_run_tracing_on_exception():
         await runner.run("test")
     spans = runner.spans
     assert len(spans) == 1
-    assert spans[0].metadata.get("error") == "exception"
+    assert spans[0].metadata.get("error_type") == "ValueError"
 
 
 @pytest.mark.asyncio
@@ -286,16 +286,18 @@ async def test_clear_spans():
     assert runner.spans == []
 
 
-# ── TracingSpan unit tests ─────────────────────────────────────────
+# ── Span unit tests ────────────────────────────────────────────────
 
 
-def test_tracing_span_duration_none_before_finish():
-    span = TracingSpan(name="test")
+def test_span_duration_none_before_finish():
+    ctx = TraceContext()
+    span = ctx.create_span(name="test")
     assert span.duration_ms is None
 
 
-def test_tracing_span_finish():
-    span = TracingSpan(name="test")
+def test_span_finish():
+    ctx = TraceContext()
+    span = ctx.create_span(name="test")
     span.finish()
     assert span.end_time is not None
     assert span.duration_ms is not None
@@ -461,7 +463,7 @@ async def test_run_streaming_tracing_on_error():
 
     exec_spans = [s for s in runner.spans if s.name == "agent_execution"]
     assert len(exec_spans) == 1
-    assert exec_spans[0].metadata.get("error") == "exception"
+    assert exec_spans[0].metadata.get("error_type") == "RuntimeError"
 
 
 # ── Context passing tests ─────────────────────────────────────────

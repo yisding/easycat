@@ -13,25 +13,15 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
-import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from easycat.cancel import CancelToken
+from easycat.timeouts import AgentTimeoutError
+from easycat.tracing import Span, SpanStatus, TraceContext
 
 logger = logging.getLogger(__name__)
-
-
-# ── Exceptions ──────────────────────────────────────────────────────
-
-
-class AgentTimeoutError(Exception):
-    """Raised when an agent invocation exceeds the configured timeout."""
-
-    def __init__(self, timeout: float) -> None:
-        self.timeout = timeout
-        super().__init__(f"Agent did not respond within {timeout}s")
 
 
 # ── Stream event types ──────────────────────────────────────────────
@@ -85,32 +75,6 @@ class StreamingAgent(Protocol):
     ) -> AsyncIterator[AgentStreamEvent]: ...
 
 
-# ── Tracing ─────────────────────────────────────────────────────────
-
-
-@dataclass
-class TracingSpan:
-    """A timing span for pipeline stage tracing.
-
-    Records start/end timestamps and optional metadata. Integrates with
-    WS8's observability layer when available.
-    """
-
-    name: str
-    start_time: float = field(default_factory=time.monotonic)
-    end_time: float | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def duration_ms(self) -> float | None:
-        if self.end_time is None:
-            return None
-        return (self.end_time - self.start_time) * 1000
-
-    def finish(self) -> None:
-        self.end_time = time.monotonic()
-
-
 # ── Configuration ───────────────────────────────────────────────────
 
 
@@ -153,7 +117,8 @@ class AgentRunner:
         self._agent = agent
         self._config = config or AgentRunnerConfig()
         self._history: list[dict[str, str]] = []
-        self._spans: list[TracingSpan] = []
+        self._spans: list[Span] = []
+        self._trace_context = TraceContext()
         self._is_streaming = isinstance(agent, StreamingAgent)
 
     # ── Properties ─────────────────────────────────────────────
@@ -164,7 +129,7 @@ class AgentRunner:
         return list(self._history)
 
     @property
-    def spans(self) -> list[TracingSpan]:
+    def spans(self) -> list[Span]:
         """Recorded tracing spans (copies)."""
         return list(self._spans)
 
@@ -185,8 +150,8 @@ class AgentRunner:
 
     # ── Internal helpers ───────────────────────────────────────
 
-    def _record_span(self, name: str, **metadata: Any) -> TracingSpan:
-        span = TracingSpan(name=name, metadata=metadata)
+    def _record_span(self, name: str, **metadata: Any) -> Span:
+        span = self._trace_context.create_span(name=name, **metadata)
         self._spans.append(span)
         return span
 
@@ -212,21 +177,22 @@ class AgentRunner:
             else:
                 response = await self._agent.run(text)
         except TimeoutError:
+            err = AgentTimeoutError(self._config.timeout or 0)
             if span:
-                span.metadata["error"] = "timeout"
-                span.finish()
+                span.set_error(err)
+                span.finish(SpanStatus.ERROR)
             # Remove the user message we just added since the turn failed
             self._history.pop()
-            raise AgentTimeoutError(self._config.timeout or 0)
-        except Exception:
+            raise err
+        except Exception as exc:
             if span:
-                span.metadata["error"] = "exception"
-                span.finish()
+                span.set_error(exc)
+                span.finish(SpanStatus.ERROR)
             self._history.pop()
             raise
 
         if span:
-            span.finish()
+            span.finish(SpanStatus.OK)
 
         self._history.append({"role": "assistant", "content": response})
         return response
@@ -252,7 +218,7 @@ class AgentRunner:
 
         if self._config.enable_tracing:
             stt_to_agent = self._record_span("stt_to_agent")
-            stt_to_agent.finish()
+            stt_to_agent.finish(SpanStatus.OK)
 
         exec_span = self._record_span("agent_execution") if self._config.enable_tracing else None
 
@@ -314,26 +280,26 @@ class AgentRunner:
             if stream and hasattr(stream, "aclose"):
                 await stream.aclose()
             if exec_span:
-                exec_span.metadata["error"] = "timeout"
-                exec_span.finish()
+                exec_span.set_error(AgentTimeoutError(self._config.timeout or 0))
+                exec_span.finish(SpanStatus.ERROR)
             self._history.pop()
             raise AgentTimeoutError(self._config.timeout or 0)
         except GeneratorExit:
             # Generator was closed by caller (e.g., barge-in) — not an error
             if exec_span:
-                exec_span.finish()
+                exec_span.finish(SpanStatus.CANCELLED)
             self._history.append({"role": "assistant", "content": accumulated})
             return
-        except Exception:
+        except Exception as exc:
             if exec_span:
-                exec_span.metadata["error"] = "exception"
-                exec_span.finish()
+                exec_span.set_error(exc)
+                exec_span.finish(SpanStatus.ERROR)
             self._history.pop()
             raise
 
         if exec_span:
-            exec_span.finish()
+            exec_span.finish(SpanStatus.OK)
         if self._config.enable_tracing:
             agent_to_tts = self._record_span("agent_to_tts")
-            agent_to_tts.finish()
+            agent_to_tts.finish(SpanStatus.OK)
         self._history.append({"role": "assistant", "content": accumulated})

@@ -11,10 +11,42 @@ from easycat.audio_format import AudioChunk, AudioFormat
 def resample(data: bytes, from_rate: int, to_rate: int) -> bytes:
     """Resample PCM16 mono audio between sample rates.
 
-    Uses linear interpolation. Supports at minimum 8000 <-> 16000 Hz.
+    Prefers high-quality backends (soxr, scipy) when available and
+    falls back to linear interpolation if not.
     """
     if from_rate == to_rate:
         return data
+    if not data:
+        return data
+
+    # Try soxr (highest quality, fast) if installed
+    try:
+        import numpy as np  # type: ignore[import-untyped]
+        import soxr  # type: ignore[import-not-found]
+
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        resampled = soxr.resample(samples, from_rate, to_rate)
+        out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+        return out.tobytes()
+    except Exception:
+        pass
+
+    # Try scipy.signal.resample_poly as a quality fallback
+    try:
+        import math
+
+        import numpy as np  # type: ignore[import-untyped]
+        from scipy.signal import resample_poly  # type: ignore[import-not-found]
+
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+        g = math.gcd(from_rate, to_rate)
+        up = to_rate // g
+        down = from_rate // g
+        resampled = resample_poly(samples, up, down)
+        out = np.clip(resampled, -32768, 32767).astype(np.int16)
+        return out.tobytes()
+    except Exception:
+        pass
 
     # Decode PCM16 LE samples
     num_samples = len(data) // 2

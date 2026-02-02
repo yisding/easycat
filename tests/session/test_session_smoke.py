@@ -36,6 +36,9 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.session import Session, SessionConfig, TurnState
+from easycat.turn_manager import TurnManagerConfig
+
+_FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
 
 # ── Stub providers for smoke test ──────────────────────────────────
 
@@ -143,6 +146,7 @@ async def test_full_session_smoke():
         agent=SmokeAgent(),
         tts=SmokeTTS(),
         noise_reducer=SmokeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 

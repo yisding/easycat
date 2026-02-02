@@ -50,6 +50,7 @@ class ElevenLabsTTSConfig:
     base_url: str = "https://api.elevenlabs.io/v1"
     ws_base_url: str = "wss://api.elevenlabs.io/v1"
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_24K)
+    event_bus: object | None = None
 
     def __post_init__(self) -> None:
         if self.output_format not in _ELEVENLABS_FORMAT_MAP:
@@ -165,6 +166,8 @@ class ElevenLabsTTS(TTSBase):
             config=ReconnectConfig(
                 extra_headers={"xi-api-key": self._config.api_key},
             ),
+            event_bus=self._config.event_bus,
+            provider_name="elevenlabs_tts",
         )
 
         try:
