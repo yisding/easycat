@@ -18,6 +18,7 @@ from easycat.audio_format import (
     AudioFormat,
 )
 from easycat.audio_utils import chunk_frames, resample, resample_chunk, to_mono, to_mono_chunk
+from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
 from easycat.events import (
     DTMF,
@@ -52,6 +53,22 @@ from easycat.events import (
     VoicemailDetected,
     WordTimestamp,
 )
+from easycat.health_check import HealthCheckable, PeriodicHealthChecker
+from easycat.metrics import (
+    AGENT_LATENCY,
+    ERRORS,
+    INTERRUPTIONS,
+    RECONNECTS,
+    STT_LATENCY,
+    TTS_TTFB,
+    TURN_E2E,
+    InMemoryMetrics,
+    LatencyStats,
+    MetricsCollector,
+    measure_latency,
+    measure_latency_sync,
+    timed_metric,
+)
 from easycat.noise_reduction import (
     KrispNoiseReducer,
     NoiseReducerConfig,
@@ -82,6 +99,22 @@ from easycat.telephony import (
     VoicemailPolicyConfig,
     VoicemailPolicyHandler,
     parse_twilio_dtmf_message,
+)
+from easycat.timeouts import (
+    STTTimeoutError,
+    TimeoutConfig,
+    TTSTimeoutError,
+    with_agent_timeout,
+    with_stt_timeout,
+    with_tts_timeout,
+)
+from easycat.tracing import (
+    InMemoryTraceExporter,
+    Span,
+    SpanStatus,
+    TraceContext,
+    TraceExporter,
+    Tracer,
 )
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import (
@@ -184,9 +217,43 @@ __all__ = [
     "Session",
     "SessionConfig",
     "TurnState",
-    # ReconnectingWebSocket
+    # ReconnectingWebSocket (WS8)
     "ReconnectConfig",
     "ReconnectingWebSocket",
+    # Health check (WS8)
+    "HealthCheckable",
+    "PeriodicHealthChecker",
+    # Timeouts (WS8)
+    "STTTimeoutError",
+    "TTSTimeoutError",
+    "TimeoutConfig",
+    "with_stt_timeout",
+    "with_agent_timeout",
+    "with_tts_timeout",
+    # Backpressure (WS8)
+    "BoundedAudioQueue",
+    "DropPolicy",
+    # Metrics (WS8)
+    "MetricsCollector",
+    "InMemoryMetrics",
+    "LatencyStats",
+    "STT_LATENCY",
+    "AGENT_LATENCY",
+    "TTS_TTFB",
+    "TURN_E2E",
+    "INTERRUPTIONS",
+    "RECONNECTS",
+    "ERRORS",
+    "timed_metric",
+    "measure_latency",
+    "measure_latency_sync",
+    # Tracing (WS8)
+    "Span",
+    "SpanStatus",
+    "TraceContext",
+    "TraceExporter",
+    "InMemoryTraceExporter",
+    "Tracer",
     # STT providers
     "STTBase",
     "OpenAISTT",
