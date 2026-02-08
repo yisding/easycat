@@ -139,7 +139,10 @@ class SileroVAD(_VADBase):
 
     def _load_model(self) -> None:
         """Load the Silero VAD model."""
-        torch = require_module("torch", extra="all", purpose="Silero VAD")
+        try:
+            torch = require_module("torch", extra="all", purpose="Silero VAD")
+        except ImportError as exc:
+            raise RuntimeError(str(exc)) from exc
         try:
             model, _ = torch.hub.load(
                 repo_or_dir="snakers4/silero-vad",
@@ -216,7 +219,10 @@ class KrispVAD(_VADBase):
 
     def _initialize(self) -> None:
         """Initialize the Krisp VAD SDK session."""
-        krisp_audio = require_module("krisp_audio", extra="krisp", purpose="Krisp VAD")
+        try:
+            krisp_audio = require_module("krisp_audio", purpose="Krisp VAD")
+        except ImportError as exc:
+            raise RuntimeError(str(exc)) from exc
         config = {}
         if self._model_path:
             config["model_path"] = self._model_path
@@ -316,12 +322,12 @@ def create_vad(config: VADConfig | None = None) -> Any:
     # Auto mode: try Krisp -> Silero
     try:
         return _configure(KrispVAD(model_path=cfg.krisp_model_path))
-    except RuntimeError:
+    except (RuntimeError, ImportError):
         logger.info("Krisp VAD not available, trying Silero fallback")
 
     try:
         return _configure(SileroVAD())
-    except RuntimeError:
+    except (RuntimeError, ImportError):
         logger.info("Silero VAD not available either")
         raise RuntimeError(
             "No VAD backend available. Install torch (for Silero) or krisp-audio (for Krisp)."

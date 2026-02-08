@@ -81,7 +81,10 @@ class TestLocalTransport:
                 await transport.connect()
             assert not transport.is_connected
         else:
-            await transport.connect()
+            try:
+                await transport.connect()
+            except OSError:
+                pytest.skip("No audio device available (CI/container environment)")
             assert transport.is_connected
             await transport.disconnect()
             assert not transport.is_connected

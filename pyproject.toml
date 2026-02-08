@@ -3,7 +3,7 @@ name = "easycat"
 version = "0.1.0"
 description = "Slim, batteries-included voice bot framework for the OpenAI Agents SDK"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28.1",
     "websockets>=16.0",
@@ -15,14 +15,12 @@ pydantic-ai = ["pydantic-ai>=0.1"]
 openai = ["openai>=1.0.0"]
 deepgram = ["deepgram-sdk>=3.0.0"]
 elevenlabs = ["elevenlabs>=1.0.0"]
-krisp = ["krisp-audio>=1.0.0"]
 telephony = ["fastapi>=0.110.0", "python-multipart>=0.0.9", "twilio>=9.0.0", "uvicorn>=0.29.0"]
 local = ["sounddevice>=0.4.6"]
 all = [
     "deepgram-sdk>=3.0.0",
     "elevenlabs>=1.0.0",
     "fastapi>=0.110.0",
-    "krisp-audio>=1.0.0",
     "openai>=1.0.0",
     "python-multipart>=0.0.9",
     "sounddevice>=0.4.6",
@@ -44,7 +42,7 @@ dev = [
 
 [tool.ruff]
 line-length = 99
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP"]

@@ -165,9 +165,12 @@ class KrispNoiseReducer:
 
     def _initialize(self) -> None:
         """Initialize the Krisp SDK and create a noise cancellation session."""
-        krisp_audio = require_module(
-            "krisp_audio", extra="krisp", purpose="Krisp noise reduction"
-        )
+        try:
+            krisp_audio = require_module(
+                "krisp_audio", purpose="Krisp noise reduction"
+            )
+        except ImportError as exc:
+            raise RuntimeError(str(exc)) from exc
         config = {}
         if self._model_path:
             config["model_path"] = self._model_path
@@ -184,7 +187,7 @@ class KrispNoiseReducer:
         """Process audio through Krisp noise cancellation."""
         if self._krisp_audio is None:
             self._krisp_audio = require_module(
-                "krisp_audio", extra="krisp", purpose="Krisp noise reduction"
+                "krisp_audio", purpose="Krisp noise reduction"
             )
         cleaned_data = self._krisp_audio.process_frame(
             self._session, chunk.data, chunk.format.sample_rate
@@ -201,7 +204,7 @@ class KrispNoiseReducer:
             try:
                 if self._krisp_audio is None:
                     self._krisp_audio = require_module(
-                        "krisp_audio", extra="krisp", purpose="Krisp noise reduction"
+                        "krisp_audio", purpose="Krisp noise reduction"
                     )
                 self._krisp_audio.destroy_session(self._session)
             except Exception:
@@ -256,12 +259,12 @@ def create_noise_reducer(config: NoiseReducerConfig | None = None) -> Any:
     # Auto mode: try Krisp -> RNNoise -> passthrough
     try:
         return KrispNoiseReducer(model_path=cfg.krisp_model_path)
-    except RuntimeError:
+    except (RuntimeError, ImportError):
         logger.info("Krisp not available, trying RNNoise fallback")
 
     try:
         return RNNoiseReducer()
-    except RuntimeError:
+    except (RuntimeError, ImportError):
         logger.info("RNNoise not available, falling back to passthrough")
 
     return PassthroughNoiseReducer()
