@@ -23,9 +23,13 @@ Internal plumbing remains importable from submodules for advanced use::
     from easycat.transports.twilio_media import mulaw_to_pcm16, pcm16_to_mulaw, ...
 """
 
+# ── Primary API ───────────────────────────────────────────────────
+
+from easycat.voice_pipeline import VoicePipeline  # noqa: I001
+
 # ── Core session & agent ──────────────────────────────────────────
 
-from easycat.agent_runner import (  # noqa: I001
+from easycat.agent_runner import (
     AgentRunner,
     AgentRunnerConfig,
     AgentStreamEvent,
@@ -124,6 +128,8 @@ from easycat.timeouts import (
 from easycat.tracing import Tracer, TraceExporter
 
 __all__ = [
+    # Primary API
+    "VoicePipeline",
     # Core session & agent
     "Session",
     "SessionConfig",
