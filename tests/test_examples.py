@@ -27,6 +27,8 @@ def test_pydantic_ai_example_imports():
 def test_twilio_example_factory():
     if importlib.util.find_spec("fastapi") is None:
         pytest.skip("fastapi not installed")
+    if importlib.util.find_spec("agents") is None:
+        pytest.skip("openai-agents not installed")
     import examples.twilio_app as twilio_app
 
     app = twilio_app.create_app(api_key="test-key", stream_url="wss://example.com/stream")
