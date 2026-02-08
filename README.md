@@ -1,6 +1,7 @@
 # EasyCat
 
-Slim, batteries-included voice bot framework for the OpenAI Agents SDK.
+Slim, batteries-included voice bot framework that plugs into idiomatic
+OpenAI Agents SDK or PydanticAI agents.
 
 ## Current capabilities
 - Session runtime that wires the audio pipeline (noise reduction -> VAD -> STT -> agent -> TTS)
@@ -12,6 +13,43 @@ Slim, batteries-included voice bot framework for the OpenAI Agents SDK.
 - Transports: Local (sounddevice), WebSocket server, Twilio Media Streams server
 - Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers
 - Reliability/observability: reconnecting WebSocket, timeouts, bounded queues, metrics/tracing
+- Agent adapters: use OpenAI Agents SDK or PydanticAI directly and wrap with EasyCat
+
+## Bring your own agent
+EasyCat does not replace your agent framework. Build your agent with your SDK of
+choice, then wrap it with an EasyCat adapter when creating a session.
+
+### OpenAI Agents SDK (idiomatic)
+```python
+from agents import Agent
+
+from easycat import Session, SessionConfig
+from easycat.agents import OpenAIAgentsAdapter
+
+agent = Agent(
+    name="Support",
+    instructions="Help customers with account issues.",
+)
+
+adapter = OpenAIAgentsAdapter(agent)
+session = Session(SessionConfig(agent=adapter, ...))
+```
+
+### PydanticAI (idiomatic)
+```python
+from pydantic_ai import Agent as PydanticAgent
+
+from easycat import Session, SessionConfig
+from easycat.agents import PydanticAIAdapter
+
+pydantic_agent = PydanticAgent(
+    "openai:gpt-5.2",
+    system_prompt="Help customers with account issues.",
+)
+
+adapter = PydanticAIAdapter(pydantic_agent)
+session = Session(SessionConfig(agent=adapter, ...))
+```
 
 ## Not yet in this repo
 - EasyCatConfig / create_session convenience layer (planned in workstreams)
