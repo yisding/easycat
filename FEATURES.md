@@ -1,8 +1,9 @@
 # EasyCat Features (MVP)
 
-EasyCat is a slim, batteries-included voice bot framework designed to pair with the
-OpenAI Agents SDK (Python). EasyCat handles audio I/O, VAD/turn-taking, STT/TTS
-providers, telephony basics (DTMF + voicemail), and noise reduction.
+EasyCat is a slim, batteries-included voice bot framework designed to pair with
+the OpenAI Agents SDK (Python) or PydanticAI. EasyCat handles audio I/O,
+VAD/turn-taking, STT/TTS providers, telephony basics (DTMF + voicemail), and
+noise reduction.
 
 ## Scope
 
@@ -14,6 +15,7 @@ providers, telephony basics (DTMF + voicemail), and noise reduction.
 - DTMF support (telephony and testing hooks)
 - Voicemail / answering machine detection
 - Tight integration with OpenAI Agents SDK voice/workflow streaming concepts
+- Adapter layer so you keep your Agents SDK or PydanticAI agent code idiomatic
 
 ## 1) Core Runtime (Minimal "Voice Loop" Engine)
 
@@ -69,15 +71,16 @@ Errors
 
 (Design mirrors the Agents SDK voice event style: audio + lifecycle + error.)
 
-## 2) Agents SDK Integration (Python)
+## 2) Agent Framework Integration (Python)
 
 ### MVP integration points
-- Accept an Agents SDK workflow / agent and run it per user turn
-- Support streaming where available (text deltas, tool events) using Agents SDK primitives
-- Pass through (or optionally augment) Agents SDK tracing hooks
+- Accept an OpenAI Agents SDK or PydanticAI agent/workflow and run it per user turn
+- Support streaming where available (text deltas, tool events) using framework primitives
+- Pass through (or optionally augment) Agents SDK tracing hooks when present
 
 ### What EasyCat does NOT redo
-- Tool calling schemas, handoffs, guardrails, agent memory: those stay in the Agents SDK
+- Tool calling schemas, handoffs, guardrails, agent memory: those stay in the
+  agent framework (OpenAI Agents SDK or PydanticAI)
 
 ## 3) Speech-to-Text (STT) - OpenAI + Deepgram + ElevenLabs
 
