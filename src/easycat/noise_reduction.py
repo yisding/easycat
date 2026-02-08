@@ -16,6 +16,7 @@ from typing import Any
 
 from easycat.audio_format import PCM16_MONO_48K, AudioChunk
 from easycat.audio_utils import resample_chunk
+from easycat.extras import require_module
 
 logger = logging.getLogger(__name__)
 
@@ -159,33 +160,33 @@ class KrispNoiseReducer:
     def __init__(self, model_path: str | None = None) -> None:
         self._session: Any = None
         self._model_path = model_path
+        self._krisp_audio: Any = None
         self._initialize()
 
     def _initialize(self) -> None:
         """Initialize the Krisp SDK and create a noise cancellation session."""
+        krisp_audio = require_module(
+            "krisp_audio", extra="krisp", purpose="Krisp noise reduction"
+        )
+        config = {}
+        if self._model_path:
+            config["model_path"] = self._model_path
         try:
-            import krisp_audio  # type: ignore[import-not-found]
-
-            config = {}
-            if self._model_path:
-                config["model_path"] = self._model_path
             self._session = krisp_audio.create_noise_cancellation_session(**config)
-            logger.info("Krisp noise reduction initialized")
-        except ImportError as exc:
-            raise RuntimeError(
-                "Krisp SDK not installed. Install the krisp-audio package "
-                "or use RNNoise as a fallback."
-            ) from exc
         except Exception as exc:
             raise RuntimeError(
                 f"Krisp SDK initialization failed (license or config issue): {exc}"
             ) from exc
+        self._krisp_audio = krisp_audio
+        logger.info("Krisp noise reduction initialized")
 
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         """Process audio through Krisp noise cancellation."""
-        import krisp_audio  # type: ignore[import-not-found]
-
-        cleaned_data = krisp_audio.process_frame(
+        if self._krisp_audio is None:
+            self._krisp_audio = require_module(
+                "krisp_audio", extra="krisp", purpose="Krisp noise reduction"
+            )
+        cleaned_data = self._krisp_audio.process_frame(
             self._session, chunk.data, chunk.format.sample_rate
         )
         return AudioChunk(
@@ -198,9 +199,11 @@ class KrispNoiseReducer:
         """Release Krisp session resources."""
         if self._session is not None:
             try:
-                import krisp_audio  # type: ignore[import-not-found]
-
-                krisp_audio.destroy_session(self._session)
+                if self._krisp_audio is None:
+                    self._krisp_audio = require_module(
+                        "krisp_audio", extra="krisp", purpose="Krisp noise reduction"
+                    )
+                self._krisp_audio.destroy_session(self._session)
             except Exception:
                 pass
             self._session = None

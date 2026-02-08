@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import importlib.util
 import json
 import struct
 
@@ -73,12 +74,17 @@ class TestLocalTransport:
 
     @pytest.mark.asyncio
     async def test_connect_disconnect_without_sounddevice(self):
-        """LocalTransport gracefully handles missing sounddevice."""
+        """LocalTransport requires sounddevice to connect."""
         transport = LocalTransport()
-        await transport.connect()
-        assert transport.is_connected
-        await transport.disconnect()
-        assert not transport.is_connected
+        if importlib.util.find_spec("sounddevice") is None:
+            with pytest.raises(ImportError):
+                await transport.connect()
+            assert not transport.is_connected
+        else:
+            await transport.connect()
+            assert transport.is_connected
+            await transport.disconnect()
+            assert not transport.is_connected
 
     @pytest.mark.asyncio
     async def test_disconnect_idempotent(self):
@@ -104,6 +110,8 @@ class TestLocalTransport:
     @pytest.mark.asyncio
     async def test_receive_audio_returns_on_disconnect(self):
         """receive_audio iterator ends when transport disconnects."""
+        if importlib.util.find_spec("sounddevice") is None:
+            pytest.skip("sounddevice not installed")
         transport = LocalTransport()
         await transport.connect()
 
@@ -122,6 +130,8 @@ class TestLocalTransport:
     @pytest.mark.asyncio
     async def test_send_audio_splits_oversized_chunks(self):
         """Chunks larger than one frame are split into frame-sized pieces."""
+        if importlib.util.find_spec("sounddevice") is None:
+            pytest.skip("sounddevice not installed")
         transport = LocalTransport()
         await transport.connect()
 
