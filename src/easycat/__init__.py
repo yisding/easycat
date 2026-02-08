@@ -1,34 +1,53 @@
-"""EasyCat — slim, batteries-included voice bot framework."""
+"""EasyCat — slim, batteries-included voice bot framework.
 
-from easycat.agent_runner import (
+Public API
+----------
+This module exports the symbols intended for typical library consumers.
+Internal plumbing remains importable from submodules for advanced use::
+
+    from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
+    from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
+    from easycat.reconnecting_ws import ReconnectingWebSocket, ReconnectConfig
+    from easycat.health_check import PeriodicHealthChecker, HealthCheckable
+    from easycat.tracing import Span, SpanStatus, TraceContext, InMemoryTraceExporter
+    from easycat.metrics import timed_metric, measure_latency, STT_LATENCY, ...
+    from easycat.timeouts import with_stt_timeout, with_agent_timeout, with_tts_timeout
+    from easycat.audio_utils import chunk_frames, resample, to_mono, ...
+    from easycat.stt.base import STTBase, pcm_to_wav
+    from easycat.tts.base import TTSBase
+    from easycat.stt import create_stt_provider
+    from easycat.tts.factory import create_tts_provider, TTSProviderConfig
+    from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode
+    from easycat.events import STTEvent, STTEventType, TTSEvent, TTSEventType, WordTimestamp
+    from easycat.telephony import DTMFAggregator, VoicemailDetector, ...
+    from easycat.transports.twilio_media import mulaw_to_pcm16, pcm16_to_mulaw, ...
+"""
+
+# ── Core session & agent ──────────────────────────────────────────
+
+from easycat.agent_runner import (  # noqa: I001
     AgentRunner,
     AgentRunnerConfig,
     AgentStreamEvent,
     AgentStreamEventType,
-    AgentTimeoutError,
     StreamingAgent,
 )
 from easycat.agents.base import BaseAgentAdapter, serialize_output
 from easycat.agents.openai_agents import OpenAIAgentsAdapter
 from easycat.agents.pydantic_ai import PydanticAIAdapter
-from easycat.audio_format import (
-    PCM16_MONO_8K,
-    PCM16_MONO_16K,
-    PCM16_MONO_24K,
-    PCM16_MONO_48K,
-    AudioChunk,
-    AudioFormat,
-)
-from easycat.audio_utils import chunk_frames, resample, resample_chunk, to_mono, to_mono_chunk
-from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
+from easycat.session import Session, SessionConfig, TurnState
+from easycat.turn_manager import TurnMode
+
+# ── EasyCat-level events ─────────────────────────────────────────
+
 from easycat.events import (
-    DTMF,
     AgentDelta,
     AgentFinal,
     AudioIn,
     BotStartedSpeaking,
     BotStoppedSpeaking,
+    DTMF,
     DTMFAggregated,
     Error,
     Event,
@@ -37,50 +56,43 @@ from easycat.events import (
     ReconnectAttempt,
     ReconnectFailure,
     ReconnectSuccess,
-    STTEvent,
-    STTEventType,
     STTFinal,
     STTPartial,
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
     TTSAudio,
-    TTSEvent,
-    TTSEventType,
     TTSMarkers,
     TurnEnded,
     TurnStarted,
     VADStartSpeaking,
     VADStopSpeaking,
     VoicemailDetected,
-    WordTimestamp,
 )
-from easycat.health_check import HealthCheckable, PeriodicHealthChecker
-from easycat.metrics import (
-    AGENT_LATENCY,
-    ERRORS,
-    INTERRUPTIONS,
-    RECONNECTS,
-    STT_LATENCY,
-    TTS_TTFB,
-    TURN_E2E,
-    InMemoryMetrics,
-    LatencyStats,
-    MetricsCollector,
-    measure_latency,
-    measure_latency_sync,
-    timed_metric,
+
+# ── Provider protocols ────────────────────────────────────────────
+
+from easycat.providers import NoiseReducer, STTProvider, Transport, TTSProvider, VADProvider
+
+# ── Audio format ──────────────────────────────────────────────────
+
+from easycat.audio_format import (
+    PCM16_MONO_8K,
+    PCM16_MONO_16K,
+    PCM16_MONO_24K,
+    PCM16_MONO_48K,
+    AudioChunk,
+    AudioFormat,
 )
+
+# ── Provider implementations ─────────────────────────────────────
+
 from easycat.noise_reduction import (
     KrispNoiseReducer,
     NoiseReducerConfig,
-    PassthroughNoiseReducer,
     RNNoiseReducer,
     create_noise_reducer,
 )
-from easycat.providers import NoiseReducer, STTProvider, Transport, TTSProvider, VADProvider
-from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
-from easycat.session import Session, SessionConfig, TurnState
 from easycat.stt import (
     DeepgramSTT,
     DeepgramSTTConfig,
@@ -88,83 +100,47 @@ from easycat.stt import (
     ElevenLabsSTTConfig,
     OpenAISTT,
     OpenAISTTConfig,
-    STTBase,
-    create_stt_provider,
-    pcm_to_wav,
 )
-from easycat.telephony import (
-    DTMFAggregator,
-    DTMFAggregatorConfig,
-    VoicemailDetector,
-    VoicemailDetectorConfig,
-    VoicemailPolicy,
-    VoicemailPolicyConfig,
-    VoicemailPolicyHandler,
-    parse_twilio_dtmf_message,
-)
+from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
+from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
+from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
+from easycat.vad import KrispVAD, SileroVAD, VADConfig, create_vad
+
+# ── Transport implementations ────────────────────────────────────
+
+from easycat.transports.local import LocalTransport, LocalTransportConfig
+from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
+from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
+
+# ── Configuration & errors ────────────────────────────────────────
+
+from easycat.metrics import InMemoryMetrics, LatencyStats, MetricsCollector
 from easycat.timeouts import (
+    AgentTimeoutError,
     STTTimeoutError,
     TimeoutConfig,
     TTSTimeoutError,
-    with_agent_timeout,
-    with_stt_timeout,
-    with_tts_timeout,
 )
-from easycat.tracing import (
-    InMemoryTraceExporter,
-    Span,
-    SpanStatus,
-    TraceContext,
-    TraceExporter,
-    Tracer,
-)
-from easycat.transports.local import LocalTransport, LocalTransportConfig
-from easycat.transports.twilio_media import (
-    TwilioTransport,
-    TwilioTransportConfig,
-    mulaw_to_pcm16,
-    pcm16_to_mulaw,
-    twiml_connect_stream,
-    twiml_stream,
-)
-from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
-from easycat.tts.base import TTSBase
-from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
-from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode, ElevenLabsTTS, ElevenLabsTTSConfig
-from easycat.tts.factory import TTSProviderConfig, create_tts_provider
-from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
-from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState, TurnMode
-from easycat.vad import KrispVAD, SileroVAD, VADConfig, create_vad
+from easycat.tracing import Tracer, TraceExporter
 
 __all__ = [
-    # Agent runner (WS7)
+    # Core session & agent
+    "Session",
+    "SessionConfig",
+    "TurnState",
+    "TurnMode",
     "AgentRunner",
     "AgentRunnerConfig",
     "AgentStreamEvent",
     "AgentStreamEventType",
-    "AgentTimeoutError",
     "StreamingAgent",
     # Agent adapters
     "BaseAgentAdapter",
     "OpenAIAgentsAdapter",
     "PydanticAIAdapter",
     "serialize_output",
-    # Audio format
-    "AudioChunk",
-    "AudioFormat",
-    "PCM16_MONO_8K",
-    "PCM16_MONO_16K",
-    "PCM16_MONO_24K",
-    "PCM16_MONO_48K",
-    # Audio utilities
-    "chunk_frames",
-    "resample",
-    "resample_chunk",
-    "to_mono",
-    "to_mono_chunk",
-    # Cancel
     "CancelToken",
-    # EasyCat events
+    # EasyCat-level events
     "AgentDelta",
     "AgentFinal",
     "AudioIn",
@@ -181,124 +157,68 @@ __all__ = [
     "ReconnectSuccess",
     "STTFinal",
     "STTPartial",
-    "TTSAudio",
-    "TTSMarkers",
     "ToolCallDelta",
     "ToolCallResult",
     "ToolCallStarted",
+    "TTSAudio",
+    "TTSMarkers",
     "TurnEnded",
     "TurnStarted",
     "VADStartSpeaking",
     "VADStopSpeaking",
     "VoicemailDetected",
-    # Provider-scoped events
-    "STTEvent",
-    "STTEventType",
-    "TTSEvent",
-    "TTSEventType",
-    "WordTimestamp",
-    # Providers
+    # Provider protocols
     "NoiseReducer",
     "STTProvider",
     "Transport",
     "TTSProvider",
     "VADProvider",
-    # Noise reduction (WS4)
-    "RNNoiseReducer",
-    "KrispNoiseReducer",
-    "PassthroughNoiseReducer",
-    "NoiseReducerConfig",
-    "create_noise_reducer",
-    # VAD (WS4)
-    "SileroVAD",
-    "KrispVAD",
-    "VADConfig",
-    "create_vad",
-    # Turn-taking (WS4)
-    "TurnManager",
-    "TurnManagerConfig",
-    "TurnManagerState",
-    "TurnMode",
-    # Session
-    "Session",
-    "SessionConfig",
-    "TurnState",
-    # ReconnectingWebSocket (WS8)
-    "ReconnectConfig",
-    "ReconnectingWebSocket",
-    # Health check (WS8)
-    "HealthCheckable",
-    "PeriodicHealthChecker",
-    # Timeouts (WS8)
-    "STTTimeoutError",
-    "TTSTimeoutError",
-    "TimeoutConfig",
-    "with_stt_timeout",
-    "with_agent_timeout",
-    "with_tts_timeout",
-    # Backpressure (WS8)
-    "BoundedAudioQueue",
-    "DropPolicy",
-    # Metrics (WS8)
-    "MetricsCollector",
-    "InMemoryMetrics",
-    "LatencyStats",
-    "STT_LATENCY",
-    "AGENT_LATENCY",
-    "TTS_TTFB",
-    "TURN_E2E",
-    "INTERRUPTIONS",
-    "RECONNECTS",
-    "ERRORS",
-    "timed_metric",
-    "measure_latency",
-    "measure_latency_sync",
-    # Tracing (WS8)
-    "Span",
-    "SpanStatus",
-    "TraceContext",
-    "TraceExporter",
-    "InMemoryTraceExporter",
-    "Tracer",
+    # Audio format
+    "AudioChunk",
+    "AudioFormat",
+    "PCM16_MONO_8K",
+    "PCM16_MONO_16K",
+    "PCM16_MONO_24K",
+    "PCM16_MONO_48K",
     # STT providers
-    "STTBase",
     "OpenAISTT",
     "OpenAISTTConfig",
     "DeepgramSTT",
     "DeepgramSTTConfig",
     "ElevenLabsSTT",
     "ElevenLabsSTTConfig",
-    "create_stt_provider",
-    "pcm_to_wav",
     # TTS providers
-    "TTSBase",
     "OpenAITTS",
     "OpenAITTSConfig",
     "DeepgramTTS",
     "DeepgramTTSConfig",
     "ElevenLabsTTS",
     "ElevenLabsTTSConfig",
-    "ElevenLabsStreamMode",
-    "TTSProviderConfig",
-    "create_tts_provider",
-    # Transports (WS5)
+    # VAD
+    "SileroVAD",
+    "KrispVAD",
+    "VADConfig",
+    "create_vad",
+    # Noise reduction
+    "RNNoiseReducer",
+    "KrispNoiseReducer",
+    "NoiseReducerConfig",
+    "create_noise_reducer",
+    # Transports
     "LocalTransport",
     "LocalTransportConfig",
     "WebSocketTransport",
     "WebSocketTransportConfig",
     "TwilioTransport",
     "TwilioTransportConfig",
-    "mulaw_to_pcm16",
-    "pcm16_to_mulaw",
-    "twiml_connect_stream",
-    "twiml_stream",
-    # Telephony (WS6)
-    "DTMFAggregator",
-    "DTMFAggregatorConfig",
-    "VoicemailDetector",
-    "VoicemailDetectorConfig",
-    "VoicemailPolicy",
-    "VoicemailPolicyConfig",
-    "VoicemailPolicyHandler",
-    "parse_twilio_dtmf_message",
+    # Configuration & errors
+    "TimeoutConfig",
+    "STTTimeoutError",
+    "AgentTimeoutError",
+    "TTSTimeoutError",
+    "MetricsCollector",
+    "InMemoryMetrics",
+    "LatencyStats",
+    "Tracer",
+    "TraceExporter",
 ]
