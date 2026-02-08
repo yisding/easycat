@@ -45,8 +45,8 @@ from easycat.metrics import (
     INTERRUPTIONS,
     RECONNECTS,
     STT_LATENCY,
-    TURN_E2E,
     TTS_TTFB,
+    TURN_E2E,
     MetricsCollector,
 )
 from easycat.stubs import (
@@ -57,8 +57,6 @@ from easycat.stubs import (
     NoopTTS,
     NoopVAD,
 )
-from easycat.turn_manager import TurnManager, TurnManagerConfig
-from easycat.tracing import SpanStatus, TraceContext, Tracer
 from easycat.timeouts import (
     AgentTimeoutError,
     STTTimeoutError,
@@ -67,6 +65,8 @@ from easycat.timeouts import (
     with_agent_timeout,
     with_tts_timeout,
 )
+from easycat.tracing import SpanStatus, TraceContext, Tracer
+from easycat.turn_manager import TurnManager, TurnManagerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -309,7 +309,8 @@ class Session:
                 await self._pipeline_task
             except asyncio.CancelledError:
                 logger.debug(
-                    "TTS processing task was cancelled; ensuring BotStoppedSpeaking is emitted if needed."
+                    "TTS processing task was cancelled; ensuring"
+                    " BotStoppedSpeaking is emitted if needed."
                 )
 
         await self._cancel_stt()
@@ -643,7 +644,7 @@ class Session:
                     )
                 else:
                     transcript = await self._stt_final_future
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 err = STTTimeoutError("stt", self._timeout_config.stt_timeout)
                 await self.event_bus.emit(Error(exception=err, context="stt_timeout"))
                 if self._tracer and self._stt_span:
@@ -964,7 +965,8 @@ class Session:
         except TTSTimeoutError:
             await self._cancel_tts()
             if tts_span:
-                tts_span.set_error(TTSTimeoutError("tts", self._timeout_config.tts_first_byte_timeout))
+                timeout = self._timeout_config.tts_first_byte_timeout
+                tts_span.set_error(TTSTimeoutError("tts", timeout))
                 tts_status = SpanStatus.ERROR
         except Exception as exc:
             if tts_span:

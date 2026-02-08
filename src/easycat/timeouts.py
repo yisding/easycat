@@ -84,7 +84,7 @@ async def with_stt_timeout(
                 yield event
             except StopAsyncIteration:
                 return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 timed_out = True
                 break
     finally:
@@ -113,7 +113,7 @@ async def with_agent_timeout(
     """
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         err = AgentTimeoutError(timeout)
         logger.warning(str(err))
         if event_bus is not None:
@@ -151,7 +151,7 @@ async def with_tts_timeout(
                 yield event
             except StopAsyncIteration:
                 return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 timed_out = True
                 break
     finally:
