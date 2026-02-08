@@ -10,10 +10,11 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
-import re
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+
+import pysbd
 
 from easycat.agent_runner import AgentStreamEventType
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
@@ -70,8 +71,18 @@ from easycat.turn_manager import TurnManager, TurnManagerConfig
 
 logger = logging.getLogger(__name__)
 
-# Sentence boundary regex: matches whitespace after sentence-ending punctuation
-_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
+# Sentence boundary detection via pySBD.
+_SENTENCE_SEGMENTER = pysbd.Segmenter(language="en", clean=False)
+
+
+def _span_bounds(span: object) -> tuple[int, int]:
+    if isinstance(span, tuple) and len(span) == 2:
+        return span
+    start = getattr(span, "start", None)
+    end = getattr(span, "end", None)
+    if start is None or end is None:
+        raise TypeError(f"Unexpected span type from pySBD: {span!r}")
+    return int(start), int(end)
 
 
 # ── Agent protocol (lightweight — WS7 provides real implementations) ──
@@ -130,11 +141,18 @@ def _split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     sentences to send to TTS; ``remaining_buffer`` holds any trailing text
     that hasn't reached a sentence boundary yet.
     """
-    matches = list(_SENTENCE_END_RE.finditer(text))
-    if not matches:
+    spans = _SENTENCE_SEGMENTER.segment(text, char_span=True)
+    if not spans:
         return "", text
-    last_match = matches[-1]
-    return text[: last_match.start()], text[last_match.end() :]
+    stripped = text.rstrip()
+    if not stripped:
+        return "", text
+    if stripped.endswith((".", "!", "?")):
+        return text, ""
+    if len(spans) == 1:
+        return "", text
+    last_start, _ = _span_bounds(spans[-1])
+    return text[:last_start], text[last_start:]
 
 
 # ── Session ────────────────────────────────────────────────────────
