@@ -112,7 +112,7 @@ class BoundedAudioQueue:
         elif self._policy == DropPolicy.BLOCK:
             try:
                 await asyncio.wait_for(self._not_full.wait(), timeout=self._block_timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._drops += 1
                 logger.debug(
                     "Queue '%s' block timed out, dropping (total drops: %d)",

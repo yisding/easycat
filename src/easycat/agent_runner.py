@@ -44,7 +44,9 @@ class AgentStreamEvent:
     - TOOL_STARTED: ``tool_name`` and ``call_id``
     - TOOL_DELTA: ``call_id`` and ``text`` (delta content)
     - TOOL_RESULT: ``call_id`` and ``result``
-    - DONE: ``text`` contains the full accumulated response (optional)
+    - DONE: ``text`` contains the full accumulated response (optional),
+      ``structured_output`` carries the raw typed output when the agent
+      uses a structured ``output_type`` (e.g. a Pydantic model).
     """
 
     type: AgentStreamEventType
@@ -52,6 +54,7 @@ class AgentStreamEvent:
     tool_name: str = ""
     call_id: str = ""
     result: str = ""
+    structured_output: Any = None
 
 
 # ── Protocols ───────────────────────────────────────────────────────

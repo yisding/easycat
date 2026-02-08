@@ -25,15 +25,18 @@ Internal plumbing remains importable from submodules for advanced use::
 
 # ── Core session & agent ──────────────────────────────────────────
 
-from easycat.session import Session, SessionConfig, TurnState
-from easycat.agent_runner import (
+from easycat.agent_runner import (  # noqa: I001
     AgentRunner,
     AgentRunnerConfig,
     AgentStreamEvent,
     AgentStreamEventType,
     StreamingAgent,
 )
+from easycat.agents.base import BaseAgentAdapter, serialize_output
+from easycat.agents.openai_agents import OpenAIAgentsAdapter
+from easycat.agents.pydantic_ai import PydanticAIAdapter
 from easycat.cancel import CancelToken
+from easycat.session import Session, SessionConfig, TurnState
 from easycat.turn_manager import TurnMode
 
 # ── EasyCat-level events ─────────────────────────────────────────
@@ -84,6 +87,12 @@ from easycat.audio_format import (
 
 # ── Provider implementations ─────────────────────────────────────
 
+from easycat.noise_reduction import (
+    KrispNoiseReducer,
+    NoiseReducerConfig,
+    RNNoiseReducer,
+    create_noise_reducer,
+)
 from easycat.stt import (
     DeepgramSTT,
     DeepgramSTTConfig,
@@ -96,12 +105,6 @@ from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 from easycat.vad import KrispVAD, SileroVAD, VADConfig, create_vad
-from easycat.noise_reduction import (
-    KrispNoiseReducer,
-    NoiseReducerConfig,
-    RNNoiseReducer,
-    create_noise_reducer,
-)
 
 # ── Transport implementations ────────────────────────────────────
 
@@ -111,13 +114,13 @@ from easycat.transports.websocket import WebSocketTransport, WebSocketTransportC
 
 # ── Configuration & errors ────────────────────────────────────────
 
+from easycat.metrics import InMemoryMetrics, LatencyStats, MetricsCollector
 from easycat.timeouts import (
     AgentTimeoutError,
     STTTimeoutError,
     TimeoutConfig,
     TTSTimeoutError,
 )
-from easycat.metrics import InMemoryMetrics, LatencyStats, MetricsCollector
 from easycat.tracing import Tracer, TraceExporter
 
 __all__ = [
@@ -131,6 +134,11 @@ __all__ = [
     "AgentStreamEvent",
     "AgentStreamEventType",
     "StreamingAgent",
+    # Agent adapters
+    "BaseAgentAdapter",
+    "OpenAIAgentsAdapter",
+    "PydanticAIAdapter",
+    "serialize_output",
     "CancelToken",
     # EasyCat-level events
     "AgentDelta",
