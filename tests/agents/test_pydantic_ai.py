@@ -1068,3 +1068,129 @@ async def test_iter_streaming_skips_unmapped_events():
     text_deltas = [e for e in events if e.type == AgentStreamEventType.TEXT_DELTA]
     assert len(text_deltas) == 1
     assert text_deltas[0].text == "visible"
+
+
+# ── Structured output tests ──────────────────────────────────────
+
+
+class FakePydanticModel:
+    """Fake Pydantic v2 model for testing structured output."""
+
+    def __init__(self, name: str, score: int) -> None:
+        self.name = name
+        self.score = score
+
+    def model_dump_json(self) -> str:
+        return f'{{"name":"{self.name}","score":{self.score}}}'
+
+
+@pytest.mark.asyncio
+async def test_run_serializes_pydantic_model():
+    """run() should use serialize_output for Pydantic models."""
+    model = FakePydanticModel("Alice", 95)
+
+    class StructuredAgent:
+        async def run(self, prompt, *, message_history=None, deps=None, model_settings=None):
+            return MockRunResult(output=model, _messages=[])
+
+    adapter = PydanticAIAdapter(StructuredAgent())
+    result = await adapter.run("query")
+    assert result == '{"name":"Alice","score":95}'
+    assert adapter.last_output is model
+
+
+@pytest.mark.asyncio
+async def test_run_stores_last_output():
+    """run() should store the raw output in last_output."""
+    agent = MockPydanticAgent(responses=["hello"])
+    adapter = PydanticAIAdapter(agent)
+    await adapter.run("test")
+    assert adapter.last_output == "hello"
+
+
+@pytest.mark.asyncio
+async def test_run_serializes_dict():
+    """run() should serialize dict output as JSON."""
+
+    class DictAgent:
+        async def run(self, prompt, *, message_history=None, deps=None, model_settings=None):
+            return MockRunResult(output={"action": "greet"}, _messages=[])
+
+    adapter = PydanticAIAdapter(DictAgent())
+    result = await adapter.run("query")
+    assert '"action"' in result
+    assert '"greet"' in result
+
+
+@pytest.mark.asyncio
+async def test_iter_streaming_done_includes_structured_output():
+    """iter() DONE event should carry structured_output."""
+    model = FakePydanticModel("Bob", 80)
+
+    class MockIterRunWithOutput(MockIterAgentRun):
+        def __init__(self, nodes, messages=None):
+            super().__init__(nodes, messages)
+            self.output = model  # Structured output
+
+    class IterAgentWithOutput(MockIterPydanticAgent):
+        @asynccontextmanager
+        async def iter(self, prompt, *, message_history=None, deps=None, model_settings=None):
+            self.iter_calls.append({"prompt": prompt})
+            yield MockIterRunWithOutput(
+                self._iter_nodes, self._iter_messages
+            )
+
+    agent = IterAgentWithOutput(
+        iter_nodes=[MockStreamableNode([MockDeltaEvent(TextPartDelta("Hi"))])],
+    )
+    adapter = PydanticAIAdapter(agent)
+
+    events = []
+    async for event in adapter.run_streaming("test"):
+        events.append(event)
+
+    done = [e for e in events if e.type == AgentStreamEventType.DONE]
+    assert len(done) == 1
+    assert done[0].structured_output is model
+    assert adapter.last_output is model
+
+
+@pytest.mark.asyncio
+async def test_fallback_streaming_done_includes_structured_output():
+    """run_stream() fallback DONE event should carry structured_output when available."""
+
+    class StreamResultWithOutput(MockStreamResult):
+        def __init__(self, chunks, messages=None, output=None):
+            super().__init__(chunks, messages)
+            self.output = output
+
+    class AgentWithStreamOutput:
+        @asynccontextmanager
+        async def run_stream(
+            self, prompt, *, message_history=None, deps=None, model_settings=None,
+        ):
+            yield StreamResultWithOutput(
+                chunks=["Hello"],
+                messages=[],
+                output={"structured": True},
+            )
+
+    adapter = PydanticAIAdapter(AgentWithStreamOutput())
+    events = []
+    async for event in adapter.run_streaming("test"):
+        events.append(event)
+
+    done = [e for e in events if e.type == AgentStreamEventType.DONE]
+    assert done[0].structured_output == {"structured": True}
+    assert adapter.last_output == {"structured": True}
+
+
+@pytest.mark.asyncio
+async def test_clear_history_resets_last_output():
+    agent = MockPydanticAgent(responses=["reply"])
+    adapter = PydanticAIAdapter(agent)
+    await adapter.run("test")
+    assert adapter.last_output is not None
+
+    adapter.clear_history()
+    assert adapter.last_output is None

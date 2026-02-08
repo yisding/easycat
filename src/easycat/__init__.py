@@ -8,7 +8,7 @@ from easycat.agent_runner import (
     AgentTimeoutError,
     StreamingAgent,
 )
-from easycat.agents.base import BaseAgentAdapter
+from easycat.agents.base import BaseAgentAdapter, serialize_output
 from easycat.agents.openai_agents import OpenAIAgentsAdapter
 from easycat.agents.pydantic_ai import PydanticAIAdapter
 from easycat.audio_format import (
@@ -148,6 +148,7 @@ __all__ = [
     "BaseAgentAdapter",
     "OpenAIAgentsAdapter",
     "PydanticAIAdapter",
+    "serialize_output",
     # Audio format
     "AudioChunk",
     "AudioFormat",
