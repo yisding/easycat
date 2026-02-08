@@ -43,6 +43,11 @@ class PydanticAIAdapter(BaseAgentAdapter):
     message history is stored internally so multi-turn conversations work
     without any manual message passing.
 
+    When the agent supports the ``iter()`` API, streaming includes tool
+    events (``TOOL_STARTED``, ``TOOL_DELTA``, ``TOOL_RESULT``) alongside
+    text deltas.  Falls back to ``run_stream()`` for text-only streaming
+    on older PydanticAI versions.
+
     Parameters
     ----------
     agent:
@@ -88,16 +93,72 @@ class PydanticAIAdapter(BaseAgentAdapter):
         context: list[dict[str, str]] | None = None,
         cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
-        """Run the agent with streaming text output.
+        """Run the agent with streaming output.
 
-        Yields ``AgentStreamEvent`` objects — ``TEXT_DELTA`` events as the
-        model generates text, followed by a single ``DONE`` event carrying
-        the full accumulated response.
+        Uses PydanticAI's ``iter()`` API to stream both text and tool events.
+        Falls back to ``run_stream()`` (text-only) when ``iter()`` is not
+        available.
 
         PydanticAI message history is managed internally.  The *context*
         parameter (provided by EasyCat's ``AgentRunner``) is accepted for
         protocol compatibility but is not used.
         """
+        if hasattr(self._agent, "iter"):
+            async for event in self._stream_via_iter(text, cancel_token):
+                yield event
+        else:
+            async for event in self._stream_via_run_stream(text, cancel_token):
+                yield event
+
+    # ── iter()-based streaming (text + tools) ─────────────────
+
+    async def _stream_via_iter(
+        self,
+        text: str,
+        cancel_token: CancelToken | None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        """Stream using ``agent.iter()`` — full text + tool event support."""
+        accumulated = ""
+
+        async with self._agent.iter(
+            text,
+            message_history=self._message_history or None,
+            deps=self._deps,
+            model_settings=self._model_settings,
+        ) as agent_run:
+            async for node in agent_run:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+
+                # Both ModelRequestNode and CallToolsNode expose stream()
+                if not hasattr(node, "stream"):
+                    continue
+
+                async with node.stream(agent_run.ctx) as stream:
+                    async for event in stream:
+                        if cancel_token and cancel_token.is_cancelled:
+                            break
+                        mapped = _map_pydantic_event(event)
+                        if mapped is not None:
+                            if mapped.type == AgentStreamEventType.TEXT_DELTA:
+                                accumulated += mapped.text
+                            yield mapped
+
+            self._message_history = agent_run.new_messages()
+
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.DONE,
+            text=accumulated,
+        )
+
+    # ── run_stream()-based streaming (text only, fallback) ────
+
+    async def _stream_via_run_stream(
+        self,
+        text: str,
+        cancel_token: CancelToken | None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        """Stream using ``agent.run_stream()`` — text deltas only."""
         async with self._agent.run_stream(
             text,
             message_history=self._message_history or None,
@@ -122,3 +183,54 @@ class PydanticAIAdapter(BaseAgentAdapter):
             type=AgentStreamEventType.DONE,
             text=accumulated,
         )
+
+
+# ── Event mapping helpers ─────────────────────────────────────────
+
+
+def _map_pydantic_event(event: Any) -> AgentStreamEvent | None:
+    """Map a PydanticAI streaming event to an EasyCat ``AgentStreamEvent``.
+
+    Uses duck typing (class-name checks) so this works without importing
+    PydanticAI types.  Returns ``None`` for events that don't map to
+    EasyCat events (e.g. ``PartStartEvent``, ``ThinkingPartDelta``).
+    """
+    event_cls = type(event).__name__
+
+    # PartDeltaEvent → TEXT_DELTA or TOOL_DELTA
+    delta = getattr(event, "delta", None)
+    if delta is not None:
+        delta_cls = type(delta).__name__
+        if delta_cls == "TextPartDelta":
+            content = getattr(delta, "content_delta", "") or ""
+            if content:
+                return AgentStreamEvent(
+                    type=AgentStreamEventType.TEXT_DELTA,
+                    text=content,
+                )
+        elif delta_cls == "ToolCallPartDelta":
+            args = getattr(delta, "args_delta", "") or ""
+            if args:
+                return AgentStreamEvent(
+                    type=AgentStreamEventType.TOOL_DELTA,
+                    text=args,
+                )
+
+    # FunctionToolCallEvent → TOOL_STARTED
+    if event_cls == "FunctionToolCallEvent":
+        part = getattr(event, "part", None)
+        return AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_STARTED,
+            tool_name=getattr(part, "tool_name", "") or "",
+            call_id=getattr(part, "tool_call_id", "") or "",
+        )
+
+    # FunctionToolResultEvent → TOOL_RESULT
+    if event_cls == "FunctionToolResultEvent":
+        return AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_RESULT,
+            call_id=getattr(event, "tool_call_id", "") or "",
+            result=str(getattr(event, "result", "")) if hasattr(event, "result") else "",
+        )
+
+    return None

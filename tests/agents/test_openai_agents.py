@@ -18,6 +18,7 @@ from easycat.agent_runner import AgentStreamEventType
 from easycat.agents.openai_agents import (
     OpenAIAgentsAdapter,
     _extract_text_delta,
+    _extract_tool_delta,
     _map_run_item_event,
 )
 from easycat.cancel import CancelToken
@@ -38,6 +39,16 @@ class MockOtherResponseEvent:
     """A non-text response event (e.g., response.created)."""
 
     type: str = "response.created"
+
+
+@dataclass
+class MockFunctionCallArgsDeltaEvent:
+    """Mimics ResponseFunctionCallArgumentsDeltaEvent."""
+
+    type: str = "response.function_call_arguments.delta"
+    delta: str = ""
+    call_id: str = ""
+    item_id: str = ""
 
 
 @dataclass
@@ -179,6 +190,19 @@ def _make_tool_events() -> list[MockStreamEvent]:
                 output="sunny, 72°F",
             ),
         ),
+    ]
+
+
+def _make_tool_delta_events(
+    chunks: list[str], call_id: str = "call_abc"
+) -> list[MockStreamEvent]:
+    """Build raw_response_event stream events for function call argument deltas."""
+    return [
+        MockStreamEvent(
+            type="raw_response_event",
+            data=MockFunctionCallArgsDeltaEvent(delta=chunk, call_id=call_id),
+        )
+        for chunk in chunks
     ]
 
 
@@ -551,3 +575,154 @@ def test_inherits_from_base():
 
     adapter = OpenAIAgentsAdapter(MockAgent())
     assert isinstance(adapter, BaseAgentAdapter)
+
+
+# ── _extract_tool_delta unit tests ────────────────────────────────
+
+
+class TestExtractToolDelta:
+    def test_extracts_delta(self):
+        event = MockFunctionCallArgsDeltaEvent(delta='{"city":', call_id="call_1")
+        result = _extract_tool_delta(event)
+        assert result is not None
+        assert result.type == AgentStreamEventType.TOOL_DELTA
+        assert result.text == '{"city":'
+        assert result.call_id == "call_1"
+
+    def test_uses_item_id_fallback(self):
+        """When call_id is empty, falls back to item_id."""
+        event = MockFunctionCallArgsDeltaEvent(delta="args", call_id="", item_id="item_42")
+        result = _extract_tool_delta(event)
+        assert result is not None
+        assert result.call_id == "item_42"
+
+    def test_returns_none_for_non_tool_event(self):
+        event = MockOtherResponseEvent()
+        assert _extract_tool_delta(event) is None
+
+    def test_returns_none_for_text_delta_event(self):
+        event = MockResponseTextDeltaEvent(delta="Hello")
+        assert _extract_tool_delta(event) is None
+
+    def test_returns_none_for_empty_delta(self):
+        event = MockFunctionCallArgsDeltaEvent(delta="", call_id="call_1")
+        assert _extract_tool_delta(event) is None
+
+
+# ── TOOL_DELTA streaming tests ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_streaming_yields_tool_delta_events(monkeypatch):
+    """Tool call argument deltas should yield TOOL_DELTA events."""
+    tool_start = [
+        MockStreamEvent(
+            type="run_item_stream_event",
+            item=MockToolCallItem(
+                raw_item=MockRawItem(name="get_weather", call_id="call_abc"),
+            ),
+        ),
+    ]
+    tool_deltas = _make_tool_delta_events(['{"city":', ' "London"}'], call_id="call_abc")
+    tool_end = [
+        MockStreamEvent(
+            type="run_item_stream_event",
+            item=MockToolCallOutputItem(
+                raw_item=MockRawItem(call_id="call_abc"),
+                output="sunny, 72°F",
+            ),
+        ),
+    ]
+    text = _make_text_events(["The weather is nice."])
+
+    all_events = tool_start + tool_deltas + tool_end + text
+    runner = MockRunner(stream_results=[MockRunResultStreaming(all_events)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    collected = []
+    async for event in adapter.run_streaming("weather"):
+        collected.append(event)
+
+    types = [e.type for e in collected]
+    assert AgentStreamEventType.TOOL_STARTED in types
+    assert AgentStreamEventType.TOOL_DELTA in types
+    assert AgentStreamEventType.TOOL_RESULT in types
+    assert AgentStreamEventType.TEXT_DELTA in types
+    assert AgentStreamEventType.DONE in types
+
+    tool_delta_events = [e for e in collected if e.type == AgentStreamEventType.TOOL_DELTA]
+    assert len(tool_delta_events) == 2
+    assert tool_delta_events[0].text == '{"city":'
+    assert tool_delta_events[0].call_id == "call_abc"
+    assert tool_delta_events[1].text == ' "London"}'
+
+
+@pytest.mark.asyncio
+async def test_streaming_full_tool_lifecycle(monkeypatch):
+    """Full lifecycle: TOOL_STARTED → TOOL_DELTA(s) → TOOL_RESULT → TEXT_DELTA → DONE."""
+    events = [
+        # Tool started
+        MockStreamEvent(
+            type="run_item_stream_event",
+            item=MockToolCallItem(
+                raw_item=MockRawItem(name="search", call_id="c1"),
+            ),
+        ),
+        # Tool argument deltas
+        MockStreamEvent(
+            type="raw_response_event",
+            data=MockFunctionCallArgsDeltaEvent(delta='{"q":', call_id="c1"),
+        ),
+        MockStreamEvent(
+            type="raw_response_event",
+            data=MockFunctionCallArgsDeltaEvent(delta=' "test"}', call_id="c1"),
+        ),
+        # Tool result
+        MockStreamEvent(
+            type="run_item_stream_event",
+            item=MockToolCallOutputItem(
+                raw_item=MockRawItem(call_id="c1"),
+                output="3 results found",
+            ),
+        ),
+        # Text response
+        *_make_text_events(["Here are the results."]),
+    ]
+    runner = MockRunner(stream_results=[MockRunResultStreaming(events)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    collected = []
+    async for event in adapter.run_streaming("search"):
+        collected.append(event)
+
+    # Verify event order: TOOL_STARTED, TOOL_DELTA, TOOL_DELTA, TOOL_RESULT, TEXT_DELTA, DONE
+    event_types = [e.type for e in collected]
+    assert event_types == [
+        AgentStreamEventType.TOOL_STARTED,
+        AgentStreamEventType.TOOL_DELTA,
+        AgentStreamEventType.TOOL_DELTA,
+        AgentStreamEventType.TOOL_RESULT,
+        AgentStreamEventType.TEXT_DELTA,
+        AgentStreamEventType.DONE,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_deltas_without_text(monkeypatch):
+    """Tool deltas should not interfere with text accumulation in DONE."""
+    events = [
+        *_make_tool_delta_events(['{"a":1}'], call_id="c1"),
+        *_make_text_events(["Result"]),
+    ]
+    runner = MockRunner(stream_results=[MockRunResultStreaming(events)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    collected = []
+    async for event in adapter.run_streaming("test"):
+        collected.append(event)
+
+    done = [e for e in collected if e.type == AgentStreamEventType.DONE]
+    assert done[0].text == "Result"  # Only text deltas contribute to accumulated text

@@ -7,8 +7,8 @@ Satisfies both the basic ``Agent`` protocol (``run()``) and the
 :class:`easycat.Session`.
 
 Conversation history is managed internally via ``to_input_list()``.  Streaming
-produces ``TEXT_DELTA`` events for incremental TTS and ``TOOL_STARTED`` /
-``TOOL_RESULT`` events for pipeline observability.
+produces ``TEXT_DELTA`` events for incremental TTS, ``TOOL_STARTED`` /
+``TOOL_DELTA`` / ``TOOL_RESULT`` events for full tool-call observability.
 
 Usage::
 
@@ -115,7 +115,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         Yields ``AgentStreamEvent`` objects:
 
         - ``TEXT_DELTA`` for each chunk of generated text (for incremental TTS)
-        - ``TOOL_STARTED`` / ``TOOL_RESULT`` for tool-call observability
+        - ``TOOL_STARTED`` / ``TOOL_DELTA`` / ``TOOL_RESULT`` for tool-call observability
         - ``DONE`` with the full accumulated text when finished
 
         The *context* parameter from EasyCat's ``AgentRunner`` is accepted for
@@ -149,6 +149,10 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
                         type=AgentStreamEventType.TEXT_DELTA,
                         text=delta,
                     )
+                else:
+                    tool_delta = _extract_tool_delta(event.data)
+                    if tool_delta is not None:
+                        yield tool_delta
             elif event.type == "run_item_stream_event":
                 agent_event = _map_run_item_event(event.item)
                 if agent_event is not None:
@@ -177,6 +181,26 @@ def _extract_text_delta(data: Any) -> str:
     if event_type == "response.output_text.delta":
         return getattr(data, "delta", "") or ""
     return ""
+
+
+def _extract_tool_delta(data: Any) -> AgentStreamEvent | None:
+    """Extract a tool-call argument delta from a raw Responses API event.
+
+    Works with ``ResponseFunctionCallArgumentsDeltaEvent`` objects that have
+    ``type == "response.function_call_arguments.delta"`` and a ``.delta``
+    attribute containing the argument string chunk.  Returns ``None`` for
+    non-matching events.
+    """
+    event_type = getattr(data, "type", "")
+    if event_type == "response.function_call_arguments.delta":
+        delta = getattr(data, "delta", "") or ""
+        if delta:
+            return AgentStreamEvent(
+                type=AgentStreamEventType.TOOL_DELTA,
+                text=delta,
+                call_id=getattr(data, "call_id", "") or getattr(data, "item_id", "") or "",
+            )
+    return None
 
 
 def _map_run_item_event(item: Any) -> AgentStreamEvent | None:
