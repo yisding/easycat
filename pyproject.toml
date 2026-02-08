@@ -9,6 +9,10 @@ dependencies = [
     "websockets>=16.0",
 ]
 
+[project.optional-dependencies]
+openai-agents = ["openai-agents>=0.0.7"]
+pydantic-ai = ["pydantic-ai>=0.1"]
+
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]
 build-backend = "uv_build"

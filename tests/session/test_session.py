@@ -26,8 +26,8 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.session import Session, SessionConfig, TurnState
-from easycat.turn_manager import TurnManagerConfig
 from easycat.stubs import NoopNoiseReducer
+from easycat.turn_manager import TurnManagerConfig
 
 # ── Test helpers ───────────────────────────────────────────────────
 

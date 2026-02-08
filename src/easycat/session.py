@@ -45,8 +45,8 @@ from easycat.metrics import (
     INTERRUPTIONS,
     RECONNECTS,
     STT_LATENCY,
-    TURN_E2E,
     TTS_TTFB,
+    TURN_E2E,
     MetricsCollector,
 )
 from easycat.stubs import (
@@ -57,8 +57,6 @@ from easycat.stubs import (
     NoopTTS,
     NoopVAD,
 )
-from easycat.turn_manager import TurnManager, TurnManagerConfig
-from easycat.tracing import SpanStatus, TraceContext, Tracer
 from easycat.timeouts import (
     AgentTimeoutError,
     STTTimeoutError,
@@ -67,6 +65,8 @@ from easycat.timeouts import (
     with_agent_timeout,
     with_tts_timeout,
 )
+from easycat.tracing import SpanStatus, TraceContext, Tracer
+from easycat.turn_manager import TurnManager, TurnManagerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -309,7 +309,8 @@ class Session:
                 await self._pipeline_task
             except asyncio.CancelledError:
                 logger.debug(
-                    "TTS processing task was cancelled; ensuring BotStoppedSpeaking is emitted if needed."
+                    "TTS processing task was cancelled; ensuring"
+                    " BotStoppedSpeaking is emitted if needed."
                 )
 
         await self._cancel_stt()
@@ -643,7 +644,7 @@ class Session:
                     )
                 else:
                     transcript = await self._stt_final_future
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 err = STTTimeoutError("stt", self._timeout_config.stt_timeout)
                 await self.event_bus.emit(Error(exception=err, context="stt_timeout"))
                 if self._tracer and self._stt_span:
@@ -718,7 +719,16 @@ class Session:
             return
 
         await self.event_bus.emit(AgentDelta(text=agent_response))
-        await self.event_bus.emit(AgentFinal(text=agent_response))
+        # Expose structured output from adapters that support it, but avoid
+        # duplicating plain-text responses in `structured_output`.
+        agent_structured = None
+        agent_last_output = getattr(self.agent, "last_output", None)
+        agent_output_type = getattr(self.agent, "output_type", None)
+        if agent_output_type is not None or not isinstance(agent_last_output, str):
+            agent_structured = agent_last_output
+        await self.event_bus.emit(
+            AgentFinal(text=agent_response, structured_output=agent_structured)
+        )
 
         if self._metrics and self._stt_final_time is not None:
             self._metrics.record_latency(
@@ -740,12 +750,13 @@ class Session:
         """
         tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
         accumulated_text = ""
+        structured_output: Any = None
         agent_error: BaseException | None = None
         if self._tracer and self._trace_context:
             self._agent_span = self._tracer.start_span(Tracer.AGENT, self._trace_context)
 
         async def _consume_agent() -> None:
-            nonlocal accumulated_text, agent_error
+            nonlocal accumulated_text, structured_output, agent_error
             text_buffer = ""
             try:
                 async for event in self.agent.run_streaming(transcript, cancel_token=token):
@@ -781,8 +792,11 @@ class Session:
                         await self.event_bus.emit(
                             ToolCallResult(call_id=event.call_id, result=event.result)
                         )
-                    elif event.type == AgentStreamEventType.DONE and event.text:
-                        accumulated_text = event.text
+                    elif event.type == AgentStreamEventType.DONE:
+                        if event.text:
+                            accumulated_text = event.text
+                        if event.structured_output is not None:
+                            structured_output = event.structured_output
 
             except Exception as exc:
                 agent_error = exc
@@ -892,7 +906,9 @@ class Session:
 
         # Emit AgentFinal after agent stream is fully consumed
         if accumulated_text and agent_error is None and not (token and token.is_cancelled):
-            await self.event_bus.emit(AgentFinal(text=accumulated_text))
+            await self.event_bus.emit(
+                AgentFinal(text=accumulated_text, structured_output=structured_output)
+            )
 
         try:
             await tts_task
@@ -954,7 +970,8 @@ class Session:
         except TTSTimeoutError:
             await self._cancel_tts()
             if tts_span:
-                tts_span.set_error(TTSTimeoutError("tts", self._timeout_config.tts_first_byte_timeout))
+                timeout = self._timeout_config.tts_first_byte_timeout
+                tts_span.set_error(TTSTimeoutError("tts", timeout))
                 tts_status = SpanStatus.ERROR
         except Exception as exc:
             if tts_span:
