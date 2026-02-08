@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import enum
 import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from enum import Enum
 
 import httpx
 
@@ -18,7 +18,7 @@ from easycat.tts.base import TTSBase
 logger = logging.getLogger(__name__)
 
 
-class ElevenLabsStreamMode(str, Enum):
+class ElevenLabsStreamMode(enum.StrEnum):
     """Streaming mode for ElevenLabs TTS."""
 
     HTTP = "http"
