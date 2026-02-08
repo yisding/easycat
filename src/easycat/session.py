@@ -719,8 +719,13 @@ class Session:
             return
 
         await self.event_bus.emit(AgentDelta(text=agent_response))
-        # Expose structured output from adapters that support it
-        agent_structured = getattr(self.agent, "last_output", None)
+        # Expose structured output from adapters that support it, but avoid
+        # duplicating plain-text responses in `structured_output`.
+        agent_structured = None
+        agent_last_output = getattr(self.agent, "last_output", None)
+        agent_output_type = getattr(self.agent, "output_type", None)
+        if agent_output_type is not None or not isinstance(agent_last_output, str):
+            agent_structured = agent_last_output
         await self.event_bus.emit(
             AgentFinal(text=agent_response, structured_output=agent_structured)
         )
