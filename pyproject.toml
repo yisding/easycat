@@ -12,6 +12,22 @@ dependencies = [
 [project.optional-dependencies]
 openai-agents = ["openai-agents>=0.0.7"]
 pydantic-ai = ["pydantic-ai>=0.1"]
+openai = ["openai>=1.0.0"]
+deepgram = ["deepgram-sdk>=3.0.0"]
+elevenlabs = ["elevenlabs>=1.0.0"]
+telephony = ["fastapi>=0.110.0", "python-multipart>=0.0.9", "twilio>=9.0.0", "uvicorn>=0.29.0"]
+local = ["sounddevice>=0.4.6"]
+all = [
+    "deepgram-sdk>=3.0.0",
+    "elevenlabs>=1.0.0",
+    "fastapi>=0.110.0",
+    "openai>=1.0.0",
+    "python-multipart>=0.0.9",
+    "sounddevice>=0.4.6",
+    "twilio>=9.0.0",
+    "uvicorn>=0.29.0",
+    "torch>=2.2.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]

@@ -20,6 +20,7 @@ from typing import Any
 from easycat.audio_format import AudioChunk
 from easycat.audio_utils import resample_chunk
 from easycat.events import Event, VADStartSpeaking, VADStopSpeaking
+from easycat.extras import require_module
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,7 @@ class SileroVAD(_VADBase):
     def __init__(self) -> None:
         super().__init__()
         self._model: Any = None
+        self._torch: Any = None
 
         # Accumulation buffer for sub-frame chunks
         self._buffer: bytes = b""
@@ -138,24 +140,27 @@ class SileroVAD(_VADBase):
     def _load_model(self) -> None:
         """Load the Silero VAD model."""
         try:
-            import torch  # type: ignore[import-not-found]
-
+            torch = require_module("torch", extra="all", purpose="Silero VAD")
+        except ImportError as exc:
+            raise RuntimeError(str(exc)) from exc
+        try:
             model, _ = torch.hub.load(
                 repo_or_dir="snakers4/silero-vad",
                 model="silero_vad",
                 force_reload=False,
                 trust_repo=True,
             )
-            self._model = model
-            logger.info("Silero VAD model loaded successfully")
-        except ImportError as exc:
-            raise RuntimeError("PyTorch not installed. Install torch to use Silero VAD.") from exc
         except Exception as exc:
             raise RuntimeError(f"Failed to load Silero VAD model: {exc}") from exc
+        self._model = model
+        self._torch = torch
+        logger.info("Silero VAD model loaded successfully")
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process an audio chunk and yield VAD events."""
-        import torch  # type: ignore[import-not-found]
+        if self._torch is None:
+            self._torch = require_module("torch", extra="all", purpose="Silero VAD")
+        torch = self._torch
 
         # Resample to 16 kHz if needed
         if chunk.format.sample_rate != _SILERO_SAMPLE_RATE:
@@ -208,34 +213,37 @@ class KrispVAD(_VADBase):
         super().__init__()
         self._session: Any = None
         self._model_path = model_path
+        self._krisp_audio: Any = None
 
         self._initialize()
 
     def _initialize(self) -> None:
         """Initialize the Krisp VAD SDK session."""
         try:
-            import krisp_audio  # type: ignore[import-not-found]
-
-            config = {}
-            if self._model_path:
-                config["model_path"] = self._model_path
-            self._session = krisp_audio.create_vad_session(**config)
-            logger.info("Krisp VAD initialized")
+            krisp_audio = require_module("krisp_audio", purpose="Krisp VAD")
         except ImportError as exc:
-            raise RuntimeError(
-                "Krisp SDK not installed. Install the krisp-audio package "
-                "or use Silero VAD as a fallback."
-            ) from exc
+            raise RuntimeError(str(exc)) from exc
+        config = {}
+        if self._model_path:
+            config["model_path"] = self._model_path
+        try:
+            self._session = krisp_audio.create_vad_session(**config)
         except Exception as exc:
             raise RuntimeError(
                 f"Krisp VAD initialization failed (license or config issue): {exc}"
             ) from exc
+        self._krisp_audio = krisp_audio
+        logger.info("Krisp VAD initialized")
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process audio through Krisp VAD and yield events."""
-        import krisp_audio  # type: ignore[import-not-found]
-
-        speech_prob = krisp_audio.vad_process(self._session, chunk.data, chunk.format.sample_rate)
+        if self._krisp_audio is None:
+            self._krisp_audio = require_module(
+                "krisp_audio", extra="krisp", purpose="Krisp VAD"
+            )
+        speech_prob = self._krisp_audio.vad_process(
+            self._session, chunk.data, chunk.format.sample_rate
+        )
         now = time.monotonic()
 
         for event in self._evaluate_speech(speech_prob, now):
@@ -249,9 +257,11 @@ class KrispVAD(_VADBase):
         """Release Krisp session resources."""
         if self._session is not None:
             try:
-                import krisp_audio  # type: ignore[import-not-found]
-
-                krisp_audio.destroy_session(self._session)
+                if self._krisp_audio is None:
+                    self._krisp_audio = require_module(
+                        "krisp_audio", extra="krisp", purpose="Krisp VAD"
+                    )
+                self._krisp_audio.destroy_session(self._session)
             except Exception:
                 pass
             self._session = None
@@ -312,12 +322,12 @@ def create_vad(config: VADConfig | None = None) -> Any:
     # Auto mode: try Krisp -> Silero
     try:
         return _configure(KrispVAD(model_path=cfg.krisp_model_path))
-    except RuntimeError:
+    except (RuntimeError, ImportError):
         logger.info("Krisp VAD not available, trying Silero fallback")
 
     try:
         return _configure(SileroVAD())
-    except RuntimeError:
+    except (RuntimeError, ImportError):
         logger.info("Silero VAD not available either")
         raise RuntimeError(
             "No VAD backend available. Install torch (for Silero) or krisp-audio (for Krisp)."
