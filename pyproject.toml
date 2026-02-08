@@ -10,6 +10,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+openai-agents = ["openai-agents>=0.0.7"]
 pydantic-ai = ["pydantic-ai>=0.1"]
 
 [build-system]

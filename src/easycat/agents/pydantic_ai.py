@@ -29,12 +29,13 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
+from easycat.agents.base import BaseAgentAdapter
 from easycat.cancel import CancelToken
 
 logger = logging.getLogger(__name__)
 
 
-class PydanticAIAdapter:
+class PydanticAIAdapter(BaseAgentAdapter):
     """Wraps a PydanticAI ``Agent`` for use with EasyCat's ``Session``.
 
     Implements both the basic ``Agent`` protocol (``run(text) -> str``) and the
@@ -60,10 +61,10 @@ class PydanticAIAdapter:
         deps: Any = None,
         model_settings: Any = None,
     ) -> None:
+        super().__init__()
         self._agent = agent
         self._deps = deps
         self._model_settings = model_settings
-        self._message_history: list[Any] = []
 
     # ── Basic Agent protocol ──────────────────────────────────
 
@@ -121,14 +122,3 @@ class PydanticAIAdapter:
             type=AgentStreamEventType.DONE,
             text=accumulated,
         )
-
-    # ── History management ────────────────────────────────────
-
-    def clear_history(self) -> None:
-        """Clear the internal PydanticAI message history."""
-        self._message_history.clear()
-
-    @property
-    def message_history(self) -> list[Any]:
-        """Return a copy of the current PydanticAI message history."""
-        return list(self._message_history)
