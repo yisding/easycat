@@ -8,6 +8,7 @@ from easycat.agent_runner import (
     AgentTimeoutError,
     StreamingAgent,
 )
+from easycat.agents.pydantic_ai import PydanticAIAdapter
 from easycat.audio_format import (
     PCM16_MONO_8K,
     PCM16_MONO_16K,
@@ -141,6 +142,8 @@ __all__ = [
     "AgentStreamEventType",
     "AgentTimeoutError",
     "StreamingAgent",
+    # Agent adapters
+    "PydanticAIAdapter",
     # Audio format
     "AudioChunk",
     "AudioFormat",
