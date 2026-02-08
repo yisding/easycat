@@ -15,7 +15,7 @@ Usage::
     from easycat import Session, SessionConfig
 
     pydantic_agent = PydanticAgent(
-        "openai:gpt-4o",
+        "openai:gpt-5.2",
         system_prompt="You are a helpful voice assistant.",
     )
     adapter = PydanticAIAdapter(pydantic_agent)
