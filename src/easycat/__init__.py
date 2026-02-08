@@ -99,7 +99,6 @@ from easycat.vad import KrispVAD, SileroVAD, VADConfig, create_vad
 from easycat.noise_reduction import (
     KrispNoiseReducer,
     NoiseReducerConfig,
-    PassthroughNoiseReducer,
     RNNoiseReducer,
     create_noise_reducer,
 )
@@ -195,7 +194,6 @@ __all__ = [
     # Noise reduction
     "RNNoiseReducer",
     "KrispNoiseReducer",
-    "PassthroughNoiseReducer",
     "NoiseReducerConfig",
     "create_noise_reducer",
     # Transports
