@@ -1,8 +1,8 @@
 """Local transport: microphone capture and speaker playback.
 
-Uses the ``sounddevice`` library when available, falling back to a no-op
-implementation that logs a warning. This lets the rest of the framework
-import and test ``LocalTransport`` without requiring audio hardware.
+Uses the ``sounddevice`` library for audio capture/playback. If the
+dependency is missing, ``connect()`` raises an ImportError with
+installation instructions.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.extras import require_module
 
 logger = logging.getLogger(__name__)
 
@@ -80,15 +81,11 @@ class LocalTransport:
         self._in_queue = asyncio.Queue(maxsize=self._config.max_pending_in_chunks)
         self._out_queue = thread_queue.Queue(maxsize=self._config.max_pending_out_chunks)
 
-        try:
-            import sounddevice as sd  # type: ignore[import-untyped]
-        except ImportError:
-            logger.warning(
-                "sounddevice is not installed; LocalTransport will not capture or play audio. "
-                "Install it with: uv add sounddevice"
-            )
-            self._connected = True
-            return
+        sd = require_module(
+            "sounddevice",
+            extra="local",
+            purpose="LocalTransport audio I/O",
+        )
 
         loop = asyncio.get_running_loop()
         frame_size = self._frame_samples

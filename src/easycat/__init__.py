@@ -38,6 +38,7 @@ from easycat.agents.pydantic_ai import PydanticAIAdapter
 from easycat.cancel import CancelToken
 from easycat.session import Session, SessionConfig, TurnState
 from easycat.turn_manager import TurnMode
+from easycat.config import EasyCatConfig, MetricsConfig, TelephonyConfig, TracingConfig, create_session
 
 # ── EasyCat-level events ─────────────────────────────────────────
 
@@ -129,6 +130,11 @@ __all__ = [
     "SessionConfig",
     "TurnState",
     "TurnMode",
+    "EasyCatConfig",
+    "MetricsConfig",
+    "TelephonyConfig",
+    "TracingConfig",
+    "create_session",
     "AgentRunner",
     "AgentRunnerConfig",
     "AgentStreamEvent",
