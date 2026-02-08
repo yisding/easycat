@@ -726,3 +726,110 @@ async def test_streaming_tool_deltas_without_text(monkeypatch):
 
     done = [e for e in collected if e.type == AgentStreamEventType.DONE]
     assert done[0].text == "Result"  # Only text deltas contribute to accumulated text
+
+
+# ── Structured output tests ──────────────────────────────────────
+
+
+class FakeOpenAIPydanticModel:
+    """Fake Pydantic v2 model for testing structured output."""
+
+    def __init__(self, action: str, reasoning: str) -> None:
+        self.action = action
+        self.reasoning = reasoning
+
+    def model_dump_json(self) -> str:
+        return f'{{"action":"{self.action}","reasoning":"{self.reasoning}"}}'
+
+
+@pytest.mark.asyncio
+async def test_run_serializes_structured_output(monkeypatch):
+    """run() should use serialize_output for Pydantic models."""
+    model = FakeOpenAIPydanticModel("greet", "user said hello")
+    runner = MockRunner(run_results=[MockRunResult(final_output=model)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    result = await adapter.run("test")
+    assert result == '{"action":"greet","reasoning":"user said hello"}'
+    assert adapter.last_output is model
+
+
+@pytest.mark.asyncio
+async def test_run_stores_last_output(monkeypatch):
+    """run() should store the raw output in last_output."""
+    runner = MockRunner(run_results=[MockRunResult(final_output="hello")])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("test")
+    assert adapter.last_output == "hello"
+
+
+@pytest.mark.asyncio
+async def test_run_serializes_dict(monkeypatch):
+    """run() should serialize dict output as JSON."""
+    runner = MockRunner(run_results=[MockRunResult(final_output={"key": "val"})])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    result = await adapter.run("test")
+    assert '"key"' in result
+    assert '"val"' in result
+
+
+@pytest.mark.asyncio
+async def test_streaming_done_includes_structured_output(monkeypatch):
+    """Streaming DONE event should carry structured_output from result.final_output."""
+
+    class MockRunResultStreamingWithOutput(MockRunResultStreaming):
+        def __init__(self, events, final_output=None, **kwargs):
+            super().__init__(events, **kwargs)
+            self.final_output = final_output
+
+    model = FakeOpenAIPydanticModel("search", "user asked to find")
+    events = _make_text_events(["Searching..."])
+    runner = MockRunner(
+        stream_results=[MockRunResultStreamingWithOutput(events, final_output=model)]
+    )
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    collected = []
+    async for event in adapter.run_streaming("search"):
+        collected.append(event)
+
+    done = [e for e in collected if e.type == AgentStreamEventType.DONE]
+    assert len(done) == 1
+    assert done[0].structured_output is model
+    assert adapter.last_output is model
+
+
+@pytest.mark.asyncio
+async def test_streaming_done_structured_output_none_for_text(monkeypatch):
+    """For text-only agents, final_output is the text string."""
+    events = _make_text_events(["Hello"])
+    runner = MockRunner(stream_results=[MockRunResultStreaming(events)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    collected = []
+    async for event in adapter.run_streaming("test"):
+        collected.append(event)
+
+    done = [e for e in collected if e.type == AgentStreamEventType.DONE]
+    # MockRunResultStreaming doesn't have final_output attr → None
+    assert done[0].structured_output is None
+
+
+@pytest.mark.asyncio
+async def test_clear_history_resets_last_output(monkeypatch):
+    runner = MockRunner(run_results=[MockRunResult(final_output="reply")])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("test")
+    assert adapter.last_output is not None
+
+    adapter.clear_history()
+    assert adapter.last_output is None

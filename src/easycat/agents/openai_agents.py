@@ -31,7 +31,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
-from easycat.agents.base import BaseAgentAdapter
+from easycat.agents.base import BaseAgentAdapter, serialize_output
 from easycat.cancel import CancelToken
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,8 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
 
         result = await Runner.run(self._agent, input_data, **kwargs)
         self._message_history = result.to_input_list()
-        return str(result.final_output)
+        self._last_output = result.final_output
+        return serialize_output(result.final_output)
 
     # ── StreamingAgent protocol ───────────────────────────────
 
@@ -160,9 +161,14 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
 
         self._message_history = result.to_input_list()
 
+        # Capture structured output when available
+        raw_output = getattr(result, "final_output", None)
+        self._last_output = raw_output
+
         yield AgentStreamEvent(
             type=AgentStreamEventType.DONE,
             text=accumulated,
+            structured_output=self._last_output,
         )
 
 

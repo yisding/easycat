@@ -29,7 +29,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
-from easycat.agents.base import BaseAgentAdapter
+from easycat.agents.base import BaseAgentAdapter, serialize_output
 from easycat.cancel import CancelToken
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,8 @@ class PydanticAIAdapter(BaseAgentAdapter):
             model_settings=self._model_settings,
         )
         self._message_history = result.new_messages()
-        return str(result.output)
+        self._last_output = result.output
+        return serialize_output(result.output)
 
     # ── StreamingAgent protocol ───────────────────────────────
 
@@ -146,9 +147,18 @@ class PydanticAIAdapter(BaseAgentAdapter):
 
             self._message_history = agent_run.new_messages()
 
+            # Capture structured output when available
+            raw_output = getattr(agent_run, "output", None)
+            if raw_output is None:
+                _result = getattr(agent_run, "result", None)
+                if _result is not None:
+                    raw_output = getattr(_result, "output", None)
+            self._last_output = raw_output
+
         yield AgentStreamEvent(
             type=AgentStreamEventType.DONE,
             text=accumulated,
+            structured_output=self._last_output,
         )
 
     # ── run_stream()-based streaming (text only, fallback) ────
@@ -179,9 +189,14 @@ class PydanticAIAdapter(BaseAgentAdapter):
 
             self._message_history = result.new_messages()
 
+            # Capture structured output when available
+            raw_output = getattr(result, "output", None)
+            self._last_output = raw_output
+
         yield AgentStreamEvent(
             type=AgentStreamEventType.DONE,
             text=accumulated,
+            structured_output=self._last_output,
         )
 
 

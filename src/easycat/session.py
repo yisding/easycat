@@ -718,7 +718,11 @@ class Session:
             return
 
         await self.event_bus.emit(AgentDelta(text=agent_response))
-        await self.event_bus.emit(AgentFinal(text=agent_response))
+        # Expose structured output from adapters that support it
+        agent_structured = getattr(self.agent, "last_output", None)
+        await self.event_bus.emit(
+            AgentFinal(text=agent_response, structured_output=agent_structured)
+        )
 
         if self._metrics and self._stt_final_time is not None:
             self._metrics.record_latency(
@@ -740,12 +744,13 @@ class Session:
         """
         tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
         accumulated_text = ""
+        structured_output: Any = None
         agent_error: BaseException | None = None
         if self._tracer and self._trace_context:
             self._agent_span = self._tracer.start_span(Tracer.AGENT, self._trace_context)
 
         async def _consume_agent() -> None:
-            nonlocal accumulated_text, agent_error
+            nonlocal accumulated_text, structured_output, agent_error
             text_buffer = ""
             try:
                 async for event in self.agent.run_streaming(transcript, cancel_token=token):
@@ -781,8 +786,11 @@ class Session:
                         await self.event_bus.emit(
                             ToolCallResult(call_id=event.call_id, result=event.result)
                         )
-                    elif event.type == AgentStreamEventType.DONE and event.text:
-                        accumulated_text = event.text
+                    elif event.type == AgentStreamEventType.DONE:
+                        if event.text:
+                            accumulated_text = event.text
+                        if event.structured_output is not None:
+                            structured_output = event.structured_output
 
             except Exception as exc:
                 agent_error = exc
@@ -892,7 +900,9 @@ class Session:
 
         # Emit AgentFinal after agent stream is fully consumed
         if accumulated_text and agent_error is None and not (token and token.is_cancelled):
-            await self.event_bus.emit(AgentFinal(text=accumulated_text))
+            await self.event_bus.emit(
+                AgentFinal(text=accumulated_text, structured_output=structured_output)
+            )
 
         try:
             await tts_task

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from easycat.agents.base import BaseAgentAdapter
+from easycat.agents.base import BaseAgentAdapter, serialize_output
 
 
 class ConcreteAdapter(BaseAgentAdapter):
@@ -75,3 +77,116 @@ def test_openai_adapter_inherits_from_base():
 
     adapter = OpenAIAgentsAdapter(object())
     assert isinstance(adapter, BaseAgentAdapter)
+
+
+# ── serialize_output tests ───────────────────────────────────────
+
+
+class TestSerializeOutput:
+    def test_string_passthrough(self):
+        assert serialize_output("hello world") == "hello world"
+
+    def test_empty_string(self):
+        assert serialize_output("") == ""
+
+    def test_pydantic_v2_model(self):
+        """Objects with model_dump_json() should use it."""
+
+        class FakeModelV2:
+            def model_dump_json(self):
+                return '{"name":"Alice","age":30}'
+
+        result = serialize_output(FakeModelV2())
+        assert result == '{"name":"Alice","age":30}'
+
+    def test_pydantic_v1_model(self):
+        """Objects with json() method should use it."""
+
+        class FakeModelV1:
+            def json(self):
+                return '{"name":"Bob","age":25}'
+
+        result = serialize_output(FakeModelV1())
+        assert result == '{"name":"Bob","age":25}'
+
+    def test_pydantic_v2_takes_precedence(self):
+        """When both model_dump_json and json exist, prefer v2."""
+
+        class FakeModelBoth:
+            def model_dump_json(self):
+                return '{"version":"v2"}'
+
+            def json(self):
+                return '{"version":"v1"}'
+
+        result = serialize_output(FakeModelBoth())
+        assert result == '{"version":"v2"}'
+
+    def test_dict_to_json(self):
+        result = serialize_output({"key": "value", "num": 42})
+        parsed = json.loads(result)
+        assert parsed == {"key": "value", "num": 42}
+
+    def test_list_to_json(self):
+        result = serialize_output([1, "two", 3])
+        parsed = json.loads(result)
+        assert parsed == [1, "two", 3]
+
+    def test_integer_fallback(self):
+        assert serialize_output(42) == "42"
+
+    def test_none_fallback(self):
+        assert serialize_output(None) == "None"
+
+
+# ── output_type property tests ───────────────────────────────────
+
+
+class TestOutputType:
+    def test_no_agent_returns_none(self):
+        adapter = BaseAgentAdapter()
+        assert adapter.output_type is None
+
+    def test_agent_without_output_type(self):
+        adapter = ConcreteAdapter()
+        adapter._agent = object()
+        assert adapter.output_type is None
+
+    def test_agent_with_str_output_type(self):
+        class StrAgent:
+            output_type = str
+
+        adapter = ConcreteAdapter()
+        adapter._agent = StrAgent()
+        assert adapter.output_type is None
+
+    def test_agent_with_custom_output_type(self):
+        class MyModel:
+            pass
+
+        class StructuredAgent:
+            output_type = MyModel
+
+        adapter = ConcreteAdapter()
+        adapter._agent = StructuredAgent()
+        assert adapter.output_type is MyModel
+
+
+# ── last_output property tests ───────────────────────────────────
+
+
+class TestLastOutput:
+    def test_initially_none(self):
+        adapter = ConcreteAdapter()
+        assert adapter.last_output is None
+
+    def test_set_and_read(self):
+        adapter = ConcreteAdapter()
+        adapter._last_output = {"key": "value"}
+        assert adapter.last_output == {"key": "value"}
+
+    def test_cleared_on_clear_history(self):
+        adapter = ConcreteAdapter()
+        adapter._last_output = "some output"
+        adapter.clear_history()
+        assert adapter.last_output is None

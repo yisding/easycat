@@ -74,9 +74,15 @@ class AgentDelta:
 
 @dataclass(frozen=True)
 class AgentFinal:
-    """Final complete response from the agent."""
+    """Final complete response from the agent.
+
+    When the agent uses a structured ``output_type``, ``structured_output``
+    carries the raw typed value (e.g. a Pydantic model instance) while
+    ``text`` contains its serialized string form.
+    """
 
     text: str
+    structured_output: Any = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
