@@ -13,15 +13,53 @@ from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
 
-def _make_mock_client(text: str = "hello world", status_code: int = 200) -> httpx.AsyncClient:
-    """Create a mock httpx.AsyncClient that returns a transcript."""
-    mock_response = httpx.Response(
-        status_code=status_code,
-        json={"text": text},
-        request=httpx.Request("POST", "https://api.openai.com/v1/audio/transcriptions"),
-    )
+class _MockStreamingResponse:
+    def __init__(self, lines: list[str], status_code: int = 200) -> None:
+        self._lines = lines
+        self.status_code = status_code
+        self.request = httpx.Request("POST", "https://api.openai.com/v1/audio/transcriptions")
+        self.text = "error"
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            response = httpx.Response(
+                status_code=self.status_code,
+                request=self.request,
+                text=self.text,
+            )
+            raise httpx.HTTPStatusError("error", request=self.request, response=response)
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _MockStreamContext:
+    def __init__(self, response: _MockStreamingResponse) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _MockStreamingResponse:
+        return self._response
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+
+def _make_mock_client(
+    lines: list[str] | None = None,
+    status_code: int = 200,
+) -> httpx.AsyncClient:
+    """Create a mock httpx.AsyncClient that streams transcription events."""
+    if lines is None:
+        lines = [
+            'data: {"delta": "hello"}',
+            'data: {"delta": " world"}',
+            'data: {"text": "hello world", "is_final": true}',
+            "data: [DONE]",
+        ]
+    mock_response = _MockStreamingResponse(lines=lines, status_code=status_code)
     mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post = AsyncMock(return_value=mock_response)
+    mock_client.stream = AsyncMock(return_value=_MockStreamContext(mock_response))
     mock_client.aclose = AsyncMock()
     return mock_client
 
@@ -39,7 +77,7 @@ def test_openai_stt_conforms_to_protocol():
 
 @pytest.mark.asyncio
 async def test_openai_stt_transcribes_audio():
-    mock_client = _make_mock_client("hello world")
+    mock_client = _make_mock_client()
     config = OpenAISTTConfig(api_key="test-key", http_client=mock_client)
     stt = OpenAISTT(config)
 
@@ -47,14 +85,15 @@ async def test_openai_stt_transcribes_audio():
     chunks = make_audio_chunks(pcm)
     events = await collect_stt_events(stt, chunks)
 
-    assert len(events) == 1
-    assert events[0].type == STTEventType.FINAL
-    assert events[0].text == "hello world"
+    assert len(events) >= 2
+    assert events[-1].type == STTEventType.FINAL
+    assert events[-1].text == "hello world"
+    assert any(event.type == STTEventType.PARTIAL for event in events)
 
     # Verify the API was called
-    mock_client.post.assert_called_once()
-    call_kwargs = mock_client.post.call_args
-    assert "audio/transcriptions" in call_kwargs.args[0]
+    mock_client.stream.assert_called_once()
+    call_kwargs = mock_client.stream.call_args
+    assert "audio/transcriptions" in call_kwargs.args[1]
 
 
 @pytest.mark.asyncio
@@ -65,12 +104,17 @@ async def test_openai_stt_no_event_on_empty_audio():
 
     events = await collect_stt_events(stt, [])
     assert len(events) == 0
-    mock_client.post.assert_not_called()
+    mock_client.stream.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_openai_stt_sends_wav_file():
-    mock_client = _make_mock_client("test")
+    mock_client = _make_mock_client(
+        [
+            'data: {"text": "test", "is_final": true}',
+            "data: [DONE]",
+        ]
+    )
     config = OpenAISTTConfig(api_key="test-key", http_client=mock_client)
     stt = OpenAISTT(config)
 
@@ -78,7 +122,7 @@ async def test_openai_stt_sends_wav_file():
     chunks = make_audio_chunks(pcm)
     await collect_stt_events(stt, chunks)
 
-    call_kwargs = mock_client.post.call_args
+    call_kwargs = mock_client.stream.call_args
     files = call_kwargs.kwargs.get("files", {})
     assert "file" in files
     filename, data, mime = files["file"]
@@ -93,21 +137,31 @@ async def test_openai_stt_sends_wav_file():
 
 @pytest.mark.asyncio
 async def test_openai_stt_sends_model_in_request():
-    mock_client = _make_mock_client("test")
+    mock_client = _make_mock_client(
+        [
+            'data: {"text": "test", "is_final": true}',
+            "data: [DONE]",
+        ]
+    )
     config = OpenAISTTConfig(api_key="test-key", model="whisper-1", http_client=mock_client)
     stt = OpenAISTT(config)
 
     pcm = generate_pcm_sine(duration_ms=100)
     await collect_stt_events(stt, make_audio_chunks(pcm))
 
-    call_kwargs = mock_client.post.call_args
+    call_kwargs = mock_client.stream.call_args
     data = call_kwargs.kwargs.get("data", {})
     assert data["model"] == "whisper-1"
 
 
 @pytest.mark.asyncio
 async def test_openai_stt_sends_optional_params():
-    mock_client = _make_mock_client("test")
+    mock_client = _make_mock_client(
+        [
+            'data: {"text": "test", "is_final": true}',
+            "data: [DONE]",
+        ]
+    )
     config = OpenAISTTConfig(
         api_key="test-key",
         language="en",
@@ -119,7 +173,7 @@ async def test_openai_stt_sends_optional_params():
     pcm = generate_pcm_sine(duration_ms=100)
     await collect_stt_events(stt, make_audio_chunks(pcm))
 
-    call_kwargs = mock_client.post.call_args
+    call_kwargs = mock_client.stream.call_args
     data = call_kwargs.kwargs.get("data", {})
     assert data["language"] == "en"
     assert data["prompt"] == "This is a meeting transcript"
@@ -127,7 +181,12 @@ async def test_openai_stt_sends_optional_params():
 
 @pytest.mark.asyncio
 async def test_openai_stt_custom_base_url():
-    mock_client = _make_mock_client("test")
+    mock_client = _make_mock_client(
+        [
+            'data: {"text": "test", "is_final": true}',
+            "data: [DONE]",
+        ]
+    )
     config = OpenAISTTConfig(
         api_key="test-key",
         base_url="https://custom.api.com/v2",
@@ -138,7 +197,7 @@ async def test_openai_stt_custom_base_url():
     pcm = generate_pcm_sine(duration_ms=100)
     await collect_stt_events(stt, make_audio_chunks(pcm))
 
-    url = mock_client.post.call_args.args[0]
+    url = mock_client.stream.call_args.args[1]
     assert url == "https://custom.api.com/v2/audio/transcriptions"
 
 
@@ -147,14 +206,19 @@ async def test_openai_stt_custom_base_url():
 
 @pytest.mark.asyncio
 async def test_openai_stt_sends_auth_header():
-    mock_client = _make_mock_client("test")
+    mock_client = _make_mock_client(
+        [
+            'data: {"text": "test", "is_final": true}',
+            "data: [DONE]",
+        ]
+    )
     config = OpenAISTTConfig(api_key="sk-test-key-123", http_client=mock_client)
     stt = OpenAISTT(config)
 
     pcm = generate_pcm_sine(duration_ms=100)
     await collect_stt_events(stt, make_audio_chunks(pcm))
 
-    headers = mock_client.post.call_args.kwargs.get("headers", {})
+    headers = mock_client.stream.call_args.kwargs.get("headers", {})
     assert headers["Authorization"] == "Bearer sk-test-key-123"
 
 
@@ -163,13 +227,9 @@ async def test_openai_stt_sends_auth_header():
 
 @pytest.mark.asyncio
 async def test_openai_stt_raises_on_api_error():
-    error_response = httpx.Response(
-        status_code=500,
-        json={"error": "Internal Server Error"},
-        request=httpx.Request("POST", "https://api.openai.com/v1/audio/transcriptions"),
-    )
+    error_response = _MockStreamingResponse(lines=["data: error"], status_code=500)
     mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post = AsyncMock(return_value=error_response)
+    mock_client.stream = AsyncMock(return_value=_MockStreamContext(error_response))
     mock_client.aclose = AsyncMock()
 
     config = OpenAISTTConfig(api_key="test-key", max_retries=1, http_client=mock_client)
@@ -191,7 +251,12 @@ async def test_openai_stt_raises_on_api_error():
 
 @pytest.mark.asyncio
 async def test_openai_stt_reusable_across_streams():
-    mock_client = _make_mock_client("stream two")
+    mock_client = _make_mock_client(
+        [
+            'data: {"text": "stream one", "is_final": true}',
+            "data: [DONE]",
+        ]
+    )
     config = OpenAISTTConfig(api_key="test-key", http_client=mock_client)
     stt = OpenAISTT(config)
 
@@ -203,9 +268,14 @@ async def test_openai_stt_reusable_across_streams():
     assert len(events1) == 1
 
     # Second stream (buffer should be cleared)
-    mock_client.post.reset_mock()
-    mock_response = _make_mock_client("stream two").post.return_value
-    mock_client.post.return_value = mock_response
+    mock_client.stream.reset_mock()
+    mock_response = _make_mock_client(
+        [
+            'data: {"text": "stream two", "is_final": true}',
+            "data: [DONE]",
+        ]
+    ).stream.return_value
+    mock_client.stream.return_value = mock_response
 
     events2 = await collect_stt_events(stt, chunks)
     assert len(events2) == 1
