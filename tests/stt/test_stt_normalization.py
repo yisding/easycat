@@ -30,14 +30,48 @@ from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_
 # ── Fixture helpers ──────────────────────────────────────────────
 
 
+class _MockStreamingResponse:
+    def __init__(self, lines: list[str], status_code: int = 200) -> None:
+        self._lines = lines
+        self.status_code = status_code
+        self.request = httpx.Request("POST", "https://api.openai.com/v1/audio/transcriptions")
+        self.text = "error"
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            response = httpx.Response(
+                status_code=self.status_code,
+                request=self.request,
+                text=self.text,
+            )
+            raise httpx.HTTPStatusError("error", request=self.request, response=response)
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _MockStreamContext:
+    def __init__(self, response: _MockStreamingResponse) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _MockStreamingResponse:
+        return self._response
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+
 def _make_openai(text: str = "openai result") -> OpenAISTT:
-    mock_response = httpx.Response(
-        status_code=200,
-        json={"text": text},
-        request=httpx.Request("POST", "https://api.openai.com/v1/audio/transcriptions"),
-    )
+    lines = [
+        f'data: {json.dumps({"delta": text[:4]})}',
+        f'data: {json.dumps({"delta": text[4:]})}',
+        f'data: {json.dumps({"text": text, "is_final": True})}',
+        "data: [DONE]",
+    ]
+    mock_response = _MockStreamingResponse(lines=lines)
     mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post = AsyncMock(return_value=mock_response)
+    mock_client.stream = AsyncMock(return_value=_MockStreamContext(mock_response))
     mock_client.aclose = AsyncMock()
     return OpenAISTT(OpenAISTTConfig(api_key="k", http_client=mock_client))
 
@@ -150,9 +184,9 @@ def _assert_stt_event_schema(event: STTEvent) -> None:
 @pytest.mark.asyncio
 async def test_openai_event_schema():
     events = await collect_stt_events(_make_openai(), _audio())
-    assert len(events) == 1
-    _assert_stt_event_schema(events[0])
-    assert events[0].type == STTEventType.FINAL
+    assert len(events) >= 2
+    _assert_stt_event_schema(events[-1])
+    assert events[-1].type == STTEventType.FINAL
 
 
 @pytest.mark.asyncio
