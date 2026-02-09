@@ -284,6 +284,35 @@ def test_split_incomplete_sentence():
     assert remaining == "How are"
 
 
+def test_split_abbreviation_sentence():
+    text = "Dr. Smith went home. Next"
+    ready, remaining = _split_at_sentence_boundaries(text)
+    assert ready.strip() == "Dr. Smith went home."
+    assert remaining == "Next"
+
+
+def test_split_newline_sentence():
+    text = "Hello world!\nHow are you"
+    ready, remaining = _split_at_sentence_boundaries(text)
+    assert ready.strip() == "Hello world!"
+    assert remaining == "How are you"
+
+
+def test_split_spanish_sentence():
+    text = "Hola mundo. ¿Cómo estás? Bien"
+    ready, remaining = _split_at_sentence_boundaries(text)
+    assert "Hola mundo." in ready
+    assert "¿Cómo estás?" in ready
+    assert remaining == "Bien"
+
+
+def test_split_chinese_sentence():
+    text = "你好。今天天气不错。继续"
+    ready, remaining = _split_at_sentence_boundaries(text)
+    assert ready == "你好。今天天气不错。"
+    assert remaining == "继续"
+
+
 # ── Session with basic agent (backward compatibility) ──────────────
 
 
@@ -667,6 +696,42 @@ async def test_session_with_agent_runner_streaming():
     span_names = [s.name for s in runner.spans]
     assert "stt_to_agent" in span_names
     assert "agent_execution" in span_names
+
+
+@pytest.mark.asyncio
+async def test_streaming_flushes_final_buffer_to_tts():
+    class BufferingAgent:
+        async def run(self, text: str) -> str:
+            return "Hello world"
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world")
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world")
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="hello"),
+        agent=BufferingAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.2)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["Hello world"]
 
 
 @pytest.mark.asyncio
