@@ -298,6 +298,21 @@ def test_split_newline_sentence():
     assert remaining == "How are you"
 
 
+def test_split_spanish_sentence():
+    text = "Hola mundo. ¿Cómo estás? Bien"
+    ready, remaining = _split_at_sentence_boundaries(text)
+    assert "Hola mundo." in ready
+    assert "¿Cómo estás?" in ready
+    assert remaining == "Bien"
+
+
+def test_split_chinese_sentence():
+    text = "你好。今天天气不错。继续"
+    ready, remaining = _split_at_sentence_boundaries(text)
+    assert ready == "你好。今天天气不错。"
+    assert remaining == "继续"
+
+
 # ── Session with basic agent (backward compatibility) ──────────────
 
 
