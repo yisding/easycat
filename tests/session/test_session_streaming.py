@@ -284,6 +284,20 @@ def test_split_incomplete_sentence():
     assert remaining == "How are"
 
 
+def test_split_abbreviation_sentence():
+    text = "Dr. Smith went home. Next"
+    ready, remaining = _split_at_sentence_boundaries(text)
+    assert ready.strip() == "Dr. Smith went home."
+    assert remaining == "Next"
+
+
+def test_split_newline_sentence():
+    text = "Hello world!\nHow are you"
+    ready, remaining = _split_at_sentence_boundaries(text)
+    assert ready.strip() == "Hello world!"
+    assert remaining == "How are you"
+
+
 # ── Session with basic agent (backward compatibility) ──────────────
 
 
