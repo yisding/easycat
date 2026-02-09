@@ -1,8 +1,9 @@
-"""OpenAI STT provider — turn-based transcription via Audio API."""
+"""OpenAI STT provider — streaming transcription via Audio API."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 
@@ -31,10 +32,12 @@ class OpenAISTTConfig:
 
 
 class OpenAISTT(STTBase):
-    """Turn-based STT using OpenAI Audio API transcriptions endpoint.
+    """Turn-based STT using OpenAI Audio API streaming transcriptions.
 
     Buffers all audio received via ``send_audio``, then submits the complete
     buffer as a WAV file to the transcription API when ``end_stream`` is called.
+    The transcription response is streamed and emitted as partial events, with
+    a final transcript emitted at the end of the stream.
     """
 
     def __init__(self, config: OpenAISTTConfig) -> None:
@@ -57,11 +60,9 @@ class OpenAISTT(STTBase):
             return
 
         wav_data = pcm_to_wav(bytes(self._buffer), self._audio_format)
-        text = await self._transcribe(wav_data)
-        if text:
-            self._emit_event(STTEvent(type=STTEventType.FINAL, text=text))
+        await self._transcribe_streaming(wav_data)
 
-    async def _transcribe(self, wav_data: bytes) -> str:
+    async def _transcribe_streaming(self, wav_data: bytes) -> str:
         url = f"{self._config.base_url}/audio/transcriptions"
         headers = {"Authorization": f"Bearer {self._config.api_key}"}
 
@@ -70,8 +71,11 @@ class OpenAISTT(STTBase):
             data["language"] = self._config.language
         if self._config.prompt:
             data["prompt"] = self._config.prompt
+        data["stream"] = "true"
 
         last_exc: Exception | None = None
+        full_text = ""
+        emitted_final = False
         for attempt in range(self._config.max_retries):
             try:
                 client = self._config.http_client or httpx.AsyncClient(
@@ -79,14 +83,44 @@ class OpenAISTT(STTBase):
                 )
                 owns_client = self._config.http_client is None
                 try:
-                    response = await client.post(
+                    async with client.stream(
+                        "POST",
                         url,
                         headers=headers,
                         files={"file": ("audio.wav", wav_data, "audio/wav")},
                         data=data,
-                    )
-                    response.raise_for_status()
-                    return response.json()["text"]
+                    ) as response:
+                        response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if not line:
+                                continue
+                            payload = line.strip()
+                            if payload.startswith("data:"):
+                                payload = payload[5:].strip()
+                            if payload == "[DONE]":
+                                break
+                            text, is_delta, is_final = self._extract_stream_text(payload)
+                            if not text:
+                                continue
+                            if is_delta:
+                                full_text += text
+                            else:
+                                full_text = text
+                            self._emit_event(
+                                STTEvent(type=STTEventType.PARTIAL, text=full_text)
+                            )
+                            if is_final:
+                                self._emit_event(
+                                    STTEvent(type=STTEventType.FINAL, text=full_text)
+                                )
+                                emitted_final = True
+                                break
+                        if full_text and not emitted_final:
+                            self._emit_event(
+                                STTEvent(type=STTEventType.FINAL, text=full_text)
+                            )
+                            emitted_final = True
+                        return full_text
                 finally:
                     if owns_client:
                         await client.aclose()
@@ -110,3 +144,37 @@ class OpenAISTT(STTBase):
                 raise
 
         raise RuntimeError("All retries exhausted") from last_exc
+
+    @staticmethod
+    def _extract_stream_text(payload: str) -> tuple[str | None, bool, bool]:
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return None, False, False
+
+        if isinstance(data, dict) and isinstance(data.get("data"), dict):
+            data = data["data"]
+
+        if isinstance(data, dict) and isinstance(data.get("choices"), list):
+            choice = data["choices"][0] if data["choices"] else {}
+            if isinstance(choice, dict):
+                delta = choice.get("delta")
+                if isinstance(delta, dict):
+                    if isinstance(delta.get("text"), str):
+                        return delta["text"], True, False
+                    if isinstance(delta.get("content"), str):
+                        return delta["content"], True, False
+                if isinstance(choice.get("text"), str):
+                    return choice["text"], False, choice.get("finish_reason") is not None
+
+        if isinstance(data, dict):
+            if isinstance(data.get("delta"), str):
+                return data["delta"], True, False
+            if isinstance(data.get("text"), str):
+                is_final = bool(data.get("is_final") or data.get("final"))
+                return data["text"], False, is_final
+            if isinstance(data.get("transcript"), str):
+                is_final = bool(data.get("is_final") or data.get("final"))
+                return data["transcript"], False, is_final
+
+        return None, False, False
