@@ -684,6 +684,42 @@ async def test_session_with_agent_runner_streaming():
 
 
 @pytest.mark.asyncio
+async def test_streaming_flushes_final_buffer_to_tts():
+    class BufferingAgent:
+        async def run(self, text: str) -> str:
+            return "Hello world"
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world")
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world")
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="hello"),
+        agent=BufferingAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.2)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["Hello world"]
+
+
+@pytest.mark.asyncio
 async def test_full_streaming_turn_event_order():
     """Verify the complete event ordering in a streaming turn."""
     transport = FakeTransport(chunks=[_chunk(), _chunk()])

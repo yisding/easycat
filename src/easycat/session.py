@@ -776,6 +776,7 @@ class Session:
         async def _consume_agent() -> None:
             nonlocal accumulated_text, structured_output, agent_error
             text_buffer = ""
+            stream_completed = False
             try:
                 async for event in self.agent.run_streaming(transcript, cancel_token=token):
                     if token and token.is_cancelled:
@@ -811,19 +812,22 @@ class Session:
                             ToolCallResult(call_id=event.call_id, result=event.result)
                         )
                     elif event.type == AgentStreamEventType.DONE:
+                        stream_completed = True
                         if event.text:
                             accumulated_text = event.text
                         if event.structured_output is not None:
                             structured_output = event.structured_output
-
             except Exception as exc:
                 agent_error = exc
                 logger.exception("Agent streaming error")
                 await self.event_bus.emit(Error(exception=exc, context="agent"))
             finally:
-                # Flush any remaining buffered text
-                if text_buffer.strip():
-                    await tts_queue.put(text_buffer.strip())
+                if (
+                    stream_completed
+                    and (not token or not token.is_cancelled)
+                    and text_buffer.strip()
+                ):
+                    await tts_queue.put(text_buffer)
                 await tts_queue.put(None)  # sentinel to stop TTS task
 
         async def _process_tts() -> None:
