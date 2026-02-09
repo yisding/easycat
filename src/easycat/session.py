@@ -162,6 +162,25 @@ class Session:
         self.transport = cfg.transport or NoopTransport()
         self.agent: Agent = cfg.agent or NoopAgent()
 
+        noops = []
+        if isinstance(self.stt, NoopSTT):
+            noops.append("stt")
+        if isinstance(self.tts, NoopTTS):
+            noops.append("tts")
+        if isinstance(self.vad, NoopVAD):
+            noops.append("vad")
+        if isinstance(self.noise_reducer, NoopNoiseReducer) and cfg.enable_noise_reduction:
+            noops.append("noise_reducer")
+        if isinstance(self.transport, NoopTransport):
+            noops.append("transport")
+        if isinstance(self.agent, NoopAgent):
+            noops.append("agent")
+        if noops:
+            raise ValueError(
+                "SessionConfig must provide non-noop implementations for: "
+                + ", ".join(noops)
+            )
+
         # Event system
         self.event_bus = cfg.event_bus or EventBus()
 
