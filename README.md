@@ -19,6 +19,29 @@ OpenAI Agents SDK or PydanticAI agents.
 EasyCat does not replace your agent framework. Build your agent with your SDK of
 choice, then wrap it with an EasyCat adapter when creating a session.
 
+### Quickstart (EasyCatConfig)
+```python
+from easycat import EasyCatConfig, create_session
+from easycat.agents import OpenAIAgentsAdapter
+from agents import Agent
+
+agent = Agent(
+    name="Support",
+    instructions="Help customers with account issues.",
+)
+
+config = EasyCatConfig(
+    openai_api_key="your-api-key",
+    agent=OpenAIAgentsAdapter(agent),
+)
+session = create_session(config)
+```
+
+> Note: `SessionConfig` requires real provider implementations (unless you set
+> `enable_noise_reduction=False`, which allows a no-op noise reducer). For most
+> users, `EasyCatConfig` + `create_session` is the fastest way to get a working
+> pipeline.
+
 ### OpenAI Agents SDK (idiomatic)
 ```python
 from agents import Agent
@@ -51,9 +74,14 @@ adapter = PydanticAIAdapter(pydantic_agent)
 session = Session(SessionConfig(agent=adapter, ...))
 ```
 
+## Examples
+Runnable examples live in the `examples/` directory:
+- `local_chat.py`: local microphone/speaker loop
+- `ws_server.py`: WebSocket server example
+- `twilio_app.py`: Twilio Media Streams example
+- `pydantic_ai_voice.py`: PydanticAI adapter example
+
 ## Not yet in this repo
-- EasyCatConfig / create_session convenience layer (planned in workstreams)
-- Runnable examples or CLI
 - Optional dependency extras in packaging
 
 ## Repo layout
