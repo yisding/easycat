@@ -3,6 +3,7 @@
 Setup:
   export OPENAI_API_KEY="..."
   uv add easycat[local]
+  uv add easycat[openai]
   uv add easycat[openai-agents]
   uv run python examples/local_chat.py
 """

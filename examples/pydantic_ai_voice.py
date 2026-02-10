@@ -3,6 +3,7 @@
 Setup:
   export OPENAI_API_KEY="..."
   uv add easycat[local]
+  uv add easycat[openai]
   uv add easycat[pydantic-ai]
   uv run python examples/pydantic_ai_voice.py
 """
