@@ -18,6 +18,7 @@ deepgram = ["deepgram-sdk>=3.0.0"]
 elevenlabs = ["elevenlabs>=1.0.0"]
 telephony = ["fastapi>=0.110.0", "python-multipart>=0.0.9", "twilio>=9.0.0", "uvicorn>=0.29.0"]
 local = ["sounddevice>=0.4.6"]
+rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.31.0"]
 all = [
     "deepgram-sdk>=3.0.0",
     "elevenlabs>=1.0.0",
@@ -25,6 +26,8 @@ all = [
     "openai>=1.0.0",
     "python-multipart>=0.0.9",
     "sounddevice>=0.4.6",
+    "pyrnnoise>=0.3.0",
+    "requests>=2.31.0",
     "twilio>=9.0.0",
     "uvicorn>=0.29.0",
     "torch>=2.2.0",

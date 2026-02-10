@@ -68,29 +68,25 @@ def test_float32_to_pcm16_clipping():
 
 
 def test_rnnoise_fails_without_library():
-    """RNNoiseReducer should raise RuntimeError if library is missing."""
-    with pytest.raises(RuntimeError, match="RNNoise"):
-        RNNoiseReducer()
+    """RNNoiseReducer should raise RuntimeError if pyrnnoise is missing."""
+    with patch("easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")):
+        with pytest.raises(RuntimeError, match="RNNoise"):
+            RNNoiseReducer()
 
 
 @pytest.mark.asyncio
 async def test_rnnoise_process_mocked():
-    """RNNoiseReducer.process with mocked C library calls."""
-    mock_lib = MagicMock()
-    mock_state = MagicMock()
-    mock_lib.rnnoise_create.return_value = mock_state
+    """RNNoiseReducer.process with mocked pyrnnoise bindings."""
+    mock_rnnoise = MagicMock()
+    mock_rnnoise.FRAME_SIZE = 480
+    mock_rnnoise.create.return_value = MagicMock()
 
-    # Mock process_frame to copy input to output (passthrough)
-    def mock_process_frame(state, out_buf, in_buf):
-        for i in range(480):
-            out_buf[i] = in_buf[i]
+    def mock_process_mono_frame(state, frame):
+        return frame, 0.0
 
-    mock_lib.rnnoise_process_frame.side_effect = mock_process_frame
+    mock_rnnoise.process_mono_frame.side_effect = mock_process_mono_frame
 
-    with (
-        patch("ctypes.util.find_library", return_value="/fake/librnnoise.so"),
-        patch("ctypes.CDLL", return_value=mock_lib),
-    ):
+    with patch("easycat.noise_reduction.require_module", return_value=mock_rnnoise):
         reducer = RNNoiseReducer()
 
     # Create a 16 kHz chunk (320 samples = 20ms)
@@ -104,34 +100,22 @@ async def test_rnnoise_process_mocked():
     assert result.format.sample_rate == 16000
     assert len(result.data) > 0
     # RNNoise should have been called
-    assert mock_lib.rnnoise_process_frame.called
+    assert mock_rnnoise.process_mono_frame.called
 
 
-def test_rnnoise_sets_ctypes_argtypes():
-    """RNNoiseReducer must set restype/argtypes for 64-bit pointer safety."""
-    import ctypes
+def test_rnnoise_uses_pyrnnoise_state_lifecycle():
+    """RNNoiseReducer should create and destroy pyrnnoise state."""
+    mock_rnnoise = MagicMock()
+    mock_rnnoise.FRAME_SIZE = 480
+    mock_state = MagicMock()
+    mock_rnnoise.create.return_value = mock_state
 
-    mock_lib = MagicMock()
-    mock_lib.rnnoise_create.return_value = 0xDEADBEEF
+    with patch("easycat.noise_reduction.require_module", return_value=mock_rnnoise):
+        reducer = RNNoiseReducer()
+        reducer.close()
 
-    with (
-        patch("ctypes.util.find_library", return_value="/fake/librnnoise.so"),
-        patch("ctypes.CDLL", return_value=mock_lib),
-    ):
-        RNNoiseReducer()
-
-    # rnnoise_create must return c_void_p (pointer), not the default c_int
-    assert mock_lib.rnnoise_create.restype == ctypes.c_void_p
-    # rnnoise_destroy must accept a pointer and return nothing
-    assert mock_lib.rnnoise_destroy.restype is None
-    assert mock_lib.rnnoise_destroy.argtypes == [ctypes.c_void_p]
-    # rnnoise_process_frame must accept pointer + two float pointers
-    assert mock_lib.rnnoise_process_frame.restype == ctypes.c_float
-    assert mock_lib.rnnoise_process_frame.argtypes == [
-        ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_float),
-        ctypes.POINTER(ctypes.c_float),
-    ]
+    mock_rnnoise.create.assert_called_once()
+    mock_rnnoise.destroy.assert_called_once_with(mock_state)
 
 
 # ── KrispNoiseReducer tests ─────────────────────────────────────────
@@ -185,8 +169,9 @@ async def test_passthrough_returns_unchanged():
 
 def test_factory_auto_falls_back_to_passthrough():
     """In auto mode with no SDKs available, factory returns passthrough."""
-    reducer = create_noise_reducer(NoiseReducerConfig(backend="auto"))
-    assert isinstance(reducer, PassthroughNoiseReducer)
+    with patch("easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")):
+        reducer = create_noise_reducer(NoiseReducerConfig(backend="auto"))
+        assert isinstance(reducer, PassthroughNoiseReducer)
 
 
 def test_factory_explicit_krisp_fails():
@@ -196,18 +181,20 @@ def test_factory_explicit_krisp_fails():
 
 
 def test_factory_explicit_rnnoise_fails():
-    """Explicitly requesting rnnoise without library should raise."""
-    with pytest.raises(RuntimeError, match="RNNoise"):
-        create_noise_reducer(NoiseReducerConfig(backend="rnnoise"))
+    """Explicitly requesting rnnoise without pyrnnoise should raise."""
+    with patch("easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")):
+        with pytest.raises(RuntimeError, match="RNNoise"):
+            create_noise_reducer(NoiseReducerConfig(backend="rnnoise"))
 
 
 @pytest.mark.asyncio
 async def test_factory_auto_passthrough_processes_audio():
     """Factory auto -> passthrough should still process audio."""
-    reducer = create_noise_reducer()
-    chunk = AudioChunk(data=b"\x00\x00" * 160, format=PCM16_MONO_16K)
-    result = await reducer.process(chunk)
-    assert result.data == chunk.data
+    with patch("easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")):
+        reducer = create_noise_reducer()
+        chunk = AudioChunk(data=b"\x00\x00" * 160, format=PCM16_MONO_16K)
+        result = await reducer.process(chunk)
+        assert result.data == chunk.data
 
 
 def test_factory_krisp_preferred_in_auto():

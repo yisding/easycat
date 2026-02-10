@@ -37,10 +37,35 @@ config = EasyCatConfig(
 session = create_session(config)
 ```
 
-> Note: `SessionConfig` requires real provider implementations (unless you set
-> `enable_noise_reduction=False`, which allows a no-op noise reducer). For most
+> Note: `EasyCatConfig` will automatically wire **OpenAI STT + OpenAI TTS** if
+> you provide `openai_api_key` and do not override `stt` or `tts`. If you omit
+> the API key, you must supply `stt` and `tts` configs explicitly. For most
 > users, `EasyCatConfig` + `create_session` is the fastest way to get a working
 > pipeline.
+
+### Local/open-source speech pipeline
+EasyCat ships with hosted STT/TTS providers (OpenAI, Deepgram, ElevenLabs). To
+run fully local speech, plug in your own STT/TTS implementations and use
+`SessionConfig` directly:
+
+```python
+from easycat import Session, SessionConfig
+
+from my_local_stt import LocalSTTProvider
+from my_local_tts import LocalTTSProvider
+
+session = Session(
+    SessionConfig(
+        stt=LocalSTTProvider(...),
+        tts=LocalTTSProvider(...),
+        # keep using local transport to stay offline
+        ...
+    )
+)
+```
+
+This keeps the pipeline (VAD → STT → agent → TTS) identical while letting you
+swap in open-source models for fully local operation.
 
 ### OpenAI Agents SDK (idiomatic)
 ```python
@@ -96,9 +121,19 @@ Python 3.11+ is required.
 python -m pip install -e .
 ```
 
+### Simplest setup (local mic/speaker + OpenAI STT/TTS + OpenAI Agents SDK)
+If you want the shortest path to a working end-to-end pipeline on your machine:
+
+```
+python -m pip install -e ".[local,openai,openai-agents,rnnoise]"
+python -m pip install torch
+export OPENAI_API_KEY="your-api-key"
+python examples/local_chat.py
+```
+
 Optional dependencies you may need depending on providers/transports:
 - sounddevice (LocalTransport)
 - torch (Silero VAD)
-- RNNoise shared library (rnnoise)
+- pyrnnoise + requests (RNNoise noise reduction backend)
 - Krisp SDK (krisp_audio)
 - Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs
