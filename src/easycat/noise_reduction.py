@@ -41,94 +41,70 @@ def _float32_to_pcm16(samples: list[float]) -> bytes:
 
 
 class RNNoiseReducer:
-    """Noise reducer using RNNoise (open-source, C library via ctypes/cffi).
+    """Noise reducer using pyrnnoise (open-source RNNoise bindings).
 
     RNNoise expects 48 kHz float32 input in frames of 480 samples (10 ms).
     Internal pipeline: PCM16 at pipeline rate -> resample to 48 kHz ->
     convert to float32 -> RNNoise process -> convert back to PCM16 ->
     resample to pipeline rate.
 
-    If the rnnoise shared library is not available, raises RuntimeError
-    on construction.
+    Requires the ``pyrnnoise`` package.
     """
 
     def __init__(self) -> None:
         self._rnnoise: Any = None
         self._state: Any = None
+        self._frame_samples: int = _RNNOISE_FRAME_SAMPLES
         self._load_rnnoise()
 
     def _load_rnnoise(self) -> None:
-        """Attempt to load the RNNoise shared library."""
+        """Attempt to load RNNoise via pyrnnoise."""
         try:
-            import ctypes
-            import ctypes.util
+            self._rnnoise = require_module(
+                "pyrnnoise.rnnoise",
+                extra="rnnoise",
+                purpose="RNNoise",
+            )
+        except ImportError as exc:
+            raise RuntimeError(str(exc)) from exc
 
-            lib_path = ctypes.util.find_library("rnnoise")
-            if lib_path is None:
-                raise RuntimeError(
-                    "RNNoise shared library not found. "
-                    "Install librnnoise-dev or place librnnoise.so on the library path."
-                )
-            self._rnnoise = ctypes.CDLL(lib_path)
-
-            # Set proper restype/argtypes so ctypes handles 64-bit
-            # pointers correctly instead of truncating to c_int.
-            # DenoiseState* rnnoise_create(RNNModel *model)
-            self._rnnoise.rnnoise_create.restype = ctypes.c_void_p
-            self._rnnoise.rnnoise_create.argtypes = [ctypes.c_void_p]
-            # float rnnoise_process_frame(DenoiseState *st, float *out, const float *in)
-            self._rnnoise.rnnoise_process_frame.restype = ctypes.c_float
-            self._rnnoise.rnnoise_process_frame.argtypes = [
-                ctypes.c_void_p,
-                ctypes.POINTER(ctypes.c_float),
-                ctypes.POINTER(ctypes.c_float),
-            ]
-            # void rnnoise_destroy(DenoiseState *st)
-            self._rnnoise.rnnoise_destroy.restype = None
-            self._rnnoise.rnnoise_destroy.argtypes = [ctypes.c_void_p]
-
-            self._state = self._rnnoise.rnnoise_create(None)
-            if not self._state:
-                raise RuntimeError("Failed to create RNNoise state.")
-            logger.info("RNNoise loaded successfully from %s", lib_path)
-        except OSError as exc:
-            raise RuntimeError(f"Failed to load RNNoise library: {exc}") from exc
+        self._frame_samples = int(getattr(self._rnnoise, "FRAME_SIZE", _RNNOISE_FRAME_SAMPLES))
+        self._state = self._rnnoise.create()
+        if not self._state:
+            raise RuntimeError("Failed to create RNNoise state.")
+        logger.info("RNNoise loaded successfully via pyrnnoise")
 
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         """Process an audio chunk through RNNoise for noise reduction.
 
         Handles resampling to/from 48 kHz and float32 conversion internally.
         """
-        import ctypes
+        import numpy as np
 
         original_rate = chunk.format.sample_rate
 
         # Step 1: Resample to 48 kHz if needed
         chunk_48k = resample_chunk(chunk, 48000)
 
-        # Step 2: Convert to float32
-        float_samples = _pcm16_to_float32(chunk_48k.data)
+        # Step 2: Convert to int16 samples for pyrnnoise
+        samples = np.frombuffer(chunk_48k.data, dtype=np.int16)
 
-        # Step 3: Process in 480-sample (10 ms) frames through RNNoise
-        output_samples: list[float] = []
+        # Step 3: Process in frame chunks through RNNoise
+        output_samples: list[int] = []
         i = 0
-        while i < len(float_samples):
-            frame = float_samples[i : i + _RNNOISE_FRAME_SAMPLES]
-            if len(frame) < _RNNOISE_FRAME_SAMPLES:
+        while i < len(samples):
+            frame = samples[i : i + self._frame_samples]
+            if len(frame) < self._frame_samples:
                 # Pad the last frame with zeros
-                frame = frame + [0.0] * (_RNNOISE_FRAME_SAMPLES - len(frame))
+                frame = np.pad(frame, (0, self._frame_samples - len(frame)), mode="constant")
 
-            # RNNoise expects float* input/output scaled to [-32768, 32767]
-            in_buf = (ctypes.c_float * _RNNOISE_FRAME_SAMPLES)(*(s * 32768.0 for s in frame))
-            out_buf = (ctypes.c_float * _RNNOISE_FRAME_SAMPLES)()
-            self._rnnoise.rnnoise_process_frame(self._state, out_buf, in_buf)
-
-            processed = [out_buf[j] / 32768.0 for j in range(_RNNOISE_FRAME_SAMPLES)]
-            output_samples.extend(processed[: min(_RNNOISE_FRAME_SAMPLES, len(float_samples) - i)])
-            i += _RNNOISE_FRAME_SAMPLES
+            processed, _ = self._rnnoise.process_mono_frame(self._state, frame.copy())
+            remaining = min(self._frame_samples, len(samples) - i)
+            output_samples.extend(int(v) for v in processed[:remaining])
+            i += self._frame_samples
 
         # Step 4: Convert back to PCM16
-        pcm_data = _float32_to_pcm16(output_samples)
+        pcm_data = struct.pack(f"<{len(output_samples)}h", *output_samples)
         cleaned_48k = AudioChunk(data=pcm_data, format=PCM16_MONO_48K, timestamp=chunk.timestamp)
 
         # Step 5: Resample back to original rate
@@ -138,7 +114,7 @@ class RNNoiseReducer:
         """Release RNNoise state."""
         if self._state and self._rnnoise:
             try:
-                self._rnnoise.rnnoise_destroy(self._state)
+                self._rnnoise.destroy(self._state)
             except Exception:
                 pass
             self._state = None
