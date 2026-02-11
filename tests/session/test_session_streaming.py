@@ -264,18 +264,18 @@ def test_split_no_boundary():
 
 def test_split_single_sentence():
     ready, remaining = _split_at_sentence_boundaries("Hello world. ")
-    # "Hello world." is ready, remainder is empty (after the space)
-    assert "Hello world" in ready
-    assert remaining == ""
+    # Single sentence is buffered; the caller flushes when the LLM finishes.
+    assert ready == ""
+    assert remaining == "Hello world. "
 
 
 def test_split_multiple_sentences():
-    text = "Hello. How are you? Fine."
+    text = "Hello. How are you? Fine"
     ready, remaining = _split_at_sentence_boundaries(text)
     # Should split at last boundary (after "you? ")
     assert "Hello" in ready
     assert "How are you" in ready
-    assert remaining == "Fine."
+    assert remaining == "Fine"
 
 
 def test_split_incomplete_sentence():
@@ -289,6 +289,12 @@ def test_split_abbreviation_sentence():
     ready, remaining = _split_at_sentence_boundaries(text)
     assert ready.strip() == "Dr. Smith went home."
     assert remaining == "Next"
+
+
+def test_split_trailing_abbreviation():
+    ready, remaining = _split_at_sentence_boundaries("Nice to meet you Mr. ")
+    assert ready == ""
+    assert remaining == "Nice to meet you Mr. "
 
 
 def test_split_newline_sentence():

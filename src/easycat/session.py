@@ -72,7 +72,7 @@ from easycat.turn_manager import TurnManager, TurnManagerConfig
 logger = logging.getLogger(__name__)
 
 # Sentence boundary detection via pySBD.
-_SENTENCE_SEGMENTER = pysbd.Segmenter(language="en", clean=False)
+_SENTENCE_SEGMENTER = pysbd.Segmenter(language="en", clean=False, char_span=True)
 
 
 def _span_bounds(span: object) -> tuple[int, int]:
@@ -140,16 +140,13 @@ def _split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     Returns (ready_text, remaining_buffer). ``ready_text`` contains complete
     sentences to send to TTS; ``remaining_buffer`` holds any trailing text
     that hasn't reached a sentence boundary yet.
+
+    Only splits when pySBD detects multiple sentences — all but the last are
+    returned as ready.  Single-span text is always buffered; the caller is
+    responsible for flushing the final buffer when the LLM stream finishes.
     """
-    spans = _SENTENCE_SEGMENTER.segment(text, char_span=True)
-    if not spans:
-        return "", text
-    stripped = text.rstrip()
-    if not stripped:
-        return "", text
-    if stripped.endswith((".", "!", "?")):
-        return text, ""
-    if len(spans) == 1:
+    spans = _SENTENCE_SEGMENTER.segment(text)
+    if len(spans) <= 1:
         return "", text
     last_start, _ = _span_bounds(spans[-1])
     return text[:last_start], text[last_start:]

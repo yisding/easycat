@@ -40,5 +40,10 @@ def test_example_session_smoke():
         openai_api_key="test-key",
         transport=WebSocketTransportConfig(),
     )
-    session = create_session(config)
+    try:
+        session = create_session(config)
+    except RuntimeError as exc:
+        if "No VAD backend available" in str(exc):
+            pytest.skip("No VAD backend available")
+        raise
     assert session is not None

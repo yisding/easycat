@@ -25,5 +25,10 @@ def test_easycat_config_wraps_agent():
             return text
 
     config = EasyCatConfig(openai_api_key="test-key", agent=DummyAgent())
-    session = create_session(config)
+    try:
+        session = create_session(config)
+    except RuntimeError as exc:
+        if "No VAD backend available" in str(exc):
+            pytest.skip("No VAD backend available")
+        raise
     assert isinstance(session.agent, AgentRunner)
