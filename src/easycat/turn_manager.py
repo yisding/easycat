@@ -68,6 +68,10 @@ class TurnManagerConfig:
     pre_roll_ms: int = 300
     # Turn detection mode
     mode: TurnMode = TurnMode.VAD
+    # Optional endpoint detector for smart turn-taking.
+    # When set, TurnManager queries it on silence to decide whether
+    # to end the turn immediately or wait the full timeout.
+    endpoint_detector: Any = None
 
 
 class TurnManager:
@@ -115,6 +119,9 @@ class TurnManager:
 
         # Cancel token for the current turn
         self._cancel_token: CancelToken | None = None
+
+        # Optional endpoint detector (smart-turn model)
+        self._endpoint_detector = self._config.endpoint_detector
 
     # ── Properties ──────────────────────────────────────────────
 
@@ -213,8 +220,44 @@ class TurnManager:
         self._silence_timer_task = asyncio.create_task(self._silence_timeout())
 
     async def _silence_timeout(self) -> None:
-        """Wait for end-of-turn silence timeout, then transition to Processing."""
+        """Wait for end-of-turn silence timeout, then transition to Processing.
+
+        When an endpoint detector is configured, it is queried first.  If the
+        detector predicts "complete", the turn ends immediately.  If it predicts
+        "incomplete" (or raises an error), falls back to the normal sleep.
+        """
         try:
+            if self._endpoint_detector is not None and self._turn_audio:
+                try:
+                    result = await self._endpoint_detector.detect(
+                        list(self._turn_audio)
+                    )
+                    logger.debug(
+                        "Smart-turn prediction=%d probability=%.3f",
+                        result.prediction,
+                        result.probability,
+                    )
+                    if result.prediction == 1:
+                        if self._state == TurnManagerState.USER_PAUSED:
+                            self._state = TurnManagerState.PROCESSING
+                            logger.debug(
+                                "Turn: UserPaused -> Processing "
+                                "(smart-turn: complete, p=%.3f)",
+                                result.probability,
+                            )
+                            await self._event_bus.emit(TurnEnded())
+                        return
+                    logger.debug(
+                        "Smart-turn: incomplete (p=%.3f), "
+                        "falling back to silence timeout",
+                        result.probability,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Endpoint detection failed, "
+                        "falling back to silence timeout"
+                    )
+
             await asyncio.sleep(self._config.end_of_turn_silence_ms / 1000.0)
 
             if self._state == TurnManagerState.USER_PAUSED:

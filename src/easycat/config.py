@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from easycat.agent_runner import AgentRunner, AgentRunnerConfig
+from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.events import EventBus
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
@@ -70,6 +71,7 @@ class EasyCatConfig:
     noise_reduction: NoiseReducerConfig = field(default_factory=NoiseReducerConfig)
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
+    smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
     telephony: TelephonyConfig | None = None
     metrics: MetricsConfig | None = None
@@ -122,6 +124,11 @@ def create_session(config: EasyCatConfig) -> Session:
     metrics = _create_metrics(config.metrics)
     tracer = _create_tracer(config.tracing)
 
+    turn_config = config.turn_taking
+    smart_turn = create_smart_turn(config.smart_turn)
+    if smart_turn is not None:
+        turn_config.endpoint_detector = smart_turn
+
     session = Session(
         SessionConfig(
             stt=stt,
@@ -131,7 +138,7 @@ def create_session(config: EasyCatConfig) -> Session:
             transport=transport,
             agent=agent,
             event_bus=event_bus,
-            turn_manager_config=config.turn_taking,
+            turn_manager_config=turn_config,
             timeout_config=config.timeouts,
             metrics=metrics,
             tracer=tracer,
