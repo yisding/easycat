@@ -36,6 +36,13 @@ from easycat.agents.base import BaseAgentAdapter, serialize_output
 from easycat.agents.openai_agents import OpenAIAgentsAdapter
 from easycat.agents.pydantic_ai import PydanticAIAdapter
 from easycat.cancel import CancelToken
+from easycat.smart_turn import (
+    SmartTurnConfig,
+    SmartTurnONNX,
+    SmartTurnProvider,
+    SmartTurnResult,
+    create_smart_turn,
+)
 from easycat.session import Session, SessionConfig, TurnState
 from easycat.turn_manager import TurnMode
 from easycat.config import EasyCatConfig, MetricsConfig, TelephonyConfig, TracingConfig, create_session
@@ -146,6 +153,12 @@ __all__ = [
     "PydanticAIAdapter",
     "serialize_output",
     "CancelToken",
+    # Smart turn
+    "SmartTurnConfig",
+    "SmartTurnONNX",
+    "SmartTurnProvider",
+    "SmartTurnResult",
+    "create_smart_turn",
     # EasyCat-level events
     "AgentDelta",
     "AgentFinal",
