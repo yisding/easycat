@@ -122,6 +122,21 @@ class FakeTTS:
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
 
 
+def _full_config(**overrides) -> SessionConfig:
+    """Build a SessionConfig with all required providers filled in."""
+    defaults = dict(
+        transport=FakeTransport(),
+        vad=FakeVAD(),
+        stt=FakeSTT(),
+        agent=FakeAgent(),
+        tts=FakeTTS(),
+        noise_reducer=NoopNoiseReducer(),
+        enable_noise_reduction=False,
+    )
+    defaults.update(overrides)
+    return SessionConfig(**defaults)
+
+
 # ── CancelToken tests ──────────────────────────────────────────────
 
 
@@ -154,7 +169,7 @@ async def test_cancel_token_wait():
 
 @pytest.mark.asyncio
 async def test_session_default_construction():
-    session = Session()
+    session = Session(_full_config())
     assert session.turn_state == TurnState.IDLE
     assert not session.is_running
     assert session.cancel_token is None
@@ -163,7 +178,7 @@ async def test_session_default_construction():
 @pytest.mark.asyncio
 async def test_session_start_and_stop():
     transport = FakeTransport()
-    config = SessionConfig(transport=transport)
+    config = _full_config(transport=transport)
     session = Session(config)
 
     await session.start()
@@ -179,7 +194,7 @@ async def test_session_start_and_stop():
 @pytest.mark.asyncio
 async def test_session_shutdown():
     transport = FakeTransport()
-    config = SessionConfig(transport=transport)
+    config = _full_config(transport=transport)
     session = Session(config)
 
     await session.start()
@@ -191,7 +206,7 @@ async def test_session_shutdown():
 
 @pytest.mark.asyncio
 async def test_session_start_idempotent():
-    session = Session()
+    session = Session(_full_config())
     await session.start()
     await session.start()
     assert session.is_running
@@ -200,7 +215,7 @@ async def test_session_start_idempotent():
 
 @pytest.mark.asyncio
 async def test_session_stop_idempotent():
-    session = Session()
+    session = Session(_full_config())
     await session.stop()
     assert not session.is_running
 
@@ -210,7 +225,7 @@ async def test_session_stop_idempotent():
 
 @pytest.mark.asyncio
 async def test_cancel_turn_resets_state():
-    session = Session()
+    session = Session(_full_config())
     session._turn_state = TurnState.LISTENING
     session._cancel_token = CancelToken()
     await session.cancel_turn()
@@ -220,7 +235,7 @@ async def test_cancel_turn_resets_state():
 
 @pytest.mark.asyncio
 async def test_cancel_turn_barge_in_emits_interruption():
-    session = Session()
+    session = Session(_full_config())
     session._turn_state = TurnState.BOT_SPEAKING
     session._cancel_token = CancelToken()
 
@@ -234,7 +249,7 @@ async def test_cancel_turn_barge_in_emits_interruption():
 
 @pytest.mark.asyncio
 async def test_cancel_tts_playback_resets_state():
-    session = Session()
+    session = Session(_full_config())
     session._turn_state = TurnState.BOT_SPEAKING
     session._cancel_token = CancelToken()
     await session.cancel_tts_playback()
@@ -244,7 +259,7 @@ async def test_cancel_tts_playback_resets_state():
 
 @pytest.mark.asyncio
 async def test_reset_state():
-    session = Session()
+    session = Session(_full_config())
     session._turn_state = TurnState.PROCESSING
     session._cancel_token = CancelToken()
     await session.reset_state()
@@ -259,7 +274,7 @@ async def test_reset_state():
 async def test_pipeline_emits_audio_in_events():
     chunks = [_make_chunk(), _make_chunk()]
     transport = FakeTransport(chunks=chunks)
-    config = SessionConfig(transport=transport, enable_vad=False)
+    config = _full_config(transport=transport, enable_vad=False)
     session = Session(config)
 
     received: list[AudioIn] = []
@@ -286,7 +301,7 @@ async def test_pipeline_noise_reduction():
             return c
 
     nr = TrackingNoiseReducer()
-    config = SessionConfig(transport=transport, noise_reducer=nr, enable_vad=False)
+    config = _full_config(transport=transport, noise_reducer=nr, enable_vad=False, enable_noise_reduction=True)
     session = Session(config)
 
     await session.start()
@@ -306,13 +321,12 @@ async def test_pipeline_full_turn_with_provider_events():
     agent = FakeAgent()
     tts = FakeTTS()
 
-    config = SessionConfig(
+    config = _full_config(
         transport=transport,
         vad=vad,
         stt=stt,
         agent=agent,
         tts=tts,
-        noise_reducer=NoopNoiseReducer(),
         turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
@@ -378,7 +392,7 @@ async def test_pipeline_skips_empty_transcript():
             agent_ran = True
             return text
 
-    config = SessionConfig(
+    config = _full_config(
         transport=transport,
         vad=vad,
         stt=stt,
@@ -396,7 +410,7 @@ async def test_pipeline_skips_empty_transcript():
 
 @pytest.mark.asyncio
 async def test_session_event_bus_accessible():
-    session = Session()
+    session = Session(_full_config())
     assert session.event_bus is not None
     received: list = []
     session.event_bus.subscribe(STTFinal, lambda e: received.append(e))

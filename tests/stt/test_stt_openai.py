@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -59,7 +59,7 @@ def _make_mock_client(
         ]
     mock_response = _MockStreamingResponse(lines=lines, status_code=status_code)
     mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = AsyncMock(return_value=_MockStreamContext(mock_response))
+    mock_client.stream = MagicMock(return_value=_MockStreamContext(mock_response))
     mock_client.aclose = AsyncMock()
     return mock_client
 
@@ -229,7 +229,7 @@ async def test_openai_stt_sends_auth_header():
 async def test_openai_stt_raises_on_api_error():
     error_response = _MockStreamingResponse(lines=["data: error"], status_code=500)
     mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = AsyncMock(return_value=_MockStreamContext(error_response))
+    mock_client.stream = MagicMock(return_value=_MockStreamContext(error_response))
     mock_client.aclose = AsyncMock()
 
     config = OpenAISTTConfig(api_key="test-key", max_retries=1, http_client=mock_client)
@@ -265,7 +265,8 @@ async def test_openai_stt_reusable_across_streams():
 
     # First stream
     events1 = await collect_stt_events(stt, chunks)
-    assert len(events1) == 1
+    finals1 = [e for e in events1 if e.type == STTEventType.FINAL]
+    assert len(finals1) == 1
 
     # Second stream (buffer should be cleared)
     mock_client.stream.reset_mock()
@@ -278,4 +279,5 @@ async def test_openai_stt_reusable_across_streams():
     mock_client.stream.return_value = mock_response
 
     events2 = await collect_stt_events(stt, chunks)
-    assert len(events2) == 1
+    finals2 = [e for e in events2 if e.type == STTEventType.FINAL]
+    assert len(finals2) == 1

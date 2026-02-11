@@ -627,7 +627,16 @@ async def test_session_reset_clears_agent_history():
     await runner.run("hello")
     assert len(runner.history) == 2
 
-    config = SessionConfig(agent=runner, turn_manager_config=_FAST_TURN)
+    config = SessionConfig(
+        agent=runner,
+        transport=FakeTransport(),
+        vad=FakeVAD(),
+        stt=FakeSTT(),
+        tts=FakeTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        enable_noise_reduction=False,
+        turn_manager_config=_FAST_TURN,
+    )
     session = Session(config)
     await session.reset_state()
 
