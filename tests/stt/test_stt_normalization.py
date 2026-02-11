@@ -16,7 +16,7 @@ and field-type consistency.
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -71,7 +71,7 @@ def _make_openai(text: str = "openai result") -> OpenAISTT:
     ]
     mock_response = _MockStreamingResponse(lines=lines)
     mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = AsyncMock(return_value=_MockStreamContext(mock_response))
+    mock_client.stream = MagicMock(return_value=_MockStreamContext(mock_response))
     mock_client.aclose = AsyncMock()
     return OpenAISTT(OpenAISTTConfig(api_key="k", http_client=mock_client))
 
