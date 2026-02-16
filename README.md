@@ -106,8 +106,6 @@ Runnable examples live in the `examples/` directory:
 - `twilio_app.py`: Twilio Media Streams example
 - `pydantic_ai_voice.py`: PydanticAI adapter example
 
-## Not yet in this repo
-- Optional dependency extras in packaging
 
 ## Repo layout
 - src/easycat: library code

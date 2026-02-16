@@ -4,8 +4,12 @@ import pytest
 
 from easycat import EasyCatConfig, create_session
 from easycat.agent_runner import AgentRunner
+from easycat.config import TelephonyConfig
+from easycat.events import DTMFAggregated
 from easycat.stt.openai_provider import OpenAISTTConfig
+from easycat.telephony.dtmf import emit_twilio_dtmf
 from easycat.tts.openai_tts import OpenAITTSConfig
+from easycat.turn_manager import TurnManagerConfig
 
 
 def test_easycat_config_requires_stt_tts():
@@ -32,3 +36,49 @@ def test_easycat_config_wraps_agent():
             pytest.skip("No VAD backend available")
         raise
     assert isinstance(session.agent, AgentRunner)
+
+
+def test_create_session_does_not_mutate_turn_taking_config():
+    turn_cfg = TurnManagerConfig(endpoint_detector=None)
+    config = EasyCatConfig(
+        openai_api_key="test-key",
+        turn_taking=turn_cfg,
+    )
+    try:
+        create_session(config)
+    except RuntimeError as exc:
+        if "No VAD backend available" in str(exc):
+            pytest.skip("No VAD backend available")
+        raise
+
+    assert config.turn_taking.endpoint_detector is None
+
+
+@pytest.mark.asyncio
+async def test_telephony_helpers_are_managed_by_session_lifecycle():
+    config = EasyCatConfig(
+        openai_api_key="test-key",
+        telephony=TelephonyConfig(enable_dtmf_aggregator=True),
+    )
+    config.smart_turn.enabled = False
+
+    try:
+        session = create_session(config)
+    except RuntimeError as exc:
+        if "No VAD backend available" in str(exc):
+            pytest.skip("No VAD backend available")
+        raise
+    bus = session.event_bus
+    aggregated: list[DTMFAggregated] = []
+    bus.subscribe(DTMFAggregated, lambda e: aggregated.append(e))
+
+    await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "1"}}, bus)
+    await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "#"}}, bus)
+    assert aggregated
+
+    await session.shutdown()
+
+    aggregated.clear()
+    await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "1"}}, bus)
+    await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "#"}}, bus)
+    assert not aggregated
