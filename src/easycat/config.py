@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from easycat.agent_runner import AgentRunner, AgentRunnerConfig
-from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.events import EventBus
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.session import Session, SessionConfig
+from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
@@ -58,6 +58,24 @@ class TelephonyConfig:
 TransportConfig = LocalTransportConfig | WebSocketTransportConfig | TwilioTransportConfig
 STTConfig = OpenAISTTConfig | DeepgramSTTConfig | ElevenLabsSTTConfig
 TTSConfig = OpenAITTSConfig | DeepgramTTSConfig | ElevenLabsTTSConfig
+
+_STT_PROVIDERS: dict[type[STTConfig], Any] = {
+    OpenAISTTConfig: OpenAISTT,
+    DeepgramSTTConfig: DeepgramSTT,
+    ElevenLabsSTTConfig: ElevenLabsSTT,
+}
+
+_TTS_PROVIDERS: dict[type[TTSConfig], Any] = {
+    OpenAITTSConfig: OpenAITTS,
+    DeepgramTTSConfig: DeepgramTTS,
+    ElevenLabsTTSConfig: ElevenLabsTTS,
+}
+
+_TRANSPORT_PROVIDERS: dict[type[TransportConfig], Any] = {
+    LocalTransportConfig: LocalTransport,
+    WebSocketTransportConfig: WebSocketTransport,
+    TwilioTransportConfig: TwilioTransport,
+}
 
 
 @dataclass
@@ -127,9 +145,11 @@ def create_session(config: EasyCatConfig) -> Session:
     turn_config = config.turn_taking
     smart_turn = create_smart_turn(config.smart_turn)
     if smart_turn is not None:
-        turn_config.endpoint_detector = smart_turn
+        turn_config = replace(turn_config, endpoint_detector=smart_turn)
 
-    session = Session(
+    telephony_helpers = _create_telephony_helpers(event_bus, config.telephony)
+
+    return Session(
         SessionConfig(
             stt=stt,
             tts=tts,
@@ -142,49 +162,62 @@ def create_session(config: EasyCatConfig) -> Session:
             timeout_config=config.timeouts,
             metrics=metrics,
             tracer=tracer,
+            telephony_helpers=telephony_helpers,
         )
     )
 
-    if config.telephony:
-        _attach_telephony_helpers(session, event_bus, config.telephony)
-
-    return session
-
 
 def _create_stt_provider(config: STTConfig, event_bus: EventBus) -> Any:
-    if isinstance(config, OpenAISTTConfig):
-        return OpenAISTT(config)
-    if isinstance(config, DeepgramSTTConfig):
-        if config.event_bus is None:
-            config.event_bus = event_bus
-        return DeepgramSTT(config)
-    if isinstance(config, ElevenLabsSTTConfig):
-        if config.event_bus is None:
-            config.event_bus = event_bus
-        return ElevenLabsSTT(config)
-    raise ValueError("Unsupported STT configuration type.")
+    provider_cls = _STT_PROVIDERS.get(type(config))
+    if provider_cls is None:
+        raise ValueError("Unsupported STT configuration type.")
+
+    provider_config = config
+    if isinstance(config, (DeepgramSTTConfig, ElevenLabsSTTConfig)) and config.event_bus is None:
+        provider_config = replace(config, event_bus=event_bus)
+
+    return provider_cls(provider_config)
 
 
 def _create_tts_provider(config: TTSConfig, event_bus: EventBus) -> Any:
-    if isinstance(config, OpenAITTSConfig):
-        return OpenAITTS(config)
-    if isinstance(config, DeepgramTTSConfig):
-        if config.event_bus is None:
-            config.event_bus = event_bus
-        return DeepgramTTS(config)
-    if isinstance(config, ElevenLabsTTSConfig):
-        return ElevenLabsTTS(config)
-    raise ValueError("Unsupported TTS configuration type.")
+    provider_cls = _TTS_PROVIDERS.get(type(config))
+    if provider_cls is None:
+        raise ValueError("Unsupported TTS configuration type.")
+
+    provider_config = config
+    if isinstance(config, DeepgramTTSConfig) and config.event_bus is None:
+        provider_config = replace(config, event_bus=event_bus)
+
+    return provider_cls(provider_config)
 
 
 def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
-    if isinstance(config, LocalTransportConfig):
-        return LocalTransport(config)
-    if isinstance(config, WebSocketTransportConfig):
-        return WebSocketTransport(config)
+    provider_cls = _TRANSPORT_PROVIDERS.get(type(config))
+    if provider_cls is None:
+        raise ValueError("Unsupported transport configuration type.")
+
     if isinstance(config, TwilioTransportConfig):
-        return TwilioTransport(config=config, event_bus=event_bus)
-    raise ValueError("Unsupported transport configuration type.")
+        return provider_cls(config=config, event_bus=event_bus)
+
+    return provider_cls(config)
+
+
+def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | None) -> list[Any]:
+    helpers: list[Any] = []
+    if config is None:
+        return helpers
+
+    if config.enable_dtmf_aggregator:
+        aggregator = DTMFAggregator(event_bus, config.dtmf_aggregator)
+        aggregator.start()
+        helpers.append(aggregator)
+
+    if config.enable_voicemail_detector:
+        detector = VoicemailDetector(event_bus, config.voicemail_detector)
+        detector.start()
+        helpers.append(detector)
+
+    return helpers
 
 
 def _create_metrics(config: MetricsConfig | None) -> MetricsCollector | None:
@@ -197,19 +230,3 @@ def _create_tracer(config: TracingConfig | None) -> Tracer | None:
     if not config or not config.enabled:
         return None
     return Tracer(exporter=config.exporter)
-
-
-def _attach_telephony_helpers(
-    session: Session,
-    event_bus: EventBus,
-    config: TelephonyConfig,
-) -> None:
-    if config.enable_dtmf_aggregator:
-        aggregator = DTMFAggregator(event_bus, config.dtmf_aggregator)
-        aggregator.start()
-        session._dtmf_aggregator = aggregator  # type: ignore[attr-defined]
-
-    if config.enable_voicemail_detector:
-        detector = VoicemailDetector(event_bus, config.voicemail_detector)
-        detector.start()
-        session._voicemail_detector = detector  # type: ignore[attr-defined]
