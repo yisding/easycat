@@ -562,7 +562,6 @@ class Session:
                 helper.stop()
             except Exception:
                 logger.debug("Error stopping session helper", exc_info=True)
-        self._telephony_helpers = []
 
     def _schedule_turn_ended(self, event: TurnEnded) -> None:
         """Schedule end-of-turn processing without blocking other handlers."""
