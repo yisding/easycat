@@ -123,18 +123,14 @@ class TestDropNewest:
 
 class TestBlock:
     async def test_block_times_out(self):
-        q = BoundedAudioQueue(
-            max_size=1, policy=DropPolicy.BLOCK, block_timeout=0.05
-        )
+        q = BoundedAudioQueue(max_size=1, policy=DropPolicy.BLOCK, block_timeout=0.05)
         await q.put(_chunk(b"\x01"))
         result = await q.put(_chunk(b"\x02"))  # should block then timeout
         assert result is False
         assert q.drops == 1
 
     async def test_block_succeeds_when_space_freed(self):
-        q = BoundedAudioQueue(
-            max_size=1, policy=DropPolicy.BLOCK, block_timeout=1.0
-        )
+        q = BoundedAudioQueue(max_size=1, policy=DropPolicy.BLOCK, block_timeout=1.0)
         await q.put(_chunk(b"\x01"))
 
         async def free_space():

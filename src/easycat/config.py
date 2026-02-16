@@ -74,7 +74,9 @@ _TTS_PROVIDERS: dict[type[TTSConfig], Any] = {
 _TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
     LocalTransportConfig: lambda config, event_bus: LocalTransport(config),
     WebSocketTransportConfig: lambda config, event_bus: WebSocketTransport(config),
-    TwilioTransportConfig: lambda config, event_bus: TwilioTransport(config=config, event_bus=event_bus),
+    TwilioTransportConfig: lambda config, event_bus: TwilioTransport(
+        config=config, event_bus=event_bus
+    ),
 }
 
 

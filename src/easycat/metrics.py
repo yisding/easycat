@@ -125,9 +125,7 @@ ERRORS = "errors"
 # ── Helpers: decorator and context managers ────────────────────────
 
 
-def timed_metric(
-    metric_name: str, collector: MetricsCollector
-) -> Callable[..., Any]:
+def timed_metric(metric_name: str, collector: MetricsCollector) -> Callable[..., Any]:
     """Decorator that records the execution time of an async function.
 
     Usage::

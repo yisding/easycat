@@ -64,9 +64,9 @@ class _MockStreamContext:
 
 def _make_openai(text: str = "openai result") -> OpenAISTT:
     lines = [
-        f'data: {json.dumps({"delta": text[:4]})}',
-        f'data: {json.dumps({"delta": text[4:]})}',
-        f'data: {json.dumps({"text": text, "is_final": True})}',
+        f"data: {json.dumps({'delta': text[:4]})}",
+        f"data: {json.dumps({'delta': text[4:]})}",
+        f"data: {json.dumps({'text': text, 'is_final': True})}",
         "data: [DONE]",
     ]
     mock_response = _MockStreamingResponse(lines=lines)

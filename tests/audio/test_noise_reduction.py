@@ -69,7 +69,9 @@ def test_float32_to_pcm16_clipping():
 
 def test_rnnoise_fails_without_library():
     """RNNoiseReducer should raise RuntimeError if pyrnnoise is missing."""
-    with patch("easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")):
+    with patch(
+        "easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")
+    ):
         with pytest.raises(RuntimeError, match="RNNoise"):
             RNNoiseReducer()
 
@@ -171,7 +173,9 @@ async def test_passthrough_returns_unchanged():
 
 def test_factory_auto_falls_back_to_passthrough():
     """In auto mode with no SDKs available, factory returns passthrough."""
-    with patch("easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")):
+    with patch(
+        "easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")
+    ):
         reducer = create_noise_reducer(NoiseReducerConfig(backend="auto"))
         assert isinstance(reducer, PassthroughNoiseReducer)
 
@@ -184,7 +188,9 @@ def test_factory_explicit_krisp_fails():
 
 def test_factory_explicit_rnnoise_fails():
     """Explicitly requesting rnnoise without pyrnnoise should raise."""
-    with patch("easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")):
+    with patch(
+        "easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")
+    ):
         with pytest.raises(RuntimeError, match="RNNoise"):
             create_noise_reducer(NoiseReducerConfig(backend="rnnoise"))
 
@@ -192,7 +198,9 @@ def test_factory_explicit_rnnoise_fails():
 @pytest.mark.asyncio
 async def test_factory_auto_passthrough_processes_audio():
     """Factory auto -> passthrough should still process audio."""
-    with patch("easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")):
+    with patch(
+        "easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")
+    ):
         reducer = create_noise_reducer()
         chunk = AudioChunk(data=b"\x00\x00" * 160, format=PCM16_MONO_16K)
         result = await reducer.process(chunk)

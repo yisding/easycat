@@ -238,9 +238,7 @@ class KrispVAD(_VADBase):
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process audio through Krisp VAD and yield events."""
         if self._krisp_audio is None:
-            self._krisp_audio = require_module(
-                "krisp_audio", extra="krisp", purpose="Krisp VAD"
-            )
+            self._krisp_audio = require_module("krisp_audio", extra="krisp", purpose="Krisp VAD")
         speech_prob = self._krisp_audio.vad_process(
             self._session, chunk.data, chunk.format.sample_rate
         )

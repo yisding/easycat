@@ -203,8 +203,7 @@ class Session:
             noops.append("agent")
         if noops:
             raise ValueError(
-                "SessionConfig must provide non-noop implementations for: "
-                + ", ".join(noops)
+                "SessionConfig must provide non-noop implementations for: " + ", ".join(noops)
             )
 
         # Event system
@@ -260,9 +259,7 @@ class Session:
             self.event_bus.subscribe(
                 ReconnectSuccess, lambda e: self._metrics.increment_counter(RECONNECTS)
             )
-            self.event_bus.subscribe(
-                Error, lambda e: self._metrics.increment_counter(ERRORS)
-            )
+            self.event_bus.subscribe(Error, lambda e: self._metrics.increment_counter(ERRORS))
 
         # State
         self._turn_state = TurnState.IDLE
@@ -578,9 +575,7 @@ class Session:
             return
         self._turn_end_time = event.timestamp
         if self._tracer and self._trace_context:
-            self._stt_span = self._tracer.start_span(
-                Tracer.STT, self._trace_context
-            )
+            self._stt_span = self._tracer.start_span(Tracer.STT, self._trace_context)
         await self._handle_end_of_speech()
 
     @staticmethod
@@ -651,9 +646,7 @@ class Session:
                 # Stage 1: Noise reduction (optional)
                 if self._enable_noise_reduction:
                     if self._tracer and self._trace_context:
-                        async with self._tracer.trace(
-                            Tracer.NOISE_REDUCTION, self._trace_context
-                        ):
+                        async with self._tracer.trace(Tracer.NOISE_REDUCTION, self._trace_context):
                             chunk = await self.noise_reducer.process(chunk)
                     else:
                         chunk = await self.noise_reducer.process(chunk)

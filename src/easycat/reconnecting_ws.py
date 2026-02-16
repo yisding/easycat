@@ -130,9 +130,7 @@ class ReconnectingWebSocket:
         await self._emit_reconnect_failure(str(last_error))
         if self._on_give_up:
             await self._invoke_callback(self._on_give_up)
-        raise ConnectionError(
-            f"Failed to connect after {attempt} attempts"
-        ) from last_error
+        raise ConnectionError(f"Failed to connect after {attempt} attempts") from last_error
 
     async def send(self, message: str | bytes) -> None:
         """Send a message over the WebSocket."""
@@ -209,9 +207,7 @@ class ReconnectingWebSocket:
         if self._event_bus is not None:
             from easycat.events import ReconnectFailure
 
-            await self._event_bus.emit(
-                ReconnectFailure(provider=self._provider_name, error=error)
-            )
+            await self._event_bus.emit(ReconnectFailure(provider=self._provider_name, error=error))
 
     async def _invoke_callback(self, callback: ReconnectCallback) -> None:
         """Invoke a sync or async callback."""
