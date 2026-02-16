@@ -100,6 +100,8 @@ class Agent(Protocol):
 class SessionHelper(Protocol):
     """Lifecycle-managed session helper component."""
 
+    def start(self) -> None: ...
+
     def stop(self) -> None: ...
 
 
@@ -335,6 +337,8 @@ class Session:
                 )
                 checker.start()
                 self._health_checkers.append(checker)
+        for helper in self._telephony_helpers:
+            helper.start()
         self._outbound_task = asyncio.create_task(self._drain_outbound_audio())
         self._pipeline_task = asyncio.create_task(self._run_pipeline())
 
