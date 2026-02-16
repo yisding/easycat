@@ -79,7 +79,7 @@ def test_rnnoise_fails_without_library():
 @pytest.mark.asyncio
 async def test_rnnoise_process_mocked():
     """RNNoiseReducer.process with mocked pyrnnoise bindings."""
-    np = pytest.importorskip("numpy")
+    pytest.importorskip("numpy")
 
     mock_rnnoise = MagicMock()
     mock_rnnoise.FRAME_SIZE = 480
