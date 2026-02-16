@@ -71,10 +71,10 @@ _TTS_PROVIDERS: dict[type[TTSConfig], Any] = {
     ElevenLabsTTSConfig: ElevenLabsTTS,
 }
 
-_TRANSPORT_PROVIDERS: dict[type[TransportConfig], Any] = {
-    LocalTransportConfig: LocalTransport,
-    WebSocketTransportConfig: WebSocketTransport,
-    TwilioTransportConfig: TwilioTransport,
+_TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
+    LocalTransportConfig: lambda config, event_bus: LocalTransport(config),
+    WebSocketTransportConfig: lambda config, event_bus: WebSocketTransport(config),
+    TwilioTransportConfig: lambda config, event_bus: TwilioTransport(config=config, event_bus=event_bus),
 }
 
 
@@ -192,14 +192,10 @@ def _create_tts_provider(config: TTSConfig, event_bus: EventBus) -> Any:
 
 
 def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
-    provider_cls = _TRANSPORT_PROVIDERS.get(type(config))
-    if provider_cls is None:
+    factory = _TRANSPORT_FACTORIES.get(type(config))
+    if factory is None:
         raise ValueError("Unsupported transport configuration type.")
-
-    if isinstance(config, TwilioTransportConfig):
-        return provider_cls(config=config, event_bus=event_bus)
-
-    return provider_cls(config)
+    return factory(config, event_bus)
 
 
 def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | None) -> list[Any]:
@@ -208,14 +204,10 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
         return helpers
 
     if config.enable_dtmf_aggregator:
-        aggregator = DTMFAggregator(event_bus, config.dtmf_aggregator)
-        aggregator.start()
-        helpers.append(aggregator)
+        helpers.append(DTMFAggregator(event_bus, config.dtmf_aggregator))
 
     if config.enable_voicemail_detector:
-        detector = VoicemailDetector(event_bus, config.voicemail_detector)
-        detector.start()
-        helpers.append(detector)
+        helpers.append(VoicemailDetector(event_bus, config.voicemail_detector))
 
     return helpers
 
