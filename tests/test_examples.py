@@ -18,6 +18,7 @@ def test_ws_server_example_imports():
 
     assert callable(ws_server.main)
 
+
 def test_pydantic_ai_example_imports():
     import examples.pydantic_ai_voice as pydantic_example
 

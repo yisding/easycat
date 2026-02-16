@@ -106,9 +106,7 @@ class TestSTTTimeout:
             yield "never"
 
         with pytest.raises(STTTimeoutError) as exc_info:
-            await _collect(
-                with_stt_timeout(stalling(), timeout=0.05, provider_name="elevenlabs")
-            )
+            await _collect(with_stt_timeout(stalling(), timeout=0.05, provider_name="elevenlabs"))
 
         assert exc_info.value.provider_name == "elevenlabs"
 
@@ -148,9 +146,7 @@ class TestAgentTimeout:
             return "never"
 
         with pytest.raises(AgentTimeoutError):
-            await with_agent_timeout(
-                hanging(), timeout=0.05, event_bus=event_bus
-            )
+            await with_agent_timeout(hanging(), timeout=0.05, event_bus=event_bus)
 
         assert len(errors) == 1
         assert "agent_timeout" in errors[0].context

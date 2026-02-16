@@ -229,9 +229,7 @@ class TurnManager:
         try:
             if self._endpoint_detector is not None and self._turn_audio:
                 try:
-                    result = await self._endpoint_detector.detect(
-                        list(self._turn_audio)
-                    )
+                    result = await self._endpoint_detector.detect(list(self._turn_audio))
                     logger.debug(
                         "Smart-turn prediction=%d probability=%.3f",
                         result.prediction,
@@ -241,22 +239,17 @@ class TurnManager:
                         if self._state == TurnManagerState.USER_PAUSED:
                             self._state = TurnManagerState.PROCESSING
                             logger.debug(
-                                "Turn: UserPaused -> Processing "
-                                "(smart-turn: complete, p=%.3f)",
+                                "Turn: UserPaused -> Processing (smart-turn: complete, p=%.3f)",
                                 result.probability,
                             )
                             await self._event_bus.emit(TurnEnded())
                         return
                     logger.debug(
-                        "Smart-turn: incomplete (p=%.3f), "
-                        "falling back to silence timeout",
+                        "Smart-turn: incomplete (p=%.3f), falling back to silence timeout",
                         result.probability,
                     )
                 except Exception:
-                    logger.exception(
-                        "Endpoint detection failed, "
-                        "falling back to silence timeout"
-                    )
+                    logger.exception("Endpoint detection failed, falling back to silence timeout")
 
             await asyncio.sleep(self._config.end_of_turn_silence_ms / 1000.0)
 

@@ -120,9 +120,7 @@ class SmartTurnONNX:
             audio_array = audio_array[-max_samples:]
         elif len(audio_array) < max_samples:
             padding = max_samples - len(audio_array)
-            audio_array = np.pad(
-                audio_array, (padding, 0), mode="constant", constant_values=0
-            )
+            audio_array = np.pad(audio_array, (padding, 0), mode="constant", constant_values=0)
 
         inputs = self._feature_extractor(
             audio_array,
@@ -179,8 +177,7 @@ def create_smart_turn(
         return None
     if not config.model_path:
         logger.warning(
-            "SmartTurnConfig.enabled=True but model_path is empty; "
-            "falling back to silence timeout"
+            "SmartTurnConfig.enabled=True but model_path is empty; falling back to silence timeout"
         )
         return None
     return SmartTurnONNX(

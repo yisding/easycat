@@ -301,7 +301,9 @@ async def test_pipeline_noise_reduction():
             return c
 
     nr = TrackingNoiseReducer()
-    config = _full_config(transport=transport, noise_reducer=nr, enable_vad=False, enable_noise_reduction=True)
+    config = _full_config(
+        transport=transport, noise_reducer=nr, enable_vad=False, enable_noise_reduction=True
+    )
     session = Session(config)
 
     await session.start()

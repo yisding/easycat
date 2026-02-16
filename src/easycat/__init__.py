@@ -45,7 +45,13 @@ from easycat.smart_turn import (
 )
 from easycat.session import Session, SessionConfig, TurnState
 from easycat.turn_manager import TurnMode
-from easycat.config import EasyCatConfig, MetricsConfig, TelephonyConfig, TracingConfig, create_session
+from easycat.config import (
+    EasyCatConfig,
+    MetricsConfig,
+    TelephonyConfig,
+    TracingConfig,
+    create_session,
+)
 
 # ── EasyCat-level events ─────────────────────────────────────────
 

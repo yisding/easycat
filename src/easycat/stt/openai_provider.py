@@ -106,19 +106,13 @@ class OpenAISTT(STTBase):
                                 full_text += text
                             else:
                                 full_text = text
-                            self._emit_event(
-                                STTEvent(type=STTEventType.PARTIAL, text=full_text)
-                            )
+                            self._emit_event(STTEvent(type=STTEventType.PARTIAL, text=full_text))
                             if is_final:
-                                self._emit_event(
-                                    STTEvent(type=STTEventType.FINAL, text=full_text)
-                                )
+                                self._emit_event(STTEvent(type=STTEventType.FINAL, text=full_text))
                                 emitted_final = True
                                 break
                         if full_text and not emitted_final:
-                            self._emit_event(
-                                STTEvent(type=STTEventType.FINAL, text=full_text)
-                            )
+                            self._emit_event(STTEvent(type=STTEventType.FINAL, text=full_text))
                             emitted_final = True
                         return full_text
                 finally:

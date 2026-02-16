@@ -195,9 +195,7 @@ def _make_tool_events() -> list[MockStreamEvent]:
     ]
 
 
-def _make_tool_delta_events(
-    chunks: list[str], call_id: str = "call_abc"
-) -> list[MockStreamEvent]:
+def _make_tool_delta_events(chunks: list[str], call_id: str = "call_abc") -> list[MockStreamEvent]:
     """Build raw_response_event stream events for function call argument deltas."""
     return [
         MockStreamEvent(
@@ -286,9 +284,7 @@ async def test_run_returns_response(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_passes_input(monkeypatch):
-    runner = MockRunner(
-        run_results=[MockRunResult("ok", _input_list_for("What?", "ok"))]
-    )
+    runner = MockRunner(run_results=[MockRunResult("ok", _input_list_for("What?", "ok"))])
     monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
 
     agent = MockAgent()

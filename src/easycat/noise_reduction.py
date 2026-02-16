@@ -142,9 +142,7 @@ class KrispNoiseReducer:
     def _initialize(self) -> None:
         """Initialize the Krisp SDK and create a noise cancellation session."""
         try:
-            krisp_audio = require_module(
-                "krisp_audio", purpose="Krisp noise reduction"
-            )
+            krisp_audio = require_module("krisp_audio", purpose="Krisp noise reduction")
         except ImportError as exc:
             raise RuntimeError(str(exc)) from exc
         config = {}
@@ -162,9 +160,7 @@ class KrispNoiseReducer:
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         """Process audio through Krisp noise cancellation."""
         if self._krisp_audio is None:
-            self._krisp_audio = require_module(
-                "krisp_audio", purpose="Krisp noise reduction"
-            )
+            self._krisp_audio = require_module("krisp_audio", purpose="Krisp noise reduction")
         cleaned_data = self._krisp_audio.process_frame(
             self._session, chunk.data, chunk.format.sample_rate
         )

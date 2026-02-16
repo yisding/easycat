@@ -25,9 +25,7 @@ class STTTimeoutError(Exception):
     def __init__(self, provider_name: str, timeout: float) -> None:
         self.provider_name = provider_name
         self.timeout = timeout
-        super().__init__(
-            f"STT provider '{provider_name}' timed out after {timeout:.1f}s"
-        )
+        super().__init__(f"STT provider '{provider_name}' timed out after {timeout:.1f}s")
 
 
 class AgentTimeoutError(Exception):
@@ -44,9 +42,7 @@ class TTSTimeoutError(Exception):
     def __init__(self, provider_name: str, timeout: float) -> None:
         self.provider_name = provider_name
         self.timeout = timeout
-        super().__init__(
-            f"TTS provider '{provider_name}' timed out after {timeout:.1f}s"
-        )
+        super().__init__(f"TTS provider '{provider_name}' timed out after {timeout:.1f}s")
 
 
 # ── Timeout configuration ─────────────────────────────────────────
@@ -94,9 +90,7 @@ async def with_stt_timeout(
             if event_bus is not None:
                 from easycat.events import Error
 
-                await event_bus.emit(
-                    Error(exception=err, context=f"stt_timeout:{provider_name}")
-                )
+                await event_bus.emit(Error(exception=err, context=f"stt_timeout:{provider_name}"))
             raise err
 
 
@@ -142,9 +136,7 @@ async def with_tts_timeout(
             try:
                 wait_time = timeout if not first_received else None
                 if wait_time is not None:
-                    event = await asyncio.wait_for(
-                        events_iter.__anext__(), timeout=wait_time
-                    )
+                    event = await asyncio.wait_for(events_iter.__anext__(), timeout=wait_time)
                 else:
                     event = await events_iter.__anext__()
                 first_received = True
@@ -161,7 +153,5 @@ async def with_tts_timeout(
             if event_bus is not None:
                 from easycat.events import Error
 
-                await event_bus.emit(
-                    Error(exception=err, context=f"tts_timeout:{provider_name}")
-                )
+                await event_bus.emit(Error(exception=err, context=f"tts_timeout:{provider_name}"))
             raise err

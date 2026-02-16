@@ -97,7 +97,8 @@ class BoundedAudioQueue:
             self._drops += 1
             logger.debug(
                 "Queue '%s' dropped oldest chunk (total drops: %d)",
-                self._name, self._drops,
+                self._name,
+                self._drops,
             )
             self._not_empty.set()
             return True

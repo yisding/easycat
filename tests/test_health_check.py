@@ -36,21 +36,15 @@ class TestHealthCheckable:
 
 class TestPeriodicHealthChecker:
     async def test_check_once_healthy(self):
-        checker = PeriodicHealthChecker(
-            HealthyProvider(), provider_name="test"
-        )
+        checker = PeriodicHealthChecker(HealthyProvider(), provider_name="test")
         assert await checker.check_once() is True
 
     async def test_check_once_unhealthy(self):
-        checker = PeriodicHealthChecker(
-            UnhealthyProvider(), provider_name="test"
-        )
+        checker = PeriodicHealthChecker(UnhealthyProvider(), provider_name="test")
         assert await checker.check_once() is False
 
     async def test_check_once_exception(self):
-        checker = PeriodicHealthChecker(
-            FailingProvider(), provider_name="test"
-        )
+        checker = PeriodicHealthChecker(FailingProvider(), provider_name="test")
         assert await checker.check_once() is False
 
     async def test_unhealthy_emits_error_event(self):

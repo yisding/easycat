@@ -486,9 +486,7 @@ async def test_streaming_fallback_yields_done_event():
 
 @pytest.mark.asyncio
 async def test_streaming_fallback_updates_message_history():
-    agent = MockPydanticAgent(
-        stream_chunks=[["First", " response"], ["Second", " response"]]
-    )
+    agent = MockPydanticAgent(stream_chunks=[["First", " response"], ["Second", " response"]])
     adapter = PydanticAIAdapter(agent)
 
     async for _ in adapter.run_streaming("turn 1"):
@@ -930,19 +928,25 @@ async def test_iter_streaming_prefers_iter_over_run_stream():
 @pytest.mark.asyncio
 async def test_iter_streaming_multiple_tool_calls():
     """iter() handles multiple tool calls across separate nodes."""
-    tool_node_1 = MockStreamableNode([
-        FunctionToolCallEvent(MockToolPart("search", "call_1")),
-        MockDeltaEvent(ToolCallPartDelta('{"q": "test"}')),
-        FunctionToolResultEvent(tool_call_id="call_1", result="found 3 results"),
-    ])
-    tool_node_2 = MockStreamableNode([
-        FunctionToolCallEvent(MockToolPart("fetch", "call_2")),
-        MockDeltaEvent(ToolCallPartDelta('{"url": "http://example.com"}')),
-        FunctionToolResultEvent(tool_call_id="call_2", result="page content"),
-    ])
-    text_node = MockStreamableNode([
-        MockDeltaEvent(TextPartDelta("Here's what I found.")),
-    ])
+    tool_node_1 = MockStreamableNode(
+        [
+            FunctionToolCallEvent(MockToolPart("search", "call_1")),
+            MockDeltaEvent(ToolCallPartDelta('{"q": "test"}')),
+            FunctionToolResultEvent(tool_call_id="call_1", result="found 3 results"),
+        ]
+    )
+    tool_node_2 = MockStreamableNode(
+        [
+            FunctionToolCallEvent(MockToolPart("fetch", "call_2")),
+            MockDeltaEvent(ToolCallPartDelta('{"url": "http://example.com"}')),
+            FunctionToolResultEvent(tool_call_id="call_2", result="page content"),
+        ]
+    )
+    text_node = MockStreamableNode(
+        [
+            MockDeltaEvent(TextPartDelta("Here's what I found.")),
+        ]
+    )
 
     agent = MockIterPydanticAgent(
         iter_nodes=[tool_node_1, tool_node_2, text_node],
@@ -1052,11 +1056,13 @@ async def test_iter_streaming_skips_unmapped_events():
 
     agent = MockIterPydanticAgent(
         iter_nodes=[
-            MockStreamableNode([
-                UnknownEvent(),
-                MockDeltaEvent(TextPartDelta("visible")),
-                UnknownEvent(),
-            ]),
+            MockStreamableNode(
+                [
+                    UnknownEvent(),
+                    MockDeltaEvent(TextPartDelta("visible")),
+                    UnknownEvent(),
+                ]
+            ),
         ],
     )
     adapter = PydanticAIAdapter(agent)
@@ -1136,9 +1142,7 @@ async def test_iter_streaming_done_includes_structured_output():
         @asynccontextmanager
         async def iter(self, prompt, *, message_history=None, deps=None, model_settings=None):
             self.iter_calls.append({"prompt": prompt})
-            yield MockIterRunWithOutput(
-                self._iter_nodes, self._iter_messages
-            )
+            yield MockIterRunWithOutput(self._iter_nodes, self._iter_messages)
 
     agent = IterAgentWithOutput(
         iter_nodes=[MockStreamableNode([MockDeltaEvent(TextPartDelta("Hi"))])],
@@ -1167,7 +1171,12 @@ async def test_fallback_streaming_done_includes_structured_output():
     class AgentWithStreamOutput:
         @asynccontextmanager
         async def run_stream(
-            self, prompt, *, message_history=None, deps=None, model_settings=None,
+            self,
+            prompt,
+            *,
+            message_history=None,
+            deps=None,
+            model_settings=None,
         ):
             yield StreamResultWithOutput(
                 chunks=["Hello"],
