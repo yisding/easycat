@@ -11,6 +11,7 @@ import asyncio
 import enum
 import logging
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -95,6 +96,13 @@ class Agent(Protocol):
     async def run(self, text: str) -> str: ...
 
 
+@runtime_checkable
+class SessionHelper(Protocol):
+    """Lifecycle-managed session helper component."""
+
+    def stop(self) -> None: ...
+
+
 # ── Turn state ─────────────────────────────────────────────────────
 
 
@@ -125,6 +133,7 @@ class SessionConfig:
     metrics: MetricsCollector | None = None
     tracer: Tracer | None = None
     outbound_queue: BoundedAudioQueue | None = None
+    telephony_helpers: Sequence[SessionHelper] = ()
 
     # Pipeline flags
     enable_noise_reduction: bool = True
@@ -239,6 +248,7 @@ class Session:
         )
         self._outbound_task: asyncio.Task[None] | None = None
         self._health_checkers: list[PeriodicHealthChecker] = []
+        self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)
 
         # Metrics counters
         if self._metrics:
@@ -352,6 +362,7 @@ class Session:
         for checker in self._health_checkers:
             await checker.stop()
         self._health_checkers = []
+        self._stop_helpers()
         if self._tracer and self._turn_span:
             self._tracer.finish_span(self._turn_span, SpanStatus.CANCELLED)
             self._turn_span = None
@@ -401,6 +412,7 @@ class Session:
         for checker in self._health_checkers:
             await checker.stop()
         self._health_checkers = []
+        self._stop_helpers()
         if self._tracer and self._turn_span:
             self._tracer.finish_span(self._turn_span, SpanStatus.CANCELLED)
             self._turn_span = None
@@ -538,6 +550,15 @@ class Session:
             await self.stt.send_audio(chunk)
 
         self._turn_state = TurnState.LISTENING
+
+    def _stop_helpers(self) -> None:
+        """Stop attached helper components that own event subscriptions/state."""
+        for helper in self._telephony_helpers:
+            try:
+                helper.stop()
+            except Exception:
+                logger.debug("Error stopping session helper", exc_info=True)
+        self._telephony_helpers = []
 
     def _schedule_turn_ended(self, event: TurnEnded) -> None:
         """Schedule end-of-turn processing without blocking other handlers."""
