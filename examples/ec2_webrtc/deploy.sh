@@ -6,17 +6,19 @@
 #   - Ubuntu 22.04+ EC2 instance (t3.medium or larger recommended)
 #   - SSH access
 #   - The following ports open in your Security Group:
-#       TCP 8080   — WebRTC signaling (HTTP)
-#       TCP 8443   — Static file server (HTML client)
+#       TCP 8080   — WebRTC signaling + static files (HTTP)
 #       TCP 3478   — TURN/STUN
 #       UDP 3478   — TURN/STUN
 #       TCP 5349   — TURNS (TLS)
 #       UDP 49152-65535 — TURN relay range
 #
+# NOTE: getUserMedia() requires HTTPS for non-localhost origins.  For
+# production, place the server behind an HTTPS reverse proxy (e.g.
+# nginx or Caddy with a TLS certificate from Let's Encrypt).
+#
 # Usage:
 #   export OPENAI_API_KEY="sk-..."
 #   export TURN_PASSWORD="some-secure-password"
-#   export DOMAIN="webrtc.example.com"  # optional, for TLS
 #   bash deploy.sh
 #
 set -euo pipefail
@@ -97,7 +99,6 @@ sudo tee "$INSTALL_DIR/.env" > /dev/null <<EOF
 OPENAI_API_KEY=$OPENAI_API_KEY
 SIGNALING_HOST=0.0.0.0
 SIGNALING_PORT=8080
-STATIC_PORT=8443
 TURN_SERVER_URL=turn:$EXTERNAL_IP:3478
 TURN_USERNAME=easycat
 TURN_CREDENTIAL=$TURN_PASSWORD
@@ -118,7 +119,7 @@ sudo systemctl start easycat-webrtc
 echo ""
 echo "=== Deployment complete ==="
 echo ""
-echo "  Client URL:      http://$EXTERNAL_IP:8443/webrtc_client.html"
+echo "  Client URL:      http://$EXTERNAL_IP:8080/webrtc_client.html"
 echo "  Signaling URL:   http://$EXTERNAL_IP:8080/offer"
 echo "  TURN server:     turn:$EXTERNAL_IP:3478"
 echo "  TURN user:       easycat"
@@ -129,4 +130,7 @@ echo "  View logs:       sudo journalctl -u easycat-webrtc -f"
 echo "  TURN logs:       sudo tail -f /var/log/turnserver.log"
 echo ""
 echo "Security Group reminder — ensure these ports are open:"
-echo "  TCP 8080, TCP 8443, TCP/UDP 3478, TCP 5349, UDP 49152-65535"
+echo "  TCP 8080, TCP/UDP 3478, TCP 5349, UDP 49152-65535"
+echo ""
+echo "NOTE: For remote access, getUserMedia() requires HTTPS."
+echo "  Place this server behind nginx/Caddy with a TLS certificate."

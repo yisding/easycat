@@ -35,7 +35,7 @@ class TwilioTransportConfig:
 
     host: str = "0.0.0.0"
     port: int = 8766
-    internal_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
+    audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
 
 
@@ -70,7 +70,7 @@ class TwilioTransport(_ServerTransportBase):
             port=self._config.port,
             max_pending_chunks=self._config.max_pending_chunks,
         )
-        self._internal_format = self._config.internal_format
+        self._audio_format = self._config.audio_format
         self._event_bus = event_bus
 
         self._stream_sid: str | None = None
@@ -232,9 +232,9 @@ class TwilioTransport(_ServerTransportBase):
         except Exception:
             logger.warning("Ignoring Twilio media frame with invalid base64 payload")
             return
-        pcm_data = mulaw_to_pcm16(mulaw_data, self._internal_format.sample_rate)
+        pcm_data = mulaw_to_pcm16(mulaw_data, self._audio_format.sample_rate)
 
-        chunk = AudioChunk(data=pcm_data, format=self._internal_format)
+        chunk = AudioChunk(data=pcm_data, format=self._audio_format)
         try:
             self._in_queue.put_nowait(chunk)
         except asyncio.QueueFull:

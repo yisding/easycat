@@ -1,8 +1,8 @@
 """WebRTC voice chat server — deployable on EC2.
 
-Serves a signaling HTTP endpoint and a static HTML client.  A browser
-connects via WebRTC, sending microphone audio and receiving the agent's
-TTS response as a real-time Opus stream.
+Serves a signaling HTTP endpoint and the static HTML client from the same
+server.  A browser connects via WebRTC, sending microphone audio and
+receiving the agent's TTS response as a real-time Opus stream.
 
 Setup (local):
     export OPENAI_API_KEY="..."
@@ -19,21 +19,20 @@ Environment variables:
     TURN_USERNAME         — Optional.  TURN server username.
     TURN_CREDENTIAL       — Optional.  TURN server credential.
     SIGNALING_HOST        — Optional.  Bind address (default 0.0.0.0).
-    SIGNALING_PORT        — Optional.  Signaling HTTP port (default 8080).
-    STATIC_PORT           — Optional.  Static file server port (default 8443).
+    SIGNALING_PORT        — Optional.  Listen port (default 8080).
 
-Then open https://<your-ec2-ip>:8443/webrtc_client.html in your browser.
-(For localhost testing, http://localhost:8443/webrtc_client.html also works.)
+Then open http://localhost:8080/webrtc_client.html in your browser.
+
+NOTE: getUserMedia() requires a secure context.  For localhost this works
+over plain HTTP.  For remote deployments, place the server behind an HTTPS
+reverse proxy (e.g. nginx or Caddy with a TLS certificate).
 """
 
 from __future__ import annotations
 
 import asyncio
-import functools
 import os
 import signal
-import threading
-from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
 from easycat import (
@@ -66,13 +65,6 @@ def _build_ice_servers() -> list[ICEServer]:
     return servers
 
 
-def _run_static_server(port: int) -> None:
-    """Serve static files from the examples directory in a background thread."""
-    handler = functools.partial(SimpleHTTPRequestHandler, directory=_STATIC_DIR)
-    httpd = HTTPServer(("0.0.0.0", port), handler)
-    httpd.serve_forever()
-
-
 async def main() -> None:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -93,7 +85,6 @@ async def main() -> None:
 
     signaling_host = os.getenv("SIGNALING_HOST", "0.0.0.0")
     signaling_port = int(os.getenv("SIGNALING_PORT", "8080"))
-    static_port = int(os.getenv("STATIC_PORT", "8443"))
 
     ice_servers = _build_ice_servers()
 
@@ -103,20 +94,18 @@ async def main() -> None:
             host=signaling_host,
             port=signaling_port,
             ice_servers=ice_servers,
+            static_dir=_STATIC_DIR,
         ),
         agent=adapter,
         wrap_agent=False,
     )
     session = create_session(config)
 
-    # Serve the HTML client on a background thread.
-    http_thread = threading.Thread(target=_run_static_server, args=(static_port,), daemon=True)
-    http_thread.start()
-
-    print(f"Static files: http://localhost:{static_port}/webrtc_client.html")
-    print(f"Signaling:    http://localhost:{signaling_port}/offer")
-    if any(s.urls and "turn:" in (s.urls if isinstance(s.urls, str) else s.urls[0])
-           for s in ice_servers):
+    print(f"Open http://localhost:{signaling_port}/webrtc_client.html in your browser")
+    if any(
+        s.urls and "turn:" in (s.urls if isinstance(s.urls, str) else s.urls[0])
+        for s in ice_servers
+    ):
         print("TURN server:  configured")
     else:
         print("TURN server:  not configured (STUN only — NAT traversal may fail)")
