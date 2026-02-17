@@ -331,3 +331,25 @@ class TestOutboundAudioTrack:
         data3 = bytes(frame3.planes[0])
         expected3 = bytes([0xBB]) * (frame_bytes // 2) + bytes(frame_bytes // 2)
         assert data3 == expected3
+
+    def test_clear_discards_queued_data(self):
+        track = _OutboundAudioTrack()
+        track.enqueue(bytes(100))
+        track.enqueue(bytes(200))
+        track._remainder = bytes(50)
+
+        track.clear()
+
+        assert track._queue.empty()
+        assert track._remainder == b""
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_clear_then_recv_produces_silence(self):
+        track = _OutboundAudioTrack()
+        track.enqueue(bytes([0xFF]) * 960 * 2)
+        track.clear()
+
+        frame = await track._recv()
+        data = bytes(frame.planes[0])
+        assert data == bytes(960 * 2)  # silence
