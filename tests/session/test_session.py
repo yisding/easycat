@@ -27,6 +27,7 @@ from easycat.events import (
 )
 from easycat.session import Session, SessionConfig, TurnState
 from easycat.stubs import NoopNoiseReducer
+from easycat.tracing import InMemoryTraceExporter, SpanStatus, Tracer
 from easycat.turn_manager import TurnManagerConfig
 
 # ── Test helpers ───────────────────────────────────────────────────
@@ -311,6 +312,68 @@ async def test_pipeline_noise_reduction():
     await session.stop()
 
     assert nr.processed
+
+
+@pytest.mark.asyncio
+async def test_pipeline_tracing_emits_noise_reduction_and_vad_spans():
+    chunk = _make_chunk()
+    transport = FakeTransport(chunks=[chunk])
+    exporter = InMemoryTraceExporter()
+    tracer = Tracer(exporter=exporter)
+
+    class TrackingNoiseReducer:
+        async def process(self, c: AudioChunk) -> AudioChunk:
+            return c
+
+    class SilentVAD:
+        async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
+            if False:
+                yield VADStartSpeaking()
+
+        def configure(self, **kwargs: object) -> None:
+            pass
+
+    config = _full_config(
+        transport=transport,
+        tracer=tracer,
+        noise_reducer=TrackingNoiseReducer(),
+        vad=SilentVAD(),
+        enable_noise_reduction=True,
+        enable_vad=True,
+    )
+    session = Session(config)
+    session._spans.begin_turn()
+    session._is_running = True
+
+    await session._run_pipeline()
+
+    span_names = [span.name for span in exporter.spans]
+    assert Tracer.NOISE_REDUCTION in span_names
+    assert Tracer.VAD in span_names
+
+
+@pytest.mark.asyncio
+async def test_run_basic_agent_cancellation_marks_agent_span_cancelled():
+    exporter = InMemoryTraceExporter()
+    tracer = Tracer(exporter=exporter)
+
+    class BlockingAgent:
+        async def run(self, text: str) -> str:
+            await asyncio.Event().wait()
+            return text
+
+    session = Session(_full_config(agent=BlockingAgent(), tracer=tracer))
+    session._spans.begin_turn()
+
+    task = asyncio.create_task(session._run_basic_agent("hello", token=None))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    agent_spans = [span for span in exporter.spans if span.name == Tracer.AGENT]
+    assert len(agent_spans) == 1
+    assert agent_spans[0].status == SpanStatus.CANCELLED
 
 
 @pytest.mark.asyncio
