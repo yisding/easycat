@@ -92,6 +92,7 @@ var workletNode = null;
 var analyser = null;
 var nextPlayTime = 0;
 var levelRAF = 0;
+var manualStop = false;
 
 // ── UI helpers ───────────────────────────────────────────────────
 var startBtn  = document.getElementById("startBtn");
@@ -173,6 +174,7 @@ function playAudio(pcm16Buf) {
 
 // ── Start / Stop ─────────────────────────────────────────────────
 async function start() {
+  manualStop = false;
   startBtn.disabled = true;
   setStatus("Requesting microphone...", "connecting");
 
@@ -248,8 +250,10 @@ async function start() {
     };
 
     ws.onclose = function () {
-      setStatus("Disconnected", "idle");
-      cleanup();
+      if (!manualStop) {
+        setStatus("Disconnected", "idle");
+        cleanup();
+      }
     };
 
     ws.onerror = function () {
@@ -263,6 +267,7 @@ async function start() {
 }
 
 function stop() {
+  manualStop = true;
   if (ws) {
     try { ws.send(JSON.stringify({ type: "stop" })); } catch (_) {}
     ws.close();
