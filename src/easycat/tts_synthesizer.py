@@ -13,10 +13,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from easycat._span_manager import SpanManager
 from easycat.bounded_queue import BoundedAudioQueue
 from easycat.events import EventBus, TTSAudio, TTSEventType, TTSMarkers
 from easycat.metrics import TTS_TTFB, TURN_E2E, MetricsCollector
-from easycat.span_manager import SpanManager
 from easycat.timeouts import TimeoutConfig, with_tts_timeout
 from easycat.tracing import SpanStatus, Tracer
 

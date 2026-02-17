@@ -5,12 +5,12 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from easycat._span_manager import SpanManager
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
 from easycat.events import EventBus, TTSAudio, TTSEvent, TTSEventType, TTSMarkers
 from easycat.metrics import TTS_TTFB, TURN_E2E, InMemoryMetrics
-from easycat.span_manager import SpanManager
 from easycat.tracing import InMemoryTraceExporter, SpanStatus, Tracer
 from easycat.tts_synthesizer import TTSSynthesizer
 
@@ -240,7 +240,7 @@ async def test_synthesize_creates_and_finishes_tts_span():
     synth, _, _ = _make_synth(tracer=tracer)
 
     # Need a turn context for spans to work
-    synth._spans.new_turn()
+    synth._spans.begin_turn()
     await synth.synthesize("hello", None)
 
     tts_spans = exporter.get_spans_by_name("tts")
@@ -254,7 +254,7 @@ async def test_synthesize_marks_span_error_on_exception():
     tracer = Tracer(exporter)
     synth, _, _ = _make_synth(tts=FailingTTS(), tracer=tracer)
 
-    synth._spans.new_turn()
+    synth._spans.begin_turn()
     with pytest.raises(RuntimeError, match="TTS failed"):
         await synth.synthesize("hello", None)
 
