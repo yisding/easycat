@@ -62,6 +62,7 @@ class TTSSynthesizer:
         *,
         turn_end_time: float | None = None,
         is_active: Callable[[], bool] | None = None,
+        record_latency: bool = True,
     ) -> TTSSynthResult:
         """Synthesize text and stream audio to the outbound queue.
 
@@ -75,6 +76,9 @@ class TTSSynthesizer:
             turn_end_time: Monotonic timestamp of turn end (for E2E latency).
             is_active: Optional predicate; iteration stops when it returns False.
                 Typically ``lambda: self._turn_state == TurnState.BOT_SPEAKING``.
+            record_latency: Whether to record TTS_TTFB and TURN_E2E metrics.
+                Set to False for subsequent sentence chunks in a streaming turn
+                to avoid recording multiple latency samples per turn.
 
         Returns:
             TTSSynthResult indicating whether audio was produced.
@@ -109,7 +113,7 @@ class TTSSynthesizer:
                     if not result.audio_produced:
                         result.audio_produced = True
                         result.first_audio_time = time.monotonic()
-                        if self._metrics:
+                        if record_latency and self._metrics:
                             self._metrics.record_latency(
                                 TTS_TTFB,
                                 (result.first_audio_time - tts_start) * 1000,
