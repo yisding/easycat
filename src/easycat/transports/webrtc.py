@@ -242,6 +242,12 @@ class WebRTCTransport(_AudioQueueMixin):
             if static_path.is_dir():
                 app.router.add_static("/", static_path)
                 logger.info("Serving static files from %s", static_path)
+            else:
+                logger.warning(
+                    "Configured static_dir '%s' does not exist or is not a directory; "
+                    "static file serving is disabled",
+                    static_path,
+                )
 
         self._app = app
         self._runner = web.AppRunner(app)
@@ -404,6 +410,7 @@ class WebRTCTransport(_AudioQueueMixin):
             await pc.setLocalDescription(answer)
         except Exception as exc:
             logger.warning("WebRTC offer handling failed: %s", exc)
+            await pc.close()
             self._pc = None
             return web.Response(
                 status=400,
