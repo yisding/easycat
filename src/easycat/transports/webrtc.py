@@ -22,12 +22,13 @@ import fractions
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.extras import require_module
+from easycat.transports._base import _AudioQueueMixin
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,10 @@ class WebRTCTransportConfig:
         Target audio format for the pipeline side (default 16 kHz PCM16 mono).
     max_pending_chunks:
         Maximum number of inbound audio chunks to buffer before dropping.
+    static_dir:
+        Optional directory to serve static files from (e.g. the HTML client).
+        When set, static files are served from the same HTTP server as the
+        signaling endpoint, eliminating the need for a separate file server.
     """
 
     host: str = "0.0.0.0"
@@ -75,6 +80,7 @@ class WebRTCTransportConfig:
     )
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
+    static_dir: str | None = None
 
 
 # ── Outbound audio track ─────────────────────────────────────────
@@ -91,24 +97,16 @@ class _OutboundAudioTrack:
 
     def __init__(self) -> None:
         self._queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=100)
+        self._remainder = b""
         self._pts = 0
         self._start: float | None = None
-        self._ended = False
-        # Lazy imports set by _ensure_imports()
-        self._MediaStreamTrack: type | None = None
-
-    def _ensure_imports(self) -> None:
-        if self._MediaStreamTrack is not None:
-            return
-        aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
-        self._MediaStreamTrack = aiortc.MediaStreamTrack
+        # Cache the av.AudioFrame class to avoid per-frame import overhead.
+        self._AudioFrame: type | None = None
 
     def create_track(self) -> Any:
         """Return an aiortc MediaStreamTrack wrapping this source."""
-        self._ensure_imports()
         transport_src = self
-
-        import aiortc  # noqa: F811
+        aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
 
         class _Track(aiortc.MediaStreamTrack):
             kind = "audio"
@@ -127,8 +125,9 @@ class _OutboundAudioTrack:
 
     async def _recv(self) -> Any:
         """Produce the next 20 ms audio frame for aiortc."""
-        av = require_module("av", extra="webrtc", purpose="WebRTC audio frames")
-        AudioFrame = av.AudioFrame
+        if self._AudioFrame is None:
+            av = require_module("av", extra="webrtc", purpose="WebRTC audio frames")
+            self._AudioFrame = av.AudioFrame
 
         if self._start is None:
             self._start = time.time()
@@ -141,8 +140,11 @@ class _OutboundAudioTrack:
 
         frame_bytes = _FRAME_SAMPLES * 2  # 16-bit mono
 
-        # Drain as much as possible into one frame.
-        buf = bytearray()
+        # Start with any leftover data from the previous frame to preserve
+        # audio ordering (instead of putting remainders back on the queue).
+        buf = bytearray(self._remainder)
+        self._remainder = b""
+
         while len(buf) < frame_bytes:
             try:
                 chunk = self._queue.get_nowait()
@@ -155,15 +157,9 @@ class _OutboundAudioTrack:
             buf.extend(bytes(frame_bytes - len(buf)))
 
         pcm_data = bytes(buf[:frame_bytes])
-        # Keep remainder for next frame.
-        remainder = bytes(buf[frame_bytes:])
-        if remainder:
-            try:
-                self._queue.put_nowait(remainder)
-            except asyncio.QueueFull:
-                pass
+        self._remainder = bytes(buf[frame_bytes:])
 
-        frame = AudioFrame(format="s16", layout="mono", samples=_FRAME_SAMPLES)
+        frame = self._AudioFrame(format="s16", layout="mono", samples=_FRAME_SAMPLES)
         frame.sample_rate = _WEBRTC_SAMPLE_RATE
         frame.pts = self._pts
         frame.time_base = fractions.Fraction(1, _WEBRTC_SAMPLE_RATE)
@@ -173,13 +169,13 @@ class _OutboundAudioTrack:
         return frame
 
     def stop(self) -> None:
-        self._ended = True
+        """Signal that no more data will be enqueued."""
 
 
 # ── WebRTC Transport ─────────────────────────────────────────────
 
 
-class WebRTCTransport:
+class WebRTCTransport(_AudioQueueMixin):
     """Transport that exchanges audio over a WebRTC peer connection.
 
     Implements the ``Transport`` protocol from :mod:`easycat.providers`.
@@ -194,6 +190,10 @@ class WebRTCTransport:
     ``{"sdp": "...", "type": "answer"}``.  ICE candidates are gathered
     in-band (full ICE) before the answer is returned.
 
+    **GET /config** — Returns the ICE server configuration as JSON so
+    browser clients can configure their ``RTCPeerConnection`` with the
+    same STUN/TURN servers.
+
     **GET /health** — Returns ``{"status": "ok"}``.
     """
 
@@ -201,17 +201,12 @@ class WebRTCTransport:
 
     def __init__(self, config: WebRTCTransportConfig | None = None) -> None:
         self._config = config or WebRTCTransportConfig()
-        self._connected = False
+        self._init_audio_queue(self._config.max_pending_chunks)
 
         # Peer connection state.
         self._pc: Any | None = None
         self._outbound: _OutboundAudioTrack = _OutboundAudioTrack()
         self._outbound_track: Any | None = None
-
-        # Inbound audio queue (filled by the track consumer task).
-        self._in_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
-            maxsize=self._config.max_pending_chunks,
-        )
 
         # HTTP signaling server (aiohttp).
         self._app: Any | None = None
@@ -233,12 +228,26 @@ class WebRTCTransport:
         aiohttp_web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
         web = aiohttp_web
 
-        self._in_queue = asyncio.Queue(maxsize=self._config.max_pending_chunks)
+        self._reset_audio_queue()
 
         app = web.Application()
         app.router.add_post("/offer", self._handle_offer)
+        app.router.add_get("/config", self._handle_config)
         app.router.add_get("/health", self._handle_health)
         app.router.add_options("/offer", self._handle_cors_preflight)
+
+        # Serve static files if a directory was configured.
+        if self._config.static_dir is not None:
+            static_path = Path(self._config.static_dir)
+            if static_path.is_dir():
+                app.router.add_static("/", static_path)
+                logger.info("Serving static files from %s", static_path)
+            else:
+                logger.warning(
+                    "Configured static_dir '%s' does not exist or is not a directory; "
+                    "static file serving is disabled",
+                    static_path,
+                )
 
         self._app = app
         self._runner = web.AppRunner(app)
@@ -283,22 +292,9 @@ class WebRTCTransport:
             self._runner = None
         self._app = None
 
-        # Signal end of audio.
-        try:
-            self._in_queue.put_nowait(None)
-        except asyncio.QueueFull:
-            logger.debug("Input queue full when enqueueing sentinel; ignoring")
-
+        self._enqueue_sentinel()
         self._connected = False
         self._client_connected.clear()
-
-    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
-        """Yield audio chunks received from the remote WebRTC peer."""
-        while self._connected or not self._in_queue.empty():
-            chunk = await self._in_queue.get()
-            if chunk is None:
-                break
-            yield chunk
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         """Send an audio chunk to the remote WebRTC peer."""
@@ -330,7 +326,7 @@ class WebRTCTransport:
         # CORS headers for cross-origin requests.
         cors_headers = {
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
         }
 
@@ -368,55 +364,88 @@ class WebRTCTransport:
             ice_servers.append(RTCIceServer(**kwargs))
 
         rtc_config = RTCConfiguration(iceServers=ice_servers)
-        pc = RTCPeerConnection(rtc_config)
-        self._pc = pc
 
-        # Reset outbound track for the new connection.
-        self._outbound = _OutboundAudioTrack()
-        self._outbound_track = self._outbound.create_track()
-        pc.addTrack(self._outbound_track)
+        try:
+            pc = RTCPeerConnection(rtc_config)
+            self._pc = pc
 
-        # Listen for the remote audio track.
-        @pc.on("track")
-        def on_track(track: Any) -> None:
-            if track.kind == "audio":
-                logger.info("WebRTC remote audio track received")
-                self._consume_task = asyncio.ensure_future(self._consume_audio(track))
+            # Reset outbound track for the new connection.
+            self._outbound = _OutboundAudioTrack()
+            self._outbound_track = self._outbound.create_track()
+            pc.addTrack(self._outbound_track)
 
-                @track.on("ended")
-                async def on_ended() -> None:
-                    logger.info("WebRTC remote audio track ended")
+            # Listen for the remote audio track.
+            @pc.on("track")
+            def on_track(track: Any) -> None:
+                if track.kind == "audio":
+                    logger.info("WebRTC remote audio track received")
+                    self._consume_task = asyncio.ensure_future(self._consume_audio(track))
+
+                    @track.on("ended")
+                    async def on_ended() -> None:
+                        logger.info("WebRTC remote audio track ended")
+                        try:
+                            self._in_queue.put_nowait(None)
+                        except asyncio.QueueFull:
+                            pass
+
+            @pc.on("connectionstatechange")
+            async def on_connectionstatechange() -> None:
+                state = pc.connectionState
+                logger.info("WebRTC connection state: %s", state)
+                if state == "connected":
+                    self._client_connected.set()
+                elif state in ("disconnected", "failed", "closed"):
+                    self._client_connected.clear()
                     try:
                         self._in_queue.put_nowait(None)
                     except asyncio.QueueFull:
                         pass
 
-        @pc.on("connectionstatechange")
-        async def on_connectionstatechange() -> None:
-            state = pc.connectionState
-            logger.info("WebRTC connection state: %s", state)
-            if state == "connected":
-                self._client_connected.set()
-            elif state in ("disconnected", "failed", "closed"):
-                self._client_connected.clear()
-                try:
-                    self._in_queue.put_nowait(None)
-                except asyncio.QueueFull:
-                    pass
+            # Set remote offer and create answer.
+            offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+            await pc.setRemoteDescription(offer)
 
-        # Set remote offer and create answer.
-        offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
-        await pc.setRemoteDescription(offer)
-
-        answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
+            answer = await pc.createAnswer()
+            await pc.setLocalDescription(answer)
+        except Exception as exc:
+            logger.warning("WebRTC offer handling failed: %s", exc)
+            await pc.close()
+            self._pc = None
+            return web.Response(
+                status=400,
+                text=json.dumps({"error": f"SDP negotiation failed: {exc}"}),
+                content_type="application/json",
+                headers=cors_headers,
+            )
 
         return web.Response(
             content_type="application/json",
-            text=json.dumps(
-                {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
-            ),
+            text=json.dumps({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}),
             headers=cors_headers,
+        )
+
+    async def _handle_config(self, request: Any) -> Any:
+        """Return ICE server configuration for browser clients."""
+        import aiohttp.web as web
+
+        ice_servers = []
+        for srv in self._config.ice_servers:
+            entry: dict[str, Any] = {
+                "urls": srv.urls if isinstance(srv.urls, list) else [srv.urls],
+            }
+            if srv.username:
+                entry["username"] = srv.username
+            if srv.credential:
+                entry["credential"] = srv.credential
+            ice_servers.append(entry)
+
+        return web.Response(
+            content_type="application/json",
+            text=json.dumps({"iceServers": ice_servers}),
+            headers={
+                "Access-Control-Allow-Origin": "*",
+            },
         )
 
     async def _handle_health(self, request: Any) -> Any:
@@ -433,7 +462,7 @@ class WebRTCTransport:
         return web.Response(
             headers={
                 "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type",
             }
         )
@@ -442,7 +471,7 @@ class WebRTCTransport:
 
     async def _consume_audio(self, track: Any) -> None:
         """Read audio frames from the remote track and enqueue as AudioChunk."""
-        from easycat.audio_utils import resample
+        from easycat.audio_utils import resample, to_mono
 
         target_rate = self._config.audio_format.sample_rate
         target_format = self._config.audio_format
@@ -461,8 +490,6 @@ class WebRTCTransport:
 
                 # Downmix to mono if needed.
                 if channels > 1:
-                    from easycat.audio_utils import to_mono
-
                     raw = to_mono(raw, channels)
 
                 # Resample to pipeline target rate.
@@ -483,10 +510,6 @@ class WebRTCTransport:
                 logger.warning("WebRTC audio consume error: %s", exc)
 
     # ── Properties ────────────────────────────────────────────────
-
-    @property
-    def is_connected(self) -> bool:
-        return self._connected
 
     @property
     def has_client(self) -> bool:

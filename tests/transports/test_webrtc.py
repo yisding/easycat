@@ -4,9 +4,9 @@ Tests cover:
   - WebRTCTransportConfig defaults and ICE server configuration
   - Transport protocol conformance (has required methods)
   - Connect/disconnect lifecycle
-  - Signaling HTTP endpoints (health, offer)
+  - Signaling HTTP endpoints (health, config, offer)
   - Inbound/outbound audio flow (with mocked aiortc)
-  - Outbound audio track frame generation
+  - Outbound audio track frame generation and remainder handling
 """
 
 from __future__ import annotations
@@ -55,6 +55,7 @@ class TestWebRTCTransportConfig:
         assert config.port == 8080
         assert config.audio_format == PCM16_MONO_16K
         assert config.max_pending_chunks == 200
+        assert config.static_dir is None
         assert len(config.ice_servers) == 1
         assert "stun:" in config.ice_servers[0].urls
 
@@ -180,6 +181,36 @@ class TestWebRTCTransportLifecycle:
         await transport.disconnect()
 
     @pytest.mark.asyncio
+    async def test_config_endpoint(self):
+        import aiohttp
+
+        port = _find_free_port()
+        servers = [
+            ICEServer(urls="stun:stun.example.com:3478"),
+            ICEServer(
+                urls=["turn:turn.example.com:3478"],
+                username="user",
+                credential="pass",
+            ),
+        ]
+        config = WebRTCTransportConfig(host="127.0.0.1", port=port, ice_servers=servers)
+        transport = WebRTCTransport(config)
+        await transport.connect()
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/config") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert "iceServers" in data
+                assert len(data["iceServers"]) == 2
+                # TURN server should include credentials.
+                turn = data["iceServers"][1]
+                assert turn["username"] == "user"
+                assert turn["credential"] == "pass"
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
     async def test_cors_preflight(self):
         import aiohttp
 
@@ -270,3 +301,33 @@ class TestOutboundAudioTrack:
         frame = await track._recv()
         actual = bytes(frame.planes[0])
         assert actual == test_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_recv_preserves_audio_order_with_remainder(self):
+        """Verify that audio chunks larger than one frame don't reorder."""
+        track = _OutboundAudioTrack()
+        frame_bytes = 960 * 2  # one 20ms frame at 48kHz mono s16
+
+        # Create chunk A (1.5 frames) and chunk B (1 frame).
+        chunk_a = bytes([0xAA]) * (frame_bytes + frame_bytes // 2)
+        chunk_b = bytes([0xBB]) * frame_bytes
+        track.enqueue(chunk_a)
+        track.enqueue(chunk_b)
+
+        # Frame 1: first frame of A.
+        frame1 = await track._recv()
+        data1 = bytes(frame1.planes[0])
+        assert data1 == bytes([0xAA]) * frame_bytes
+
+        # Frame 2: remainder of A (half frame) + start of B (half frame).
+        frame2 = await track._recv()
+        data2 = bytes(frame2.planes[0])
+        expected = bytes([0xAA]) * (frame_bytes // 2) + bytes([0xBB]) * (frame_bytes // 2)
+        assert data2 == expected
+
+        # Frame 3: remainder of B (half frame) + silence padding.
+        frame3 = await track._recv()
+        data3 = bytes(frame3.planes[0])
+        expected3 = bytes([0xBB]) * (frame_bytes // 2) + bytes(frame_bytes // 2)
+        assert data3 == expected3
