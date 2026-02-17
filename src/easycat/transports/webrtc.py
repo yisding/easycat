@@ -36,6 +36,12 @@ _WEBRTC_SAMPLE_RATE = 48000  # Opus standard
 _FRAME_DURATION_MS = 20
 _FRAME_SAMPLES = (_WEBRTC_SAMPLE_RATE * _FRAME_DURATION_MS) // 1000  # 960
 
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+}
+
 
 # ── Configuration ────────────────────────────────────────────────
 
@@ -168,8 +174,21 @@ class _OutboundAudioTrack:
         self._pts += _FRAME_SAMPLES
         return frame
 
+    def clear(self) -> None:
+        """Discard all queued audio data (used for barge-in / interruption)."""
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        self._remainder = b""
+
     def stop(self) -> None:
-        """Signal that no more data will be enqueued."""
+        """Signal that no more data will be enqueued.
+
+        No-op: the track is discarded along with the peer connection on
+        disconnect, so there is nothing to clean up here.
+        """
 
 
 # ── WebRTC Transport ─────────────────────────────────────────────
@@ -217,6 +236,26 @@ class WebRTCTransport(_AudioQueueMixin):
         self._consume_task: asyncio.Task[None] | None = None
 
         self._client_connected = asyncio.Event()
+
+    # ── Helpers ─────────────────────────────────────────────────
+
+    def _ice_servers_as_dicts(self) -> list[dict[str, Any]]:
+        """Serialize configured ICE servers to plain dicts.
+
+        Used by both the ``/offer`` handler (to build ``RTCIceServer``
+        objects) and ``/config`` (to return JSON to the browser).
+        """
+        result: list[dict[str, Any]] = []
+        for srv in self._config.ice_servers:
+            entry: dict[str, Any] = {
+                "urls": srv.urls if isinstance(srv.urls, list) else [srv.urls],
+            }
+            if srv.username:
+                entry["username"] = srv.username
+            if srv.credential:
+                entry["credential"] = srv.credential
+            result.append(entry)
+        return result
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -311,6 +350,10 @@ class WebRTCTransport(_AudioQueueMixin):
 
         self._outbound.enqueue(pcm_data)
 
+    async def clear_audio(self) -> None:
+        """Discard queued outbound audio (useful during barge-in)."""
+        self._outbound.clear()
+
     # ── Signaling handlers ────────────────────────────────────────
 
     async def _handle_offer(self, request: Any) -> Any:
@@ -323,13 +366,6 @@ class WebRTCTransport(_AudioQueueMixin):
         RTCConfiguration = aiortc.RTCConfiguration
         RTCIceServer = aiortc.RTCIceServer
 
-        # CORS headers for cross-origin requests.
-        cors_headers = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-        }
-
         try:
             params = await request.json()
         except Exception:
@@ -337,7 +373,7 @@ class WebRTCTransport(_AudioQueueMixin):
                 status=400,
                 text=json.dumps({"error": "Invalid JSON"}),
                 content_type="application/json",
-                headers=cors_headers,
+                headers=_CORS_HEADERS,
             )
 
         # Close any existing peer connection.
@@ -352,19 +388,11 @@ class WebRTCTransport(_AudioQueueMixin):
             await self._pc.close()
             self._pc = None
 
-        # Build ICE configuration.
-        ice_servers = []
-        for srv in self._config.ice_servers:
-            urls = srv.urls if isinstance(srv.urls, list) else [srv.urls]
-            kwargs: dict[str, Any] = {"urls": urls}
-            if srv.username:
-                kwargs["username"] = srv.username
-            if srv.credential:
-                kwargs["credential"] = srv.credential
-            ice_servers.append(RTCIceServer(**kwargs))
-
+        # Build ICE configuration from the shared serializer.
+        ice_servers = [RTCIceServer(**entry) for entry in self._ice_servers_as_dicts()]
         rtc_config = RTCConfiguration(iceServers=ice_servers)
 
+        pc = None
         try:
             pc = RTCPeerConnection(rtc_config)
             self._pc = pc
@@ -410,42 +438,30 @@ class WebRTCTransport(_AudioQueueMixin):
             await pc.setLocalDescription(answer)
         except Exception as exc:
             logger.warning("WebRTC offer handling failed: %s", exc)
-            await pc.close()
+            if pc is not None:
+                await pc.close()
             self._pc = None
             return web.Response(
                 status=400,
                 text=json.dumps({"error": f"SDP negotiation failed: {exc}"}),
                 content_type="application/json",
-                headers=cors_headers,
+                headers=_CORS_HEADERS,
             )
 
         return web.Response(
             content_type="application/json",
             text=json.dumps({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}),
-            headers=cors_headers,
+            headers=_CORS_HEADERS,
         )
 
     async def _handle_config(self, request: Any) -> Any:
         """Return ICE server configuration for browser clients."""
         import aiohttp.web as web
 
-        ice_servers = []
-        for srv in self._config.ice_servers:
-            entry: dict[str, Any] = {
-                "urls": srv.urls if isinstance(srv.urls, list) else [srv.urls],
-            }
-            if srv.username:
-                entry["username"] = srv.username
-            if srv.credential:
-                entry["credential"] = srv.credential
-            ice_servers.append(entry)
-
         return web.Response(
             content_type="application/json",
-            text=json.dumps({"iceServers": ice_servers}),
-            headers={
-                "Access-Control-Allow-Origin": "*",
-            },
+            text=json.dumps({"iceServers": self._ice_servers_as_dicts()}),
+            headers=_CORS_HEADERS,
         )
 
     async def _handle_health(self, request: Any) -> Any:
@@ -459,13 +475,7 @@ class WebRTCTransport(_AudioQueueMixin):
     async def _handle_cors_preflight(self, request: Any) -> Any:
         import aiohttp.web as web
 
-        return web.Response(
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            }
-        )
+        return web.Response(headers=_CORS_HEADERS)
 
     # ── Audio track consumer ──────────────────────────────────────
 
