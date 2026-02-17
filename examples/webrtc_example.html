@@ -73,9 +73,11 @@
 
 <script>
 // ── Configuration ────────────────────────────────────────────────
+// We request 16 kHz from the browser, but it may silently give us
+// 48 kHz instead.  We read the actual rate and tell the server so
+// it can resample server-side when needed.
+var DESIRED_RATE = 16000;
 // The server always sends 16 kHz PCM16 audio back to the client.
-// For capture, we let the browser choose its native rate and tell
-// the server what it actually is so it can resample server-side.
 var SERVER_PLAYBACK_RATE = 16000;
 var WS_URL = "ws://" + location.hostname + ":8765";
 
@@ -173,9 +175,10 @@ async function start() {
   setStatus("Requesting microphone...", "connecting");
 
   try {
-    // 1. Get microphone access
+    // 1. Get microphone access (request 16 kHz, but the browser may ignore it)
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
+        sampleRate: DESIRED_RATE,
         channelCount: 1,
         echoCancellation: true,
         noiseSuppression: true,
@@ -183,9 +186,9 @@ async function start() {
       },
     });
 
-    // 2. Create mic AudioContext — let the browser pick its native rate.
-    //    Common values: 48 000 Hz (Chrome/Firefox) or 44 100 Hz (Safari).
-    micCtx = new AudioContext();
+    // 2. Create mic AudioContext at 16 kHz.  If the browser honours this
+    //    the server needs no resampling; if not, the server handles it.
+    micCtx = new AudioContext({ sampleRate: DESIRED_RATE });
     var captureRate = micCtx.sampleRate;
     console.log("Mic AudioContext sample rate:", captureRate, "Hz");
 
