@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyCat Voice Chat</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: #f5f5f5;
+    }
+    .container {
+      text-align: center;
+      padding: 40px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      max-width: 420px;
+      width: 90%;
+    }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    .subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
+    #status {
+      margin: 16px 0;
+      padding: 6px 16px;
+      border-radius: 20px;
+      display: inline-block;
+      font-size: 14px;
+    }
+    .status-idle       { background: #e0e0e0; color: #555; }
+    .status-connecting { background: #fff3cd; color: #856404; }
+    .status-connected  { background: #d4edda; color: #155724; }
+    .status-error      { background: #f8d7da; color: #721c24; }
+    .level-bar {
+      width: 100%;
+      height: 4px;
+      background: #e0e0e0;
+      border-radius: 2px;
+      margin: 16px 0;
+      overflow: hidden;
+    }
+    .level-fill { height: 100%; background: #4CAF50; width: 0%; transition: width 80ms; }
+    button {
+      padding: 12px 36px;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 6px;
+      transition: opacity 0.2s;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #startBtn { background: #4CAF50; color: white; }
+    #stopBtn  { background: #f44336; color: white; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>EasyCat Voice Chat</h1>
+    <p class="subtitle">Talk to an AI voice assistant</p>
+    <div><span id="status" class="status-idle">Ready</span></div>
+    <div class="level-bar"><div class="level-fill" id="levelFill"></div></div>
+    <div>
+      <button id="startBtn">Start</button>
+      <button id="stopBtn" disabled>Stop</button>
+    </div>
+  </div>
+
+<script>
+// ── Configuration ────────────────────────────────────────────────
+const SAMPLE_RATE = 16000;
+const WS_URL = "ws://" + location.hostname + ":8765";
+
+// ── State ────────────────────────────────────────────────────────
+let ws = null;
+let micCtx = null;
+let playCtx = null;
+let mediaStream = null;
+let workletNode = null;
+let analyser = null;
+let nextPlayTime = 0;
+let levelRAF = 0;
+
+// ── UI helpers ───────────────────────────────────────────────────
+const startBtn  = document.getElementById("startBtn");
+const stopBtn   = document.getElementById("stopBtn");
+const statusEl  = document.getElementById("status");
+const levelFill = document.getElementById("levelFill");
+
+function setStatus(text, type) {
+  statusEl.textContent = text;
+  statusEl.className = "status-" + type;
+}
+
+// ── AudioWorklet code (inline via Blob URL) ──────────────────────
+const WORKLET_SRC = `
+class PCMProcessor extends AudioWorkletProcessor {
+  process(inputs) {
+    const ch = inputs[0][0];
+    if (ch) {
+      const pcm = new Int16Array(ch.length);
+      for (let i = 0; i < ch.length; i++) {
+        const s = Math.max(-1, Math.min(1, ch[i]));
+        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      this.port.postMessage(pcm.buffer, [pcm.buffer]);
+    }
+    return true;
+  }
+}
+registerProcessor("pcm-processor", PCMProcessor);
+`;
+
+// ── Mic level meter ──────────────────────────────────────────────
+function startLevelMeter() {
+  if (!analyser) return;
+  const buf = new Uint8Array(analyser.fftSize);
+  function tick() {
+    analyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = (buf[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / buf.length);
+    levelFill.style.width = Math.min(100, rms * 400) + "%";
+    levelRAF = requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function stopLevelMeter() {
+  cancelAnimationFrame(levelRAF);
+  levelFill.style.width = "0%";
+}
+
+// ── Playback ─────────────────────────────────────────────────────
+function playAudio(pcm16Buf) {
+  if (!playCtx) return;
+
+  const int16 = new Int16Array(pcm16Buf);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) {
+    float32[i] = int16[i] / 32768.0;
+  }
+
+  const buffer = playCtx.createBuffer(1, float32.length, SAMPLE_RATE);
+  buffer.getChannelData(0).set(float32);
+
+  const src = playCtx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(playCtx.destination);
+
+  const now = playCtx.currentTime;
+  if (nextPlayTime < now) nextPlayTime = now;
+  src.start(nextPlayTime);
+  nextPlayTime += buffer.duration;
+}
+
+// ── Start / Stop ─────────────────────────────────────────────────
+async function start() {
+  startBtn.disabled = true;
+  setStatus("Requesting microphone...", "connecting");
+
+  try {
+    // 1. Get microphone access
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate: SAMPLE_RATE,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    // 2. Create mic capture AudioContext at 16 kHz
+    micCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+
+    // 3. Load the AudioWorklet processor via Blob URL
+    const blob = new Blob([WORKLET_SRC], { type: "application/javascript" });
+    const url = URL.createObjectURL(blob);
+    await micCtx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+
+    const source = micCtx.createMediaStreamSource(mediaStream);
+    workletNode = new AudioWorkletNode(micCtx, "pcm-processor");
+
+    // 4. Level meter via AnalyserNode
+    analyser = micCtx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    startLevelMeter();
+
+    // 5. Create playback AudioContext
+    playCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    nextPlayTime = 0;
+
+    // 6. Open WebSocket
+    setStatus("Connecting to server...", "connecting");
+    ws = new WebSocket(WS_URL);
+    ws.binaryType = "arraybuffer";
+
+    ws.onopen = function () {
+      // Negotiate audio format
+      ws.send(JSON.stringify({ type: "config", sample_rate: SAMPLE_RATE }));
+
+      // Wire mic → worklet → WebSocket
+      workletNode.port.onmessage = function (e) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(e.data);
+        }
+      };
+      source.connect(workletNode);
+
+      stopBtn.disabled = false;
+      setStatus("Connected — speak!", "connected");
+    };
+
+    ws.onmessage = function (e) {
+      if (e.data instanceof ArrayBuffer) {
+        playAudio(e.data);
+      }
+      // JSON control messages (e.g. {"type":"ready"}) are ignored for now.
+    };
+
+    ws.onclose = function () {
+      setStatus("Disconnected", "idle");
+      cleanup();
+    };
+
+    ws.onerror = function () {
+      setStatus("WebSocket error — is the server running?", "error");
+      cleanup();
+    };
+  } catch (err) {
+    setStatus("Error: " + err.message, "error");
+    cleanup();
+  }
+}
+
+function stop() {
+  if (ws) {
+    try { ws.send(JSON.stringify({ type: "stop" })); } catch (_) {}
+    ws.close();
+  }
+  cleanup();
+  setStatus("Ready", "idle");
+}
+
+function cleanup() {
+  stopLevelMeter();
+  if (mediaStream) { mediaStream.getTracks().forEach(function (t) { t.stop(); }); mediaStream = null; }
+  if (micCtx)  { micCtx.close();  micCtx = null; }
+  if (playCtx) { playCtx.close(); playCtx = null; }
+  ws = null;
+  workletNode = null;
+  analyser = null;
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+}
+
+// ── Button wiring ────────────────────────────────────────────────
+startBtn.addEventListener("click", start);
+stopBtn.addEventListener("click", stop);
+</script>
+</body>
+</html>
