@@ -117,8 +117,9 @@ var levelFill    = document.getElementById("levelFill");
 var connInfo     = document.getElementById("connInfo");
 var signalingUrl = document.getElementById("signalingUrl");
 
-// Default signaling URL: same host, port 8080.
-signalingUrl.value = location.protocol + "//" + location.hostname + ":8080";
+// Default signaling URL: same origin (works when static files are
+// served from the signaling server via the static_dir config option).
+signalingUrl.value = location.origin;
 
 function setStatus(text, type) {
   statusEl.textContent = text;
@@ -153,6 +154,20 @@ function stopLevelMeter() {
   levelFill.style.width = "0%";
   if (micCtx) { micCtx.close(); micCtx = null; }
   analyser = null;
+}
+
+// ── Fetch ICE config from server ─────────────────────────────────
+async function fetchIceConfig(baseUrl) {
+  try {
+    var response = await fetch(baseUrl + "/config");
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch (err) {
+    console.warn("Could not fetch ICE config from server:", err);
+  }
+  // Fallback: no ICE servers (host candidates only).
+  return { iceServers: [] };
 }
 
 // ── WebRTC negotiation ───────────────────────────────────────────
@@ -209,11 +224,12 @@ async function start() {
 
     startLevelMeter(localStream);
 
-    // 2. Create peer connection.
-    var config = { sdpSemantics: "unified-plan" };
-    // We don't set iceServers here — the server controls ICE config
-    // and the answer includes server-reflexive candidates.
-    pc = new RTCPeerConnection(config);
+    var baseUrl = signalingUrl.value.replace(/\/$/, "");
+
+    // 2. Fetch ICE server config from the signaling server so the
+    //    client uses the same STUN/TURN servers as the server side.
+    var iceConfig = await fetchIceConfig(baseUrl);
+    pc = new RTCPeerConnection(iceConfig);
 
     // 3. Add mic track.
     localStream.getTracks().forEach(function(track) {
@@ -249,7 +265,7 @@ async function start() {
 
     // 6. Negotiate with signaling server.
     setStatus("Connecting...", "connecting");
-    await negotiate(signalingUrl.value.replace(/\/$/, ""));
+    await negotiate(baseUrl);
 
   } catch (err) {
     console.error(err);

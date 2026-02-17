@@ -1,8 +1,6 @@
-"""Internal base class for server-backed WebSocket transports.
+"""Internal base classes for transports.
 
-Provides the shared connect/disconnect/receive_audio logic used by
-both :class:`WebSocketTransport` and :class:`TwilioTransport`.
-
+Provides shared infrastructure used by multiple transport implementations.
 Not part of the public API — ``__init__.py`` does not export this module.
 """
 
@@ -20,7 +18,60 @@ from easycat.audio_format import AudioChunk
 logger = logging.getLogger(__name__)
 
 
-class _ServerTransportBase:
+# ── Shared queue / receive_audio logic ────────────────────────────
+
+
+class _AudioQueueMixin:
+    """Mixin that provides the inbound audio queue and ``receive_audio`` iterator.
+
+    Transports that accept audio chunks from an external source can inherit
+    this mixin to get the queue management, sentinel-based shutdown, and
+    ``receive_audio()`` async iterator for free.
+
+    Users must:
+      - Call ``_init_audio_queue(max_pending_chunks)`` during ``__init__``.
+      - Set ``self._connected`` to ``True``/``False`` in ``connect``/``disconnect``.
+      - Call ``_enqueue_sentinel()`` during ``disconnect`` to signal end-of-stream.
+    """
+
+    _connected: bool
+    _in_queue: asyncio.Queue[AudioChunk | None]
+
+    def _init_audio_queue(self, max_pending_chunks: int) -> None:
+        self._max_pending_chunks = max_pending_chunks
+        self._connected = False
+        self._in_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
+            maxsize=max_pending_chunks,
+        )
+
+    def _reset_audio_queue(self) -> None:
+        """Reinitialize the queue to clear any stale sentinels from a previous session."""
+        self._in_queue = asyncio.Queue(maxsize=self._max_pending_chunks)
+
+    def _enqueue_sentinel(self) -> None:
+        """Put ``None`` on the queue to signal end-of-stream."""
+        try:
+            self._in_queue.put_nowait(None)
+        except asyncio.QueueFull:
+            logger.debug("Input queue full when enqueueing sentinel; ignoring")
+
+    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
+        """Yield audio chunks until a ``None`` sentinel is received."""
+        while self._connected or not self._in_queue.empty():
+            chunk = await self._in_queue.get()
+            if chunk is None:
+                break
+            yield chunk
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+
+# ── WebSocket server base ─────────────────────────────────────────
+
+
+class _ServerTransportBase(_AudioQueueMixin):
     """Base for transports that host a ``websockets`` server.
 
     Subclasses must provide:
@@ -34,14 +85,10 @@ class _ServerTransportBase:
     def __init__(self, host: str, port: int, max_pending_chunks: int) -> None:
         self._host = host
         self._port = port
-        self._max_pending_chunks = max_pending_chunks
+        self._init_audio_queue(max_pending_chunks)
 
         self._server: Server | None = None
         self._ws: ServerConnection | None = None
-        self._connected = False
-        self._in_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
-            maxsize=max_pending_chunks,
-        )
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -50,8 +97,7 @@ class _ServerTransportBase:
         if self._connected:
             return
 
-        # Reinitialize queue to clear any stale sentinels from a previous session.
-        self._in_queue = asyncio.Queue(maxsize=self._max_pending_chunks)
+        self._reset_audio_queue()
 
         self._server = await websockets.serve(
             self._handle_connection,
@@ -87,25 +133,5 @@ class _ServerTransportBase:
             await self._server.wait_closed()
             self._server = None
 
-        # Signal end of audio to any pending receive_audio iterators.
-        try:
-            self._in_queue.put_nowait(None)
-        except asyncio.QueueFull:
-            # Sentinel already enqueued or consumers stopped reading; safe to ignore.
-            logger.debug("Input queue full when enqueueing sentinel; ignoring")
-
+        self._enqueue_sentinel()
         self._connected = False
-
-    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
-        """Yield audio chunks received from the WebSocket client."""
-        while self._connected or not self._in_queue.empty():
-            chunk = await self._in_queue.get()
-            if chunk is None:
-                break
-            yield chunk
-
-    # ── Properties ────────────────────────────────────────────────
-
-    @property
-    def is_connected(self) -> bool:
-        return self._connected
