@@ -77,8 +77,10 @@
 // 48 kHz instead.  We read the actual rate and tell the server so
 // it can resample server-side when needed.
 var DESIRED_RATE = 16000;
-// The server always sends 16 kHz PCM16 audio back to the client.
-var SERVER_PLAYBACK_RATE = 16000;
+// The server sends an audio_format message with the TTS native rate
+// (e.g. 24 kHz) before the first audio chunk.  Default to 16 kHz
+// until we hear otherwise.
+var serverPlaybackRate = 16000;
 var WS_URL = "ws://" + location.hostname + ":8765";
 
 // ── State ────────────────────────────────────────────────────────
@@ -154,9 +156,9 @@ function playAudio(pcm16Buf) {
     float32[i] = int16[i] / 32768.0;
   }
 
-  // The buffer is created at SERVER_PLAYBACK_RATE (16 kHz).
-  // The browser will resample to the playback context's native rate.
-  var buffer = playCtx.createBuffer(1, float32.length, SERVER_PLAYBACK_RATE);
+  // The buffer is created at the TTS native rate reported by the server.
+  // The browser will resample to the playback context's output rate.
+  var buffer = playCtx.createBuffer(1, float32.length, serverPlaybackRate);
   buffer.getChannelData(0).set(float32);
 
   var src = playCtx.createBufferSource();
@@ -236,8 +238,13 @@ async function start() {
     ws.onmessage = function (e) {
       if (e.data instanceof ArrayBuffer) {
         playAudio(e.data);
+      } else {
+        var msg = JSON.parse(e.data);
+        if (msg.type === "audio_format" && msg.sample_rate) {
+          serverPlaybackRate = msg.sample_rate;
+          console.log("Server playback rate:", serverPlaybackRate, "Hz");
+        }
       }
-      // JSON control messages (e.g. {"type":"ready"}) are ignored for now.
     };
 
     ws.onclose = function () {
