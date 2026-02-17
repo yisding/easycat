@@ -6,8 +6,9 @@ sends PCM16 frames over WebSocket, and plays back the agent's audio.
 
 The browser may capture at a higher sample rate (typically 48 kHz) than
 the 16 kHz that EasyCat's pipeline expects.  A thin resampling transport
-wrapper converts inbound audio to 16 kHz and normalises outbound audio
-to 16 kHz so the client always receives a consistent format.
+wrapper converts inbound audio to 16 kHz.  Outbound TTS audio is passed
+through at its native rate (e.g. 24 kHz) and the server sends an
+``audio_format`` control message so the client knows the playback rate.
 
 Setup:
     export OPENAI_API_KEY="..."
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import json
 import logging
 import os
 import signal
@@ -50,16 +52,20 @@ _STATIC_DIR = str(Path(__file__).parent)
 
 
 class _ResamplingTransport:
-    """Wraps a Transport and resamples all audio to/from 16 kHz.
+    """Wraps a Transport, resamples inbound audio and forwards TTS at native rate.
 
     Inbound:  client rate (e.g. 48 kHz) → 16 kHz for the EasyCat pipeline.
-    Outbound: TTS rate (e.g. 24 kHz)    → 16 kHz for the browser client.
+    Outbound: passed through at the TTS provider's native rate (e.g. 24 kHz).
+              An ``audio_format`` JSON control message is sent to the client
+              whenever the outbound sample rate changes so it can create
+              playback buffers at the correct rate.
     """
 
     _INTERNAL_RATE = PCM16_MONO_16K.sample_rate  # 16 000
 
     def __init__(self, inner: object) -> None:
         self._inner = inner
+        self._outbound_rate: int | None = None
 
     async def connect(self) -> None:
         await self._inner.connect()  # type: ignore[attr-defined]
@@ -79,8 +85,18 @@ class _ResamplingTransport:
             yield chunk
 
     async def send_audio(self, chunk: AudioChunk) -> None:
-        if chunk.format.sample_rate != self._INTERNAL_RATE:
-            chunk = resample_chunk(chunk, self._INTERNAL_RATE)
+        rate = chunk.format.sample_rate
+        # Notify the client when the outbound sample rate changes so it
+        # can create AudioBuffers at the right rate.
+        if rate != self._outbound_rate:
+            ws = getattr(self._inner, "_ws", None)
+            if ws is not None:
+                try:
+                    await ws.send(json.dumps({"type": "audio_format", "sample_rate": rate}))
+                except Exception:
+                    logger.debug("Could not send audio_format message", exc_info=True)
+            self._outbound_rate = rate
+            logger.info("Outbound audio rate: %d Hz", rate)
         await self._inner.send_audio(chunk)  # type: ignore[attr-defined]
 
 
