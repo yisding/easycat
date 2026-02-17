@@ -37,11 +37,14 @@ from pathlib import Path
 
 from easycat import (
     EasyCatConfig,
+    ICEServer,
     OpenAIAgentsAdapter,
+    WebRTCTransportConfig,
     create_session,
 )
-from easycat.transports.webrtc import ICEServer, WebRTCTransportConfig
 
+# Serves the examples/ directory as static files (including the HTML client).
+# For production, use a dedicated directory containing only the HTML client.
 _STATIC_DIR = str(Path(__file__).parent)
 
 
