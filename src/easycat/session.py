@@ -856,6 +856,7 @@ class Session:
                         is_active=lambda: (
                             self._turn_manager.state == TurnManagerState.BOT_SPEAKING
                         ),
+                        record_latency=self._first_tts_audio_time is None,
                     )
                     if result.first_audio_time is not None and self._first_tts_audio_time is None:
                         self._first_tts_audio_time = result.first_audio_time
