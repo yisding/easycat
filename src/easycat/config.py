@@ -21,6 +21,7 @@ from easycat.timeouts import TimeoutConfig
 from easycat.tracing import TraceExporter, Tracer
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
+from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
@@ -55,7 +56,9 @@ class TelephonyConfig:
     voicemail_detector: VoicemailDetectorConfig = field(default_factory=VoicemailDetectorConfig)
 
 
-TransportConfig = LocalTransportConfig | WebSocketTransportConfig | TwilioTransportConfig
+TransportConfig = (
+    LocalTransportConfig | WebSocketTransportConfig | TwilioTransportConfig | WebRTCTransportConfig
+)
 STTConfig = OpenAISTTConfig | DeepgramSTTConfig | ElevenLabsSTTConfig
 TTSConfig = OpenAITTSConfig | DeepgramTTSConfig | ElevenLabsTTSConfig
 
@@ -77,6 +80,7 @@ _TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
     TwilioTransportConfig: lambda config, event_bus: TwilioTransport(
         config=config, event_bus=event_bus
     ),
+    WebRTCTransportConfig: lambda config, event_bus: WebRTCTransport(config),
 }
 
 
