@@ -609,13 +609,37 @@ class Session:
 
                 # Stage 1: Noise reduction (optional)
                 if self._enable_noise_reduction:
-                    chunk = await self.noise_reducer.process(chunk)
+                    self._spans.start(Tracer.NOISE_REDUCTION)
+                    noise_reduction_status = SpanStatus.OK
+                    try:
+                        chunk = await self.noise_reducer.process(chunk)
+                    except asyncio.CancelledError:
+                        noise_reduction_status = SpanStatus.CANCELLED
+                        raise
+                    except Exception as exc:
+                        self._spans.finish_with_error(Tracer.NOISE_REDUCTION, exc)
+                        raise
+                    finally:
+                        if self._spans.has(Tracer.NOISE_REDUCTION):
+                            self._spans.finish(Tracer.NOISE_REDUCTION, noise_reduction_status)
 
                 # Stage 2: VAD (optional)
                 if self._enable_vad:
-                    async for vad_event in self.vad.process(chunk):
-                        await self.event_bus.emit(vad_event)
-                        await self._turn_manager.on_vad_event(vad_event)
+                    self._spans.start(Tracer.VAD)
+                    vad_status = SpanStatus.OK
+                    try:
+                        async for vad_event in self.vad.process(chunk):
+                            await self.event_bus.emit(vad_event)
+                            await self._turn_manager.on_vad_event(vad_event)
+                    except asyncio.CancelledError:
+                        vad_status = SpanStatus.CANCELLED
+                        raise
+                    except Exception as exc:
+                        self._spans.finish_with_error(Tracer.VAD, exc)
+                        raise
+                    finally:
+                        if self._spans.has(Tracer.VAD):
+                            self._spans.finish(Tracer.VAD, vad_status)
 
                 # TurnManager always sees raw audio frames for pre-roll buffering
                 self._turn_manager.on_audio_frame(chunk)
@@ -748,8 +772,12 @@ class Session:
     async def _run_basic_agent(self, transcript: str, token: CancelToken | None) -> None:
         """Non-streaming agent path: invoke run(), emit events, synthesize TTS."""
         self._spans.start(Tracer.AGENT)
+        agent_status = SpanStatus.OK
         try:
             agent_response = await self._invoke_agent(transcript)
+        except asyncio.CancelledError:
+            agent_status = SpanStatus.CANCELLED
+            raise
         except AgentTimeoutError:
             self._spans.finish(Tracer.AGENT, SpanStatus.ERROR)
             self._spans.finish("turn", SpanStatus.ERROR)
@@ -763,8 +791,8 @@ class Session:
             self._turn_manager.reset()
             return
         finally:
-            # Finish agent span if still open (success case)
-            self._spans.finish(Tracer.AGENT)
+            if self._spans.has(Tracer.AGENT):
+                self._spans.finish(Tracer.AGENT, agent_status)
 
         if token and token.is_cancelled:
             self._spans.finish("turn", SpanStatus.CANCELLED)
