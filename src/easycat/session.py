@@ -757,6 +757,7 @@ class Session:
                 timeout = self._timeout_config.tts_first_byte_timeout
                 tts_span.set_error(TTSTimeoutError("tts", timeout))
                 tts_status = SpanStatus.ERROR
+            raise
         except asyncio.CancelledError:
             pass
         except Exception as exc:
@@ -967,7 +968,7 @@ class Session:
         await self._turn_manager.bot_started_speaking()
         try:
             await self._consume_tts_events(text, token, time.monotonic())
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, TTSTimeoutError):
             pass
 
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
