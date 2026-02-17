@@ -73,24 +73,27 @@
 
 <script>
 // ── Configuration ────────────────────────────────────────────────
-const SAMPLE_RATE = 16000;
-const WS_URL = "ws://" + location.hostname + ":8765";
+// The server always sends 16 kHz PCM16 audio back to the client.
+// For capture, we let the browser choose its native rate and tell
+// the server what it actually is so it can resample server-side.
+var SERVER_PLAYBACK_RATE = 16000;
+var WS_URL = "ws://" + location.hostname + ":8765";
 
 // ── State ────────────────────────────────────────────────────────
-let ws = null;
-let micCtx = null;
-let playCtx = null;
-let mediaStream = null;
-let workletNode = null;
-let analyser = null;
-let nextPlayTime = 0;
-let levelRAF = 0;
+var ws = null;
+var micCtx = null;
+var playCtx = null;
+var mediaStream = null;
+var workletNode = null;
+var analyser = null;
+var nextPlayTime = 0;
+var levelRAF = 0;
 
 // ── UI helpers ───────────────────────────────────────────────────
-const startBtn  = document.getElementById("startBtn");
-const stopBtn   = document.getElementById("stopBtn");
-const statusEl  = document.getElementById("status");
-const levelFill = document.getElementById("levelFill");
+var startBtn  = document.getElementById("startBtn");
+var stopBtn   = document.getElementById("stopBtn");
+var statusEl  = document.getElementById("status");
+var levelFill = document.getElementById("levelFill");
 
 function setStatus(text, type) {
   statusEl.textContent = text;
@@ -98,36 +101,36 @@ function setStatus(text, type) {
 }
 
 // ── AudioWorklet code (inline via Blob URL) ──────────────────────
-const WORKLET_SRC = `
-class PCMProcessor extends AudioWorkletProcessor {
-  process(inputs) {
-    const ch = inputs[0][0];
-    if (ch) {
-      const pcm = new Int16Array(ch.length);
-      for (let i = 0; i < ch.length; i++) {
-        const s = Math.max(-1, Math.min(1, ch[i]));
-        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-      }
-      this.port.postMessage(pcm.buffer, [pcm.buffer]);
-    }
-    return true;
-  }
-}
-registerProcessor("pcm-processor", PCMProcessor);
-`;
+var WORKLET_SRC = [
+  "class PCMProcessor extends AudioWorkletProcessor {",
+  "  process(inputs) {",
+  "    var ch = inputs[0][0];",
+  "    if (ch) {",
+  "      var pcm = new Int16Array(ch.length);",
+  "      for (var i = 0; i < ch.length; i++) {",
+  "        var s = Math.max(-1, Math.min(1, ch[i]));",
+  "        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;",
+  "      }",
+  "      this.port.postMessage(pcm.buffer, [pcm.buffer]);",
+  "    }",
+  "    return true;",
+  "  }",
+  "}",
+  'registerProcessor("pcm-processor", PCMProcessor);',
+].join("\n");
 
 // ── Mic level meter ──────────────────────────────────────────────
 function startLevelMeter() {
   if (!analyser) return;
-  const buf = new Uint8Array(analyser.fftSize);
+  var buf = new Uint8Array(analyser.fftSize);
   function tick() {
     analyser.getByteTimeDomainData(buf);
-    let sum = 0;
-    for (let i = 0; i < buf.length; i++) {
-      const v = (buf[i] - 128) / 128;
+    var sum = 0;
+    for (var i = 0; i < buf.length; i++) {
+      var v = (buf[i] - 128) / 128;
       sum += v * v;
     }
-    const rms = Math.sqrt(sum / buf.length);
+    var rms = Math.sqrt(sum / buf.length);
     levelFill.style.width = Math.min(100, rms * 400) + "%";
     levelRAF = requestAnimationFrame(tick);
   }
@@ -143,20 +146,22 @@ function stopLevelMeter() {
 function playAudio(pcm16Buf) {
   if (!playCtx) return;
 
-  const int16 = new Int16Array(pcm16Buf);
-  const float32 = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) {
+  var int16 = new Int16Array(pcm16Buf);
+  var float32 = new Float32Array(int16.length);
+  for (var i = 0; i < int16.length; i++) {
     float32[i] = int16[i] / 32768.0;
   }
 
-  const buffer = playCtx.createBuffer(1, float32.length, SAMPLE_RATE);
+  // The buffer is created at SERVER_PLAYBACK_RATE (16 kHz).
+  // The browser will resample to the playback context's native rate.
+  var buffer = playCtx.createBuffer(1, float32.length, SERVER_PLAYBACK_RATE);
   buffer.getChannelData(0).set(float32);
 
-  const src = playCtx.createBufferSource();
+  var src = playCtx.createBufferSource();
   src.buffer = buffer;
   src.connect(playCtx.destination);
 
-  const now = playCtx.currentTime;
+  var now = playCtx.currentTime;
   if (nextPlayTime < now) nextPlayTime = now;
   src.start(nextPlayTime);
   nextPlayTime += buffer.duration;
@@ -171,7 +176,6 @@ async function start() {
     // 1. Get microphone access
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
-        sampleRate: SAMPLE_RATE,
         channelCount: 1,
         echoCancellation: true,
         noiseSuppression: true,
@@ -179,16 +183,19 @@ async function start() {
       },
     });
 
-    // 2. Create mic capture AudioContext at 16 kHz
-    micCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    // 2. Create mic AudioContext — let the browser pick its native rate.
+    //    Common values: 48 000 Hz (Chrome/Firefox) or 44 100 Hz (Safari).
+    micCtx = new AudioContext();
+    var captureRate = micCtx.sampleRate;
+    console.log("Mic AudioContext sample rate:", captureRate, "Hz");
 
     // 3. Load the AudioWorklet processor via Blob URL
-    const blob = new Blob([WORKLET_SRC], { type: "application/javascript" });
-    const url = URL.createObjectURL(blob);
+    var blob = new Blob([WORKLET_SRC], { type: "application/javascript" });
+    var url = URL.createObjectURL(blob);
     await micCtx.audioWorklet.addModule(url);
     URL.revokeObjectURL(url);
 
-    const source = micCtx.createMediaStreamSource(mediaStream);
+    var source = micCtx.createMediaStreamSource(mediaStream);
     workletNode = new AudioWorkletNode(micCtx, "pcm-processor");
 
     // 4. Level meter via AnalyserNode
@@ -197,8 +204,9 @@ async function start() {
     source.connect(analyser);
     startLevelMeter();
 
-    // 5. Create playback AudioContext
-    playCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    // 5. Create playback AudioContext (browser-native rate is fine;
+    //    AudioBuffers carry their own rate and the browser resamples).
+    playCtx = new AudioContext();
     nextPlayTime = 0;
 
     // 6. Open WebSocket
@@ -207,10 +215,10 @@ async function start() {
     ws.binaryType = "arraybuffer";
 
     ws.onopen = function () {
-      // Negotiate audio format
-      ws.send(JSON.stringify({ type: "config", sample_rate: SAMPLE_RATE }));
+      // Tell the server the actual capture rate so it can resample to 16 kHz.
+      ws.send(JSON.stringify({ type: "config", sample_rate: captureRate }));
 
-      // Wire mic → worklet → WebSocket
+      // Wire mic -> worklet -> WebSocket
       workletNode.port.onmessage = function (e) {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(e.data);
