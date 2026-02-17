@@ -1,0 +1,22 @@
+[Unit]
+Description=EasyCat WebRTC Voice Server
+After=network.target coturn.service
+
+[Service]
+Type=simple
+User=easycat
+Group=easycat
+WorkingDirectory=/opt/easycat
+EnvironmentFile=/opt/easycat/.env
+ExecStart=/opt/easycat/.venv/bin/python examples/webrtc_server.py
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/easycat
+
+[Install]
+WantedBy=multi-user.target
