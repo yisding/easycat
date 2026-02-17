@@ -11,12 +11,13 @@ import asyncio
 import enum
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 import pysbd
 
+from easycat._span_manager import SpanManager
 from easycat.agent_runner import AgentStreamEventType
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
@@ -51,6 +52,7 @@ from easycat.metrics import (
     TURN_E2E,
     MetricsCollector,
 )
+from easycat.providers import NoiseReducer, STTProvider, Transport, TTSProvider, VADProvider
 from easycat.stubs import (
     NoopAgent,
     NoopNoiseReducer,
@@ -67,8 +69,8 @@ from easycat.timeouts import (
     with_agent_timeout,
     with_tts_timeout,
 )
-from easycat.tracing import SpanStatus, TraceContext, Tracer
-from easycat.turn_manager import TurnManager, TurnManagerConfig
+from easycat.tracing import SpanStatus, Tracer
+from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +117,16 @@ class TurnState(enum.Enum):
     BOT_SPEAKING = "bot_speaking"
 
 
+# Mapping from TurnManagerState to the Session-level TurnState.
+_TM_TO_TURN_STATE: dict[TurnManagerState, TurnState] = {
+    TurnManagerState.IDLE: TurnState.IDLE,
+    TurnManagerState.USER_SPEAKING: TurnState.LISTENING,
+    TurnManagerState.USER_PAUSED: TurnState.LISTENING,
+    TurnManagerState.PROCESSING: TurnState.PROCESSING,
+    TurnManagerState.BOT_SPEAKING: TurnState.BOT_SPEAKING,
+}
+
+
 # ── Session configuration ─────────────────────────────────────────
 
 
@@ -122,12 +134,12 @@ class TurnState(enum.Enum):
 class SessionConfig:
     """Configuration for a Session."""
 
-    stt: Any = None
-    tts: Any = None
-    vad: Any = None
-    noise_reducer: Any = None
-    transport: Any = None
-    agent: Any = None
+    stt: STTProvider | Any = None
+    tts: TTSProvider | Any = None
+    vad: VADProvider | Any = None
+    noise_reducer: NoiseReducer | Any = None
+    transport: Transport | Any = None
+    agent: Agent | Any = None
     event_bus: EventBus | None = None
     turn_manager: TurnManager | None = None
     turn_manager_config: TurnManagerConfig | None = None
@@ -218,7 +230,7 @@ class Session:
         self._enable_noise_reduction = cfg.enable_noise_reduction
         self._enable_vad = cfg.enable_vad
 
-        # Turn manager
+        # Turn manager — single source of truth for turn state
         self._turn_manager = cfg.turn_manager or TurnManager(
             self.event_bus,
             config=cfg.turn_manager_config,
@@ -230,12 +242,7 @@ class Session:
         # Reliability/observability config
         self._timeout_config = cfg.timeout_config or TimeoutConfig()
         self._metrics = cfg.metrics
-        self._tracer = cfg.tracer
-        self._trace_context: TraceContext | None = None
-        self._turn_span = None
-        self._stt_span = None
-        self._agent_span = None
-        self._tts_span = None
+        self._spans = SpanManager(tracer=cfg.tracer)
 
         # Backpressure (outbound audio queue)
         self._outbound_queue_external = cfg.outbound_queue is not None
@@ -262,7 +269,6 @@ class Session:
             self.event_bus.subscribe(Error, lambda e: self._metrics.increment_counter(ERRORS))
 
         # State
-        self._turn_state = TurnState.IDLE
         self._is_running = False
         self._pipeline_task: asyncio.Task[None] | None = None
         self._stt_task: asyncio.Task[None] | None = None
@@ -285,7 +291,8 @@ class Session:
 
     @property
     def turn_state(self) -> TurnState:
-        return self._turn_state
+        """Session-level turn state, derived from the TurnManager."""
+        return _TM_TO_TURN_STATE.get(self._turn_manager.state, TurnState.IDLE)
 
     @property
     def is_running(self) -> bool:
@@ -293,11 +300,14 @@ class Session:
 
     @property
     def is_speaking(self) -> bool:
-        return self._turn_state == TurnState.LISTENING
+        return self._turn_manager.state in (
+            TurnManagerState.USER_SPEAKING,
+            TurnManagerState.USER_PAUSED,
+        )
 
     @property
     def is_bot_speaking(self) -> bool:
-        return self._turn_state == TurnState.BOT_SPEAKING
+        return self._turn_manager.state == TurnManagerState.BOT_SPEAKING
 
     @property
     def cancel_token(self) -> CancelToken | None:
@@ -310,7 +320,6 @@ class Session:
         if self._is_running:
             return
         self._is_running = True
-        self._turn_state = TurnState.IDLE
 
         await self.transport.connect()
         if not self._outbound_queue_external:
@@ -364,15 +373,7 @@ class Session:
             await checker.stop()
         self._health_checkers = []
         self._stop_helpers()
-        if self._tracer and self._turn_span:
-            self._tracer.finish_span(self._turn_span, SpanStatus.CANCELLED)
-            self._turn_span = None
-        if self._tracer and self._stt_span:
-            self._tracer.finish_span(self._stt_span, SpanStatus.CANCELLED)
-            self._stt_span = None
-        if self._tracer and self._agent_span:
-            self._tracer.finish_span(self._agent_span, SpanStatus.CANCELLED)
-            self._agent_span = None
+        self._spans.finish_all(SpanStatus.CANCELLED)
         self._outbound_queue.close()
         if self._outbound_task and not self._outbound_task.done():
             self._outbound_task.cancel()
@@ -381,7 +382,7 @@ class Session:
             except asyncio.CancelledError:
                 pass
         await self.transport.disconnect()
-        self._turn_state = TurnState.IDLE
+        self._turn_manager.reset()
 
     async def shutdown(self) -> None:
         """Force-close everything and release resources."""
@@ -414,18 +415,10 @@ class Session:
             await checker.stop()
         self._health_checkers = []
         self._stop_helpers()
-        if self._tracer and self._turn_span:
-            self._tracer.finish_span(self._turn_span, SpanStatus.CANCELLED)
-            self._turn_span = None
-        if self._tracer and self._stt_span:
-            self._tracer.finish_span(self._stt_span, SpanStatus.CANCELLED)
-            self._stt_span = None
-        if self._tracer and self._agent_span:
-            self._tracer.finish_span(self._agent_span, SpanStatus.CANCELLED)
-            self._agent_span = None
+        self._spans.finish_all(SpanStatus.CANCELLED)
         self._outbound_queue.close()
         await self.transport.disconnect()
-        self._turn_state = TurnState.IDLE
+        self._turn_manager.reset()
 
     # ── Cancellation ───────────────────────────────────────────
 
@@ -443,20 +436,11 @@ class Session:
         await self._cancel_stt()
         await self._cancel_tts()
         self._outbound_queue.flush_for_new_turn()
-        self._turn_state = TurnState.IDLE
 
         if not barge_in:
             self._turn_manager.reset()
 
-        if self._tracer and self._turn_span:
-            self._tracer.finish_span(self._turn_span, SpanStatus.CANCELLED)
-            self._turn_span = None
-        if self._tracer and self._stt_span:
-            self._tracer.finish_span(self._stt_span, SpanStatus.CANCELLED)
-            self._stt_span = None
-        if self._tracer and self._agent_span:
-            self._tracer.finish_span(self._agent_span, SpanStatus.CANCELLED)
-            self._agent_span = None
+        self._spans.finish_all(SpanStatus.CANCELLED)
 
     async def cancel_tts_playback(self) -> None:
         """Stop TTS provider and flush outbound audio."""
@@ -465,8 +449,8 @@ class Session:
 
         await self._cancel_tts()
         self._outbound_queue.flush_for_new_turn()
-        if self._turn_state == TurnState.BOT_SPEAKING:
-            self._turn_state = TurnState.IDLE
+        if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
+            self._turn_manager.reset()
 
     async def reset_state(self) -> None:
         """Cancel everything and return to idle/listening state.
@@ -484,20 +468,10 @@ class Session:
         if hasattr(self.agent, "clear_history"):
             self.agent.clear_history()
 
-        self._turn_state = TurnState.IDLE
-
         # Reset turn manager state
         self._turn_manager.reset()
 
-        if self._tracer and self._turn_span:
-            self._tracer.finish_span(self._turn_span, SpanStatus.CANCELLED)
-            self._turn_span = None
-        if self._tracer and self._stt_span:
-            self._tracer.finish_span(self._stt_span, SpanStatus.CANCELLED)
-            self._stt_span = None
-        if self._tracer and self._agent_span:
-            self._tracer.finish_span(self._agent_span, SpanStatus.CANCELLED)
-            self._agent_span = None
+        self._spans.finish_all(SpanStatus.CANCELLED)
 
     # ── Push-to-talk helpers ───────────────────────────────────
 
@@ -526,11 +500,8 @@ class Session:
         self._first_agent_time = None
         self._first_tts_audio_time = None
 
-        # Initialize tracing context/span for this turn
-        if self._tracer:
-            self._trace_context = TraceContext()
-            self._turn_span = self._tracer.start_span("turn", self._trace_context)
-            self._trace_context.root_span_id = self._turn_span.span_id
+        # Initialize tracing for this turn
+        self._spans.begin_turn()
 
         # Establish a new cancel token from TurnManager
         self._cancel_token = self._turn_manager.cancel_token or CancelToken()
@@ -549,8 +520,6 @@ class Session:
         # Prime STT with pre-roll frames captured by TurnManager
         for chunk in self._turn_manager.turn_audio:
             await self.stt.send_audio(chunk)
-
-        self._turn_state = TurnState.LISTENING
 
     def _stop_helpers(self) -> None:
         """Stop attached helper components that own event subscriptions/state."""
@@ -571,11 +540,10 @@ class Session:
         """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
         if not self._is_running:
             return
-        if self._turn_state != TurnState.LISTENING:
+        if self._turn_manager.state != TurnManagerState.PROCESSING:
             return
         self._turn_end_time = event.timestamp
-        if self._tracer and self._trace_context:
-            self._stt_span = self._tracer.start_span(Tracer.STT, self._trace_context)
+        self._spans.start(Tracer.STT)
         await self._handle_end_of_speech()
 
     @staticmethod
@@ -609,9 +577,7 @@ class Session:
                                 STT_LATENCY,
                                 (self._stt_final_time - self._turn_end_time) * 1000,
                             )
-                        if self._tracer and self._stt_span:
-                            self._tracer.finish_span(self._stt_span)
-                            self._stt_span = None
+                        self._spans.finish(Tracer.STT)
                         if self._stt_final_future and not self._stt_final_future.done():
                             self._stt_final_future.set_result(stt_event.text)
                         break
@@ -623,9 +589,7 @@ class Session:
             finally:
                 if self._stt_final_future and not self._stt_final_future.done():
                     self._stt_final_future.set_result("")
-                if self._tracer and self._stt_span:
-                    self._tracer.finish_span(self._stt_span, SpanStatus.CANCELLED)
-                    self._stt_span = None
+                self._spans.finish(Tracer.STT, SpanStatus.CANCELLED)
 
         self._stt_task = asyncio.create_task(_consume())
 
@@ -645,29 +609,19 @@ class Session:
 
                 # Stage 1: Noise reduction (optional)
                 if self._enable_noise_reduction:
-                    if self._tracer and self._trace_context:
-                        async with self._tracer.trace(Tracer.NOISE_REDUCTION, self._trace_context):
-                            chunk = await self.noise_reducer.process(chunk)
-                    else:
-                        chunk = await self.noise_reducer.process(chunk)
+                    chunk = await self.noise_reducer.process(chunk)
 
                 # Stage 2: VAD (optional)
                 if self._enable_vad:
-                    if self._tracer and self._trace_context:
-                        async with self._tracer.trace(Tracer.VAD, self._trace_context):
-                            async for vad_event in self.vad.process(chunk):
-                                await self.event_bus.emit(vad_event)
-                                await self._turn_manager.on_vad_event(vad_event)
-                    else:
-                        async for vad_event in self.vad.process(chunk):
-                            await self.event_bus.emit(vad_event)
-                            await self._turn_manager.on_vad_event(vad_event)
+                    async for vad_event in self.vad.process(chunk):
+                        await self.event_bus.emit(vad_event)
+                        await self._turn_manager.on_vad_event(vad_event)
 
                 # TurnManager always sees raw audio frames for pre-roll buffering
                 self._turn_manager.on_audio_frame(chunk)
 
                 # Stage 3: Feed audio to STT (if listening)
-                if self._turn_state == TurnState.LISTENING and self._stt_active:
+                if self.is_speaking and self._stt_active:
                     await self.stt.send_audio(chunk)
 
         except asyncio.CancelledError:
@@ -678,7 +632,6 @@ class Session:
 
     async def _handle_end_of_speech(self) -> None:
         """Called when VAD signals end of speech: finalize STT, run agent, synthesize TTS."""
-        self._turn_state = TurnState.PROCESSING
         if self._stt_active:
             await self.stt.end_stream()
             self._stt_active = False
@@ -698,11 +651,8 @@ class Session:
             except TimeoutError:
                 err = STTTimeoutError("stt", self._timeout_config.stt_timeout)
                 await self.event_bus.emit(Error(exception=err, context="stt_timeout"))
-                if self._tracer and self._stt_span:
-                    self._stt_span.set_error(err)
-                    self._tracer.finish_span(self._stt_span, SpanStatus.ERROR)
-                    self._stt_span = None
-                self._turn_state = TurnState.IDLE
+                self._spans.finish_with_error(Tracer.STT, err)
+                self._turn_manager.reset()
                 return
             except Exception:
                 transcript = ""
@@ -710,10 +660,8 @@ class Session:
                 self._stt_final_future = None
 
         if not transcript or (token and token.is_cancelled):
-            self._turn_state = TurnState.IDLE
-            if self._tracer and self._turn_span:
-                self._tracer.finish_span(self._turn_span, SpanStatus.CANCELLED)
-                self._turn_span = None
+            self._spans.finish("turn", SpanStatus.CANCELLED)
+            self._turn_manager.reset()
             return
 
         # Route to streaming or basic agent path
@@ -722,51 +670,105 @@ class Session:
         else:
             await self._run_basic_agent(transcript, token)
 
+    # ── Agent invocation helper ────────────────────────────────
+
+    async def _invoke_agent(self, transcript: str) -> str:
+        """Invoke the basic agent with optional timeout. Returns the response."""
+        if self._timeout_config and self._timeout_config.agent_timeout:
+            return await with_agent_timeout(
+                self.agent.run(transcript),
+                timeout=self._timeout_config.agent_timeout,
+                event_bus=self.event_bus,
+            )
+        return await self.agent.run(transcript)
+
+    # ── TTS consumption helper ─────────────────────────────────
+
+    async def _consume_tts_events(
+        self,
+        text: str,
+        token: CancelToken | None,
+        tts_start: float,
+    ) -> None:
+        """Consume TTS events for a single text chunk, emitting audio and markers.
+
+        Shared by both basic and streaming agent paths.
+        """
+        tts_span = self._spans.start(Tracer.TTS)
+        tts_status = SpanStatus.OK
+        try:
+            tts_iter: AsyncIterator = self.tts.synthesize(text)
+            if self._timeout_config and self._timeout_config.tts_first_byte_timeout:
+                tts_iter = with_tts_timeout(
+                    tts_iter,
+                    timeout=self._timeout_config.tts_first_byte_timeout,
+                    provider_name="tts",
+                    event_bus=self.event_bus,
+                )
+            async for tts_event in tts_iter:
+                if token and token.is_cancelled:
+                    break
+                if self._turn_manager.state != TurnManagerState.BOT_SPEAKING:
+                    break
+                if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
+                    await self.event_bus.emit(TTSAudio(chunk=tts_event.audio))
+                    if self._first_tts_audio_time is None:
+                        self._first_tts_audio_time = time.monotonic()
+                        if self._metrics:
+                            self._metrics.record_latency(
+                                TTS_TTFB,
+                                (self._first_tts_audio_time - tts_start) * 1000,
+                            )
+                            if self._turn_end_time is not None:
+                                self._metrics.record_latency(
+                                    TURN_E2E,
+                                    (self._first_tts_audio_time - self._turn_end_time) * 1000,
+                                )
+                    await self._outbound_queue.put(tts_event.audio)
+                elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
+                    await self.event_bus.emit(TTSMarkers(markers=tts_event.markers))
+        except TTSTimeoutError:
+            await self._cancel_tts()
+            if tts_span:
+                timeout = self._timeout_config.tts_first_byte_timeout
+                tts_span.set_error(TTSTimeoutError("tts", timeout))
+                tts_status = SpanStatus.ERROR
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            if tts_span:
+                tts_span.set_error(exc)
+                tts_status = SpanStatus.ERROR
+            raise
+        finally:
+            self._spans.finish(Tracer.TTS, tts_status)
+
     # ── Basic agent path ───────────────────────────────────────
 
     async def _run_basic_agent(self, transcript: str, token: CancelToken | None) -> None:
         """Non-streaming agent path: invoke run(), emit events, synthesize TTS."""
+        self._spans.start(Tracer.AGENT)
         try:
-            if self._tracer and self._trace_context:
-                async with self._tracer.trace(Tracer.AGENT, self._trace_context):
-                    if self._timeout_config and self._timeout_config.agent_timeout:
-                        agent_response = await with_agent_timeout(
-                            self.agent.run(transcript),
-                            timeout=self._timeout_config.agent_timeout,
-                            event_bus=self.event_bus,
-                        )
-                    else:
-                        agent_response = await self.agent.run(transcript)
-            else:
-                if self._timeout_config and self._timeout_config.agent_timeout:
-                    agent_response = await with_agent_timeout(
-                        self.agent.run(transcript),
-                        timeout=self._timeout_config.agent_timeout,
-                        event_bus=self.event_bus,
-                    )
-                else:
-                    agent_response = await self.agent.run(transcript)
+            agent_response = await self._invoke_agent(transcript)
         except AgentTimeoutError:
-            self._turn_state = TurnState.IDLE
-            if self._tracer and self._turn_span:
-                self._tracer.finish_span(self._turn_span, SpanStatus.ERROR)
-                self._turn_span = None
+            self._spans.finish(Tracer.AGENT, SpanStatus.ERROR)
+            self._spans.finish("turn", SpanStatus.ERROR)
+            self._turn_manager.reset()
             return
         except Exception as exc:
             logger.exception("Agent error")
             await self.event_bus.emit(Error(exception=exc, context="agent"))
-            self._turn_state = TurnState.IDLE
-            if self._tracer and self._turn_span:
-                self._turn_span.set_error(exc)
-                self._tracer.finish_span(self._turn_span, SpanStatus.ERROR)
-                self._turn_span = None
+            self._spans.finish_with_error(Tracer.AGENT, exc)
+            self._spans.finish_with_error("turn", exc)
+            self._turn_manager.reset()
             return
+        finally:
+            # Finish agent span if still open (success case)
+            self._spans.finish(Tracer.AGENT)
 
         if token and token.is_cancelled:
-            self._turn_state = TurnState.IDLE
-            if self._tracer and self._turn_span:
-                self._tracer.finish_span(self._turn_span, SpanStatus.CANCELLED)
-                self._turn_span = None
+            self._spans.finish("turn", SpanStatus.CANCELLED)
+            self._turn_manager.reset()
             return
 
         await self.event_bus.emit(AgentDelta(text=agent_response))
@@ -803,8 +805,7 @@ class Session:
         accumulated_text = ""
         structured_output: Any = None
         agent_error: BaseException | None = None
-        if self._tracer and self._trace_context:
-            self._agent_span = self._tracer.start_span(Tracer.AGENT, self._trace_context)
+        self._spans.start(Tracer.AGENT)
 
         async def _consume_agent() -> None:
             nonlocal accumulated_text, structured_output, agent_error
@@ -874,49 +875,10 @@ class Session:
                         break
 
                     if not started:
-                        self._turn_state = TurnState.BOT_SPEAKING
                         await self._turn_manager.bot_started_speaking()
                         started = True
 
-                    tts_start = time.monotonic()
-                    tts_span = None
-                    if self._tracer and self._trace_context:
-                        tts_span = self._tracer.start_span(Tracer.TTS, self._trace_context)
-                    tts_iter = self.tts.synthesize(text)
-                    if self._timeout_config and self._timeout_config.tts_first_byte_timeout:
-                        tts_iter = with_tts_timeout(
-                            tts_iter,
-                            timeout=self._timeout_config.tts_first_byte_timeout,
-                            provider_name="tts",
-                            event_bus=self.event_bus,
-                        )
-                    try:
-                        async for tts_event in tts_iter:
-                            if token and token.is_cancelled:
-                                break
-                            if self._turn_state != TurnState.BOT_SPEAKING:
-                                break
-                            if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
-                                await self.event_bus.emit(TTSAudio(chunk=tts_event.audio))
-                                if self._first_tts_audio_time is None:
-                                    self._first_tts_audio_time = time.monotonic()
-                                    if self._metrics:
-                                        self._metrics.record_latency(
-                                            TTS_TTFB,
-                                            (self._first_tts_audio_time - tts_start) * 1000,
-                                        )
-                                        if self._turn_end_time is not None:
-                                            self._metrics.record_latency(
-                                                TURN_E2E,
-                                                (self._first_tts_audio_time - self._turn_end_time)
-                                                * 1000,
-                                            )
-                                await self._outbound_queue.put(tts_event.audio)
-                            elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
-                                await self.event_bus.emit(TTSMarkers(markers=tts_event.markers))
-                    finally:
-                        if tts_span and self._tracer:
-                            self._tracer.finish_span(tts_span)
+                    await self._consume_tts_events(text, token, time.monotonic())
             except asyncio.CancelledError:
                 pass
             except TTSTimeoutError:
@@ -924,12 +886,9 @@ class Session:
             except Exception:
                 logger.exception("TTS streaming error")
 
-            if started and self._turn_state == TurnState.BOT_SPEAKING:
+            if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 await self._turn_manager.bot_stopped_speaking()
-                self._turn_state = TurnState.IDLE
-                if self._tracer and self._turn_span:
-                    self._tracer.finish_span(self._turn_span)
-                    self._turn_span = None
+                self._spans.finish("turn")
 
         # Run agent consumption and TTS synthesis concurrently
         agent_task = asyncio.create_task(_consume_agent())
@@ -951,13 +910,10 @@ class Session:
             if not tts_task.done():
                 tts_task.cancel()
         finally:
-            if self._tracer and self._agent_span:
-                if agent_error:
-                    self._agent_span.set_error(agent_error)
-                    self._tracer.finish_span(self._agent_span, SpanStatus.ERROR)
-                else:
-                    self._tracer.finish_span(self._agent_span, SpanStatus.OK)
-                self._agent_span = None
+            if agent_error:
+                self._spans.finish_with_error(Tracer.AGENT, agent_error)
+            else:
+                self._spans.finish(Tracer.AGENT)
 
         # Emit AgentFinal after agent stream is fully consumed
         if accumulated_text and agent_error is None and not (token and token.is_cancelled):
@@ -970,79 +926,25 @@ class Session:
         except asyncio.CancelledError:
             pass
 
-        # If agent errored or was cancelled with no TTS started, ensure IDLE
-        if self._turn_state != TurnState.IDLE:
-            self._turn_state = TurnState.IDLE
-        if self._tracer and self._turn_span:
-            status = SpanStatus.ERROR if agent_error else SpanStatus.OK
-            self._tracer.finish_span(self._turn_span, status)
-            self._turn_span = None
+        # If agent errored or was cancelled with no TTS started, ensure idle
+        if self._turn_manager.state != TurnManagerState.IDLE:
+            self._turn_manager.reset()
+        status = SpanStatus.ERROR if agent_error else SpanStatus.OK
+        self._spans.finish("turn", status)
 
     # ── TTS synthesis helper ───────────────────────────────────
 
     async def _synthesize_tts(self, text: str, token: CancelToken | None) -> None:
         """Synthesize TTS for a complete text and emit audio events."""
-        self._turn_state = TurnState.BOT_SPEAKING
         await self._turn_manager.bot_started_speaking()
-        tts_span = None
-        tts_status = SpanStatus.OK
-        if self._tracer and self._trace_context:
-            tts_span = self._tracer.start_span(Tracer.TTS, self._trace_context)
         try:
-            tts_start = time.monotonic()
-            tts_iter = self.tts.synthesize(text)
-            if self._timeout_config and self._timeout_config.tts_first_byte_timeout:
-                tts_iter = with_tts_timeout(
-                    tts_iter,
-                    timeout=self._timeout_config.tts_first_byte_timeout,
-                    provider_name="tts",
-                    event_bus=self.event_bus,
-                )
-            async for tts_event in tts_iter:
-                if token and token.is_cancelled:
-                    break
-                if self._turn_state != TurnState.BOT_SPEAKING:
-                    break
-                if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
-                    await self.event_bus.emit(TTSAudio(chunk=tts_event.audio))
-                    if self._first_tts_audio_time is None:
-                        self._first_tts_audio_time = time.monotonic()
-                        if self._metrics:
-                            self._metrics.record_latency(
-                                TTS_TTFB,
-                                (self._first_tts_audio_time - tts_start) * 1000,
-                            )
-                            if self._turn_end_time is not None:
-                                self._metrics.record_latency(
-                                    TURN_E2E,
-                                    (self._first_tts_audio_time - self._turn_end_time) * 1000,
-                                )
-                    await self._outbound_queue.put(tts_event.audio)
-                elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
-                    await self.event_bus.emit(TTSMarkers(markers=tts_event.markers))
+            await self._consume_tts_events(text, token, time.monotonic())
         except asyncio.CancelledError:
             pass
-        except TTSTimeoutError:
-            await self._cancel_tts()
-            if tts_span:
-                timeout = self._timeout_config.tts_first_byte_timeout
-                tts_span.set_error(TTSTimeoutError("tts", timeout))
-                tts_status = SpanStatus.ERROR
-        except Exception as exc:
-            if tts_span:
-                tts_span.set_error(exc)
-                tts_status = SpanStatus.ERROR
-            raise
-        finally:
-            if tts_span and self._tracer:
-                self._tracer.finish_span(tts_span, tts_status)
 
-        if self._turn_state == TurnState.BOT_SPEAKING:
+        if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             await self._turn_manager.bot_stopped_speaking()
-            self._turn_state = TurnState.IDLE
-            if self._tracer and self._turn_span:
-                self._tracer.finish_span(self._turn_span)
-                self._turn_span = None
+            self._spans.finish("turn")
 
     # ── Internal helpers ───────────────────────────────────────
 
