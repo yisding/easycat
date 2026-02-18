@@ -136,3 +136,12 @@ class Transport(Protocol):
     async def send_audio(self, chunk: AudioChunk) -> None:
         """Send an audio chunk to the remote end."""
         ...
+
+    async def clear_audio(self) -> None:
+        """Discard queued outbound audio (e.g. during barge-in).
+
+        Transports that buffer outbound audio should drop pending data.
+        The default implementation is a no-op for transports without
+        outbound buffering.
+        """
+        ...
