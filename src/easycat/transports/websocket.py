@@ -96,6 +96,7 @@ class WebSocketTransport(_ServerTransportBase):
             logger.info("WebSocket client disconnected")
         finally:
             self._ws = None
+            self._client_connected.clear()
             # Reset negotiated format so the next client starts fresh.
             self._audio_format = self._config.audio_format
             self._enqueue_sentinel()
