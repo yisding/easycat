@@ -378,6 +378,23 @@ class WebRTCTransport(_AudioQueueMixin):
                 headers=_CORS_HEADERS,
             )
 
+        sdp = params.get("sdp") if isinstance(params, dict) else None
+        sdp_type = params.get("type") if isinstance(params, dict) else None
+        if not isinstance(sdp, str) or not sdp.strip() or sdp_type != "offer":
+            return web.Response(
+                status=400,
+                text=json.dumps(
+                    {
+                        "error": (
+                            "Expected JSON body with non-empty 'sdp' and "
+                            "'type' set to 'offer'"
+                        )
+                    }
+                ),
+                content_type="application/json",
+                headers=_CORS_HEADERS,
+            )
+
         # Close any existing peer connection.
         if self._pc is not None:
             if self._consume_task is not None and not self._consume_task.done():
@@ -418,10 +435,7 @@ class WebRTCTransport(_AudioQueueMixin):
                     @track.on("ended")
                     async def on_ended() -> None:
                         logger.info("WebRTC remote audio track ended")
-                        try:
-                            self._in_queue.put_nowait(None)
-                        except asyncio.QueueFull:
-                            pass
+                        self._enqueue_sentinel()
 
             @pc.on("connectionstatechange")
             async def on_connectionstatechange() -> None:
@@ -431,13 +445,10 @@ class WebRTCTransport(_AudioQueueMixin):
                     self._client_connected.set()
                 elif state in ("disconnected", "failed", "closed"):
                     self._client_connected.clear()
-                    try:
-                        self._in_queue.put_nowait(None)
-                    except asyncio.QueueFull:
-                        pass
+                    self._enqueue_sentinel()
 
             # Set remote offer and create answer.
-            offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+            offer = RTCSessionDescription(sdp=sdp, type=sdp_type)
             await pc.setRemoteDescription(offer)
 
             answer = await pc.createAnswer()
@@ -511,10 +522,7 @@ class WebRTCTransport(_AudioQueueMixin):
                     raw = resample(raw, frame_rate, target_rate)
 
                 chunk = AudioChunk(data=raw, format=target_format)
-                try:
-                    self._in_queue.put_nowait(chunk)
-                except asyncio.QueueFull:
-                    logger.warning("Inbound WebRTC audio queue full — dropping frame")
+                self._enqueue_chunk(chunk, context="WebRTC")
 
         except StopAsyncIteration:
             logger.info("WebRTC audio track stream ended")

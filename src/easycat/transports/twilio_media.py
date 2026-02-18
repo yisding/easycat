@@ -239,10 +239,7 @@ class TwilioTransport(_ServerTransportBase):
         pcm_data = mulaw_to_pcm16(mulaw_data, self._audio_format.sample_rate)
 
         chunk = AudioChunk(data=pcm_data, format=self._audio_format)
-        try:
-            self._in_queue.put_nowait(chunk)
-        except asyncio.QueueFull:
-            logger.warning("Inbound audio queue full — dropping Twilio frame")
+        self._enqueue_chunk(chunk, context="Twilio")
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
         """Emit a DTMF event for the pressed digit."""
