@@ -272,6 +272,7 @@ class WebRTCTransport(_AudioQueueMixin):
         web = self._web
 
         self._reset_audio_queue()
+        self._has_bundled_client = False
 
         app = web.Application()
         app.router.add_post("/offer", self._handle_offer)
@@ -297,10 +298,19 @@ class WebRTCTransport(_AudioQueueMixin):
                 )
 
         self._app = app
-        self._runner = web.AppRunner(app)
-        await self._runner.setup()
-        self._site = web.TCPSite(self._runner, self._config.host, self._config.port)
-        await self._site.start()
+        try:
+            self._runner = web.AppRunner(app)
+            await self._runner.setup()
+            self._site = web.TCPSite(self._runner, self._config.host, self._config.port)
+            await self._site.start()
+        except Exception:
+            self._has_bundled_client = False
+            if self._runner is not None:
+                await self._runner.cleanup()
+                self._runner = None
+            self._site = None
+            self._app = None
+            raise
 
         self._connected = True
         logger.info(
