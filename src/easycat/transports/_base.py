@@ -28,6 +28,10 @@ class _AudioQueueMixin:
     this mixin to get the queue management, sentinel-based shutdown, and
     ``receive_audio()`` async iterator for free.
 
+    Also provides a ``_client_connected`` :class:`asyncio.Event` and a
+    ``wait_for_client`` helper so that server-style transports can signal
+    when a remote peer has connected.
+
     Users must:
       - Call ``_init_audio_queue(max_pending_chunks)`` during ``__init__``.
       - Set ``self._connected`` to ``True``/``False`` in ``connect``/``disconnect``.
@@ -36,6 +40,7 @@ class _AudioQueueMixin:
 
     _connected: bool
     _in_queue: asyncio.Queue[AudioChunk | None]
+    _client_connected: asyncio.Event
 
     def _init_audio_queue(self, max_pending_chunks: int) -> None:
         self._max_pending_chunks = max_pending_chunks
@@ -43,6 +48,7 @@ class _AudioQueueMixin:
         self._in_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
             maxsize=max_pending_chunks,
         )
+        self._client_connected = asyncio.Event()
 
     def _reset_audio_queue(self) -> None:
         """Reinitialize the queue to clear any stale sentinels from a previous session."""
@@ -82,6 +88,10 @@ class _AudioQueueMixin:
     def is_connected(self) -> bool:
         return self._connected
 
+    async def wait_for_client(self, timeout: float | None = None) -> None:
+        """Block until a remote peer / client connects (or *timeout* expires)."""
+        await asyncio.wait_for(self._client_connected.wait(), timeout=timeout)
+
 
 # ── WebSocket server base ─────────────────────────────────────────
 
@@ -104,7 +114,6 @@ class _ServerTransportBase(_AudioQueueMixin):
 
         self._server: Server | None = None
         self._ws: ServerConnection | None = None
-        self._client_connected = asyncio.Event()
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -156,7 +165,3 @@ class _ServerTransportBase(_AudioQueueMixin):
     @property
     def has_client(self) -> bool:
         return self._ws is not None
-
-    async def wait_for_client(self, timeout: float | None = None) -> None:
-        """Block until a client connects (or timeout expires)."""
-        await asyncio.wait_for(self._client_connected.wait(), timeout=timeout)
