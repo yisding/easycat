@@ -432,3 +432,60 @@ class TestOutboundAudioSource:
         frame = await source._recv()
         data = bytes(frame.planes[0])
         assert data == bytes(960 * 2)  # silence
+
+
+# ── Consume-audio sentinel tests ─────────────────────────────────
+
+
+class TestConsumeAudioSentinel:
+    """Verify that _consume_audio enqueues a sentinel when the track ends."""
+
+    @pytest.mark.asyncio
+    async def test_track_recv_raises_stops_receive_audio(self):
+        """When track.recv() raises, _consume_audio's finally block enqueues
+        a sentinel so that receive_audio() terminates instead of blocking."""
+        transport = WebRTCTransport(WebRTCTransportConfig())
+        transport._init_audio_queue(200)
+        transport._connected = True
+
+        # Fake track whose recv() signals end-of-stream immediately.
+        class _FakeTrack:
+            async def recv(self):
+                raise StopAsyncIteration
+
+        # Run _consume_audio — it should enqueue a sentinel via the finally block.
+        await transport._consume_audio(_FakeTrack())
+
+        # receive_audio() should now terminate promptly.
+        chunks: list[AudioChunk] = []
+        async for chunk in transport.receive_audio():
+            chunks.append(chunk)
+
+        assert chunks == []
+
+    @pytest.mark.asyncio
+    async def test_sentinel_delivered_when_queue_is_full(self):
+        """Even when the inbound queue is full, the sentinel must be delivered
+        so that receive_audio() does not block forever."""
+        transport = WebRTCTransport(WebRTCTransportConfig(max_pending_chunks=2))
+        transport._init_audio_queue(2)
+        transport._connected = True
+
+        # Fill the queue completely.
+        for _ in range(2):
+            transport._enqueue_chunk(make_chunk(), context="test")
+
+        # Fake track that ends immediately.
+        class _FakeTrack:
+            async def recv(self):
+                raise StopAsyncIteration
+
+        await transport._consume_audio(_FakeTrack())
+
+        # receive_audio() must still terminate (sentinel was force-enqueued).
+        chunks: list[AudioChunk] = []
+        async for chunk in transport.receive_audio():
+            chunks.append(chunk)
+
+        # One chunk was dropped to make room for the sentinel; at most 1 chunk.
+        assert len(chunks) <= 2

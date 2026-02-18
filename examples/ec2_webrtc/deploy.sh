@@ -89,7 +89,7 @@ echo "[4/6] Creating Python venv..."
 
 sudo python3.11 -m venv "$INSTALL_DIR/.venv"
 sudo "$INSTALL_DIR/.venv/bin/pip" install --upgrade pip
-sudo "$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR[webrtc,openai-agents,openai]"
+sudo "$INSTALL_DIR/.venv/bin/pip" install "$INSTALL_DIR[webrtc,openai-agents,openai]"
 
 # ── 5. Environment file ──────────────────────────────────────────
 

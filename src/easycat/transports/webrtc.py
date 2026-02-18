@@ -97,13 +97,14 @@ class WebRTCTransportConfig:
 
 
 class _OutboundAudioSource:
-    """Custom audio track that reads PCM16 data from a queue.
+    """Custom audio source that reads PCM16 data from a queue.
 
     Produces 20 ms Opus-compatible frames at 48 kHz.  When the queue is
     empty, silence frames are emitted so the RTP stream stays alive.
-    """
 
-    kind = "audio"
+    This is *not* a ``MediaStreamTrack`` itself — call :meth:`create_track`
+    to obtain an aiortc track that delegates ``recv()`` back to this source.
+    """
 
     def __init__(self) -> None:
         self._queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=100)
@@ -240,8 +241,6 @@ class WebRTCTransport(_AudioQueueMixin):
 
         # Background task that consumes the inbound audio track.
         self._consume_task: asyncio.Task[None] | None = None
-
-        self._client_connected = asyncio.Event()
 
     # ── Helpers ─────────────────────────────────────────────────
 
@@ -535,7 +534,11 @@ class WebRTCTransport(_AudioQueueMixin):
     # ── Audio track consumer ──────────────────────────────────────
 
     async def _consume_audio(self, track: Any) -> None:
-        """Read audio frames from the remote track and enqueue as AudioChunk."""
+        """Read audio frames from the remote track and enqueue as AudioChunk.
+
+        Always enqueues a sentinel on exit so that ``receive_audio()`` does not
+        block indefinitely if the track ends without a connection-state callback.
+        """
         from easycat.audio_utils import resample, to_mono
 
         target_rate = self._config.audio_format.sample_rate
@@ -573,13 +576,14 @@ class WebRTCTransport(_AudioQueueMixin):
                 logger.info("WebRTC audio track stream ended")
             else:
                 logger.warning("WebRTC audio consume error: %s", exc)
+        finally:
+            # Ensure the pipeline unblocks even if on_ended/connectionstatechange
+            # callbacks don't fire.  Duplicate sentinels are harmless — the first
+            # one stops receive_audio() and extras are cleared on next connection.
+            self._enqueue_sentinel()
 
     # ── Properties ────────────────────────────────────────────────
 
     @property
     def has_client(self) -> bool:
         return self._pc is not None and self._pc.connectionState == "connected"
-
-    async def wait_for_client(self, timeout: float | None = None) -> None:
-        """Block until a WebRTC peer connects (or timeout expires)."""
-        await asyncio.wait_for(self._client_connected.wait(), timeout=timeout)
