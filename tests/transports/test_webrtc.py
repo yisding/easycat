@@ -151,6 +151,69 @@ class TestWebRTCTransportLifecycle:
         await transport.disconnect()
 
     @pytest.mark.asyncio
+    async def test_root_returns_endpoint_hint_without_static_client(self):
+        import aiohttp
+
+        port = find_free_port()
+        config = WebRTCTransportConfig(host="127.0.0.1", port=port)
+        transport = WebRTCTransport(config)
+        await transport.connect()
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["service"] == "easycat-webrtc-signaling"
+                assert "/offer" in data["endpoints"]
+                assert "Access-Control-Allow-Origin" in resp.headers
+
+        await transport.disconnect()
+
+
+    @pytest.mark.asyncio
+    async def test_failed_connect_does_not_leave_stale_bundled_client_state(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        import aiohttp
+
+        client = tmp_path / "webrtc_client.html"
+        client.write_text("<html></html>", encoding="utf-8")
+
+        port = find_free_port()
+        config = WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=str(tmp_path))
+        transport = WebRTCTransport(config)
+
+        async def broken_start(_self):
+            raise RuntimeError("port busy")
+
+        monkeypatch.setattr(aiohttp.web.TCPSite, "start", broken_start)
+
+        with pytest.raises(RuntimeError, match="port busy"):
+            await transport.connect()
+
+        monkeypatch.undo()
+
+        assert transport._has_bundled_client is False
+        assert transport._app is None
+        assert transport._runner is None
+        assert transport._site is None
+
+        # Retry on same instance without static files should not keep stale
+        # redirect behavior from the failed attempt.
+        transport._config.static_dir = None
+        await transport.connect()
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["service"] == "easycat-webrtc-signaling"
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
     async def test_health_endpoint(self):
         import aiohttp
 
