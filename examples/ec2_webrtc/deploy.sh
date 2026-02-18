@@ -77,8 +77,9 @@ sudo useradd --system --home-dir "$INSTALL_DIR" --shell /usr/sbin/nologin easyca
 sudo mkdir -p "$INSTALL_DIR"
 
 # Clone or copy the repo.  If running from within the repo, copy it.
-if [ -d "$(dirname "$SCRIPT_DIR")/src/easycat" ]; then
-    sudo cp -r "$(dirname "$SCRIPT_DIR")/.." "$INSTALL_DIR/"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+if [ -d "$REPO_ROOT/src/easycat" ]; then
+    sudo cp -a "$REPO_ROOT/." "$INSTALL_DIR/"
 else
     echo "  Place the easycat repository at $INSTALL_DIR"
 fi

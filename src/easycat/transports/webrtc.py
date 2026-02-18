@@ -141,11 +141,12 @@ class _OutboundAudioSource:
             self._AudioFrame = av.AudioFrame
 
         if self._start is None:
-            self._start = time.time()
+            self._start = time.monotonic()
 
         # Pace frames to real-time so RTP timing is correct.
+        # Use monotonic clock so pacing is not affected by wall-clock jumps.
         expected = self._start + (self._pts / _WEBRTC_SAMPLE_RATE)
-        wait = expected - time.time()
+        wait = expected - time.monotonic()
         if wait > 0:
             await asyncio.sleep(wait)
 
@@ -467,6 +468,12 @@ class WebRTCTransport(_AudioQueueMixin):
 
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
+
+            # Wait for ICE gathering to complete before responding, so that
+            # the SDP answer includes candidates (important behind NAT).
+            start = time.monotonic()
+            while pc.iceGatheringState != "complete" and (time.monotonic() - start) < 2.0:
+                await asyncio.sleep(0.1)
         except Exception as exc:
             logger.warning("WebRTC offer handling failed: %s", exc)
             if pc is not None:
