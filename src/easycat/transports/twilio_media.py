@@ -7,7 +7,6 @@ and emits DTMF / control events into the Session event bus.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import logging
@@ -77,7 +76,6 @@ class TwilioTransport(_ServerTransportBase):
         self._call_sid: str | None = None
 
         self._mark_counter = 0
-        self._client_connected = asyncio.Event()
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -86,7 +84,6 @@ class TwilioTransport(_ServerTransportBase):
         await super().disconnect()
         self._stream_sid = None
         self._call_sid = None
-        self._client_connected.clear()
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         """Convert a PCM16 chunk to mulaw 8 kHz and send to Twilio."""
@@ -174,12 +171,7 @@ class TwilioTransport(_ServerTransportBase):
         finally:
             self._ws = None
             self._stream_sid = None
-            self._client_connected.clear()
-            try:
-                self._in_queue.put_nowait(None)
-            except asyncio.QueueFull:
-                # Sentinel already enqueued or consumer stopped reading; safe to ignore.
-                logger.debug("Input queue full during Twilio disconnect; dropping sentinel")
+            self._enqueue_sentinel()
 
     async def _handle_message(self, raw: str) -> None:
         """Route a Twilio JSON message to the appropriate handler."""
@@ -201,10 +193,7 @@ class TwilioTransport(_ServerTransportBase):
             # Explicitly end the current audio stream so receive_audio() can terminate.
             self._stream_sid = None
             self._call_sid = None
-            try:
-                self._in_queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+            self._enqueue_sentinel()
         elif event == "mark":
             mark_name = msg.get("mark", {}).get("name", "")
             logger.debug("Twilio mark acknowledged: %s", mark_name)
@@ -250,14 +239,6 @@ class TwilioTransport(_ServerTransportBase):
             await self._event_bus.emit(DTMF(digit=digit))
 
     # ── Properties ────────────────────────────────────────────────
-
-    @property
-    def has_client(self) -> bool:
-        return self._ws is not None
-
-    async def wait_for_client(self, timeout: float | None = None) -> None:
-        """Block until a Twilio client connects (or timeout expires)."""
-        await asyncio.wait_for(self._client_connected.wait(), timeout=timeout)
 
     @property
     def stream_sid(self) -> str | None:

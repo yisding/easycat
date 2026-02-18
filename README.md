@@ -115,7 +115,8 @@ Runnable examples live in the `examples/` directory:
 3. Run the server:
    `python examples/webrtc_server.py`
 4. Open:
-   `http://localhost:8080/webrtc_client.html`
+   `http://localhost:8080`
+   (auto-redirects to `webrtc_client.html` when using the bundled static client)
 
 If browser clients are remote (not localhost), run behind HTTPS and configure
 TURN (`TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`) for reliable NAT traversal.
