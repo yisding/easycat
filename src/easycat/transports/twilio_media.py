@@ -77,6 +77,7 @@ class TwilioTransport(_ServerTransportBase):
         self._call_sid: str | None = None
 
         self._mark_counter = 0
+        self._client_connected = asyncio.Event()
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -85,6 +86,7 @@ class TwilioTransport(_ServerTransportBase):
         await super().disconnect()
         self._stream_sid = None
         self._call_sid = None
+        self._client_connected.clear()
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         """Convert a PCM16 chunk to mulaw 8 kHz and send to Twilio."""
@@ -159,6 +161,7 @@ class TwilioTransport(_ServerTransportBase):
             return
 
         self._ws = ws
+        self._client_connected.set()
         logger.info("Twilio Media Streams connected")
 
         try:
@@ -171,6 +174,7 @@ class TwilioTransport(_ServerTransportBase):
         finally:
             self._ws = None
             self._stream_sid = None
+            self._client_connected.clear()
             try:
                 self._in_queue.put_nowait(None)
             except asyncio.QueueFull:
@@ -249,6 +253,14 @@ class TwilioTransport(_ServerTransportBase):
             await self._event_bus.emit(DTMF(digit=digit))
 
     # ── Properties ────────────────────────────────────────────────
+
+    @property
+    def has_client(self) -> bool:
+        return self._ws is not None
+
+    async def wait_for_client(self, timeout: float | None = None) -> None:
+        """Block until a Twilio client connects (or timeout expires)."""
+        await asyncio.wait_for(self._client_connected.wait(), timeout=timeout)
 
     @property
     def stream_sid(self) -> str | None:

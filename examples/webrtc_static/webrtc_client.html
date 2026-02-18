@@ -121,6 +121,15 @@ var signalingUrl = document.getElementById("signalingUrl");
 // served from the signaling server via the static_dir config option).
 signalingUrl.value = location.origin;
 
+// Warn if not in a secure context (getUserMedia requires HTTPS for
+// non-localhost origins).
+if (location.protocol !== "https:" && location.hostname !== "localhost"
+    && location.hostname !== "127.0.0.1") {
+  connInfo.textContent = "\u26a0 Microphone access requires HTTPS on non-localhost origins. "
+    + "Use localhost, or place the server behind an HTTPS reverse proxy.";
+  connInfo.style.color = "#856404";
+}
+
 function setStatus(text, type) {
   statusEl.textContent = text;
   statusEl.className = "status-" + type;

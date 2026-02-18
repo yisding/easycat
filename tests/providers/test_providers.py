@@ -84,6 +84,9 @@ class StubTransport:
     async def send_audio(self, chunk: AudioChunk) -> None:
         pass
 
+    async def clear_audio(self) -> None:
+        pass
+
 
 # ── Protocol conformance tests ────────────────────────────────────
 
