@@ -91,7 +91,7 @@ from easycat import Session, SessionConfig
 from easycat.agents import PydanticAIAdapter
 
 pydantic_agent = PydanticAgent(
-    "openai:gpt-5.2",
+    "openai:gpt-4o-mini",
     system_prompt="Help customers with account issues.",
 )
 

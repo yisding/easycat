@@ -129,12 +129,12 @@ _TM_TO_TURN_STATE: dict[TurnManagerState, TurnState] = {
 class SessionConfig:
     """Configuration for a Session."""
 
-    stt: STTProvider | Any = None
-    tts: TTSProvider | Any = None
-    vad: VADProvider | Any = None
-    noise_reducer: NoiseReducer | Any = None
-    transport: Transport | Any = None
-    agent: Agent | Any = None
+    stt: STTProvider | None = None
+    tts: TTSProvider | None = None
+    vad: VADProvider | None = None
+    noise_reducer: NoiseReducer | None = None
+    transport: Transport | None = None
+    agent: Agent | None = None
     event_bus: EventBus | None = None
     turn_manager: TurnManager | None = None
     turn_manager_config: TurnManagerConfig | None = None

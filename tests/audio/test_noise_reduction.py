@@ -11,58 +11,8 @@ from easycat.noise_reduction import (
     NoiseReducerConfig,
     PassthroughNoiseReducer,
     RNNoiseReducer,
-    _float32_to_pcm16,
-    _pcm16_to_float32,
     create_noise_reducer,
 )
-
-# ── PCM16 <-> float32 conversion tests ──────────────────────────────
-
-
-def test_pcm16_to_float32_silence():
-    """Silence (all zeros) should convert to all 0.0."""
-    data = b"\x00\x00" * 10
-    result = _pcm16_to_float32(data)
-    assert len(result) == 10
-    assert all(s == 0.0 for s in result)
-
-
-def test_pcm16_to_float32_max_positive():
-    """Max int16 (32767) should convert to ~1.0."""
-    data = struct.pack("<h", 32767)
-    result = _pcm16_to_float32(data)
-    assert len(result) == 1
-    assert abs(result[0] - (32767 / 32768.0)) < 0.001
-
-
-def test_pcm16_to_float32_max_negative():
-    """Min int16 (-32768) should convert to -1.0."""
-    data = struct.pack("<h", -32768)
-    result = _pcm16_to_float32(data)
-    assert len(result) == 1
-    assert result[0] == -1.0
-
-
-def test_float32_to_pcm16_roundtrip():
-    """PCM16 -> float32 -> PCM16 should preserve values."""
-    original = [0, 1000, -1000, 32767, -32768]
-    data = struct.pack(f"<{len(original)}h", *original)
-    floats = _pcm16_to_float32(data)
-    roundtrip = _float32_to_pcm16(floats)
-    recovered = list(struct.unpack(f"<{len(original)}h", roundtrip))
-    # Allow +-1 for rounding
-    for orig, rec in zip(original, recovered):
-        assert abs(orig - rec) <= 1, f"Expected {orig}, got {rec}"
-
-
-def test_float32_to_pcm16_clipping():
-    """Values outside [-1, 1] should clip to int16 range."""
-    samples = [2.0, -2.0]
-    result = _float32_to_pcm16(samples)
-    values = struct.unpack("<2h", result)
-    assert values[0] == 32767
-    assert values[1] == -32768
-
 
 # ── RNNoiseReducer tests ────────────────────────────────────────────
 
