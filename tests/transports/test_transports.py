@@ -304,6 +304,32 @@ class TestWebSocketTransport:
 
         await transport.disconnect()
 
+    @pytest.mark.asyncio
+    async def test_wait_for_client_waits_for_new_connection_after_disconnect(self):
+        """wait_for_client should not stay set after a client disconnects."""
+        port = _find_free_port()
+        config = WebSocketTransportConfig(host="127.0.0.1", port=port)
+        transport = WebSocketTransport(config)
+        await transport.connect()
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.recv()  # ready
+            await transport.wait_for_client(timeout=1.0)
+            assert transport.has_client
+
+        await asyncio.sleep(0.05)
+        assert not transport.has_client
+
+        with pytest.raises(asyncio.TimeoutError):
+            await transport.wait_for_client(timeout=0.1)
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws2:
+            await ws2.recv()  # ready
+            await transport.wait_for_client(timeout=1.0)
+            assert transport.has_client
+
+        await transport.disconnect()
+
 
 # ── TwilioTransport tests ────────────────────────────────────────
 
@@ -501,6 +527,32 @@ class TestTwilioTransport:
 
         # Client disconnected — collect should end.
         await asyncio.wait_for(collect_task, timeout=2.0)
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_wait_for_client_waits_for_new_twilio_connection_after_disconnect(self):
+        """wait_for_client should clear after Twilio socket disconnects."""
+        port = _find_free_port()
+        config = TwilioTransportConfig(host="127.0.0.1", port=port)
+        transport = TwilioTransport(config)
+        await transport.connect()
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.send(_twilio_connected_msg())
+            await transport.wait_for_client(timeout=1.0)
+            assert transport.has_client
+
+        await asyncio.sleep(0.05)
+        assert not transport.has_client
+
+        with pytest.raises(asyncio.TimeoutError):
+            await transport.wait_for_client(timeout=0.1)
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws2:
+            await ws2.send(_twilio_connected_msg())
+            await transport.wait_for_client(timeout=1.0)
+            assert transport.has_client
 
         await transport.disconnect()
 

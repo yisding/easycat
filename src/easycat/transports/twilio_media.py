@@ -170,6 +170,7 @@ class TwilioTransport(_ServerTransportBase):
             logger.info("Twilio Media Streams disconnected")
         finally:
             self._ws = None
+            self._client_connected.clear()
             self._stream_sid = None
             self._enqueue_sentinel()
 
