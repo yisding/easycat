@@ -31,6 +31,7 @@ reverse proxy (e.g. nginx or Caddy with a TLS certificate).
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 from pathlib import Path
@@ -43,9 +44,8 @@ from easycat import (
     create_session,
 )
 
-# Serves the examples/ directory as static files (including the HTML client).
-# For production, use a dedicated directory containing only the HTML client.
-_STATIC_DIR = str(Path(__file__).parent)
+# Serves only the webrtc_static/ subdirectory (contains only the HTML client).
+_STATIC_DIR = str(Path(__file__).parent / "webrtc_static")
 
 
 def _build_ice_servers() -> list[ICEServer]:
@@ -69,6 +69,11 @@ def _build_ice_servers() -> list[ICEServer]:
 
 
 async def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise SystemExit("OPENAI_API_KEY is required.")
@@ -105,10 +110,7 @@ async def main() -> None:
     session = create_session(config)
 
     print(f"Open http://localhost:{signaling_port}/webrtc_client.html in your browser")
-    if any(
-        s.urls and "turn:" in (s.urls if isinstance(s.urls, str) else s.urls[0])
-        for s in ice_servers
-    ):
+    if any(any("turn:" in u for u in s.urls) for s in ice_servers):
         print("TURN server:  configured")
     else:
         print("TURN server:  not configured (STUN only — NAT traversal may fail)")

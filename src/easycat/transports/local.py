@@ -194,6 +194,14 @@ class LocalTransport(_AudioQueueMixin):
                 logger.warning("Output audio queue full — dropping frame")
             offset += frame_bytes
 
+    async def clear_audio(self) -> None:
+        """Discard queued outbound audio awaiting speaker playback."""
+        while not self._out_queue.empty():
+            try:
+                self._out_queue.get_nowait()
+            except thread_queue.Empty:
+                break
+
 
 def _np_array(samples: tuple[int, ...], np: object) -> object:
     """Create a numpy array from a tuple — isolated for type-checker friendliness."""

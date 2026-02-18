@@ -80,6 +80,9 @@ class WebSocketTransport(_ServerTransportBase):
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot send audio: client disconnected")
 
+    async def clear_audio(self) -> None:
+        """No-op — WebSocket sends frames immediately without buffering."""
+
     # ── Server helpers ────────────────────────────────────────────
 
     async def _handle_connection(self, ws: ServerConnection) -> None:

@@ -81,6 +81,9 @@ class NoopTransport:
     async def send_audio(self, chunk: AudioChunk) -> None:
         pass
 
+    async def clear_audio(self) -> None:
+        pass
+
 
 class NoopAgent:
     """Agent that echoes input text — used as default for pipeline testing."""
