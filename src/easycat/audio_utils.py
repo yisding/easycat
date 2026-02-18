@@ -1,11 +1,36 @@
-"""Audio processing utilities: resampling, mono downmix, and chunk sizing."""
+"""Audio processing utilities: resampling, mono downmix, chunk sizing, and format conversion."""
 
 from __future__ import annotations
 
+import io
 import struct
 from collections.abc import Iterator
 
 from easycat.audio_format import AudioChunk, AudioFormat
+
+
+def pcm_to_wav(pcm_data: bytes, fmt: AudioFormat) -> bytes:
+    """Convert raw PCM16 data to WAV file bytes."""
+    buf = io.BytesIO()
+    data_size = len(pcm_data)
+    bits_per_sample = fmt.sample_width * 8
+
+    buf.write(b"RIFF")
+    buf.write(struct.pack("<I", 36 + data_size))
+    buf.write(b"WAVE")
+    buf.write(b"fmt ")
+    buf.write(struct.pack("<I", 16))
+    buf.write(struct.pack("<H", 1))  # PCM format
+    buf.write(struct.pack("<H", fmt.channels))
+    buf.write(struct.pack("<I", fmt.sample_rate))
+    buf.write(struct.pack("<I", fmt.bytes_per_second))
+    buf.write(struct.pack("<H", fmt.frame_size))
+    buf.write(struct.pack("<H", bits_per_sample))
+    buf.write(b"data")
+    buf.write(struct.pack("<I", data_size))
+    buf.write(pcm_data)
+
+    return buf.getvalue()
 
 
 def resample(data: bytes, from_rate: int, to_rate: int) -> bytes:

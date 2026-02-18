@@ -8,52 +8,29 @@ Thorough analysis of the codebase for possible improvements and architectural de
 
 ## Critical / High-Impact
 
-### 1. Massive Code Duplication in `session.py`
+### 1. ~~Massive Code Duplication in `session.py`~~ — FIXED
 
-The most significant structural issue. `session.py` (1106 lines) contains extensive copy-pasted blocks:
+All three duplication clusters have been resolved:
 
-- **Tracer span cleanup** -- The pattern `if self._tracer and self._X_span: self._tracer.finish_span(...)` is repeated verbatim in `stop()` (lines 367-375), `shutdown()` (lines 417-425), `cancel_turn()` (lines 451-459), and `reset_state()` (lines 492-500). Extract a `_finish_all_spans(status)` helper.
+- **Tracer span cleanup** — Consolidated into `SpanManager` (`_span_manager.py`). All lifecycle methods now call `self._spans.finish_all(status)`.
+- **TTS event loop** — Extracted into `TTSSynthesizer` (`tts_synthesizer.py`). Both basic and streaming paths delegate to `self._tts_synth.synthesize()`.
+- **Agent invocation tracer branching** — `SpanManager` handles tracer-or-not checks internally, eliminating the `if self._tracer` / `else` branches.
 
-- **TTS event loop** -- The inner loop consuming `TTSEvent` objects and recording metrics appears twice: in `_synthesize_tts()` (lines 991-1022) and nearly identically in `_process_tts()` within `_run_streaming_agent()` (lines 893-916). Both check `token.is_cancelled`, check `self._turn_state`, handle `TTSEventType.AUDIO`/`MARKERS`, record `TTS_TTFB` and `TURN_E2E`. Extract a shared TTS consumption method.
+### 2. ~~`SessionConfig` Uses `Any` for All Provider Fields~~ — FIXED
 
-- **Agent invocation with/without tracer** -- `_run_basic_agent()` (lines 730-748) has duplicated `if self._tracer` / `else` branches. The tracer context manager should wrap the call unconditionally, or a helper should eliminate the branching.
+Provider fields are now typed as `STTProvider | None`, `TTSProvider | None`, etc., using the Protocol types from `providers.py`.
 
-**Recommendation:** Extract 3 helpers: `_finish_all_spans()`, `_consume_tts_events()`, and `_invoke_agent_with_timeout()`. This would reduce `session.py` by ~100 lines and eliminate all 3 duplication clusters.
+### 3. ~~Dual Turn State Tracking Creates Divergence Risk~~ — FIXED
 
-### 2. `SessionConfig` Uses `Any` for All Provider Fields
-
-`session.py:121-138` -- Every provider field is typed as `Any`:
-
-```python
-stt: Any = None
-tts: Any = None
-vad: Any = None
-transport: Any = None
-agent: Any = None
-```
-
-The Protocol types (`STTProvider`, `TTSProvider`, etc.) exist in `providers.py` but aren't used. This defeats the protocol-first architecture and means type checkers can't catch provider mismatches at configuration time.
-
-**Recommendation:** Type the fields with the corresponding protocols.
-
-### 3. Dual Turn State Tracking Creates Divergence Risk
-
-Both `Session._turn_state` (4 states: IDLE, LISTENING, PROCESSING, BOT_SPEAKING) and `TurnManager._state` (5 states: IDLE, USER_SPEAKING, USER_PAUSED, PROCESSING, BOT_SPEAKING) track turn state independently. They're loosely synchronized via events but can diverge:
-
-- `Session` sets `_turn_state = BOT_SPEAKING` in the TTS path, then separately calls `TurnManager.bot_started_speaking()`.
-- If either fails, the states diverge.
-
-**Recommendation:** Unify -- either Session delegates all state to TurnManager, or TurnManager is a pure event emitter and Session owns the state.
+`Session` no longer maintains its own `_turn_state`. The `turn_state` property now derives from `TurnManager.state` via a mapping (`_TM_TO_TURN_STATE`), making TurnManager the single source of truth.
 
 ---
 
 ## Medium-Impact
 
-### 4. No CI/CD Pipeline
+### 4. ~~No CI/CD Pipeline~~ — FIXED
 
-No GitHub Actions workflows, no pre-commit hooks, no automated linting or test runs. For a framework with 700+ tests and multiple provider integrations, this is a significant gap.
-
-**Recommendation:** Add a minimal `.github/workflows/ci.yml` that runs `ruff check`, `ruff format --check`, and `pytest`.
+Added `.github/workflows/ci.yml` with lint (ruff check + format) and test (pytest) jobs.
 
 ### 5. `OpenAISTT` Creates a New HTTP Client Per Request
 
@@ -179,25 +156,25 @@ The `openai-agents` package is listed under optional dependencies, but `OpenAIAg
 
 ## Summary
 
-| Priority | Issue | Effort |
+| Priority | Issue | Status |
 |----------|-------|--------|
-| High | Session.py code duplication (~3 clusters) | Medium |
-| High | SessionConfig typed as Any | Low |
-| High | Dual turn state tracking | High |
-| Medium | No CI/CD | Low |
-| Medium | OpenAISTT client-per-request | Low |
-| Medium | LatencyStats unbounded growth | Low |
-| Medium | Hardcoded English segmenter | Low |
-| Medium | No STT close() protocol | Medium |
-| Medium | resample() error swallowing | Low |
-| Medium | No async context manager | Low |
-| Medium | Unbounded TTS queue | Low |
-| Medium | Pre-1.0 dep upper bounds | Low |
-| Low | EventBus error swallowing | Low |
-| Low | Timeout raise-in-finally | Low |
-| Low | Span.set_error type | Low |
-| Low | Drain loop fragility | Low |
-| Low | Bot lifecycle event gaps | Low |
-| Low | Missing test __init__.py | Low |
-| Low | pysbd warnings | Low |
-| Low | Lazy adapter loading | Low |
+| ~~High~~ | ~~Session.py code duplication (~3 clusters)~~ | **FIXED** (SpanManager + TTSSynthesizer) |
+| ~~High~~ | ~~SessionConfig typed as Any~~ | **FIXED** |
+| ~~High~~ | ~~Dual turn state tracking~~ | **FIXED** (derived from TurnManager) |
+| ~~Medium~~ | ~~No CI/CD~~ | **FIXED** |
+| Medium | OpenAISTT client-per-request | Open |
+| Medium | LatencyStats unbounded growth | Open |
+| Medium | Hardcoded English segmenter | Open |
+| Medium | No STT close() protocol | Open |
+| Medium | resample() error swallowing | Open |
+| Medium | No async context manager | Open |
+| Medium | Unbounded TTS queue | Open |
+| Medium | Pre-1.0 dep upper bounds | Open |
+| Low | EventBus error swallowing | Open |
+| Low | Timeout raise-in-finally | Open |
+| Low | Span.set_error type | Open |
+| Low | Drain loop fragility | Open |
+| Low | Bot lifecycle event gaps | Open |
+| Low | Missing test __init__.py | Open |
+| Low | pysbd warnings | Open |
+| Low | Lazy adapter loading | Open |

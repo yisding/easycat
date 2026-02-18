@@ -13,7 +13,8 @@ Internal plumbing remains importable from submodules for advanced use::
     from easycat.metrics import timed_metric, measure_latency, STT_LATENCY, ...
     from easycat.timeouts import with_stt_timeout, with_agent_timeout, with_tts_timeout
     from easycat.audio_utils import chunk_frames, resample, to_mono, ...
-    from easycat.stt.base import STTBase, pcm_to_wav
+    from easycat.audio_utils import pcm_to_wav
+    from easycat.stt.base import STTBase
     from easycat.tts.base import TTSBase
     from easycat.stt import create_stt_provider
     from easycat.tts.factory import create_tts_provider, TTSProviderConfig
