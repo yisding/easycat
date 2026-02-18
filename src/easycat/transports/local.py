@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_FRAME_MS = 20
 
 
+def _enqueue_or_drop(q: asyncio.Queue[object], item: object) -> None:
+    """Best-effort enqueue — silently drops if the queue is full."""
+    try:
+        q.put_nowait(item)
+    except asyncio.QueueFull:
+        logger.debug("Inbound mic audio queue full — dropping frame")
+
+
 @dataclass
 class LocalTransportConfig:
     """Configuration for :class:`LocalTransport`."""
@@ -97,7 +105,7 @@ class LocalTransport(_AudioQueueMixin):
             # Convert float32 [-1, 1] to int16
             pcm = (arr * 32767).astype(np.int16).tobytes()  # type: ignore[union-attr]
             chunk = AudioChunk(data=pcm, format=self._audio_format)
-            loop.call_soon_threadsafe(self._in_queue.put_nowait, chunk)
+            loop.call_soon_threadsafe(_enqueue_or_drop, self._in_queue, chunk)
 
         self._input_stream = sd.InputStream(
             samplerate=self._audio_format.sample_rate,
