@@ -248,6 +248,10 @@ async function start() {
     // 4. Handle remote audio track (agent TTS output).
     pc.addEventListener("track", function(evt) {
       if (evt.track.kind === "audio") {
+        // Remove any existing remote audio element to avoid duplicates.
+        var existing = document.getElementById("remoteAudio");
+        if (existing) existing.remove();
+
         var audio = document.createElement("audio");
         audio.srcObject = evt.streams[0];
         audio.autoplay = true;
