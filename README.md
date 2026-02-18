@@ -107,6 +107,18 @@ Runnable examples live in the `examples/` directory:
 - `twilio_app.py`: Twilio Media Streams example
 - `pydantic_ai_voice.py`: PydanticAI adapter example
 
+### Quickstart: WebRTC in browser (fast path)
+1. Install extras:
+   `python -m pip install -e ".[webrtc,openai,openai-agents]"`
+2. Set your key:
+   `export OPENAI_API_KEY="your-api-key"`
+3. Run the server:
+   `python examples/webrtc_server.py`
+4. Open:
+   `http://localhost:8080/webrtc_client.html`
+
+If browser clients are remote (not localhost), run behind HTTPS and configure
+TURN (`TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`) for reliable NAT traversal.
 
 ## Repo layout
 - src/easycat: library code

@@ -115,10 +115,7 @@ class WebSocketTransport(_ServerTransportBase):
         async for message in ws:
             if isinstance(message, bytes):
                 chunk = AudioChunk(data=message, format=self._audio_format)
-                try:
-                    self._in_queue.put_nowait(chunk)
-                except asyncio.QueueFull:
-                    logger.warning("Inbound audio queue full — dropping frame")
+                self._enqueue_chunk(chunk, context="WebSocket")
             elif isinstance(message, str):
                 self._handle_control_message(message)
 
