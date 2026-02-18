@@ -168,6 +168,13 @@ class TestWebRTCTransportLifecycle:
             ) as resp:
                 assert resp.status == 400
 
+            # Send valid JSON but invalid schema.
+            async with session.post(
+                f"http://127.0.0.1:{port}/offer",
+                json={"type": "answer", "sdp": "dummy"},
+            ) as resp:
+                assert resp.status == 400
+
         await transport.disconnect()
 
     @pytest.mark.asyncio
