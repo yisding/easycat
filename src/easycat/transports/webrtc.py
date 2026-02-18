@@ -282,6 +282,9 @@ class WebRTCTransport(_AudioQueueMixin):
         if self._config.static_dir is not None:
             static_path = Path(self._config.static_dir)
             if static_path.is_dir():
+                default_client = static_path / "webrtc_client.html"
+                if default_client.is_file():
+                    app.router.add_get("/", self._handle_root)
                 app.router.add_static("/", static_path)
                 logger.info("Serving static files from %s", static_path)
             else:
@@ -386,8 +389,7 @@ class WebRTCTransport(_AudioQueueMixin):
                 text=json.dumps(
                     {
                         "error": (
-                            "Expected JSON body with non-empty 'sdp' and "
-                            "'type' set to 'offer'"
+                            "Expected JSON body with non-empty 'sdp' and 'type' set to 'offer'"
                         )
                     }
                 ),
@@ -487,6 +489,11 @@ class WebRTCTransport(_AudioQueueMixin):
             text=json.dumps({"status": "ok"}),
             headers=_CORS_HEADERS,
         )
+
+    async def _handle_root(self, request: Any) -> Any:
+        """Redirect `/` to the bundled demo client when present."""
+        web = self._web
+        raise web.HTTPFound("/webrtc_client.html")
 
     async def _handle_cors_preflight(self, request: Any) -> Any:
         web = self._web

@@ -8,7 +8,6 @@ to a single audio session. The wire protocol uses:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -61,14 +60,8 @@ class WebSocketTransport(_ServerTransportBase):
             max_pending_chunks=self._config.max_pending_chunks,
         )
         self._audio_format = self._config.audio_format
-        self._client_connected = asyncio.Event()
 
     # ── Transport protocol ────────────────────────────────────────
-
-    async def disconnect(self) -> None:
-        """Disconnect the current client and stop the server."""
-        await super().disconnect()
-        self._client_connected.clear()
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         """Send an audio chunk to the connected WebSocket client as a binary frame."""
@@ -106,12 +99,7 @@ class WebSocketTransport(_ServerTransportBase):
             self._client_connected.clear()
             # Reset negotiated format so the next client starts fresh.
             self._audio_format = self._config.audio_format
-            # Signal end of stream.
-            try:
-                self._in_queue.put_nowait(None)
-            except asyncio.QueueFull:
-                # Sentinel already enqueued or consumer stopped reading; safe to ignore.
-                logger.debug("Input queue full during client disconnect; dropping sentinel")
+            self._enqueue_sentinel()
 
     async def _receive_loop(self, ws: ServerConnection) -> None:
         """Read messages from the client connection."""
@@ -147,13 +135,3 @@ class WebSocketTransport(_ServerTransportBase):
             logger.debug("Client sent stop signal")
         else:
             logger.debug("Unknown control message type: %s", msg_type)
-
-    # ── Properties ────────────────────────────────────────────────
-
-    @property
-    def has_client(self) -> bool:
-        return self._ws is not None
-
-    async def wait_for_client(self, timeout: float | None = None) -> None:
-        """Block until a client connects (or timeout expires)."""
-        await asyncio.wait_for(self._client_connected.wait(), timeout=timeout)

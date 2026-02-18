@@ -104,6 +104,7 @@ class _ServerTransportBase(_AudioQueueMixin):
 
         self._server: Server | None = None
         self._ws: ServerConnection | None = None
+        self._client_connected = asyncio.Event()
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -142,6 +143,7 @@ class _ServerTransportBase(_AudioQueueMixin):
             except Exception:
                 logger.debug("Error closing %s WebSocket", self._transport_name, exc_info=True)
             self._ws = None
+        self._client_connected.clear()
 
         if self._server is not None:
             self._server.close()
@@ -150,3 +152,11 @@ class _ServerTransportBase(_AudioQueueMixin):
 
         self._enqueue_sentinel()
         self._connected = False
+
+    @property
+    def has_client(self) -> bool:
+        return self._ws is not None
+
+    async def wait_for_client(self, timeout: float | None = None) -> None:
+        """Block until a client connects (or timeout expires)."""
+        await asyncio.wait_for(self._client_connected.wait(), timeout=timeout)
