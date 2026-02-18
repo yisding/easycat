@@ -236,6 +236,7 @@ class WebRTCTransport(_AudioQueueMixin):
         self._app: Any | None = None
         self._runner: Any | None = None
         self._site: Any | None = None
+        self._has_bundled_client = False
 
         # Background task that consumes the inbound audio track.
         self._consume_task: asyncio.Task[None] | None = None
@@ -276,6 +277,7 @@ class WebRTCTransport(_AudioQueueMixin):
         app.router.add_post("/offer", self._handle_offer)
         app.router.add_get("/config", self._handle_config)
         app.router.add_get("/health", self._handle_health)
+        app.router.add_get("/", self._handle_root)
         app.router.add_options("/offer", self._handle_cors_preflight)
 
         # Serve static files if a directory was configured.
@@ -284,7 +286,7 @@ class WebRTCTransport(_AudioQueueMixin):
             if static_path.is_dir():
                 default_client = static_path / "webrtc_client.html"
                 if default_client.is_file():
-                    app.router.add_get("/", self._handle_root)
+                    self._has_bundled_client = True
                 app.router.add_static("/", static_path)
                 logger.info("Serving static files from %s", static_path)
             else:
@@ -336,6 +338,7 @@ class WebRTCTransport(_AudioQueueMixin):
             await self._runner.cleanup()
             self._runner = None
         self._app = None
+        self._has_bundled_client = False
 
         self._enqueue_sentinel()
         self._connected = False
@@ -491,9 +494,29 @@ class WebRTCTransport(_AudioQueueMixin):
         )
 
     async def _handle_root(self, request: Any) -> Any:
-        """Redirect `/` to the bundled demo client when present."""
+        """Return a friendly landing response for signaling server root.
+
+        When the bundled demo client is served, redirect to it. Otherwise,
+        return a small JSON payload describing available endpoints so first
+        time users can immediately discover how to connect.
+        """
         web = self._web
-        raise web.HTTPFound("/webrtc_client.html")
+        if self._has_bundled_client:
+            raise web.HTTPFound("/webrtc_client.html")
+        return web.Response(
+            content_type="application/json",
+            text=json.dumps(
+                {
+                    "service": "easycat-webrtc-signaling",
+                    "endpoints": ["/offer", "/config", "/health"],
+                    "note": (
+                        "Set WebRTCTransportConfig.static_dir to serve "
+                        "the demo browser client from this server."
+                    ),
+                }
+            ),
+            headers=_CORS_HEADERS,
+        )
 
     async def _handle_cors_preflight(self, request: Any) -> Any:
         web = self._web
