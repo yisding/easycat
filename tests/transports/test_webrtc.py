@@ -132,6 +132,25 @@ class TestWebRTCTransportLifecycle:
         await transport.disconnect()
 
     @pytest.mark.asyncio
+    async def test_root_redirects_to_bundled_client_when_present(self, tmp_path):
+        import aiohttp
+
+        client = tmp_path / "webrtc_client.html"
+        client.write_text("<html></html>", encoding="utf-8")
+
+        port = find_free_port()
+        config = WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=str(tmp_path))
+        transport = WebRTCTransport(config)
+        await transport.connect()
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/", allow_redirects=False) as resp:
+                assert resp.status == 302
+                assert resp.headers["Location"] == "/webrtc_client.html"
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
     async def test_health_endpoint(self):
         import aiohttp
 
