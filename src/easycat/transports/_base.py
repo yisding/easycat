@@ -55,11 +55,25 @@ class _AudioQueueMixin:
         self._in_queue = asyncio.Queue(maxsize=self._max_pending_chunks)
 
     def _enqueue_sentinel(self) -> None:
-        """Put ``None`` on the queue to signal end-of-stream."""
+        """Put ``None`` on the queue to signal end-of-stream.
+
+        The sentinel is critical for unblocking ``receive_audio()``, so if the
+        queue is full we drain one item to make room rather than silently
+        dropping the signal.
+        """
         try:
             self._in_queue.put_nowait(None)
         except asyncio.QueueFull:
-            logger.debug("Input queue full when enqueueing sentinel; ignoring")
+            # Drop one audio chunk to make room — shutdown signals must not
+            # be silently lost.
+            try:
+                self._in_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                self._in_queue.put_nowait(None)
+            except asyncio.QueueFull:
+                logger.debug("Input queue full when enqueueing sentinel; ignoring")
 
     def _enqueue_chunk(self, chunk: AudioChunk, *, context: str) -> None:
         """Best-effort enqueue for inbound audio data.
