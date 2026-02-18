@@ -97,7 +97,7 @@ class WebRTCTransportConfig:
 
 
 class _OutboundAudioSource:
-    """Custom audio track that reads PCM16 data from a queue.
+    """Custom audio source that reads PCM16 data from a queue.
 
     Produces 20 ms Opus-compatible frames at 48 kHz.  When the queue is
     empty, silence frames are emitted so the RTP stream stays alive.
