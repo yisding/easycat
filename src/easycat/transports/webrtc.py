@@ -54,6 +54,10 @@ class ICEServer:
     username: str | None = None
     credential: str | None = None
 
+    def __post_init__(self) -> None:
+        if isinstance(self.urls, str):
+            self.urls = [self.urls]
+
 
 @dataclass
 class WebRTCTransportConfig:
@@ -92,7 +96,7 @@ class WebRTCTransportConfig:
 # ── Outbound audio track ─────────────────────────────────────────
 
 
-class _OutboundAudioTrack:
+class _OutboundAudioSource:
     """Custom audio track that reads PCM16 data from a queue.
 
     Produces 20 ms Opus-compatible frames at 48 kHz.  When the queue is
@@ -224,10 +228,11 @@ class WebRTCTransport(_AudioQueueMixin):
 
         # Peer connection state.
         self._pc: Any | None = None
-        self._outbound: _OutboundAudioTrack = _OutboundAudioTrack()
+        self._outbound: _OutboundAudioSource = _OutboundAudioSource()
         self._outbound_track: Any | None = None
 
         # HTTP signaling server (aiohttp).
+        self._web: Any | None = None  # cached aiohttp.web module
         self._app: Any | None = None
         self._runner: Any | None = None
         self._site: Any | None = None
@@ -247,9 +252,7 @@ class WebRTCTransport(_AudioQueueMixin):
         """
         result: list[dict[str, Any]] = []
         for srv in self._config.ice_servers:
-            entry: dict[str, Any] = {
-                "urls": srv.urls if isinstance(srv.urls, list) else [srv.urls],
-            }
+            entry: dict[str, Any] = {"urls": srv.urls}
             if srv.username:
                 entry["username"] = srv.username
             if srv.credential:
@@ -264,8 +267,8 @@ class WebRTCTransport(_AudioQueueMixin):
         if self._connected:
             return
 
-        aiohttp_web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
-        web = aiohttp_web
+        self._web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
+        web = self._web
 
         self._reset_audio_queue()
 
@@ -320,7 +323,7 @@ class WebRTCTransport(_AudioQueueMixin):
             await self._pc.close()
             self._pc = None
 
-        self._outbound.stop()
+        self._outbound.stop()  # no-op by design; track is discarded with the PC
 
         # Shut down HTTP server.
         if self._site is not None:
@@ -358,8 +361,7 @@ class WebRTCTransport(_AudioQueueMixin):
 
     async def _handle_offer(self, request: Any) -> Any:
         """Handle an SDP offer from the browser client."""
-        import aiohttp.web as web
-
+        web = self._web
         aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
         RTCPeerConnection = aiortc.RTCPeerConnection
         RTCSessionDescription = aiortc.RTCSessionDescription
@@ -405,6 +407,10 @@ class WebRTCTransport(_AudioQueueMixin):
             await self._pc.close()
             self._pc = None
 
+        # Clear stale audio from the previous peer so it doesn't leak into
+        # the new session's receive_audio() iterator.
+        self._reset_audio_queue()
+
         # Build ICE configuration from the shared serializer.
         ice_servers = [RTCIceServer(**entry) for entry in self._ice_servers_as_dicts()]
         rtc_config = RTCConfiguration(iceServers=ice_servers)
@@ -415,7 +421,7 @@ class WebRTCTransport(_AudioQueueMixin):
             self._pc = pc
 
             # Reset outbound track for the new connection.
-            self._outbound = _OutboundAudioTrack()
+            self._outbound = _OutboundAudioSource()
             self._outbound_track = self._outbound.create_track()
             pc.addTrack(self._outbound_track)
 
@@ -467,8 +473,7 @@ class WebRTCTransport(_AudioQueueMixin):
 
     async def _handle_config(self, request: Any) -> Any:
         """Return ICE server configuration for browser clients."""
-        import aiohttp.web as web
-
+        web = self._web
         return web.Response(
             content_type="application/json",
             text=json.dumps({"iceServers": self._ice_servers_as_dicts()}),
@@ -476,16 +481,15 @@ class WebRTCTransport(_AudioQueueMixin):
         )
 
     async def _handle_health(self, request: Any) -> Any:
-        import aiohttp.web as web
-
+        web = self._web
         return web.Response(
             content_type="application/json",
             text=json.dumps({"status": "ok"}),
+            headers=_CORS_HEADERS,
         )
 
     async def _handle_cors_preflight(self, request: Any) -> Any:
-        import aiohttp.web as web
-
+        web = self._web
         return web.Response(headers=_CORS_HEADERS)
 
     # ── Audio track consumer ──────────────────────────────────────
@@ -520,9 +524,12 @@ class WebRTCTransport(_AudioQueueMixin):
                 chunk = AudioChunk(data=raw, format=target_format)
                 self._enqueue_chunk(chunk, context="WebRTC")
 
+        except StopAsyncIteration:
+            logger.info("WebRTC audio track stream ended")
         except Exception as exc:
             # aiortc raises MediaStreamError when the track ends.
-            if "MediaStreamError" in type(exc).__name__:
+            aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
+            if isinstance(exc, aiortc.MediaStreamError):
                 logger.info("WebRTC audio track stream ended")
             else:
                 logger.warning("WebRTC audio consume error: %s", exc)

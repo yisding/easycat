@@ -6,7 +6,7 @@ Tests cover:
   - Connect/disconnect lifecycle
   - Signaling HTTP endpoints (health, config, offer)
   - Inbound/outbound audio flow (with mocked aiortc)
-  - Outbound audio track frame generation and remainder handling
+  - Outbound audio source frame generation and remainder handling
 """
 
 from __future__ import annotations
@@ -16,33 +16,20 @@ import importlib.util
 
 import pytest
 
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.transports.webrtc import (
     ICEServer,
     WebRTCTransport,
     WebRTCTransportConfig,
-    _OutboundAudioTrack,
+    _OutboundAudioSource,
 )
+
+from .conftest import find_free_port, make_chunk
 
 # Whether aiortc + aiohttp are available (needed for integration tests).
 _HAS_AIORTC = importlib.util.find_spec("aiortc") is not None
 _HAS_AIOHTTP = importlib.util.find_spec("aiohttp") is not None
 _HAS_WEBRTC_DEPS = _HAS_AIORTC and _HAS_AIOHTTP
-
-
-def _find_free_port() -> int:
-    """Find a free TCP port on localhost."""
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _make_chunk(n_bytes: int = 320, sample_rate: int = 16000) -> AudioChunk:
-    """Create a test audio chunk of silence."""
-    fmt = AudioFormat(sample_rate=sample_rate, channels=1, sample_width=2)
-    return AudioChunk(data=bytes(n_bytes), format=fmt)
 
 
 # ── Config tests ──────────────────────────────────────────────────
@@ -57,7 +44,7 @@ class TestWebRTCTransportConfig:
         assert config.max_pending_chunks == 200
         assert config.static_dir is None
         assert len(config.ice_servers) == 1
-        assert "stun:" in config.ice_servers[0].urls
+        assert "stun:" in config.ice_servers[0].urls[0]
 
     def test_custom_ice_servers(self):
         servers = [
@@ -73,9 +60,9 @@ class TestWebRTCTransportConfig:
         assert config.ice_servers[1].username == "user"
         assert config.ice_servers[1].credential == "pass"
 
-    def test_ice_server_single_url(self):
+    def test_ice_server_single_url_normalized_to_list(self):
         srv = ICEServer(urls="stun:stun.l.google.com:19302")
-        assert srv.urls == "stun:stun.l.google.com:19302"
+        assert srv.urls == ["stun:stun.l.google.com:19302"]
         assert srv.username is None
         assert srv.credential is None
 
@@ -95,6 +82,7 @@ class TestWebRTCTransportConformance:
         assert callable(t.disconnect)
         assert callable(t.receive_audio)
         assert callable(t.send_audio)
+        assert callable(t.clear_audio)
 
     def test_is_transport_protocol(self):
         from easycat.providers import Transport
@@ -115,7 +103,7 @@ class TestWebRTCTransportConformance:
 class TestWebRTCTransportLifecycle:
     @pytest.mark.asyncio
     async def test_connect_disconnect(self):
-        port = _find_free_port()
+        port = find_free_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
 
@@ -133,7 +121,7 @@ class TestWebRTCTransportLifecycle:
 
     @pytest.mark.asyncio
     async def test_connect_idempotent(self):
-        port = _find_free_port()
+        port = find_free_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
 
@@ -147,7 +135,7 @@ class TestWebRTCTransportLifecycle:
     async def test_health_endpoint(self):
         import aiohttp
 
-        port = _find_free_port()
+        port = find_free_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
@@ -157,6 +145,8 @@ class TestWebRTCTransportLifecycle:
                 assert resp.status == 200
                 data = await resp.json()
                 assert data["status"] == "ok"
+                # Verify CORS headers are present.
+                assert "Access-Control-Allow-Origin" in resp.headers
 
         await transport.disconnect()
 
@@ -164,7 +154,7 @@ class TestWebRTCTransportLifecycle:
     async def test_offer_without_valid_sdp_returns_error(self):
         import aiohttp
 
-        port = _find_free_port()
+        port = find_free_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
@@ -191,7 +181,7 @@ class TestWebRTCTransportLifecycle:
     async def test_config_endpoint(self):
         import aiohttp
 
-        port = _find_free_port()
+        port = find_free_port()
         servers = [
             ICEServer(urls="stun:stun.example.com:3478"),
             ICEServer(
@@ -221,7 +211,7 @@ class TestWebRTCTransportLifecycle:
     async def test_cors_preflight(self):
         import aiohttp
 
-        port = _find_free_port()
+        port = find_free_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
@@ -235,7 +225,7 @@ class TestWebRTCTransportLifecycle:
 
     @pytest.mark.asyncio
     async def test_receive_audio_ends_on_disconnect(self):
-        port = _find_free_port()
+        port = find_free_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
@@ -255,41 +245,41 @@ class TestWebRTCTransportLifecycle:
     @pytest.mark.asyncio
     async def test_send_audio_no_peer(self):
         """send_audio is a no-op when no peer is connected."""
-        port = _find_free_port()
+        port = find_free_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
 
-        chunk = _make_chunk()
+        chunk = make_chunk()
         await transport.send_audio(chunk)  # Should not raise.
 
         await transport.disconnect()
 
 
-# ── Outbound audio track tests ───────────────────────────────────
+# ── Outbound audio source tests ──────────────────────────────────
 
 
-class TestOutboundAudioTrack:
+class TestOutboundAudioSource:
     def test_enqueue_and_drain(self):
-        track = _OutboundAudioTrack()
+        source = _OutboundAudioSource()
         data = bytes(960 * 2)  # 20ms at 48kHz mono s16
-        track.enqueue(data)
-        assert not track._queue.empty()
+        source.enqueue(data)
+        assert not source._queue.empty()
 
     def test_enqueue_overflow(self):
-        track = _OutboundAudioTrack()
-        track._queue = asyncio.Queue(maxsize=2)
+        source = _OutboundAudioSource()
+        source._queue = asyncio.Queue(maxsize=2)
         # Fill queue.
-        track.enqueue(bytes(100))
-        track.enqueue(bytes(100))
+        source.enqueue(bytes(100))
+        source.enqueue(bytes(100))
         # Overflow — should not raise.
-        track.enqueue(bytes(100))
+        source.enqueue(bytes(100))
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_recv_produces_silence_when_empty(self):
-        track = _OutboundAudioTrack()
-        frame = await track._recv()
+        source = _OutboundAudioSource()
+        frame = await source._recv()
         assert frame.sample_rate == 48000
         assert frame.samples == 960
         # Frame data should be all zeros (silence).
@@ -299,13 +289,13 @@ class TestOutboundAudioTrack:
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_recv_returns_enqueued_data(self):
-        track = _OutboundAudioTrack()
+        source = _OutboundAudioSource()
         # Enqueue one frame of non-silent data.
         test_data = bytes(range(256)) * (960 * 2 // 256 + 1)
         test_data = test_data[: 960 * 2]
-        track.enqueue(test_data)
+        source.enqueue(test_data)
 
-        frame = await track._recv()
+        frame = await source._recv()
         actual = bytes(frame.planes[0])
         assert actual == test_data
 
@@ -313,50 +303,50 @@ class TestOutboundAudioTrack:
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_recv_preserves_audio_order_with_remainder(self):
         """Verify that audio chunks larger than one frame don't reorder."""
-        track = _OutboundAudioTrack()
+        source = _OutboundAudioSource()
         frame_bytes = 960 * 2  # one 20ms frame at 48kHz mono s16
 
         # Create chunk A (1.5 frames) and chunk B (1 frame).
         chunk_a = bytes([0xAA]) * (frame_bytes + frame_bytes // 2)
         chunk_b = bytes([0xBB]) * frame_bytes
-        track.enqueue(chunk_a)
-        track.enqueue(chunk_b)
+        source.enqueue(chunk_a)
+        source.enqueue(chunk_b)
 
         # Frame 1: first frame of A.
-        frame1 = await track._recv()
+        frame1 = await source._recv()
         data1 = bytes(frame1.planes[0])
         assert data1 == bytes([0xAA]) * frame_bytes
 
         # Frame 2: remainder of A (half frame) + start of B (half frame).
-        frame2 = await track._recv()
+        frame2 = await source._recv()
         data2 = bytes(frame2.planes[0])
         expected = bytes([0xAA]) * (frame_bytes // 2) + bytes([0xBB]) * (frame_bytes // 2)
         assert data2 == expected
 
         # Frame 3: remainder of B (half frame) + silence padding.
-        frame3 = await track._recv()
+        frame3 = await source._recv()
         data3 = bytes(frame3.planes[0])
         expected3 = bytes([0xBB]) * (frame_bytes // 2) + bytes(frame_bytes // 2)
         assert data3 == expected3
 
     def test_clear_discards_queued_data(self):
-        track = _OutboundAudioTrack()
-        track.enqueue(bytes(100))
-        track.enqueue(bytes(200))
-        track._remainder = bytes(50)
+        source = _OutboundAudioSource()
+        source.enqueue(bytes(100))
+        source.enqueue(bytes(200))
+        source._remainder = bytes(50)
 
-        track.clear()
+        source.clear()
 
-        assert track._queue.empty()
-        assert track._remainder == b""
+        assert source._queue.empty()
+        assert source._remainder == b""
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_clear_then_recv_produces_silence(self):
-        track = _OutboundAudioTrack()
-        track.enqueue(bytes([0xFF]) * 960 * 2)
-        track.clear()
+        source = _OutboundAudioSource()
+        source.enqueue(bytes([0xFF]) * 960 * 2)
+        source.clear()
 
-        frame = await track._recv()
+        frame = await source._recv()
         data = bytes(frame.planes[0])
         assert data == bytes(960 * 2)  # silence

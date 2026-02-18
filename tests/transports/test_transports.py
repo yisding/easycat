@@ -31,17 +31,16 @@ from easycat.transports.twilio_media import (
     twiml_connect_stream,
     twiml_stream,
 )
+from easycat.transports.webrtc import WebRTCTransport
 from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
+
+from .conftest import find_free_port, make_chunk
 
 # ── Helpers ───────────────────────────────────────────────────────
 
-
-def _make_chunk(n_bytes: int = 320, sample_rate: int = 16000) -> AudioChunk:
-    """Create a test audio chunk of silence."""
-    from easycat.audio_format import AudioFormat
-
-    fmt = AudioFormat(sample_rate=sample_rate, channels=1, sample_width=2)
-    return AudioChunk(data=bytes(n_bytes), format=fmt)
+# Aliases for backward compatibility within this file.
+_make_chunk = make_chunk
+_find_free_port = find_free_port
 
 
 def _make_sine_pcm16(freq: int = 440, duration_ms: int = 20, sample_rate: int = 16000) -> bytes:
@@ -55,15 +54,6 @@ def _make_sine_pcm16(freq: int = 440, duration_ms: int = 20, sample_rate: int = 
         value = int(16000 * math.sin(2 * math.pi * freq * t))
         samples.append(max(-32768, min(32767, value)))
     return struct.pack(f"<{n_samples}h", *samples)
-
-
-def _find_free_port() -> int:
-    """Find a free TCP port on localhost."""
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 # ── LocalTransport tests ─────────────────────────────────────────
@@ -602,41 +592,41 @@ class TestTwiML:
 class TestTransportConformance:
     """Verify all transports satisfy the Transport protocol shape."""
 
-    def test_local_transport_has_protocol_methods(self):
-        t = LocalTransport()
+    def _assert_has_protocol_methods(self, t: object) -> None:
         assert callable(t.connect)
         assert callable(t.disconnect)
         assert callable(t.receive_audio)
         assert callable(t.send_audio)
+        assert callable(t.clear_audio)
+
+    def test_local_transport_has_protocol_methods(self):
+        self._assert_has_protocol_methods(LocalTransport())
 
     def test_websocket_transport_has_protocol_methods(self):
-        t = WebSocketTransport()
-        assert callable(t.connect)
-        assert callable(t.disconnect)
-        assert callable(t.receive_audio)
-        assert callable(t.send_audio)
+        self._assert_has_protocol_methods(WebSocketTransport())
 
     def test_twilio_transport_has_protocol_methods(self):
-        t = TwilioTransport()
-        assert callable(t.connect)
-        assert callable(t.disconnect)
-        assert callable(t.receive_audio)
-        assert callable(t.send_audio)
+        self._assert_has_protocol_methods(TwilioTransport())
+
+    def test_webrtc_transport_has_protocol_methods(self):
+        self._assert_has_protocol_methods(WebRTCTransport())
 
     def test_local_transport_is_transport(self):
         from easycat.providers import Transport
 
-        t = LocalTransport()
-        assert isinstance(t, Transport)
+        assert isinstance(LocalTransport(), Transport)
 
     def test_websocket_transport_is_transport(self):
         from easycat.providers import Transport
 
-        t = WebSocketTransport()
-        assert isinstance(t, Transport)
+        assert isinstance(WebSocketTransport(), Transport)
 
     def test_twilio_transport_is_transport(self):
         from easycat.providers import Transport
 
-        t = TwilioTransport()
-        assert isinstance(t, Transport)
+        assert isinstance(TwilioTransport(), Transport)
+
+    def test_webrtc_transport_is_transport(self):
+        from easycat.providers import Transport
+
+        assert isinstance(WebRTCTransport(), Transport)
