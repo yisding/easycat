@@ -11,7 +11,7 @@ import asyncio
 import enum
 import logging
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -35,9 +35,6 @@ from easycat.events import (
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
-    TTSAudio,
-    TTSEventType,
-    TTSMarkers,
     TurnEnded,
     TurnStarted,
 )
@@ -48,8 +45,6 @@ from easycat.metrics import (
     INTERRUPTIONS,
     RECONNECTS,
     STT_LATENCY,
-    TTS_TTFB,
-    TURN_E2E,
     MetricsCollector,
 )
 from easycat.providers import NoiseReducer, STTProvider, Transport, TTSProvider, VADProvider
@@ -67,9 +62,9 @@ from easycat.timeouts import (
     TimeoutConfig,
     TTSTimeoutError,
     with_agent_timeout,
-    with_tts_timeout,
 )
 from easycat.tracing import SpanStatus, Tracer
+from easycat.tts_synthesizer import TTSSynthesizer
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
 
 logger = logging.getLogger(__name__)
@@ -255,6 +250,14 @@ class Session:
             name=self._outbound_queue_name,
         )
         self._outbound_task: asyncio.Task[None] | None = None
+        self._tts_synth = TTSSynthesizer(
+            tts=self.tts,
+            event_bus=self.event_bus,
+            outbound_queue=self._outbound_queue,
+            spans=self._spans,
+            metrics=self._metrics,
+            timeout_config=self._timeout_config,
+        )
         self._health_checkers: list[PeriodicHealthChecker] = []
         self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)
 
@@ -328,6 +331,7 @@ class Session:
                 policy=self._outbound_queue_policy,
                 name=self._outbound_queue_name,
             )
+            self._tts_synth._outbound_queue = self._outbound_queue
         # Start periodic health checks for providers that support it
         self._health_checkers = []
         for name, provider in (
@@ -706,68 +710,6 @@ class Session:
             )
         return await self.agent.run(transcript)
 
-    # ── TTS consumption helper ─────────────────────────────────
-
-    async def _consume_tts_events(
-        self,
-        text: str,
-        token: CancelToken | None,
-        tts_start: float,
-    ) -> None:
-        """Consume TTS events for a single text chunk, emitting audio and markers.
-
-        Shared by both basic and streaming agent paths.
-        """
-        tts_span = self._spans.start(Tracer.TTS)
-        tts_status = SpanStatus.OK
-        try:
-            tts_iter: AsyncIterator = self.tts.synthesize(text)
-            if self._timeout_config and self._timeout_config.tts_first_byte_timeout:
-                tts_iter = with_tts_timeout(
-                    tts_iter,
-                    timeout=self._timeout_config.tts_first_byte_timeout,
-                    provider_name="tts",
-                    event_bus=self.event_bus,
-                )
-            async for tts_event in tts_iter:
-                if token and token.is_cancelled:
-                    break
-                if self._turn_manager.state != TurnManagerState.BOT_SPEAKING:
-                    break
-                if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
-                    await self.event_bus.emit(TTSAudio(chunk=tts_event.audio))
-                    if self._first_tts_audio_time is None:
-                        self._first_tts_audio_time = time.monotonic()
-                        if self._metrics:
-                            self._metrics.record_latency(
-                                TTS_TTFB,
-                                (self._first_tts_audio_time - tts_start) * 1000,
-                            )
-                            if self._turn_end_time is not None:
-                                self._metrics.record_latency(
-                                    TURN_E2E,
-                                    (self._first_tts_audio_time - self._turn_end_time) * 1000,
-                                )
-                    await self._outbound_queue.put(tts_event.audio)
-                elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
-                    await self.event_bus.emit(TTSMarkers(markers=tts_event.markers))
-        except TTSTimeoutError:
-            await self._cancel_tts()
-            if tts_span:
-                timeout = self._timeout_config.tts_first_byte_timeout
-                tts_span.set_error(TTSTimeoutError("tts", timeout))
-                tts_status = SpanStatus.ERROR
-            raise
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            if tts_span:
-                tts_span.set_error(exc)
-                tts_status = SpanStatus.ERROR
-            raise
-        finally:
-            self._spans.finish(Tracer.TTS, tts_status)
-
     # ── Basic agent path ───────────────────────────────────────
 
     async def _run_basic_agent(self, transcript: str, token: CancelToken | None) -> None:
@@ -907,7 +849,17 @@ class Session:
                         await self._turn_manager.bot_started_speaking()
                         started = True
 
-                    await self._consume_tts_events(text, token, time.monotonic())
+                    result = await self._tts_synth.synthesize(
+                        text,
+                        token,
+                        turn_end_time=self._turn_end_time,
+                        is_active=lambda: (
+                            self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                        ),
+                        record_latency=self._first_tts_audio_time is None,
+                    )
+                    if result.first_audio_time is not None and self._first_tts_audio_time is None:
+                        self._first_tts_audio_time = result.first_audio_time
             except asyncio.CancelledError:
                 pass
             except TTSTimeoutError:
@@ -967,7 +919,14 @@ class Session:
         """Synthesize TTS for a complete text and emit audio events."""
         await self._turn_manager.bot_started_speaking()
         try:
-            await self._consume_tts_events(text, token, time.monotonic())
+            result = await self._tts_synth.synthesize(
+                text,
+                token,
+                turn_end_time=self._turn_end_time,
+                is_active=lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING,
+            )
+            if result.first_audio_time is not None:
+                self._first_tts_audio_time = result.first_audio_time
         except (asyncio.CancelledError, TTSTimeoutError):
             pass
 
@@ -1024,10 +983,7 @@ class Session:
         self._stt_final_future = None
 
     async def _cancel_tts(self) -> None:
-        try:
-            await self.tts.cancel()
-        except Exception:
-            pass
+        await self._tts_synth.cancel()
         if self._current_tts_task and not self._current_tts_task.done():
             self._current_tts_task.cancel()
             try:
