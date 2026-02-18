@@ -21,7 +21,7 @@ class OpenAISTTConfig:
     """Configuration for the OpenAI STT provider."""
 
     api_key: str
-    model: str = "gpt-4o-transcribe"
+    model: str = "gpt-5.2-transcribe"
     language: str | None = None
     prompt: str | None = None
     base_url: str = "https://api.openai.com/v1"

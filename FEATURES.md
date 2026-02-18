@@ -93,7 +93,7 @@ Errors
 
 ### Providers (MVP)
 - OpenAI STT
-  - Turn-based transcription via Audio API (transcriptions endpoint; models include gpt-4o-transcribe, etc.)
+  - Turn-based transcription via Audio API (transcriptions endpoint; models include gpt-5.2-transcribe, etc.)
   - Use VAD-driven turn segmentation; submit finalized user turns for transcription
 - Deepgram Streaming STT
   - Real-time transcription over WebSocket (listen-streaming)
