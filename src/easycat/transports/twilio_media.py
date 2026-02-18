@@ -7,7 +7,6 @@ and emits DTMF / control events into the Session event bus.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import logging
@@ -35,7 +34,7 @@ class TwilioTransportConfig:
 
     host: str = "0.0.0.0"
     port: int = 8766
-    internal_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
+    audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
 
 
@@ -70,7 +69,7 @@ class TwilioTransport(_ServerTransportBase):
             port=self._config.port,
             max_pending_chunks=self._config.max_pending_chunks,
         )
-        self._internal_format = self._config.internal_format
+        self._audio_format = self._config.audio_format
         self._event_bus = event_bus
 
         self._stream_sid: str | None = None
@@ -159,6 +158,7 @@ class TwilioTransport(_ServerTransportBase):
             return
 
         self._ws = ws
+        self._client_connected.set()
         logger.info("Twilio Media Streams connected")
 
         try:
@@ -170,12 +170,9 @@ class TwilioTransport(_ServerTransportBase):
             logger.info("Twilio Media Streams disconnected")
         finally:
             self._ws = None
+            self._client_connected.clear()
             self._stream_sid = None
-            try:
-                self._in_queue.put_nowait(None)
-            except asyncio.QueueFull:
-                # Sentinel already enqueued or consumer stopped reading; safe to ignore.
-                logger.debug("Input queue full during Twilio disconnect; dropping sentinel")
+            self._enqueue_sentinel()
 
     async def _handle_message(self, raw: str) -> None:
         """Route a Twilio JSON message to the appropriate handler."""
@@ -197,10 +194,7 @@ class TwilioTransport(_ServerTransportBase):
             # Explicitly end the current audio stream so receive_audio() can terminate.
             self._stream_sid = None
             self._call_sid = None
-            try:
-                self._in_queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+            self._enqueue_sentinel()
         elif event == "mark":
             mark_name = msg.get("mark", {}).get("name", "")
             logger.debug("Twilio mark acknowledged: %s", mark_name)
@@ -232,13 +226,10 @@ class TwilioTransport(_ServerTransportBase):
         except Exception:
             logger.warning("Ignoring Twilio media frame with invalid base64 payload")
             return
-        pcm_data = mulaw_to_pcm16(mulaw_data, self._internal_format.sample_rate)
+        pcm_data = mulaw_to_pcm16(mulaw_data, self._audio_format.sample_rate)
 
-        chunk = AudioChunk(data=pcm_data, format=self._internal_format)
-        try:
-            self._in_queue.put_nowait(chunk)
-        except asyncio.QueueFull:
-            logger.warning("Inbound audio queue full — dropping Twilio frame")
+        chunk = AudioChunk(data=pcm_data, format=self._audio_format)
+        self._enqueue_chunk(chunk, context="Twilio")
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
         """Emit a DTMF event for the pressed digit."""

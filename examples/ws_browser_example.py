@@ -13,9 +13,9 @@ through at its native rate (e.g. 24 kHz) and the server sends an
 Setup:
     export OPENAI_API_KEY="..."
     uv add easycat[openai-agents]
-    uv run python examples/webrtc_example.py
+    uv run python examples/ws_browser_example.py
 
-Then open http://localhost:8080/webrtc_example.html in your browser.
+Then open http://localhost:8080/ws_browser_client.html in your browser.
 """
 
 from __future__ import annotations
@@ -146,7 +146,7 @@ async def main() -> None:
     # Serve the HTML client on a background thread.
     http_thread = threading.Thread(target=_run_http_server, daemon=True)
     http_thread.start()
-    print(f"Open http://localhost:{HTTP_PORT}/webrtc_example.html in your browser")
+    print(f"Open http://localhost:{HTTP_PORT}/ws_browser_client.html in your browser")
 
     # Start the EasyCat session (launches WebSocket server on WS_PORT).
     await session.start()

@@ -10,7 +10,7 @@ OpenAI Agents SDK or PydanticAI agents.
 - TTS providers: OpenAI, Deepgram, ElevenLabs
 - VAD providers: Silero (open-source) and Krisp (commercial)
 - Noise reduction: RNNoise (open-source), Krisp (commercial), passthrough fallback
-- Transports: Local (sounddevice), WebSocket server, Twilio Media Streams server
+- Transports: Local (sounddevice), WebSocket server, WebRTC (aiortc), Twilio Media Streams server
 - Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers
 - Reliability/observability: reconnecting WebSocket, timeouts, bounded queues, metrics/tracing
 - Agent adapters: use OpenAI Agents SDK or PydanticAI directly and wrap with EasyCat
@@ -103,9 +103,23 @@ session = Session(SessionConfig(agent=adapter, ...))
 Runnable examples live in the `examples/` directory:
 - `local_chat.py`: local microphone/speaker loop
 - `ws_server.py`: WebSocket server example
+- `webrtc_server.py`: WebRTC voice chat with browser client
 - `twilio_app.py`: Twilio Media Streams example
 - `pydantic_ai_voice.py`: PydanticAI adapter example
 
+### Quickstart: WebRTC in browser (fast path)
+1. Install extras:
+   `python -m pip install -e ".[webrtc,openai,openai-agents]"`
+2. Set your key:
+   `export OPENAI_API_KEY="your-api-key"`
+3. Run the server:
+   `python examples/webrtc_server.py`
+4. Open:
+   `http://localhost:8080`
+   (auto-redirects to `webrtc_client.html` when using the bundled static client)
+
+If browser clients are remote (not localhost), run behind HTTPS and configure
+TURN (`TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`) for reliable NAT traversal.
 
 ## Repo layout
 - src/easycat: library code
@@ -131,6 +145,7 @@ python examples/local_chat.py
 
 Optional dependencies you may need depending on providers/transports:
 - sounddevice (LocalTransport)
+- aiortc + aiohttp (WebRTCTransport): `pip install -e ".[webrtc]"`
 - torch (Silero VAD)
 - pyrnnoise + requests (RNNoise noise reduction backend)
 - Krisp SDK (krisp_audio)

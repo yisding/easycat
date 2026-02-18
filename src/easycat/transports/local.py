@@ -11,16 +11,24 @@ import asyncio
 import logging
 import queue as thread_queue
 import struct
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.extras import require_module
+from easycat.transports._base import _AudioQueueMixin
 
 logger = logging.getLogger(__name__)
 
 # Frame duration for mic capture chunks (milliseconds).
 _DEFAULT_FRAME_MS = 20
+
+
+def _enqueue_or_drop(q: asyncio.Queue[object], item: object) -> None:
+    """Best-effort enqueue — silently drops if the queue is full."""
+    try:
+        q.put_nowait(item)
+    except asyncio.QueueFull:
+        logger.debug("Inbound mic audio queue full — dropping frame")
 
 
 @dataclass
@@ -35,7 +43,7 @@ class LocalTransportConfig:
     max_pending_out_chunks: int = 200
 
 
-class LocalTransport:
+class LocalTransport(_AudioQueueMixin):
     """Transport backed by local microphone and speaker via ``sounddevice``.
 
     Implements the ``Transport`` protocol from :mod:`easycat.providers`.
@@ -50,11 +58,8 @@ class LocalTransport:
     def __init__(self, config: LocalTransportConfig | None = None) -> None:
         self._config = config or LocalTransportConfig()
         self._audio_format = self._config.audio_format
+        self._init_audio_queue(self._config.max_pending_in_chunks)
 
-        # Queues bridging the sounddevice callback threads and asyncio.
-        self._in_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
-            maxsize=self._config.max_pending_in_chunks,
-        )
         # Output queue uses stdlib thread-safe queue because the sounddevice
         # output callback runs on a separate audio thread.
         self._out_queue: thread_queue.Queue[bytes | None] = thread_queue.Queue(
@@ -63,7 +68,6 @@ class LocalTransport:
 
         self._input_stream: object | None = None
         self._output_stream: object | None = None
-        self._connected = False
 
         # Samples per frame for the configured frame duration.
         self._frame_samples = (
@@ -77,8 +81,7 @@ class LocalTransport:
         if self._connected:
             return
 
-        # Reinitialize queues to clear any stale sentinels from a previous session.
-        self._in_queue = asyncio.Queue(maxsize=self._config.max_pending_in_chunks)
+        self._reset_audio_queue()
         self._out_queue = thread_queue.Queue(maxsize=self._config.max_pending_out_chunks)
 
         sd = require_module(
@@ -102,7 +105,7 @@ class LocalTransport:
             # Convert float32 [-1, 1] to int16
             pcm = (arr * 32767).astype(np.int16).tobytes()  # type: ignore[union-attr]
             chunk = AudioChunk(data=pcm, format=self._audio_format)
-            loop.call_soon_threadsafe(self._in_queue.put_nowait, chunk)
+            loop.call_soon_threadsafe(_enqueue_or_drop, self._in_queue, chunk)
 
         self._input_stream = sd.InputStream(
             samplerate=self._audio_format.sample_rate,
@@ -178,21 +181,8 @@ class LocalTransport:
             except thread_queue.Empty:
                 break
 
-        # Signal end of stream to any pending receive_audio iterators.
-        try:
-            self._in_queue.put_nowait(None)
-        except asyncio.QueueFull:
-            logger.debug("Input queue full when enqueueing sentinel; ignoring")
-
+        self._enqueue_sentinel()
         self._connected = False
-
-    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
-        """Yield microphone audio chunks as they arrive."""
-        while self._connected or not self._in_queue.empty():
-            chunk = await self._in_queue.get()
-            if chunk is None:
-                break
-            yield chunk
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         """Queue an audio chunk for speaker playback.
@@ -212,11 +202,13 @@ class LocalTransport:
                 logger.warning("Output audio queue full — dropping frame")
             offset += frame_bytes
 
-    # ── Helpers ────────────────────────────────────────────────────
-
-    @property
-    def is_connected(self) -> bool:
-        return self._connected
+    async def clear_audio(self) -> None:
+        """Discard queued outbound audio awaiting speaker playback."""
+        while not self._out_queue.empty():
+            try:
+                self._out_queue.get_nowait()
+            except thread_queue.Empty:
+                break
 
 
 def _np_array(samples: tuple[int, ...], np: object) -> object:

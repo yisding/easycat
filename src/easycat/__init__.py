@@ -124,6 +124,7 @@ from easycat.vad import KrispVAD, SileroVAD, VADConfig, create_vad
 
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
+from easycat.transports.webrtc import ICEServer, WebRTCTransport, WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
 
 # ── Configuration & errors ────────────────────────────────────────
@@ -230,8 +231,11 @@ __all__ = [
     "NoiseReducerConfig",
     "create_noise_reducer",
     # Transports
+    "ICEServer",
     "LocalTransport",
     "LocalTransportConfig",
+    "WebRTCTransport",
+    "WebRTCTransportConfig",
     "WebSocketTransport",
     "WebSocketTransportConfig",
     "TwilioTransport",

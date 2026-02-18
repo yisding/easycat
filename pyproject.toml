@@ -20,7 +20,10 @@ telephony = ["fastapi>=0.110.0", "python-multipart>=0.0.9", "twilio>=9.0.0", "uv
 local = ["sounddevice>=0.4.6"]
 rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.31.0"]
 smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.16.0", "transformers>=4.36.0"]
+webrtc = ["aiortc>=1.9.0", "aiohttp>=3.9.0"]
 all = [
+    "aiortc>=1.9.0",
+    "aiohttp>=3.9.0",
     "deepgram-sdk>=3.0.0",
     "elevenlabs>=1.0.0",
     "fastapi>=0.110.0",
