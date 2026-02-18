@@ -55,6 +55,21 @@ class _AudioQueueMixin:
         except asyncio.QueueFull:
             logger.debug("Input queue full when enqueueing sentinel; ignoring")
 
+    def _enqueue_chunk(self, chunk: AudioChunk, *, context: str) -> None:
+        """Best-effort enqueue for inbound audio data.
+
+        Parameters
+        ----------
+        chunk:
+            The audio chunk to enqueue.
+        context:
+            Log-friendly transport/context name used when the queue is full.
+        """
+        try:
+            self._in_queue.put_nowait(chunk)
+        except asyncio.QueueFull:
+            logger.warning("Inbound %s audio queue full — dropping frame", context)
+
     async def receive_audio(self) -> AsyncIterator[AudioChunk]:
         """Yield audio chunks until a ``None`` sentinel is received."""
         while self._connected or not self._in_queue.empty():
