@@ -22,7 +22,7 @@ All providers must implement:
 
 ### Provider: OpenAI STT
 
-- Use Audio API transcriptions endpoint (models: `gpt-4o-transcribe`, etc.)
+- Use Audio API transcriptions endpoint (models: `gpt-5.2-transcribe`, etc.)
 - Turn-based transcription: submit finalized user turns (VAD-driven segmentation)
 - Handle API errors and retries
 

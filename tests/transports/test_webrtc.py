@@ -169,7 +169,6 @@ class TestWebRTCTransportLifecycle:
 
         await transport.disconnect()
 
-
     @pytest.mark.asyncio
     async def test_failed_connect_does_not_leave_stale_bundled_client_state(
         self,

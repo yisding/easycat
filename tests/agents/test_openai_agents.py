@@ -299,7 +299,7 @@ async def test_run_passes_run_config(monkeypatch):
     runner = MockRunner(run_results=[MockRunResult("ok")])
     monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
 
-    config = {"model": "gpt-4o"}
+    config = {"model": "gpt-5.2"}
     adapter = OpenAIAgentsAdapter(MockAgent(), run_config=config)
     await adapter.run("test")
     assert runner.run_calls[0]["run_config"] == config

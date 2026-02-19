@@ -27,19 +27,6 @@ _RNNOISE_FRAME_SAMPLES = 480
 # ── RNNoise integration (open-source fallback) ─────────────────────
 
 
-def _pcm16_to_float32(data: bytes) -> list[float]:
-    """Convert PCM16 LE bytes to float32 samples in [-1.0, 1.0]."""
-    n = len(data) // 2
-    samples = struct.unpack(f"<{n}h", data)
-    return [s / 32768.0 for s in samples]
-
-
-def _float32_to_pcm16(samples: list[float]) -> bytes:
-    """Convert float32 samples in [-1.0, 1.0] to PCM16 LE bytes."""
-    clamped = [max(-32768, min(32767, int(round(s * 32768.0)))) for s in samples]
-    return struct.pack(f"<{len(clamped)}h", *clamped)
-
-
 class RNNoiseReducer:
     """Noise reducer using pyrnnoise (open-source RNNoise bindings).
 
