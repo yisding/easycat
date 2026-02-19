@@ -19,6 +19,9 @@ _PROVIDERS: dict[str, tuple[type[TTSProvider], type[TTSConfig]]] = {
     "deepgram": (DeepgramTTS, DeepgramTTSConfig),
     "elevenlabs": (ElevenLabsTTS, ElevenLabsTTSConfig),
 }
+_CONFIG_TO_PROVIDER: dict[type[TTSConfig], type[TTSProvider]] = {
+    cfg_cls: provider_cls for provider_cls, cfg_cls in _PROVIDERS.values()
+}
 
 
 @dataclass
@@ -72,7 +75,7 @@ def create_tts_provider_from_config(config: TTSConfig, event_bus: EventBus) -> T
 
 
 def _provider_for_config(config_type: type[TTSConfig]) -> type[TTSProvider]:
-    for _, (provider_cls, cfg_cls) in _PROVIDERS.items():
-        if config_type is cfg_cls:
-            return provider_cls
-    raise ValueError("Unsupported TTS configuration type.")
+    provider_cls = _CONFIG_TO_PROVIDER.get(config_type)
+    if provider_cls is None:
+        raise ValueError("Unsupported TTS configuration type.")
+    return provider_cls
