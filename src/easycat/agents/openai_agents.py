@@ -73,6 +73,31 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         self._run_config = run_config
         self._context = context
 
+    # ── History patching ─────────────────────────────────────
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Replace the text in the last assistant message.
+
+        ``to_input_list()`` returns dicts following the Responses API
+        format.  Walk backwards to find the last assistant / output
+        message and patch its text content.
+        """
+        for item in reversed(self._message_history):
+            if not isinstance(item, dict):
+                break
+            role = item.get("role")
+            if role == "assistant":
+                content = item.get("content")
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "output_text":
+                            part["text"] = text
+                            return
+                elif isinstance(content, str):
+                    item["content"] = text
+                    return
+                break
+
     # ── Helpers ────────────────────────────────────────────────
 
     def _build_input(self, text: str) -> Any:

@@ -71,6 +71,30 @@ class PydanticAIAdapter(BaseAgentAdapter):
         self._deps = deps
         self._model_settings = model_settings
 
+    # ── History patching ─────────────────────────────────────
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Replace the text in the last assistant (model response) message.
+
+        PydanticAI history consists of ``ModelRequest`` / ``ModelResponse``
+        objects.  Walk backwards to find the last ``ModelResponse`` and
+        replace its first ``TextPart``'s content.
+        """
+        for msg in reversed(self._message_history):
+            cls_name = type(msg).__name__
+            if cls_name == "ModelResponse":
+                parts = getattr(msg, "parts", [])
+                for part in parts:
+                    if type(part).__name__ == "TextPart" and hasattr(part, "content"):
+                        # Pydantic v2 models — use object.__setattr__ to bypass
+                        # frozen-model restrictions when present.
+                        try:
+                            part.content = text
+                        except (AttributeError, TypeError):
+                            object.__setattr__(part, "content", text)
+                        return
+                break
+
     # ── Basic Agent protocol ──────────────────────────────────
 
     async def run(self, text: str) -> str:

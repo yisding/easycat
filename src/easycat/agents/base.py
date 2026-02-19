@@ -74,6 +74,14 @@ class BaseAgentAdapter:
         """Return a copy of the current message history."""
         return list(self._message_history)
 
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Replace the text content of the last assistant message in history.
+
+        Subclasses should override to handle framework-specific message
+        formats.  The default implementation is a no-op because message
+        history formats vary across agent frameworks.
+        """
+
     # ── Structured output access ─────────────────────────────
 
     @property

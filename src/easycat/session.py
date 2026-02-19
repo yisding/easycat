@@ -48,6 +48,7 @@ from easycat.metrics import (
     MetricsCollector,
 )
 from easycat.providers import NoiseReducer, STTProvider, Transport, TTSProvider, VADProvider
+from easycat.strip_markdown import strip_markdown
 from easycat.stubs import (
     NoopAgent,
     NoopNoiseReducer,
@@ -147,6 +148,7 @@ class SessionConfig:
     # Pipeline flags
     enable_noise_reduction: bool = True
     enable_vad: bool = True
+    strip_markdown: bool = False
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -168,6 +170,18 @@ def _split_at_sentence_boundaries(text: str) -> tuple[str, str]:
         return "", text
     last_start, _ = _span_bounds(spans[-1])
     return text[:last_start], text[last_start:]
+
+
+def _replace_last_assistant_text(agent: Any, text: str) -> None:
+    """Update the last assistant message in the agent's chat history.
+
+    Works with :class:`AgentRunner` and :class:`BaseAgentAdapter` (or any
+    object that exposes ``replace_last_assistant_text``).  Silently does
+    nothing when the method is unavailable.
+    """
+    fn = getattr(agent, "replace_last_assistant_text", None)
+    if fn is not None:
+        fn(text)
 
 
 # ── Session ────────────────────────────────────────────────────────
@@ -224,6 +238,7 @@ class Session:
         # Pipeline flags
         self._enable_noise_reduction = cfg.enable_noise_reduction
         self._enable_vad = cfg.enable_vad
+        self._strip_markdown = cfg.strip_markdown
 
         # Turn manager — single source of truth for turn state
         self._turn_manager = cfg.turn_manager or TurnManager(
@@ -742,6 +757,13 @@ class Session:
             self._turn_manager.reset()
             return
 
+        # Strip markdown formatting when enabled so TTS speaks clean text.
+        if self._strip_markdown:
+            stripped = strip_markdown(agent_response)
+            if stripped != agent_response:
+                agent_response = stripped
+                _replace_last_assistant_text(self.agent, stripped)
+
         await self.event_bus.emit(AgentDelta(text=agent_response))
         # Expose structured output from adapters that support it, but avoid
         # duplicating plain-text responses in `structured_output`.
@@ -845,6 +867,9 @@ class Session:
                     if token and token.is_cancelled:
                         break
 
+                    if self._strip_markdown:
+                        text = strip_markdown(text)
+
                     if not started:
                         await self._turn_manager.bot_started_speaking()
                         started = True
@@ -895,6 +920,13 @@ class Session:
                 self._spans.finish_with_error(Tracer.AGENT, agent_error)
             else:
                 self._spans.finish(Tracer.AGENT)
+
+        # Strip markdown from the final accumulated text and update agent history.
+        if self._strip_markdown and accumulated_text:
+            stripped = strip_markdown(accumulated_text)
+            if stripped != accumulated_text:
+                accumulated_text = stripped
+                _replace_last_assistant_text(self.agent, stripped)
 
         # Emit AgentFinal after agent stream is fully consumed
         if accumulated_text and agent_error is None and not (token and token.is_cancelled):
