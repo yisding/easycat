@@ -803,3 +803,151 @@ async def test_full_streaming_turn_event_order():
     assert sf_idx < af_idx
     assert af_idx < bs_idx or bs_idx < af_idx  # TTS may start before AgentFinal
     assert bs_idx < be_idx
+
+
+# ── Barge-in with tool calls ──────────────────────────────────────
+
+
+class SlowToolCallingAgent:
+    """Streaming agent with a tool call that takes time, allowing
+    cancellation to arrive mid-tool."""
+
+    def __init__(self) -> None:
+        self.interruption_notified = False
+
+    async def run(self, text: str) -> str:
+        return "The answer is 42."
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        # Text before tool
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Let me look. ")
+        # Tool lifecycle
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_STARTED,
+            tool_name="database_update",
+            call_id="call_xyz",
+        )
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_DELTA,
+            call_id="call_xyz",
+            text="updating...",
+        )
+        # Simulate slow tool — cancellation arrives here
+        await asyncio.sleep(0.1)
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_RESULT,
+            call_id="call_xyz",
+            result="row updated",
+        )
+        # Text after tool (should be skipped on barge-in)
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Done!")
+        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Done!")
+
+    def notify_interruption(self) -> None:
+        self.interruption_notified = True
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_completes_tool_calls():
+    """Barge-in during a tool call should let the tool finish and emit its result."""
+    agent = SlowToolCallingAgent()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="do the thing"),
+        agent=agent,
+        tts=FakeTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    tool_started: list[ToolCallStarted] = []
+    tool_results: list[ToolCallResult] = []
+    session.event_bus.subscribe(ToolCallStarted, lambda e: tool_started.append(e))
+    session.event_bus.subscribe(ToolCallResult, lambda e: tool_results.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.1)
+
+    # Simulate barge-in while tool call is in-flight
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    # Tool call started AND result should both have been emitted
+    assert len(tool_started) == 1
+    assert tool_started[0].tool_name == "database_update"
+    assert len(tool_results) == 1
+    assert tool_results[0].result == "row updated"
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_calls_notify_interruption():
+    """After barge-in the session should call notify_interruption on the agent."""
+    agent = SlowToolCallingAgent()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="do the thing"),
+        agent=agent,
+        tts=FakeTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.1)
+
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    assert agent.interruption_notified
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_without_tool_calls_stops_immediately():
+    """Barge-in with no tool calls in flight should stop the stream quickly."""
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="test"),
+        agent=SlowStreamingAgent(),
+        tts=FakeTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    deltas: list[AgentDelta] = []
+    session.event_bus.subscribe(AgentDelta, lambda e: deltas.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.1)
+
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.2)
+    await session.stop()
+
+    # Stream should not have produced extra text beyond the agent's
+    # natural output.  The SlowStreamingAgent only yields 2 words, so
+    # it may finish before cancel arrives — what matters is it did not
+    # hang waiting for more output.
+    assert len(deltas) <= 2

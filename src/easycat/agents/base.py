@@ -106,6 +106,20 @@ class BaseAgentAdapter:
         """
         return self._last_output
 
+    # ── Interruption handling ────────────────────────────────
+
+    def notify_interruption(self) -> None:
+        """Record that the user interrupted the assistant's last response.
+
+        Called by :class:`easycat.Session` after a barge-in when the agent
+        stream has been drained (tool calls completed).  Appends a note to
+        the framework-specific message history so the agent understands the
+        user may not have heard the full response.
+
+        Subclasses override to inject the note in the appropriate format
+        for their framework.  The default implementation is a no-op.
+        """
+
     # ── Protocol methods (subclasses must override) ───────────
 
     async def run(self, text: str) -> str:
