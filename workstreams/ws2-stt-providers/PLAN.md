@@ -15,7 +15,7 @@
 
 ### Task 2.2: OpenAI STT provider ✅
 - Implement `OpenAISTT(STTProvider)`
-- Use the Audio API transcriptions endpoint (`gpt-5.2-transcribe` model)
+- Use the Audio API transcriptions endpoint (`gpt-4o-transcribe` model)
 - Turn-based: accept complete audio buffers (from VAD-segmented turns), submit via API, return final transcript
 - Since this is turn-based (not streaming), `send_audio(chunk)` buffers internally; `end_stream()` triggers the API call
 - **Important:** WS4/WS1 must provide a turn-finalization trigger (e.g., `TurnEnded` event or direct `end_stream()` call) at the right moment to submit the buffered audio — coordinate with WS4's TurnManager design
