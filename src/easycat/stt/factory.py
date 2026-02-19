@@ -13,11 +13,13 @@ from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 
 STTConfig = OpenAISTTConfig | DeepgramSTTConfig | ElevenLabsSTTConfig
 
-_PROVIDERS = {"openai", "deepgram", "elevenlabs"}
 _PROVIDER_TO_CONFIG: dict[str, tuple[type[STTBase], type[STTConfig]]] = {
     "openai": (OpenAISTT, OpenAISTTConfig),
     "deepgram": (DeepgramSTT, DeepgramSTTConfig),
     "elevenlabs": (ElevenLabsSTT, ElevenLabsSTTConfig),
+}
+_CONFIG_TO_PROVIDER: dict[type[STTConfig], type[STTBase]] = {
+    cfg_cls: provider_cls for provider_cls, cfg_cls in _PROVIDER_TO_CONFIG.values()
 }
 
 
@@ -37,10 +39,10 @@ def create_stt_provider(config: STTProviderConfig) -> STTBase:
     Provider-specific parameters are passed via ``config.params``.
     """
     provider_name = config.provider.lower()
-    if provider_name not in _PROVIDERS:
+    if provider_name not in _PROVIDER_TO_CONFIG:
         raise ValueError(
             f"Unknown STT provider '{config.provider}'. "
-            f"Available providers: {', '.join(sorted(_PROVIDERS))}"
+            f"Available providers: {', '.join(sorted(_PROVIDER_TO_CONFIG))}"
         )
 
     if not config.api_key:
@@ -66,7 +68,7 @@ def create_stt_provider_from_config(config: STTConfig, event_bus: EventBus) -> S
 
 
 def _provider_for_config(config_type: type[STTConfig]) -> type[STTBase]:
-    for _, (provider_cls, cfg_cls) in _PROVIDER_TO_CONFIG.items():
-        if config_type is cfg_cls:
-            return provider_cls
-    raise ValueError("Unsupported STT configuration type.")
+    provider_cls = _CONFIG_TO_PROVIDER.get(config_type)
+    if provider_cls is None:
+        raise ValueError("Unsupported STT configuration type.")
+    return provider_cls
