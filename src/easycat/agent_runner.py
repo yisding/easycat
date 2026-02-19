@@ -151,6 +151,27 @@ class AgentRunner:
         """Clear recorded tracing spans."""
         self._spans.clear()
 
+    # ── Interruption handling ─────────────────────────────────
+
+    _INTERRUPTION_NOTE = (
+        "[The user interrupted the assistant's response and may not have heard all of it.]"
+    )
+
+    def _append_interruption_note(self) -> None:
+        """Append a system-level note about the interruption to history."""
+        self._history.append({"role": "system", "content": self._INTERRUPTION_NOTE})
+
+    def notify_interruption(self) -> None:
+        """Record that the user interrupted the assistant's last response.
+
+        Called by :class:`Session` after a barge-in.  Delegates to the
+        underlying agent if it supports ``notify_interruption``, then
+        appends the note to the runner's own history.
+        """
+        if hasattr(self._agent, "notify_interruption"):
+            self._agent.notify_interruption()
+        self._append_interruption_note()
+
     # ── Internal helpers ───────────────────────────────────────
 
     def _record_span(self, name: str, **metadata: Any) -> Span:
@@ -239,16 +260,41 @@ class AgentRunner:
 
                 async def _iter_stream() -> AsyncIterator[AgentStreamEvent]:
                     nonlocal accumulated
+                    pending_tool_calls = 0
+                    interrupted = False
                     async for event in stream:
                         if cancel_token and cancel_token.is_cancelled:
-                            # Try to close the stream gracefully
-                            if hasattr(stream, "aclose"):
-                                await stream.aclose()
-                            break
+                            if not interrupted:
+                                interrupted = True
+                            # Let in-flight tool calls complete before stopping
+                            if pending_tool_calls > 0:
+                                if event.type == AgentStreamEventType.TOOL_RESULT:
+                                    pending_tool_calls -= 1
+                                    yield event
+                                    if pending_tool_calls <= 0:
+                                        break
+                                elif event.type in (
+                                    AgentStreamEventType.TOOL_STARTED,
+                                    AgentStreamEventType.TOOL_DELTA,
+                                ):
+                                    yield event
+                                elif event.type == AgentStreamEventType.DONE:
+                                    if event.text:
+                                        accumulated = event.text
+                                    break
+                                # Skip text deltas during drain
+                                continue
+                            else:
+                                # No tool calls in flight — stop immediately
+                                break
                         if event.type == AgentStreamEventType.TEXT_DELTA:
                             accumulated += event.text
                         elif event.type == AgentStreamEventType.DONE and event.text:
                             accumulated = event.text
+                        if event.type == AgentStreamEventType.TOOL_STARTED:
+                            pending_tool_calls += 1
+                        elif event.type == AgentStreamEventType.TOOL_RESULT:
+                            pending_tool_calls -= 1
                         yield event
 
                 if self._config.timeout:
@@ -292,6 +338,8 @@ class AgentRunner:
             if exec_span:
                 exec_span.finish(SpanStatus.CANCELLED)
             self._history.append({"role": "assistant", "content": accumulated})
+            if cancel_token and cancel_token.is_cancelled:
+                self._append_interruption_note()
             return
         except Exception as exc:
             if exec_span:
@@ -300,9 +348,12 @@ class AgentRunner:
             self._history.pop()
             raise
 
+        interrupted = cancel_token and cancel_token.is_cancelled
         if exec_span:
-            exec_span.finish(SpanStatus.OK)
-        if self._config.enable_tracing:
+            exec_span.finish(SpanStatus.CANCELLED if interrupted else SpanStatus.OK)
+        if self._config.enable_tracing and not interrupted:
             agent_to_tts = self._record_span("agent_to_tts")
             agent_to_tts.finish(SpanStatus.OK)
         self._history.append({"role": "assistant", "content": accumulated})
+        if interrupted:
+            self._append_interruption_note()

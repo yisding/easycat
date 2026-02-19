@@ -1203,3 +1203,150 @@ async def test_clear_history_resets_last_output():
 
     adapter.clear_history()
     assert adapter.last_output is None
+
+
+# ── Barge-in / interruption tests ─────────────────────────────────
+
+
+class CallToolsNode(MockStreamableNode):
+    """Named to match PydanticAI's CallToolsNode so the adapter
+    recognises it as a tool node during cancellation drain."""
+
+    pass
+
+
+class ModelRequestNode(MockStreamableNode):
+    """Named to match PydanticAI's ModelRequestNode (text generation)."""
+
+    pass
+
+
+class SlowToolIterAgent:
+    """iter()-based agent with a tool call node followed by a text node,
+    with delays so cancellation can arrive mid-tool."""
+
+    def __init__(self) -> None:
+        self.iter_calls: list[dict[str, Any]] = []
+        self._iter_messages: list[Any] = []
+
+    @asynccontextmanager
+    async def iter(
+        self,
+        prompt: str,
+        *,
+        message_history: list[Any] | None = None,
+        deps: Any = None,
+        model_settings: Any = None,
+    ) -> AsyncIterator[MockIterAgentRun]:
+        self.iter_calls.append({"prompt": prompt})
+
+        class SlowNodeStream:
+            def __init__(self, events: list[Any]) -> None:
+                self._events = events
+                self._index = 0
+
+            def __aiter__(self) -> SlowNodeStream:
+                return self
+
+            async def __anext__(self) -> Any:
+                if self._index >= len(self._events):
+                    raise StopAsyncIteration
+                event = self._events[self._index]
+                self._index += 1
+                await asyncio.sleep(0.03)
+                return event
+
+        class SlowCallToolsNode:
+            """Named CallToolsNode so the adapter recognises it."""
+
+            def __init__(self, events: list[Any]) -> None:
+                self._events = events
+
+            @asynccontextmanager
+            async def stream(self, ctx: Any) -> AsyncIterator[Any]:
+                yield SlowNodeStream(self._events)
+
+        # Must use __qualname__ trick to ensure type().__name__ == "CallToolsNode"
+        SlowCallToolsNode.__name__ = "CallToolsNode"
+
+        tool_events = [
+            FunctionToolCallEvent(MockToolPart("db_update", "call_1")),
+            MockDeltaEvent(ToolCallPartDelta('{"id": 1}')),
+            FunctionToolResultEvent(tool_call_id="call_1", result="updated"),
+        ]
+        text_events = [
+            MockDeltaEvent(TextPartDelta("Done updating.")),
+        ]
+
+        messages = [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": "Done updating."},
+        ]
+        self._iter_messages = messages
+
+        yield MockIterAgentRun(
+            nodes=[
+                SlowCallToolsNode(tool_events),
+                ModelRequestNode(text_events),
+            ],
+            messages=messages,
+        )
+
+
+@pytest.mark.asyncio
+async def test_iter_cancel_during_tool_call_lets_tool_complete():
+    """When cancelled mid-tool-call via iter(), the tool node should
+    complete and yield its result, but the text node should be skipped."""
+    agent = SlowToolIterAgent()
+    adapter = PydanticAIAdapter(agent)
+    token = CancelToken()
+
+    events = []
+    async for event in adapter.run_streaming("update it", cancel_token=token):
+        events.append(event)
+        # Cancel after seeing the tool started
+        if event.type == AgentStreamEventType.TOOL_STARTED:
+            token.cancel()
+
+    types = [e.type for e in events]
+
+    # Tool events should all be present
+    assert AgentStreamEventType.TOOL_STARTED in types
+    assert AgentStreamEventType.TOOL_RESULT in types
+
+    # Text deltas should be absent (the ModelRequestNode was skipped)
+    assert AgentStreamEventType.TEXT_DELTA not in types
+
+    # DONE should still be emitted
+    assert AgentStreamEventType.DONE in types
+
+    # History should be updated
+    assert len(adapter.message_history) > 0
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_appends_system_prompt():
+    """notify_interruption should add a system prompt part to the
+    PydanticAI message history when pydantic_ai is installed."""
+    try:
+        from pydantic_ai.messages import ModelRequest, SystemPromptPart  # noqa: F401
+
+        pydantic_ai_available = True
+    except ImportError:
+        pydantic_ai_available = False
+
+    agent = MockPydanticAgent(responses=["reply"])
+    adapter = PydanticAIAdapter(agent)
+    await adapter.run("hi")
+    initial_len = len(adapter.message_history)
+
+    adapter.notify_interruption()
+
+    if pydantic_ai_available:
+        assert len(adapter.message_history) == initial_len + 1
+        last = adapter.message_history[-1]
+        assert hasattr(last, "parts")
+        assert any("interrupted" in getattr(p, "content", "").lower() for p in last.parts)
+    else:
+        # Without pydantic_ai installed, notify_interruption is a no-op
+        assert len(adapter.message_history) == initial_len

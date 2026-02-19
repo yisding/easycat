@@ -831,3 +831,106 @@ async def test_clear_history_resets_last_output(monkeypatch):
 
     adapter.clear_history()
     assert adapter.last_output is None
+
+
+# ── Barge-in / interruption tests ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancel_during_tool_call_lets_tool_complete(monkeypatch):
+    """Cancelling mid-tool-call should let the tool result arrive."""
+    events = [
+        *_make_text_events(["Checking. "]),
+        MockStreamEvent(
+            type="run_item_stream_event",
+            item=MockToolCallItem(
+                raw_item=MockRawItem(name="db_update", call_id="c1"),
+            ),
+        ),
+        *_make_tool_delta_events(['{"id": 1}'], call_id="c1"),
+        # --- cancel arrives around here ---
+        MockStreamEvent(
+            type="run_item_stream_event",
+            item=MockToolCallOutputItem(
+                raw_item=MockRawItem(call_id="c1"),
+                output="row updated",
+            ),
+        ),
+        *_make_text_events(["All done."]),
+    ]
+
+    input_list = [
+        {"role": "user", "content": "update it"},
+        {"role": "assistant", "content": "Checking. All done."},
+    ]
+    result = MockSlowRunResultStreaming(events, input_list=input_list)
+    runner = MockRunner(stream_results=[result])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    token = CancelToken()
+    collected = []
+    async for event in adapter.run_streaming("update it", cancel_token=token):
+        collected.append(event)
+        # Cancel after seeing the tool started event
+        if event.type == AgentStreamEventType.TOOL_STARTED:
+            token.cancel()
+
+    types = [e.type for e in collected]
+
+    # Tool events should all be present (tool completed)
+    assert AgentStreamEventType.TOOL_STARTED in types
+    assert AgentStreamEventType.TOOL_RESULT in types
+
+    # Text before cancellation should be present
+    assert AgentStreamEventType.TEXT_DELTA in types
+    text_deltas = [e for e in collected if e.type == AgentStreamEventType.TEXT_DELTA]
+    assert text_deltas[0].text == "Checking. "
+    # "All done." text AFTER tool should NOT be present (cancelled)
+    assert len(text_deltas) == 1
+
+    # History should be updated (via try/finally)
+    assert len(adapter.message_history) > 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancel_without_tool_stops_immediately(monkeypatch):
+    """Cancelling with no tool call in flight should stop right away."""
+    events = [
+        *_make_text_events(["Hello ", "world. ", "This is long."]),
+    ]
+    result = MockSlowRunResultStreaming(events)
+    runner = MockRunner(stream_results=[result])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    token = CancelToken()
+    collected = []
+    async for event in adapter.run_streaming("test", cancel_token=token):
+        collected.append(event)
+        if event.type == AgentStreamEventType.TEXT_DELTA:
+            token.cancel()
+
+    text_deltas = [e for e in collected if e.type == AgentStreamEventType.TEXT_DELTA]
+    assert len(text_deltas) == 1
+    assert text_deltas[0].text == "Hello "
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_appends_developer_message(monkeypatch):
+    """notify_interruption should add a developer message to the history."""
+    input_list = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "reply"},
+    ]
+    runner = MockRunner(run_results=[MockRunResult(final_output="reply", input_list=input_list)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("hi")
+    assert len(adapter.message_history) == 2
+
+    adapter.notify_interruption()
+    assert len(adapter.message_history) == 3
+    assert adapter.message_history[2]["role"] == "developer"
+    assert "interrupted" in adapter.message_history[2]["content"].lower()

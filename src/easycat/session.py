@@ -782,10 +782,45 @@ class Session:
             nonlocal accumulated_text, structured_output, agent_error
             text_buffer = ""
             stream_completed = False
+            interrupted = False
+            pending_tool_calls = 0
             try:
                 async for event in self.agent.run_streaming(transcript, cancel_token=token):
                     if token and token.is_cancelled:
-                        break
+                        if not interrupted:
+                            interrupted = True
+                        # Let in-flight tool calls complete before stopping.
+                        # The adapter yields tool events even after cancel.
+                        if pending_tool_calls > 0:
+                            if event.type == AgentStreamEventType.TOOL_RESULT:
+                                pending_tool_calls -= 1
+                                await self.event_bus.emit(
+                                    ToolCallResult(call_id=event.call_id, result=event.result)
+                                )
+                                if pending_tool_calls <= 0:
+                                    break
+                            elif event.type == AgentStreamEventType.TOOL_STARTED:
+                                await self.event_bus.emit(
+                                    ToolCallStarted(
+                                        tool_name=event.tool_name, call_id=event.call_id
+                                    )
+                                )
+                            elif event.type == AgentStreamEventType.TOOL_DELTA:
+                                await self.event_bus.emit(
+                                    ToolCallDelta(call_id=event.call_id, delta=event.text)
+                                )
+                            elif event.type == AgentStreamEventType.DONE:
+                                stream_completed = True
+                                if event.text:
+                                    accumulated_text = event.text
+                                if event.structured_output is not None:
+                                    structured_output = event.structured_output
+                                break
+                            # Skip text deltas during drain
+                            continue
+                        else:
+                            # No tool calls in flight — stop immediately
+                            break
 
                     if event.type == AgentStreamEventType.TEXT_DELTA:
                         accumulated_text += event.text
@@ -805,6 +840,7 @@ class Session:
                             await tts_queue.put(ready)
 
                     elif event.type == AgentStreamEventType.TOOL_STARTED:
+                        pending_tool_calls += 1
                         await self.event_bus.emit(
                             ToolCallStarted(tool_name=event.tool_name, call_id=event.call_id)
                         )
@@ -813,6 +849,7 @@ class Session:
                             ToolCallDelta(call_id=event.call_id, delta=event.text)
                         )
                     elif event.type == AgentStreamEventType.TOOL_RESULT:
+                        pending_tool_calls -= 1
                         await self.event_bus.emit(
                             ToolCallResult(call_id=event.call_id, result=event.result)
                         )
@@ -827,13 +864,18 @@ class Session:
                 logger.exception("Agent streaming error")
                 await self.event_bus.emit(Error(exception=exc, context="agent"))
             finally:
-                if (
-                    stream_completed
-                    and (not token or not token.is_cancelled)
-                    and text_buffer.strip()
-                ):
+                if stream_completed and not interrupted and text_buffer.strip():
                     await tts_queue.put(text_buffer)
                 await tts_queue.put(None)  # sentinel to stop TTS task
+
+                # Notify the agent that the user interrupted so subsequent
+                # turns carry the context that the response was not fully
+                # delivered.
+                if interrupted and hasattr(self.agent, "notify_interruption"):
+                    try:
+                        self.agent.notify_interruption()
+                    except Exception:
+                        logger.debug("Failed to notify agent of interruption", exc_info=True)
 
         async def _process_tts() -> None:
             started = False

@@ -73,6 +73,16 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         self._run_config = run_config
         self._context = context
 
+    # ── Interruption handling ────────────────────────────────
+
+    _INTERRUPTION_NOTE = (
+        "[The user interrupted the assistant's response and may not have heard all of it.]"
+    )
+
+    def notify_interruption(self) -> None:
+        """Append an interruption note to the OpenAI-format message history."""
+        self._message_history.append({"role": "developer", "content": self._INTERRUPTION_NOTE})
+
     # ── Helpers ────────────────────────────────────────────────
 
     def _build_input(self, text: str) -> Any:
@@ -138,28 +148,59 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         result = await Runner.run_streamed(self._agent, input_data, **kwargs)
 
         accumulated = ""
-        async for event in result.stream_events():
-            if cancel_token and cancel_token.is_cancelled:
-                break
+        pending_tool_calls: set[str] = set()
+        interrupted = False
+        try:
+            async for event in result.stream_events():
+                if cancel_token and cancel_token.is_cancelled:
+                    if not interrupted:
+                        interrupted = True
+                    # Let in-flight tool calls complete before stopping
+                    if pending_tool_calls:
+                        if event.type == "run_item_stream_event":
+                            agent_event = _map_run_item_event(event.item)
+                            if agent_event is not None:
+                                if agent_event.type == AgentStreamEventType.TOOL_RESULT:
+                                    pending_tool_calls.discard(agent_event.call_id)
+                                    yield agent_event
+                                    if not pending_tool_calls:
+                                        break
+                                elif agent_event.type in (
+                                    AgentStreamEventType.TOOL_STARTED,
+                                    AgentStreamEventType.TOOL_DELTA,
+                                ):
+                                    yield agent_event
+                        elif event.type == "raw_response_event":
+                            tool_delta = _extract_tool_delta(event.data)
+                            if tool_delta is not None:
+                                yield tool_delta
+                        # Skip text deltas during drain
+                        continue
+                    else:
+                        break
 
-            if event.type == "raw_response_event":
-                delta = _extract_text_delta(event.data)
-                if delta:
-                    accumulated += delta
-                    yield AgentStreamEvent(
-                        type=AgentStreamEventType.TEXT_DELTA,
-                        text=delta,
-                    )
-                else:
-                    tool_delta = _extract_tool_delta(event.data)
-                    if tool_delta is not None:
-                        yield tool_delta
-            elif event.type == "run_item_stream_event":
-                agent_event = _map_run_item_event(event.item)
-                if agent_event is not None:
-                    yield agent_event
-
-        self._message_history = result.to_input_list()
+                if event.type == "raw_response_event":
+                    delta = _extract_text_delta(event.data)
+                    if delta:
+                        accumulated += delta
+                        yield AgentStreamEvent(
+                            type=AgentStreamEventType.TEXT_DELTA,
+                            text=delta,
+                        )
+                    else:
+                        tool_delta = _extract_tool_delta(event.data)
+                        if tool_delta is not None:
+                            yield tool_delta
+                elif event.type == "run_item_stream_event":
+                    agent_event = _map_run_item_event(event.item)
+                    if agent_event is not None:
+                        if agent_event.type == AgentStreamEventType.TOOL_STARTED:
+                            pending_tool_calls.add(agent_event.call_id)
+                        elif agent_event.type == AgentStreamEventType.TOOL_RESULT:
+                            pending_tool_calls.discard(agent_event.call_id)
+                        yield agent_event
+        finally:
+            self._message_history = result.to_input_list()
 
         # Capture structured output when available
         raw_output = getattr(result, "final_output", None)
