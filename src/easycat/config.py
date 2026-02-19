@@ -117,18 +117,15 @@ class EasyCatConfig:
             raise ValueError("STT configuration is required.")
         if self.tts is None:
             raise ValueError("TTS configuration is required.")
-        if isinstance(self.stt, OpenAISTTConfig) and not self.stt.api_key:
-            raise ValueError("OpenAI STT requires an API key.")
-        if isinstance(self.stt, DeepgramSTTConfig) and not self.stt.api_key:
-            raise ValueError("Deepgram STT requires an API key.")
-        if isinstance(self.stt, ElevenLabsSTTConfig) and not self.stt.api_key:
-            raise ValueError("ElevenLabs STT requires an API key.")
-        if isinstance(self.tts, OpenAITTSConfig) and not self.tts.api_key:
-            raise ValueError("OpenAI TTS requires an API key.")
-        if isinstance(self.tts, DeepgramTTSConfig) and not self.tts.api_key:
-            raise ValueError("Deepgram TTS requires an API key.")
-        if isinstance(self.tts, ElevenLabsTTSConfig) and not self.tts.api_key:
-            raise ValueError("ElevenLabs TTS requires an API key.")
+        for cfg in (self.stt, self.tts):
+            if hasattr(cfg, "api_key") and not cfg.api_key:
+                name = (
+                    type(cfg)
+                    .__name__.replace("Config", "")
+                    .replace("STT", " STT")
+                    .replace("TTS", " TTS")
+                )
+                raise ValueError(f"{name} requires an API key.")
 
 
 def create_session(config: EasyCatConfig) -> Session:

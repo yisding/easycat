@@ -30,7 +30,7 @@ async def main() -> None:
         ) from exc
 
     voice_agent = Agent(
-        "openai:gpt-4o-mini",
+        "openai:gpt-5.2",
         system_prompt="You are a helpful voice assistant.",
     )
     adapter = PydanticAIAdapter(voice_agent)
