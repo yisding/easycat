@@ -25,7 +25,9 @@ _MD_DETECT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"`.+?`"),  # inline code
     re.compile(r"^#{1,6}\s+", re.MULTILINE),  # headings
     re.compile(r"^\s*[-*+]\s+", re.MULTILINE),  # unordered lists
-    re.compile(r"^\s*\d+\.\s+", re.MULTILINE),  # ordered lists
+    # Ordered lists: intentionally cap to 1–3 digits to avoid stripping
+    # leading year-like numeric sentences (e.g. "2026. We launched").
+    re.compile(r"^\s*\d{1,3}\.\s+", re.MULTILINE),
     re.compile(r"\[.+?\]\(.+?\)"),  # links
     re.compile(r"!\[.*?\]\(.+?\)"),  # images
     re.compile(r"^>\s+", re.MULTILINE),  # blockquotes
@@ -117,7 +119,7 @@ def strip_markdown(text: str) -> str:
     result = _UNORDERED_LIST_RE.sub(r"\1", result)
 
     # 11. Ordered list markers (preserve indentation)
-    result = _ORDERED_LIST_RE.sub(r"\1", result)
+    result = re.sub(r"^(\s*)\d{1,3}\.\s+", r"\1", result, flags=re.MULTILINE)
 
     # 12. Horizontal rules (---, ***, ___)
     result = _HR_DASH_RE.sub("", result)
