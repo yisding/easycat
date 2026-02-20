@@ -803,6 +803,12 @@ class Session:
         async def _consume_agent() -> None:
             nonlocal accumulated_text, structured_output, agent_error
             text_buffer = ""
+            # When strip_markdown is enabled we maintain a parallel stripped
+            # text buffer.  On each TEXT_DELTA we re-strip the *full*
+            # accumulated text (so markdown constructs that span sentence
+            # boundaries are handled correctly) and run sentence splitting on
+            # the *stripped* result.  Only the new unsent tail is queued to TTS.
+            stripped_buffer_start = 0
             stream_completed = False
             try:
                 async for event in self.agent.run_streaming(transcript, cancel_token=token):
@@ -811,7 +817,6 @@ class Session:
 
                     if event.type == AgentStreamEventType.TEXT_DELTA:
                         accumulated_text += event.text
-                        text_buffer += event.text
                         await self.event_bus.emit(AgentDelta(text=event.text))
                         if self._first_agent_time is None:
                             self._first_agent_time = time.monotonic()
@@ -821,10 +826,21 @@ class Session:
                                     (self._first_agent_time - self._stt_final_time) * 1000,
                                 )
 
-                        # Flush complete sentences to TTS queue
-                        ready, text_buffer = _split_at_sentence_boundaries(text_buffer)
-                        if ready:
-                            await tts_queue.put(ready)
+                        if self._strip_markdown:
+                            # Sentence-split the *stripped* text so TTS
+                            # never sees stray markdown artefacts.
+                            full_stripped = strip_markdown(accumulated_text)
+                            new_stripped = full_stripped[stripped_buffer_start:]
+                            ready, remaining = _split_at_sentence_boundaries(new_stripped)
+                            if ready:
+                                await tts_queue.put(ready)
+                                stripped_buffer_start = len(full_stripped) - len(remaining)
+                        else:
+                            # Original path: sentence-split the raw buffer.
+                            text_buffer += event.text
+                            ready, text_buffer = _split_at_sentence_boundaries(text_buffer)
+                            if ready:
+                                await tts_queue.put(ready)
 
                     elif event.type == AgentStreamEventType.TOOL_STARTED:
                         await self.event_bus.emit(
@@ -849,12 +865,14 @@ class Session:
                 logger.exception("Agent streaming error")
                 await self.event_bus.emit(Error(exception=exc, context="agent"))
             finally:
-                if (
-                    stream_completed
-                    and (not token or not token.is_cancelled)
-                    and text_buffer.strip()
-                ):
-                    await tts_queue.put(text_buffer)
+                if stream_completed and (not token or not token.is_cancelled):
+                    if self._strip_markdown:
+                        stripped_full = strip_markdown(accumulated_text)
+                        remaining = stripped_full[stripped_buffer_start:]
+                        if remaining.strip():
+                            await tts_queue.put(remaining)
+                    elif text_buffer.strip():
+                        await tts_queue.put(text_buffer)
                 await tts_queue.put(None)  # sentinel to stop TTS task
 
         async def _process_tts() -> None:
@@ -866,9 +884,6 @@ class Session:
                         break
                     if token and token.is_cancelled:
                         break
-
-                    if self._strip_markdown:
-                        text = strip_markdown(text)
 
                     if not started:
                         await self._turn_manager.bot_started_speaking()
