@@ -302,9 +302,7 @@ def _replace_markdown_links_and_images(text: str) -> str:
     return "".join(out)
 
 
-def strip_markdown(
-    text: str, *, trim: bool = True, normalize_code_spans: bool = False
-) -> str:
+def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool = False) -> str:
     """Remove Markdown formatting from *text*, preserving readable content.
 
     Handles fenced code blocks, inline code, images, links, bold, italic,
