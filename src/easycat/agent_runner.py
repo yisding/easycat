@@ -175,6 +175,13 @@ class AgentRunner:
                     }
                     break
         else:
+            # Deduplicate: don't add a second note if one already follows
+            # the last user message.
+            for entry in reversed(self._history):
+                if entry["role"] == "user":
+                    break
+                if entry == {"role": "system", "content": self._INTERRUPTION_NOTE}:
+                    return
             self._history.append({"role": "system", "content": self._INTERRUPTION_NOTE})
 
     def notify_interruption(
@@ -289,15 +296,15 @@ class AgentRunner:
                                 interrupted = True
                             # Let in-flight tool calls complete before stopping
                             if pending_tool_calls > 0:
-                                if event.type == AgentStreamEventType.TOOL_RESULT:
+                                if event.type == AgentStreamEventType.TOOL_STARTED:
+                                    pending_tool_calls += 1
+                                    yield event
+                                elif event.type == AgentStreamEventType.TOOL_RESULT:
                                     pending_tool_calls -= 1
                                     yield event
                                     if pending_tool_calls <= 0:
                                         break
-                                elif event.type in (
-                                    AgentStreamEventType.TOOL_STARTED,
-                                    AgentStreamEventType.TOOL_DELTA,
-                                ):
+                                elif event.type == AgentStreamEventType.TOOL_DELTA:
                                     yield event
                                 elif event.type == AgentStreamEventType.DONE:
                                     if event.text:
