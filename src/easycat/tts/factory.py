@@ -12,14 +12,15 @@ from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 
 TTSConfig = OpenAITTSConfig | DeepgramTTSConfig | ElevenLabsTTSConfig
+TTSConfigType = type[OpenAITTSConfig] | type[DeepgramTTSConfig] | type[ElevenLabsTTSConfig]
 
 # Registry of known provider names to their config/class pairs
-_PROVIDERS: dict[str, tuple[type[TTSProvider], type[TTSConfig]]] = {
+_PROVIDERS: dict[str, tuple[type[TTSProvider], TTSConfigType]] = {
     "openai": (OpenAITTS, OpenAITTSConfig),
     "deepgram": (DeepgramTTS, DeepgramTTSConfig),
     "elevenlabs": (ElevenLabsTTS, ElevenLabsTTSConfig),
 }
-_CONFIG_TO_PROVIDER: dict[type[TTSConfig], type[TTSProvider]] = {
+_CONFIG_TO_PROVIDER: dict[TTSConfigType, type[TTSProvider]] = {
     cfg_cls: provider_cls for provider_cls, cfg_cls in _PROVIDERS.values()
 }
 
@@ -71,10 +72,12 @@ def create_tts_provider_from_config(config: TTSConfig, event_bus: EventBus) -> T
     provider_config = config
     if isinstance(config, DeepgramTTSConfig) and config.event_bus is None:
         provider_config = replace(config, event_bus=event_bus)
+    elif isinstance(config, ElevenLabsTTSConfig) and config.event_bus is None:
+        provider_config = replace(config, event_bus=event_bus)
     return provider_cls(provider_config)
 
 
-def _provider_for_config(config_type: type[TTSConfig]) -> type[TTSProvider]:
+def _provider_for_config(config_type: TTSConfigType) -> type[TTSProvider]:
     provider_cls = _CONFIG_TO_PROVIDER.get(config_type)
     if provider_cls is None:
         raise ValueError("Unsupported TTS configuration type.")

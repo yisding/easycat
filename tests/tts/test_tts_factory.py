@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from easycat.tts.deepgram_tts import DeepgramTTS
-from easycat.tts.elevenlabs_tts import ElevenLabsTTS
-from easycat.tts.factory import TTSProviderConfig, create_tts_provider
-from easycat.tts.openai_tts import OpenAITTS
+from easycat.events import EventBus
+from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
+from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode, ElevenLabsTTS, ElevenLabsTTSConfig
+from easycat.tts.factory import (
+    TTSProviderConfig,
+    create_tts_provider,
+    create_tts_provider_from_config,
+)
+from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 
 
 class TestTTSProviderConfig:
@@ -128,3 +133,46 @@ class TestCreateTTSProvider:
         assert isinstance(provider, ElevenLabsTTS)
         assert provider._config.voice_id == "custom-voice"
         assert provider._config.stability == 0.9
+
+
+class TestCreateTTSProviderFromConfig:
+    def test_injects_event_bus_for_deepgram_when_missing(self):
+        bus = EventBus()
+        provider = create_tts_provider_from_config(DeepgramTTSConfig(api_key="test"), bus)
+
+        assert isinstance(provider, DeepgramTTS)
+        assert provider._config.event_bus is bus
+
+    def test_injects_event_bus_for_elevenlabs_when_missing(self):
+        bus = EventBus()
+        provider = create_tts_provider_from_config(
+            ElevenLabsTTSConfig(
+                api_key="test",
+                stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+            ),
+            bus,
+        )
+
+        assert isinstance(provider, ElevenLabsTTS)
+        assert provider._config.event_bus is bus
+
+    def test_keeps_existing_event_bus_for_elevenlabs(self):
+        existing_bus = EventBus()
+        bus = EventBus()
+        provider = create_tts_provider_from_config(
+            ElevenLabsTTSConfig(
+                api_key="test",
+                stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+                event_bus=existing_bus,
+            ),
+            bus,
+        )
+
+        assert isinstance(provider, ElevenLabsTTS)
+        assert provider._config.event_bus is existing_bus
+
+    def test_openai_config_works_without_event_bus_injection(self):
+        bus = EventBus()
+        provider = create_tts_provider_from_config(OpenAITTSConfig(api_key="test"), bus)
+
+        assert isinstance(provider, OpenAITTS)
