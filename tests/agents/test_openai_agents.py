@@ -146,9 +146,7 @@ class MockRunner:
         self._run_call_count += 1
         return self._run_results[idx]
 
-    def run_streamed(
-        self, agent: Any, input_data: Any, **kwargs: Any
-    ) -> MockRunResultStreaming:
+    def run_streamed(self, agent: Any, input_data: Any, **kwargs: Any) -> MockRunResultStreaming:
         self.stream_calls.append({"agent": agent, "input": input_data, **kwargs})
         idx = min(self._stream_call_count, len(self._stream_results) - 1)
         self._stream_call_count += 1
