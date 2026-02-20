@@ -917,8 +917,27 @@ async def test_streaming_cancel_without_tool_stops_immediately(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_notify_interruption_appends_developer_message(monkeypatch):
-    """notify_interruption should add a developer message to the history."""
+async def test_notify_interruption_truncates_by_default(monkeypatch):
+    """Default (truncate) mode replaces the last assistant message."""
+    input_list = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "Hello there, how can I help?"},
+    ]
+    runner = MockRunner(run_results=[MockRunResult(final_output="reply", input_list=input_list)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("hi")
+    assert len(adapter.message_history) == 2
+
+    adapter.notify_interruption("Hello there")
+    assert len(adapter.message_history) == 2
+    assert adapter.message_history[1]["content"] == "Hello there..."
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_message_mode(monkeypatch):
+    """Message mode appends a developer message to the history."""
     input_list = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "reply"},
@@ -930,7 +949,7 @@ async def test_notify_interruption_appends_developer_message(monkeypatch):
     await adapter.run("hi")
     assert len(adapter.message_history) == 2
 
-    adapter.notify_interruption()
+    adapter.notify_interruption("rep", mode="message")
     assert len(adapter.message_history) == 3
     assert adapter.message_history[2]["role"] == "developer"
     assert "interrupted" in adapter.message_history[2]["content"].lower()

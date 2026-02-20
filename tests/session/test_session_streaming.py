@@ -814,6 +814,8 @@ class SlowToolCallingAgent:
 
     def __init__(self) -> None:
         self.interruption_notified = False
+        self.interruption_text_spoken = ""
+        self.interruption_mode = ""
 
     async def run(self, text: str) -> str:
         return "The answer is 42."
@@ -849,8 +851,10 @@ class SlowToolCallingAgent:
         yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Done!")
         yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Done!")
 
-    def notify_interruption(self) -> None:
+    def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
         self.interruption_notified = True
+        self.interruption_text_spoken = text_spoken
+        self.interruption_mode = mode
 
 
 @pytest.mark.asyncio
@@ -893,7 +897,8 @@ async def test_session_barge_in_completes_tool_calls():
 
 @pytest.mark.asyncio
 async def test_session_barge_in_calls_notify_interruption():
-    """After barge-in the session should call notify_interruption on the agent."""
+    """After barge-in the session should call notify_interruption on the agent
+    with the spoken text and the configured interruption mode."""
     agent = SlowToolCallingAgent()
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
     config = SessionConfig(
@@ -917,6 +922,40 @@ async def test_session_barge_in_calls_notify_interruption():
     await session.stop()
 
     assert agent.interruption_notified
+    # The text spoken before barge-in should be passed
+    assert agent.interruption_text_spoken == "Let me look. "
+    # Default mode is "truncate"
+    assert agent.interruption_mode == "truncate"
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_message_mode():
+    """When interruption_mode='message', notify_interruption receives that mode."""
+    agent = SlowToolCallingAgent()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="do the thing"),
+        agent=agent,
+        tts=FakeTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        interruption_mode="message",
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.1)
+
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    assert agent.interruption_notified
+    assert agent.interruption_mode == "message"
 
 
 @pytest.mark.asyncio

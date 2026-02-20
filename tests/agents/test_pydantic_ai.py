@@ -1325,9 +1325,40 @@ async def test_iter_cancel_during_tool_call_lets_tool_complete():
 
 
 @pytest.mark.asyncio
-async def test_notify_interruption_appends_system_prompt():
-    """notify_interruption should add a system prompt part to the
-    PydanticAI message history when pydantic_ai is installed."""
+async def test_notify_interruption_truncates_by_default():
+    """Default (truncate) mode replaces the last ModelResponse TextPart."""
+    try:
+        from pydantic_ai.messages import ModelResponse  # noqa: F401
+
+        pydantic_ai_available = True
+    except ImportError:
+        pydantic_ai_available = False
+
+    agent = MockPydanticAgent(responses=["Hello there, how can I help?"])
+    adapter = PydanticAIAdapter(agent)
+    await adapter.run("hi")
+    initial_len = len(adapter.message_history)
+
+    adapter.notify_interruption("Hello there")
+
+    if pydantic_ai_available:
+        # Length stays the same — no new message, just truncation
+        assert len(adapter.message_history) == initial_len
+        # Find the last ModelResponse and check its TextPart was truncated
+        for msg in reversed(adapter.message_history):
+            if isinstance(msg, ModelResponse):
+                text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
+                assert len(text_parts) > 0
+                assert text_parts[0].content == "Hello there..."
+                break
+    else:
+        # Without pydantic_ai installed, notify_interruption is a no-op
+        assert len(adapter.message_history) == initial_len
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_message_mode():
+    """Message mode appends a SystemPromptPart to the PydanticAI history."""
     try:
         from pydantic_ai.messages import ModelRequest, SystemPromptPart  # noqa: F401
 
@@ -1340,7 +1371,7 @@ async def test_notify_interruption_appends_system_prompt():
     await adapter.run("hi")
     initial_len = len(adapter.message_history)
 
-    adapter.notify_interruption()
+    adapter.notify_interruption("rep", mode="message")
 
     if pydantic_ai_available:
         assert len(adapter.message_history) == initial_len + 1
@@ -1348,5 +1379,4 @@ async def test_notify_interruption_appends_system_prompt():
         assert hasattr(last, "parts")
         assert any("interrupted" in getattr(p, "content", "").lower() for p in last.parts)
     else:
-        # Without pydantic_ai installed, notify_interruption is a no-op
         assert len(adapter.message_history) == initial_len

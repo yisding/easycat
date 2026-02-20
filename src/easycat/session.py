@@ -13,7 +13,7 @@ import logging
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 import pysbd
 
@@ -148,6 +148,14 @@ class SessionConfig:
     enable_noise_reduction: bool = True
     enable_vad: bool = True
 
+    # Interruption behaviour.
+    # "truncate" (default): truncate the assistant message to what was
+    #   actually spoken and append "..." — compatible with all models.
+    # "message": append an explicit system/developer message noting the
+    #   interruption — clearer intent but requires model support for
+    #   interleaved system messages.
+    interruption_mode: Literal["truncate", "message"] = "truncate"
+
 
 # ── Helpers ────────────────────────────────────────────────────────
 
@@ -224,6 +232,7 @@ class Session:
         # Pipeline flags
         self._enable_noise_reduction = cfg.enable_noise_reduction
         self._enable_vad = cfg.enable_vad
+        self._interruption_mode = cfg.interruption_mode
 
         # Turn manager — single source of truth for turn state
         self._turn_manager = cfg.turn_manager or TurnManager(
@@ -870,10 +879,14 @@ class Session:
 
                 # Notify the agent that the user interrupted so subsequent
                 # turns carry the context that the response was not fully
-                # delivered.
+                # delivered.  Pass the text that was approximately spoken
+                # to the user so truncation-mode can show what was heard.
                 if interrupted and hasattr(self.agent, "notify_interruption"):
                     try:
-                        self.agent.notify_interruption()
+                        self.agent.notify_interruption(
+                            accumulated_text,
+                            mode=self._interruption_mode,
+                        )
                     except Exception:
                         logger.debug("Failed to notify agent of interruption", exc_info=True)
 
