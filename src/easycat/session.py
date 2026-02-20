@@ -180,7 +180,7 @@ def _replace_last_assistant_text(agent: Any, text: str) -> None:
     nothing when the method is unavailable.
     """
     fn = getattr(agent, "replace_last_assistant_text", None)
-    if fn is not None:
+    if callable(fn):
         fn(text)
 
 
