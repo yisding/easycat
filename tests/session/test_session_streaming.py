@@ -803,3 +803,123 @@ async def test_full_streaming_turn_event_order():
     assert sf_idx < af_idx
     assert af_idx < bs_idx or bs_idx < af_idx  # TTS may start before AgentFinal
     assert bs_idx < be_idx
+
+
+# ── Streaming with strip_markdown ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_tts_receives_clean_text():
+    """Markdown should be stripped from TTS chunks and AgentFinal when enabled."""
+
+    class MarkdownStreamingAgent:
+        async def run(self, text: str) -> str:
+            return "Go to **Settings** first. Then click *Security* next."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            # Stream the markdown response in realistic token-size deltas
+            chunks = [
+                "Go to **Settings",
+                "** first. ",
+                "Then click *Security",
+                "* next.",
+            ]
+            for chunk in chunks:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            full = "Go to **Settings** first. Then click *Security* next."
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="help"),
+        agent=MarkdownStreamingAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    # TTS should have received text with no markdown artefacts
+    joined_tts = " ".join(tts.synthesized_texts)
+    assert "**" not in joined_tts
+    assert "*Security*" not in joined_tts
+    assert "Settings" in joined_tts
+    assert "Security" in joined_tts
+
+    # AgentFinal event should also carry stripped text
+    assert len(finals) == 1
+    assert "**" not in finals[0].text
+    assert "Settings" in finals[0].text
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_cross_sentence_bold():
+    """Bold spanning two sentences should still be stripped correctly."""
+
+    class CrossSentenceBoldAgent:
+        async def run(self, text: str) -> str:
+            return "**This is important. Very important.** Got it?"
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            chunks = ["**This is important. ", "Very important.** Got it?"]
+            for chunk in chunks:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            full = "**This is important. Very important.** Got it?"
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="test"),
+        agent=CrossSentenceBoldAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    # TTS must not contain any stray ** markers
+    joined_tts = " ".join(tts.synthesized_texts)
+    assert "**" not in joined_tts
+    assert "important" in joined_tts.lower()
+
+    # AgentFinal should be fully stripped
+    assert len(finals) == 1
+    assert "**" not in finals[0].text
