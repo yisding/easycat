@@ -72,6 +72,12 @@ def test_factory_passes_elevenlabs_params():
 # ── Validation ───────────────────────────────────────────────────
 
 
+def test_factory_rejects_non_string_provider():
+    config = STTProviderConfig(provider=None, api_key="k")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="Unknown STT provider"):
+        create_stt_provider(config)
+
+
 def test_factory_rejects_unknown_provider():
     config = STTProviderConfig(provider="unknown", api_key="k")
     with pytest.raises(ValueError, match="Unknown STT provider"):

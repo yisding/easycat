@@ -38,6 +38,12 @@ def create_stt_provider(config: STTProviderConfig) -> STTBase:
     Validates the provider name and API key at construction time (fail-fast).
     Provider-specific parameters are passed via ``config.params``.
     """
+    if not isinstance(config.provider, str):
+        raise ValueError(
+            f"Unknown STT provider '{config.provider}'. "
+            f"Available providers: {', '.join(sorted(_PROVIDER_TO_CONFIG))}"
+        )
+
     provider_name = config.provider.lower()
     if provider_name not in _PROVIDER_TO_CONFIG:
         raise ValueError(
