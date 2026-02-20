@@ -108,15 +108,30 @@ class BaseAgentAdapter:
 
     # ── Interruption handling ────────────────────────────────
 
-    def notify_interruption(self) -> None:
+    def notify_interruption(
+        self,
+        text_spoken: str = "",
+        *,
+        mode: str = "truncate",
+    ) -> None:
         """Record that the user interrupted the assistant's last response.
 
         Called by :class:`easycat.Session` after a barge-in when the agent
-        stream has been drained (tool calls completed).  Appends a note to
-        the framework-specific message history so the agent understands the
-        user may not have heard the full response.
+        stream has been drained (tool calls completed).
 
-        Subclasses override to inject the note in the appropriate format
+        Parameters
+        ----------
+        text_spoken:
+            The portion of the assistant's response that was approximately
+            delivered to the user before the interruption.
+        mode:
+            ``"truncate"`` (default) — replace the last assistant message
+            with ``text_spoken + "..."`` so the model sees what was heard.
+            ``"message"`` — append an explicit system/developer message
+            noting the interruption (requires model support for interleaved
+            system messages).
+
+        Subclasses override to apply the note in the appropriate format
         for their framework.  The default implementation is a no-op.
         """
 

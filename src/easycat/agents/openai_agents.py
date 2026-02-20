@@ -79,9 +79,30 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         "[The user interrupted the assistant's response and may not have heard all of it.]"
     )
 
-    def notify_interruption(self) -> None:
-        """Append an interruption note to the OpenAI-format message history."""
-        self._message_history.append({"role": "developer", "content": self._INTERRUPTION_NOTE})
+    def notify_interruption(
+        self,
+        text_spoken: str = "",
+        *,
+        mode: str = "truncate",
+    ) -> None:
+        """Record an interruption in the OpenAI-format message history.
+
+        * ``mode="truncate"`` — find the last assistant item and replace
+          its text content with *text_spoken* + ``"..."``.
+        * ``mode="message"`` — append a ``developer`` message.
+        """
+        if mode == "truncate":
+            for i in range(len(self._message_history) - 1, -1, -1):
+                item = self._message_history[i]
+                role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
+                if role == "assistant":
+                    if isinstance(item, dict):
+                        item["content"] = text_spoken + "..." if text_spoken else "..."
+                    elif hasattr(item, "content"):
+                        item.content = text_spoken + "..." if text_spoken else "..."
+                    break
+        else:
+            self._message_history.append({"role": "developer", "content": self._INTERRUPTION_NOTE})
 
     # ── Helpers ────────────────────────────────────────────────
 

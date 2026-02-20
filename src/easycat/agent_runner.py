@@ -157,20 +157,41 @@ class AgentRunner:
         "[The user interrupted the assistant's response and may not have heard all of it.]"
     )
 
-    def _append_interruption_note(self) -> None:
-        """Append a system-level note about the interruption to history."""
-        self._history.append({"role": "system", "content": self._INTERRUPTION_NOTE})
+    def _apply_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+        """Record an interruption in the runner's own ``_history``.
 
-    def notify_interruption(self) -> None:
+        * ``mode="truncate"`` — replace the last assistant entry's content
+          with *text_spoken* + ``"..."`` so the model sees only what was
+          actually delivered to the user.
+        * ``mode="message"`` — append an explicit ``system`` message.
+        """
+        if mode == "truncate":
+            # Walk backwards to find the last assistant entry and truncate.
+            for i in range(len(self._history) - 1, -1, -1):
+                if self._history[i].get("role") == "assistant":
+                    self._history[i] = {
+                        "role": "assistant",
+                        "content": text_spoken + "..." if text_spoken else "...",
+                    }
+                    break
+        else:
+            self._history.append({"role": "system", "content": self._INTERRUPTION_NOTE})
+
+    def notify_interruption(
+        self,
+        text_spoken: str = "",
+        *,
+        mode: str = "truncate",
+    ) -> None:
         """Record that the user interrupted the assistant's last response.
 
         Called by :class:`Session` after a barge-in.  Delegates to the
         underlying agent if it supports ``notify_interruption``, then
-        appends the note to the runner's own history.
+        applies the note to the runner's own history.
         """
         if hasattr(self._agent, "notify_interruption"):
-            self._agent.notify_interruption()
-        self._append_interruption_note()
+            self._agent.notify_interruption(text_spoken, mode=mode)
+        self._apply_interruption(text_spoken, mode=mode)
 
     # ── Internal helpers ───────────────────────────────────────
 
@@ -334,12 +355,12 @@ class AgentRunner:
             self._history.pop()
             raise AgentTimeoutError(self._config.timeout or 0)
         except GeneratorExit:
-            # Generator was closed by caller (e.g., barge-in) — not an error
+            # Generator was closed by caller (e.g., barge-in) — not an error.
+            # The caller is responsible for calling notify_interruption() to
+            # record the interruption in history.
             if exec_span:
                 exec_span.finish(SpanStatus.CANCELLED)
             self._history.append({"role": "assistant", "content": accumulated})
-            if cancel_token and cancel_token.is_cancelled:
-                self._append_interruption_note()
             return
         except Exception as exc:
             if exec_span:
@@ -355,5 +376,3 @@ class AgentRunner:
             agent_to_tts = self._record_span("agent_to_tts")
             agent_to_tts.finish(SpanStatus.OK)
         self._history.append({"role": "assistant", "content": accumulated})
-        if interrupted:
-            self._append_interruption_note()

@@ -574,7 +574,8 @@ async def test_cancel_during_tool_call_lets_tool_complete():
 @pytest.mark.asyncio
 async def test_cancel_during_tool_call_records_history_with_interruption():
     """After barge-in with tool completion, history should contain the
-    assistant response AND an interruption note."""
+    assistant response.  Calling notify_interruption() in truncate mode
+    should replace the assistant content with text_spoken + '...'."""
     token = CancelToken()
     runner = AgentRunner(SlowToolStreamingAgent())
 
@@ -582,11 +583,31 @@ async def test_cancel_during_tool_call_records_history_with_interruption():
         if event.type == AgentStreamEventType.TOOL_STARTED:
             token.cancel()
 
-    # History: user + assistant + system interruption note
-    assert len(runner.history) == 3
+    # History after streaming: user + assistant (no auto-appended note)
+    assert len(runner.history) == 2
     assert runner.history[0] == {"role": "user", "content": "test"}
     assert runner.history[1]["role"] == "assistant"
     assert runner.history[1]["content"] == "Let me check. "
+
+    # Truncate mode (default): assistant message is replaced
+    runner.notify_interruption("Let me check. ")
+    assert len(runner.history) == 2
+    assert runner.history[1] == {"role": "assistant", "content": "Let me check. ..."}
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_tool_call_records_history_message_mode():
+    """In message mode, notify_interruption appends a system note instead
+    of truncating the assistant message."""
+    token = CancelToken()
+    runner = AgentRunner(SlowToolStreamingAgent())
+
+    async for event in runner.run_streaming("test", cancel_token=token):
+        if event.type == AgentStreamEventType.TOOL_STARTED:
+            token.cancel()
+
+    runner.notify_interruption("Let me check. ", mode="message")
+    assert len(runner.history) == 3
     assert runner.history[2]["role"] == "system"
     assert "interrupted" in runner.history[2]["content"].lower()
 
@@ -609,13 +630,25 @@ async def test_cancel_without_tool_call_stops_immediately():
 
 
 @pytest.mark.asyncio
-async def test_notify_interruption_appends_to_history():
-    """notify_interruption should add a system note to the runner's history."""
+async def test_notify_interruption_truncates_by_default():
+    """Default (truncate) mode replaces the assistant message content."""
     runner = AgentRunner(EchoAgent())
     await runner.run("hello")
     assert len(runner.history) == 2
 
-    runner.notify_interruption()
+    runner.notify_interruption("Echo: hel")
+    assert len(runner.history) == 2
+    assert runner.history[1] == {"role": "assistant", "content": "Echo: hel..."}
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_message_mode():
+    """Message mode appends a system note to the runner's history."""
+    runner = AgentRunner(EchoAgent())
+    await runner.run("hello")
+    assert len(runner.history) == 2
+
+    runner.notify_interruption("Echo: hel", mode="message")
     assert len(runner.history) == 3
     assert runner.history[2]["role"] == "system"
     assert "interrupted" in runner.history[2]["content"].lower()

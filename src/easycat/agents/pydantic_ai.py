@@ -77,14 +77,38 @@ class PydanticAIAdapter(BaseAgentAdapter):
         "[The user interrupted the assistant's response and may not have heard all of it.]"
     )
 
-    def notify_interruption(self) -> None:
-        """Append an interruption note to the PydanticAI message history."""
-        try:
-            from pydantic_ai.messages import ModelRequest, SystemPromptPart
+    def notify_interruption(
+        self,
+        text_spoken: str = "",
+        *,
+        mode: str = "truncate",
+    ) -> None:
+        """Record an interruption in the PydanticAI message history.
 
-            self._message_history.append(
-                ModelRequest(parts=[SystemPromptPart(content=self._INTERRUPTION_NOTE)])
-            )
+        * ``mode="truncate"`` — find the last ``ModelResponse``'s
+          ``TextPart`` and replace its content with *text_spoken* +
+          ``"..."``.
+        * ``mode="message"`` — append a ``ModelRequest`` with a
+          ``SystemPromptPart``.
+        """
+        try:
+            if mode == "truncate":
+                from pydantic_ai.messages import ModelResponse
+
+                for i in range(len(self._message_history) - 1, -1, -1):
+                    msg = self._message_history[i]
+                    if isinstance(msg, ModelResponse):
+                        for part in msg.parts:
+                            if type(part).__name__ == "TextPart":
+                                part.content = text_spoken + "..." if text_spoken else "..."
+                                return
+                        break
+            else:
+                from pydantic_ai.messages import ModelRequest, SystemPromptPart
+
+                self._message_history.append(
+                    ModelRequest(parts=[SystemPromptPart(content=self._INTERRUPTION_NOTE)])
+                )
         except ImportError:
             logger.debug("pydantic_ai.messages not available; skipping interruption note")
 
