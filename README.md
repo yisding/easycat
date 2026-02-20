@@ -103,17 +103,18 @@ session = Session(SessionConfig(agent=adapter, ...))
 Runnable examples live in the `examples/` directory:
 - `local_chat.py`: local microphone/speaker loop
 - `ws_server.py`: WebSocket server example
+- `ws_browser_example.py`: browser mic/speaker over WebSocket + static web client
 - `webrtc_server.py`: WebRTC voice chat with browser client
 - `twilio_app.py`: Twilio Media Streams example
 - `pydantic_ai_voice.py`: PydanticAI adapter example
 
 ### Quickstart: WebRTC in browser (fast path)
 1. Install extras:
-   `python -m pip install -e ".[webrtc,openai,openai-agents]"`
+   `uv sync --extra webrtc --extra openai --extra openai-agents`
 2. Set your key:
    `export OPENAI_API_KEY="your-api-key"`
 3. Run the server:
-   `python examples/webrtc_server.py`
+   `uv run python examples/webrtc_server.py`
 4. Open:
    `http://localhost:8080`
    (auto-redirects to `webrtc_client.html` when using the bundled static client)
@@ -130,23 +131,34 @@ TURN (`TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`) for reliable NAT tr
 Python 3.11+ is required.
 
 ```
-python -m pip install -e .
+uv sync
 ```
 
 ### Simplest setup (local mic/speaker + OpenAI STT/TTS + OpenAI Agents SDK)
 If you want the shortest path to a working end-to-end pipeline on your machine:
 
 ```
-python -m pip install -e ".[local,openai,openai-agents,rnnoise]"
-python -m pip install torch
+uv sync --extra local --extra openai --extra openai-agents --extra rnnoise
+uv pip install torch
 export OPENAI_API_KEY="your-api-key"
-python examples/local_chat.py
+uv run python examples/local_chat.py
 ```
 
 Optional dependencies you may need depending on providers/transports:
 - sounddevice (LocalTransport)
-- aiortc + aiohttp (WebRTCTransport): `pip install -e ".[webrtc]"`
+- aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
 - torch (Silero VAD)
 - pyrnnoise + requests (RNNoise noise reduction backend)
 - Krisp SDK (krisp_audio)
 - Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs
+
+## Factory APIs
+
+EasyCat supports two complementary factory styles:
+
+- String-based provider selection (`create_stt_provider` / `create_tts_provider`) for dynamic setups.
+- Config-object based provider wiring via `EasyCatConfig` + `create_session`.
+
+Both styles now resolve provider classes through the same central registries in
+`easycat.stt.factory` and `easycat.tts.factory`, so adding providers only
+requires updating one mapping per domain.
