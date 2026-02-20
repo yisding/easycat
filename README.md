@@ -139,7 +139,7 @@ If you want the shortest path to a working end-to-end pipeline on your machine:
 
 ```
 uv sync --extra local --extra openai --extra openai-agents --extra rnnoise
-uv add torch
+uv pip install torch
 export OPENAI_API_KEY="your-api-key"
 uv run python examples/local_chat.py
 ```
