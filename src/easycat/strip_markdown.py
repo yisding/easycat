@@ -52,6 +52,25 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
     return body.strip()
 
 
+_FENCED_CODE_RE = re.compile(r"```([\s\S]*?)```")
+_INLINE_CODE_RE = re.compile(r"`(.+?)`")
+_IMAGE_RE = re.compile(r"!\[.*?\]\(.+?\)")
+_LINK_RE = re.compile(r"\[(.+?)\]\(.+?\)")
+_BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
+_BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)([\s\S]+?)(?<=\S)__")
+_ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
+_ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
+_STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~")
+_HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+_BLOCKQUOTE_RE = re.compile(r"^(?:>\s*)+", re.MULTILINE)
+_UNORDERED_LIST_RE = re.compile(r"^(\s*)[-*+]\s+", re.MULTILINE)
+_ORDERED_LIST_RE = re.compile(r"^(\s*)\d+\.\s+", re.MULTILINE)
+_HR_DASH_RE = re.compile(r"^-{3,}\s*$", re.MULTILINE)
+_HR_ASTERISK_RE = re.compile(r"^\*{3,}\s*$", re.MULTILINE)
+_HR_UNDERSCORE_RE = re.compile(r"^_{3,}\s*$", re.MULTILINE)
+_EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
+
+
 def strip_markdown(text: str) -> str:
     """Remove Markdown formatting from *text*, preserving readable content.
 
@@ -66,46 +85,46 @@ def strip_markdown(text: str) -> str:
     result = text
 
     # 1. Fenced code blocks (```lang\n...\n```) → keep body only
-    result = re.sub(r"```([\s\S]*?)```", _extract_fenced_code, result)
+    result = _FENCED_CODE_RE.sub(_extract_fenced_code, result)
 
     # 2. Inline code → keep content
-    result = re.sub(r"`(.+?)`", r"\1", result)
+    result = _INLINE_CODE_RE.sub(r"\1", result)
 
     # 3. Images → remove entirely
-    result = re.sub(r"!\[.*?\]\(.+?\)", "", result)
+    result = _IMAGE_RE.sub("", result)
 
     # 4. Links → keep link text
-    result = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", result)
+    result = _LINK_RE.sub(r"\1", result)
 
     # 5. Bold (before italic so ** is matched before *)
-    result = re.sub(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*", r"\1", result)
-    result = re.sub(r"__(?=\S)([\s\S]+?)(?<=\S)__", r"\1", result)
+    result = _BOLD_ASTERISK_RE.sub(r"\1", result)
+    result = _BOLD_UNDERSCORE_RE.sub(r"\1", result)
 
     # 6. Italic
-    result = re.sub(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)", r"\1", result)
-    result = re.sub(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)", r"\1", result)
+    result = _ITALIC_ASTERISK_RE.sub(r"\1", result)
+    result = _ITALIC_UNDERSCORE_RE.sub(r"\1", result)
 
     # 7. Strikethrough
-    result = re.sub(r"~~(.+?)~~", r"\1", result)
+    result = _STRIKETHROUGH_RE.sub(r"\1", result)
 
     # 8. Headings
-    result = re.sub(r"^#{1,6}\s+", "", result, flags=re.MULTILINE)
+    result = _HEADING_RE.sub("", result)
 
     # 9. Blockquotes
-    result = re.sub(r"^(?:>\s*)+", "", result, flags=re.MULTILINE)
+    result = _BLOCKQUOTE_RE.sub("", result)
 
     # 10. Unordered list markers (preserve indentation)
-    result = re.sub(r"^(\s*)[-*+]\s+", r"\1", result, flags=re.MULTILINE)
+    result = _UNORDERED_LIST_RE.sub(r"\1", result)
 
     # 11. Ordered list markers (preserve indentation)
-    result = re.sub(r"^(\s*)\d+\.\s+", r"\1", result, flags=re.MULTILINE)
+    result = _ORDERED_LIST_RE.sub(r"\1", result)
 
     # 12. Horizontal rules (---, ***, ___)
-    result = re.sub(r"^-{3,}\s*$", "", result, flags=re.MULTILINE)
-    result = re.sub(r"^\*{3,}\s*$", "", result, flags=re.MULTILINE)
-    result = re.sub(r"^_{3,}\s*$", "", result, flags=re.MULTILINE)
+    result = _HR_DASH_RE.sub("", result)
+    result = _HR_ASTERISK_RE.sub("", result)
+    result = _HR_UNDERSCORE_RE.sub("", result)
 
     # 13. Collapse runs of blank lines
-    result = re.sub(r"\n{3,}", "\n\n", result)
+    result = _EXCESS_BLANK_LINES_RE.sub("\n\n", result)
 
     return result.strip()
