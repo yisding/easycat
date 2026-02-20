@@ -547,6 +547,43 @@ class SlowToolStreamingAgent:
         yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Here is the answer.")
 
 
+class MultiToolDrainAgent:
+    """Agent that starts additional tool calls while cancellation drain is active."""
+
+    async def run(self, text: str) -> str:
+        return text
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_STARTED,
+            tool_name="first",
+            call_id="call_1",
+        )
+        await asyncio.sleep(0)
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_STARTED,
+            tool_name="second",
+            call_id="call_2",
+        )
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_RESULT,
+            call_id="call_1",
+            result="first done",
+        )
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_RESULT,
+            call_id="call_2",
+            result="second done",
+        )
+        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="done")
+
+
 @pytest.mark.asyncio
 async def test_cancel_during_tool_call_lets_tool_complete():
     """When cancelled mid-tool-call, the stream should continue until the
@@ -589,6 +626,22 @@ async def test_cancel_during_tool_call_records_history_with_interruption():
     assert runner.history[1]["content"] == "Let me check. "
     assert runner.history[2]["role"] == "system"
     assert "interrupted" in runner.history[2]["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_drain_counts_new_tool_starts():
+    """Drain mode should track tool calls that start after cancellation."""
+    token = CancelToken()
+    runner = AgentRunner(MultiToolDrainAgent())
+
+    events: list[AgentStreamEvent] = []
+    async for event in runner.run_streaming("test", cancel_token=token):
+        events.append(event)
+        if event.type == AgentStreamEventType.TOOL_STARTED and event.call_id == "call_1":
+            token.cancel()
+
+    tool_results = [e.call_id for e in events if e.type == AgentStreamEventType.TOOL_RESULT]
+    assert tool_results == ["call_1", "call_2"]
 
 
 @pytest.mark.asyncio
