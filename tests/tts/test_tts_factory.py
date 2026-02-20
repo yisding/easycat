@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from easycat.tts.deepgram_tts import DeepgramTTS
-from easycat.tts.elevenlabs_tts import ElevenLabsTTS
-from easycat.tts.factory import TTSProviderConfig, create_tts_provider
+from easycat.events import EventBus
+from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
+from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode, ElevenLabsTTS, ElevenLabsTTSConfig
+from easycat.tts.factory import (
+    TTSProviderConfig,
+    create_tts_provider,
+    create_tts_provider_from_config,
+)
 from easycat.tts.openai_tts import OpenAITTS
 
 
@@ -128,3 +133,40 @@ class TestCreateTTSProvider:
         assert isinstance(provider, ElevenLabsTTS)
         assert provider._config.voice_id == "custom-voice"
         assert provider._config.stability == 0.9
+
+
+class TestCreateTTSProviderFromConfig:
+    def test_injects_event_bus_for_deepgram_when_missing(self):
+        config = DeepgramTTSConfig(api_key="test")
+        event_bus = EventBus()
+
+        provider = create_tts_provider_from_config(config, event_bus)
+
+        assert isinstance(provider, DeepgramTTS)
+        assert provider._config.event_bus is event_bus
+
+    def test_injects_event_bus_for_elevenlabs_when_missing(self):
+        config = ElevenLabsTTSConfig(
+            api_key="test",
+            stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+        )
+        event_bus = EventBus()
+
+        provider = create_tts_provider_from_config(config, event_bus)
+
+        assert isinstance(provider, ElevenLabsTTS)
+        assert provider._config.event_bus is event_bus
+
+    def test_keeps_existing_event_bus_for_elevenlabs(self):
+        existing_event_bus = EventBus()
+        config = ElevenLabsTTSConfig(
+            api_key="test",
+            stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+            event_bus=existing_event_bus,
+        )
+        session_event_bus = EventBus()
+
+        provider = create_tts_provider_from_config(config, session_event_bus)
+
+        assert isinstance(provider, ElevenLabsTTS)
+        assert provider._config.event_bus is existing_event_bus
