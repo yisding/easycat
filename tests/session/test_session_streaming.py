@@ -343,6 +343,13 @@ def test_markdown_unclosed_link_or_image_delimiters():
     assert not _has_unclosed_markdown_delimiters("See [OpenAI](https://openai.com/docs).")
 
 
+def test_markdown_delimiters_inside_inline_code_do_not_block_streaming():
+    assert not _has_unclosed_markdown_delimiters("Literal `**` should not block.")
+    assert not _has_unclosed_markdown_delimiters("Literal `__` should not block.")
+    assert not _has_unclosed_markdown_delimiters("Literal `~~` should not block.")
+    assert _has_unclosed_markdown_delimiters("Literal `**` and **still open")
+
+
 # ── Session with basic agent (backward compatibility) ──────────────
 
 
@@ -893,6 +900,60 @@ async def test_streaming_strip_markdown_tts_receives_clean_text():
     assert len(finals) == 1
     assert "**" not in finals[0].text
     assert "Settings" in finals[0].text
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_normalizes_short_code_spans_for_tts():
+    class CodeStreamingAgent:
+        async def run(self, text: str) -> str:
+            return "Call `__init__`. Then run `print()`."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            chunks = ["Call `__init__`. ", "Then run `print()`."]
+            for chunk in chunks:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="Call `__init__`. Then run `print()`.",
+            )
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="help"),
+        agent=CodeStreamingAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    joined_tts = " ".join(tts.synthesized_texts)
+    assert "dunder init" in joined_tts
+    assert "print open paren close paren" in joined_tts
+    assert "`" not in joined_tts
+
+    assert len(finals) == 1
+    assert "dunder init" in finals[0].text
+    assert "print open paren close paren" in finals[0].text
 
 
 @pytest.mark.asyncio

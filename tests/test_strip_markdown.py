@@ -96,6 +96,24 @@ class TestStripMarkdown:
     def test_inline_code(self) -> None:
         assert strip_markdown("Use `print()` for output") == "Use print() for output"
 
+    def test_inline_code_preserves_literal_markdown_chars(self) -> None:
+        text = "Use `__init__` and `*args*` literally"
+        assert strip_markdown(text) == "Use __init__ and *args* literally"
+
+    def test_inline_code_tts_normalization(self) -> None:
+        text = "Use `print()` and `__init__`."
+        assert (
+            strip_markdown(text, normalize_code_spans=True)
+            == "Use print open paren close paren and dunder init."
+        )
+
+    def test_long_inline_code_not_tts_normalized(self) -> None:
+        text = "Use `very_long_identifier_name_for_internal_config`."
+        assert (
+            strip_markdown(text, normalize_code_spans=True)
+            == "Use very_long_identifier_name_for_internal_config."
+        )
+
     def test_link(self) -> None:
         assert (
             strip_markdown("Visit [Google](https://google.com) for search")

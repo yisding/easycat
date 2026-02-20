@@ -284,10 +284,6 @@ def _has_unclosed_markdown_delimiters(text: str) -> bool:
     # Remove fenced blocks so inline delimiter counts are not distorted.
     normalized = re.sub(r"```[\s\S]*?```", "", text)
 
-    for delimiter in ("**", "__", "~~"):
-        if normalized.count(delimiter) % 2 == 1:
-            return True
-
     # Inline backticks only (exclude fenced markers already handled above).
     inline_tick_count = normalized.count("`")
     if inline_tick_count % 2 == 1:
@@ -296,6 +292,10 @@ def _has_unclosed_markdown_delimiters(text: str) -> bool:
     # Remove closed inline-code spans so markdown chars inside code do not
     # affect emphasis/link-state tracking.
     normalized = re.sub(r"`[^`]*`", "", normalized)
+
+    for delimiter in ("**", "__", "~~"):
+        if normalized.count(delimiter) % 2 == 1:
+            return True
 
     if _has_unclosed_markdown_link_or_image(normalized):
         return True
@@ -892,7 +892,7 @@ class Session:
 
         # Strip markdown formatting when enabled so TTS speaks clean text.
         if self._strip_markdown:
-            stripped = strip_markdown(agent_response)
+            stripped = strip_markdown(agent_response, normalize_code_spans=True)
             if stripped != agent_response:
                 agent_response = stripped
                 _replace_last_assistant_text(self.agent, stripped)
@@ -963,7 +963,11 @@ class Session:
                             if _has_unclosed_markdown_delimiters(text_buffer):
                                 continue
 
-                            stripped_window = strip_markdown(text_buffer, trim=False)
+                            stripped_window = strip_markdown(
+                                text_buffer,
+                                trim=False,
+                                normalize_code_spans=True,
+                            )
                             ready, remaining = _split_at_sentence_boundaries(stripped_window)
                             if ready:
                                 await tts_queue.put(ready)
@@ -1000,7 +1004,11 @@ class Session:
             finally:
                 if stream_completed and (not token or not token.is_cancelled):
                     if self._strip_markdown:
-                        remaining = strip_markdown(text_buffer, trim=False)
+                        remaining = strip_markdown(
+                            text_buffer,
+                            trim=False,
+                            normalize_code_spans=True,
+                        )
                         if remaining.strip():
                             await tts_queue.put(remaining)
                     elif text_buffer.strip():
@@ -1074,7 +1082,7 @@ class Session:
 
         # Strip markdown from the final accumulated text and update agent history.
         if self._strip_markdown and accumulated_text and stream_succeeded:
-            stripped = strip_markdown(accumulated_text)
+            stripped = strip_markdown(accumulated_text, normalize_code_spans=True)
             if stripped != accumulated_text:
                 accumulated_text = stripped
                 _replace_last_assistant_text(self.agent, stripped)
