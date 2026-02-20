@@ -35,6 +35,7 @@ all = [
     "twilio>=9.0.0",
     "uvicorn>=0.29.0",
     "torch>=2.2.0",
+    "torchaudio>=2.2.0",
     "numpy>=1.24.0",
     "onnxruntime>=1.16.0",
     "transformers>=4.36.0",
