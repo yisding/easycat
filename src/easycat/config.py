@@ -11,9 +11,8 @@ from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.session import Session, SessionConfig
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
-from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
-from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
-from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
+from easycat.stt.factory import STTConfig, create_stt_provider_from_config
+from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.stubs import NoopAgent
 from easycat.telephony.dtmf import DTMFAggregator, DTMFAggregatorConfig
 from easycat.telephony.voicemail import VoicemailDetector, VoicemailDetectorConfig
@@ -23,9 +22,8 @@ from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
-from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
-from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
-from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
+from easycat.tts.factory import TTSConfig, create_tts_provider_from_config
+from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig
 from easycat.vad import VADConfig, create_vad
 
@@ -59,21 +57,6 @@ class TelephonyConfig:
 TransportConfig = (
     LocalTransportConfig | WebSocketTransportConfig | TwilioTransportConfig | WebRTCTransportConfig
 )
-STTConfig = OpenAISTTConfig | DeepgramSTTConfig | ElevenLabsSTTConfig
-TTSConfig = OpenAITTSConfig | DeepgramTTSConfig | ElevenLabsTTSConfig
-
-_STT_PROVIDERS: dict[type[STTConfig], Any] = {
-    OpenAISTTConfig: OpenAISTT,
-    DeepgramSTTConfig: DeepgramSTT,
-    ElevenLabsSTTConfig: ElevenLabsSTT,
-}
-
-_TTS_PROVIDERS: dict[type[TTSConfig], Any] = {
-    OpenAITTSConfig: OpenAITTS,
-    DeepgramTTSConfig: DeepgramTTS,
-    ElevenLabsTTSConfig: ElevenLabsTTS,
-}
-
 _TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
     LocalTransportConfig: lambda config, event_bus: LocalTransport(config),
     WebSocketTransportConfig: lambda config, event_bus: WebSocketTransport(config),
@@ -131,8 +114,8 @@ class EasyCatConfig:
 def create_session(config: EasyCatConfig) -> Session:
     """Create a fully wired Session from EasyCatConfig."""
     event_bus = EventBus()
-    stt = _create_stt_provider(config.stt, event_bus)
-    tts = _create_tts_provider(config.tts, event_bus)
+    stt = create_stt_provider_from_config(config.stt, event_bus)
+    tts = create_tts_provider_from_config(config.tts, event_bus)
     vad = create_vad(config.vad)
     noise_reducer = create_noise_reducer(config.noise_reduction)
     transport = _create_transport(config.transport, event_bus)
@@ -168,30 +151,6 @@ def create_session(config: EasyCatConfig) -> Session:
             telephony_helpers=telephony_helpers,
         )
     )
-
-
-def _create_stt_provider(config: STTConfig, event_bus: EventBus) -> Any:
-    provider_cls = _STT_PROVIDERS.get(type(config))
-    if provider_cls is None:
-        raise ValueError("Unsupported STT configuration type.")
-
-    provider_config = config
-    if isinstance(config, (DeepgramSTTConfig, ElevenLabsSTTConfig)) and config.event_bus is None:
-        provider_config = replace(config, event_bus=event_bus)
-
-    return provider_cls(provider_config)
-
-
-def _create_tts_provider(config: TTSConfig, event_bus: EventBus) -> Any:
-    provider_cls = _TTS_PROVIDERS.get(type(config))
-    if provider_cls is None:
-        raise ValueError("Unsupported TTS configuration type.")
-
-    provider_config = config
-    if isinstance(config, DeepgramTTSConfig) and config.event_bus is None:
-        provider_config = replace(config, event_bus=event_bus)
-
-    return provider_cls(provider_config)
 
 
 def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
