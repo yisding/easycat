@@ -1,4 +1,4 @@
-"""Timeout wrappers for pipeline stages (WS8 Tasks 8.3–8.5).
+"""Timeout wrappers for pipeline stages.
 
 Provides configurable timeouts for STT response, agent run, and TTS
 first-byte latency. Each timeout emits a typed error event and allows

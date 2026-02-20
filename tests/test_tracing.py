@@ -1,4 +1,4 @@
-"""Tests for tracing span infrastructure (WS8 Tasks 8.10–8.11)."""
+"""Tests for tracing span infrastructure."""
 
 from __future__ import annotations
 

@@ -7,6 +7,11 @@ import pytest
 from easycat import EasyCatConfig, WebSocketTransportConfig, create_session
 
 
+class _DummyAgent:
+    async def run(self, text: str) -> str:
+        return text
+
+
 def test_local_chat_example_imports():
     import examples.local_chat as local_chat
 
@@ -40,6 +45,7 @@ def test_example_session_smoke():
     config = EasyCatConfig(
         openai_api_key="test-key",
         transport=WebSocketTransportConfig(),
+        agent=_DummyAgent(),
     )
     try:
         session = create_session(config)

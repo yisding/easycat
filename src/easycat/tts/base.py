@@ -62,7 +62,7 @@ class TTSBase:
     def _normalize_audio(self, data: bytes, source_format: AudioFormat) -> bytes:
         """Convert audio data to match the target output format.
 
-        Handles mono downmix and sample rate conversion using WS1 utilities.
+        Handles mono downmix and sample rate conversion.
         Assumes PCM16 encoding throughout.
         """
         if source_format.channels > 1:

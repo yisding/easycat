@@ -8,7 +8,6 @@
 - `src/easycat/models/`: runtime model assets (for example ONNX smart-turn model).
 - `tests/`: pytest suite mirroring domains (for example `tests/stt/`, `tests/tts/`, `tests/session/`, `tests/turns/`, `tests/transports/`, `tests/websocket/`, `tests/agents/`).
 - `examples/`: runnable reference apps (`local_chat.py`, `ws_server.py`, `ws_browser_example.py`, `webrtc_server.py`, `twilio_app.py`, `pydantic_ai_voice.py`) plus browser/deployment assets in `webrtc_static/` and `ec2_webrtc/`.
-- `workstreams/`: design plans and execution notes; not runtime code.
 
 ## Build, Test, and Development Commands
 - `uv sync --group dev`: install project + dev tools.
@@ -40,7 +39,7 @@
 ## Commit & Pull Request Guidelines
 - Recent history shows short, imperative subjects (for example: `add smart turn`, `fix test cases`). Keep that style, but be specific.
 - Recommended format: `<scope>: <imperative summary>` (example: `stt: normalize partial transcript events`).
-- PRs should include: problem statement, change summary, test evidence (`uv run pytest` / targeted runs), and linked issue/workstream when applicable.
+- PRs should include: problem statement, change summary, and test evidence (`uv run pytest` / targeted runs).
 - If behavior changes user-visible flows (examples/transports/telephony), include a brief usage note or sample output.
 
 ## Security & Configuration Tips

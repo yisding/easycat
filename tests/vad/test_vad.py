@@ -1,5 +1,6 @@
 """VAD tests: Silero, Krisp, factory, and configuration."""
 
+import importlib.util
 import struct
 from unittest.mock import MagicMock
 
@@ -24,6 +25,10 @@ def _make_chunk(value: int = 0, n_samples: int = 512) -> AudioChunk:
 # ── SileroVAD tests ─────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("torch") is not None,
+    reason="torch is installed; cannot test missing-torch path",
+)
 def test_silero_fails_without_torch():
     """SileroVAD should raise RuntimeError if torch is missing."""
     with pytest.raises(RuntimeError, match="torch|PyTorch|Silero"):

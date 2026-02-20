@@ -1,4 +1,4 @@
-"""Bounded audio queues with configurable drop policies (WS8 Tasks 8.6–8.7).
+"""Bounded audio queues with configurable drop policies.
 
 Provides BoundedAudioQueue for both inbound (mic -> processing) and
 outbound (TTS -> playback) audio, preventing unbounded memory growth.
