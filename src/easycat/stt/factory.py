@@ -12,13 +12,14 @@ from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 
 STTConfig = OpenAISTTConfig | DeepgramSTTConfig | ElevenLabsSTTConfig
+STTConfigType = type[OpenAISTTConfig] | type[DeepgramSTTConfig] | type[ElevenLabsSTTConfig]
 
-_PROVIDER_TO_CONFIG: dict[str, tuple[type[STTBase], type[STTConfig]]] = {
+_PROVIDER_TO_CONFIG: dict[str, tuple[type[STTBase], STTConfigType]] = {
     "openai": (OpenAISTT, OpenAISTTConfig),
     "deepgram": (DeepgramSTT, DeepgramSTTConfig),
     "elevenlabs": (ElevenLabsSTT, ElevenLabsSTTConfig),
 }
-_CONFIG_TO_PROVIDER: dict[type[STTConfig], type[STTBase]] = {
+_CONFIG_TO_PROVIDER: dict[STTConfigType, type[STTBase]] = {
     cfg_cls: provider_cls for provider_cls, cfg_cls in _PROVIDER_TO_CONFIG.values()
 }
 
@@ -67,7 +68,7 @@ def create_stt_provider_from_config(config: STTConfig, event_bus: EventBus) -> S
     return provider_cls(provider_config)
 
 
-def _provider_for_config(config_type: type[STTConfig]) -> type[STTBase]:
+def _provider_for_config(config_type: STTConfigType) -> type[STTBase]:
     provider_cls = _CONFIG_TO_PROVIDER.get(config_type)
     if provider_cls is None:
         raise ValueError("Unsupported STT configuration type.")
