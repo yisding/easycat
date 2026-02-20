@@ -923,3 +923,53 @@ async def test_streaming_strip_markdown_cross_sentence_bold():
     # AgentFinal should be fully stripped
     assert len(finals) == 1
     assert "**" not in finals[0].text
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_unclosed_bold_multiple_sentences():
+    """Unclosed markdown across chunks should not drop earlier stripped text."""
+
+    class UnclosedBoldAgent:
+        async def run(self, text: str) -> str:
+            return "**First sentence. Second sentence.** Third sentence."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            chunks = ["**First sentence. Second sentence.", "** Third sentence."]
+            for chunk in chunks:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="**First sentence. Second sentence.** Third sentence.",
+            )
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="test"),
+        agent=UnclosedBoldAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    joined_tts = " ".join(tts.synthesized_texts)
+    assert "**" not in joined_tts
+    assert "First sentence." in joined_tts
+    assert "Second sentence." in joined_tts
+    assert "Third sentence." in joined_tts
