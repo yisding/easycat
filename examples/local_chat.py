@@ -2,9 +2,8 @@
 
 Setup:
   export OPENAI_API_KEY="..."
-  uv add easycat[local]
-  uv add easycat[openai]
-  uv add easycat[openai-agents]
+  uv sync --extra local --extra openai
+  uv sync --extra openai-agents
   uv run python examples/local_chat.py
 """
 
@@ -31,7 +30,7 @@ async def main() -> None:
         from agents import Agent  # type: ignore[import-untyped]
     except ImportError as exc:
         raise SystemExit(
-            "OpenAI Agents SDK is required. Install with: uv add easycat[openai-agents]"
+            "OpenAI Agents SDK is required. Install with: uv sync --extra openai-agents"
         ) from exc
 
     voice_agent = Agent(

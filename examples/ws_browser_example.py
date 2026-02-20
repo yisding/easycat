@@ -12,7 +12,7 @@ through at its native rate (e.g. 24 kHz) and the server sends an
 
 Setup:
     export OPENAI_API_KEY="..."
-    uv add easycat[openai-agents]
+    uv sync --extra openai-agents
     uv run python examples/ws_browser_example.py
 
 Then open http://localhost:8080/ws_browser_client.html in your browser.
@@ -122,7 +122,7 @@ async def main() -> None:
         from agents import Agent  # type: ignore[import-untyped]
     except ImportError as exc:
         raise SystemExit(
-            "OpenAI Agents SDK is required. Install with: uv add easycat[openai-agents]"
+            "OpenAI Agents SDK is required. Install with: uv sync --extra openai-agents"
         ) from exc
 
     voice_agent = Agent(
