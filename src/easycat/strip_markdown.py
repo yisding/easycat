@@ -57,8 +57,6 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
 
 _FENCED_CODE_RE = re.compile(r"```([\s\S]*?)```")
 _INLINE_CODE_RE = re.compile(r"`(.+?)`")
-_IMAGE_RE = re.compile(r"!\[.*?\]\(.+?\)")
-_LINK_RE = re.compile(r"\[(.+?)\]\(.+?\)")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
 _BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)([\s\S]+?)(?<=\S)__")
 _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
@@ -169,6 +167,141 @@ def _extract_inline_code_for_tts(match: re.Match[str]) -> str:
     return _normalize_short_code_for_tts(_extract_inline_code(match))
 
 
+def _is_escaped(text: str, idx: int) -> bool:
+    """Return True when character at *idx* is escaped by an odd '\' run."""
+    backslashes = 0
+    i = idx - 1
+    while i >= 0 and text[i] == "\\":
+        backslashes += 1
+        i -= 1
+    return backslashes % 2 == 1
+
+
+def _find_balanced_close(text: str, start: int, opener: str, closer: str) -> int | None:
+    """Find matching closing delimiter for *opener* at *start*."""
+    if start >= len(text) or text[start] != opener:
+        return None
+
+    depth = 1
+    i = start + 1
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def _extract_markdown_destination_url(destination: str) -> str:
+    """Extract URL token from markdown destination, dropping optional titles."""
+    token = destination.strip()
+    if not token:
+        return ""
+
+    if token.startswith("<"):
+        end = token.find(">")
+        if end > 1:
+            return token[1:end].strip()
+
+    i = 0
+    while i < len(token):
+        ch = token[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch.isspace():
+            break
+        i += 1
+    return token[:i].strip()
+
+
+def _replace_markdown_links_and_images(text: str) -> str:
+    """Resolve markdown links/images with balanced delimiters.
+
+    Links preserve both label and URL for TTS context. Images preserve alt text
+    only and remove destination URLs.
+    """
+    out: list[str] = []
+    i = 0
+    length = len(text)
+
+    while i < length:
+        ch = text[i]
+
+        if ch == "!" and (i + 1) < length and text[i + 1] == "[" and not _is_escaped(text, i):
+            label_start = i + 1
+            label_end = _find_balanced_close(text, label_start, "[", "]")
+            if label_end is None:
+                out.append(ch)
+                i += 1
+                continue
+
+            j = label_end + 1
+            while j < length and text[j].isspace():
+                j += 1
+            if j >= length or text[j] != "(":
+                out.append(ch)
+                i += 1
+                continue
+
+            destination_end = _find_balanced_close(text, j, "(", ")")
+            if destination_end is None:
+                out.append(ch)
+                i += 1
+                continue
+
+            alt_text = text[label_start + 1 : label_end].strip()
+            if alt_text:
+                out.append(alt_text)
+            i = destination_end + 1
+            continue
+
+        if ch == "[" and not _is_escaped(text, i):
+            label_end = _find_balanced_close(text, i, "[", "]")
+            if label_end is None:
+                out.append(ch)
+                i += 1
+                continue
+
+            j = label_end + 1
+            while j < length and text[j].isspace():
+                j += 1
+            if j >= length or text[j] != "(":
+                out.append(ch)
+                i += 1
+                continue
+
+            destination_end = _find_balanced_close(text, j, "(", ")")
+            if destination_end is None:
+                out.append(ch)
+                i += 1
+                continue
+
+            label = text[i + 1 : label_end].strip()
+            destination = text[j + 1 : destination_end]
+            destination_url = _extract_markdown_destination_url(destination)
+            if label and destination_url:
+                out.append(f"{label} {destination_url}")
+            elif label:
+                out.append(label)
+            elif destination_url:
+                out.append(destination_url)
+            i = destination_end + 1
+            continue
+
+        out.append(ch)
+        i += 1
+
+    return "".join(out)
+
+
 def strip_markdown(
     text: str, *, trim: bool = True, normalize_code_spans: bool = False
 ) -> str:
@@ -176,6 +309,11 @@ def strip_markdown(
 
     Handles fenced code blocks, inline code, images, links, bold, italic,
     strikethrough, headings, blockquotes, lists, and horizontal rules.
+
+    Link handling preserves both label and URL (for example ``[Docs](https://x)``
+    becomes ``Docs https://x``). Image handling preserves alt text and removes
+    destination URLs (for example ``![diagram](https://img)`` becomes
+    ``diagram``).
 
     Returns the cleaned text with extra blank lines collapsed.
 
@@ -206,11 +344,8 @@ def strip_markdown(
     result = _FENCED_CODE_RE.sub(_stash_code_span(code_spans, fenced_extractor), result)
     result = _INLINE_CODE_RE.sub(_stash_code_span(code_spans, inline_extractor), result)
 
-    # 3. Images → remove entirely
-    result = _IMAGE_RE.sub("", result)
-
-    # 4. Links → keep link text
-    result = _LINK_RE.sub(r"\1", result)
+    # 3/4. Links/images with balanced destination parsing.
+    result = _replace_markdown_links_and_images(result)
 
     # 5. Bold (before italic so ** is matched before *)
     result = _BOLD_ASTERISK_RE.sub(r"\1", result)

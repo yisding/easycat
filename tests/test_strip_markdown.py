@@ -32,6 +32,9 @@ class TestHasMarkdown:
     def test_link(self) -> None:
         assert has_markdown("Click [here](https://example.com)")
 
+    def test_link_with_parenthesized_url(self) -> None:
+        assert has_markdown("See [Function](https://en.wikipedia.org/wiki/Function_(math))")
+
     def test_inline_code(self) -> None:
         assert has_markdown("Use `print()` to debug")
 
@@ -52,6 +55,9 @@ class TestHasMarkdown:
 
     def test_image(self) -> None:
         assert has_markdown("![alt text](image.png)")
+
+    def test_image_with_parenthesized_url(self) -> None:
+        assert has_markdown("![alt text](https://example.com/a(b))")
 
     def test_strikethrough(self) -> None:
         assert has_markdown("~~deleted~~")
@@ -117,11 +123,22 @@ class TestStripMarkdown:
     def test_link(self) -> None:
         assert (
             strip_markdown("Visit [Google](https://google.com) for search")
-            == "Visit Google for search"
+            == "Visit Google https://google.com for search"
         )
 
     def test_image_removed(self) -> None:
-        assert strip_markdown("Look at this: ![photo](image.jpg)") == "Look at this:"
+        assert strip_markdown("Look at this: ![photo](image.jpg)") == "Look at this: photo"
+
+    def test_link_with_parenthesized_url(self) -> None:
+        text = "See [Function](https://en.wikipedia.org/wiki/Function_(mathematics))."
+        assert (
+            strip_markdown(text)
+            == "See Function https://en.wikipedia.org/wiki/Function_(mathematics)."
+        )
+
+    def test_image_with_parenthesized_url(self) -> None:
+        text = "Diagram: ![plot](https://example.com/a(b))."
+        assert strip_markdown(text) == "Diagram: plot."
 
     def test_heading_h1(self) -> None:
         assert strip_markdown("# Main Title") == "Main Title"
@@ -186,7 +203,7 @@ class TestStripMarkdown:
     def test_multiple_formatting_combined(self) -> None:
         text = "# Welcome\n\nThis is **bold** and *italic* with a [link](http://x.com)."
         result = strip_markdown(text)
-        assert result == "Welcome\n\nThis is bold and italic with a link."
+        assert result == "Welcome\n\nThis is bold and italic with a link http://x.com."
 
     def test_blank_lines_collapsed(self) -> None:
         text = "Line one\n\n\n\nLine two"
@@ -216,6 +233,7 @@ class TestStripMarkdown:
         assert "Security" in result
         assert "Reset Password" in result
         assert "our help page" in result
+        assert "https://example.com/help" in result
 
 
 # ── Agent history integration ──────────────────────────────────────
