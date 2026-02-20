@@ -672,3 +672,20 @@ async def test_notify_interruption_appends_to_history():
     assert len(runner.history) == 3
     assert runner.history[2]["role"] == "system"
     assert "interrupted" in runner.history[2]["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_deduplicates_consecutive_notes():
+    """Repeated notifications should not duplicate the same interruption note."""
+    runner = AgentRunner(EchoAgent())
+    await runner.run("hello")
+
+    runner.notify_interruption()
+    runner.notify_interruption()
+
+    interruption_notes = [
+        entry
+        for entry in runner.history
+        if entry["role"] == "system" and "interrupted" in entry["content"].lower()
+    ]
+    assert len(interruption_notes) == 1

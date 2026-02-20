@@ -159,6 +159,11 @@ class AgentRunner:
 
     def _append_interruption_note(self) -> None:
         """Append a system-level note about the interruption to history."""
+        for message in reversed(self._history):
+            if message["role"] == "user":
+                break
+            if message == {"role": "system", "content": self._INTERRUPTION_NOTE}:
+                return
         self._history.append({"role": "system", "content": self._INTERRUPTION_NOTE})
 
     def notify_interruption(self) -> None:

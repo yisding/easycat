@@ -18,7 +18,7 @@ from typing import Any, Protocol, runtime_checkable
 import pysbd
 
 from easycat._span_manager import SpanManager
-from easycat.agent_runner import AgentRunner, AgentStreamEventType
+from easycat.agent_runner import AgentStreamEventType
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -871,11 +871,7 @@ class Session:
                 # Notify the agent that the user interrupted so subsequent
                 # turns carry the context that the response was not fully
                 # delivered.
-                if (
-                    interrupted
-                    and not isinstance(self.agent, AgentRunner)
-                    and hasattr(self.agent, "notify_interruption")
-                ):
+                if interrupted and hasattr(self.agent, "notify_interruption"):
                     try:
                         self.agent.notify_interruption()
                     except Exception:
