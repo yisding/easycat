@@ -269,6 +269,31 @@ class TestOpenAIAdapterHistoryUpdate:
         part = adapter._message_history[1]["content"][0]
         assert part["text"] == "Hello!"
 
+    def test_replaces_all_output_text_parts(self) -> None:
+        from easycat.agents.openai_agents import OpenAIAgentsAdapter
+
+        class FakeAgent:
+            pass
+
+        adapter = OpenAIAgentsAdapter(FakeAgent())
+        adapter._message_history = [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "**Hello**"},
+                    {"type": "other_type", "value": 1},
+                    {"type": "output_text", "text": "*world*"},
+                ],
+            },
+        ]
+
+        adapter.replace_last_assistant_text("Hello world")
+
+        parts = adapter._message_history[1]["content"]
+        assert parts[0]["text"] == "Hello world"
+        assert parts[2]["text"] == "Hello world"
+
     def test_replaces_string_content(self) -> None:
         from easycat.agents.openai_agents import OpenAIAgentsAdapter
 
@@ -319,6 +344,32 @@ class TestPydanticAIAdapterHistoryUpdate:
 
         adapter.replace_last_assistant_text("Hello!")
         assert text_part.content == "Hello!"
+
+    def test_replaces_all_text_part_content(self) -> None:
+        from easycat.agents.pydantic_ai import PydanticAIAdapter
+
+        class TextPart:
+            def __init__(self, content: str) -> None:
+                self.content = content
+
+        class ToolPart:
+            pass
+
+        class ModelResponse:
+            def __init__(self, parts: list) -> None:
+                self.parts = parts
+
+        class FakeAgent:
+            pass
+
+        adapter = PydanticAIAdapter(FakeAgent())
+        first = TextPart("**Hello**")
+        second = TextPart("*world*")
+        adapter._message_history = [ModelResponse(parts=[first, ToolPart(), second])]
+
+        adapter.replace_last_assistant_text("Hello world")
+        assert first.content == "Hello world"
+        assert second.content == "Hello world"
 
     def test_empty_history_is_noop(self) -> None:
         from easycat.agents.pydantic_ai import PydanticAIAdapter
