@@ -931,12 +931,26 @@ class Session:
         accumulated_text = ""
         structured_output: Any = None
         agent_error: BaseException | None = None
-        stream_completed = False
         self._spans.start(Tracer.AGENT)
 
         async def _consume_agent() -> None:
-            nonlocal accumulated_text, structured_output, agent_error, stream_completed
+            nonlocal accumulated_text, structured_output, agent_error
             text_buffer = ""
+
+            async def _flush_pending_tts_buffer() -> None:
+                nonlocal text_buffer
+                if self._strip_markdown:
+                    remaining = strip_markdown(
+                        text_buffer,
+                        trim=False,
+                        normalize_code_spans=True,
+                    )
+                    if remaining.strip():
+                        await tts_queue.put(remaining)
+                elif text_buffer.strip():
+                    await tts_queue.put(text_buffer)
+                text_buffer = ""
+
             try:
                 async for event in self.agent.run_streaming(transcript, cancel_token=token):
                     if token and token.is_cancelled:
@@ -992,27 +1006,21 @@ class Session:
                             ToolCallResult(call_id=event.call_id, result=event.result)
                         )
                     elif event.type == AgentStreamEventType.DONE:
-                        stream_completed = True
                         if event.text:
                             accumulated_text = event.text
                         if event.structured_output is not None:
                             structured_output = event.structured_output
+                        # Flush any tail immediately so TTS can start before
+                        # stream teardown/adapter cleanup completes.
+                        await _flush_pending_tts_buffer()
             except Exception as exc:
                 agent_error = exc
                 logger.exception("Agent streaming error")
                 await self.event_bus.emit(Error(exception=exc, context="agent"))
             finally:
-                if stream_completed and (not token or not token.is_cancelled):
-                    if self._strip_markdown:
-                        remaining = strip_markdown(
-                            text_buffer,
-                            trim=False,
-                            normalize_code_spans=True,
-                        )
-                        if remaining.strip():
-                            await tts_queue.put(remaining)
-                    elif text_buffer.strip():
-                        await tts_queue.put(text_buffer)
+                stream_succeeded = agent_error is None and (not token or not token.is_cancelled)
+                if stream_succeeded:
+                    await _flush_pending_tts_buffer()
                 await tts_queue.put(None)  # sentinel to stop TTS task
 
         async def _process_tts() -> None:
@@ -1076,9 +1084,7 @@ class Session:
             else:
                 self._spans.finish(Tracer.AGENT)
 
-        stream_succeeded = stream_completed and agent_error is None and not (
-            token and token.is_cancelled
-        )
+        stream_succeeded = agent_error is None and not (token and token.is_cancelled)
 
         # Strip markdown from the final accumulated text and update agent history.
         if self._strip_markdown and accumulated_text and stream_succeeded:
