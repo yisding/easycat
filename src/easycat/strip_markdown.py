@@ -73,13 +73,20 @@ _HR_UNDERSCORE_RE = re.compile(r"^_{3,}\s*$", re.MULTILINE)
 _EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
 
 
-def strip_markdown(text: str) -> str:
+def strip_markdown(text: str, *, trim: bool = True) -> str:
     """Remove Markdown formatting from *text*, preserving readable content.
 
     Handles fenced code blocks, inline code, images, links, bold, italic,
     strikethrough, headings, blockquotes, lists, and horizontal rules.
 
     Returns the cleaned text with extra blank lines collapsed.
+
+    Parameters
+    ----------
+    trim:
+        When ``True`` (default), trims leading/trailing whitespace on the
+        final result. Set to ``False`` for incremental/streaming use cases
+        that must preserve chunk-boundary spaces.
     """
     if not text:
         return text
@@ -129,4 +136,4 @@ def strip_markdown(text: str) -> str:
     # 13. Collapse runs of blank lines
     result = _EXCESS_BLANK_LINES_RE.sub("\n\n", result)
 
-    return result.strip()
+    return result.strip() if trim else result

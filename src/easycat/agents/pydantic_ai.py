@@ -29,7 +29,11 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
-from easycat.agents.base import BaseAgentAdapter, serialize_output
+from easycat.agents.base import (
+    BaseAgentAdapter,
+    serialize_output,
+    split_replacement_by_original_parts,
+)
 from easycat.cancel import CancelToken
 
 logger = logging.getLogger(__name__)
@@ -77,24 +81,34 @@ class PydanticAIAdapter(BaseAgentAdapter):
         """Replace the text in the last assistant (model response) message.
 
         PydanticAI history consists of ``ModelRequest`` / ``ModelResponse``
-        objects.  Walk backwards to find the last ``ModelResponse`` and
-        replace all ``TextPart`` contents.
+        objects. Walk backwards to find the last ``ModelResponse`` and
+        patch ``TextPart`` content while preserving part granularity.
         """
         for msg in reversed(self._message_history):
             cls_name = type(msg).__name__
             if cls_name == "ModelResponse":
                 parts = getattr(msg, "parts", [])
-                patched_any = False
+                text_parts: list[Any] = []
+                original_segments: list[str] = []
                 for part in parts:
                     if type(part).__name__ == "TextPart" and hasattr(part, "content"):
+                        text_parts.append(part)
+                        original_segments.append(str(getattr(part, "content", "")))
+
+                if text_parts:
+                    replacement_segments = split_replacement_by_original_parts(
+                        original_segments,
+                        text,
+                    )
+                    for part, replacement_segment in zip(
+                        text_parts, replacement_segments, strict=False
+                    ):
                         # Pydantic v2 models — use object.__setattr__ to bypass
                         # frozen-model restrictions when present.
                         try:
-                            part.content = text
+                            part.content = replacement_segment
                         except (AttributeError, TypeError):
-                            object.__setattr__(part, "content", text)
-                        patched_any = True
-                if patched_any:
+                            object.__setattr__(part, "content", replacement_segment)
                     return
                 break
 

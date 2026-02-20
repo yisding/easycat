@@ -31,7 +31,11 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
-from easycat.agents.base import BaseAgentAdapter, serialize_output
+from easycat.agents.base import (
+    BaseAgentAdapter,
+    serialize_output,
+    split_replacement_by_original_parts,
+)
 from easycat.cancel import CancelToken
 
 logger = logging.getLogger(__name__)
@@ -79,8 +83,8 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         """Replace the text in the last assistant message.
 
         ``to_input_list()`` returns dicts following the Responses API
-        format.  Walk backwards to find the last assistant / output
-        message and patch its text content.
+        format. Walk backwards to find the last assistant/output message
+        and patch only output-text parts while preserving part boundaries.
         """
         for item in reversed(self._message_history):
             if not isinstance(item, dict):
@@ -89,12 +93,22 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
             if role == "assistant":
                 content = item.get("content")
                 if isinstance(content, list):
-                    patched_any = False
+                    output_text_parts: list[dict[str, Any]] = []
+                    original_segments: list[str] = []
                     for part in content:
                         if isinstance(part, dict) and part.get("type") == "output_text":
-                            part["text"] = text
-                            patched_any = True
-                    if patched_any:
+                            output_text_parts.append(part)
+                            original_segments.append(str(part.get("text", "")))
+
+                    if output_text_parts:
+                        replacement_segments = split_replacement_by_original_parts(
+                            original_segments,
+                            text,
+                        )
+                        for part, replacement_segment in zip(
+                            output_text_parts, replacement_segments, strict=False
+                        ):
+                            part["text"] = replacement_segment
                         return
                 elif isinstance(content, str):
                     item["content"] = text

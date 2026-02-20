@@ -888,6 +888,48 @@ async def test_streaming_strip_markdown_tts_receives_clean_text():
 
 
 @pytest.mark.asyncio
+async def test_streaming_strip_markdown_preserves_chunk_boundary_spaces():
+    """Chunk-boundary spaces should not be removed by incremental stripping."""
+
+    class BoundarySpaceAgent:
+        async def run(self, text: str) -> str:
+            return "Then click Security."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            for chunk in ["Then ", "click Security."]:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Then click Security.")
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="test"),
+        agent=BoundarySpaceAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["Then click Security."]
+
+
+@pytest.mark.asyncio
 async def test_streaming_strip_markdown_cross_sentence_bold():
     """Bold spanning two sentences should still be stripped correctly."""
 
