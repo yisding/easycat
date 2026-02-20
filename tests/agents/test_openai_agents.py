@@ -959,6 +959,34 @@ async def test_notify_interruption_truncate_falls_back_without_content(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_notify_interruption_truncate_does_not_corrupt_older_turn(monkeypatch):
+    """Non-writable newest assistant must not cause older entries to be overwritten."""
+
+    class AssistantToolOnlyMessage:
+        role = "assistant"
+
+    input_list = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "First reply"},
+        {"role": "user", "content": "turn 2"},
+        AssistantToolOnlyMessage(),  # newest assistant — no writable content
+    ]
+    runner = MockRunner(run_results=[MockRunResult(final_output="reply", input_list=input_list)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("turn 2")
+
+    adapter.notify_interruption("", mode="truncate")
+
+    # The older assistant dict must be untouched
+    assert adapter.message_history[1]["content"] == "First reply"
+    # A fallback developer note should have been appended instead
+    assert adapter.message_history[-1]["role"] == "developer"
+    assert "interrupted" in adapter.message_history[-1]["content"].lower()
+
+
+@pytest.mark.asyncio
 async def test_notify_interruption_message_mode(monkeypatch):
     """Message mode appends a developer message to the history."""
     input_list = [
