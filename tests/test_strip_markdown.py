@@ -132,6 +132,15 @@ class TestStripMarkdown:
         expected = "First\nSecond\nThird"
         assert strip_markdown(text) == expected
 
+    def test_ordered_list_up_to_three_digits(self) -> None:
+        text = "100. First\n101. Second"
+        expected = "First\nSecond"
+        assert strip_markdown(text) == expected
+
+    def test_numeric_sentence_with_year_preserved(self) -> None:
+        text = "2026. We launched globally."
+        assert strip_markdown(text) == text
+
     def test_horizontal_rule_dashes(self) -> None:
         text = "Above\n---\nBelow"
         result = strip_markdown(text)
