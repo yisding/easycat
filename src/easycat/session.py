@@ -178,6 +178,44 @@ def _split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     return text[:last_start], text[last_start:]
 
 
+def _estimate_text_spoken(
+    tts_chunks: list[tuple[str, int]],
+    audio_bytes_sent: int,
+) -> str:
+    """Estimate what text the user heard based on TTS audio delivered.
+
+    Each entry in *tts_chunks* is ``(text, audio_bytes_produced)`` for a
+    sentence-level TTS call.  *audio_bytes_sent* is the total audio bytes
+    that were actually sent to the transport before the barge-in flush.
+
+    Walks through the chunks in order, subtracting each chunk's audio from
+    the bytes-sent budget.  When the budget runs out mid-chunk, the text is
+    proportionally estimated (assumes roughly linear text → audio mapping
+    within a single sentence — not perfect, but a practical heuristic).
+    """
+    if not tts_chunks or audio_bytes_sent <= 0:
+        return ""
+
+    remaining = audio_bytes_sent
+    spoken = ""
+    for chunk_text, chunk_audio in tts_chunks:
+        if chunk_audio <= 0:
+            # No audio produced for this chunk (e.g. cancelled before any
+            # data) — skip.
+            continue
+        if remaining >= chunk_audio:
+            # This entire chunk was delivered.
+            spoken += chunk_text
+            remaining -= chunk_audio
+        else:
+            # Partial chunk — estimate by fraction of audio delivered.
+            fraction = remaining / chunk_audio
+            chars = int(len(chunk_text) * fraction)
+            spoken += chunk_text[:chars]
+            break
+    return spoken
+
+
 # ── Session ────────────────────────────────────────────────────────
 
 
@@ -298,6 +336,11 @@ class Session:
         self._stt_final_time: float | None = None
         self._first_agent_time: float | None = None
         self._first_tts_audio_time: float | None = None
+
+        # Audio bytes actually sent to the transport during this turn.
+        # Used to estimate which portion of the agent response the user
+        # heard before a barge-in.
+        self._turn_audio_bytes_sent: int = 0
 
     # ── Properties ─────────────────────────────────────────────
 
@@ -512,6 +555,7 @@ class Session:
         self._stt_final_time = None
         self._first_agent_time = None
         self._first_tts_audio_time = None
+        self._turn_audio_bytes_sent = 0
 
         # Initialize tracing for this turn
         self._spans.begin_turn()
@@ -785,13 +829,19 @@ class Session:
         accumulated_text = ""
         structured_output: Any = None
         agent_error: BaseException | None = None
+        interrupted = False
+
+        # Per-chunk TTS accounting: list of (text, audio_bytes_produced).
+        # Populated by _process_tts so we can map audio-bytes-sent back to
+        # text to estimate what the user actually heard before barge-in.
+        tts_chunks: list[tuple[str, int]] = []
+
         self._spans.start(Tracer.AGENT)
 
         async def _consume_agent() -> None:
-            nonlocal accumulated_text, structured_output, agent_error
+            nonlocal accumulated_text, structured_output, agent_error, interrupted
             text_buffer = ""
             stream_completed = False
-            interrupted = False
             pending_tool_calls = 0
             try:
                 async for event in self.agent.run_streaming(transcript, cancel_token=token):
@@ -877,19 +927,6 @@ class Session:
                     await tts_queue.put(text_buffer)
                 await tts_queue.put(None)  # sentinel to stop TTS task
 
-                # Notify the agent that the user interrupted so subsequent
-                # turns carry the context that the response was not fully
-                # delivered.  Pass the text that was approximately spoken
-                # to the user so truncation-mode can show what was heard.
-                if interrupted and hasattr(self.agent, "notify_interruption"):
-                    try:
-                        self.agent.notify_interruption(
-                            accumulated_text,
-                            mode=self._interruption_mode,
-                        )
-                    except Exception:
-                        logger.debug("Failed to notify agent of interruption", exc_info=True)
-
         async def _process_tts() -> None:
             started = False
             try:
@@ -913,6 +950,7 @@ class Session:
                         ),
                         record_latency=self._first_tts_audio_time is None,
                     )
+                    tts_chunks.append((text, result.audio_bytes))
                     if result.first_audio_time is not None and self._first_tts_audio_time is None:
                         self._first_tts_audio_time = result.first_audio_time
             except asyncio.CancelledError:
@@ -962,6 +1000,19 @@ class Session:
         except asyncio.CancelledError:
             pass
 
+        # Both tasks are done.  If the user barged in, estimate what they
+        # actually heard by comparing audio bytes sent to the transport
+        # against the per-chunk audio produced by TTS.
+        if interrupted and hasattr(self.agent, "notify_interruption"):
+            text_spoken = _estimate_text_spoken(tts_chunks, self._turn_audio_bytes_sent)
+            try:
+                self.agent.notify_interruption(
+                    text_spoken,
+                    mode=self._interruption_mode,
+                )
+            except Exception:
+                logger.debug("Failed to notify agent of interruption", exc_info=True)
+
         # If agent errored or was cancelled with no TTS started, ensure idle
         if self._turn_manager.state != TurnManagerState.IDLE:
             self._turn_manager.reset()
@@ -1002,6 +1053,7 @@ class Session:
                 break
             try:
                 await self.transport.send_audio(chunk)
+                self._turn_audio_bytes_sent += len(chunk.data)
             except Exception:
                 logger.exception("Failed to send audio to transport")
 
