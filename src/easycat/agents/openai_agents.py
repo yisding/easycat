@@ -97,10 +97,10 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
                 item = self._message_history[i]
                 role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
                 if role == "assistant":
-                    if isinstance(item, dict):
+                    if isinstance(item, dict) and "content" in item:
                         item["content"] = text_spoken + "..." if text_spoken else "..."
                         updated = True
-                    elif hasattr(item, "content"):
+                    elif not isinstance(item, dict) and hasattr(item, "content"):
                         item.content = text_spoken + "..." if text_spoken else "..."
                         updated = True
                     break  # Always stop at the newest assistant entry
