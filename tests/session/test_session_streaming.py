@@ -35,7 +35,12 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.session import Session, SessionConfig, _split_at_sentence_boundaries
+from easycat.session import (
+    Session,
+    SessionConfig,
+    _estimate_text_spoken,
+    _split_at_sentence_boundaries,
+)
 from easycat.turn_manager import TurnManagerConfig
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
@@ -317,6 +322,47 @@ def test_split_chinese_sentence():
     ready, remaining = _split_at_sentence_boundaries(text)
     assert ready == "你好。今天天气不错。"
     assert remaining == "继续"
+
+
+# ── _estimate_text_spoken tests ─────────────────────────────────────
+
+
+def test_estimate_text_spoken_empty():
+    assert _estimate_text_spoken([], 0) == ""
+    assert _estimate_text_spoken([], 100) == ""
+    assert _estimate_text_spoken([("Hello.", 320)], 0) == ""
+
+
+def test_estimate_text_spoken_full_chunks():
+    """When all audio was sent, the full text is returned."""
+    chunks = [("Hello. ", 320), ("How are you?", 640)]
+    assert _estimate_text_spoken(chunks, 960) == "Hello. How are you?"
+    # More bytes sent than produced — still returns full text
+    assert _estimate_text_spoken(chunks, 9999) == "Hello. How are you?"
+
+
+def test_estimate_text_spoken_partial_first_chunk():
+    """When only part of the first chunk's audio was sent, estimate proportionally."""
+    chunks = [("Hello world.", 1000)]
+    # Half the audio sent → approximately half the text
+    assert _estimate_text_spoken(chunks, 500) == "Hello "
+
+
+def test_estimate_text_spoken_one_and_a_half_chunks():
+    """First chunk fully sent, second chunk partially sent."""
+    chunks = [("First sentence. ", 400), ("Second sentence.", 400)]
+    # All of first chunk (400) + half of second (200) = 600
+    spoken = _estimate_text_spoken(chunks, 600)
+    assert spoken.startswith("First sentence. ")
+    # Second chunk has 16 chars, half → 8 chars
+    assert spoken == "First sentence. Second s"
+
+
+def test_estimate_text_spoken_skips_zero_audio_chunks():
+    """Chunks with 0 audio bytes (cancelled before any output) are skipped."""
+    chunks = [("First. ", 320), ("Never spoken.", 0), ("Third.", 320)]
+    # 320 covers first chunk, 0-byte chunk is skipped, then 320 for third
+    assert _estimate_text_spoken(chunks, 640) == "First. Third."
 
 
 # ── Session with basic agent (backward compatibility) ──────────────
@@ -897,8 +943,13 @@ async def test_session_barge_in_completes_tool_calls():
 
 @pytest.mark.asyncio
 async def test_session_barge_in_calls_notify_interruption():
-    """After barge-in the session should call notify_interruption on the agent
-    with the spoken text and the configured interruption mode."""
+    """After barge-in the session should call notify_interruption on the agent.
+
+    The SlowToolCallingAgent emits a single sentence fragment before
+    starting a tool call.  Because the fragment never crosses a sentence
+    boundary it stays in the text buffer and is never sent to TTS, so the
+    audio-based estimation correctly reports "" — the user never heard it.
+    """
     agent = SlowToolCallingAgent()
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
     config = SessionConfig(
@@ -922,8 +973,9 @@ async def test_session_barge_in_calls_notify_interruption():
     await session.stop()
 
     assert agent.interruption_notified
-    # The text spoken before barge-in should be passed
-    assert agent.interruption_text_spoken == "Let me look. "
+    # Text never reached TTS (single sentence fragment still in buffer),
+    # so audio-based estimation yields empty string.
+    assert agent.interruption_text_spoken == ""
     # Default mode is "truncate"
     assert agent.interruption_mode == "truncate"
 

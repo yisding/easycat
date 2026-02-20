@@ -29,6 +29,7 @@ class TTSSynthResult:
 
     audio_produced: bool = False
     first_audio_time: float | None = None
+    audio_bytes: int = 0
 
 
 class TTSSynthesizer:
@@ -109,6 +110,7 @@ class TTSSynthesizer:
                     break
 
                 if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
+                    result.audio_bytes += len(tts_event.audio.data)
                     await self._event_bus.emit(TTSAudio(chunk=tts_event.audio))
                     if not result.audio_produced:
                         result.audio_produced = True

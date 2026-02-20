@@ -131,6 +131,15 @@ async def test_synthesize_emits_markers():
 
 
 @pytest.mark.asyncio
+async def test_synthesize_tracks_audio_bytes():
+    synth, _, _ = _make_synth(tts=FakeTTS(chunks=3))
+    result = await synth.synthesize("hello", None)
+
+    # Each chunk is 320 bytes, 3 chunks → 960 bytes
+    assert result.audio_bytes == 320 * 3
+
+
+@pytest.mark.asyncio
 async def test_synthesize_no_audio_returns_false():
     class EmptyTTS:
         async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
