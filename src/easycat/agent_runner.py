@@ -169,7 +169,7 @@ class AgentRunner:
 
         # Delegate to the wrapped agent/adapter
         fn = getattr(self._agent, "replace_last_assistant_text", None)
-        if fn is not None:
+        if callable(fn):
             fn(text)
 
     # ── Internal helpers ───────────────────────────────────────
