@@ -781,6 +781,93 @@ async def test_streaming_flushes_final_buffer_to_tts():
 
 
 @pytest.mark.asyncio
+async def test_streaming_delta_only_still_emits_final_and_flushes_tts():
+    class DeltaOnlyAgent:
+        async def run(self, text: str) -> str:
+            return "Hello world"
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world")
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="hello"),
+        agent=DeltaOnlyAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.2)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["Hello world"]
+    assert len(finals) == 1
+    assert finals[0].text == "Hello world"
+
+
+@pytest.mark.asyncio
+async def test_streaming_done_flushes_tts_before_stream_cleanup_finishes():
+    class DelayedAfterDoneAgent:
+        async def run(self, text: str) -> str:
+            return "Hello world"
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world")
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world")
+            await asyncio.sleep(0.3)
+
+    class ObservableFakeTTS(FakeTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+            self.started.set()
+            async for event in super().synthesize(text):
+                yield event
+
+    tts = ObservableFakeTTS()
+    session = Session(
+        SessionConfig(
+            agent=DelayedAfterDoneAgent(),
+            tts=tts,
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    task = asyncio.create_task(session._run_streaming_agent("hello", token=None))
+    await asyncio.wait_for(tts.started.wait(), timeout=0.2)
+    await task
+
+    assert tts.synthesized_texts == ["Hello world"]
+
+
+@pytest.mark.asyncio
 async def test_full_streaming_turn_event_order():
     """Verify the complete event ordering in a streaming turn."""
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
