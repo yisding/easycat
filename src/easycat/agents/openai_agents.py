@@ -135,7 +135,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         if self._context is not None:
             kwargs["context"] = self._context
 
-        result = await Runner.run_streamed(self._agent, input_data, **kwargs)
+        result = Runner.run_streamed(self._agent, input_data, **kwargs)
 
         accumulated = ""
         async for event in result.stream_events():
