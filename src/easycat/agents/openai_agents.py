@@ -89,10 +89,13 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
             if role == "assistant":
                 content = item.get("content")
                 if isinstance(content, list):
+                    patched_any = False
                     for part in content:
                         if isinstance(part, dict) and part.get("type") == "output_text":
                             part["text"] = text
-                            return
+                            patched_any = True
+                    if patched_any:
+                        return
                 elif isinstance(content, str):
                     item["content"] = text
                     return

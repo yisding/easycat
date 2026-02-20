@@ -78,12 +78,13 @@ class PydanticAIAdapter(BaseAgentAdapter):
 
         PydanticAI history consists of ``ModelRequest`` / ``ModelResponse``
         objects.  Walk backwards to find the last ``ModelResponse`` and
-        replace its first ``TextPart``'s content.
+        replace all ``TextPart`` contents.
         """
         for msg in reversed(self._message_history):
             cls_name = type(msg).__name__
             if cls_name == "ModelResponse":
                 parts = getattr(msg, "parts", [])
+                patched_any = False
                 for part in parts:
                     if type(part).__name__ == "TextPart" and hasattr(part, "content"):
                         # Pydantic v2 models — use object.__setattr__ to bypass
@@ -92,7 +93,9 @@ class PydanticAIAdapter(BaseAgentAdapter):
                             part.content = text
                         except (AttributeError, TypeError):
                             object.__setattr__(part, "content", text)
-                        return
+                        patched_any = True
+                if patched_any:
+                    return
                 break
 
     # ── Basic Agent protocol ──────────────────────────────────
