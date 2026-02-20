@@ -13,6 +13,7 @@ content.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 # ── Detection patterns ─────────────────────────────────────────────
 
@@ -71,9 +72,106 @@ _HR_DASH_RE = re.compile(r"^-{3,}\s*$", re.MULTILINE)
 _HR_ASTERISK_RE = re.compile(r"^\*{3,}\s*$", re.MULTILINE)
 _HR_UNDERSCORE_RE = re.compile(r"^_{3,}\s*$", re.MULTILINE)
 _EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
+_WS_RE = re.compile(r"\s+")
+_DUNDER_NAME_RE = re.compile(r"^__([A-Za-z][A-Za-z0-9_]*)__$")
+
+_SHORT_CODE_MAX_CHARS = 24
+
+_MULTI_CHAR_CODE_SPEECH: tuple[tuple[str, str], ...] = (
+    ("===", "triple equals"),
+    ("==", "equals equals"),
+    ("!=", "not equals"),
+    (">=", "greater than or equal to"),
+    ("<=", "less than or equal to"),
+    ("=>", "arrow"),
+    ("->", "arrow"),
+    ("::", "double colon"),
+    ("&&", "and and"),
+    ("||", "or or"),
+    ("**", "star star"),
+)
+
+_SINGLE_CHAR_CODE_SPEECH: dict[str, str] = {
+    "(": "open paren",
+    ")": "close paren",
+    "[": "open bracket",
+    "]": "close bracket",
+    "{": "open brace",
+    "}": "close brace",
+    "<": "less than",
+    ">": "greater than",
+    "_": "underscore",
+    "*": "star",
+    "/": "slash",
+    "\\": "backslash",
+    "|": "pipe",
+    "&": "ampersand",
+    "+": "plus",
+    "-": "minus",
+    "=": "equals",
+    ".": "dot",
+    ",": "comma",
+    ":": "colon",
+}
 
 
-def strip_markdown(text: str, *, trim: bool = True) -> str:
+def _stash_code_span(
+    code_spans: list[str], extractor: Callable[[re.Match[str]], str]
+) -> Callable[[re.Match[str]], str]:
+    """Protect code text from markdown passes, restoring it at the end."""
+
+    def _replace(match: re.Match[str]) -> str:
+        code_spans.append(extractor(match))
+        return f"EASYCATCODETOKEN{len(code_spans) - 1}X"
+
+    return _replace
+
+
+def _extract_inline_code(match: re.Match[str]) -> str:
+    return match.group(1)
+
+
+def _normalize_short_code_for_tts(code: str) -> str:
+    """Convert short code snippets to speech-friendly text."""
+    snippet = code.strip()
+    if not snippet:
+        return snippet
+    if "\n" in snippet or "\r" in snippet or len(snippet) > _SHORT_CODE_MAX_CHARS:
+        return code
+
+    dunder_match = _DUNDER_NAME_RE.fullmatch(snippet)
+    if dunder_match:
+        dunder_name = dunder_match.group(1).replace("_", " ")
+        return f"dunder {dunder_name}".strip()
+
+    normalized = snippet
+    for pattern, spoken in _MULTI_CHAR_CODE_SPEECH:
+        normalized = normalized.replace(pattern, f" {spoken} ")
+
+    normalized_chars: list[str] = []
+    for ch in normalized:
+        spoken = _SINGLE_CHAR_CODE_SPEECH.get(ch)
+        if spoken is None:
+            normalized_chars.append(ch)
+            continue
+        normalized_chars.append(f" {spoken} ")
+
+    normalized = "".join(normalized_chars)
+    normalized = _WS_RE.sub(" ", normalized).strip()
+    return normalized if normalized else code
+
+
+def _extract_fenced_code_for_tts(match: re.Match[str]) -> str:
+    return _normalize_short_code_for_tts(_extract_fenced_code(match))
+
+
+def _extract_inline_code_for_tts(match: re.Match[str]) -> str:
+    return _normalize_short_code_for_tts(_extract_inline_code(match))
+
+
+def strip_markdown(
+    text: str, *, trim: bool = True, normalize_code_spans: bool = False
+) -> str:
     """Remove Markdown formatting from *text*, preserving readable content.
 
     Handles fenced code blocks, inline code, images, links, bold, italic,
@@ -87,17 +185,26 @@ def strip_markdown(text: str, *, trim: bool = True) -> str:
         When ``True`` (default), trims leading/trailing whitespace on the
         final result. Set to ``False`` for incremental/streaming use cases
         that must preserve chunk-boundary spaces.
+    normalize_code_spans:
+        When ``True``, converts short inline/fenced code snippets to
+        speech-friendly text (e.g. ``print()`` -> ``print open paren close
+        paren``), while leaving longer code unchanged.
     """
     if not text:
         return text
 
     result = text
+    code_spans: list[str] = []
 
-    # 1. Fenced code blocks (```lang\n...\n```) → keep body only
-    result = _FENCED_CODE_RE.sub(_extract_fenced_code, result)
-
-    # 2. Inline code → keep content
-    result = _INLINE_CODE_RE.sub(r"\1", result)
+    # 1. Fenced and inline code: remove markdown wrappers, then protect
+    # extracted text from later markdown regex passes.
+    fenced_extractor: Callable[[re.Match[str]], str] = _extract_fenced_code
+    inline_extractor: Callable[[re.Match[str]], str] = _extract_inline_code
+    if normalize_code_spans:
+        fenced_extractor = _extract_fenced_code_for_tts
+        inline_extractor = _extract_inline_code_for_tts
+    result = _FENCED_CODE_RE.sub(_stash_code_span(code_spans, fenced_extractor), result)
+    result = _INLINE_CODE_RE.sub(_stash_code_span(code_spans, inline_extractor), result)
 
     # 3. Images → remove entirely
     result = _IMAGE_RE.sub("", result)
@@ -133,7 +240,11 @@ def strip_markdown(text: str, *, trim: bool = True) -> str:
     result = _HR_ASTERISK_RE.sub("", result)
     result = _HR_UNDERSCORE_RE.sub("", result)
 
-    # 13. Collapse runs of blank lines
+    # 13. Restore protected code spans.
+    for idx, code in enumerate(code_spans):
+        result = result.replace(f"EASYCATCODETOKEN{idx}X", code)
+
+    # 14. Collapse runs of blank lines
     result = _EXCESS_BLANK_LINES_RE.sub("\n\n", result)
 
     return result.strip() if trim else result
