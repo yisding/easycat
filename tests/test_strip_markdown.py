@@ -174,6 +174,10 @@ class TestStripMarkdown:
         text = "Line one\n\n\n\nLine two"
         assert strip_markdown(text) == "Line one\n\nLine two"
 
+    def test_trim_false_preserves_boundary_whitespace(self) -> None:
+        text = "Then "
+        assert strip_markdown(text, trim=False) == "Then "
+
     def test_typical_llm_response(self) -> None:
         """Simulate a typical LLM markdown response for voice output."""
         text = (
@@ -269,7 +273,7 @@ class TestOpenAIAdapterHistoryUpdate:
         part = adapter._message_history[1]["content"][0]
         assert part["text"] == "Hello!"
 
-    def test_replaces_all_output_text_parts(self) -> None:
+    def test_preserves_output_text_part_granularity(self) -> None:
         from easycat.agents.openai_agents import OpenAIAgentsAdapter
 
         class FakeAgent:
@@ -281,7 +285,7 @@ class TestOpenAIAdapterHistoryUpdate:
             {
                 "role": "assistant",
                 "content": [
-                    {"type": "output_text", "text": "**Hello**"},
+                    {"type": "output_text", "text": "**Hello** "},
                     {"type": "other_type", "value": 1},
                     {"type": "output_text", "text": "*world*"},
                 ],
@@ -291,8 +295,9 @@ class TestOpenAIAdapterHistoryUpdate:
         adapter.replace_last_assistant_text("Hello world")
 
         parts = adapter._message_history[1]["content"]
-        assert parts[0]["text"] == "Hello world"
-        assert parts[2]["text"] == "Hello world"
+        assert parts[0]["text"] == "Hello "
+        assert parts[2]["text"] == "world"
+        assert parts[0]["text"] + parts[2]["text"] == "Hello world"
 
     def test_replaces_string_content(self) -> None:
         from easycat.agents.openai_agents import OpenAIAgentsAdapter
@@ -345,7 +350,7 @@ class TestPydanticAIAdapterHistoryUpdate:
         adapter.replace_last_assistant_text("Hello!")
         assert text_part.content == "Hello!"
 
-    def test_replaces_all_text_part_content(self) -> None:
+    def test_preserves_text_part_granularity(self) -> None:
         from easycat.agents.pydantic_ai import PydanticAIAdapter
 
         class TextPart:
@@ -363,13 +368,14 @@ class TestPydanticAIAdapterHistoryUpdate:
             pass
 
         adapter = PydanticAIAdapter(FakeAgent())
-        first = TextPart("**Hello**")
+        first = TextPart("**Hello** ")
         second = TextPart("*world*")
         adapter._message_history = [ModelResponse(parts=[first, ToolPart(), second])]
 
         adapter.replace_last_assistant_text("Hello world")
-        assert first.content == "Hello world"
-        assert second.content == "Hello world"
+        assert first.content == "Hello "
+        assert second.content == "world"
+        assert first.content + second.content == "Hello world"
 
     def test_empty_history_is_noop(self) -> None:
         from easycat.agents.pydantic_ai import PydanticAIAdapter

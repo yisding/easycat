@@ -901,7 +901,7 @@ class Session:
                             if _has_unclosed_markdown_delimiters(text_buffer):
                                 continue
 
-                            stripped_window = strip_markdown(text_buffer)
+                            stripped_window = strip_markdown(text_buffer, trim=False)
                             ready, remaining = _split_at_sentence_boundaries(stripped_window)
                             if ready:
                                 await tts_queue.put(ready)
@@ -938,7 +938,7 @@ class Session:
             finally:
                 if stream_completed and (not token or not token.is_cancelled):
                     if self._strip_markdown:
-                        remaining = strip_markdown(text_buffer)
+                        remaining = strip_markdown(text_buffer, trim=False)
                         if remaining.strip():
                             await tts_queue.put(remaining)
                     elif text_buffer.strip():
