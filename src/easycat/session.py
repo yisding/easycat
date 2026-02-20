@@ -211,6 +211,65 @@ def _has_unclosed_single_emphasis(text: str, delimiter: str) -> bool:
     return open_count > 0
 
 
+def _has_unclosed_markdown_link_or_image(text: str) -> bool:
+    """Detect incomplete markdown link/image spans in ``text``.
+
+    The check is intentionally conservative for streaming safety: any trailing
+    ``[label]`` without a resolved destination is treated as still-open until a
+    non-link continuation is observed.
+    """
+
+    label_depth = 0
+    awaiting_destination = False
+    destination_depth = 0
+    i = 0
+    length = len(text)
+
+    while i < length:
+        ch = text[i]
+
+        if ch == "\\":
+            i += 2
+            continue
+
+        if destination_depth > 0:
+            if ch == "(":
+                destination_depth += 1
+            elif ch == ")":
+                destination_depth -= 1
+            i += 1
+            continue
+
+        if label_depth > 0:
+            if ch == "[":
+                label_depth += 1
+            elif ch == "]":
+                label_depth -= 1
+                if label_depth == 0:
+                    awaiting_destination = True
+            i += 1
+            continue
+
+        if awaiting_destination:
+            if ch.isspace():
+                i += 1
+                continue
+            if ch == "(":
+                awaiting_destination = False
+                destination_depth = 1
+                i += 1
+                continue
+            # Closed bracket not followed by destination: not a markdown link.
+            awaiting_destination = False
+            continue
+
+        if ch == "[":
+            label_depth = 1
+        i += 1
+
+    return label_depth > 0 or awaiting_destination or destination_depth > 0
+
+
 def _has_unclosed_markdown_delimiters(text: str) -> bool:
     """Best-effort check for unfinished markdown spans in a rolling buffer.
 
@@ -235,8 +294,11 @@ def _has_unclosed_markdown_delimiters(text: str) -> bool:
         return True
 
     # Remove closed inline-code spans so markdown chars inside code do not
-    # affect emphasis-state tracking.
+    # affect emphasis/link-state tracking.
     normalized = re.sub(r"`[^`]*`", "", normalized)
+
+    if _has_unclosed_markdown_link_or_image(normalized):
+        return True
 
     return _has_unclosed_single_emphasis(normalized, "*") or _has_unclosed_single_emphasis(
         normalized, "_"
@@ -869,12 +931,12 @@ class Session:
         accumulated_text = ""
         structured_output: Any = None
         agent_error: BaseException | None = None
+        stream_completed = False
         self._spans.start(Tracer.AGENT)
 
         async def _consume_agent() -> None:
-            nonlocal accumulated_text, structured_output, agent_error
+            nonlocal accumulated_text, structured_output, agent_error, stream_completed
             text_buffer = ""
-            stream_completed = False
             try:
                 async for event in self.agent.run_streaming(transcript, cancel_token=token):
                     if token and token.is_cancelled:
@@ -1006,15 +1068,19 @@ class Session:
             else:
                 self._spans.finish(Tracer.AGENT)
 
+        stream_succeeded = stream_completed and agent_error is None and not (
+            token and token.is_cancelled
+        )
+
         # Strip markdown from the final accumulated text and update agent history.
-        if self._strip_markdown and accumulated_text:
+        if self._strip_markdown and accumulated_text and stream_succeeded:
             stripped = strip_markdown(accumulated_text)
             if stripped != accumulated_text:
                 accumulated_text = stripped
                 _replace_last_assistant_text(self.agent, stripped)
 
         # Emit AgentFinal after agent stream is fully consumed
-        if accumulated_text and agent_error is None and not (token and token.is_cancelled):
+        if accumulated_text and stream_succeeded:
             await self.event_bus.emit(
                 AgentFinal(text=accumulated_text, structured_output=structured_output)
             )
