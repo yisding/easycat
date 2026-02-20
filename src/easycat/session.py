@@ -83,7 +83,7 @@ def _span_bounds(span: object) -> tuple[int, int]:
     return int(start), int(end)
 
 
-# ── Agent protocol (lightweight — WS7 provides real implementations) ──
+# ── Agent protocol (lightweight — agent adapters provide real implementations) ──
 
 
 @runtime_checkable

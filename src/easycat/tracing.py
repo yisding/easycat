@@ -1,4 +1,4 @@
-"""Tracing span infrastructure (WS8 Tasks 8.10–8.11).
+"""Tracing span infrastructure.
 
 Provides span creation for EasyCat pipeline stages with support for
 trace context propagation. Each span records start time, end time,

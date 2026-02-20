@@ -2,7 +2,7 @@
 
 Provides automatic reconnection for WebSocket connections used by
 STT, TTS, and transport providers. This is the single source of
-reconnect logic in EasyCat (WS8 Task 8.1).
+reconnect logic in EasyCat.
 """
 
 from __future__ import annotations

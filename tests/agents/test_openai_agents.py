@@ -146,7 +146,7 @@ class MockRunner:
         self._run_call_count += 1
         return self._run_results[idx]
 
-    async def run_streamed(
+    def run_streamed(
         self, agent: Any, input_data: Any, **kwargs: Any
     ) -> MockRunResultStreaming:
         self.stream_calls.append({"agent": agent, "input": input_data, **kwargs})
