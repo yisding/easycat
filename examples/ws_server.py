@@ -2,7 +2,7 @@
 
 Setup:
   export OPENAI_API_KEY="..."
-  uv add easycat[openai-agents]
+  uv sync --extra openai-agents
   uv run python examples/ws_server.py
 
 Connect a client that streams raw PCM16 audio to ws://localhost:8765.
@@ -31,7 +31,7 @@ async def main() -> None:
         from agents import Agent  # type: ignore[import-untyped]
     except ImportError as exc:
         raise SystemExit(
-            "OpenAI Agents SDK is required. Install with: uv add easycat[openai-agents]"
+            "OpenAI Agents SDK is required. Install with: uv sync --extra openai-agents"
         ) from exc
 
     voice_agent = Agent(

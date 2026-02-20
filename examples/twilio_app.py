@@ -3,8 +3,7 @@
 Setup:
   export OPENAI_API_KEY="..."
   export TWILIO_STREAM_URL="wss://your-public-host:8766"
-  uv add easycat[telephony]
-  uv add easycat[openai-agents]
+  uv sync --extra telephony --extra openai-agents
   uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0 --port 8000
 """
 
