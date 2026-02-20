@@ -1011,6 +1011,40 @@ async def test_session_barge_in_message_mode():
 
 
 @pytest.mark.asyncio
+async def test_session_barge_in_with_agent_runner_adds_single_interruption_note():
+    """Wrapped AgentRunner should record exactly one interruption note."""
+    runner = AgentRunner(SlowToolCallingAgent())
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="do the thing"),
+        agent=runner,
+        tts=FakeTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        interruption_mode="message",
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.1)
+
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    interruption_notes = [
+        entry
+        for entry in runner.history
+        if entry["role"] == "system" and "interrupted" in entry["content"].lower()
+    ]
+    assert len(interruption_notes) == 1
+
+
+@pytest.mark.asyncio
 async def test_session_barge_in_without_tool_calls_stops_immediately():
     """Barge-in with no tool calls in flight should stop the stream quickly."""
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
