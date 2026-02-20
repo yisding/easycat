@@ -92,15 +92,23 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         * ``mode="message"`` — append a ``developer`` message.
         """
         if mode == "truncate":
+            updated = False
             for i in range(len(self._message_history) - 1, -1, -1):
                 item = self._message_history[i]
                 role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
                 if role == "assistant":
                     if isinstance(item, dict):
                         item["content"] = text_spoken + "..." if text_spoken else "..."
+                        updated = True
+                        break
                     elif hasattr(item, "content"):
                         item.content = text_spoken + "..." if text_spoken else "..."
-                    break
+                        updated = True
+                        break
+            if not updated:
+                self._message_history.append(
+                    {"role": "developer", "content": self._INTERRUPTION_NOTE}
+                )
         else:
             self._message_history.append({"role": "developer", "content": self._INTERRUPTION_NOTE})
 
