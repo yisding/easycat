@@ -335,6 +335,14 @@ def test_markdown_unclosed_single_italic_underscore():
     assert not _has_unclosed_markdown_delimiters("Use my_variable_name here.")
 
 
+def test_markdown_unclosed_link_or_image_delimiters():
+    assert _has_unclosed_markdown_delimiters("See [OpenAI")
+    assert _has_unclosed_markdown_delimiters("See [OpenAI]")
+    assert _has_unclosed_markdown_delimiters("See [OpenAI](https://openai.com/docs")
+    assert _has_unclosed_markdown_delimiters("See ![diagram](https://img.example.com/plot")
+    assert not _has_unclosed_markdown_delimiters("See [OpenAI](https://openai.com/docs).")
+
+
 # ── Session with basic agent (backward compatibility) ──────────────
 
 
@@ -1081,3 +1089,118 @@ async def test_streaming_strip_markdown_unclosed_italic_multiple_sentences():
     assert "First sentence." in joined_tts
     assert "Second sentence." in joined_tts
     assert "Third sentence." in joined_tts
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_unclosed_link_multiple_sentences():
+    """Unclosed markdown links across chunks should not leak link/url artefacts."""
+
+    class UnclosedLinkAgent:
+        async def run(self, text: str) -> str:
+            return "See [OpenAI. Next sentence.](https://openai.com/docs) Last sentence."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            chunks = [
+                "See [OpenAI. Next sentence.",
+                "](https://openai.com/docs) Last sentence.",
+            ]
+            for chunk in chunks:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="See [OpenAI. Next sentence.](https://openai.com/docs) Last sentence.",
+            )
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="test"),
+        agent=UnclosedLinkAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    joined_tts = " ".join(tts.synthesized_texts)
+    assert "https://" not in joined_tts
+    assert "](" not in joined_tts
+    assert "OpenAI." in joined_tts
+    assert "Next sentence." in joined_tts
+    assert "Last sentence." in joined_tts
+
+    assert len(finals) == 1
+    assert "https://" not in finals[0].text
+    assert "](" not in finals[0].text
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_failed_turn_does_not_rewrite_prior_history():
+    """Failed streaming turns must not patch prior assistant history entries."""
+
+    class FlakyMarkdownAgent:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def run(self, text: str) -> str:
+            return "unused"
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            self.calls += 1
+            if self.calls == 1:
+                full = "First **answer**."
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=full)
+                yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+                return
+
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.TEXT_DELTA,
+                text="[overwritten](https://example.com)",
+            )
+            raise RuntimeError("agent failed mid-stream")
+
+    runner = AgentRunner(FlakyMarkdownAgent())
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="ignored"),
+            agent=runner,
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            strip_markdown=True,
+        )
+    )
+
+    await session._run_streaming_agent("first", token=None)
+    assert runner.history[-1]["role"] == "assistant"
+    assert runner.history[-1]["content"] == "First answer."
+    history_after_success = [entry.copy() for entry in runner.history]
+
+    await session._run_streaming_agent("second", token=None)
+    assert runner.history == history_after_success
