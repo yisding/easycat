@@ -173,6 +173,44 @@ def _split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     return text[:last_start], text[last_start:]
 
 
+def _is_word_char(ch: str) -> bool:
+    return ch.isalnum() or ch == "_"
+
+
+def _has_unclosed_single_emphasis(text: str, delimiter: str) -> bool:
+    """Detect unclosed single-char emphasis delimiters (* / _) in text."""
+    open_count = 0
+    i = 0
+    length = len(text)
+    while i < length:
+        ch = text[i]
+        if ch == "\\":
+            i += 2  # Skip escaped character (if any).
+            continue
+        if ch != delimiter:
+            i += 1
+            continue
+
+        prev_char = text[i - 1] if i > 0 else ""
+        next_char = text[i + 1] if i + 1 < length else ""
+
+        # Ignore repeated runs (** / __ / *** / ___); those are handled elsewhere.
+        if prev_char == delimiter or next_char == delimiter:
+            i += 1
+            continue
+
+        is_open = (not _is_word_char(prev_char)) and bool(next_char) and not next_char.isspace()
+        is_close = bool(prev_char) and not prev_char.isspace() and (not _is_word_char(next_char))
+
+        if is_close and open_count > 0:
+            open_count -= 1
+        elif is_open:
+            open_count += 1
+        i += 1
+
+    return open_count > 0
+
+
 def _has_unclosed_markdown_delimiters(text: str) -> bool:
     """Best-effort check for unfinished markdown spans in a rolling buffer.
 
@@ -193,7 +231,16 @@ def _has_unclosed_markdown_delimiters(text: str) -> bool:
 
     # Inline backticks only (exclude fenced markers already handled above).
     inline_tick_count = normalized.count("`")
-    return inline_tick_count % 2 == 1
+    if inline_tick_count % 2 == 1:
+        return True
+
+    # Remove closed inline-code spans so markdown chars inside code do not
+    # affect emphasis-state tracking.
+    normalized = re.sub(r"`[^`]*`", "", normalized)
+
+    return _has_unclosed_single_emphasis(normalized, "*") or _has_unclosed_single_emphasis(
+        normalized, "_"
+    )
 
 
 def _replace_last_assistant_text(agent: Any, text: str) -> None:
