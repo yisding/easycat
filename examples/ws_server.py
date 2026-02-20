@@ -11,6 +11,7 @@ Connect a client that streams raw PCM16 audio to ws://localhost:8765.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 
@@ -23,6 +24,8 @@ from easycat import (
 
 
 async def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise SystemExit("OPENAI_API_KEY is required.")
@@ -49,6 +52,9 @@ async def main() -> None:
     session = create_session(config)
 
     await session.start()
+
+    print("\nServer ready. Connect a WebSocket client to ws://localhost:8765")
+    print("Press Ctrl+C to stop.\n")
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
