@@ -341,6 +341,9 @@ def test_markdown_unclosed_link_or_image_delimiters():
     assert _has_unclosed_markdown_delimiters("See [OpenAI](https://openai.com/docs")
     assert _has_unclosed_markdown_delimiters("See ![diagram](https://img.example.com/plot")
     assert not _has_unclosed_markdown_delimiters("See [OpenAI](https://openai.com/docs).")
+    assert not _has_unclosed_markdown_delimiters(
+        "See [Function](https://en.wikipedia.org/wiki/Function_(mathematics))."
+    )
 
 
 def test_markdown_delimiters_inside_inline_code_do_not_block_streaming():
@@ -1289,14 +1292,14 @@ async def test_streaming_strip_markdown_unclosed_link_multiple_sentences():
     await session.stop()
 
     joined_tts = " ".join(tts.synthesized_texts)
-    assert "https://" not in joined_tts
+    assert "https://openai.com/docs" in joined_tts
     assert "](" not in joined_tts
     assert "OpenAI." in joined_tts
     assert "Next sentence." in joined_tts
     assert "Last sentence." in joined_tts
 
     assert len(finals) == 1
-    assert "https://" not in finals[0].text
+    assert "https://openai.com/docs" in finals[0].text
     assert "](" not in finals[0].text
 
 
