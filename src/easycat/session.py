@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
+import re
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -170,6 +171,29 @@ def _split_at_sentence_boundaries(text: str) -> tuple[str, str]:
         return "", text
     last_start, _ = _span_bounds(spans[-1])
     return text[:last_start], text[last_start:]
+
+
+def _has_unclosed_markdown_delimiters(text: str) -> bool:
+    """Best-effort check for unfinished markdown spans in a rolling buffer.
+
+    The streaming path defers sentence emission while markdown delimiters are
+    still open so later deltas cannot rewrite already-emitted text.
+    """
+
+    fenced_count = text.count("```")
+    if fenced_count % 2 == 1:
+        return True
+
+    # Remove fenced blocks so inline delimiter counts are not distorted.
+    normalized = re.sub(r"```[\s\S]*?```", "", text)
+
+    for delimiter in ("**", "__", "~~"):
+        if normalized.count(delimiter) % 2 == 1:
+            return True
+
+    # Inline backticks only (exclude fenced markers already handled above).
+    inline_tick_count = normalized.count("`")
+    return inline_tick_count % 2 == 1
 
 
 def _replace_last_assistant_text(agent: Any, text: str) -> None:
@@ -803,12 +827,6 @@ class Session:
         async def _consume_agent() -> None:
             nonlocal accumulated_text, structured_output, agent_error
             text_buffer = ""
-            # When strip_markdown is enabled we maintain a parallel stripped
-            # text buffer.  On each TEXT_DELTA we re-strip the *full*
-            # accumulated text (so markdown constructs that span sentence
-            # boundaries are handled correctly) and run sentence splitting on
-            # the *stripped* result.  Only the new unsent tail is queued to TTS.
-            stripped_buffer_start = 0
             stream_completed = False
             try:
                 async for event in self.agent.run_streaming(transcript, cancel_token=token):
@@ -827,14 +845,20 @@ class Session:
                                 )
 
                         if self._strip_markdown:
-                            # Sentence-split the *stripped* text so TTS
-                            # never sees stray markdown artefacts.
-                            full_stripped = strip_markdown(accumulated_text)
-                            new_stripped = full_stripped[stripped_buffer_start:]
-                            ready, remaining = _split_at_sentence_boundaries(new_stripped)
+                            # Keep a rolling, unsent window to avoid repeatedly
+                            # stripping the full transcript on every delta.
+                            text_buffer += event.text
+
+                            # If markdown spans are still open, hold the window
+                            # until closing delimiters arrive.
+                            if _has_unclosed_markdown_delimiters(text_buffer):
+                                continue
+
+                            stripped_window = strip_markdown(text_buffer)
+                            ready, remaining = _split_at_sentence_boundaries(stripped_window)
                             if ready:
                                 await tts_queue.put(ready)
-                                stripped_buffer_start = len(full_stripped) - len(remaining)
+                                text_buffer = remaining
                         else:
                             # Original path: sentence-split the raw buffer.
                             text_buffer += event.text
@@ -867,8 +891,7 @@ class Session:
             finally:
                 if stream_completed and (not token or not token.is_cancelled):
                     if self._strip_markdown:
-                        stripped_full = strip_markdown(accumulated_text)
-                        remaining = stripped_full[stripped_buffer_start:]
+                        remaining = strip_markdown(text_buffer)
                         if remaining.strip():
                             await tts_queue.put(remaining)
                     elif text_buffer.strip():
