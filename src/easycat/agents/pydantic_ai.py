@@ -212,11 +212,12 @@ class PydanticAIAdapter(BaseAgentAdapter):
         ) as agent_run:
             interrupted = False
             async for node in agent_run:
+                node_cls = type(node).__name__
+                is_tool_node = node_cls == "CallToolsNode"
                 if cancel_token and cancel_token.is_cancelled:
                     interrupted = True
                     # Let CallToolsNode complete; skip ModelRequestNode
-                    node_cls = type(node).__name__
-                    if node_cls != "CallToolsNode":
+                    if not is_tool_node:
                         break
 
                 if not hasattr(node, "stream"):
@@ -226,6 +227,8 @@ class PydanticAIAdapter(BaseAgentAdapter):
                     async for event in stream:
                         if cancel_token and cancel_token.is_cancelled and not interrupted:
                             interrupted = True
+                            if not is_tool_node:
+                                break
                         mapped = _map_pydantic_event(event)
                         if mapped is not None:
                             if interrupted and mapped.type == AgentStreamEventType.TEXT_DELTA:

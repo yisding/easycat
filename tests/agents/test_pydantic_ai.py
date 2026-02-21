@@ -987,6 +987,67 @@ async def test_iter_streaming_respects_cancel_token():
 
 
 @pytest.mark.asyncio
+async def test_iter_streaming_cancel_mid_text_node_stops_consuming_stream():
+    """Cancellation in a text node should stop that node's stream promptly."""
+
+    class CountingNodeStream:
+        def __init__(self, events: list[Any]) -> None:
+            self._events = events
+            self._index = 0
+            self.reads = 0
+
+        def __aiter__(self) -> CountingNodeStream:
+            return self
+
+        async def __anext__(self) -> Any:
+            if self._index >= len(self._events):
+                raise StopAsyncIteration
+            event = self._events[self._index]
+            self._index += 1
+            self.reads += 1
+            return event
+
+    class CountingModelRequestNode:
+        def __init__(self, events: list[Any]) -> None:
+            self._events = events
+            self.stream_reads = 0
+
+        @asynccontextmanager
+        async def stream(self, ctx: Any) -> AsyncIterator[CountingNodeStream]:
+            node_stream = CountingNodeStream(self._events)
+            try:
+                yield node_stream
+            finally:
+                self.stream_reads = node_stream.reads
+
+    CountingModelRequestNode.__name__ = "ModelRequestNode"
+
+    node = CountingModelRequestNode(
+        [
+            MockDeltaEvent(TextPartDelta("first")),
+            MockDeltaEvent(TextPartDelta(" second")),
+            MockDeltaEvent(TextPartDelta(" third")),
+        ]
+    )
+    agent = MockIterPydanticAgent(iter_nodes=[node])
+    adapter = PydanticAIAdapter(agent)
+    token = CancelToken()
+
+    events = []
+    async for event in adapter.run_streaming("test", cancel_token=token):
+        events.append(event)
+        if event.type == AgentStreamEventType.TEXT_DELTA:
+            token.cancel()
+
+    text_deltas = [e for e in events if e.type == AgentStreamEventType.TEXT_DELTA]
+    assert len(text_deltas) == 1
+    assert text_deltas[0].text == "first"
+    # First event is yielded; one additional event is observed after cancel,
+    # then the node stream exits without draining the rest.
+    assert node.stream_reads == 2
+
+
+@pytest.mark.asyncio
 async def test_iter_streaming_cancel_emits_done():
     """iter() path emits DONE even after cancellation."""
     adapter = PydanticAIAdapter(SlowMockIterAgent())
