@@ -1482,6 +1482,58 @@ async def test_session_barge_in_after_full_playback_keeps_agent_runner_history()
     assert runner.history[-1] == {"role": "assistant", "content": "Hello world."}
 
 
+@pytest.mark.asyncio
+async def test_session_barge_in_after_full_multichunk_playback_keeps_history():
+    """Late cancel after full multi-chunk playback should not truncate history."""
+
+    class MultiSentenceAgent:
+        async def run(self, text: str) -> str:
+            return "First sentence. Second sentence."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="First sentence. ")
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Second sentence.")
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="First sentence. Second sentence.",
+            )
+
+    runner = AgentRunner(MultiSentenceAgent())
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(chunks=[_chunk(), _chunk()]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=runner,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    await session.start()
+    await asyncio.sleep(0.3)
+
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.1)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["First sentence. ", "Second sentence."]
+    assert runner.history[-1] == {
+        "role": "assistant",
+        "content": "First sentence. Second sentence.",
+    }
+
+
 # ── Streaming with strip_markdown ──────────────────────────────────
 
 
