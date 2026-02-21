@@ -219,6 +219,16 @@ def _estimate_text_spoken(
     return spoken
 
 
+def _all_tts_audio_sent(tts_chunks: list[tuple[str, int, bool]], audio_bytes_sent: int) -> bool:
+    """Whether all synthesized TTS audio was sent to the transport."""
+    if not tts_chunks:
+        return False
+    if not all(completed for _, _, completed in tts_chunks):
+        return False
+    total_audio = sum(max(chunk_audio, 0) for _, chunk_audio, _ in tts_chunks)
+    return total_audio > 0 and audio_bytes_sent >= total_audio
+
+
 def _is_word_char(ch: str) -> bool:
     return ch.isalnum() or ch == "_"
 
@@ -990,7 +1000,7 @@ class Session:
         # Per-chunk TTS accounting: list of (text, audio_bytes_produced).
         # Populated by _process_tts so we can map audio-bytes-sent back to
         # text to estimate what the user actually heard before barge-in.
-        tts_chunks: list[tuple[str, int]] = []
+        tts_chunks: list[tuple[str, int, bool]] = []
 
         self._spans.start(Tracer.AGENT)
 
@@ -1150,7 +1160,7 @@ class Session:
                         ),
                         record_latency=self._first_tts_audio_time is None,
                     )
-                    tts_chunks.append((text, result.audio_bytes))
+                    tts_chunks.append((text, result.audio_bytes, result.completed))
                     if result.first_audio_time is not None and self._first_tts_audio_time is None:
                         self._first_tts_audio_time = result.first_audio_time
             except asyncio.CancelledError:
@@ -1216,14 +1226,18 @@ class Session:
         if (interrupted or cancelled_during_playback) and hasattr(
             self.agent, "notify_interruption"
         ):
-            text_spoken = _estimate_text_spoken(tts_chunks, self._turn_audio_bytes_sent)
-            try:
-                self.agent.notify_interruption(
-                    text_spoken,
-                    mode=self._interruption_mode,
+            if not _all_tts_audio_sent(tts_chunks, self._turn_audio_bytes_sent):
+                text_spoken = _estimate_text_spoken(
+                    [(text, audio_bytes) for text, audio_bytes, _ in tts_chunks],
+                    self._turn_audio_bytes_sent,
                 )
-            except Exception:
-                logger.debug("Failed to notify agent of interruption", exc_info=True)
+                try:
+                    self.agent.notify_interruption(
+                        text_spoken,
+                        mode=self._interruption_mode,
+                    )
+                except Exception:
+                    logger.debug("Failed to notify agent of interruption", exc_info=True)
 
         # If agent errored or was cancelled with no TTS started, ensure idle
         if self._turn_manager.state != TurnManagerState.IDLE:
