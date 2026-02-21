@@ -270,22 +270,8 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         finally:
             self._message_history = result.to_input_list()
 
-        # Capture structured output when available
-        raw_output = getattr(result, "final_output", None)
-        self._last_output = raw_output
-
-        # Only expose structured_output when it is actually structured (non-str)
-        # or when an explicit output_type is configured on the adapter.
-        if isinstance(raw_output, str) and self.output_type is None:
-            structured_output = None
-        else:
-            structured_output = raw_output
-
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.DONE,
-            text=accumulated,
-            structured_output=structured_output,
-        )
+        self._last_output = getattr(result, "final_output", None)
+        yield self.to_done_event(accumulated)
 
 
 # ── Event mapping helpers (module-level, testable) ────────────────

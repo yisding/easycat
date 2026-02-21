@@ -190,3 +190,34 @@ class TestLastOutput:
         adapter._last_output = "some output"
         adapter.clear_history()
         assert adapter.last_output is None
+
+
+# ── DONE event normalization tests ──────────────────────────────
+
+
+def test_to_done_event_plain_text_without_output_type_omits_structured_output():
+    adapter = ConcreteAdapter()
+    adapter._last_output = "hello"
+
+    done = adapter.to_done_event("hello")
+
+    assert done.text == "hello"
+    assert done.structured_output is None
+
+
+def test_to_done_event_structured_output_preserved():
+    class MyModel:
+        pass
+
+    class StructuredAgent:
+        output_type = MyModel
+
+    payload = {"name": "Ada"}
+    adapter = ConcreteAdapter()
+    adapter._agent = StructuredAgent()
+    adapter._last_output = payload
+
+    done = adapter.to_done_event("hello")
+
+    assert done.text == "hello"
+    assert done.structured_output == payload

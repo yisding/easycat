@@ -14,7 +14,7 @@ import logging
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, Literal
 
-from easycat.agent_runner import AgentStreamEvent
+from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
 from easycat.cancel import CancelToken
 
 logger = logging.getLogger(__name__)
@@ -159,6 +159,25 @@ class BaseAgentAdapter:
         first call or after ``clear_history()``.
         """
         return self._last_output
+
+    def to_done_event(self, accumulated_text: str) -> AgentStreamEvent:
+        """Build a normalized ``DONE`` event from the adapter's last output.
+
+        Streaming adapters should set ``self._last_output`` before calling
+        this helper.  It normalizes ``structured_output`` so plain-text runs
+        don't duplicate data in both ``text`` and ``structured_output``.
+        """
+        raw_output = self._last_output
+        if isinstance(raw_output, str) and self.output_type is None:
+            structured_output = None
+        else:
+            structured_output = raw_output
+
+        return AgentStreamEvent(
+            type=AgentStreamEventType.DONE,
+            text=accumulated_text,
+            structured_output=structured_output,
+        )
 
     # ── Interruption handling ────────────────────────────────
 
