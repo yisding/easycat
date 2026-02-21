@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from easycat.agent_runner import AgentRunner, AgentRunnerConfig
+from easycat.agents.factory import auto_adapt_agent
 from easycat.events import EventBus
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
@@ -121,10 +122,13 @@ def create_session(config: EasyCatConfig) -> Session:
     noise_reducer = create_noise_reducer(config.noise_reduction)
     transport = _create_transport(config.transport, event_bus)
 
-    agent = config.agent or NoopAgent()
-    if config.wrap_agent and config.agent is not None:
-        runner_cfg = config.agent_runner or AgentRunnerConfig()
-        agent = AgentRunner(agent, runner_cfg)
+    if config.agent is not None:
+        agent = auto_adapt_agent(config.agent)
+        if config.wrap_agent:
+            runner_cfg = config.agent_runner or AgentRunnerConfig()
+            agent = AgentRunner(agent, runner_cfg)
+    else:
+        agent = NoopAgent()
 
     metrics = _create_metrics(config.metrics)
     tracer = _create_tracer(config.tracing)
