@@ -38,7 +38,7 @@ from easycat.events import (
 from easycat.session import (
     Session,
     SessionConfig,
-    _audio_bytes_sent_before,
+    _audio_bytes_likely_heard,
     _all_tts_audio_sent,
     _estimate_text_spoken,
     _has_unclosed_markdown_delimiters,
@@ -400,19 +400,24 @@ def test_all_tts_audio_sent_requires_completed_synthesis():
     assert not _all_tts_audio_sent(chunks, 320)
 
 
-def test_audio_bytes_sent_before_without_cutoff_uses_all_bytes():
-    send_log = [(1.0, 100), (1.2, 150), (1.4, 50)]
-    assert _audio_bytes_sent_before(send_log, None) == 300
+def test_audio_bytes_likely_heard_without_cutoff_uses_all_bytes():
+    send_log = [(1.0, 100, 10.0), (1.2, 150, 10.0), (1.4, 50, 10.0)]
+    assert _audio_bytes_likely_heard(send_log, None) == 300
 
 
-def test_audio_bytes_sent_before_with_cutoff_filters_future_bytes():
-    send_log = [(1.0, 100), (1.2, 150), (1.4, 50)]
-    assert _audio_bytes_sent_before(send_log, 1.2) == 250
+def test_audio_bytes_likely_heard_with_cutoff_filters_future_bytes():
+    send_log = [(1.0, 100, 10.0), (1.2, 150, 10.0), (1.4, 50, 10.0)]
+    assert _audio_bytes_likely_heard(send_log, 1.2) == 100
 
 
-def test_audio_bytes_sent_before_ignores_negative_sizes():
-    send_log = [(1.0, 100), (1.2, -10), (1.3, 20)]
-    assert _audio_bytes_sent_before(send_log, 2.0) == 120
+def test_audio_bytes_likely_heard_ignores_negative_sizes():
+    send_log = [(1.0, 100, 10.0), (1.2, -10, 10.0), (1.3, 20, 10.0)]
+    assert _audio_bytes_likely_heard(send_log, 2.0) == 120
+
+
+def test_audio_bytes_likely_heard_partial_chunk_by_duration():
+    send_log = [(1.0, 100, 20.0)]
+    assert _audio_bytes_likely_heard(send_log, 1.005) == 24
 
 
 def test_markdown_unclosed_single_italic_asterisk():

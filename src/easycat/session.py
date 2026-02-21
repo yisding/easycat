@@ -264,13 +264,38 @@ def _all_tts_audio_sent(tts_chunks: list[tuple[str, int, bool]], audio_bytes_sen
     return total_audio > 0 and audio_bytes_sent >= total_audio
 
 
-def _audio_bytes_sent_before(send_log: list[tuple[float, int]], cutoff_time: float | None) -> int:
-    """Return bytes sent at or before ``cutoff_time`` from timestamped send log."""
+def _audio_bytes_likely_heard(
+    send_log: list[tuple[float, int, float]],
+    cutoff_time: float | None,
+) -> int:
+    """Estimate bytes likely heard by ``cutoff_time``.
+
+    ``send_log`` entries are ``(send_time, bytes_sent, chunk_duration_ms)``.
+    We model each chunk as playing linearly over its own duration after send.
+    """
     if not send_log:
         return 0
     if cutoff_time is None:
-        return sum(max(size, 0) for _, size in send_log)
-    return sum(max(size, 0) for ts, size in send_log if ts <= cutoff_time)
+        return sum(max(size, 0) for _, size, _ in send_log)
+
+    heard = 0
+    for send_time, size, duration_ms in send_log:
+        size = max(size, 0)
+        if size == 0:
+            continue
+        if duration_ms <= 0:
+            if send_time <= cutoff_time:
+                heard += size
+            continue
+
+        elapsed_ms = (cutoff_time - send_time) * 1000.0
+        if elapsed_ms <= 0:
+            continue
+        if elapsed_ms >= duration_ms:
+            heard += size
+            continue
+        heard += int(size * (elapsed_ms / duration_ms))
+    return heard
 
 
 def _is_word_char(ch: str) -> bool:
@@ -546,7 +571,7 @@ class Session:
         # Used to estimate which portion of the agent response the user
         # heard before a barge-in.
         self._turn_audio_bytes_sent: int = 0
-        self._turn_audio_send_log: deque[tuple[float, int]] = deque()
+        self._turn_audio_send_log: deque[tuple[float, int, float]] = deque()
         self._last_barge_in_time: float | None = None
 
     # ── Properties ─────────────────────────────────────────────
@@ -1281,7 +1306,7 @@ class Session:
             cutoff_time = self._last_barge_in_time
             if cutoff_time is not None and self._interruption_latency_compensation_ms > 0:
                 cutoff_time -= self._interruption_latency_compensation_ms / 1000.0
-            heard_bytes = _audio_bytes_sent_before(list(self._turn_audio_send_log), cutoff_time)
+            heard_bytes = _audio_bytes_likely_heard(list(self._turn_audio_send_log), cutoff_time)
 
             if not _all_tts_audio_sent(tts_chunks, heard_bytes):
                 text_spoken = _estimate_text_spoken(
@@ -1338,7 +1363,7 @@ class Session:
                 await self.transport.send_audio(chunk)
                 sent_size = len(chunk.data)
                 self._turn_audio_bytes_sent += sent_size
-                self._turn_audio_send_log.append((time.monotonic(), sent_size))
+                self._turn_audio_send_log.append((time.monotonic(), sent_size, chunk.duration_ms))
             except Exception:
                 logger.exception("Failed to send audio to transport")
 
