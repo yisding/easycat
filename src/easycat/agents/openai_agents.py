@@ -109,9 +109,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
                         updated = True
                     break  # Always stop at the newest assistant entry
             if not updated:
-                self._message_history.append(
-                    {"role": "developer", "content": INTERRUPTION_NOTE}
-                )
+                self._message_history.append({"role": "developer", "content": INTERRUPTION_NOTE})
         else:
             self._message_history.append({"role": "developer", "content": INTERRUPTION_NOTE})
 
