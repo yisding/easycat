@@ -281,10 +281,9 @@ class TenVAD(_VADBase):
     a speech probability plus flags.
     """
 
-    def __init__(self, hop_size: int = _TEN_HOP_SAMPLES, threshold: float = 0.5) -> None:
+    def __init__(self, hop_size: int = _TEN_HOP_SAMPLES) -> None:
         super().__init__()
         self._hop_size = hop_size
-        self._threshold = threshold
         self._buffer: bytes = b""
         self._ten_vad: Any = None
         self._numpy: Any = None
@@ -298,9 +297,14 @@ class TenVAD(_VADBase):
             raise RuntimeError(str(exc)) from exc
 
         try:
-            self._ten_vad = ten_vad.TenVad(hop_size=self._hop_size, threshold=self._threshold)
+            self._ten_vad = ten_vad.TenVad(hop_size=self._hop_size, threshold=0.5)
         except Exception as exc:
-            raise RuntimeError(f"TEN VAD initialization failed: {exc}") from exc
+            raise RuntimeError(
+                "TEN VAD initialization failed. "
+                "If you are on macOS/Windows, install a recent ten-vad build "
+                "with ONNX support. Original error: "
+                f"{exc}"
+            ) from exc
 
         self._numpy = numpy
         logger.info("TEN VAD initialized")
@@ -359,7 +363,7 @@ def create_vad(config: VADConfig | None = None) -> Any:
       1. If config.backend == "krisp": use Krisp (fail if unavailable)
       2. If config.backend == "ten": use TEN VAD (fail if unavailable)
       3. If config.backend == "silero": use Silero (fail if unavailable)
-      3. If config.backend == "auto" (default):
+      4. If config.backend == "auto" (default):
          - Try Krisp first
          - Fall back to TEN VAD
          - Fall back to Silero
