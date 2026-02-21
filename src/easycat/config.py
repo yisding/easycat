@@ -7,6 +7,7 @@ from typing import Any
 
 from easycat.agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.agents.factory import auto_adapt_agent
+from easycat.event_logging import EventLoggingConfig, EventTraceLogger
 from easycat.events import EventBus
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
@@ -82,6 +83,7 @@ class EasyCatConfig:
     smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
     telephony: TelephonyConfig | None = None
+    event_logging: EventLoggingConfig = field(default_factory=EventLoggingConfig)
     metrics: MetricsConfig | None = None
     tracing: TracingConfig | None = None
     agent: Any = None
@@ -139,6 +141,8 @@ def create_session(config: EasyCatConfig) -> Session:
         turn_config = replace(turn_config, endpoint_detector=smart_turn)
 
     telephony_helpers = _create_telephony_helpers(event_bus, config.telephony)
+    if config.event_logging.enabled:
+        telephony_helpers.append(EventTraceLogger(event_bus, config.event_logging))
 
     return Session(
         SessionConfig(

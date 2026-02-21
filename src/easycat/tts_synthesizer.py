@@ -48,6 +48,7 @@ class TTSSynthesizer:
         spans: SpanManager,
         metrics: MetricsCollector | None = None,
         timeout_config: TimeoutConfig | None = None,
+        correlation_ids: Callable[[], tuple[str | None, str | None]] | None = None,
     ) -> None:
         self._tts = tts
         self._event_bus = event_bus
@@ -55,6 +56,7 @@ class TTSSynthesizer:
         self._spans = spans
         self._metrics = metrics
         self._timeout_config = timeout_config
+        self._correlation_ids = correlation_ids
 
     async def synthesize(
         self,
@@ -111,7 +113,12 @@ class TTSSynthesizer:
 
                 if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
                     result.audio_bytes += len(tts_event.audio.data)
-                    await self._event_bus.emit(TTSAudio(chunk=tts_event.audio))
+                    session_id, turn_id = (
+                        self._correlation_ids() if self._correlation_ids else (None, None)
+                    )
+                    await self._event_bus.emit(
+                        TTSAudio(chunk=tts_event.audio, session_id=session_id, turn_id=turn_id)
+                    )
                     if not result.audio_produced:
                         result.audio_produced = True
                         result.first_audio_time = time.monotonic()
@@ -128,7 +135,14 @@ class TTSSynthesizer:
                     await self._outbound_queue.put(tts_event.audio)
 
                 elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
-                    await self._event_bus.emit(TTSMarkers(markers=tts_event.markers))
+                    session_id, turn_id = (
+                        self._correlation_ids() if self._correlation_ids else (None, None)
+                    )
+                    await self._event_bus.emit(
+                        TTSMarkers(
+                            markers=tts_event.markers, session_id=session_id, turn_id=turn_id
+                        )
+                    )
 
         except asyncio.CancelledError:
             pass

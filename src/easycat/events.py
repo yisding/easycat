@@ -28,6 +28,8 @@ class AudioIn:
     """Raw audio chunk received from transport."""
 
     chunk: AudioChunk
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -36,6 +38,8 @@ class AudioIn:
 class VADStartSpeaking:
     """VAD detected start of user speech."""
 
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -43,6 +47,8 @@ class VADStartSpeaking:
 class VADStopSpeaking:
     """VAD detected end of user speech."""
 
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -52,6 +58,8 @@ class STTPartial:
     """Partial transcript from STT provider."""
 
     text: str
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -60,6 +68,8 @@ class STTFinal:
     """Final transcript from STT provider for a completed turn."""
 
     text: str
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -69,6 +79,8 @@ class AgentDelta:
     """Streaming text delta from the agent."""
 
     text: str
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -83,6 +95,8 @@ class AgentFinal:
 
     text: str
     structured_output: Any = None
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -92,6 +106,8 @@ class TTSAudio:
     """Audio chunk produced by TTS provider."""
 
     chunk: AudioChunk
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -100,6 +116,8 @@ class TTSMarkers:
     """Word/viseme alignment markers from TTS."""
 
     markers: list[dict[str, Any]]
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -108,6 +126,8 @@ class TTSMarkers:
 class BotStartedSpeaking:
     """Bot began playing TTS audio."""
 
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -115,6 +135,8 @@ class BotStartedSpeaking:
 class BotStoppedSpeaking:
     """Bot finished playing TTS audio."""
 
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -122,6 +144,8 @@ class BotStoppedSpeaking:
 class TurnStarted:
     """A new user turn has begun (VAD triggered)."""
 
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -129,6 +153,8 @@ class TurnStarted:
 class TurnEnded:
     """User turn has ended (speech capture complete)."""
 
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -137,6 +163,8 @@ class TurnEnded:
 class Interruption:
     """User barged in while bot was speaking."""
 
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -147,6 +175,8 @@ class ToolCallStarted:
 
     tool_name: str
     call_id: str
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -156,6 +186,8 @@ class ToolCallDelta:
 
     call_id: str
     delta: str
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -165,6 +197,8 @@ class ToolCallResult:
 
     call_id: str
     result: str
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -175,6 +209,8 @@ class ReconnectAttempt:
 
     provider: str
     attempt: int
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -183,6 +219,8 @@ class ReconnectSuccess:
     """A provider reconnection succeeded."""
 
     provider: str
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -192,6 +230,8 @@ class ReconnectFailure:
 
     provider: str
     error: str
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -201,6 +241,8 @@ class DTMF:
     """Single DTMF digit detected."""
 
     digit: str
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -209,6 +251,8 @@ class DTMFAggregated:
     """Aggregated DTMF digit sequence."""
 
     sequence: str
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -217,6 +261,8 @@ class VoicemailDetected:
     """Voicemail / answering machine detection result."""
 
     result: str  # "human" | "machine" | "unknown"
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -227,6 +273,8 @@ class Error:
 
     exception: BaseException
     context: str = ""
+    session_id: str | None = None
+    turn_id: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -312,6 +360,7 @@ class EventBus:
 
     def __init__(self) -> None:
         self._handlers: defaultdict[type, list[EventHandler]] = defaultdict(list)
+        self._all_handlers: list[EventHandler] = []
 
     def subscribe(self, event_type: type, handler: EventHandler) -> None:
         """Register a handler for a specific event type."""
@@ -325,14 +374,27 @@ class EventBus:
         except ValueError:
             pass
 
+    def subscribe_all(self, handler: EventHandler) -> None:
+        """Register a handler that receives every emitted event."""
+        self._all_handlers.append(handler)
+
+    def unsubscribe_all(self, handler: EventHandler) -> None:
+        """Remove a global handler registered by ``subscribe_all``."""
+        try:
+            self._all_handlers.remove(handler)
+        except ValueError:
+            pass
+
     async def emit(self, event: Event) -> None:
-        """Emit an event to all registered handlers for its type.
+        """Emit an event to matching and global handlers.
 
         Sync handlers are called directly; async handlers are awaited.
         Exceptions in handlers are logged but do not prevent other handlers from running.
         """
         event_type = type(event)
-        for handler in list(self._handlers[event_type]):
+        handlers = list(self._all_handlers)
+        handlers.extend(self._handlers[event_type])
+        for handler in handlers:
             try:
                 result = handler(event)
                 if asyncio.iscoroutine(result):

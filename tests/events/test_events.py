@@ -249,3 +249,33 @@ async def test_eventbus_handler_error_does_not_stop_others():
 
     await bus.emit(STTFinal(text="hello"))
     assert len(received) == 1
+
+
+@pytest.mark.asyncio
+async def test_eventbus_subscribe_all_receives_multiple_event_types():
+    bus = EventBus()
+    received: list[str] = []
+
+    def handler(event: object) -> None:
+        received.append(type(event).__name__)
+
+    bus.subscribe_all(handler)
+    await bus.emit(STTPartial(text="p"))
+    await bus.emit(STTFinal(text="f"))
+
+    assert received == ["STTPartial", "STTFinal"]
+
+
+@pytest.mark.asyncio
+async def test_eventbus_unsubscribe_all():
+    bus = EventBus()
+    received: list[str] = []
+
+    def handler(event: object) -> None:
+        received.append(type(event).__name__)
+
+    bus.subscribe_all(handler)
+    bus.unsubscribe_all(handler)
+    await bus.emit(STTFinal(text="hello"))
+
+    assert not received

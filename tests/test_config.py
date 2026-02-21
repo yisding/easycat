@@ -5,7 +5,7 @@ import pytest
 from easycat import EasyCatConfig, create_session
 from easycat.agent_runner import AgentRunner
 from easycat.agents import OpenAIAgentsAdapter, PydanticAIAdapter
-from easycat.config import TelephonyConfig
+from easycat.config import EventLoggingConfig, TelephonyConfig
 from easycat.events import DTMFAggregated
 from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.telephony.dtmf import emit_twilio_dtmf
@@ -127,3 +127,22 @@ async def test_telephony_helpers_are_managed_by_session_lifecycle():
     await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "1"}}, bus)
     await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "#"}}, bus)
     assert not aggregated
+
+
+def test_create_session_adds_event_trace_logger_when_enabled():
+    config = EasyCatConfig(
+        openai_api_key="test-key",
+        event_logging=EventLoggingConfig(enabled=True),
+        agent=_DummyAgent(),
+    )
+
+    try:
+        session = create_session(config)
+    except RuntimeError as exc:
+        if "No VAD backend available" in str(exc):
+            pytest.skip("No VAD backend available")
+        raise
+
+    assert any(
+        type(helper).__name__ == "EventTraceLogger" for helper in session._telephony_helpers
+    )

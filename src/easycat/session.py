@@ -13,8 +13,9 @@ import logging
 import re
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol, runtime_checkable
+from uuid import uuid4
 
 import pysbd
 
@@ -28,6 +29,7 @@ from easycat.events import (
     AudioIn,
     Error,
     EventBus,
+    EventHandler,
     Interruption,
     ReconnectSuccess,
     STTEventType,
@@ -452,6 +454,7 @@ class Session:
             spans=self._spans,
             metrics=self._metrics,
             timeout_config=self._timeout_config,
+            correlation_ids=lambda: (self.session_id, self._current_turn_id),
         )
         self._health_checkers: list[PeriodicHealthChecker] = []
         self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)
@@ -490,7 +493,68 @@ class Session:
         # heard before a barge-in.
         self._turn_audio_bytes_sent: int = 0
 
+        self.session_id = f"session-{uuid4().hex[:12]}"
+        self._current_turn_id: str | None = None
+        self._turn_manager.bind_session(self.session_id)
+
+    def _with_correlation(self, event: Any) -> Any:
+        """Attach session/turn identifiers to events when supported."""
+        if not hasattr(event, "session_id") and not hasattr(event, "turn_id"):
+            return event
+        kwargs: dict[str, Any] = {}
+        if hasattr(event, "session_id") and getattr(event, "session_id", None) is None:
+            kwargs["session_id"] = self.session_id
+        if hasattr(event, "turn_id") and getattr(event, "turn_id", None) is None:
+            kwargs["turn_id"] = self._current_turn_id
+        return replace(event, **kwargs) if kwargs else event
+
+    async def _emit(self, event: Any) -> None:
+        await self.event_bus.emit(self._with_correlation(event))
+
     # ── Properties ─────────────────────────────────────────────
+
+    def subscribe_event(self, event_type: type, handler: EventHandler) -> None:
+        """Subscribe to a session event via the underlying EventBus."""
+        self.event_bus.subscribe(event_type, handler)
+
+    def unsubscribe_event(self, event_type: type, handler: EventHandler) -> None:
+        """Unsubscribe a handler previously attached with ``subscribe_event``."""
+        self.event_bus.unsubscribe(event_type, handler)
+
+    def subscribe_agent_events(
+        self,
+        *,
+        on_delta: EventHandler | None = None,
+        on_final: EventHandler | None = None,
+        on_tool_started: EventHandler | None = None,
+        on_tool_delta: EventHandler | None = None,
+        on_tool_result: EventHandler | None = None,
+    ) -> list[tuple[type, EventHandler]]:
+        """Subscribe handlers for agent and tool-call events in one call.
+
+        Returns a list of ``(event_type, handler)`` registrations that can be
+        passed to :meth:`unsubscribe_handlers`.
+        """
+        registrations: list[tuple[type, EventHandler]] = []
+
+        for event_type, handler in (
+            (AgentDelta, on_delta),
+            (AgentFinal, on_final),
+            (ToolCallStarted, on_tool_started),
+            (ToolCallDelta, on_tool_delta),
+            (ToolCallResult, on_tool_result),
+        ):
+            if handler is None:
+                continue
+            self.event_bus.subscribe(event_type, handler)
+            registrations.append((event_type, handler))
+
+        return registrations
+
+    def unsubscribe_handlers(self, registrations: list[tuple[type, EventHandler]]) -> None:
+        """Unsubscribe a batch of event handlers from prior registrations."""
+        for event_type, handler in registrations:
+            self.event_bus.unsubscribe(event_type, handler)
 
     @property
     def turn_state(self) -> TurnState:
@@ -635,13 +699,14 @@ class Session:
             self._cancel_token.cancel()
 
         if barge_in:
-            await self.event_bus.emit(Interruption())
+            await self._emit(Interruption())
 
         await self._cancel_stt()
         await self._cancel_tts()
         self._outbound_queue.flush_for_new_turn()
 
         if not barge_in:
+            self._current_turn_id = None
             self._turn_manager.reset()
 
         self._spans.finish_all(SpanStatus.CANCELLED)
@@ -654,6 +719,7 @@ class Session:
         await self._cancel_tts()
         self._outbound_queue.flush_for_new_turn()
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
+            self._current_turn_id = None
             self._turn_manager.reset()
 
     async def reset_state(self) -> None:
@@ -673,6 +739,7 @@ class Session:
             self.agent.clear_history()
 
         # Reset turn manager state
+        self._current_turn_id = None
         self._turn_manager.reset()
 
         self._spans.finish_all(SpanStatus.CANCELLED)
@@ -698,6 +765,8 @@ class Session:
         if not self._is_running:
             return
 
+        self._current_turn_id = event.turn_id
+
         # Reset timing markers for this turn
         self._turn_end_time = None
         self._stt_final_time = None
@@ -718,7 +787,7 @@ class Session:
             self._start_stt_event_task()
         except Exception as exc:
             logger.exception("Failed to start STT stream")
-            await self.event_bus.emit(Error(exception=exc, context="stt_start"))
+            await self._emit(Error(exception=exc, context="stt_start"))
             self._stt_active = False
             return
 
@@ -773,9 +842,9 @@ class Session:
                     if self._cancel_token and self._cancel_token.is_cancelled:
                         break
                     if stt_event.type == STTEventType.PARTIAL:
-                        await self.event_bus.emit(STTPartial(text=stt_event.text))
+                        await self._emit(STTPartial(text=stt_event.text))
                     elif stt_event.type == STTEventType.FINAL:
-                        await self.event_bus.emit(STTFinal(text=stt_event.text))
+                        await self._emit(STTFinal(text=stt_event.text))
                         self._stt_final_time = time.monotonic()
                         if self._metrics and self._turn_end_time is not None:
                             self._metrics.record_latency(
@@ -788,7 +857,7 @@ class Session:
                         break
             except Exception as exc:
                 logger.exception("STT event loop error")
-                await self.event_bus.emit(Error(exception=exc, context="stt_events"))
+                await self._emit(Error(exception=exc, context="stt_events"))
                 if self._stt_final_future and not self._stt_final_future.done():
                     self._stt_final_future.set_result("")
             finally:
@@ -810,7 +879,7 @@ class Session:
                 if not self._is_running:
                     break
 
-                await self.event_bus.emit(AudioIn(chunk=chunk))
+                await self._emit(AudioIn(chunk=chunk))
 
                 # Stage 1: Noise reduction (optional)
                 if self._enable_noise_reduction:
@@ -834,7 +903,8 @@ class Session:
                     vad_status = SpanStatus.OK
                     try:
                         async for vad_event in self.vad.process(chunk):
-                            await self.event_bus.emit(vad_event)
+                            vad_event = self._with_correlation(vad_event)
+                            await self._emit(vad_event)
                             await self._turn_manager.on_vad_event(vad_event)
                     except asyncio.CancelledError:
                         vad_status = SpanStatus.CANCELLED
@@ -857,7 +927,7 @@ class Session:
             pass
         except Exception as exc:
             logger.exception("Pipeline error")
-            await self.event_bus.emit(Error(exception=exc, context="pipeline"))
+            await self._emit(Error(exception=exc, context="pipeline"))
 
     async def _handle_end_of_speech(self) -> None:
         """Called when VAD signals end of speech: finalize STT, run agent, synthesize TTS."""
@@ -879,7 +949,7 @@ class Session:
                     transcript = await self._stt_final_future
             except TimeoutError:
                 err = STTTimeoutError("stt", self._timeout_config.stt_timeout)
-                await self.event_bus.emit(Error(exception=err, context="stt_timeout"))
+                await self._emit(Error(exception=err, context="stt_timeout"))
                 self._spans.finish_with_error(Tracer.STT, err)
                 self._turn_manager.reset()
                 return
@@ -929,7 +999,7 @@ class Session:
             return
         except Exception as exc:
             logger.exception("Agent error")
-            await self.event_bus.emit(Error(exception=exc, context="agent"))
+            await self._emit(Error(exception=exc, context="agent"))
             self._spans.finish_with_error(Tracer.AGENT, exc)
             self._spans.finish_with_error("turn", exc)
             self._turn_manager.reset()
@@ -950,7 +1020,7 @@ class Session:
                 agent_response = stripped
                 _replace_last_assistant_text(self.agent, stripped)
 
-        await self.event_bus.emit(AgentDelta(text=agent_response))
+        await self._emit(AgentDelta(text=agent_response))
         # Expose structured output from adapters that support it, but avoid
         # duplicating plain-text responses in `structured_output`.
         agent_structured = None
@@ -958,9 +1028,7 @@ class Session:
         agent_output_type = getattr(self.agent, "output_type", None)
         if agent_output_type is not None or not isinstance(agent_last_output, str):
             agent_structured = agent_last_output
-        await self.event_bus.emit(
-            AgentFinal(text=agent_response, structured_output=agent_structured)
-        )
+        await self._emit(AgentFinal(text=agent_response, structured_output=agent_structured))
 
         if self._metrics and self._stt_final_time is not None:
             self._metrics.record_latency(
@@ -1028,20 +1096,20 @@ class Session:
                         if pending_tool_calls > 0:
                             if event.type == AgentStreamEventType.TOOL_RESULT:
                                 pending_tool_calls = max(0, pending_tool_calls - 1)
-                                await self.event_bus.emit(
+                                await self._emit(
                                     ToolCallResult(call_id=event.call_id, result=event.result)
                                 )
                                 if pending_tool_calls <= 0:
                                     break
                             elif event.type == AgentStreamEventType.TOOL_STARTED:
                                 pending_tool_calls += 1
-                                await self.event_bus.emit(
+                                await self._emit(
                                     ToolCallStarted(
                                         tool_name=event.tool_name, call_id=event.call_id
                                     )
                                 )
                             elif event.type == AgentStreamEventType.TOOL_DELTA:
-                                await self.event_bus.emit(
+                                await self._emit(
                                     ToolCallDelta(call_id=event.call_id, delta=event.text)
                                 )
                             elif event.type == AgentStreamEventType.DONE:
@@ -1058,7 +1126,7 @@ class Session:
 
                     if event.type == AgentStreamEventType.TEXT_DELTA:
                         accumulated_text += event.text
-                        await self.event_bus.emit(AgentDelta(text=event.text))
+                        await self._emit(AgentDelta(text=event.text))
                         if self._first_agent_time is None:
                             self._first_agent_time = time.monotonic()
                             if self._metrics and self._stt_final_time is not None:
@@ -1095,16 +1163,14 @@ class Session:
 
                     elif event.type == AgentStreamEventType.TOOL_STARTED:
                         pending_tool_calls += 1
-                        await self.event_bus.emit(
+                        await self._emit(
                             ToolCallStarted(tool_name=event.tool_name, call_id=event.call_id)
                         )
                     elif event.type == AgentStreamEventType.TOOL_DELTA:
-                        await self.event_bus.emit(
-                            ToolCallDelta(call_id=event.call_id, delta=event.text)
-                        )
+                        await self._emit(ToolCallDelta(call_id=event.call_id, delta=event.text))
                     elif event.type == AgentStreamEventType.TOOL_RESULT:
                         pending_tool_calls = max(0, pending_tool_calls - 1)
-                        await self.event_bus.emit(
+                        await self._emit(
                             ToolCallResult(call_id=event.call_id, result=event.result)
                         )
                     elif event.type == AgentStreamEventType.DONE:
@@ -1118,7 +1184,7 @@ class Session:
             except Exception as exc:
                 agent_error = exc
                 logger.exception("Agent streaming error")
-                await self.event_bus.emit(Error(exception=exc, context="agent"))
+                await self._emit(Error(exception=exc, context="agent"))
             finally:
                 stream_succeeded = agent_error is None and (not token or not token.is_cancelled)
                 if stream_succeeded:
@@ -1200,7 +1266,7 @@ class Session:
 
         # Emit AgentFinal after agent stream is fully consumed
         if accumulated_text and stream_succeeded:
-            await self.event_bus.emit(
+            await self._emit(
                 AgentFinal(text=accumulated_text, structured_output=structured_output)
             )
 
