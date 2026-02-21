@@ -357,7 +357,19 @@ def test_estimate_text_spoken_one_and_a_half_chunks():
     spoken = _estimate_text_spoken(chunks, 600)
     assert spoken.startswith("First sentence. ")
     # Second chunk has 16 chars, half → 8 chars
-    assert spoken == "First sentence. Second s"
+    assert spoken == "First sentence. Second "
+
+
+def test_estimate_text_spoken_partial_chunk_trims_mid_word_boundary():
+    chunks = [("Alpha bravo charlie", 1000)]
+    # 12 chars would land in the middle of "charlie"; should trim to word boundary.
+    assert _estimate_text_spoken(chunks, 700) == "Alpha bravo "
+
+
+def test_estimate_text_spoken_partial_single_token_keeps_prefix():
+    chunks = [("supercalifragilistic", 1000)]
+    # No internal boundary exists; keep proportional prefix instead of dropping content.
+    assert _estimate_text_spoken(chunks, 300) == "superc"
 
 
 def test_estimate_text_spoken_skips_zero_audio_chunks():
