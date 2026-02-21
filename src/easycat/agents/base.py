@@ -160,6 +160,18 @@ class BaseAgentAdapter:
         """
         return self._last_output
 
+    def done_structured_output(self, raw_output: Any) -> Any:
+        """Normalize ``DONE`` event structured output payload.
+
+        By convention, plain-text agents should emit ``structured_output=None``
+        on ``DONE`` events even though ``last_output`` is still captured.
+        Structured agents (configured ``output_type``) should expose the raw
+        validated output object.
+        """
+        if isinstance(raw_output, str) and self.output_type is None:
+            return None
+        return raw_output
+
     # ── Interruption handling ────────────────────────────────
 
     def notify_interruption(

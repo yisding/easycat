@@ -175,6 +175,28 @@ class TestOutputType:
 # ── last_output property tests ───────────────────────────────────
 
 
+# ── done_structured_output helper tests ───────────────────────────
+
+
+class TestDoneStructuredOutput:
+    def test_plain_string_without_output_type_returns_none(self):
+        adapter = ConcreteAdapter()
+        assert adapter.done_structured_output("hello") is None
+
+    def test_non_string_without_output_type_is_preserved(self):
+        adapter = ConcreteAdapter()
+        value = {"ok": True}
+        assert adapter.done_structured_output(value) == value
+
+    def test_string_with_structured_output_type_is_preserved(self):
+        class StructuredAgent:
+            output_type = dict
+
+        adapter = ConcreteAdapter()
+        adapter._agent = StructuredAgent()
+        assert adapter.done_structured_output("raw") == "raw"
+
+
 class TestLastOutput:
     def test_initially_none(self):
         adapter = ConcreteAdapter()
