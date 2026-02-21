@@ -146,7 +146,7 @@ uv run python examples/local_chat.py
 Optional dependencies you may need depending on providers/transports:
 - sounddevice (LocalTransport)
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
-- ten-vad + numpy (TEN VAD)
+- ten-vad + numpy (TEN VAD; use latest ten-vad for macOS/Windows ONNX support)
 - torch (Silero VAD)
 - pyrnnoise + requests (RNNoise noise reduction backend)
 - Krisp SDK (krisp_audio)
