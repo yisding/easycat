@@ -37,6 +37,10 @@ config = EasyCatConfig(
 session = create_session(config)
 ```
 
+> Note: `create_session` wraps `config.agent` in `AgentRunner` by default (`wrap_agent=True`).
+> If you pass a custom runner/wrapper that already handles history, timeout, or tracing,
+> set `wrap_agent=False` to avoid double wrapping.
+
 > Note: `EasyCatConfig` will automatically wire **OpenAI STT + OpenAI TTS** if
 > you provide `openai_api_key` and do not override `stt` or `tts`. If you omit
 > the API key, you must supply `stt` and `tts` configs explicitly. For most

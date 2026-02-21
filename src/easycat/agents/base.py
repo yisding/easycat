@@ -160,6 +160,17 @@ class BaseAgentAdapter:
         """
         return self._last_output
 
+    def done_structured_output(self) -> Any:
+        """Return structured output payload for ``AgentStreamEvent(DONE)``.
+
+        EasyCat exposes ``structured_output`` only when a framework is actually
+        configured for structured responses. For plain-text runs, returning
+        ``None`` keeps downstream behavior consistent across adapters.
+        """
+        if isinstance(self._last_output, str) and self.output_type is None:
+            return None
+        return self._last_output
+
     # ── Interruption handling ────────────────────────────────
 
     def notify_interruption(

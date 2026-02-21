@@ -190,3 +190,27 @@ class TestLastOutput:
         adapter._last_output = "some output"
         adapter.clear_history()
         assert adapter.last_output is None
+
+
+# ── done_structured_output helper tests ──────────────────────────
+
+
+class TestDoneStructuredOutput:
+    def test_text_output_without_output_type_returns_none(self):
+        adapter = ConcreteAdapter()
+        adapter._last_output = "plain text"
+        assert adapter.done_structured_output() is None
+
+    def test_structured_output_returns_value(self):
+        adapter = ConcreteAdapter()
+        adapter._last_output = {"ok": True}
+        assert adapter.done_structured_output() == {"ok": True}
+
+    def test_text_output_with_explicit_output_type_is_preserved(self):
+        class StructuredAgent:
+            output_type = dict
+
+        adapter = ConcreteAdapter()
+        adapter._agent = StructuredAgent()
+        adapter._last_output = "json-as-string"
+        assert adapter.done_structured_output() == "json-as-string"
