@@ -181,6 +181,36 @@ def _split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     return text[:last_start], text[last_start:]
 
 
+def _truncate_partial_text_to_boundary(text: str, chars: int) -> str:
+    """Trim a partial text estimate to a safer boundary.
+
+    If the proportional cut lands in the middle of a word, trim back to the
+    nearest non-word boundary so interruption context looks less noisy.
+    """
+    if chars <= 0:
+        return ""
+    if chars >= len(text):
+        return text
+
+    prefix = text[:chars]
+    next_char = text[chars]
+    if not prefix:
+        return ""
+
+    # If the cut already lands on a boundary (e.g. whitespace/punctuation),
+    # keep the proportional estimate as-is.
+    if (not _is_word_char(prefix[-1])) or (not _is_word_char(next_char)):
+        return prefix
+
+    # Otherwise trim back to the nearest safe boundary in the prefix.
+    for i in range(len(prefix) - 1, -1, -1):
+        if not _is_word_char(prefix[i]):
+            return prefix[: i + 1]
+
+    # Single long token with no internal boundary; keep the proportional cut.
+    return prefix
+
+
 def _estimate_text_spoken(
     tts_chunks: list[tuple[str, int]],
     audio_bytes_sent: int,
@@ -214,7 +244,7 @@ def _estimate_text_spoken(
             # Partial chunk — estimate by fraction of audio delivered.
             fraction = remaining / chunk_audio
             chars = int(len(chunk_text) * fraction)
-            spoken += chunk_text[:chars]
+            spoken += _truncate_partial_text_to_boundary(chunk_text, chars)
             break
     return spoken
 
