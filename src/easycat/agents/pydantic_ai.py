@@ -26,9 +26,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
-from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
+from easycat.agent_runner import (
+    INTERRUPTION_NOTE,
+    AgentStreamEvent,
+    AgentStreamEventType,
+)
 from easycat.agents.base import (
     BaseAgentAdapter,
     serialize_output,
@@ -74,6 +78,48 @@ class PydanticAIAdapter(BaseAgentAdapter):
         self._agent = agent
         self._deps = deps
         self._model_settings = model_settings
+
+    # ── Interruption handling ────────────────────────────────
+
+    def notify_interruption(
+        self,
+        text_spoken: str = "",
+        *,
+        mode: Literal["truncate", "message"] = "truncate",
+    ) -> None:
+        """Record an interruption in the PydanticAI message history.
+
+        * ``mode="truncate"`` — find the last ``ModelResponse``'s
+          ``TextPart`` and replace its content with *text_spoken* +
+          ``"..."``.
+        * ``mode="message"`` — append a ``ModelRequest`` with a
+          ``SystemPromptPart``.
+        """
+        try:
+            from pydantic_ai.messages import ModelRequest, ModelResponse, SystemPromptPart
+
+            if mode == "truncate":
+                for i in range(len(self._message_history) - 1, -1, -1):
+                    msg = self._message_history[i]
+                    if isinstance(msg, ModelResponse):
+                        for part in msg.parts:
+                            if type(part).__name__ == "TextPart":
+                                replacement = text_spoken + "..." if text_spoken else "..."
+                                try:
+                                    part.content = replacement
+                                except (AttributeError, TypeError):
+                                    object.__setattr__(part, "content", replacement)
+                                return
+                        # No TextPart found (e.g. tool-call-only response);
+                        # fall back to message mode so the interruption is
+                        # still recorded.
+                        break
+
+            self._message_history.append(
+                ModelRequest(parts=[SystemPromptPart(content=INTERRUPTION_NOTE)])
+            )
+        except ImportError:
+            logger.debug("pydantic_ai.messages not available; skipping interruption note")
 
     # ── History patching ─────────────────────────────────────
 
@@ -168,20 +214,32 @@ class PydanticAIAdapter(BaseAgentAdapter):
             deps=self._deps,
             model_settings=self._model_settings,
         ) as agent_run:
+            interrupted = False
             async for node in agent_run:
+                node_cls = type(node).__name__
+                is_tool_node = node_cls == "CallToolsNode"
                 if cancel_token and cancel_token.is_cancelled:
-                    break
+                    interrupted = True
+                    # Let CallToolsNode complete; skip ModelRequestNode.
+                    # This intentionally allows a newly-arriving tool node
+                    # (discovered after cancellation) to run to completion
+                    # so that tool state remains consistent.
+                    if not is_tool_node:
+                        break
 
-                # Both ModelRequestNode and CallToolsNode expose stream()
                 if not hasattr(node, "stream"):
                     continue
 
                 async with node.stream(agent_run.ctx) as stream:
                     async for event in stream:
-                        if cancel_token and cancel_token.is_cancelled:
-                            break
+                        if cancel_token and cancel_token.is_cancelled and not interrupted:
+                            interrupted = True
+                            if not is_tool_node:
+                                break
                         mapped = _map_pydantic_event(event)
                         if mapped is not None:
+                            if interrupted and mapped.type == AgentStreamEventType.TEXT_DELTA:
+                                continue  # Skip text deltas during drain
                             if mapped.type == AgentStreamEventType.TEXT_DELTA:
                                 accumulated += mapped.text
                             yield mapped

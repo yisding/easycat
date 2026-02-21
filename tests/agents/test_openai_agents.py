@@ -829,3 +829,215 @@ async def test_clear_history_resets_last_output(monkeypatch):
 
     adapter.clear_history()
     assert adapter.last_output is None
+
+
+# ── Barge-in / interruption tests ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancel_during_tool_call_lets_tool_complete(monkeypatch):
+    """Cancelling mid-tool-call should let the tool result arrive."""
+    events = [
+        *_make_text_events(["Checking. "]),
+        MockStreamEvent(
+            type="run_item_stream_event",
+            item=MockToolCallItem(
+                raw_item=MockRawItem(name="db_update", call_id="c1"),
+            ),
+        ),
+        *_make_tool_delta_events(['{"id": 1}'], call_id="c1"),
+        # --- cancel arrives around here ---
+        MockStreamEvent(
+            type="run_item_stream_event",
+            item=MockToolCallOutputItem(
+                raw_item=MockRawItem(call_id="c1"),
+                output="row updated",
+            ),
+        ),
+        *_make_text_events(["All done."]),
+    ]
+
+    input_list = [
+        {"role": "user", "content": "update it"},
+        {"role": "assistant", "content": "Checking. All done."},
+    ]
+    result = MockSlowRunResultStreaming(events, input_list=input_list)
+    runner = MockRunner(stream_results=[result])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    token = CancelToken()
+    collected = []
+    async for event in adapter.run_streaming("update it", cancel_token=token):
+        collected.append(event)
+        # Cancel after seeing the tool started event
+        if event.type == AgentStreamEventType.TOOL_STARTED:
+            token.cancel()
+
+    types = [e.type for e in collected]
+
+    # Tool events should all be present (tool completed)
+    assert AgentStreamEventType.TOOL_STARTED in types
+    assert AgentStreamEventType.TOOL_RESULT in types
+
+    # Text before cancellation should be present
+    assert AgentStreamEventType.TEXT_DELTA in types
+    text_deltas = [e for e in collected if e.type == AgentStreamEventType.TEXT_DELTA]
+    assert text_deltas[0].text == "Checking. "
+    # "All done." text AFTER tool should NOT be present (cancelled)
+    assert len(text_deltas) == 1
+
+    # History should be updated (via try/finally)
+    assert len(adapter.message_history) > 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancel_without_tool_stops_immediately(monkeypatch):
+    """Cancelling with no tool call in flight should stop right away."""
+    events = [
+        *_make_text_events(["Hello ", "world. ", "This is long."]),
+    ]
+    result = MockSlowRunResultStreaming(events)
+    runner = MockRunner(stream_results=[result])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    token = CancelToken()
+    collected = []
+    async for event in adapter.run_streaming("test", cancel_token=token):
+        collected.append(event)
+        if event.type == AgentStreamEventType.TEXT_DELTA:
+            token.cancel()
+
+    text_deltas = [e for e in collected if e.type == AgentStreamEventType.TEXT_DELTA]
+    assert len(text_deltas) == 1
+    assert text_deltas[0].text == "Hello "
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_truncates_by_default(monkeypatch):
+    """Default (truncate) mode replaces the last assistant message."""
+    input_list = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "Hello there, how can I help?"},
+    ]
+    runner = MockRunner(run_results=[MockRunResult(final_output="reply", input_list=input_list)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("hi")
+    assert len(adapter.message_history) == 2
+
+    adapter.notify_interruption("Hello there")
+    assert len(adapter.message_history) == 2
+    assert adapter.message_history[1]["content"] == "Hello there..."
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_truncate_falls_back_without_content(monkeypatch):
+    """Truncate mode appends a note when assistant content is unavailable."""
+
+    class AssistantToolOnlyMessage:
+        role = "assistant"
+
+    input_list = [
+        {"role": "user", "content": "hi"},
+        AssistantToolOnlyMessage(),
+    ]
+    runner = MockRunner(run_results=[MockRunResult(final_output="reply", input_list=input_list)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("hi")
+    assert len(adapter.message_history) == 2
+
+    adapter.notify_interruption("", mode="truncate")
+    assert len(adapter.message_history) == 3
+    assert adapter.message_history[2]["role"] == "developer"
+    assert "interrupted" in adapter.message_history[2]["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_truncate_does_not_corrupt_older_turn(monkeypatch):
+    """Non-writable newest assistant must not cause older entries to be overwritten."""
+
+    class AssistantToolOnlyMessage:
+        role = "assistant"
+
+    input_list = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "First reply"},
+        {"role": "user", "content": "turn 2"},
+        AssistantToolOnlyMessage(),  # newest assistant — no writable content
+    ]
+    runner = MockRunner(run_results=[MockRunResult(final_output="reply", input_list=input_list)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("turn 2")
+
+    adapter.notify_interruption("", mode="truncate")
+
+    # The older assistant dict must be untouched
+    assert adapter.message_history[1]["content"] == "First reply"
+    # A fallback developer note should have been appended instead
+    assert adapter.message_history[-1]["role"] == "developer"
+    assert "interrupted" in adapter.message_history[-1]["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_truncate_falls_back_for_dict_without_content_key(monkeypatch):
+    """Truncate mode falls back to developer note for assistant dict missing 'content' key."""
+    input_list = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function"}]},
+    ]
+    runner = MockRunner(run_results=[MockRunResult(final_output="reply", input_list=input_list)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("hi")
+
+    adapter.notify_interruption("", mode="truncate")
+    # Should not inject a 'content' key into the tool-call-only dict
+    assert "content" not in adapter.message_history[1]
+    # Should append a fallback developer note instead
+    assert adapter.message_history[-1]["role"] == "developer"
+    assert "interrupted" in adapter.message_history[-1]["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_truncate_falls_back_with_no_assistant_entry(monkeypatch):
+    """Truncate mode falls back to developer note when history has no assistant entries."""
+    input_list = [
+        {"role": "user", "content": "hi"},
+    ]
+    runner = MockRunner(run_results=[MockRunResult(final_output="reply", input_list=input_list)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("hi")
+
+    adapter.notify_interruption("", mode="truncate")
+    assert adapter.message_history[-1]["role"] == "developer"
+    assert "interrupted" in adapter.message_history[-1]["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_message_mode(monkeypatch):
+    """Message mode appends a developer message to the history."""
+    input_list = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "reply"},
+    ]
+    runner = MockRunner(run_results=[MockRunResult(final_output="reply", input_list=input_list)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("hi")
+    assert len(adapter.message_history) == 2
+
+    adapter.notify_interruption("rep", mode="message")
+    assert len(adapter.message_history) == 3
+    assert adapter.message_history[2]["role"] == "developer"
+    assert "interrupted" in adapter.message_history[2]["content"].lower()

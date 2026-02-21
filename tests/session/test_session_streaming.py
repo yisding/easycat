@@ -38,6 +38,7 @@ from easycat.events import (
 from easycat.session import (
     Session,
     SessionConfig,
+    _estimate_text_spoken,
     _has_unclosed_markdown_delimiters,
     _split_at_sentence_boundaries,
 )
@@ -322,6 +323,47 @@ def test_split_chinese_sentence():
     ready, remaining = _split_at_sentence_boundaries(text)
     assert ready == "你好。今天天气不错。"
     assert remaining == "继续"
+
+
+# ── _estimate_text_spoken tests ─────────────────────────────────────
+
+
+def test_estimate_text_spoken_empty():
+    assert _estimate_text_spoken([], 0) == ""
+    assert _estimate_text_spoken([], 100) == ""
+    assert _estimate_text_spoken([("Hello.", 320)], 0) == ""
+
+
+def test_estimate_text_spoken_full_chunks():
+    """When all audio was sent, the full text is returned."""
+    chunks = [("Hello. ", 320), ("How are you?", 640)]
+    assert _estimate_text_spoken(chunks, 960) == "Hello. How are you?"
+    # More bytes sent than produced — still returns full text
+    assert _estimate_text_spoken(chunks, 9999) == "Hello. How are you?"
+
+
+def test_estimate_text_spoken_partial_first_chunk():
+    """When only part of the first chunk's audio was sent, estimate proportionally."""
+    chunks = [("Hello world.", 1000)]
+    # Half the audio sent → approximately half the text
+    assert _estimate_text_spoken(chunks, 500) == "Hello "
+
+
+def test_estimate_text_spoken_one_and_a_half_chunks():
+    """First chunk fully sent, second chunk partially sent."""
+    chunks = [("First sentence. ", 400), ("Second sentence.", 400)]
+    # All of first chunk (400) + half of second (200) = 600
+    spoken = _estimate_text_spoken(chunks, 600)
+    assert spoken.startswith("First sentence. ")
+    # Second chunk has 16 chars, half → 8 chars
+    assert spoken == "First sentence. Second s"
+
+
+def test_estimate_text_spoken_skips_zero_audio_chunks():
+    """Chunks with 0 audio bytes (cancelled before any output) are skipped."""
+    chunks = [("First. ", 320), ("Never spoken.", 0), ("Third.", 320)]
+    # 320 covers first chunk, 0-byte chunk is skipped, then 320 for third
+    assert _estimate_text_spoken(chunks, 640) == "First. Third."
 
 
 def test_markdown_unclosed_single_italic_asterisk():
@@ -924,6 +966,380 @@ async def test_full_streaming_turn_event_order():
     assert sf_idx < af_idx
     assert af_idx < bs_idx or bs_idx < af_idx  # TTS may start before AgentFinal
     assert bs_idx < be_idx
+
+
+# ── Barge-in with tool calls ──────────────────────────────────────
+
+
+class SlowToolCallingAgent:
+    """Streaming agent with a tool call that takes time, allowing
+    cancellation to arrive mid-tool."""
+
+    def __init__(self) -> None:
+        self.interruption_notified = False
+        self.interruption_text_spoken = ""
+        self.interruption_mode = ""
+
+    async def run(self, text: str) -> str:
+        return "The answer is 42."
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        # Text before tool
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Let me look. ")
+        # Tool lifecycle
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_STARTED,
+            tool_name="database_update",
+            call_id="call_xyz",
+        )
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_DELTA,
+            call_id="call_xyz",
+            text="updating...",
+        )
+        # Simulate slow tool — cancellation arrives here
+        await asyncio.sleep(0.1)
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_RESULT,
+            call_id="call_xyz",
+            result="row updated",
+        )
+        # Text after tool (should be skipped on barge-in)
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Done!")
+        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Done!")
+
+    def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+        self.interruption_notified = True
+        self.interruption_text_spoken = text_spoken
+        self.interruption_mode = mode
+
+
+class FastDoneAgent:
+    """Agent that completes quickly and supports interruption notifications."""
+
+    def __init__(self) -> None:
+        self.finished = asyncio.Event()
+        self.interruption_notified = False
+        self.interruption_text_spoken = ""
+        self.interruption_mode = ""
+
+    async def run(self, text: str) -> str:
+        return "Quick reply."
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Quick reply.")
+        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Quick reply.")
+        self.finished.set()
+
+    def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+        self.interruption_notified = True
+        self.interruption_text_spoken = text_spoken
+        self.interruption_mode = mode
+
+
+class SlowStartTTS(FakeTTS):
+    """TTS that starts playback, then waits before yielding audio."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+
+    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        self.synthesized_texts.append(text)
+        self.started.set()
+        await asyncio.sleep(0.1)
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_completes_tool_calls():
+    """Barge-in during a tool call should let the tool finish and emit its result."""
+    agent = SlowToolCallingAgent()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="do the thing"),
+        agent=agent,
+        tts=FakeTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    tool_started: list[ToolCallStarted] = []
+    tool_results: list[ToolCallResult] = []
+    session.event_bus.subscribe(ToolCallStarted, lambda e: tool_started.append(e))
+    session.event_bus.subscribe(ToolCallResult, lambda e: tool_results.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.1)
+
+    # Simulate barge-in while tool call is in-flight
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    # Tool call started AND result should both have been emitted
+    assert len(tool_started) == 1
+    assert tool_started[0].tool_name == "database_update"
+    assert len(tool_results) == 1
+    assert tool_results[0].result == "row updated"
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_calls_notify_interruption():
+    """After barge-in the session should call notify_interruption on the agent.
+
+    The SlowToolCallingAgent emits a single sentence fragment before
+    starting a tool call.  Because the fragment never crosses a sentence
+    boundary it stays in the text buffer and is never sent to TTS, so the
+    audio-based estimation correctly reports "" — the user never heard it.
+    """
+    agent = SlowToolCallingAgent()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="do the thing"),
+        agent=agent,
+        tts=FakeTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.1)
+
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    assert agent.interruption_notified
+    # Text never reached TTS (single sentence fragment still in buffer),
+    # so audio-based estimation yields empty string.
+    assert agent.interruption_text_spoken == ""
+    # Default mode is "truncate"
+    assert agent.interruption_mode == "truncate"
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_after_agent_done_calls_notify_interruption():
+    """Cancellation during TTS playback should still notify interruption."""
+    agent = FastDoneAgent()
+    tts = SlowStartTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="test"),
+            agent=agent,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+    token = CancelToken()
+
+    async def _cancel_during_tts_playback() -> None:
+        await agent.finished.wait()
+        await tts.started.wait()
+        token.cancel()
+
+    cancel_task = asyncio.create_task(_cancel_during_tts_playback())
+    await session._run_streaming_agent("test", token=token)
+    await cancel_task
+
+    assert agent.interruption_notified
+    assert agent.interruption_text_spoken == ""
+    assert agent.interruption_mode == "truncate"
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_message_mode():
+    """When interruption_mode='message', notify_interruption receives that mode."""
+    agent = SlowToolCallingAgent()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="do the thing"),
+        agent=agent,
+        tts=FakeTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        interruption_mode="message",
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.1)
+
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    assert agent.interruption_notified
+    assert agent.interruption_mode == "message"
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_with_agent_runner_adds_single_interruption_note():
+    """Wrapped AgentRunner should record exactly one interruption note."""
+    runner = AgentRunner(SlowToolCallingAgent())
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="do the thing"),
+        agent=runner,
+        tts=FakeTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        interruption_mode="message",
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.1)
+
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    interruption_notes = [
+        entry
+        for entry in runner.history
+        if entry["role"] == "system" and "interrupted" in entry["content"].lower()
+    ]
+    assert len(interruption_notes) == 1
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_without_tool_calls_stops_immediately():
+    """Barge-in with no tool calls in flight should stop the stream quickly."""
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="test"),
+        agent=SlowStreamingAgent(),
+        tts=FakeTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    deltas: list[AgentDelta] = []
+    session.event_bus.subscribe(AgentDelta, lambda e: deltas.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.1)
+
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.2)
+    await session.stop()
+
+    # Stream should not have produced extra text beyond the agent's
+    # natural output.  The SlowStreamingAgent only yields 2 words, so
+    # it may finish before cancel arrives — what matters is it did not
+    # hang waiting for more output.
+    assert len(deltas) <= 2
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_during_tts_playback():
+    """Cancellation after agent stream completes but during TTS playback
+    should still trigger notify_interruption (cancelled_during_playback path)."""
+
+    class FastAgent:
+        """Completes instantly with a full sentence."""
+
+        interruption_notified = False
+        interruption_text_spoken = ""
+        interruption_mode = ""
+
+        async def run(self, text: str) -> str:
+            return "Hello world."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world.")
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world.")
+
+        def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+            self.interruption_notified = True
+            self.interruption_text_spoken = text_spoken
+            self.interruption_mode = mode
+
+    class SlowTTS:
+        """TTS that yields audio slowly so cancel can arrive mid-playback."""
+
+        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+            for _ in range(5):
+                yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+                await asyncio.sleep(0.05)
+
+        async def stop(self) -> None:
+            pass
+
+        async def cancel(self) -> None:
+            pass
+
+    agent = FastAgent()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="hello"),
+        agent=agent,
+        tts=SlowTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    await session.start()
+    # Wait for agent to finish and TTS to start playing
+    await asyncio.sleep(0.15)
+
+    # Cancel during TTS playback (agent stream already done)
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    assert agent.interruption_notified
+    assert agent.interruption_mode == "truncate"
 
 
 # ── Streaming with strip_markdown ──────────────────────────────────

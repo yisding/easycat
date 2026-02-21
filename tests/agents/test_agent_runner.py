@@ -501,3 +501,224 @@ async def test_streaming_context_cleared():
     async for _ in runner.run_streaming("fresh start"):
         pass
     assert agent.received_contexts[1] == []  # No context after clear
+
+
+# ── Barge-in tool call completion tests ────────────────────────────
+
+
+class SlowToolStreamingAgent:
+    """Agent that starts a tool call, then yields text — with a delay
+    between TOOL_STARTED and TOOL_RESULT so cancellation can arrive
+    mid-tool.
+    """
+
+    async def run(self, text: str) -> str:
+        return f"Result for {text}"
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        # Text before tool call
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Let me check. ")
+        # Start tool call
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_STARTED,
+            tool_name="lookup",
+            call_id="call_1",
+        )
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_DELTA,
+            call_id="call_1",
+            text="searching...",
+        )
+        # Simulate slow tool execution — cancel arrives here
+        await asyncio.sleep(0.1)
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_RESULT,
+            call_id="call_1",
+            result="found it",
+        )
+        # Text after tool
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Here is the answer.")
+        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Here is the answer.")
+
+
+class MultiToolDrainAgent:
+    """Agent that starts additional tool calls while cancellation drain is active."""
+
+    async def run(self, text: str) -> str:
+        return text
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_STARTED,
+            tool_name="first",
+            call_id="call_1",
+        )
+        await asyncio.sleep(0)
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_STARTED,
+            tool_name="second",
+            call_id="call_2",
+        )
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_RESULT,
+            call_id="call_1",
+            result="first done",
+        )
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_RESULT,
+            call_id="call_2",
+            result="second done",
+        )
+        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="done")
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_tool_call_lets_tool_complete():
+    """When cancelled mid-tool-call, the stream should continue until the
+    TOOL_RESULT is received, then stop."""
+    token = CancelToken()
+    runner = AgentRunner(SlowToolStreamingAgent())
+
+    events: list[AgentStreamEvent] = []
+    async for event in runner.run_streaming("test", cancel_token=token):
+        events.append(event)
+        # Cancel after seeing the TOOL_STARTED event
+        if event.type == AgentStreamEventType.TOOL_STARTED:
+            token.cancel()
+
+    types = [e.type for e in events]
+    # Tool events should all be present — the tool completed
+    assert AgentStreamEventType.TOOL_STARTED in types
+    assert AgentStreamEventType.TOOL_RESULT in types
+    # The initial text delta before cancellation should be there
+    assert AgentStreamEventType.TEXT_DELTA in types
+    # The DONE event should NOT be present (we stopped after tool completed)
+    assert AgentStreamEventType.DONE not in types
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_tool_call_records_history_with_interruption():
+    """After barge-in with tool completion, history should contain the
+    assistant response.  Calling notify_interruption() in truncate mode
+    should replace the assistant content with text_spoken + '...'."""
+    token = CancelToken()
+    runner = AgentRunner(SlowToolStreamingAgent())
+
+    async for event in runner.run_streaming("test", cancel_token=token):
+        if event.type == AgentStreamEventType.TOOL_STARTED:
+            token.cancel()
+
+    # History after streaming: user + assistant (no auto-appended note)
+    assert len(runner.history) == 2
+    assert runner.history[0] == {"role": "user", "content": "test"}
+    assert runner.history[1]["role"] == "assistant"
+    assert runner.history[1]["content"] == "Let me check. "
+
+    # Truncate mode (default): assistant message is replaced
+    runner.notify_interruption("Let me check. ")
+    assert len(runner.history) == 2
+    assert runner.history[1] == {"role": "assistant", "content": "Let me check. ..."}
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_tool_call_records_history_message_mode():
+    """In message mode, notify_interruption appends a system note instead
+    of truncating the assistant message."""
+    token = CancelToken()
+    runner = AgentRunner(SlowToolStreamingAgent())
+
+    async for event in runner.run_streaming("test", cancel_token=token):
+        if event.type == AgentStreamEventType.TOOL_STARTED:
+            token.cancel()
+
+    runner.notify_interruption("Let me check. ", mode="message")
+    assert len(runner.history) == 3
+    assert runner.history[2]["role"] == "system"
+    assert "interrupted" in runner.history[2]["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_drain_counts_new_tool_starts():
+    """Drain mode should track tool calls that start after cancellation."""
+    token = CancelToken()
+    runner = AgentRunner(MultiToolDrainAgent())
+
+    events: list[AgentStreamEvent] = []
+    async for event in runner.run_streaming("test", cancel_token=token):
+        events.append(event)
+        if event.type == AgentStreamEventType.TOOL_STARTED and event.call_id == "call_1":
+            token.cancel()
+
+    tool_results = [e.call_id for e in events if e.type == AgentStreamEventType.TOOL_RESULT]
+    assert tool_results == ["call_1", "call_2"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_without_tool_call_stops_immediately():
+    """When cancelled with no tool calls in flight, stream should stop right away."""
+    token = CancelToken()
+    runner = AgentRunner(SlowStreamingAgent())
+
+    events: list[AgentStreamEvent] = []
+    async for event in runner.run_streaming("test", cancel_token=token):
+        events.append(event)
+        if event.type == AgentStreamEventType.TEXT_DELTA:
+            token.cancel()
+
+    text_deltas = [e for e in events if e.type == AgentStreamEventType.TEXT_DELTA]
+    assert len(text_deltas) == 1  # Only the first delta
+    assert text_deltas[0].text == "Hello "
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_truncates_by_default():
+    """Default (truncate) mode replaces the assistant message content."""
+    runner = AgentRunner(EchoAgent())
+    await runner.run("hello")
+    assert len(runner.history) == 2
+
+    runner.notify_interruption("Echo: hel")
+    assert len(runner.history) == 2
+    assert runner.history[1] == {"role": "assistant", "content": "Echo: hel..."}
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_message_mode():
+    """Message mode appends a system note to the runner's history."""
+    runner = AgentRunner(EchoAgent())
+    await runner.run("hello")
+    assert len(runner.history) == 2
+
+    runner.notify_interruption("Echo: hel", mode="message")
+    assert len(runner.history) == 3
+    assert runner.history[2]["role"] == "system"
+    assert "interrupted" in runner.history[2]["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_notify_interruption_deduplicates_consecutive_notes():
+    """Repeated notifications should not duplicate the same interruption note."""
+    runner = AgentRunner(EchoAgent())
+    await runner.run("hello")
+
+    runner.notify_interruption(mode="message")
+    runner.notify_interruption(mode="message")
+
+    interruption_notes = [
+        entry
+        for entry in runner.history
+        if entry["role"] == "system" and "interrupted" in entry["content"].lower()
+    ]
+    assert len(interruption_notes) == 1
