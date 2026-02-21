@@ -14,7 +14,7 @@ import logging
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, Literal
 
-from easycat.agent_runner import AgentStreamEvent
+from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
 from easycat.cancel import CancelToken
 
 logger = logging.getLogger(__name__)
@@ -172,6 +172,24 @@ class BaseAgentAdapter:
             return None
         return raw_output
 
+    def interruption_replacement_text(self, text_spoken: str) -> str:
+        """Format assistant text used when truncating after interruption."""
+        return text_spoken + "..." if text_spoken else "..."
+
+    def serialize_and_store_output(self, raw_output: Any) -> str:
+        """Persist the most recent raw output and return its serialized text."""
+        self._last_output = raw_output
+        return serialize_output(raw_output)
+
+    def done_event(self, *, text: str, raw_output: Any) -> AgentStreamEvent:
+        """Build a normalized ``DONE`` stream event and persist raw output."""
+        self._last_output = raw_output
+        return AgentStreamEvent(
+            type=AgentStreamEventType.DONE,
+            text=text,
+            structured_output=self.done_structured_output(raw_output),
+        )
+
     # ── Interruption handling ────────────────────────────────
 
     def notify_interruption(
@@ -197,8 +215,26 @@ class BaseAgentAdapter:
             noting the interruption (requires model support for interleaved
             system messages).
 
-        Subclasses override to apply the note in the appropriate format
-        for their framework.  The default implementation is a no-op.
+        Subclasses typically override ``_truncate_last_assistant_for_interruption``
+        and ``_append_interruption_note`` rather than this method directly.
+        """
+        if mode == "truncate" and self._truncate_last_assistant_for_interruption(text_spoken):
+            return
+        self._append_interruption_note()
+
+    def _truncate_last_assistant_for_interruption(self, text_spoken: str) -> bool:
+        """Try to truncate the latest assistant response after interruption.
+
+        Returns ``True`` when history was updated and no fallback message is
+        required.  The default implementation returns ``False``.
+        """
+        return False
+
+    def _append_interruption_note(self) -> None:
+        """Append a framework-specific interruption note.
+
+        Called when truncation is not possible or when ``mode='message'``.
+        The default implementation is a no-op.
         """
 
     # ── Protocol methods (subclasses must override) ───────────
