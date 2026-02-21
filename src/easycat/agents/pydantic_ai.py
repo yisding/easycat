@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any, Literal
+from typing import Any
 
 from easycat.agent_runner import (
     INTERRUPTION_NOTE,
@@ -35,7 +35,6 @@ from easycat.agent_runner import (
 )
 from easycat.agents.base import (
     BaseAgentAdapter,
-    serialize_output,
     split_replacement_by_original_parts,
 )
 from easycat.cancel import CancelToken
@@ -81,45 +80,40 @@ class PydanticAIAdapter(BaseAgentAdapter):
 
     # ── Interruption handling ────────────────────────────────
 
-    def notify_interruption(
-        self,
-        text_spoken: str = "",
-        *,
-        mode: Literal["truncate", "message"] = "truncate",
-    ) -> None:
-        """Record an interruption in the PydanticAI message history.
-
-        * ``mode="truncate"`` — find the last ``ModelResponse``'s
-          ``TextPart`` and replace its content with *text_spoken* +
-          ``"..."``.
-        * ``mode="message"`` — append a ``ModelRequest`` with a
-          ``SystemPromptPart``.
-        """
+    def _truncate_last_assistant_for_interruption(self, text_spoken: str) -> bool:
+        """Try truncating the latest PydanticAI ``ModelResponse`` text part."""
         try:
-            from pydantic_ai.messages import ModelRequest, ModelResponse, SystemPromptPart
+            from pydantic_ai.messages import ModelResponse
+        except ImportError:
+            logger.debug("pydantic_ai.messages not available; skipping interruption truncate")
+            return False
 
-            if mode == "truncate":
-                for i in range(len(self._message_history) - 1, -1, -1):
-                    msg = self._message_history[i]
-                    if isinstance(msg, ModelResponse):
-                        for part in msg.parts:
-                            if type(part).__name__ == "TextPart":
-                                replacement = text_spoken + "..." if text_spoken else "..."
-                                try:
-                                    part.content = replacement
-                                except (AttributeError, TypeError):
-                                    object.__setattr__(part, "content", replacement)
-                                return
-                        # No TextPart found (e.g. tool-call-only response);
-                        # fall back to message mode so the interruption is
-                        # still recorded.
-                        break
+        replacement = self.interruption_replacement_text(text_spoken)
+        for i in range(len(self._message_history) - 1, -1, -1):
+            msg = self._message_history[i]
+            if isinstance(msg, ModelResponse):
+                for part in msg.parts:
+                    if type(part).__name__ == "TextPart":
+                        try:
+                            part.content = replacement
+                        except (AttributeError, TypeError):
+                            object.__setattr__(part, "content", replacement)
+                        return True
+                # No TextPart found (e.g. tool-call-only response)
+                break
+        return False
 
-            self._message_history.append(
-                ModelRequest(parts=[SystemPromptPart(content=INTERRUPTION_NOTE)])
-            )
+    def _append_interruption_note(self) -> None:
+        """Append an interruption note as a ``ModelRequest`` system prompt."""
+        try:
+            from pydantic_ai.messages import ModelRequest, SystemPromptPart
         except ImportError:
             logger.debug("pydantic_ai.messages not available; skipping interruption note")
+            return
+
+        self._message_history.append(
+            ModelRequest(parts=[SystemPromptPart(content=INTERRUPTION_NOTE)])
+        )
 
     # ── History patching ─────────────────────────────────────
 
@@ -169,8 +163,7 @@ class PydanticAIAdapter(BaseAgentAdapter):
             model_settings=self._model_settings,
         )
         self._message_history = result.new_messages()
-        self._last_output = result.output
-        return serialize_output(result.output)
+        return self.serialize_and_store_output(result.output)
 
     # ── StreamingAgent protocol ───────────────────────────────
 
@@ -252,15 +245,8 @@ class PydanticAIAdapter(BaseAgentAdapter):
                 _result = getattr(agent_run, "result", None)
                 if _result is not None:
                     raw_output = getattr(_result, "output", None)
-            self._last_output = raw_output
 
-        structured_output = self.done_structured_output(self._last_output)
-
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.DONE,
-            text=accumulated,
-            structured_output=structured_output,
-        )
+        yield self.done_event(text=accumulated, raw_output=raw_output)
 
     # ── run_stream()-based streaming (text only, fallback) ────
 
@@ -292,15 +278,8 @@ class PydanticAIAdapter(BaseAgentAdapter):
 
             # Capture structured output when available
             raw_output = getattr(result, "output", None)
-            self._last_output = raw_output
 
-        structured_output = self.done_structured_output(self._last_output)
-
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.DONE,
-            text=accumulated,
-            structured_output=structured_output,
-        )
+        yield self.done_event(text=accumulated, raw_output=raw_output)
 
 
 # ── Event mapping helpers ─────────────────────────────────────────
