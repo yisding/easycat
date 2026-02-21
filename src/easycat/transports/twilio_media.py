@@ -19,7 +19,7 @@ from websockets.asyncio.server import ServerConnection
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.audio_utils import resample
-from easycat.events import DTMF, EventBus
+from easycat.events import DTMF, EventBus, PlaybackMarkAck
 from easycat.transports._base import _ServerTransportBase
 
 logger = logging.getLogger(__name__)
@@ -131,6 +131,10 @@ class TwilioTransport(_ServerTransportBase):
         await ws.send(message)
         return name
 
+    async def send_playback_mark(self, name: str | None = None) -> str:
+        """Compatibility wrapper for generic playback-mark capability."""
+        return await self.send_mark(name=name)
+
     async def clear_audio(self) -> None:
         """Send a ``clear`` message to discard queued outbound audio on Twilio's side."""
         ws = self._ws
@@ -198,6 +202,8 @@ class TwilioTransport(_ServerTransportBase):
         elif event == "mark":
             mark_name = msg.get("mark", {}).get("name", "")
             logger.debug("Twilio mark acknowledged: %s", mark_name)
+            if mark_name and self._event_bus is not None:
+                await self._event_bus.emit(PlaybackMarkAck(mark_name=mark_name))
         elif event == "dtmf":
             await self._handle_dtmf(msg)
         else:

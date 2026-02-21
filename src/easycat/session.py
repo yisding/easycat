@@ -30,6 +30,7 @@ from easycat.events import (
     Error,
     EventBus,
     Interruption,
+    PlaybackMarkAck,
     ReconnectSuccess,
     STTEventType,
     STTFinal,
@@ -49,7 +50,14 @@ from easycat.metrics import (
     STT_LATENCY,
     MetricsCollector,
 )
-from easycat.providers import NoiseReducer, STTProvider, Transport, TTSProvider, VADProvider
+from easycat.providers import (
+    NoiseReducer,
+    PlaybackAckTransport,
+    STTProvider,
+    Transport,
+    TTSProvider,
+    VADProvider,
+)
 from easycat.strip_markdown import strip_markdown
 from easycat.stubs import (
     NoopAgent,
@@ -163,6 +171,12 @@ class SessionConfig:
     # account for transport/network + receiver playback + VAD/ASR detection
     # lag so we don't overestimate what the user actually heard.
     interruption_latency_compensation_ms: int = 0
+    # If the newest playback ack before cutoff is older than this threshold,
+    # treat acks as stale and allow a bounded heuristic tail.
+    interruption_ack_stale_ms: int = 500
+    # Maximum extra playout budget (beyond acked bytes) to allow via timing
+    # heuristic when playback acks are stale.
+    interruption_ack_tail_cap_ms: int = 500
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -271,7 +285,9 @@ def _audio_bytes_likely_heard(
     """Estimate bytes likely heard by ``cutoff_time``.
 
     ``send_log`` entries are ``(send_time, bytes_sent, chunk_duration_ms)``.
-    We model each chunk as playing linearly over its own duration after send.
+    Chunks are modeled as serial playback with a virtual playout cursor:
+    each chunk starts at ``max(send_time, previous_chunk_end)`` and then
+    plays linearly over its own duration.
     """
     if not send_log:
         return 0
@@ -279,16 +295,27 @@ def _audio_bytes_likely_heard(
         return sum(max(size, 0) for _, size, _ in send_log)
 
     heard = 0
+    playout_cursor: float | None = None
+
     for send_time, size, duration_ms in send_log:
         size = max(size, 0)
         if size == 0:
             continue
+
+        start_time = send_time
+        if playout_cursor is not None and playout_cursor > start_time:
+            start_time = playout_cursor
+
         if duration_ms <= 0:
-            if send_time <= cutoff_time:
+            if start_time <= cutoff_time:
                 heard += size
             continue
 
-        elapsed_ms = (cutoff_time - send_time) * 1000.0
+        duration_s = duration_ms / 1000.0
+        end_time = start_time + duration_s
+        playout_cursor = end_time
+
+        elapsed_ms = (cutoff_time - start_time) * 1000.0
         if elapsed_ms <= 0:
             continue
         if elapsed_ms >= duration_ms:
@@ -296,6 +323,95 @@ def _audio_bytes_likely_heard(
             continue
         heard += int(size * (elapsed_ms / duration_ms))
     return heard
+
+
+def _audio_bytes_acknowledged(
+    playback_ack_log: list[tuple[float, int]],
+    cutoff_time: float | None,
+) -> int:
+    """Return acknowledged bytes at or before ``cutoff_time``."""
+    if not playback_ack_log:
+        return 0
+    if cutoff_time is None:
+        return max(0, playback_ack_log[-1][1])
+
+    acknowledged = 0
+    for ack_time, acked_bytes in playback_ack_log:
+        if ack_time > cutoff_time:
+            break
+        acknowledged = max(acknowledged, max(acked_bytes, 0))
+    return acknowledged
+
+
+def _audio_bytes_per_second_from_send_log(send_log: list[tuple[float, int, float]]) -> float:
+    """Estimate playout bytes/second from send-log durations."""
+    total_bytes = 0
+    total_duration_ms = 0.0
+    for _, size, duration_ms in send_log:
+        size = max(size, 0)
+        if size <= 0 or duration_ms <= 0:
+            continue
+        total_bytes += size
+        total_duration_ms += duration_ms
+    if total_bytes <= 0 or total_duration_ms <= 0:
+        return 0.0
+    return (total_bytes * 1000.0) / total_duration_ms
+
+
+def _latest_playback_ack_time(
+    playback_ack_log: list[tuple[float, int]],
+    cutoff_time: float | None,
+) -> float | None:
+    """Return the latest ack timestamp at or before ``cutoff_time``."""
+    latest: float | None = None
+    for ack_time, _ in playback_ack_log:
+        if cutoff_time is not None and ack_time > cutoff_time:
+            break
+        latest = ack_time
+    return latest
+
+
+def _audio_bytes_likely_heard_hybrid(
+    send_log: list[tuple[float, int, float]],
+    playback_ack_log: list[tuple[float, int]],
+    cutoff_time: float | None,
+    *,
+    ack_stale_ms: int,
+    ack_tail_cap_ms: int,
+) -> int:
+    """Estimate heard bytes using playback acks with heuristic stale fallback."""
+    heuristic_heard = _audio_bytes_likely_heard(send_log, cutoff_time)
+    if cutoff_time is None or not playback_ack_log:
+        return heuristic_heard
+
+    acked_heard = _audio_bytes_acknowledged(playback_ack_log, cutoff_time)
+    if acked_heard <= 0:
+        return heuristic_heard
+
+    # Fresh-ack path: acknowledgements cap the timing estimate.
+    heard = min(heuristic_heard, acked_heard)
+
+    latest_ack_time = _latest_playback_ack_time(playback_ack_log, cutoff_time)
+    if latest_ack_time is None:
+        return heard
+
+    bytes_per_second = _audio_bytes_per_second_from_send_log(send_log)
+    if bytes_per_second <= 0:
+        return heard
+
+    ack_age_ms = max(0.0, (cutoff_time - latest_ack_time) * 1000.0)
+    unacked_tail_bytes = max(0, heuristic_heard - acked_heard)
+    unacked_tail_ms = (unacked_tail_bytes / bytes_per_second) * 1000.0
+    is_stale = ack_age_ms > ack_stale_ms or unacked_tail_ms > ack_stale_ms
+    if not is_stale:
+        return heard
+
+    if ack_tail_cap_ms <= 0:
+        return heard
+    tail_cap_bytes = int(bytes_per_second * (ack_tail_cap_ms / 1000.0))
+    if tail_cap_bytes <= 0:
+        return heard
+    return min(heuristic_heard, acked_heard + tail_cap_bytes)
 
 
 def _is_word_char(ch: str) -> bool:
@@ -500,6 +616,8 @@ class Session:
         self._interruption_latency_compensation_ms = max(
             0, cfg.interruption_latency_compensation_ms
         )
+        self._interruption_ack_stale_ms = max(0, cfg.interruption_ack_stale_ms)
+        self._interruption_ack_tail_cap_ms = max(0, cfg.interruption_ack_tail_cap_ms)
         self._strip_markdown = cfg.strip_markdown
 
         # Turn manager — single source of truth for turn state
@@ -510,6 +628,7 @@ class Session:
         )
         self.event_bus.subscribe(TurnStarted, self._on_turn_started)
         self.event_bus.subscribe(TurnEnded, self._schedule_turn_ended)
+        self.event_bus.subscribe(PlaybackMarkAck, self._on_playback_mark_ack)
 
         # Reliability/observability config
         self._timeout_config = cfg.timeout_config or TimeoutConfig()
@@ -572,7 +691,14 @@ class Session:
         # heard before a barge-in.
         self._turn_audio_bytes_sent: int = 0
         self._turn_audio_send_log: deque[tuple[float, int, float]] = deque()
+        self._turn_playback_mark_to_bytes: dict[str, int] = {}
+        self._turn_playback_ack_log: deque[tuple[float, int]] = deque()
+        self._playback_mark_seq: int = 0
         self._last_barge_in_time: float | None = None
+
+        self._playback_ack_transport: PlaybackAckTransport | None = None
+        if isinstance(self.transport, PlaybackAckTransport):
+            self._playback_ack_transport = self.transport
 
     # ── Properties ─────────────────────────────────────────────
 
@@ -790,6 +916,9 @@ class Session:
         self._first_tts_audio_time = None
         self._turn_audio_bytes_sent = 0
         self._turn_audio_send_log.clear()
+        self._turn_playback_mark_to_bytes.clear()
+        self._turn_playback_ack_log.clear()
+        self._playback_mark_seq = 0
         self._last_barge_in_time = None
 
         # Initialize tracing for this turn
@@ -1306,7 +1435,13 @@ class Session:
             cutoff_time = self._last_barge_in_time
             if cutoff_time is not None and self._interruption_latency_compensation_ms > 0:
                 cutoff_time -= self._interruption_latency_compensation_ms / 1000.0
-            heard_bytes = _audio_bytes_likely_heard(list(self._turn_audio_send_log), cutoff_time)
+            heard_bytes = _audio_bytes_likely_heard_hybrid(
+                list(self._turn_audio_send_log),
+                list(self._turn_playback_ack_log),
+                cutoff_time,
+                ack_stale_ms=self._interruption_ack_stale_ms,
+                ack_tail_cap_ms=self._interruption_ack_tail_cap_ms,
+            )
 
             if not _all_tts_audio_sent(tts_chunks, heard_bytes):
                 text_spoken = _estimate_text_spoken(
@@ -1364,8 +1499,26 @@ class Session:
                 sent_size = len(chunk.data)
                 self._turn_audio_bytes_sent += sent_size
                 self._turn_audio_send_log.append((time.monotonic(), sent_size, chunk.duration_ms))
+                if sent_size > 0 and self._playback_ack_transport is not None:
+                    self._playback_mark_seq += 1
+                    mark_name = f"ec_playback_{self._playback_mark_seq}"
+                    self._turn_playback_mark_to_bytes[mark_name] = self._turn_audio_bytes_sent
+                    try:
+                        await self._playback_ack_transport.send_playback_mark(name=mark_name)
+                    except Exception:
+                        self._turn_playback_mark_to_bytes.pop(mark_name, None)
+                        logger.debug("Failed to send playback mark", exc_info=True)
             except Exception:
                 logger.exception("Failed to send audio to transport")
+
+    def _on_playback_mark_ack(self, event: PlaybackMarkAck) -> None:
+        """Track acknowledged playout byte positions for the active turn."""
+        acked_bytes = self._turn_playback_mark_to_bytes.pop(event.mark_name, None)
+        if acked_bytes is None:
+            return
+        if self._turn_playback_ack_log and acked_bytes < self._turn_playback_ack_log[-1][1]:
+            acked_bytes = self._turn_playback_ack_log[-1][1]
+        self._turn_playback_ack_log.append((event.timestamp, acked_bytes))
 
     def _maybe_attach_event_bus(self, provider: Any) -> None:
         """Attach the session EventBus to provider configs that support it."""
