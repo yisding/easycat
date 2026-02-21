@@ -1028,6 +1028,7 @@ class Session:
                                 if pending_tool_calls <= 0:
                                     break
                             elif event.type == AgentStreamEventType.TOOL_STARTED:
+                                pending_tool_calls += 1
                                 await self.event_bus.emit(
                                     ToolCallStarted(
                                         tool_name=event.tool_name, call_id=event.call_id

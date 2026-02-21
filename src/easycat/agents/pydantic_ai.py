@@ -96,9 +96,9 @@ class PydanticAIAdapter(BaseAgentAdapter):
           ``SystemPromptPart``.
         """
         try:
-            if mode == "truncate":
-                from pydantic_ai.messages import ModelResponse
+            from pydantic_ai.messages import ModelRequest, ModelResponse, SystemPromptPart
 
+            if mode == "truncate":
                 for i in range(len(self._message_history) - 1, -1, -1):
                     msg = self._message_history[i]
                     if isinstance(msg, ModelResponse):
@@ -106,13 +106,14 @@ class PydanticAIAdapter(BaseAgentAdapter):
                             if type(part).__name__ == "TextPart":
                                 part.content = text_spoken + "..." if text_spoken else "..."
                                 return
+                        # No TextPart found (e.g. tool-call-only response);
+                        # fall back to message mode so the interruption is
+                        # still recorded.
                         break
-            else:
-                from pydantic_ai.messages import ModelRequest, SystemPromptPart
 
-                self._message_history.append(
-                    ModelRequest(parts=[SystemPromptPart(content=self._INTERRUPTION_NOTE)])
-                )
+            self._message_history.append(
+                ModelRequest(parts=[SystemPromptPart(content=self._INTERRUPTION_NOTE)])
+            )
         except ImportError:
             logger.debug("pydantic_ai.messages not available; skipping interruption note")
 

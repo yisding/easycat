@@ -235,10 +235,10 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
                                     yield agent_event
                                     if not pending_tool_calls:
                                         break
-                                elif agent_event.type in (
-                                    AgentStreamEventType.TOOL_STARTED,
-                                    AgentStreamEventType.TOOL_DELTA,
-                                ):
+                                elif agent_event.type == AgentStreamEventType.TOOL_STARTED:
+                                    pending_tool_calls.add(agent_event.call_id)
+                                    yield agent_event
+                                elif agent_event.type == AgentStreamEventType.TOOL_DELTA:
                                     yield agent_event
                         elif event.type == "raw_response_event":
                             tool_delta = _extract_tool_delta(event.data)

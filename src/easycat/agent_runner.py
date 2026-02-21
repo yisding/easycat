@@ -197,7 +197,13 @@ class AgentRunner:
         applies the note to the runner's own history.
         """
         if hasattr(self._agent, "notify_interruption"):
-            self._agent.notify_interruption(text_spoken, mode=mode)
+            try:
+                self._agent.notify_interruption(text_spoken, mode=mode)
+            except Exception:
+                logger.debug(
+                    "Error in underlying agent.notify_interruption",
+                    exc_info=True,
+                )
         self._apply_interruption(text_spoken, mode=mode)
 
     def replace_last_assistant_text(self, text: str) -> None:
