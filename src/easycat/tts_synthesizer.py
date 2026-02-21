@@ -134,7 +134,7 @@ class TTSSynthesizer:
                     await self._event_bus.emit(TTSMarkers(markers=tts_event.markers))
 
         except asyncio.CancelledError:
-            pass
+            result.completed = False
         except Exception as exc:
             if tts_span:
                 tts_span.set_error(exc)

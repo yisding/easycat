@@ -918,7 +918,6 @@ class Session:
         self._turn_audio_send_log.clear()
         self._turn_playback_mark_to_bytes.clear()
         self._turn_playback_ack_log.clear()
-        self._playback_mark_seq = 0
         self._last_barge_in_time = None
 
         # Initialize tracing for this turn
