@@ -38,6 +38,7 @@ from easycat.events import (
 from easycat.session import (
     Session,
     SessionConfig,
+    _audio_bytes_sent_before,
     _all_tts_audio_sent,
     _estimate_text_spoken,
     _has_unclosed_markdown_delimiters,
@@ -397,6 +398,21 @@ def test_all_tts_audio_sent_ignores_non_positive_chunks():
 def test_all_tts_audio_sent_requires_completed_synthesis():
     chunks = [("Hello", 320, False)]
     assert not _all_tts_audio_sent(chunks, 320)
+
+
+def test_audio_bytes_sent_before_without_cutoff_uses_all_bytes():
+    send_log = [(1.0, 100), (1.2, 150), (1.4, 50)]
+    assert _audio_bytes_sent_before(send_log, None) == 300
+
+
+def test_audio_bytes_sent_before_with_cutoff_filters_future_bytes():
+    send_log = [(1.0, 100), (1.2, 150), (1.4, 50)]
+    assert _audio_bytes_sent_before(send_log, 1.2) == 250
+
+
+def test_audio_bytes_sent_before_ignores_negative_sizes():
+    send_log = [(1.0, 100), (1.2, -10), (1.3, 20)]
+    assert _audio_bytes_sent_before(send_log, 2.0) == 120
 
 
 def test_markdown_unclosed_single_italic_asterisk():

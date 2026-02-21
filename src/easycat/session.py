@@ -12,6 +12,7 @@ import enum
 import logging
 import re
 import time
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -158,6 +159,10 @@ class SessionConfig:
     #   interruption — clearer intent but requires model support for
     #   interleaved system messages.
     interruption_mode: Literal["truncate", "message"] = "truncate"
+    # Latency budget used when estimating the interruption point.  This can
+    # account for transport/network + receiver playback + VAD/ASR detection
+    # lag so we don't overestimate what the user actually heard.
+    interruption_latency_compensation_ms: int = 0
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -257,6 +262,15 @@ def _all_tts_audio_sent(tts_chunks: list[tuple[str, int, bool]], audio_bytes_sen
         return False
     total_audio = sum(max(chunk_audio, 0) for _, chunk_audio, _ in tts_chunks)
     return total_audio > 0 and audio_bytes_sent >= total_audio
+
+
+def _audio_bytes_sent_before(send_log: list[tuple[float, int]], cutoff_time: float | None) -> int:
+    """Return bytes sent at or before ``cutoff_time`` from timestamped send log."""
+    if not send_log:
+        return 0
+    if cutoff_time is None:
+        return sum(max(size, 0) for _, size in send_log)
+    return sum(max(size, 0) for ts, size in send_log if ts <= cutoff_time)
 
 
 def _is_word_char(ch: str) -> bool:
@@ -458,6 +472,9 @@ class Session:
         self._enable_noise_reduction = cfg.enable_noise_reduction
         self._enable_vad = cfg.enable_vad
         self._interruption_mode = cfg.interruption_mode
+        self._interruption_latency_compensation_ms = max(
+            0, cfg.interruption_latency_compensation_ms
+        )
         self._strip_markdown = cfg.strip_markdown
 
         # Turn manager — single source of truth for turn state
@@ -529,6 +546,8 @@ class Session:
         # Used to estimate which portion of the agent response the user
         # heard before a barge-in.
         self._turn_audio_bytes_sent: int = 0
+        self._turn_audio_send_log: deque[tuple[float, int]] = deque()
+        self._last_barge_in_time: float | None = None
 
     # ── Properties ─────────────────────────────────────────────
 
@@ -675,6 +694,7 @@ class Session:
             self._cancel_token.cancel()
 
         if barge_in:
+            self._last_barge_in_time = time.monotonic()
             await self.event_bus.emit(Interruption())
 
         await self._cancel_stt()
@@ -744,6 +764,8 @@ class Session:
         self._first_agent_time = None
         self._first_tts_audio_time = None
         self._turn_audio_bytes_sent = 0
+        self._turn_audio_send_log.clear()
+        self._last_barge_in_time = None
 
         # Initialize tracing for this turn
         self._spans.begin_turn()
@@ -1256,10 +1278,15 @@ class Session:
         if (interrupted or cancelled_during_playback) and hasattr(
             self.agent, "notify_interruption"
         ):
-            if not _all_tts_audio_sent(tts_chunks, self._turn_audio_bytes_sent):
+            cutoff_time = self._last_barge_in_time
+            if cutoff_time is not None and self._interruption_latency_compensation_ms > 0:
+                cutoff_time -= self._interruption_latency_compensation_ms / 1000.0
+            heard_bytes = _audio_bytes_sent_before(list(self._turn_audio_send_log), cutoff_time)
+
+            if not _all_tts_audio_sent(tts_chunks, heard_bytes):
                 text_spoken = _estimate_text_spoken(
                     [(text, audio_bytes) for text, audio_bytes, _ in tts_chunks],
-                    self._turn_audio_bytes_sent,
+                    heard_bytes,
                 )
                 try:
                     self.agent.notify_interruption(
@@ -1309,7 +1336,9 @@ class Session:
                 break
             try:
                 await self.transport.send_audio(chunk)
-                self._turn_audio_bytes_sent += len(chunk.data)
+                sent_size = len(chunk.data)
+                self._turn_audio_bytes_sent += sent_size
+                self._turn_audio_send_log.append((time.monotonic(), sent_size))
             except Exception:
                 logger.exception("Failed to send audio to transport")
 
