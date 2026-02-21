@@ -122,6 +122,10 @@ async def test_krisp_vad_process_mocked():
 # ── TenVAD tests ────────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("ten_vad") is not None,
+    reason="ten_vad is installed; cannot test missing-ten_vad path",
+)
 def test_ten_vad_fails_without_sdk():
     """TenVAD should raise RuntimeError if ten_vad package is missing."""
     with pytest.raises(RuntimeError, match="TEN VAD|ten_vad"):
@@ -246,6 +250,10 @@ def test_vad_factory_explicit_krisp_fails():
         create_vad(VADConfig(backend="krisp"))
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("ten_vad") is not None,
+    reason="ten_vad is installed; cannot test missing-ten_vad path",
+)
 def test_vad_factory_explicit_ten_fails():
     """Explicitly requesting TEN without package should raise."""
     with pytest.raises(RuntimeError, match="TEN VAD|ten_vad"):
