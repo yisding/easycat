@@ -38,8 +38,8 @@ from easycat.events import (
 from easycat.session import (
     Session,
     SessionConfig,
-    _audio_bytes_likely_heard,
     _all_tts_audio_sent,
+    _audio_bytes_likely_heard,
     _estimate_text_spoken,
     _has_unclosed_markdown_delimiters,
     _split_at_sentence_boundaries,
