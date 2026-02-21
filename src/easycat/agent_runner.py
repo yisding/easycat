@@ -15,13 +15,19 @@ import enum
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from easycat.cancel import CancelToken
 from easycat.timeouts import AgentTimeoutError
 from easycat.tracing import Span, SpanStatus, TraceContext
 
 logger = logging.getLogger(__name__)
+
+# Shared constant used by AgentRunner and adapter subclasses when recording
+# an interruption in message history.
+INTERRUPTION_NOTE = (
+    "[The user interrupted the assistant's response and may not have heard all of it.]"
+)
 
 
 # ── Stream event types ──────────────────────────────────────────────
@@ -153,11 +159,9 @@ class AgentRunner:
 
     # ── Interruption handling ─────────────────────────────────
 
-    _INTERRUPTION_NOTE = (
-        "[The user interrupted the assistant's response and may not have heard all of it.]"
-    )
-
-    def _apply_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+    def _apply_interruption(
+        self, text_spoken: str = "", *, mode: Literal["truncate", "message"] = "truncate"
+    ) -> None:
         """Record an interruption in the runner's own ``_history``.
 
         * ``mode="truncate"`` — replace the last assistant entry's content
@@ -180,15 +184,15 @@ class AgentRunner:
             for entry in reversed(self._history):
                 if entry["role"] == "user":
                     break
-                if entry == {"role": "system", "content": self._INTERRUPTION_NOTE}:
+                if entry == {"role": "system", "content": INTERRUPTION_NOTE}:
                     return
-            self._history.append({"role": "system", "content": self._INTERRUPTION_NOTE})
+            self._history.append({"role": "system", "content": INTERRUPTION_NOTE})
 
     def notify_interruption(
         self,
         text_spoken: str = "",
         *,
-        mode: str = "truncate",
+        mode: Literal["truncate", "message"] = "truncate",
     ) -> None:
         """Record that the user interrupted the assistant's last response.
 
@@ -327,7 +331,7 @@ class AgentRunner:
                                     pending_tool_calls += 1
                                     yield event
                                 elif event.type == AgentStreamEventType.TOOL_RESULT:
-                                    pending_tool_calls -= 1
+                                    pending_tool_calls = max(0, pending_tool_calls - 1)
                                     yield event
                                     if pending_tool_calls <= 0:
                                         break
@@ -349,7 +353,7 @@ class AgentRunner:
                         if event.type == AgentStreamEventType.TOOL_STARTED:
                             pending_tool_calls += 1
                         elif event.type == AgentStreamEventType.TOOL_RESULT:
-                            pending_tool_calls -= 1
+                            pending_tool_calls = max(0, pending_tool_calls - 1)
                         yield event
 
                 if self._config.timeout:

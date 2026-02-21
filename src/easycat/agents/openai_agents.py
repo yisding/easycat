@@ -28,9 +28,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
-from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
+from easycat.agent_runner import (
+    INTERRUPTION_NOTE,
+    AgentStreamEvent,
+    AgentStreamEventType,
+)
 from easycat.agents.base import (
     BaseAgentAdapter,
     serialize_output,
@@ -79,15 +83,11 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
 
     # ── Interruption handling ────────────────────────────────
 
-    _INTERRUPTION_NOTE = (
-        "[The user interrupted the assistant's response and may not have heard all of it.]"
-    )
-
     def notify_interruption(
         self,
         text_spoken: str = "",
         *,
-        mode: str = "truncate",
+        mode: Literal["truncate", "message"] = "truncate",
     ) -> None:
         """Record an interruption in the OpenAI-format message history.
 
@@ -110,10 +110,10 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
                     break  # Always stop at the newest assistant entry
             if not updated:
                 self._message_history.append(
-                    {"role": "developer", "content": self._INTERRUPTION_NOTE}
+                    {"role": "developer", "content": INTERRUPTION_NOTE}
                 )
         else:
-            self._message_history.append({"role": "developer", "content": self._INTERRUPTION_NOTE})
+            self._message_history.append({"role": "developer", "content": INTERRUPTION_NOTE})
 
     # ── History patching ─────────────────────────────────────
 

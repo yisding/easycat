@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from easycat.agent_runner import AgentStreamEvent
 from easycat.cancel import CancelToken
@@ -166,7 +166,7 @@ class BaseAgentAdapter:
         self,
         text_spoken: str = "",
         *,
-        mode: str = "truncate",
+        mode: Literal["truncate", "message"] = "truncate",
     ) -> None:
         """Record that the user interrupted the assistant's last response.
 

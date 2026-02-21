@@ -1270,6 +1270,78 @@ async def test_session_barge_in_without_tool_calls_stops_immediately():
     assert len(deltas) <= 2
 
 
+@pytest.mark.asyncio
+async def test_session_barge_in_during_tts_playback():
+    """Cancellation after agent stream completes but during TTS playback
+    should still trigger notify_interruption (cancelled_during_playback path)."""
+
+    class FastAgent:
+        """Completes instantly with a full sentence."""
+
+        interruption_notified = False
+        interruption_text_spoken = ""
+        interruption_mode = ""
+
+        async def run(self, text: str) -> str:
+            return "Hello world."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world.")
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world.")
+
+        def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+            self.interruption_notified = True
+            self.interruption_text_spoken = text_spoken
+            self.interruption_mode = mode
+
+    class SlowTTS:
+        """TTS that yields audio slowly so cancel can arrive mid-playback."""
+
+        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+            for _ in range(5):
+                yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+                await asyncio.sleep(0.05)
+
+        async def stop(self) -> None:
+            pass
+
+        async def cancel(self) -> None:
+            pass
+
+    agent = FastAgent()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="hello"),
+        agent=agent,
+        tts=SlowTTS(),
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    await session.start()
+    # Wait for agent to finish and TTS to start playing
+    await asyncio.sleep(0.15)
+
+    # Cancel during TTS playback (agent stream already done)
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    assert agent.interruption_notified
+    assert agent.interruption_mode == "truncate"
+
+
 # ── Streaming with strip_markdown ──────────────────────────────────
 
 

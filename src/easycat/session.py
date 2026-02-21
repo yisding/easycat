@@ -1019,10 +1019,15 @@ class Session:
                         if not interrupted:
                             interrupted = True
                         # Let in-flight tool calls complete before stopping.
-                        # The adapter yields tool events even after cancel.
+                        # NOTE: When the agent is an AgentRunner, the runner
+                        # also drains tool calls internally — that's fine.
+                        # This session-level drain ensures EasyCat events
+                        # (ToolCallStarted/Result) are emitted to the event
+                        # bus and text processing is skipped, regardless of
+                        # the agent type.
                         if pending_tool_calls > 0:
                             if event.type == AgentStreamEventType.TOOL_RESULT:
-                                pending_tool_calls -= 1
+                                pending_tool_calls = max(0, pending_tool_calls - 1)
                                 await self.event_bus.emit(
                                     ToolCallResult(call_id=event.call_id, result=event.result)
                                 )
@@ -1098,7 +1103,7 @@ class Session:
                             ToolCallDelta(call_id=event.call_id, delta=event.text)
                         )
                     elif event.type == AgentStreamEventType.TOOL_RESULT:
-                        pending_tool_calls -= 1
+                        pending_tool_calls = max(0, pending_tool_calls - 1)
                         await self.event_bus.emit(
                             ToolCallResult(call_id=event.call_id, result=event.result)
                         )

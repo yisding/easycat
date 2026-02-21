@@ -26,9 +26,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
-from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
+from easycat.agent_runner import (
+    INTERRUPTION_NOTE,
+    AgentStreamEvent,
+    AgentStreamEventType,
+)
 from easycat.agents.base import (
     BaseAgentAdapter,
     serialize_output,
@@ -77,15 +81,11 @@ class PydanticAIAdapter(BaseAgentAdapter):
 
     # ── Interruption handling ────────────────────────────────
 
-    _INTERRUPTION_NOTE = (
-        "[The user interrupted the assistant's response and may not have heard all of it.]"
-    )
-
     def notify_interruption(
         self,
         text_spoken: str = "",
         *,
-        mode: str = "truncate",
+        mode: Literal["truncate", "message"] = "truncate",
     ) -> None:
         """Record an interruption in the PydanticAI message history.
 
@@ -116,7 +116,7 @@ class PydanticAIAdapter(BaseAgentAdapter):
                         break
 
             self._message_history.append(
-                ModelRequest(parts=[SystemPromptPart(content=self._INTERRUPTION_NOTE)])
+                ModelRequest(parts=[SystemPromptPart(content=INTERRUPTION_NOTE)])
             )
         except ImportError:
             logger.debug("pydantic_ai.messages not available; skipping interruption note")
@@ -220,7 +220,10 @@ class PydanticAIAdapter(BaseAgentAdapter):
                 is_tool_node = node_cls == "CallToolsNode"
                 if cancel_token and cancel_token.is_cancelled:
                     interrupted = True
-                    # Let CallToolsNode complete; skip ModelRequestNode
+                    # Let CallToolsNode complete; skip ModelRequestNode.
+                    # This intentionally allows a newly-arriving tool node
+                    # (discovered after cancellation) to run to completion
+                    # so that tool state remains consistent.
                     if not is_tool_node:
                         break
 
