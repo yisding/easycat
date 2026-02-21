@@ -8,7 +8,7 @@ OpenAI Agents SDK or PydanticAI agents.
 - Typed event system with an EventBus for streaming-first voice events
 - STT providers: OpenAI, Deepgram, ElevenLabs
 - TTS providers: OpenAI, Deepgram, ElevenLabs
-- VAD providers: Silero (open-source) and Krisp (commercial)
+- VAD providers: Silero (open-source), TEN VAD (open-source), and Krisp (commercial)
 - Noise reduction: RNNoise (open-source), Krisp (commercial), passthrough fallback
 - Transports: Local (sounddevice), WebSocket server, WebRTC (aiortc), Twilio Media Streams server
 - Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers
@@ -146,6 +146,7 @@ uv run python examples/local_chat.py
 Optional dependencies you may need depending on providers/transports:
 - sounddevice (LocalTransport)
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
+- ten-vad + numpy (TEN VAD; use latest ten-vad for macOS/Windows ONNX support)
 - torch (Silero VAD)
 - pyrnnoise + requests (RNNoise noise reduction backend)
 - Krisp SDK (krisp_audio)

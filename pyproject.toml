@@ -19,6 +19,7 @@ elevenlabs = ["elevenlabs>=1.0.0"]
 telephony = ["fastapi>=0.110.0", "python-multipart>=0.0.9", "twilio>=9.0.0", "uvicorn>=0.29.0"]
 local = ["sounddevice>=0.4.6"]
 rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.31.0"]
+ten-vad = ["ten-vad>=1.0.6.8", "numpy>=1.24.0"]
 smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.16.0", "transformers>=4.36.0"]
 webrtc = ["aiortc>=1.9.0", "aiohttp>=3.9.0"]
 all = [
@@ -39,6 +40,7 @@ all = [
     "numpy>=1.24.0",
     "onnxruntime>=1.16.0",
     "transformers>=4.36.0",
+    "ten-vad>=1.0.6.8",
 ]
 
 [build-system]
