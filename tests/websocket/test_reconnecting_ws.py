@@ -1,4 +1,4 @@
-"""Tests for ReconnectingWebSocket wrapper (WS8 Task 8.1)."""
+"""Tests for ReconnectingWebSocket wrapper."""
 
 from __future__ import annotations
 
@@ -278,7 +278,7 @@ class TestReconnectingWebSocket:
 
         assert messages == ["msg1"]
 
-    # ── WS8-specific tests: jitter, event bus, callbacks ───────
+    # ── Additional tests: jitter, event bus, callbacks ───────
 
     async def test_jitter_applies_to_delay(self):
         ws = self._make_ws(jitter_factor=0.5)

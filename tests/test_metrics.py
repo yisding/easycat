@@ -1,4 +1,4 @@
-"""Tests for metrics collection framework (WS8 Tasks 8.8–8.9)."""
+"""Tests for metrics collection framework."""
 
 from __future__ import annotations
 

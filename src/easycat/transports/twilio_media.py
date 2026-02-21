@@ -51,8 +51,8 @@ class TwilioTransport(_ServerTransportBase):
       - ``mark``      — playback mark acknowledgement
       - ``dtmf``      — DTMF digit pressed by caller
 
-    DTMF digits are emitted into the provided ``EventBus`` so WS6 can
-    consume them.  Audio is converted from mulaw 8 kHz to the internal PCM16
+    DTMF digits are emitted into the provided ``EventBus`` so downstream
+    consumers can handle them.  Audio is converted from mulaw 8 kHz to the internal PCM16
     format (default 16 kHz) on ingest, and back on egress.
     """
 

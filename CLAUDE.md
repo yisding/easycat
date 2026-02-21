@@ -20,19 +20,22 @@ uv run python examples/ws_server.py  # Run an example
 
 ## Architecture
 
-**Pipeline flow:** Transport (audio in) → NoiseReducer → VAD → STT → Agent → TTS → Transport (audio out)
+**Pipeline flow:** Transport (audio in) → NoiseReducer → VAD → STT → [SmartTurn] → Agent → TTS → Transport (audio out)
 
 **Key modules:**
 - `session.py` — Core orchestrator (~1000 LOC). Wires all pipeline stages, manages turn lifecycle and interruption.
 - `config.py` — `EasyCatConfig` (simplified, auto-wires OpenAI providers) and `SessionConfig` (advanced, explicit providers). `create_session()` factory builds a wired Session.
-- `events.py` — `EventBus` pub/sub with sync/async handlers. Provider-scoped events (`STTEvent`, `TTSEvent`) get mapped to EasyCat-level events by Session.
+- `events.py` — `EventBus` pub/sub with sync/async handlers. Two event layers: provider-scoped (`STTEvent`, `TTSEvent`) emitted by providers, mapped to EasyCat-level events (`STTFinal`, `TTSAudio`, `TurnStarted`, etc.) by Session.
 - `providers.py` — `@runtime_checkable` Protocol definitions for all provider interfaces (`STTProvider`, `TTSProvider`, `VADProvider`, `Transport`, `NoiseReducer`). Providers use duck typing, not inheritance.
-- `turn_manager.py` — 5-state FSM (IDLE → USER_SPEAKING → USER_PAUSED → PROCESSING → BOT_SPEAKING) with pre-roll buffering and interruption detection.
+- `turn_manager.py` — 5-state FSM (IDLE → USER_SPEAKING → USER_PAUSED → PROCESSING → BOT_SPEAKING) with pre-roll buffering and interruption detection. Supports VAD (automatic) and PUSH_TO_TALK turn modes.
 - `agent_runner.py` — Wraps agents with timeout, tracing, cancellation. Supports both simple and streaming agents.
+- `smart_turn.py` — Optional ONNX-based endpoint detection that classifies whether a user has finished speaking, enabling faster turn transitions without waiting for silence timeout.
 
 **Provider subpackages** (`stt/`, `tts/`, `transports/`, `telephony/`): one provider per file, each implementing the corresponding Protocol. Base classes (`STTBase`, `TTSBase`, `_ServerTransportBase`) provide shared plumbing.
 
 **Agent adapters** (`agents/`): `BaseAgentAdapter` provides shared history/cancellation; `OpenAIAgentsAdapter` and `PydanticAIAdapter` wrap framework-specific agents.
+
+**Dual-backend fallback:** VAD (Krisp → Silero → passthrough) and noise reduction (Krisp → RNNoise → passthrough) both try commercial backends first, then fall back to open-source, then no-op.
 
 ## Key Patterns
 
@@ -40,6 +43,8 @@ uv run python examples/ws_server.py  # Run an example
 - **Async-first** — all I/O is async; providers are async iterators
 - **Cooperative cancellation** — `CancelToken` (not exceptions) for turn/TTS cancellation
 - **Factory functions** — `create_session()`, `create_vad()`, `create_noise_reducer()`
+- **Provider registries** — `stt/factory.py` and `tts/factory.py` each have a central `_PROVIDER_TO_CONFIG` dict. To add a new STT/TTS provider: add an entry to the registry and a corresponding config dataclass.
+- **Event bus injection** — Deepgram and ElevenLabs providers require an `EventBus` injected at construction (they emit provider-scoped events). OpenAI providers do not.
 - **Noop stubs** (`stubs.py`) — `NoopSTT`, `NoopTTS`, `NoopVAD`, `NoopTransport` for test isolation
 
 ## Style

@@ -12,6 +12,11 @@ from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig
 
 
+class _DummyAgent:
+    async def run(self, text: str) -> str:
+        return text
+
+
 def test_easycat_config_requires_stt_tts():
     with pytest.raises(ValueError):
         EasyCatConfig()
@@ -43,6 +48,7 @@ def test_create_session_does_not_mutate_turn_taking_config():
     config = EasyCatConfig(
         openai_api_key="test-key",
         turn_taking=turn_cfg,
+        agent=_DummyAgent(),
     )
     try:
         create_session(config)
@@ -59,6 +65,7 @@ async def test_telephony_helpers_are_managed_by_session_lifecycle():
     config = EasyCatConfig(
         openai_api_key="test-key",
         telephony=TelephonyConfig(enable_dtmf_aggregator=True),
+        agent=_DummyAgent(),
     )
     config.smart_turn.enabled = False
 
@@ -72,11 +79,16 @@ async def test_telephony_helpers_are_managed_by_session_lifecycle():
     aggregated: list[DTMFAggregated] = []
     bus.subscribe(DTMFAggregated, lambda e: aggregated.append(e))
 
+    # Telephony helpers must be started (normally done by session.start())
+    for helper in session._telephony_helpers:
+        helper.start()
+
     await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "1"}}, bus)
     await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "#"}}, bus)
     assert aggregated
 
-    await session.shutdown()
+    for helper in session._telephony_helpers:
+        helper.stop()
 
     aggregated.clear()
     await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "1"}}, bus)

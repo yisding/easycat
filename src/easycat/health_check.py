@@ -1,4 +1,4 @@
-"""Provider health check infrastructure (WS8 Task 8.2).
+"""Provider health check infrastructure.
 
 Defines a HealthCheckable protocol and a periodic health checker that
 detects stale connections before they fail.

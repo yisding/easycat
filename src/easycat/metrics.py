@@ -1,4 +1,4 @@
-"""Metrics collection framework (WS8 Tasks 8.8–8.9).
+"""Metrics collection framework.
 
 Provides a MetricsCollector interface and in-memory implementation,
 plus helper decorators and context managers for instrumenting pipeline stages.
