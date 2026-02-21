@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any, Literal
+from typing import Any
 
 from easycat.agent_runner import (
     INTERRUPTION_NOTE,
@@ -37,7 +37,6 @@ from easycat.agent_runner import (
 )
 from easycat.agents.base import (
     BaseAgentAdapter,
-    serialize_output,
     split_replacement_by_original_parts,
 )
 from easycat.cancel import CancelToken
@@ -83,35 +82,25 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
 
     # ── Interruption handling ────────────────────────────────
 
-    def notify_interruption(
-        self,
-        text_spoken: str = "",
-        *,
-        mode: Literal["truncate", "message"] = "truncate",
-    ) -> None:
-        """Record an interruption in the OpenAI-format message history.
+    def _truncate_last_assistant_for_interruption(self, text_spoken: str) -> bool:
+        """Try truncating the latest assistant entry in OpenAI history format."""
+        replacement = self.interruption_replacement_text(text_spoken)
+        for i in range(len(self._message_history) - 1, -1, -1):
+            item = self._message_history[i]
+            role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
+            if role == "assistant":
+                if isinstance(item, dict) and "content" in item:
+                    item["content"] = replacement
+                    return True
+                if not isinstance(item, dict) and hasattr(item, "content"):
+                    item.content = replacement
+                    return True
+                break  # Always stop at the newest assistant entry
+        return False
 
-        * ``mode="truncate"`` — find the last assistant item and replace
-          its text content with *text_spoken* + ``"..."``.
-        * ``mode="message"`` — append a ``developer`` message.
-        """
-        if mode == "truncate":
-            updated = False
-            for i in range(len(self._message_history) - 1, -1, -1):
-                item = self._message_history[i]
-                role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
-                if role == "assistant":
-                    if isinstance(item, dict) and "content" in item:
-                        item["content"] = text_spoken + "..." if text_spoken else "..."
-                        updated = True
-                    elif not isinstance(item, dict) and hasattr(item, "content"):
-                        item.content = text_spoken + "..." if text_spoken else "..."
-                        updated = True
-                    break  # Always stop at the newest assistant entry
-            if not updated:
-                self._message_history.append({"role": "developer", "content": INTERRUPTION_NOTE})
-        else:
-            self._message_history.append({"role": "developer", "content": INTERRUPTION_NOTE})
+    def _append_interruption_note(self) -> None:
+        """Append an interruption note in developer-role format."""
+        self._message_history.append({"role": "developer", "content": INTERRUPTION_NOTE})
 
     # ── History patching ─────────────────────────────────────
 
@@ -177,8 +166,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
 
         result = await Runner.run(self._agent, input_data, **kwargs)
         self._message_history = result.to_input_list()
-        self._last_output = result.final_output
-        return serialize_output(result.final_output)
+        return self.serialize_and_store_output(result.final_output)
 
     # ── StreamingAgent protocol ───────────────────────────────
 
@@ -272,15 +260,8 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
 
         # Capture structured output when available
         raw_output = getattr(result, "final_output", None)
-        self._last_output = raw_output
 
-        structured_output = self.done_structured_output(raw_output)
-
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.DONE,
-            text=accumulated,
-            structured_output=structured_output,
-        )
+        yield self.done_event(text=accumulated, raw_output=raw_output)
 
 
 # ── Event mapping helpers (module-level, testable) ────────────────
