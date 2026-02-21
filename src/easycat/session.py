@@ -268,14 +268,20 @@ def _estimate_text_spoken(
     return spoken
 
 
-def _all_tts_audio_sent(tts_chunks: list[tuple[str, int, bool]], audio_bytes_sent: int) -> bool:
-    """Whether all synthesized TTS audio was sent to the transport."""
+def _all_tts_audio_delivered(
+    tts_chunks: list[tuple[str, int, bool]], audio_bytes_delivered: int
+) -> bool:
+    """Whether all synthesized TTS audio has been delivered/heard.
+
+    ``audio_bytes_delivered`` should be the estimated bytes actually
+    delivered/heard/acknowledged, not merely bytes written to the transport.
+    """
     if not tts_chunks:
         return False
     if not all(completed for _, _, completed in tts_chunks):
         return False
     total_audio = sum(max(chunk_audio, 0) for _, chunk_audio, _ in tts_chunks)
-    return total_audio > 0 and audio_bytes_sent >= total_audio
+    return total_audio > 0 and audio_bytes_delivered >= total_audio
 
 
 def _audio_bytes_likely_heard(
@@ -694,6 +700,8 @@ class Session:
         self._turn_playback_mark_to_bytes: dict[str, int] = {}
         self._turn_playback_ack_log: deque[tuple[float, int]] = deque()
         self._playback_mark_seq: int = 0
+        self._playback_mark_bytes_interval: int = 4_000  # throttle: ~250ms at 16kHz/16-bit
+        self._bytes_since_last_mark: int = 0
         self._last_barge_in_time: float | None = None
 
         self._playback_ack_transport: PlaybackAckTransport | None = None
@@ -918,6 +926,7 @@ class Session:
         self._turn_audio_send_log.clear()
         self._turn_playback_mark_to_bytes.clear()
         self._turn_playback_ack_log.clear()
+        self._bytes_since_last_mark = 0
         self._last_barge_in_time = None
 
         # Initialize tracing for this turn
@@ -1375,6 +1384,14 @@ class Session:
             except Exception:
                 logger.exception("TTS streaming error")
 
+            # Drain any queued-but-unsynthesized text so that
+            # _all_tts_audio_delivered sees them as incomplete and
+            # does not suppress notify_interruption.
+            while not tts_queue.empty():
+                remaining = tts_queue.get_nowait()
+                if remaining is not None:
+                    tts_chunks.append((remaining, 0, False))
+
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 await self._turn_manager.bot_stopped_speaking()
                 self._spans.finish("turn")
@@ -1432,6 +1449,8 @@ class Session:
             self.agent, "notify_interruption"
         ):
             cutoff_time = self._last_barge_in_time
+            if cutoff_time is None and token is not None:
+                cutoff_time = token.cancelled_at
             if cutoff_time is not None and self._interruption_latency_compensation_ms > 0:
                 cutoff_time -= self._interruption_latency_compensation_ms / 1000.0
             heard_bytes = _audio_bytes_likely_heard_hybrid(
@@ -1442,7 +1461,7 @@ class Session:
                 ack_tail_cap_ms=self._interruption_ack_tail_cap_ms,
             )
 
-            if not _all_tts_audio_sent(tts_chunks, heard_bytes):
+            if not _all_tts_audio_delivered(tts_chunks, heard_bytes):
                 text_spoken = _estimate_text_spoken(
                     [(text, audio_bytes) for text, audio_bytes, _ in tts_chunks],
                     heard_bytes,
@@ -1498,7 +1517,13 @@ class Session:
                 sent_size = len(chunk.data)
                 self._turn_audio_bytes_sent += sent_size
                 self._turn_audio_send_log.append((time.monotonic(), sent_size, chunk.duration_ms))
-                if sent_size > 0 and self._playback_ack_transport is not None:
+                self._bytes_since_last_mark += sent_size
+                if (
+                    sent_size > 0
+                    and self._playback_ack_transport is not None
+                    and self._bytes_since_last_mark >= self._playback_mark_bytes_interval
+                ):
+                    self._bytes_since_last_mark = 0
                     self._playback_mark_seq += 1
                     mark_name = f"ec_playback_{self._playback_mark_seq}"
                     self._turn_playback_mark_to_bytes[mark_name] = self._turn_audio_bytes_sent
@@ -1509,6 +1534,19 @@ class Session:
                         logger.debug("Failed to send playback mark", exc_info=True)
             except Exception:
                 logger.exception("Failed to send audio to transport")
+
+        # Send a final mark for any trailing bytes that didn't reach the
+        # throttle threshold, so the last playback position gets acked.
+        if self._bytes_since_last_mark > 0 and self._playback_ack_transport is not None:
+            self._bytes_since_last_mark = 0
+            self._playback_mark_seq += 1
+            mark_name = f"ec_playback_{self._playback_mark_seq}"
+            self._turn_playback_mark_to_bytes[mark_name] = self._turn_audio_bytes_sent
+            try:
+                await self._playback_ack_transport.send_playback_mark(name=mark_name)
+            except Exception:
+                self._turn_playback_mark_to_bytes.pop(mark_name, None)
+                logger.debug("Failed to send playback mark", exc_info=True)
 
     def _on_playback_mark_ack(self, event: PlaybackMarkAck) -> None:
         """Track acknowledged playout byte positions for the active turn."""

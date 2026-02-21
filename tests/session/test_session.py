@@ -500,6 +500,8 @@ async def test_session_event_bus_accessible():
 async def test_playback_mark_names_are_unique_across_turns():
     transport = FakePlaybackAckTransport()
     session = Session(_full_config(transport=transport))
+    # Use a small interval so a single test chunk triggers a mark.
+    session._playback_mark_bytes_interval = 1
 
     await session._outbound_queue.put(_make_chunk())
     await session._drain_outbound_audio()

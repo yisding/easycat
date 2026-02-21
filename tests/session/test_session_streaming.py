@@ -38,7 +38,7 @@ from easycat.events import (
 from easycat.session import (
     Session,
     SessionConfig,
-    _all_tts_audio_sent,
+    _all_tts_audio_delivered,
     _audio_bytes_acknowledged,
     _audio_bytes_likely_heard,
     _audio_bytes_likely_heard_hybrid,
@@ -382,24 +382,24 @@ def test_estimate_text_spoken_skips_zero_audio_chunks():
     assert _estimate_text_spoken(chunks, 640) == "First. Third."
 
 
-def test_all_tts_audio_sent():
+def test_all_tts_audio_delivered():
     chunks = [("Hello. ", 320, True), ("How are you?", 640, True)]
 
-    assert not _all_tts_audio_sent([], 960)
-    assert not _all_tts_audio_sent(chunks, 959)
-    assert _all_tts_audio_sent(chunks, 960)
-    assert _all_tts_audio_sent(chunks, 9999)
+    assert not _all_tts_audio_delivered([], 960)
+    assert not _all_tts_audio_delivered(chunks, 959)
+    assert _all_tts_audio_delivered(chunks, 960)
+    assert _all_tts_audio_delivered(chunks, 9999)
 
 
-def test_all_tts_audio_sent_ignores_non_positive_chunks():
+def test_all_tts_audio_delivered_ignores_non_positive_chunks():
     chunks = [("First.", 320, True), ("Silent", 0, True), ("Oops", -20, True)]
-    assert not _all_tts_audio_sent(chunks, 319)
-    assert _all_tts_audio_sent(chunks, 320)
+    assert not _all_tts_audio_delivered(chunks, 319)
+    assert _all_tts_audio_delivered(chunks, 320)
 
 
-def test_all_tts_audio_sent_requires_completed_synthesis():
+def test_all_tts_audio_delivered_requires_completed_synthesis():
     chunks = [("Hello", 320, False)]
-    assert not _all_tts_audio_sent(chunks, 320)
+    assert not _all_tts_audio_delivered(chunks, 320)
 
 
 def test_audio_bytes_likely_heard_without_cutoff_uses_all_bytes():
