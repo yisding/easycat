@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from easycat.agent_runner import AgentStreamEvent
 from easycat.cancel import CancelToken
@@ -159,6 +159,35 @@ class BaseAgentAdapter:
         first call or after ``clear_history()``.
         """
         return self._last_output
+
+    # ── Interruption handling ────────────────────────────────
+
+    def notify_interruption(
+        self,
+        text_spoken: str = "",
+        *,
+        mode: Literal["truncate", "message"] = "truncate",
+    ) -> None:
+        """Record that the user interrupted the assistant's last response.
+
+        Called by :class:`easycat.Session` after a barge-in when the agent
+        stream has been drained (tool calls completed).
+
+        Parameters
+        ----------
+        text_spoken:
+            The portion of the assistant's response that was approximately
+            delivered to the user before the interruption.
+        mode:
+            ``"truncate"`` (default) — replace the last assistant message
+            with ``text_spoken + "..."`` so the model sees what was heard.
+            ``"message"`` — append an explicit system/developer message
+            noting the interruption (requires model support for interleaved
+            system messages).
+
+        Subclasses override to apply the note in the appropriate format
+        for their framework.  The default implementation is a no-op.
+        """
 
     # ── Protocol methods (subclasses must override) ───────────
 

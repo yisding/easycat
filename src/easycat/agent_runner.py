@@ -15,13 +15,19 @@ import enum
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from easycat.cancel import CancelToken
 from easycat.timeouts import AgentTimeoutError
 from easycat.tracing import Span, SpanStatus, TraceContext
 
 logger = logging.getLogger(__name__)
+
+# Shared constant used by AgentRunner and adapter subclasses when recording
+# an interruption in message history.
+INTERRUPTION_NOTE = (
+    "[The user interrupted the assistant's response and may not have heard all of it.]"
+)
 
 
 # ── Stream event types ──────────────────────────────────────────────
@@ -151,6 +157,59 @@ class AgentRunner:
         """Clear recorded tracing spans."""
         self._spans.clear()
 
+    # ── Interruption handling ─────────────────────────────────
+
+    def _apply_interruption(
+        self, text_spoken: str = "", *, mode: Literal["truncate", "message"] = "truncate"
+    ) -> None:
+        """Record an interruption in the runner's own ``_history``.
+
+        * ``mode="truncate"`` — replace the last assistant entry's content
+          with *text_spoken* + ``"..."`` so the model sees only what was
+          actually delivered to the user.
+        * ``mode="message"`` — append an explicit ``system`` message.
+        """
+        if mode == "truncate":
+            # Walk backwards to find the last assistant entry and truncate.
+            for i in range(len(self._history) - 1, -1, -1):
+                if self._history[i].get("role") == "assistant":
+                    self._history[i] = {
+                        "role": "assistant",
+                        "content": text_spoken + "..." if text_spoken else "...",
+                    }
+                    break
+        else:
+            # Deduplicate: don't add a second note if one already follows
+            # the last user message.
+            for entry in reversed(self._history):
+                if entry["role"] == "user":
+                    break
+                if entry == {"role": "system", "content": INTERRUPTION_NOTE}:
+                    return
+            self._history.append({"role": "system", "content": INTERRUPTION_NOTE})
+
+    def notify_interruption(
+        self,
+        text_spoken: str = "",
+        *,
+        mode: Literal["truncate", "message"] = "truncate",
+    ) -> None:
+        """Record that the user interrupted the assistant's last response.
+
+        Called by :class:`Session` after a barge-in.  Delegates to the
+        underlying agent if it supports ``notify_interruption``, then
+        applies the note to the runner's own history.
+        """
+        if hasattr(self._agent, "notify_interruption"):
+            try:
+                self._agent.notify_interruption(text_spoken, mode=mode)
+            except Exception:
+                logger.debug(
+                    "Error in underlying agent.notify_interruption",
+                    exc_info=True,
+                )
+        self._apply_interruption(text_spoken, mode=mode)
+
     def replace_last_assistant_text(self, text: str) -> None:
         """Replace the text content of the last assistant message in history.
 
@@ -260,16 +319,41 @@ class AgentRunner:
 
                 async def _iter_stream() -> AsyncIterator[AgentStreamEvent]:
                     nonlocal accumulated
+                    pending_tool_calls = 0
+                    interrupted = False
                     async for event in stream:
                         if cancel_token and cancel_token.is_cancelled:
-                            # Try to close the stream gracefully
-                            if hasattr(stream, "aclose"):
-                                await stream.aclose()
-                            break
+                            if not interrupted:
+                                interrupted = True
+                            # Let in-flight tool calls complete before stopping
+                            if pending_tool_calls > 0:
+                                if event.type == AgentStreamEventType.TOOL_STARTED:
+                                    pending_tool_calls += 1
+                                    yield event
+                                elif event.type == AgentStreamEventType.TOOL_RESULT:
+                                    pending_tool_calls = max(0, pending_tool_calls - 1)
+                                    yield event
+                                    if pending_tool_calls <= 0:
+                                        break
+                                elif event.type == AgentStreamEventType.TOOL_DELTA:
+                                    yield event
+                                elif event.type == AgentStreamEventType.DONE:
+                                    if event.text:
+                                        accumulated = event.text
+                                    break
+                                # Skip text deltas during drain
+                                continue
+                            else:
+                                # No tool calls in flight — stop immediately
+                                break
                         if event.type == AgentStreamEventType.TEXT_DELTA:
                             accumulated += event.text
                         elif event.type == AgentStreamEventType.DONE and event.text:
                             accumulated = event.text
+                        if event.type == AgentStreamEventType.TOOL_STARTED:
+                            pending_tool_calls += 1
+                        elif event.type == AgentStreamEventType.TOOL_RESULT:
+                            pending_tool_calls = max(0, pending_tool_calls - 1)
                         yield event
 
                 if self._config.timeout:
@@ -309,7 +393,9 @@ class AgentRunner:
             self._history.pop()
             raise AgentTimeoutError(self._config.timeout or 0)
         except GeneratorExit:
-            # Generator was closed by caller (e.g., barge-in) — not an error
+            # Generator was closed by caller (e.g., barge-in) — not an error.
+            # The caller is responsible for calling notify_interruption() to
+            # record the interruption in history.
             if exec_span:
                 exec_span.finish(SpanStatus.CANCELLED)
             self._history.append({"role": "assistant", "content": accumulated})
@@ -321,9 +407,10 @@ class AgentRunner:
             self._history.pop()
             raise
 
+        interrupted = cancel_token and cancel_token.is_cancelled
         if exec_span:
-            exec_span.finish(SpanStatus.OK)
-        if self._config.enable_tracing:
+            exec_span.finish(SpanStatus.CANCELLED if interrupted else SpanStatus.OK)
+        if self._config.enable_tracing and not interrupted:
             agent_to_tts = self._record_span("agent_to_tts")
             agent_to_tts.finish(SpanStatus.OK)
         self._history.append({"role": "assistant", "content": accumulated})
