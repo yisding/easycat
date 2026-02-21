@@ -104,7 +104,11 @@ class PydanticAIAdapter(BaseAgentAdapter):
                     if isinstance(msg, ModelResponse):
                         for part in msg.parts:
                             if type(part).__name__ == "TextPart":
-                                part.content = text_spoken + "..." if text_spoken else "..."
+                                replacement = text_spoken + "..." if text_spoken else "..."
+                                try:
+                                    part.content = replacement
+                                except (AttributeError, TypeError):
+                                    object.__setattr__(part, "content", replacement)
                                 return
                         # No TextPart found (e.g. tool-call-only response);
                         # fall back to message mode so the interruption is
