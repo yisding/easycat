@@ -119,7 +119,7 @@ from easycat.stt import (
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
-from easycat.vad import KrispVAD, SileroVAD, VADConfig, create_vad
+from easycat.vad import KrispVAD, SileroVAD, TenVAD, VADConfig, create_vad
 
 # ── Transport implementations ────────────────────────────────────
 
@@ -224,6 +224,7 @@ __all__ = [
     # VAD
     "SileroVAD",
     "KrispVAD",
+    "TenVAD",
     "VADConfig",
     "create_vad",
     # Noise reduction

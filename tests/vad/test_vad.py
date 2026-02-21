@@ -11,6 +11,7 @@ from easycat.events import VADStartSpeaking
 from easycat.vad import (
     KrispVAD,
     SileroVAD,
+    TenVAD,
     VADConfig,
     create_vad,
 )
@@ -118,6 +119,56 @@ async def test_krisp_vad_process_mocked():
         del sys.modules["krisp_audio"]
 
 
+# ── TenVAD tests ────────────────────────────────────────────────────
+
+
+def test_ten_vad_fails_without_sdk():
+    """TenVAD should raise RuntimeError if ten_vad package is missing."""
+    with pytest.raises(RuntimeError, match="TEN VAD|ten_vad"):
+        TenVAD()
+
+
+@pytest.mark.asyncio
+async def test_ten_vad_process_mocked():
+    """TenVAD with mocked SDK should process audio."""
+    mock_ten_vad = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.process.return_value = (0.9, 1)
+    mock_ten_vad.TenVad.return_value = mock_instance
+
+    import sys
+
+    sys.modules["ten_vad"] = mock_ten_vad
+
+    import types
+
+    class _FakeArray:
+        def copy(self):
+            return self
+
+    fake_numpy = types.SimpleNamespace(
+        int16="int16",
+        frombuffer=lambda data, dtype: _FakeArray(),
+    )
+    sys.modules["numpy"] = fake_numpy
+
+    try:
+        vad = TenVAD()
+        vad._min_speech_duration_ms = 0
+        vad._threshold = 0.5
+
+        chunk = _make_chunk(1000)
+        events = []
+        async for event in vad.process(chunk):
+            events.append(event)
+
+        assert any(isinstance(e, VADStartSpeaking) for e in events)
+        assert mock_instance.process.call_count == 2
+    finally:
+        del sys.modules["ten_vad"]
+        del sys.modules["numpy"]
+
+
 @pytest.mark.asyncio
 async def test_krisp_vad_silence():
     """KrispVAD should not emit events for silence."""
@@ -195,6 +246,12 @@ def test_vad_factory_explicit_krisp_fails():
         create_vad(VADConfig(backend="krisp"))
 
 
+def test_vad_factory_explicit_ten_fails():
+    """Explicitly requesting TEN without package should raise."""
+    with pytest.raises(RuntimeError, match="TEN VAD|ten_vad"):
+        create_vad(VADConfig(backend="ten"))
+
+
 def test_vad_factory_krisp_preferred():
     """In auto mode, Krisp should be tried first."""
     mock_module = MagicMock()
@@ -209,6 +266,28 @@ def test_vad_factory_krisp_preferred():
         assert isinstance(vad, KrispVAD)
     finally:
         del sys.modules["krisp_audio"]
+
+
+def test_vad_factory_ten_fallback_before_silero():
+    """In auto mode, TEN should be used when Krisp is unavailable."""
+    mock_ten_vad = MagicMock()
+    mock_ten_vad.TenVad.return_value = MagicMock()
+
+    import sys
+
+    sys.modules["ten_vad"] = mock_ten_vad
+
+    import types
+
+    fake_numpy = types.SimpleNamespace(int16="int16", frombuffer=lambda data, dtype: data)
+    sys.modules["numpy"] = fake_numpy
+
+    try:
+        vad = create_vad(VADConfig(backend="auto"))
+        assert isinstance(vad, TenVAD)
+    finally:
+        del sys.modules["ten_vad"]
+        del sys.modules["numpy"]
 
 
 def test_vad_factory_applies_config():
