@@ -48,6 +48,7 @@ from easycat.session import Session, SessionConfig, TurnState
 from easycat.turn_manager import TurnMode
 from easycat.config import (
     EasyCatConfig,
+    EventLoggingConfig,
     MetricsConfig,
     TelephonyConfig,
     TracingConfig,
@@ -146,6 +147,7 @@ __all__ = [
     "TurnState",
     "TurnMode",
     "EasyCatConfig",
+    "EventLoggingConfig",
     "MetricsConfig",
     "TelephonyConfig",
     "TracingConfig",
