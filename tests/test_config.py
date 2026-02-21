@@ -4,6 +4,7 @@ import pytest
 
 from easycat import EasyCatConfig, create_session
 from easycat.agent_runner import AgentRunner
+from easycat.agents import OpenAIAgentsAdapter, PydanticAIAdapter
 from easycat.config import TelephonyConfig
 from easycat.events import DTMFAggregated
 from easycat.stt.openai_provider import OpenAISTTConfig
@@ -41,6 +42,36 @@ def test_easycat_config_wraps_agent():
             pytest.skip("No VAD backend available")
         raise
     assert isinstance(session.agent, AgentRunner)
+
+
+def test_create_session_auto_adapts_openai_agents():
+    OpenAIAgent = type("Agent", (), {"__module__": "agents.core"})
+
+    config = EasyCatConfig(openai_api_key="test-key", agent=OpenAIAgent())
+    try:
+        session = create_session(config)
+    except RuntimeError as exc:
+        if "No VAD backend available" in str(exc):
+            pytest.skip("No VAD backend available")
+        raise
+
+    assert isinstance(session.agent, AgentRunner)
+    assert isinstance(session.agent._agent, OpenAIAgentsAdapter)
+
+
+def test_create_session_auto_adapts_pydantic_agents():
+    PydanticAgent = type("Agent", (), {"__module__": "pydantic_ai.agent"})
+
+    config = EasyCatConfig(openai_api_key="test-key", agent=PydanticAgent())
+    try:
+        session = create_session(config)
+    except RuntimeError as exc:
+        if "No VAD backend available" in str(exc):
+            pytest.skip("No VAD backend available")
+        raise
+
+    assert isinstance(session.agent, AgentRunner)
+    assert isinstance(session.agent._agent, PydanticAIAdapter)
 
 
 def test_create_session_does_not_mutate_turn_taking_config():
