@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from easycat.agents import OpenAIAgentsAdapter, PydanticAIAdapter
+import pytest
+
+from easycat.agents import PydanticAIAdapter
 from easycat.agents.factory import auto_adapt_agent
 
 
@@ -19,13 +21,18 @@ def test_auto_adapt_agent_keeps_existing_adapter():
     assert auto_adapt_agent(adapter) is adapter
 
 
-def test_auto_adapt_agent_wraps_openai_agents_by_module_name():
-    OpenAIAgent = type("Agent", (), {"__module__": "agents.core"})
-    adapted = auto_adapt_agent(OpenAIAgent())
+def test_auto_adapt_agent_wraps_openai_agents():
+    agents_mod = pytest.importorskip("agents")
+    from easycat.agents import OpenAIAgentsAdapter
+
+    raw = agents_mod.Agent(name="test", instructions="hi")
+    adapted = auto_adapt_agent(raw)
     assert isinstance(adapted, OpenAIAgentsAdapter)
 
 
-def test_auto_adapt_agent_wraps_pydantic_agents_by_module_name():
-    PydanticAgent = type("Agent", (), {"__module__": "pydantic_ai.agent"})
-    adapted = auto_adapt_agent(PydanticAgent())
+def test_auto_adapt_agent_wraps_pydantic_agents():
+    pydantic_ai_mod = pytest.importorskip("pydantic_ai")
+
+    raw = pydantic_ai_mod.Agent("openai:gpt-4o-mini")
+    adapted = auto_adapt_agent(raw)
     assert isinstance(adapted, PydanticAIAdapter)

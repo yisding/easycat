@@ -122,13 +122,13 @@ def create_session(config: EasyCatConfig) -> Session:
     noise_reducer = create_noise_reducer(config.noise_reduction)
     transport = _create_transport(config.transport, event_bus)
 
-    agent = config.agent or NoopAgent()
     if config.agent is not None:
-        agent = auto_adapt_agent(agent)
-
-    if config.wrap_agent and config.agent is not None:
-        runner_cfg = config.agent_runner or AgentRunnerConfig()
-        agent = AgentRunner(agent, runner_cfg)
+        agent = auto_adapt_agent(config.agent)
+        if config.wrap_agent:
+            runner_cfg = config.agent_runner or AgentRunnerConfig()
+            agent = AgentRunner(agent, runner_cfg)
+    else:
+        agent = NoopAgent()
 
     metrics = _create_metrics(config.metrics)
     tracer = _create_tracer(config.tracing)

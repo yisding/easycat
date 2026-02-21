@@ -45,9 +45,10 @@ def test_easycat_config_wraps_agent():
 
 
 def test_create_session_auto_adapts_openai_agents():
-    OpenAIAgent = type("Agent", (), {"__module__": "agents.core"})
+    agents_mod = pytest.importorskip("agents")
 
-    config = EasyCatConfig(openai_api_key="test-key", agent=OpenAIAgent())
+    raw = agents_mod.Agent(name="test", instructions="hi")
+    config = EasyCatConfig(openai_api_key="test-key", agent=raw)
     try:
         session = create_session(config)
     except RuntimeError as exc:
@@ -60,9 +61,10 @@ def test_create_session_auto_adapts_openai_agents():
 
 
 def test_create_session_auto_adapts_pydantic_agents():
-    PydanticAgent = type("Agent", (), {"__module__": "pydantic_ai.agent"})
+    pydantic_ai_mod = pytest.importorskip("pydantic_ai")
 
-    config = EasyCatConfig(openai_api_key="test-key", agent=PydanticAgent())
+    raw = pydantic_ai_mod.Agent("openai:gpt-4o-mini")
+    config = EasyCatConfig(openai_api_key="test-key", agent=raw)
     try:
         session = create_session(config)
     except RuntimeError as exc:

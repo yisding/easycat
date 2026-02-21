@@ -24,10 +24,20 @@ def auto_adapt_agent(agent: Any) -> Any:
     if isinstance(agent, BaseAgentAdapter):
         return agent
 
-    module_name = type(agent).__module__
-    if module_name.startswith("pydantic_ai"):
-        return PydanticAIAdapter(agent)
-    if module_name.startswith("agents"):
-        return OpenAIAgentsAdapter(agent)
-    return agent
+    try:
+        from pydantic_ai import Agent as PydanticAgent
 
+        if isinstance(agent, PydanticAgent):
+            return PydanticAIAdapter(agent)
+    except ImportError:
+        pass
+
+    try:
+        from agents import Agent as OpenAIAgent  # type: ignore[import-untyped]
+
+        if isinstance(agent, OpenAIAgent):
+            return OpenAIAgentsAdapter(agent)
+    except ImportError:
+        pass
+
+    return agent
