@@ -35,7 +35,12 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.session import Session, SessionConfig, _split_at_sentence_boundaries
+from easycat.session import (
+    Session,
+    SessionConfig,
+    _has_unclosed_markdown_delimiters,
+    _split_at_sentence_boundaries,
+)
 from easycat.turn_manager import TurnManagerConfig
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
@@ -317,6 +322,35 @@ def test_split_chinese_sentence():
     ready, remaining = _split_at_sentence_boundaries(text)
     assert ready == "你好。今天天气不错。"
     assert remaining == "继续"
+
+
+def test_markdown_unclosed_single_italic_asterisk():
+    assert _has_unclosed_markdown_delimiters("*First sentence. Second sentence")
+    assert not _has_unclosed_markdown_delimiters("*First sentence. Second sentence*")
+
+
+def test_markdown_unclosed_single_italic_underscore():
+    assert _has_unclosed_markdown_delimiters("_First sentence. Second sentence")
+    assert not _has_unclosed_markdown_delimiters("_First sentence. Second sentence_")
+    assert not _has_unclosed_markdown_delimiters("Use my_variable_name here.")
+
+
+def test_markdown_unclosed_link_or_image_delimiters():
+    assert _has_unclosed_markdown_delimiters("See [OpenAI")
+    assert _has_unclosed_markdown_delimiters("See [OpenAI]")
+    assert _has_unclosed_markdown_delimiters("See [OpenAI](https://openai.com/docs")
+    assert _has_unclosed_markdown_delimiters("See ![diagram](https://img.example.com/plot")
+    assert not _has_unclosed_markdown_delimiters("See [OpenAI](https://openai.com/docs).")
+    assert not _has_unclosed_markdown_delimiters(
+        "See [Function](https://en.wikipedia.org/wiki/Function_(mathematics))."
+    )
+
+
+def test_markdown_delimiters_inside_inline_code_do_not_block_streaming():
+    assert not _has_unclosed_markdown_delimiters("Literal `**` should not block.")
+    assert not _has_unclosed_markdown_delimiters("Literal `__` should not block.")
+    assert not _has_unclosed_markdown_delimiters("Literal `~~` should not block.")
+    assert _has_unclosed_markdown_delimiters("Literal `**` and **still open")
 
 
 # ── Session with basic agent (backward compatibility) ──────────────
@@ -750,6 +784,93 @@ async def test_streaming_flushes_final_buffer_to_tts():
 
 
 @pytest.mark.asyncio
+async def test_streaming_delta_only_still_emits_final_and_flushes_tts():
+    class DeltaOnlyAgent:
+        async def run(self, text: str) -> str:
+            return "Hello world"
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world")
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="hello"),
+        agent=DeltaOnlyAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.2)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["Hello world"]
+    assert len(finals) == 1
+    assert finals[0].text == "Hello world"
+
+
+@pytest.mark.asyncio
+async def test_streaming_done_flushes_tts_before_stream_cleanup_finishes():
+    class DelayedAfterDoneAgent:
+        async def run(self, text: str) -> str:
+            return "Hello world"
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world")
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world")
+            await asyncio.sleep(0.3)
+
+    class ObservableFakeTTS(FakeTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+            self.started.set()
+            async for event in super().synthesize(text):
+                yield event
+
+    tts = ObservableFakeTTS()
+    session = Session(
+        SessionConfig(
+            agent=DelayedAfterDoneAgent(),
+            tts=tts,
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    task = asyncio.create_task(session._run_streaming_agent("hello", token=None))
+    await asyncio.wait_for(tts.started.wait(), timeout=0.2)
+    await task
+
+    assert tts.synthesized_texts == ["Hello world"]
+
+
+@pytest.mark.asyncio
 async def test_full_streaming_turn_event_order():
     """Verify the complete event ordering in a streaming turn."""
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
@@ -803,3 +924,434 @@ async def test_full_streaming_turn_event_order():
     assert sf_idx < af_idx
     assert af_idx < bs_idx or bs_idx < af_idx  # TTS may start before AgentFinal
     assert bs_idx < be_idx
+
+
+# ── Streaming with strip_markdown ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_tts_receives_clean_text():
+    """Markdown should be stripped from TTS chunks and AgentFinal when enabled."""
+
+    class MarkdownStreamingAgent:
+        async def run(self, text: str) -> str:
+            return "Go to **Settings** first. Then click *Security* next."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            # Stream the markdown response in realistic token-size deltas
+            chunks = [
+                "Go to **Settings",
+                "** first. ",
+                "Then click *Security",
+                "* next.",
+            ]
+            for chunk in chunks:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            full = "Go to **Settings** first. Then click *Security* next."
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="help"),
+        agent=MarkdownStreamingAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    # TTS should have received text with no markdown artefacts
+    joined_tts = " ".join(tts.synthesized_texts)
+    assert "**" not in joined_tts
+    assert "*Security*" not in joined_tts
+    assert "Settings" in joined_tts
+    assert "Security" in joined_tts
+
+    # AgentFinal event should also carry stripped text
+    assert len(finals) == 1
+    assert "**" not in finals[0].text
+    assert "Settings" in finals[0].text
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_normalizes_short_code_spans_for_tts():
+    class CodeStreamingAgent:
+        async def run(self, text: str) -> str:
+            return "Call `__init__`. Then run `print()`."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            chunks = ["Call `__init__`. ", "Then run `print()`."]
+            for chunk in chunks:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="Call `__init__`. Then run `print()`.",
+            )
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="help"),
+        agent=CodeStreamingAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    joined_tts = " ".join(tts.synthesized_texts)
+    assert "dunder init" in joined_tts
+    assert "print open paren close paren" in joined_tts
+    assert "`" not in joined_tts
+
+    assert len(finals) == 1
+    assert "dunder init" in finals[0].text
+    assert "print open paren close paren" in finals[0].text
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_preserves_chunk_boundary_spaces():
+    """Chunk-boundary spaces should not be removed by incremental stripping."""
+
+    class BoundarySpaceAgent:
+        async def run(self, text: str) -> str:
+            return "Then click Security."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            for chunk in ["Then ", "click Security."]:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Then click Security.")
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="test"),
+        agent=BoundarySpaceAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["Then click Security."]
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_cross_sentence_bold():
+    """Bold spanning two sentences should still be stripped correctly."""
+
+    class CrossSentenceBoldAgent:
+        async def run(self, text: str) -> str:
+            return "**This is important. Very important.** Got it?"
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            chunks = ["**This is important. ", "Very important.** Got it?"]
+            for chunk in chunks:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            full = "**This is important. Very important.** Got it?"
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="test"),
+        agent=CrossSentenceBoldAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    # TTS must not contain any stray ** markers
+    joined_tts = " ".join(tts.synthesized_texts)
+    assert "**" not in joined_tts
+    assert "important" in joined_tts.lower()
+
+    # AgentFinal should be fully stripped
+    assert len(finals) == 1
+    assert "**" not in finals[0].text
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_unclosed_bold_multiple_sentences():
+    """Unclosed markdown across chunks should not drop earlier stripped text."""
+
+    class UnclosedBoldAgent:
+        async def run(self, text: str) -> str:
+            return "**First sentence. Second sentence.** Third sentence."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            chunks = ["**First sentence. Second sentence.", "** Third sentence."]
+            for chunk in chunks:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="**First sentence. Second sentence.** Third sentence.",
+            )
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="test"),
+        agent=UnclosedBoldAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    joined_tts = " ".join(tts.synthesized_texts)
+    assert "**" not in joined_tts
+    assert "First sentence." in joined_tts
+    assert "Second sentence." in joined_tts
+    assert "Third sentence." in joined_tts
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_unclosed_italic_multiple_sentences():
+    """Unclosed single-italic markdown should defer flushing until closed."""
+
+    class UnclosedItalicAgent:
+        async def run(self, text: str) -> str:
+            return "*First sentence. Second sentence.* Third sentence."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            chunks = ["*First sentence. Second sentence.", "* Third sentence."]
+            for chunk in chunks:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="*First sentence. Second sentence.* Third sentence.",
+            )
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="test"),
+        agent=UnclosedItalicAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    joined_tts = " ".join(tts.synthesized_texts)
+    assert "*" not in joined_tts
+    assert "First sentence." in joined_tts
+    assert "Second sentence." in joined_tts
+    assert "Third sentence." in joined_tts
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_unclosed_link_multiple_sentences():
+    """Unclosed markdown links across chunks should not leak link/url artefacts."""
+
+    class UnclosedLinkAgent:
+        async def run(self, text: str) -> str:
+            return "See [OpenAI. Next sentence.](https://openai.com/docs) Last sentence."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            chunks = [
+                "See [OpenAI. Next sentence.",
+                "](https://openai.com/docs) Last sentence.",
+            ]
+            for chunk in chunks:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="See [OpenAI. Next sentence.](https://openai.com/docs) Last sentence.",
+            )
+
+    tts = FakeTTS()
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    config = SessionConfig(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="test"),
+        agent=UnclosedLinkAgent(),
+        tts=tts,
+        noise_reducer=FakeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        strip_markdown=True,
+    )
+    session = Session(config)
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    joined_tts = " ".join(tts.synthesized_texts)
+    assert "https://openai.com/docs" in joined_tts
+    assert "](" not in joined_tts
+    assert "OpenAI." in joined_tts
+    assert "Next sentence." in joined_tts
+    assert "Last sentence." in joined_tts
+
+    assert len(finals) == 1
+    assert "https://openai.com/docs" in finals[0].text
+    assert "](" not in finals[0].text
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_failed_turn_does_not_rewrite_prior_history():
+    """Failed streaming turns must not patch prior assistant history entries."""
+
+    class FlakyMarkdownAgent:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def run(self, text: str) -> str:
+            return "unused"
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            self.calls += 1
+            if self.calls == 1:
+                full = "First **answer**."
+                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=full)
+                yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+                return
+
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.TEXT_DELTA,
+                text="[overwritten](https://example.com)",
+            )
+            raise RuntimeError("agent failed mid-stream")
+
+    runner = AgentRunner(FlakyMarkdownAgent())
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="ignored"),
+            agent=runner,
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            strip_markdown=True,
+        )
+    )
+
+    await session._run_streaming_agent("first", token=None)
+    assert runner.history[-1]["role"] == "assistant"
+    assert runner.history[-1]["content"] == "First answer."
+    history_after_success = [entry.copy() for entry in runner.history]
+
+    await session._run_streaming_agent("second", token=None)
+    assert runner.history == history_after_success

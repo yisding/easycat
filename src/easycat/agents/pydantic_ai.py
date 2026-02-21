@@ -29,7 +29,11 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
-from easycat.agents.base import BaseAgentAdapter, serialize_output
+from easycat.agents.base import (
+    BaseAgentAdapter,
+    serialize_output,
+    split_replacement_by_original_parts,
+)
 from easycat.cancel import CancelToken
 
 logger = logging.getLogger(__name__)
@@ -70,6 +74,43 @@ class PydanticAIAdapter(BaseAgentAdapter):
         self._agent = agent
         self._deps = deps
         self._model_settings = model_settings
+
+    # ── History patching ─────────────────────────────────────
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Replace the text in the last assistant (model response) message.
+
+        PydanticAI history consists of ``ModelRequest`` / ``ModelResponse``
+        objects. Walk backwards to find the last ``ModelResponse`` and
+        patch ``TextPart`` content while preserving part granularity.
+        """
+        for msg in reversed(self._message_history):
+            cls_name = type(msg).__name__
+            if cls_name == "ModelResponse":
+                parts = getattr(msg, "parts", [])
+                text_parts: list[Any] = []
+                original_segments: list[str] = []
+                for part in parts:
+                    if type(part).__name__ == "TextPart" and hasattr(part, "content"):
+                        text_parts.append(part)
+                        original_segments.append(str(getattr(part, "content", "")))
+
+                if text_parts:
+                    replacement_segments = split_replacement_by_original_parts(
+                        original_segments,
+                        text,
+                    )
+                    for part, replacement_segment in zip(
+                        text_parts, replacement_segments, strict=False
+                    ):
+                        # Pydantic v2 models — use object.__setattr__ to bypass
+                        # frozen-model restrictions when present.
+                        try:
+                            part.content = replacement_segment
+                        except (AttributeError, TypeError):
+                            object.__setattr__(part, "content", replacement_segment)
+                    return
+                break
 
     # ── Basic Agent protocol ──────────────────────────────────
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from easycat.agent_runner import AgentStreamEvent
@@ -47,6 +47,52 @@ def serialize_output(output: Any) -> str:
     return str(output)
 
 
+def split_replacement_by_original_parts(
+    original_parts: Sequence[str],
+    replacement: str,
+) -> list[str]:
+    """Split a replacement string across original part boundaries.
+
+    This keeps adapter history part granularity when post-processing modifies
+    the concatenated assistant text (e.g. Markdown stripping). The returned
+    parts always concatenate back to ``replacement``.
+    """
+    if not original_parts:
+        return []
+    if len(original_parts) == 1:
+        return [replacement]
+
+    original_joined = "".join(original_parts)
+    if not original_joined:
+        return [replacement, *([""] * (len(original_parts) - 1))]
+
+    # Greedy subsequence mapping: markdown stripping primarily removes
+    # characters, so map each original index to the consumed index in the
+    # replacement text.
+    replacement_len = len(replacement)
+    original_to_replacement = [0] * (len(original_joined) + 1)
+    replacement_idx = 0
+    for original_idx, ch in enumerate(original_joined):
+        if replacement_idx < replacement_len and ch == replacement[replacement_idx]:
+            replacement_idx += 1
+        original_to_replacement[original_idx + 1] = replacement_idx
+
+    split_points: list[int] = []
+    running = 0
+    for part in original_parts[:-1]:
+        running += len(part)
+        split_points.append(original_to_replacement[running])
+
+    result_parts: list[str] = []
+    prev = 0
+    for split_at in split_points:
+        bounded = max(prev, min(replacement_len, split_at))
+        result_parts.append(replacement[prev:bounded])
+        prev = bounded
+    result_parts.append(replacement[prev:])
+    return result_parts
+
+
 class BaseAgentAdapter:
     """Shared base for agent framework adapters.
 
@@ -73,6 +119,14 @@ class BaseAgentAdapter:
     def message_history(self) -> list[Any]:
         """Return a copy of the current message history."""
         return list(self._message_history)
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Replace the text content of the last assistant message in history.
+
+        Subclasses should override to handle framework-specific message
+        formats.  The default implementation is a no-op because message
+        history formats vary across agent frameworks.
+        """
 
     # ── Structured output access ─────────────────────────────
 
