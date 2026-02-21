@@ -274,12 +274,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         raw_output = getattr(result, "final_output", None)
         self._last_output = raw_output
 
-        # Only expose structured_output when it is actually structured (non-str)
-        # or when an explicit output_type is configured on the adapter.
-        if isinstance(raw_output, str) and self.output_type is None:
-            structured_output = None
-        else:
-            structured_output = raw_output
+        structured_output = self.done_structured_output(raw_output)
 
         yield AgentStreamEvent(
             type=AgentStreamEventType.DONE,
