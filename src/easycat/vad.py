@@ -1,11 +1,11 @@
-"""Voice Activity Detection implementations: Silero (open-source) and Krisp (commercial).
+"""Voice Activity Detection implementations: Silero, TEN, and Krisp.
 
 Both implement the VADProvider protocol from providers.py:
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]
     def configure(self, ...) -> None
 
 The factory function `create_vad` selects the best available backend
-with automatic fallback from Krisp -> Silero.
+with automatic fallback from Krisp -> TEN -> Silero.
 """
 
 from __future__ import annotations
@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 _SILERO_SAMPLE_RATE = 16000
 # Silero processes 512-sample frames (32 ms at 16 kHz)
 _SILERO_FRAME_SAMPLES = 512
+# TEN VAD expects 16 kHz audio and defaults to a hop size of 256 samples.
+_TEN_SAMPLE_RATE = 16000
+_TEN_HOP_SAMPLES = 256
 
 
 # ── VAD base class ────────────────────────────────────────────────
@@ -268,6 +271,68 @@ class KrispVAD(_VADBase):
         self.close()
 
 
+# ── TEN VAD (open-source) ──────────────────────────────────────────
+
+
+class TenVAD(_VADBase):
+    """Voice activity detection using TEN VAD.
+
+    TEN VAD consumes PCM16 int16 frames with a fixed hop size, and returns
+    a speech probability plus flags.
+    """
+
+    def __init__(self, hop_size: int = _TEN_HOP_SAMPLES, threshold: float = 0.5) -> None:
+        super().__init__()
+        self._hop_size = hop_size
+        self._threshold = threshold
+        self._buffer: bytes = b""
+        self._ten_vad: Any = None
+        self._numpy: Any = None
+        self._initialize()
+
+    def _initialize(self) -> None:
+        try:
+            ten_vad = require_module("ten_vad", extra="ten-vad", purpose="TEN VAD")
+            numpy = require_module("numpy", extra="ten-vad", purpose="TEN VAD")
+        except ImportError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        try:
+            self._ten_vad = ten_vad.TenVad(hop_size=self._hop_size, threshold=self._threshold)
+        except Exception as exc:
+            raise RuntimeError(f"TEN VAD initialization failed: {exc}") from exc
+
+        self._numpy = numpy
+        logger.info("TEN VAD initialized")
+
+    async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
+        """Process an audio chunk and yield VAD events."""
+        if self._ten_vad is None or self._numpy is None:
+            self._initialize()
+
+        # TEN currently runs at 16 kHz in this integration.
+        if chunk.format.sample_rate != _TEN_SAMPLE_RATE:
+            chunk = resample_chunk(chunk, _TEN_SAMPLE_RATE)
+
+        self._buffer += chunk.data
+        frame_bytes = self._hop_size * 2  # PCM16: 2 bytes per sample
+
+        while len(self._buffer) >= frame_bytes:
+            frame_data = self._buffer[:frame_bytes]
+            self._buffer = self._buffer[frame_bytes:]
+
+            frame = self._numpy.frombuffer(frame_data, dtype=self._numpy.int16).copy()
+            speech_prob, _ = self._ten_vad.process(frame)
+            now = time.monotonic()
+            for event in self._evaluate_speech(float(speech_prob), now):
+                yield event
+
+    def reset(self) -> None:
+        """Reset VAD internal state."""
+        super().reset()
+        self._buffer = b""
+
+
 # ── Factory ─────────────────────────────────────────────────────────
 
 
@@ -275,7 +340,7 @@ class KrispVAD(_VADBase):
 class VADConfig:
     """Configuration for VAD factory."""
 
-    # "krisp", "silero", or "auto" (try krisp first, then silero)
+    # "krisp", "ten", "silero", or "auto" (try krisp -> ten -> silero)
     backend: str = "auto"
     # Krisp-specific
     krisp_model_path: str | None = None
@@ -292,9 +357,11 @@ def create_vad(config: VADConfig | None = None) -> Any:
 
     Selection order:
       1. If config.backend == "krisp": use Krisp (fail if unavailable)
-      2. If config.backend == "silero": use Silero (fail if unavailable)
+      2. If config.backend == "ten": use TEN VAD (fail if unavailable)
+      3. If config.backend == "silero": use Silero (fail if unavailable)
       3. If config.backend == "auto" (default):
          - Try Krisp first
+         - Fall back to TEN VAD
          - Fall back to Silero
 
     Returns an object satisfying the VADProvider protocol.
@@ -317,16 +384,25 @@ def create_vad(config: VADConfig | None = None) -> Any:
     if cfg.backend == "silero":
         return _configure(SileroVAD())
 
-    # Auto mode: try Krisp -> Silero
+    if cfg.backend == "ten":
+        return _configure(TenVAD())
+
+    # Auto mode: try Krisp -> TEN -> Silero
     try:
         return _configure(KrispVAD(model_path=cfg.krisp_model_path))
     except (RuntimeError, ImportError):
-        logger.info("Krisp VAD not available, trying Silero fallback")
+        logger.info("Krisp VAD not available, trying TEN fallback")
+
+    try:
+        return _configure(TenVAD())
+    except (RuntimeError, ImportError):
+        logger.info("TEN VAD not available, trying Silero fallback")
 
     try:
         return _configure(SileroVAD())
     except (RuntimeError, ImportError):
         logger.info("Silero VAD not available either")
         raise RuntimeError(
-            "No VAD backend available. Install torch (for Silero) or krisp-audio (for Krisp)."
+            "No VAD backend available. Install ten-vad (for TEN), torch (for Silero), "
+            "or krisp-audio (for Krisp)."
         )

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -769,6 +769,7 @@ all = [
     { name = "python-multipart" },
     { name = "requests" },
     { name = "sounddevice" },
+    { name = "ten-vad" },
     { name = "torch" },
     { name = "torchaudio" },
     { name = "transformers" },
@@ -808,6 +809,10 @@ telephony = [
     { name = "twilio" },
     { name = "uvicorn" },
 ]
+ten-vad = [
+    { name = "numpy" },
+    { name = "ten-vad" },
+]
 webrtc = [
     { name = "aiohttp" },
     { name = "aiortc" },
@@ -835,6 +840,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "numpy", marker = "extra == 'all'", specifier = ">=1.24.0" },
     { name = "numpy", marker = "extra == 'smart-turn'", specifier = ">=1.24.0" },
+    { name = "numpy", marker = "extra == 'ten-vad'", specifier = ">=1.24.0" },
     { name = "onnxruntime", marker = "extra == 'all'", specifier = ">=1.16.0" },
     { name = "onnxruntime", marker = "extra == 'smart-turn'", specifier = ">=1.16.0" },
     { name = "openai", marker = "extra == 'all'", specifier = ">=1.0.0" },
@@ -850,6 +856,8 @@ requires-dist = [
     { name = "requests", marker = "extra == 'rnnoise'", specifier = ">=2.31.0" },
     { name = "sounddevice", marker = "extra == 'all'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'local'", specifier = ">=0.4.6" },
+    { name = "ten-vad", marker = "extra == 'all'", specifier = ">=0.2.5" },
+    { name = "ten-vad", marker = "extra == 'ten-vad'", specifier = ">=0.2.5" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.2.0" },
     { name = "torchaudio", marker = "extra == 'all'", specifier = ">=2.2.0" },
     { name = "transformers", marker = "extra == 'all'", specifier = ">=4.36.0" },
@@ -860,7 +868,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'telephony'", specifier = ">=0.29.0" },
     { name = "websockets", specifier = ">=16.0" },
 ]
-provides-extras = ["openai-agents", "pydantic-ai", "openai", "deepgram", "elevenlabs", "telephony", "local", "rnnoise", "smart-turn", "webrtc", "all"]
+provides-extras = ["openai-agents", "pydantic-ai", "openai", "deepgram", "elevenlabs", "telephony", "local", "rnnoise", "ten-vad", "smart-turn", "webrtc", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3407,6 +3415,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353, upload-time = "2025-04-27T18:04:59.103Z" },
+]
+
+[[package]]
+name = "ten-vad"
+version = "1.0.6.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d5/c6/00ad5a4fbba29e9ff1b15b77f99f133d06180ef40f8548c520450fe4fa0a/ten_vad-1.0.6.8.tar.gz", hash = "sha256:af1fb4fcb81b2028a20b8a4dbc5662d9f103d0d75e1d62f36f131f58f148e4d5", size = 2554475, upload-time = "2025-11-14T15:13:00.285Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/01/31/2103a8c1de080b0b071ea1e7da73fbda1bccffa9e78642d1508a01864562/ten_vad-1.0.6.8-py3-none-any.whl", hash = "sha256:c881aecd774ee29f4fd4735c87265b888e5aed37f59bd3f87ea1fe26ab436eee", size = 1279204, upload-time = "2025-11-14T15:12:58.825Z" },
 ]
 
 [[package]]
