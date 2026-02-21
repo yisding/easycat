@@ -7,6 +7,8 @@ surface so the tests run without pydantic-ai installed.
 from __future__ import annotations
 
 import asyncio
+import sys
+import types
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -1415,6 +1417,48 @@ async def test_notify_interruption_truncates_by_default():
     else:
         # Without pydantic_ai installed, notify_interruption is a no-op
         assert len(adapter.message_history) == initial_len
+
+
+def test_notify_interruption_truncate_handles_frozen_text_part(monkeypatch):
+    """truncate mode should mutate frozen TextPart content via object.__setattr__."""
+
+    class TextPart:
+        def __init__(self, content: str) -> None:
+            object.__setattr__(self, "content", content)
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            raise TypeError("frozen")
+
+    class ModelResponse:
+        def __init__(self, parts: list[Any]) -> None:
+            self.parts = parts
+
+    class ModelRequest:
+        def __init__(self, parts: list[Any]) -> None:
+            self.parts = parts
+
+    class SystemPromptPart:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    messages_module = types.ModuleType("pydantic_ai.messages")
+    messages_module.ModelResponse = ModelResponse
+    messages_module.ModelRequest = ModelRequest
+    messages_module.SystemPromptPart = SystemPromptPart
+
+    package_module = types.ModuleType("pydantic_ai")
+    package_module.messages = messages_module
+    monkeypatch.setitem(sys.modules, "pydantic_ai", package_module)
+    monkeypatch.setitem(sys.modules, "pydantic_ai.messages", messages_module)
+
+    adapter = PydanticAIAdapter(MockPydanticAgent())
+    response = ModelResponse(parts=[TextPart("Original response")])
+    adapter._message_history = [response]
+
+    adapter.notify_interruption("Original")
+
+    assert response.parts[0].content == "Original..."
+    assert len(adapter.message_history) == 1
 
 
 @pytest.mark.asyncio

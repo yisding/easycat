@@ -1020,6 +1020,49 @@ class SlowToolCallingAgent:
         self.interruption_mode = mode
 
 
+class FastDoneAgent:
+    """Agent that completes quickly and supports interruption notifications."""
+
+    def __init__(self) -> None:
+        self.finished = asyncio.Event()
+        self.interruption_notified = False
+        self.interruption_text_spoken = ""
+        self.interruption_mode = ""
+
+    async def run(self, text: str) -> str:
+        return "Quick reply."
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Quick reply.")
+        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Quick reply.")
+        self.finished.set()
+
+    def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+        self.interruption_notified = True
+        self.interruption_text_spoken = text_spoken
+        self.interruption_mode = mode
+
+
+class SlowStartTTS(FakeTTS):
+    """TTS that starts playback, then waits before yielding audio."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+
+    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        self.synthesized_texts.append(text)
+        self.started.set()
+        await asyncio.sleep(0.1)
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+
+
 @pytest.mark.asyncio
 async def test_session_barge_in_completes_tool_calls():
     """Barge-in during a tool call should let the tool finish and emit its result."""
@@ -1094,6 +1137,38 @@ async def test_session_barge_in_calls_notify_interruption():
     # so audio-based estimation yields empty string.
     assert agent.interruption_text_spoken == ""
     # Default mode is "truncate"
+    assert agent.interruption_mode == "truncate"
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_after_agent_done_calls_notify_interruption():
+    """Cancellation during TTS playback should still notify interruption."""
+    agent = FastDoneAgent()
+    tts = SlowStartTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="test"),
+            agent=agent,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+    token = CancelToken()
+
+    async def _cancel_during_tts_playback() -> None:
+        await agent.finished.wait()
+        await tts.started.wait()
+        token.cancel()
+
+    cancel_task = asyncio.create_task(_cancel_during_tts_playback())
+    await session._run_streaming_agent("test", token=token)
+    await cancel_task
+
+    assert agent.interruption_notified
+    assert agent.interruption_text_spoken == ""
     assert agent.interruption_mode == "truncate"
 
 

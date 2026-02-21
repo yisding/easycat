@@ -985,6 +985,7 @@ class Session:
         structured_output: Any = None
         agent_error: BaseException | None = None
         interrupted = False
+        tts_playback_started = False
 
         # Per-chunk TTS accounting: list of (text, audio_bytes_produced).
         # Populated by _process_tts so we can map audio-bytes-sent back to
@@ -1120,6 +1121,7 @@ class Session:
                 await tts_queue.put(None)  # sentinel to stop TTS task
 
         async def _process_tts() -> None:
+            nonlocal tts_playback_started
             started = False
             try:
                 while True:
@@ -1132,6 +1134,7 @@ class Session:
                     if not started:
                         await self._turn_manager.bot_started_speaking()
                         started = True
+                        tts_playback_started = True
 
                     result = await self._tts_synth.synthesize(
                         text,
@@ -1204,7 +1207,10 @@ class Session:
         # Both tasks are done.  If the user barged in, estimate what they
         # actually heard by comparing audio bytes sent to the transport
         # against the per-chunk audio produced by TTS.
-        if interrupted and hasattr(self.agent, "notify_interruption"):
+        cancelled_during_playback = bool(token and token.is_cancelled and tts_playback_started)
+        if (interrupted or cancelled_during_playback) and hasattr(
+            self.agent, "notify_interruption"
+        ):
             text_spoken = _estimate_text_spoken(tts_chunks, self._turn_audio_bytes_sent)
             try:
                 self.agent.notify_interruption(
