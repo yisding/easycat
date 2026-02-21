@@ -39,7 +39,9 @@ from easycat.session import (
     Session,
     SessionConfig,
     _all_tts_audio_sent,
+    _audio_bytes_acknowledged,
     _audio_bytes_likely_heard,
+    _audio_bytes_likely_heard_hybrid,
     _estimate_text_spoken,
     _has_unclosed_markdown_delimiters,
     _split_at_sentence_boundaries,
@@ -418,6 +420,59 @@ def test_audio_bytes_likely_heard_ignores_negative_sizes():
 def test_audio_bytes_likely_heard_partial_chunk_by_duration():
     send_log = [(1.0, 100, 20.0)]
     assert _audio_bytes_likely_heard(send_log, 1.005) == 24
+
+
+def test_audio_bytes_likely_heard_uses_cumulative_playout_clock():
+    send_log = [
+        (1.0, 100, 1000.0),  # plays from 1.0 to 2.0
+        (1.01, 100, 1000.0),  # queued immediately but should start at 2.0
+    ]
+    assert _audio_bytes_likely_heard(send_log, 1.5) == 50
+
+
+def test_audio_bytes_acknowledged_filters_by_cutoff():
+    playback_ack_log = [(1.0, 120), (1.2, 220), (1.4, 320)]
+    assert _audio_bytes_acknowledged(playback_ack_log, 1.2) == 220
+    assert _audio_bytes_acknowledged(playback_ack_log, None) == 320
+
+
+def test_audio_bytes_likely_heard_hybrid_fresh_ack_caps_heuristic():
+    send_log = [(1.0, 100, 1000.0)]  # 100 B/s
+    playback_ack_log = [(1.7, 70)]  # fresh and close to heuristic at cutoff=1.8
+    heard = _audio_bytes_likely_heard_hybrid(
+        send_log,
+        playback_ack_log,
+        1.8,
+        ack_stale_ms=500,
+        ack_tail_cap_ms=500,
+    )
+    assert heard == 70
+
+
+def test_audio_bytes_likely_heard_hybrid_stale_ack_allows_bounded_tail():
+    send_log = [(1.0, 100, 1000.0)]  # 100 B/s
+    playback_ack_log = [(1.0, 20)]  # stale at cutoff=1.8 (800ms old)
+    heard = _audio_bytes_likely_heard_hybrid(
+        send_log,
+        playback_ack_log,
+        1.8,
+        ack_stale_ms=500,
+        ack_tail_cap_ms=500,  # allow +50 bytes
+    )
+    assert heard == 70
+
+
+def test_audio_bytes_likely_heard_hybrid_tail_cap_zero_keeps_ack_cap():
+    send_log = [(1.0, 100, 1000.0)]  # 100 B/s
+    playback_ack_log = [(1.0, 20)]
+    heard = _audio_bytes_likely_heard_hybrid(
+        send_log,
+        playback_ack_log,
+        1.8,
+        ack_stale_ms=500,
+        ack_tail_cap_ms=0,
+    )
+    assert heard == 20
 
 
 def test_markdown_unclosed_single_italic_asterisk():
