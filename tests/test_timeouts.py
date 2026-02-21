@@ -1,4 +1,4 @@
-"""Tests for timeout wrappers (WS8 Tasks 8.3–8.5)."""
+"""Tests for timeout wrappers."""
 
 from __future__ import annotations
 

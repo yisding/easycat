@@ -1,4 +1,4 @@
-"""Tests for bounded audio queues (WS8 Tasks 8.6–8.7)."""
+"""Tests for bounded audio queues."""
 
 from __future__ import annotations
 

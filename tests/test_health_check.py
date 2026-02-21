@@ -1,4 +1,4 @@
-"""Tests for provider health check infrastructure (WS8 Task 8.2)."""
+"""Tests for provider health check infrastructure."""
 
 from __future__ import annotations
 

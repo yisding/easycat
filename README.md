@@ -125,7 +125,6 @@ TURN (`TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`) for reliable NAT tr
 ## Repo layout
 - src/easycat: library code
 - tests: unit/integration tests (some are skipped without API keys)
-- workstreams: design notes and task plans for upcoming work
 
 ## Install
 Python 3.11+ is required.

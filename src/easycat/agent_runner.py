@@ -200,6 +200,27 @@ class AgentRunner:
             self._agent.notify_interruption(text_spoken, mode=mode)
         self._apply_interruption(text_spoken, mode=mode)
 
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Replace the text content of the last assistant message in history.
+
+        Used by the session layer to update history after post-processing
+        (e.g. Markdown stripping) so that subsequent turns see the cleaned
+        text rather than the raw LLM output.
+
+        Also delegates to the wrapped agent when it exposes
+        ``replace_last_assistant_text`` (e.g. :class:`BaseAgentAdapter`).
+        """
+        # Update AgentRunner's own history
+        for entry in reversed(self._history):
+            if entry.get("role") == "assistant":
+                entry["content"] = text
+                break
+
+        # Delegate to the wrapped agent/adapter
+        fn = getattr(self._agent, "replace_last_assistant_text", None)
+        if callable(fn):
+            fn(text)
+
     # ── Internal helpers ───────────────────────────────────────
 
     def _record_span(self, name: str, **metadata: Any) -> Span:

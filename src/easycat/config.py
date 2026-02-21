@@ -86,6 +86,7 @@ class EasyCatConfig:
     agent: Any = None
     agent_runner: AgentRunnerConfig | None = None
     wrap_agent: bool = True
+    strip_markdown: bool = False
 
     def __post_init__(self) -> None:
         if self.openai_api_key:
@@ -149,6 +150,7 @@ def create_session(config: EasyCatConfig) -> Session:
             metrics=metrics,
             tracer=tracer,
             telephony_helpers=telephony_helpers,
+            strip_markdown=config.strip_markdown,
         )
     )
 
