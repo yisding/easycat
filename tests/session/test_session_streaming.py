@@ -38,6 +38,10 @@ from easycat.events import (
 from easycat.session import (
     Session,
     SessionConfig,
+    _all_tts_audio_delivered,
+    _audio_bytes_acknowledged,
+    _audio_bytes_likely_heard,
+    _audio_bytes_likely_heard_hybrid,
     _estimate_text_spoken,
     _has_unclosed_markdown_delimiters,
     _split_at_sentence_boundaries,
@@ -356,7 +360,19 @@ def test_estimate_text_spoken_one_and_a_half_chunks():
     spoken = _estimate_text_spoken(chunks, 600)
     assert spoken.startswith("First sentence. ")
     # Second chunk has 16 chars, half → 8 chars
-    assert spoken == "First sentence. Second s"
+    assert spoken == "First sentence. Second "
+
+
+def test_estimate_text_spoken_partial_chunk_trims_mid_word_boundary():
+    chunks = [("Alpha bravo charlie", 1000)]
+    # 12 chars would land in the middle of "charlie"; should trim to word boundary.
+    assert _estimate_text_spoken(chunks, 700) == "Alpha bravo "
+
+
+def test_estimate_text_spoken_partial_single_token_keeps_prefix():
+    chunks = [("supercalifragilistic", 1000)]
+    # No internal boundary exists; keep proportional prefix instead of dropping content.
+    assert _estimate_text_spoken(chunks, 300) == "superc"
 
 
 def test_estimate_text_spoken_skips_zero_audio_chunks():
@@ -364,6 +380,99 @@ def test_estimate_text_spoken_skips_zero_audio_chunks():
     chunks = [("First. ", 320), ("Never spoken.", 0), ("Third.", 320)]
     # 320 covers first chunk, 0-byte chunk is skipped, then 320 for third
     assert _estimate_text_spoken(chunks, 640) == "First. Third."
+
+
+def test_all_tts_audio_delivered():
+    chunks = [("Hello. ", 320, True), ("How are you?", 640, True)]
+
+    assert not _all_tts_audio_delivered([], 960)
+    assert not _all_tts_audio_delivered(chunks, 959)
+    assert _all_tts_audio_delivered(chunks, 960)
+    assert _all_tts_audio_delivered(chunks, 9999)
+
+
+def test_all_tts_audio_delivered_ignores_non_positive_chunks():
+    chunks = [("First.", 320, True), ("Silent", 0, True), ("Oops", -20, True)]
+    assert not _all_tts_audio_delivered(chunks, 319)
+    assert _all_tts_audio_delivered(chunks, 320)
+
+
+def test_all_tts_audio_delivered_requires_completed_synthesis():
+    chunks = [("Hello", 320, False)]
+    assert not _all_tts_audio_delivered(chunks, 320)
+
+
+def test_audio_bytes_likely_heard_without_cutoff_uses_all_bytes():
+    send_log = [(1.0, 100, 10.0), (1.2, 150, 10.0), (1.4, 50, 10.0)]
+    assert _audio_bytes_likely_heard(send_log, None) == 300
+
+
+def test_audio_bytes_likely_heard_with_cutoff_filters_future_bytes():
+    send_log = [(1.0, 100, 10.0), (1.2, 150, 10.0), (1.4, 50, 10.0)]
+    assert _audio_bytes_likely_heard(send_log, 1.2) == 100
+
+
+def test_audio_bytes_likely_heard_ignores_negative_sizes():
+    send_log = [(1.0, 100, 10.0), (1.2, -10, 10.0), (1.3, 20, 10.0)]
+    assert _audio_bytes_likely_heard(send_log, 2.0) == 120
+
+
+def test_audio_bytes_likely_heard_partial_chunk_by_duration():
+    send_log = [(1.0, 100, 20.0)]
+    assert _audio_bytes_likely_heard(send_log, 1.005) == 24
+
+
+def test_audio_bytes_likely_heard_uses_cumulative_playout_clock():
+    send_log = [
+        (1.0, 100, 1000.0),  # plays from 1.0 to 2.0
+        (1.01, 100, 1000.0),  # queued immediately but should start at 2.0
+    ]
+    assert _audio_bytes_likely_heard(send_log, 1.5) == 50
+
+
+def test_audio_bytes_acknowledged_filters_by_cutoff():
+    playback_ack_log = [(1.0, 120), (1.2, 220), (1.4, 320)]
+    assert _audio_bytes_acknowledged(playback_ack_log, 1.2) == 220
+    assert _audio_bytes_acknowledged(playback_ack_log, None) == 320
+
+
+def test_audio_bytes_likely_heard_hybrid_fresh_ack_caps_heuristic():
+    send_log = [(1.0, 100, 1000.0)]  # 100 B/s
+    playback_ack_log = [(1.7, 70)]  # fresh and close to heuristic at cutoff=1.8
+    heard = _audio_bytes_likely_heard_hybrid(
+        send_log,
+        playback_ack_log,
+        1.8,
+        ack_stale_ms=500,
+        ack_tail_cap_ms=500,
+    )
+    assert heard == 70
+
+
+def test_audio_bytes_likely_heard_hybrid_stale_ack_allows_bounded_tail():
+    send_log = [(1.0, 100, 1000.0)]  # 100 B/s
+    playback_ack_log = [(1.0, 20)]  # stale at cutoff=1.8 (800ms old)
+    heard = _audio_bytes_likely_heard_hybrid(
+        send_log,
+        playback_ack_log,
+        1.8,
+        ack_stale_ms=500,
+        ack_tail_cap_ms=500,  # allow +50 bytes
+    )
+    assert heard == 70
+
+
+def test_audio_bytes_likely_heard_hybrid_tail_cap_zero_keeps_ack_cap():
+    send_log = [(1.0, 100, 1000.0)]  # 100 B/s
+    playback_ack_log = [(1.0, 20)]
+    heard = _audio_bytes_likely_heard_hybrid(
+        send_log,
+        playback_ack_log,
+        1.8,
+        ack_stale_ms=500,
+        ack_tail_cap_ms=0,
+    )
+    assert heard == 20
 
 
 def test_markdown_unclosed_single_italic_asterisk():
@@ -1303,10 +1412,14 @@ async def test_session_barge_in_during_tts_playback():
     class SlowTTS:
         """TTS that yields audio slowly so cancel can arrive mid-playback."""
 
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+
         async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+            self.started.set()
             for _ in range(5):
+                await asyncio.sleep(0.1)
                 yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
-                await asyncio.sleep(0.05)
 
         async def stop(self) -> None:
             pass
@@ -1315,20 +1428,22 @@ async def test_session_barge_in_during_tts_playback():
             pass
 
     agent = FastAgent()
+    tts = SlowTTS()
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
     config = SessionConfig(
         transport=transport,
         vad=FakeVAD(),
         stt=FakeSTT(transcript="hello"),
         agent=agent,
-        tts=SlowTTS(),
+        tts=tts,
         noise_reducer=FakeNoiseReducer(),
         turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
 
     await session.start()
-    # Wait for agent to finish and TTS to start playing
+    # Wait for TTS playback to start, then cancel mid-playback.
+    await tts.started.wait()
     await asyncio.sleep(0.15)
 
     # Cancel during TTS playback (agent stream already done)
@@ -1340,6 +1455,242 @@ async def test_session_barge_in_during_tts_playback():
 
     assert agent.interruption_notified
     assert agent.interruption_mode == "truncate"
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_records_dequeued_unsynthesized_text_as_incomplete():
+    """Cancellation after dequeue should still count unsynthesized text as incomplete."""
+
+    token = CancelToken()
+
+    class TwoSentenceAgent:
+        interruption_notified = False
+
+        async def run(self, text: str) -> str:
+            return "First sentence. Second sentence."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="First sentence. ")
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Second sentence.")
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="First sentence. Second sentence.",
+            )
+
+        def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+            self.interruption_notified = True
+
+    class CancelAfterFirstChunkTTS:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+            self.calls += 1
+            if self.calls == 1:
+                yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+                await asyncio.sleep(0.2)
+                token.cancel()
+                return
+            pytest.fail("Second TTS chunk should not be synthesized after cancellation")
+
+        async def stop(self) -> None:
+            pass
+
+        async def cancel(self) -> None:
+            pass
+
+    agent = TwoSentenceAgent()
+    tts = CancelAfterFirstChunkTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=agent,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    await session.start()
+    try:
+        await session._run_streaming_agent("hello", token=token)
+    finally:
+        await session.stop()
+
+    assert agent.interruption_notified
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_after_full_playback_does_not_notify_interruption():
+    """If all synthesized audio is already delivered, interruption should not rewrite history."""
+
+    class FastAgent:
+        interruption_notified = False
+
+        async def run(self, text: str) -> str:
+            return "Hello world."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world.")
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world.")
+
+        def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+            self.interruption_notified = True
+
+    class OneShotTTS:
+        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+
+        async def stop(self) -> None:
+            pass
+
+        async def cancel(self) -> None:
+            pass
+
+    agent = FastAgent()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(chunks=[_chunk(), _chunk()]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=agent,
+            tts=OneShotTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    await session.start()
+    await asyncio.sleep(0.25)
+
+    # Cancel after playback has already completed; this should not be treated
+    # as an interruption that mutates agent history.
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.1)
+    await session.stop()
+
+    assert not agent.interruption_notified
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_after_full_playback_keeps_agent_runner_history():
+    """Late cancel after full playback should not truncate AgentRunner history."""
+
+    class FastAgent:
+        async def run(self, text: str) -> str:
+            return "Hello world."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world.")
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world.")
+
+    class OneShotTTS:
+        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+
+        async def stop(self) -> None:
+            pass
+
+        async def cancel(self) -> None:
+            pass
+
+    runner = AgentRunner(FastAgent())
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(chunks=[_chunk(), _chunk()]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=runner,
+            tts=OneShotTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    await session.start()
+    await asyncio.sleep(0.25)
+
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.1)
+    await session.stop()
+
+    assert runner.history[-1] == {"role": "assistant", "content": "Hello world."}
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_after_full_multichunk_playback_keeps_history():
+    """Late cancel after full multi-chunk playback should not truncate history."""
+
+    class MultiSentenceAgent:
+        async def run(self, text: str) -> str:
+            return "First sentence. Second sentence."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="First sentence. ")
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Second sentence.")
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="First sentence. Second sentence.",
+            )
+
+    runner = AgentRunner(MultiSentenceAgent())
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(chunks=[_chunk(), _chunk()]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=runner,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    await session.start()
+    await asyncio.sleep(0.3)
+
+    if session._cancel_token:
+        session._cancel_token.cancel()
+
+    await asyncio.sleep(0.1)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["First sentence. ", "Second sentence."]
+    assert runner.history[-1] == {
+        "role": "assistant",
+        "content": "First sentence. Second sentence.",
+    }
 
 
 # ── Streaming with strip_markdown ──────────────────────────────────
