@@ -527,6 +527,29 @@ async def test_playback_mark_names_are_unique_across_turns():
 
 
 @pytest.mark.asyncio
+async def test_playback_mark_ack_tracks_transport_confirmed_name():
+    class CanonicalizingPlaybackAckTransport(FakePlaybackAckTransport):
+        async def send_playback_mark(self, name: str | None = None) -> str:
+            requested_name = name or f"mark_{len(self.playback_marks) + 1}"
+            canonical_name = f"canonical::{requested_name}"
+            self.playback_marks.append(canonical_name)
+            return canonical_name
+
+    transport = CanonicalizingPlaybackAckTransport()
+    session = Session(_full_config(transport=transport))
+    session._playback_mark_bytes_interval = 1
+
+    await session._outbound_queue.put(_make_chunk())
+    await session._drain_outbound_audio()
+
+    canonical_mark = transport.playback_marks[-1]
+    session._on_playback_mark_ack(PlaybackMarkAck(mark_name=canonical_mark))
+
+    assert len(session._turn_playback_ack_log) == 1
+    assert session._turn_playback_ack_log[0][1] == 320
+
+
+@pytest.mark.asyncio
 async def test_trailing_playback_mark_emitted_while_session_running():
     transport = FakePlaybackAckTransport()
     session = Session(_full_config(transport=transport))
