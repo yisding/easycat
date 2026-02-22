@@ -401,6 +401,10 @@ def test_all_tts_audio_delivered_requires_completed_synthesis():
     chunks = [("Hello", 320, False)]
     assert not _all_tts_audio_delivered(chunks, 320)
 
+def test_all_tts_audio_delivered_zero_audio_is_still_fully_delivered():
+    chunks = [("", 0, True)]
+    assert _all_tts_audio_delivered(chunks, 0)
+
 
 def test_audio_bytes_likely_heard_without_cutoff_uses_all_bytes():
     send_log = [(1.0, 100, 10.0), (1.2, 150, 10.0), (1.4, 50, 10.0)]
