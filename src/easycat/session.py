@@ -205,6 +205,10 @@ def _truncate_partial_text_to_boundary(text: str, chars: int) -> str:
 
     If the proportional cut lands in the middle of a word, trim back to the
     nearest non-word boundary so interruption context looks less noisy.
+
+    Note: ``_is_word_char`` treats all alphanumeric characters (including CJK
+    and other non-Latin scripts) as word characters, so this function is
+    effectively a no-op for languages without whitespace word boundaries.
     """
     if chars <= 0:
         return ""

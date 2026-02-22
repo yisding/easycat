@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 
 
@@ -11,10 +12,14 @@ class CancelToken:
 
     Create one per turn. When `cancel()` is called, all stages checking
     `is_cancelled` will stop processing.
+
+    Thread-safe: ``cancel()`` may be called from any thread (including
+    GIL-free Python 3.14+).
     """
 
     def __init__(self) -> None:
         self._event = asyncio.Event()
+        self._lock = threading.Lock()
         self._cancelled_at: float | None = None
 
     @property
@@ -28,8 +33,9 @@ class CancelToken:
 
     def cancel(self) -> None:
         """Signal cancellation to all stages checking this token."""
-        if self._cancelled_at is None:
-            self._cancelled_at = time.monotonic()
+        with self._lock:
+            if self._cancelled_at is None:
+                self._cancelled_at = time.monotonic()
         self._event.set()
 
     async def wait(self) -> None:
