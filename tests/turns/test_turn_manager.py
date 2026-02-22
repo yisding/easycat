@@ -291,6 +291,25 @@ async def test_mode_switching():
     assert tm.mode == TurnMode.VAD
 
 
+@pytest.mark.asyncio
+async def test_bot_started_cancels_stale_silence_timer():
+    """bot_started_speaking should clear any stale pending silence timer."""
+    bus = EventBus()
+    config = TurnManagerConfig(end_of_turn_silence_ms=5000)
+    tm = TurnManager(bus, config=config)
+
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+
+    assert tm._silence_timer_task is not None
+    assert not tm._silence_timer_task.done()
+
+    await tm.bot_started_speaking()
+
+    assert tm.state == TurnManagerState.BOT_SPEAKING
+    assert tm._silence_timer_task is None
+
+
 # ── Barge-in / interruption tests ────────────────────────────────────
 
 
