@@ -285,7 +285,7 @@ def _all_tts_audio_delivered(
     if not all(completed for _, _, completed in tts_chunks):
         return False
     total_audio = sum(max(chunk_audio, 0) for _, chunk_audio, _ in tts_chunks)
-    return total_audio > 0 and audio_bytes_delivered >= total_audio
+    return audio_bytes_delivered >= total_audio
 
 
 def _audio_bytes_likely_heard(
