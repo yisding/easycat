@@ -1277,6 +1277,7 @@ class Session:
         - TTS task: dequeues text chunks and synthesizes them sequentially.
         """
         tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        turn_id = self._current_turn_id
         accumulated_text = ""
         structured_output: Any = None
         agent_error: BaseException | None = None
@@ -1522,9 +1523,9 @@ class Session:
         if (interrupted or cancelled_during_playback) and hasattr(
             self.agent, "notify_interruption"
         ):
-            cutoff_time = self._last_barge_in_time
-            if cutoff_time is None and token is not None:
-                cutoff_time = token.cancelled_at
+            cutoff_time = token.cancelled_at if token is not None else None
+            if cutoff_time is None:
+                cutoff_time = self._last_barge_in_time
             if cutoff_time is not None and self._interruption_latency_compensation_ms > 0:
                 cutoff_time -= self._interruption_latency_compensation_ms / 1000.0
             heard_bytes = _audio_bytes_likely_heard_hybrid(
@@ -1548,17 +1549,20 @@ class Session:
                 except Exception:
                     logger.debug("Failed to notify agent of interruption", exc_info=True)
 
-        # If agent errored or was cancelled with no TTS started, ensure idle
-        if self._turn_manager.state != TurnManagerState.IDLE:
-            self._reset_turn_state()
-        self._current_turn_id = None
-        status = SpanStatus.ERROR if agent_error else SpanStatus.OK
-        self._spans.finish("turn", status)
+        # If a newer turn started (e.g. barge-in), avoid clobbering its state.
+        if self._current_turn_id == turn_id:
+            # If agent errored or was cancelled with no TTS started, ensure idle.
+            if self._turn_manager.state != TurnManagerState.IDLE:
+                self._reset_turn_state()
+            self._current_turn_id = None
+            status = SpanStatus.ERROR if agent_error else SpanStatus.OK
+            self._spans.finish("turn", status)
 
     # ── TTS synthesis helper ───────────────────────────────────
 
     async def _synthesize_tts(self, text: str, token: CancelToken | None) -> None:
         """Synthesize TTS for a complete text and emit audio events."""
+        turn_id = self._current_turn_id
         await self._turn_manager.bot_started_speaking()
         try:
             result = await self._tts_synth.synthesize(
@@ -1573,11 +1577,15 @@ class Session:
             pass
         finally:
             try:
-                if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
+                if (
+                    self._current_turn_id == turn_id
+                    and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                ):
                     await self._turn_manager.bot_stopped_speaking()
                     self._spans.finish("turn")
             finally:
-                self._current_turn_id = None
+                if self._current_turn_id == turn_id:
+                    self._current_turn_id = None
 
     # ── Internal helpers ───────────────────────────────────────
 
