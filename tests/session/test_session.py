@@ -524,3 +524,21 @@ async def test_playback_mark_names_are_unique_across_turns():
     session._on_playback_mark_ack(PlaybackMarkAck(mark_name=second_mark))
     assert len(session._turn_playback_ack_log) == 1
     assert session._turn_playback_ack_log[0][1] == 320
+
+
+@pytest.mark.asyncio
+async def test_trailing_playback_mark_emitted_while_session_running():
+    transport = FakePlaybackAckTransport()
+    session = Session(_full_config(transport=transport))
+    session._playback_mark_bytes_interval = 10_000
+
+    await session.start()
+    await session._outbound_queue.put(_make_chunk())
+
+    for _ in range(20):
+        if transport.playback_marks:
+            break
+        await asyncio.sleep(0.01)
+
+    assert len(transport.playback_marks) == 1
+    await session.stop()
