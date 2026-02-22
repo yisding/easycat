@@ -1549,6 +1549,7 @@ class Session:
         # If agent errored or was cancelled with no TTS started, ensure idle
         if self._turn_manager.state != TurnManagerState.IDLE:
             self._turn_manager.reset()
+        self._current_turn_id = None
         status = SpanStatus.ERROR if agent_error else SpanStatus.OK
         self._spans.finish("turn", status)
 
@@ -1572,6 +1573,7 @@ class Session:
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             await self._turn_manager.bot_stopped_speaking()
             self._spans.finish("turn")
+        self._current_turn_id = None
 
     # ── Internal helpers ───────────────────────────────────────
 
