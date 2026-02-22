@@ -310,7 +310,6 @@ async def test_bot_started_cancels_stale_silence_timer():
     assert tm._silence_timer_task is None
 
 
-
 # ── Barge-in / interruption tests ────────────────────────────────────
 
 
