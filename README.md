@@ -67,6 +67,67 @@ session = Session(
 This keeps the pipeline (VAD → STT → agent → TTS) identical while letting you
 swap in open-source models for fully local operation.
 
+## Event-by-event logging (barge-in, ASR, TTS)
+EasyCat can now attach a built-in event trace logger that prints one log line
+per EventBus event so it is easy to inspect conversation flow (including
+`Interruption` / barge-in, `STTPartial` / `STTFinal`, and TTS events).
+
+```python
+import logging
+
+from easycat import EasyCatConfig, EventLoggingConfig, create_session
+
+logging.basicConfig(level=logging.INFO)
+
+config = EasyCatConfig(
+    openai_api_key="your-api-key",
+    event_logging=EventLoggingConfig(
+        enabled=True,
+        include_partials=True,
+        include_audio_events=False,  # set True to log every TTSAudio chunk
+        include_text=True,          # set False to log only text lengths
+    ),
+)
+session = create_session(config)
+```
+
+By default, logs are emitted to logger name `easycat.event_trace` and include
+a per-session event index + relative timestamp for easier debugging.
+
+For production ingestion, you can enable JSON logs + event throttling and inspect
+a small in-memory ring buffer for "last N events" snapshots:
+
+```python
+event_logging=EventLoggingConfig(
+    enabled=True,
+    json_mode=True,
+    sample_rates={"STTPartial": 0.25},   # keep every 4th partial
+    min_interval_s={"TTSAudio": 0.25},   # max 4 audio logs/second
+    ring_buffer_size=500,
+)
+```
+
+Events now carry `session_id` and `turn_id` correlation fields, and tool events
+also include `call_id`, making cross-system traces easier to join.
+
+### Hook directly into agent/tool events
+You can subscribe to agent stream events (including tool calls) via the session:
+
+```python
+session = create_session(config)
+
+registrations = session.subscribe_agent_events(
+    on_delta=lambda e: print("delta:", e.text),
+    on_final=lambda e: print("final:", e.text),
+    on_tool_started=lambda e: print("tool start:", e.tool_name, e.call_id),
+    on_tool_delta=lambda e: print("tool delta:", e.call_id, e.delta),
+    on_tool_result=lambda e: print("tool result:", e.call_id, e.result),
+)
+
+# Later, detach all handlers in one call:
+session.unsubscribe_handlers(registrations)
+```
+
 ### OpenAI Agents SDK (idiomatic)
 ```python
 from agents import Agent

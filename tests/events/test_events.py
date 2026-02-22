@@ -136,6 +136,32 @@ def test_error_event():
     assert event.context == "stt"
 
 
+def test_event_timestamp_positional_args_remain_compatible():
+    ts = 123.456
+    exc = RuntimeError("boom")
+
+    stt_final = STTFinal("hello", ts)
+    agent_final = AgentFinal("hello", None, ts)
+    tool_started = ToolCallStarted("search", "c1", ts)
+    error = Error(exc, "ctx", ts)
+
+    assert stt_final.timestamp == ts
+    assert stt_final.session_id is None
+    assert stt_final.turn_id is None
+
+    assert agent_final.timestamp == ts
+    assert agent_final.session_id is None
+    assert agent_final.turn_id is None
+
+    assert tool_started.timestamp == ts
+    assert tool_started.session_id is None
+    assert tool_started.turn_id is None
+
+    assert error.timestamp == ts
+    assert error.session_id is None
+    assert error.turn_id is None
+
+
 # ── Provider-scoped event tests ────────────────────────────────────
 
 
@@ -256,3 +282,33 @@ async def test_eventbus_handler_error_does_not_stop_others():
 
     await bus.emit(STTFinal(text="hello"))
     assert len(received) == 1
+
+
+@pytest.mark.asyncio
+async def test_eventbus_subscribe_all_receives_multiple_event_types():
+    bus = EventBus()
+    received: list[str] = []
+
+    def handler(event: object) -> None:
+        received.append(type(event).__name__)
+
+    bus.subscribe_all(handler)
+    await bus.emit(STTPartial(text="p"))
+    await bus.emit(STTFinal(text="f"))
+
+    assert received == ["STTPartial", "STTFinal"]
+
+
+@pytest.mark.asyncio
+async def test_eventbus_unsubscribe_all():
+    bus = EventBus()
+    received: list[str] = []
+
+    def handler(event: object) -> None:
+        received.append(type(event).__name__)
+
+    bus.subscribe_all(handler)
+    bus.unsubscribe_all(handler)
+    await bus.emit(STTFinal(text="hello"))
+
+    assert not received

@@ -25,6 +25,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
@@ -123,6 +124,11 @@ class TurnManager:
         # Optional endpoint detector (smart-turn model)
         self._endpoint_detector = self._config.endpoint_detector
 
+        # Correlation identifiers
+        self._session_id: str | None = None
+        self._turn_counter = 0
+        self._current_turn_id: str | None = None
+
     # ── Properties ──────────────────────────────────────────────
 
     @property
@@ -141,6 +147,10 @@ class TurnManager:
     def turn_audio(self) -> list[AudioChunk]:
         """Audio chunks captured for the current turn (including pre-roll)."""
         return self._turn_audio
+
+    def bind_session(self, session_id: str) -> None:
+        """Bind a stable session identifier used for emitted events."""
+        self._session_id = session_id
 
     # ── Audio frame handling ────────────────────────────────────
 
@@ -203,7 +213,11 @@ class TurnManager:
             self._pre_roll_buffer.clear()
             self._pre_roll_duration_ms = 0.0
 
-            await self._event_bus.emit(TurnStarted())
+            self._turn_counter += 1
+            self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
+            await self._event_bus.emit(
+                TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
+            )
             logger.debug("Turn: Idle -> UserSpeaking (new turn, pre-roll flushed)")
 
     async def _handle_speech_stop(self) -> None:
@@ -242,7 +256,11 @@ class TurnManager:
                                 "Turn: UserPaused -> Processing (smart-turn: complete, p=%.3f)",
                                 result.probability,
                             )
-                            await self._event_bus.emit(TurnEnded())
+                            await self._event_bus.emit(
+                                TurnEnded(
+                                    session_id=self._session_id, turn_id=self._current_turn_id
+                                )
+                            )
                         return
                     logger.debug(
                         "Smart-turn: incomplete (p=%.3f), falling back to silence timeout",
@@ -256,7 +274,9 @@ class TurnManager:
             if self._state == TurnManagerState.USER_PAUSED:
                 self._state = TurnManagerState.PROCESSING
                 logger.debug("Turn: UserPaused -> Processing (silence timeout)")
-                await self._event_bus.emit(TurnEnded())
+                await self._event_bus.emit(
+                    TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
+                )
         except asyncio.CancelledError:
             pass
 
@@ -287,13 +307,17 @@ class TurnManager:
         # Start new turn
         self._cancel_token = CancelToken()
         self._state = TurnManagerState.USER_SPEAKING
+        self._turn_counter += 1
+        self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
 
         # Flush pre-roll buffer into turn audio
         self._turn_audio = list(self._pre_roll_buffer)
         self._pre_roll_buffer.clear()
         self._pre_roll_duration_ms = 0.0
 
-        await self._event_bus.emit(TurnStarted())
+        await self._event_bus.emit(
+            TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
+        )
 
     # ── Push-to-talk mode ───────────────────────────────────────
 
@@ -311,13 +335,17 @@ class TurnManager:
 
         self._cancel_token = CancelToken()
         self._state = TurnManagerState.USER_SPEAKING
+        self._turn_counter += 1
+        self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
 
         # Flush pre-roll
         self._turn_audio = list(self._pre_roll_buffer)
         self._pre_roll_buffer.clear()
         self._pre_roll_duration_ms = 0.0
 
-        await self._event_bus.emit(TurnStarted())
+        await self._event_bus.emit(
+            TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
+        )
         logger.debug("Turn: Idle -> UserSpeaking (manual start)")
 
     async def end_turn(self) -> None:
@@ -334,21 +362,27 @@ class TurnManager:
         self._cancel_silence_timer()
         self._state = TurnManagerState.PROCESSING
         logger.debug("Turn: -> Processing (manual end)")
-        await self._event_bus.emit(TurnEnded())
+        await self._event_bus.emit(
+            TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
+        )
 
     # ── Bot speaking lifecycle ──────────────────────────────────
 
     async def bot_started_speaking(self) -> None:
         """Called when TTS playback begins."""
         self._state = TurnManagerState.BOT_SPEAKING
-        await self._event_bus.emit(BotStartedSpeaking())
+        await self._event_bus.emit(
+            BotStartedSpeaking(session_id=self._session_id, turn_id=self._current_turn_id)
+        )
         logger.debug("Turn: -> BotSpeaking")
 
     async def bot_stopped_speaking(self) -> None:
         """Called when TTS playback completes."""
         if self._state == TurnManagerState.BOT_SPEAKING:
             self._state = TurnManagerState.IDLE
-            await self._event_bus.emit(BotStoppedSpeaking())
+            await self._event_bus.emit(
+                BotStoppedSpeaking(session_id=self._session_id, turn_id=self._current_turn_id)
+            )
             logger.debug("Turn: BotSpeaking -> Idle")
 
     # ── State management ────────────────────────────────────────
@@ -367,6 +401,7 @@ class TurnManager:
         self._pre_roll_duration_ms = 0.0
         self._cancel_token = None
         self._silence_start_time = None
+        self._current_turn_id = None
 
     async def shutdown(self) -> None:
         """Clean up any pending tasks."""

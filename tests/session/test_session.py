@@ -2,13 +2,14 @@
 
 import asyncio
 from collections.abc import AsyncIterator
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
+    AgentDelta,
     AgentFinal,
     AudioIn,
     BotStartedSpeaking,
@@ -19,6 +20,8 @@ from easycat.events import (
     STTEvent,
     STTEventType,
     STTFinal,
+    ToolCallResult,
+    ToolCallStarted,
     TTSAudio,
     TTSEvent,
     TTSEventType,
@@ -29,6 +32,7 @@ from easycat.events import (
 )
 from easycat.session import Session, SessionConfig, TurnState
 from easycat.stubs import NoopNoiseReducer
+from easycat.timeouts import AgentTimeoutError
 from easycat.tracing import InMemoryTraceExporter, SpanStatus, Tracer
 from easycat.turn_manager import TurnManagerConfig
 
@@ -390,6 +394,61 @@ async def test_run_basic_agent_cancellation_marks_agent_span_cancelled():
 
 
 @pytest.mark.asyncio
+async def test_handle_end_of_speech_clears_turn_id_on_stt_timeout():
+    session = Session(_full_config())
+    session._current_turn_id = "turn-stale"
+    session._timeout_config.stt_timeout = 0.01
+    session._stt_final_future = asyncio.get_running_loop().create_future()
+
+    await session._handle_end_of_speech()
+
+    assert session._current_turn_id is None
+    assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_handle_end_of_speech_clears_turn_id_on_empty_transcript():
+    session = Session(_full_config())
+    session._current_turn_id = "turn-stale"
+    done = asyncio.get_running_loop().create_future()
+    done.set_result("")
+    session._stt_final_future = done
+
+    await session._handle_end_of_speech()
+
+    assert session._current_turn_id is None
+    assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_run_basic_agent_timeout_clears_turn_id():
+    class TimeoutAgent:
+        async def run(self, text: str) -> str:
+            raise AgentTimeoutError(timeout=0.01)
+
+    session = Session(_full_config(agent=TimeoutAgent()))
+    session._current_turn_id = "turn-stale"
+
+    await session._run_basic_agent("hello", token=None)
+
+    assert session._current_turn_id is None
+    assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_run_basic_agent_tts_error_cleans_turn_state_and_turn_id():
+    session = Session(_full_config())
+    session._current_turn_id = "turn-stale"
+    session._tts_synth.synthesize = AsyncMock(side_effect=RuntimeError("tts boom"))
+
+    with pytest.raises(RuntimeError, match="tts boom"):
+        await session._run_basic_agent("hello", token=None)
+
+    assert session._current_turn_id is None
+    assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
 async def test_pipeline_full_turn_with_provider_events():
     """Full pipeline using provider-scoped events (STTEvent, TTSEvent)."""
     chunks = [_make_chunk(), _make_chunk()]
@@ -416,6 +475,9 @@ async def test_pipeline_full_turn_with_provider_events():
         VADStopSpeaking,
         TurnStarted,
         STTFinal,
+        ToolCallResult,
+        ToolCallStarted,
+        AgentDelta,
         AgentFinal,
         BotStartedSpeaking,
         TTSAudio,
@@ -494,6 +556,76 @@ async def test_session_event_bus_accessible():
     session.event_bus.subscribe(STTFinal, lambda e: received.append(e))
     await session.event_bus.emit(STTFinal(text="test"))
     assert len(received) == 1
+
+
+@pytest.mark.asyncio
+async def test_session_subscribe_agent_events_helper():
+    session = Session(_full_config())
+
+    deltas: list[str] = []
+    finals: list[str] = []
+    tools_started: list[str] = []
+    tools_results: list[str] = []
+
+    registrations = session.subscribe_agent_events(
+        on_delta=lambda e: deltas.append(e.text),
+        on_final=lambda e: finals.append(e.text),
+        on_tool_started=lambda e: tools_started.append(e.tool_name),
+        on_tool_result=lambda e: tools_results.append(e.result),
+    )
+
+    await session.event_bus.emit(AgentDelta(text="chunk"))
+    await session.event_bus.emit(AgentFinal(text="done"))
+    await session.event_bus.emit(ToolCallStarted(tool_name="lookup", call_id="c1"))
+    await session.event_bus.emit(ToolCallResult(call_id="c1", result="42"))
+
+    assert deltas == ["chunk"]
+    assert finals == ["done"]
+    assert tools_started == ["lookup"]
+    assert tools_results == ["42"]
+
+    session.unsubscribe_handlers(registrations)
+    await session.event_bus.emit(AgentFinal(text="done again"))
+    assert deltas == ["chunk"]
+    assert finals == ["done"]
+
+
+@pytest.mark.asyncio
+async def test_session_events_include_correlation_ids():
+    session = Session(_full_config())
+    seen: list[TurnStarted | Interruption] = []
+    session.event_bus.subscribe(TurnStarted, lambda e: seen.append(e))
+    session.event_bus.subscribe(Interruption, lambda e: seen.append(e))
+
+    await session._emit(TurnStarted())
+    await session.cancel_turn(barge_in=True)
+
+    assert seen
+    for event in seen:
+        assert event.session_id == session.session_id
+
+
+@pytest.mark.asyncio
+async def test_turn_id_cleared_after_basic_agent_turn():
+    """After a normal basic-agent turn completes, _current_turn_id should be None
+    so that pre-turn events (like VADStartSpeaking) are not tagged with a stale ID."""
+    chunks = [_make_chunk(), _make_chunk()]
+    transport = FakeTransport(chunks=chunks)
+    config = _full_config(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="hi"),
+        agent=FakeAgent(),
+        tts=FakeTTS(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.2)
+    await session.stop()
+
+    assert session._current_turn_id is None
 
 
 @pytest.mark.asyncio
