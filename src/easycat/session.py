@@ -1571,11 +1571,13 @@ class Session:
                 self._first_tts_audio_time = result.first_audio_time
         except (asyncio.CancelledError, TTSTimeoutError):
             pass
-
-        if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
-            await self._turn_manager.bot_stopped_speaking()
-            self._spans.finish("turn")
-        self._current_turn_id = None
+        finally:
+            try:
+                if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
+                    await self._turn_manager.bot_stopped_speaking()
+                    self._spans.finish("turn")
+            finally:
+                self._current_turn_id = None
 
     # ── Internal helpers ───────────────────────────────────────
 
