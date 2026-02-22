@@ -284,7 +284,7 @@ class TurnManager:
         """Cancel the pending silence timeout task."""
         if self._silence_timer_task and not self._silence_timer_task.done():
             self._silence_timer_task.cancel()
-            self._silence_timer_task = None
+        self._silence_timer_task = None
         self._silence_start_time = None
 
     # ── Barge-in handling ───────────────────────────────────────
@@ -370,6 +370,10 @@ class TurnManager:
 
     async def bot_started_speaking(self) -> None:
         """Called when TTS playback begins."""
+        # Defensive cleanup: there should be no pending silence timer once a
+        # turn is complete, but cancel any stale timer to avoid cross-turn
+        # races in non-standard/manual integrations.
+        self._cancel_silence_timer()
         self._state = TurnManagerState.BOT_SPEAKING
         await self._event_bus.emit(
             BotStartedSpeaking(session_id=self._session_id, turn_id=self._current_turn_id)
