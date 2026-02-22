@@ -401,6 +401,7 @@ def test_all_tts_audio_delivered_requires_completed_synthesis():
     chunks = [("Hello", 320, False)]
     assert not _all_tts_audio_delivered(chunks, 320)
 
+
 def test_all_tts_audio_delivered_zero_audio_is_still_fully_delivered():
     chunks = [("", 0, True)]
     assert _all_tts_audio_delivered(chunks, 0)
