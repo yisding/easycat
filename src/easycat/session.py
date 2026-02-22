@@ -1555,12 +1555,18 @@ class Session:
             return
 
         self._playback_mark_seq += 1
-        mark_name = f"ec_playback_{self._playback_mark_seq}"
-        self._turn_playback_mark_to_bytes[mark_name] = self._turn_audio_bytes_sent
+        requested_mark_name = f"ec_playback_{self._playback_mark_seq}"
+        self._turn_playback_mark_to_bytes[requested_mark_name] = self._turn_audio_bytes_sent
         try:
-            await self._playback_ack_transport.send_playback_mark(name=mark_name)
+            mark_name = await self._playback_ack_transport.send_playback_mark(
+                name=requested_mark_name
+            )
+            if mark_name != requested_mark_name:
+                acked_bytes = self._turn_playback_mark_to_bytes.pop(requested_mark_name, None)
+                if acked_bytes is not None:
+                    self._turn_playback_mark_to_bytes[mark_name] = acked_bytes
         except Exception:
-            self._turn_playback_mark_to_bytes.pop(mark_name, None)
+            self._turn_playback_mark_to_bytes.pop(requested_mark_name, None)
             logger.debug("Failed to send playback mark", exc_info=True)
 
     def _on_playback_mark_ack(self, event: PlaybackMarkAck) -> None:
