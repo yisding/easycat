@@ -213,8 +213,6 @@ def _truncate_partial_text_to_boundary(text: str, chars: int) -> str:
 
     prefix = text[:chars]
     next_char = text[chars]
-    if not prefix:
-        return ""
 
     # If the cut already lands on a boundary (e.g. whitespace/punctuation),
     # keep the proportional estimate as-is.
@@ -696,11 +694,11 @@ class Session:
         # Used to estimate which portion of the agent response the user
         # heard before a barge-in.
         self._turn_audio_bytes_sent: int = 0
-        self._turn_audio_send_log: deque[tuple[float, int, float]] = deque()
+        self._turn_audio_send_log: deque[tuple[float, int, float]] = deque(maxlen=10_000)
         self._turn_playback_mark_to_bytes: dict[str, int] = {}
-        self._turn_playback_ack_log: deque[tuple[float, int]] = deque()
+        self._turn_playback_ack_log: deque[tuple[float, int]] = deque(maxlen=10_000)
         self._playback_mark_seq: int = 0
-        self._playback_mark_bytes_interval: int = 4_000  # throttle: ~250ms at 16kHz/16-bit
+        self._playback_mark_bytes_interval: int = 4_000  # throttle: ~125ms at 16kHz/16-bit
         self._bytes_since_last_mark: int = 0
         self._last_barge_in_time: float | None = None
 
@@ -1536,9 +1534,10 @@ class Session:
                     and self._turn_manager.state != TurnManagerState.BOT_SPEAKING
                     and self._outbound_queue.empty()
                 ):
-                    # Runtime trailing mark: once bot speech has ended and the
-                    # queue drains, ack the final playback position even when
-                    # bytes never reached the periodic mark threshold.
+                    # Best-effort trailing mark while the session is still
+                    # running.  The post-loop trailing mark (below) is the
+                    # reliable fallback at shutdown; this path provides a
+                    # timely ack for the final playback position mid-session.
                     self._bytes_since_last_mark = 0
                     await self._send_playback_mark()
             except Exception:
