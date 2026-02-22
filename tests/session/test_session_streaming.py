@@ -1458,6 +1458,77 @@ async def test_session_barge_in_during_tts_playback():
 
 
 @pytest.mark.asyncio
+async def test_session_barge_in_records_dequeued_unsynthesized_text_as_incomplete():
+    """Cancellation after dequeue should still count unsynthesized text as incomplete."""
+
+    token = CancelToken()
+
+    class TwoSentenceAgent:
+        interruption_notified = False
+
+        async def run(self, text: str) -> str:
+            return "First sentence. Second sentence."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="First sentence. ")
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Second sentence.")
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="First sentence. Second sentence.",
+            )
+
+        def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+            self.interruption_notified = True
+
+    class CancelAfterFirstChunkTTS:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+            self.calls += 1
+            if self.calls == 1:
+                yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+                await asyncio.sleep(0.2)
+                token.cancel()
+                return
+            pytest.fail("Second TTS chunk should not be synthesized after cancellation")
+
+        async def stop(self) -> None:
+            pass
+
+        async def cancel(self) -> None:
+            pass
+
+    agent = TwoSentenceAgent()
+    tts = CancelAfterFirstChunkTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=agent,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    await session.start()
+    try:
+        await session._run_streaming_agent("hello", token=token)
+    finally:
+        await session.stop()
+
+    assert agent.interruption_notified
+
+
+@pytest.mark.asyncio
 async def test_session_barge_in_after_full_playback_does_not_notify_interruption():
     """If all synthesized audio is already delivered, interruption should not rewrite history."""
 

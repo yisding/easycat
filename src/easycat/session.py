@@ -1358,6 +1358,10 @@ class Session:
                     if text is None:
                         break
                     if token and token.is_cancelled:
+                        # Cancellation can land after dequeue but before synthesis.
+                        # Preserve this chunk as incomplete so interruption
+                        # accounting does not treat the turn as fully delivered.
+                        tts_chunks.append((text, 0, False))
                         break
 
                     if not started:
@@ -1524,14 +1528,19 @@ class Session:
                     and self._bytes_since_last_mark >= self._playback_mark_bytes_interval
                 ):
                     self._bytes_since_last_mark = 0
-                    self._playback_mark_seq += 1
-                    mark_name = f"ec_playback_{self._playback_mark_seq}"
-                    self._turn_playback_mark_to_bytes[mark_name] = self._turn_audio_bytes_sent
-                    try:
-                        await self._playback_ack_transport.send_playback_mark(name=mark_name)
-                    except Exception:
-                        self._turn_playback_mark_to_bytes.pop(mark_name, None)
-                        logger.debug("Failed to send playback mark", exc_info=True)
+                    await self._send_playback_mark()
+                elif (
+                    sent_size > 0
+                    and self._bytes_since_last_mark > 0
+                    and self._playback_ack_transport is not None
+                    and self._turn_manager.state != TurnManagerState.BOT_SPEAKING
+                    and self._outbound_queue.empty()
+                ):
+                    # Runtime trailing mark: once bot speech has ended and the
+                    # queue drains, ack the final playback position even when
+                    # bytes never reached the periodic mark threshold.
+                    self._bytes_since_last_mark = 0
+                    await self._send_playback_mark()
             except Exception:
                 logger.exception("Failed to send audio to transport")
 
@@ -1539,14 +1548,20 @@ class Session:
         # throttle threshold, so the last playback position gets acked.
         if self._bytes_since_last_mark > 0 and self._playback_ack_transport is not None:
             self._bytes_since_last_mark = 0
-            self._playback_mark_seq += 1
-            mark_name = f"ec_playback_{self._playback_mark_seq}"
-            self._turn_playback_mark_to_bytes[mark_name] = self._turn_audio_bytes_sent
-            try:
-                await self._playback_ack_transport.send_playback_mark(name=mark_name)
-            except Exception:
-                self._turn_playback_mark_to_bytes.pop(mark_name, None)
-                logger.debug("Failed to send playback mark", exc_info=True)
+            await self._send_playback_mark()
+
+    async def _send_playback_mark(self) -> None:
+        if self._playback_ack_transport is None:
+            return
+
+        self._playback_mark_seq += 1
+        mark_name = f"ec_playback_{self._playback_mark_seq}"
+        self._turn_playback_mark_to_bytes[mark_name] = self._turn_audio_bytes_sent
+        try:
+            await self._playback_ack_transport.send_playback_mark(name=mark_name)
+        except Exception:
+            self._turn_playback_mark_to_bytes.pop(mark_name, None)
+            logger.debug("Failed to send playback mark", exc_info=True)
 
     def _on_playback_mark_ack(self, event: PlaybackMarkAck) -> None:
         """Track acknowledged playout byte positions for the active turn."""
