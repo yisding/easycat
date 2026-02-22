@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator
+from unittest.mock import patch
 
 import pytest
 
@@ -14,6 +15,7 @@ from easycat.events import (
     BotStoppedSpeaking,
     Event,
     Interruption,
+    PlaybackMarkAck,
     STTEvent,
     STTEventType,
     STTFinal,
@@ -56,6 +58,17 @@ class FakeTransport:
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         self.sent.append(chunk)
+
+
+class FakePlaybackAckTransport(FakeTransport):
+    def __init__(self, chunks: list[AudioChunk] | None = None) -> None:
+        super().__init__(chunks=chunks)
+        self.playback_marks: list[str] = []
+
+    async def send_playback_mark(self, name: str | None = None) -> str:
+        mark_name = name or f"mark_{len(self.playback_marks) + 1}"
+        self.playback_marks.append(mark_name)
+        return mark_name
 
 
 class FakeVAD:
@@ -481,3 +494,74 @@ async def test_session_event_bus_accessible():
     session.event_bus.subscribe(STTFinal, lambda e: received.append(e))
     await session.event_bus.emit(STTFinal(text="test"))
     assert len(received) == 1
+
+
+@pytest.mark.asyncio
+async def test_playback_mark_names_are_unique_across_turns():
+    transport = FakePlaybackAckTransport()
+    session = Session(_full_config(transport=transport))
+    # Use a small interval so a single test chunk triggers a mark.
+    session._playback_mark_bytes_interval = 1
+
+    await session._outbound_queue.put(_make_chunk())
+    await session._drain_outbound_audio()
+    first_mark = transport.playback_marks[-1]
+
+    session._is_running = True
+    with patch.object(session, "_start_stt_event_task"):
+        await session._on_turn_started(TurnStarted())
+    session._is_running = False
+
+    await session._outbound_queue.put(_make_chunk())
+    await session._drain_outbound_audio()
+    second_mark = transport.playback_marks[-1]
+
+    assert first_mark != second_mark
+
+    session._on_playback_mark_ack(PlaybackMarkAck(mark_name=first_mark))
+    assert len(session._turn_playback_ack_log) == 0
+
+    session._on_playback_mark_ack(PlaybackMarkAck(mark_name=second_mark))
+    assert len(session._turn_playback_ack_log) == 1
+    assert session._turn_playback_ack_log[0][1] == 320
+
+
+@pytest.mark.asyncio
+async def test_playback_mark_ack_tracks_transport_confirmed_name():
+    class CanonicalizingPlaybackAckTransport(FakePlaybackAckTransport):
+        async def send_playback_mark(self, name: str | None = None) -> str:
+            requested_name = name or f"mark_{len(self.playback_marks) + 1}"
+            canonical_name = f"canonical::{requested_name}"
+            self.playback_marks.append(canonical_name)
+            return canonical_name
+
+    transport = CanonicalizingPlaybackAckTransport()
+    session = Session(_full_config(transport=transport))
+    session._playback_mark_bytes_interval = 1
+
+    await session._outbound_queue.put(_make_chunk())
+    await session._drain_outbound_audio()
+
+    canonical_mark = transport.playback_marks[-1]
+    session._on_playback_mark_ack(PlaybackMarkAck(mark_name=canonical_mark))
+
+    assert len(session._turn_playback_ack_log) == 1
+    assert session._turn_playback_ack_log[0][1] == 320
+
+
+@pytest.mark.asyncio
+async def test_trailing_playback_mark_emitted_while_session_running():
+    transport = FakePlaybackAckTransport()
+    session = Session(_full_config(transport=transport))
+    session._playback_mark_bytes_interval = 10_000
+
+    await session.start()
+    await session._outbound_queue.put(_make_chunk())
+
+    for _ in range(20):
+        if transport.playback_marks:
+            break
+        await asyncio.sleep(0.01)
+
+    assert len(transport.playback_marks) == 1
+    await session.stop()

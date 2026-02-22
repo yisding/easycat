@@ -30,6 +30,7 @@ class TTSSynthResult:
     audio_produced: bool = False
     first_audio_time: float | None = None
     audio_bytes: int = 0
+    completed: bool = True
 
 
 class TTSSynthesizer:
@@ -105,8 +106,10 @@ class TTSSynthesizer:
 
             async for tts_event in tts_iter:
                 if token and token.is_cancelled:
+                    result.completed = False
                     break
                 if is_active and not is_active():
+                    result.completed = False
                     break
 
                 if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
@@ -131,7 +134,7 @@ class TTSSynthesizer:
                     await self._event_bus.emit(TTSMarkers(markers=tts_event.markers))
 
         except asyncio.CancelledError:
-            pass
+            result.completed = False
         except Exception as exc:
             if tts_span:
                 tts_span.set_error(exc)
