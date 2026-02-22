@@ -731,6 +731,11 @@ class Session:
     async def _emit(self, event: Any) -> None:
         await self.event_bus.emit(self._with_correlation(event))
 
+    def _reset_turn_state(self) -> None:
+        """Clear turn correlation state and reset the turn manager."""
+        self._current_turn_id = None
+        self._turn_manager.reset()
+
     # ── Properties ─────────────────────────────────────────────
 
     def subscribe_event(self, event_type: type, handler: EventHandler) -> None:
@@ -870,7 +875,7 @@ class Session:
             except asyncio.CancelledError:
                 pass
         await self.transport.disconnect()
-        self._turn_manager.reset()
+        self._reset_turn_state()
 
     async def shutdown(self) -> None:
         """Force-close everything and release resources."""
@@ -906,7 +911,7 @@ class Session:
         self._spans.finish_all(SpanStatus.CANCELLED)
         self._outbound_queue.close()
         await self.transport.disconnect()
-        self._turn_manager.reset()
+        self._reset_turn_state()
 
     # ── Cancellation ───────────────────────────────────────────
 
@@ -927,8 +932,7 @@ class Session:
         self._outbound_queue.flush_for_new_turn()
 
         if not barge_in:
-            self._current_turn_id = None
-            self._turn_manager.reset()
+            self._reset_turn_state()
 
         self._spans.finish_all(SpanStatus.CANCELLED)
 
@@ -940,8 +944,7 @@ class Session:
         await self._cancel_tts()
         self._outbound_queue.flush_for_new_turn()
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
-            self._current_turn_id = None
-            self._turn_manager.reset()
+            self._reset_turn_state()
 
     async def reset_state(self) -> None:
         """Cancel everything and return to idle/listening state.
@@ -960,8 +963,7 @@ class Session:
             self.agent.clear_history()
 
         # Reset turn manager state
-        self._current_turn_id = None
-        self._turn_manager.reset()
+        self._reset_turn_state()
 
         self._spans.finish_all(SpanStatus.CANCELLED)
 
@@ -1177,7 +1179,7 @@ class Session:
                 err = STTTimeoutError("stt", self._timeout_config.stt_timeout)
                 await self._emit(Error(exception=err, context="stt_timeout"))
                 self._spans.finish_with_error(Tracer.STT, err)
-                self._turn_manager.reset()
+                self._reset_turn_state()
                 return
             except Exception:
                 transcript = ""
@@ -1186,7 +1188,7 @@ class Session:
 
         if not transcript or (token and token.is_cancelled):
             self._spans.finish("turn", SpanStatus.CANCELLED)
-            self._turn_manager.reset()
+            self._reset_turn_state()
             return
 
         # Route to streaming or basic agent path
@@ -1221,14 +1223,14 @@ class Session:
         except AgentTimeoutError:
             self._spans.finish(Tracer.AGENT, SpanStatus.ERROR)
             self._spans.finish("turn", SpanStatus.ERROR)
-            self._turn_manager.reset()
+            self._reset_turn_state()
             return
         except Exception as exc:
             logger.exception("Agent error")
             await self._emit(Error(exception=exc, context="agent"))
             self._spans.finish_with_error(Tracer.AGENT, exc)
             self._spans.finish_with_error("turn", exc)
-            self._turn_manager.reset()
+            self._reset_turn_state()
             return
         finally:
             if self._spans.has(Tracer.AGENT):
@@ -1236,7 +1238,7 @@ class Session:
 
         if token and token.is_cancelled:
             self._spans.finish("turn", SpanStatus.CANCELLED)
-            self._turn_manager.reset()
+            self._reset_turn_state()
             return
 
         # Strip markdown formatting when enabled so TTS speaks clean text.
@@ -1548,7 +1550,7 @@ class Session:
 
         # If agent errored or was cancelled with no TTS started, ensure idle
         if self._turn_manager.state != TurnManagerState.IDLE:
-            self._turn_manager.reset()
+            self._reset_turn_state()
         self._current_turn_id = None
         status = SpanStatus.ERROR if agent_error else SpanStatus.OK
         self._spans.finish("turn", status)
