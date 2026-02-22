@@ -165,10 +165,16 @@ class EventTraceLogger:
             payload["call_id"] = event.call_id
         elif isinstance(event, ToolCallDelta):
             payload["call_id"] = event.call_id
-            payload["delta"] = self._truncate(event.delta)
+            if self._config.include_text:
+                payload["delta"] = self._truncate(event.delta)
+            else:
+                payload["delta_chars"] = len(event.delta)
         elif isinstance(event, ToolCallResult):
             payload["call_id"] = event.call_id
-            payload["result"] = self._truncate(event.result)
+            if self._config.include_text:
+                payload["result"] = self._truncate(event.result)
+            else:
+                payload["result_chars"] = len(event.result)
         elif isinstance(event, ReconnectAttempt):
             payload["provider"] = event.provider
             payload["attempt"] = event.attempt
@@ -212,8 +218,10 @@ class EventTraceLogger:
             "exception",
             "error",
             "result",
+            "result_chars",
             "text",
             "delta",
+            "delta_chars",
         ):
             value = payload.get(key)
             if value is None:
