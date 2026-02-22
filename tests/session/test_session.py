@@ -550,6 +550,29 @@ async def test_session_events_include_correlation_ids():
 
 
 @pytest.mark.asyncio
+async def test_turn_id_cleared_after_basic_agent_turn():
+    """After a normal basic-agent turn completes, _current_turn_id should be None
+    so that pre-turn events (like VADStartSpeaking) are not tagged with a stale ID."""
+    chunks = [_make_chunk(), _make_chunk()]
+    transport = FakeTransport(chunks=chunks)
+    config = _full_config(
+        transport=transport,
+        vad=FakeVAD(),
+        stt=FakeSTT(transcript="hi"),
+        agent=FakeAgent(),
+        tts=FakeTTS(),
+        turn_manager_config=_FAST_TURN,
+    )
+    session = Session(config)
+
+    await session.start()
+    await asyncio.sleep(0.2)
+    await session.stop()
+
+    assert session._current_turn_id is None
+
+
+@pytest.mark.asyncio
 async def test_playback_mark_names_are_unique_across_turns():
     transport = FakePlaybackAckTransport()
     session = Session(_full_config(transport=transport))
