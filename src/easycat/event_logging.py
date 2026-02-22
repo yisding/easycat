@@ -83,6 +83,7 @@ class EventTraceLogger:
         self._state = _TraceState()
         self._last_emit_time.clear()
         self._seen_counts.clear()
+        self._recent.clear()
         self._event_bus.subscribe_all(self._log_event)
         self._active = True
 

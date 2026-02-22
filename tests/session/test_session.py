@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -430,6 +430,19 @@ async def test_run_basic_agent_timeout_clears_turn_id():
     session._current_turn_id = "turn-stale"
 
     await session._run_basic_agent("hello", token=None)
+
+    assert session._current_turn_id is None
+    assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_run_basic_agent_tts_error_cleans_turn_state_and_turn_id():
+    session = Session(_full_config())
+    session._current_turn_id = "turn-stale"
+    session._tts_synth.synthesize = AsyncMock(side_effect=RuntimeError("tts boom"))
+
+    with pytest.raises(RuntimeError, match="tts boom"):
+        await session._run_basic_agent("hello", token=None)
 
     assert session._current_turn_id is None
     assert session.turn_state == TurnState.IDLE

@@ -159,7 +159,7 @@ async def test_event_trace_logger_sampling_and_rate_limit(caplog: pytest.LogCapt
 
 @pytest.mark.asyncio
 async def test_start_resets_rate_limit_state(caplog: pytest.LogCaptureFixture):
-    """Stopping and restarting EventTraceLogger should clear throttling state."""
+    """Stopping and restarting EventTraceLogger should clear run-local state."""
     bus = EventBus()
     tracer = EventTraceLogger(
         bus,
@@ -175,10 +175,12 @@ async def test_start_resets_rate_limit_state(caplog: pytest.LogCaptureFixture):
 
     first_run = [r for r in caplog.records if "Interruption" in r.getMessage()]
     assert len(first_run) == 1
+    assert len(tracer.snapshot_recent_events()) == 1
 
     tracer.stop()
     caplog.clear()
     tracer.start()
+    assert tracer.snapshot_recent_events() == []
 
     with caplog.at_level(logging.INFO, logger="easycat.event_trace"):
         await bus.emit(Interruption())
@@ -187,3 +189,5 @@ async def test_start_resets_rate_limit_state(caplog: pytest.LogCaptureFixture):
 
     second_run = [r for r in caplog.records if "Interruption" in r.getMessage()]
     assert len(second_run) == 1
+    assert len(tracer.snapshot_recent_events()) == 1
+    assert tracer.snapshot_recent_events()[-1]["event_index"] == 1
