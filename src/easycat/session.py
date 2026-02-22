@@ -1277,6 +1277,7 @@ class Session:
         - TTS task: dequeues text chunks and synthesizes them sequentially.
         """
         tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        turn_id = self._current_turn_id
         accumulated_text = ""
         structured_output: Any = None
         agent_error: BaseException | None = None
@@ -1551,7 +1552,8 @@ class Session:
         # If agent errored or was cancelled with no TTS started, ensure idle
         if self._turn_manager.state != TurnManagerState.IDLE:
             self._reset_turn_state()
-        self._current_turn_id = None
+        if self._current_turn_id == turn_id:
+            self._current_turn_id = None
         status = SpanStatus.ERROR if agent_error else SpanStatus.OK
         self._spans.finish("turn", status)
 
@@ -1559,6 +1561,7 @@ class Session:
 
     async def _synthesize_tts(self, text: str, token: CancelToken | None) -> None:
         """Synthesize TTS for a complete text and emit audio events."""
+        turn_id = self._current_turn_id
         await self._turn_manager.bot_started_speaking()
         try:
             result = await self._tts_synth.synthesize(
@@ -1577,7 +1580,8 @@ class Session:
                     await self._turn_manager.bot_stopped_speaking()
                     self._spans.finish("turn")
             finally:
-                self._current_turn_id = None
+                if self._current_turn_id == turn_id:
+                    self._current_turn_id = None
 
     # ── Internal helpers ───────────────────────────────────────
 
