@@ -136,6 +136,32 @@ def test_error_event():
     assert event.context == "stt"
 
 
+def test_event_timestamp_positional_args_remain_compatible():
+    ts = 123.456
+    exc = RuntimeError("boom")
+
+    stt_final = STTFinal("hello", ts)
+    agent_final = AgentFinal("hello", None, ts)
+    tool_started = ToolCallStarted("search", "c1", ts)
+    error = Error(exc, "ctx", ts)
+
+    assert stt_final.timestamp == ts
+    assert stt_final.session_id is None
+    assert stt_final.turn_id is None
+
+    assert agent_final.timestamp == ts
+    assert agent_final.session_id is None
+    assert agent_final.turn_id is None
+
+    assert tool_started.timestamp == ts
+    assert tool_started.session_id is None
+    assert tool_started.turn_id is None
+
+    assert error.timestamp == ts
+    assert error.session_id is None
+    assert error.turn_id is None
+
+
 # ── Provider-scoped event tests ────────────────────────────────────
 
 

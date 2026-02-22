@@ -28,8 +28,8 @@ class AudioIn:
     """Raw audio chunk received from transport."""
 
     chunk: AudioChunk
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -38,8 +38,8 @@ class AudioIn:
 class VADStartSpeaking:
     """VAD detected start of user speech."""
 
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -47,8 +47,8 @@ class VADStartSpeaking:
 class VADStopSpeaking:
     """VAD detected end of user speech."""
 
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -58,8 +58,8 @@ class STTPartial:
     """Partial transcript from STT provider."""
 
     text: str
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -68,8 +68,8 @@ class STTFinal:
     """Final transcript from STT provider for a completed turn."""
 
     text: str
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -79,8 +79,8 @@ class AgentDelta:
     """Streaming text delta from the agent."""
 
     text: str
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -95,8 +95,8 @@ class AgentFinal:
 
     text: str
     structured_output: Any = None
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -106,8 +106,8 @@ class TTSAudio:
     """Audio chunk produced by TTS provider."""
 
     chunk: AudioChunk
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -116,8 +116,8 @@ class TTSMarkers:
     """Word/viseme alignment markers from TTS."""
 
     markers: list[dict[str, Any]]
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -126,8 +126,8 @@ class TTSMarkers:
 class BotStartedSpeaking:
     """Bot began playing TTS audio."""
 
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -135,8 +135,8 @@ class BotStartedSpeaking:
 class BotStoppedSpeaking:
     """Bot finished playing TTS audio."""
 
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -144,8 +144,8 @@ class BotStoppedSpeaking:
 class TurnStarted:
     """A new user turn has begun (VAD triggered)."""
 
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -153,8 +153,8 @@ class TurnStarted:
 class TurnEnded:
     """User turn has ended (speech capture complete)."""
 
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -163,8 +163,8 @@ class TurnEnded:
 class Interruption:
     """User barged in while bot was speaking."""
 
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -183,8 +183,8 @@ class ToolCallStarted:
 
     tool_name: str
     call_id: str
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -194,8 +194,8 @@ class ToolCallDelta:
 
     call_id: str
     delta: str
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -205,8 +205,8 @@ class ToolCallResult:
 
     call_id: str
     result: str
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -217,8 +217,8 @@ class ReconnectAttempt:
 
     provider: str
     attempt: int
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -227,8 +227,8 @@ class ReconnectSuccess:
     """A provider reconnection succeeded."""
 
     provider: str
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -238,8 +238,8 @@ class ReconnectFailure:
 
     provider: str
     error: str
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -249,8 +249,8 @@ class DTMF:
     """Single DTMF digit detected."""
 
     digit: str
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -259,8 +259,8 @@ class DTMFAggregated:
     """Aggregated DTMF digit sequence."""
 
     sequence: str
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -269,8 +269,8 @@ class VoicemailDetected:
     """Voicemail / answering machine detection result."""
 
     result: str  # "human" | "machine" | "unknown"
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -281,8 +281,8 @@ class Error:
 
     exception: BaseException
     context: str = ""
-    session_id: str | None = None
-    turn_id: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 

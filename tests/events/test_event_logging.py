@@ -7,7 +7,15 @@ import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.event_logging import EventLoggingConfig, EventTraceLogger
-from easycat.events import EventBus, Interruption, STTPartial, ToolCallStarted, TTSAudio
+from easycat.events import (
+    EventBus,
+    Interruption,
+    STTPartial,
+    ToolCallDelta,
+    ToolCallResult,
+    ToolCallStarted,
+    TTSAudio,
+)
 
 
 @pytest.mark.asyncio
@@ -68,6 +76,30 @@ async def test_event_trace_logger_can_hide_text(caplog: pytest.LogCaptureFixture
 
     assert any("text_chars=12" in record.getMessage() for record in caplog.records)
     assert not any("private text" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_event_trace_logger_can_hide_tool_text(caplog: pytest.LogCaptureFixture):
+    bus = EventBus()
+    tracer = EventTraceLogger(
+        bus,
+        EventLoggingConfig(enabled=True, include_text=False),
+    )
+    tracer.start()
+
+    with caplog.at_level(logging.INFO, logger="easycat.event_trace"):
+        await bus.emit(ToolCallDelta(call_id="c1", delta="secret input"))
+        await bus.emit(ToolCallResult(call_id="c1", result="secret output"))
+
+    tracer.stop()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("ToolCallDelta" in message and "delta_chars=12" in message for message in messages)
+    assert any(
+        "ToolCallResult" in message and "result_chars=13" in message for message in messages
+    )
+    assert not any("secret input" in message for message in messages)
+    assert not any("secret output" in message for message in messages)
 
 
 @pytest.mark.asyncio
