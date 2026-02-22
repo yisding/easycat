@@ -14,6 +14,7 @@ from easycat.events import (
     Error,
     EventBus,
     Interruption,
+    PlaybackMarkAck,
     ReconnectAttempt,
     ReconnectFailure,
     ReconnectSuccess,
@@ -87,6 +88,12 @@ def test_lifecycle_events():
 
 def test_interruption_event():
     event = Interruption()
+    assert event.timestamp > 0
+
+
+def test_playback_mark_ack_event():
+    event = PlaybackMarkAck(mark_name="m1")
+    assert event.mark_name == "m1"
     assert event.timestamp > 0
 
 

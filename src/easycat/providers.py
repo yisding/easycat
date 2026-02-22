@@ -145,3 +145,17 @@ class Transport(Protocol):
         outbound buffering.
         """
         ...
+
+
+@runtime_checkable
+class PlaybackAckTransport(Protocol):
+    """Optional transport capability for explicit playback acknowledgements.
+
+    Transports that support this can place a mark in their outbound playback
+    queue and later emit an acknowledgement (for example via EventBus) when
+    playback reaches that mark.
+    """
+
+    async def send_playback_mark(self, name: str | None = None) -> str:
+        """Enqueue a playback mark and return the mark name used."""
+        ...

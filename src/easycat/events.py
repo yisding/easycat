@@ -168,6 +168,14 @@ class Interruption:
     timestamp: float = field(default_factory=time.monotonic)
 
 
+@dataclass(frozen=True)
+class PlaybackMarkAck:
+    """Transport acknowledged playback reaching a previously queued mark."""
+
+    mark_name: str
+    timestamp: float = field(default_factory=time.monotonic)
+
+
 # Tools
 @dataclass(frozen=True)
 class ToolCallStarted:
@@ -294,6 +302,7 @@ Event = (
     | TurnStarted
     | TurnEnded
     | Interruption
+    | PlaybackMarkAck
     | ToolCallStarted
     | ToolCallDelta
     | ToolCallResult

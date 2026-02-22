@@ -21,7 +21,7 @@ import pytest
 import websockets
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.events import DTMF, EventBus
+from easycat.events import DTMF, EventBus, PlaybackMarkAck
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import (
     TwilioTransport,
@@ -385,6 +385,10 @@ def _twilio_stop_msg(stream_sid: str = "MZ123") -> str:
     return json.dumps({"event": "stop", "streamSid": stream_sid})
 
 
+def _twilio_mark_msg(name: str, stream_sid: str = "MZ123") -> str:
+    return json.dumps({"event": "mark", "streamSid": stream_sid, "mark": {"name": name}})
+
+
 class TestTwilioTransport:
     """Tests for TwilioTransport with mocked Twilio messages."""
 
@@ -464,6 +468,30 @@ class TestTwilioTransport:
         await transport.disconnect()
 
     @pytest.mark.asyncio
+    async def test_send_playback_mark_to_twilio(self):
+        """Playback marks are sent as Twilio mark messages."""
+        port = _find_free_port()
+        config = TwilioTransportConfig(host="127.0.0.1", port=port)
+        transport = TwilioTransport(config)
+        await transport.connect()
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.send(_twilio_connected_msg())
+            await ws.send(_twilio_start_msg("STREAM1"))
+            await asyncio.sleep(0.1)
+
+            mark_name = await transport.send_playback_mark("unit_mark")
+            assert mark_name == "unit_mark"
+
+            raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+            msg = json.loads(raw)
+            assert msg["event"] == "mark"
+            assert msg["streamSid"] == "STREAM1"
+            assert msg["mark"]["name"] == "unit_mark"
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
     async def test_dtmf_emitted_to_event_bus(self):
         """DTMF messages from Twilio are emitted as DTMF events."""
         port = _find_free_port()
@@ -485,6 +513,29 @@ class TestTwilioTransport:
 
         await transport.disconnect()
         assert digits_received == ["5", "#"]
+
+    @pytest.mark.asyncio
+    async def test_mark_ack_emitted_to_event_bus(self):
+        """Twilio mark messages are emitted as PlaybackMarkAck events."""
+        port = _find_free_port()
+        config = TwilioTransportConfig(host="127.0.0.1", port=port)
+        event_bus = EventBus()
+        transport = TwilioTransport(config, event_bus=event_bus)
+
+        marks_received: list[str] = []
+        event_bus.subscribe(PlaybackMarkAck, lambda e: marks_received.append(e.mark_name))
+
+        await transport.connect()
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.send(_twilio_connected_msg())
+            await ws.send(_twilio_start_msg())
+            await ws.send(_twilio_mark_msg("mark_1"))
+            await ws.send(_twilio_mark_msg("mark_2"))
+            await asyncio.sleep(0.1)
+
+        await transport.disconnect()
+        assert marks_received == ["mark_1", "mark_2"]
 
     @pytest.mark.asyncio
     async def test_stream_metadata(self):

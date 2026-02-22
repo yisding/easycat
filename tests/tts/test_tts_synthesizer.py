@@ -72,6 +72,17 @@ class FailingTTS:
         pass
 
 
+class CancelledTTS:
+    """TTS that raises CancelledError mid-stream."""
+
+    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+        raise asyncio.CancelledError()
+
+    async def cancel(self) -> None:
+        pass
+
+
 def _make_synth(
     tts=None,
     metrics=None,
@@ -196,6 +207,17 @@ async def test_synthesize_stops_on_is_active_false():
     await synth.synthesize("hello", None, is_active=lambda: active)
 
     assert len(received) < 5
+
+
+@pytest.mark.asyncio
+async def test_synthesize_marks_incomplete_on_cancelled_error():
+    synth, _, _ = _make_synth(tts=CancelledTTS())
+
+    result = await synth.synthesize("hello", None)
+
+    assert result.audio_produced
+    assert result.audio_bytes == 320
+    assert not result.completed
 
 
 # ── Metrics tests ─────────────────────────────────────────────────
