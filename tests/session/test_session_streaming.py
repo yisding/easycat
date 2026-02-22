@@ -2122,3 +2122,89 @@ async def test_streaming_strip_markdown_failed_turn_does_not_rewrite_prior_histo
 
     await session._run_streaming_agent("second", token=None)
     assert runner.history == history_after_success
+
+
+@pytest.mark.asyncio
+async def test_streaming_interruption_prefers_cancel_token_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Interruption cutoff should prefer token.cancelled_at over last barge-in time."""
+
+    class CapturingAgent(FastDoneAgent):
+        pass
+
+    captured: dict[str, float | None] = {"cutoff": None}
+
+    def _capture_cutoff(
+        send_log: list[tuple[float, int, float]],
+        playback_ack_log: list[tuple[float, int]],
+        cutoff_time: float | None,
+        *,
+        ack_stale_ms: int,
+        ack_tail_cap_ms: int,
+    ) -> int:
+        captured["cutoff"] = cutoff_time
+        return 0
+
+    monkeypatch.setattr("easycat.session._audio_bytes_likely_heard_hybrid", _capture_cutoff)
+
+    agent = CapturingAgent()
+    tts = SlowStartTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="test"),
+            agent=agent,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    token = CancelToken()
+    token._cancelled_at = 10.0
+    session._last_barge_in_time = 20.0
+
+    async def _cancel_during_tts_playback() -> None:
+        await agent.finished.wait()
+        await tts.started.wait()
+        token.cancel()
+
+    cancel_task = asyncio.create_task(_cancel_during_tts_playback())
+    await session._run_streaming_agent("test", token=token)
+    await cancel_task
+
+    assert captured["cutoff"] == pytest.approx(10.0)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_tts_does_not_clear_newer_turn_id() -> None:
+    """_synthesize_tts should not clear _current_turn_id after a newer turn starts."""
+
+    class DelayedTTS(FakeTTS):
+        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+            self.synthesized_texts.append(text)
+            await asyncio.sleep(0.05)
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="test"),
+            agent=FastDoneAgent(),
+            tts=DelayedTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    session._current_turn_id = "turn-old"
+    task = asyncio.create_task(session._synthesize_tts("hello", token=CancelToken()))
+    await asyncio.sleep(0.01)
+    session._current_turn_id = "turn-new"
+
+    await task
+
+    assert session._current_turn_id == "turn-new"
