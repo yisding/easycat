@@ -32,6 +32,7 @@ from easycat.events import (
 )
 from easycat.session import Session, SessionConfig, TurnState
 from easycat.stubs import NoopNoiseReducer
+from easycat.timeouts import AgentTimeoutError
 from easycat.tracing import InMemoryTraceExporter, SpanStatus, Tracer
 from easycat.turn_manager import TurnManagerConfig
 
@@ -390,6 +391,48 @@ async def test_run_basic_agent_cancellation_marks_agent_span_cancelled():
     agent_spans = [span for span in exporter.spans if span.name == Tracer.AGENT]
     assert len(agent_spans) == 1
     assert agent_spans[0].status == SpanStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_handle_end_of_speech_clears_turn_id_on_stt_timeout():
+    session = Session(_full_config())
+    session._current_turn_id = "turn-stale"
+    session._timeout_config.stt_timeout = 0.01
+    session._stt_final_future = asyncio.get_running_loop().create_future()
+
+    await session._handle_end_of_speech()
+
+    assert session._current_turn_id is None
+    assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_handle_end_of_speech_clears_turn_id_on_empty_transcript():
+    session = Session(_full_config())
+    session._current_turn_id = "turn-stale"
+    done = asyncio.get_running_loop().create_future()
+    done.set_result("")
+    session._stt_final_future = done
+
+    await session._handle_end_of_speech()
+
+    assert session._current_turn_id is None
+    assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_run_basic_agent_timeout_clears_turn_id():
+    class TimeoutAgent:
+        async def run(self, text: str) -> str:
+            raise AgentTimeoutError(timeout=0.01)
+
+    session = Session(_full_config(agent=TimeoutAgent()))
+    session._current_turn_id = "turn-stale"
+
+    await session._run_basic_agent("hello", token=None)
+
+    assert session._current_turn_id is None
+    assert session.turn_state == TurnState.IDLE
 
 
 @pytest.mark.asyncio
