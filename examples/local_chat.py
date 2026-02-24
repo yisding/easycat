@@ -10,18 +10,25 @@ Setup:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 
 from easycat import (
     EasyCatConfig,
+    EchoCancellationConfig,
     LocalTransportConfig,
     OpenAIAgentsAdapter,
     create_session,
 )
+from easycat.events import AgentFinal, Interruption, STTFinal
+
+logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise SystemExit("OPENAI_API_KEY is required.")
@@ -42,10 +49,15 @@ async def main() -> None:
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
+        echo_cancellation=EchoCancellationConfig(enabled=True),
         agent=adapter,
         wrap_agent=False,
     )
     session = create_session(config)
+
+    session.subscribe_event(STTFinal, lambda e: logger.warning("USER: %s", e.text))
+    session.subscribe_event(AgentFinal, lambda e: logger.warning("BOT:  %s", e.text))
+    session.subscribe_event(Interruption, lambda _: logger.warning("** BARGE-IN **"))
 
     await session.start()
 

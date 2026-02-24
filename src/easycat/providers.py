@@ -111,6 +111,25 @@ class NoiseReducer(Protocol):
         ...
 
 
+# ── Echo Canceller ────────────────────────────────────────────────
+
+
+@runtime_checkable
+class EchoCanceller(Protocol):
+    """Echo cancellation provider interface.
+
+    Processes near-end (mic) audio and accepts far-end (speaker) reference.
+    """
+
+    async def process(self, chunk: AudioChunk) -> AudioChunk:
+        """Process a near-end audio chunk and return an echo-cancelled version."""
+        ...
+
+    def feed_reference(self, chunk: AudioChunk) -> None:
+        """Feed a far-end audio chunk as the AEC reference signal."""
+        ...
+
+
 # ── Transport ──────────────────────────────────────────────────────
 
 
