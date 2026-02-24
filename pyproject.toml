@@ -1,7 +1,7 @@
 [project]
 name = "easycat"
 version = "0.1.0"
-description = "Slim, batteries-included voice bot framework for the OpenAI Agents SDK"
+description = "Slim, batteries-included voice bot framework for AI Agents"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
