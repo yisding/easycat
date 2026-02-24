@@ -24,6 +24,7 @@ from easycat._span_manager import SpanManager
 from easycat.agent_runner import AgentStreamEventType
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
+from easycat.echo_cancellation import PassthroughAEC
 from easycat.events import (
     AgentDelta,
     AgentFinal,
@@ -52,7 +53,9 @@ from easycat.metrics import (
     STT_LATENCY,
     MetricsCollector,
 )
+from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.providers import (
+    EchoCanceller,
     NoiseReducer,
     PlaybackAckTransport,
     STTProvider,
@@ -63,7 +66,6 @@ from easycat.providers import (
 from easycat.strip_markdown import strip_markdown
 from easycat.stubs import (
     NoopAgent,
-    NoopNoiseReducer,
     NoopSTT,
     NoopTransport,
     NoopTTS,
@@ -146,6 +148,7 @@ class SessionConfig:
     tts: TTSProvider | None = None
     vad: VADProvider | None = None
     noise_reducer: NoiseReducer | None = None
+    echo_canceller: EchoCanceller | None = None
     transport: Transport | None = None
     agent: Agent | None = None
     event_bus: EventBus | None = None
@@ -159,6 +162,7 @@ class SessionConfig:
 
     # Pipeline flags
     enable_noise_reduction: bool = True
+    enable_echo_cancellation: bool = True
     enable_vad: bool = True
     strip_markdown: bool = False
 
@@ -589,7 +593,8 @@ class Session:
         self.stt = cfg.stt or NoopSTT()
         self.tts = cfg.tts or NoopTTS()
         self.vad = cfg.vad or NoopVAD()
-        self.noise_reducer = cfg.noise_reducer or NoopNoiseReducer()
+        self.noise_reducer = cfg.noise_reducer or PassthroughNoiseReducer()
+        self.echo_canceller = cfg.echo_canceller or PassthroughAEC()
         self.transport = cfg.transport or NoopTransport()
         self.agent: Agent = cfg.agent or NoopAgent()
 
@@ -600,7 +605,7 @@ class Session:
             noops.append("tts")
         if isinstance(self.vad, NoopVAD):
             noops.append("vad")
-        if isinstance(self.noise_reducer, NoopNoiseReducer) and cfg.enable_noise_reduction:
+        if isinstance(self.noise_reducer, PassthroughNoiseReducer) and cfg.enable_noise_reduction:
             noops.append("noise_reducer")
         if isinstance(self.transport, NoopTransport):
             noops.append("transport")
@@ -621,6 +626,9 @@ class Session:
 
         # Pipeline flags
         self._enable_noise_reduction = cfg.enable_noise_reduction
+        self._enable_aec = cfg.enable_echo_cancellation and not isinstance(
+            self.echo_canceller, PassthroughAEC
+        )
         self._enable_vad = cfg.enable_vad
         self._interruption_mode = cfg.interruption_mode
         self._interruption_latency_compensation_ms = max(
@@ -1098,7 +1106,7 @@ class Session:
     # ── Pipeline ───────────────────────────────────────────────
 
     async def _run_pipeline(self) -> None:
-        """Main audio receive loop: Transport -> Noise Reduction -> VAD -> STT.
+        """Main audio receive loop: Transport -> Noise Reduction -> AEC -> VAD -> STT.
 
         On STT final -> Agent -> TTS -> Transport audio out.
         """
@@ -1125,7 +1133,11 @@ class Session:
                         if self._spans.has(Tracer.NOISE_REDUCTION):
                             self._spans.finish(Tracer.NOISE_REDUCTION, noise_reduction_status)
 
-                # Stage 2: VAD (optional)
+                # Stage 2: Echo cancellation (optional)
+                if self._enable_aec:
+                    chunk = await self.echo_canceller.process(chunk)
+
+                # Stage 3: VAD (optional)
                 if self._enable_vad:
                     self._spans.start(Tracer.VAD)
                     vad_status = SpanStatus.OK
@@ -1147,7 +1159,7 @@ class Session:
                 # TurnManager always sees raw audio frames for pre-roll buffering
                 self._turn_manager.on_audio_frame(chunk)
 
-                # Stage 3: Feed audio to STT (if listening)
+                # Stage 4: Feed audio to STT (if listening)
                 if self.is_speaking and self._stt_active:
                     await self.stt.send_audio(chunk)
 
@@ -1600,6 +1612,8 @@ class Session:
                 break
             try:
                 await self.transport.send_audio(chunk)
+                if self._enable_aec:
+                    self.echo_canceller.feed_reference(chunk)
                 sent_size = len(chunk.data)
                 self._turn_audio_bytes_sent += sent_size
                 self._turn_audio_send_log.append((time.monotonic(), sent_size, chunk.duration_ms))

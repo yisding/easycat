@@ -7,6 +7,7 @@ from typing import Any
 
 from easycat.agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.agents.factory import auto_adapt_agent
+from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.event_logging import EventLoggingConfig, EventTraceLogger
 from easycat.events import EventBus
 from easycat.metrics import InMemoryMetrics, MetricsCollector
@@ -78,6 +79,7 @@ class EasyCatConfig:
     tts: TTSConfig | None = None
     vad: VADConfig = field(default_factory=VADConfig)
     noise_reduction: NoiseReducerConfig = field(default_factory=NoiseReducerConfig)
+    echo_cancellation: EchoCancellationConfig = field(default_factory=EchoCancellationConfig)
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
     smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
@@ -96,7 +98,14 @@ class EasyCatConfig:
             if self.stt is None:
                 self.stt = OpenAISTTConfig(api_key=self.openai_api_key)
             if self.tts is None:
-                self.tts = OpenAITTSConfig(api_key=self.openai_api_key)
+                # Match the TTS output format to the transport's audio format
+                # so that TTSBase._normalize_audio resamples correctly
+                # (e.g. OpenAI produces 24kHz but LocalTransport plays 16kHz).
+                transport_fmt = getattr(self.transport, "audio_format", None)
+                tts_kwargs: dict[str, Any] = {"api_key": self.openai_api_key}
+                if transport_fmt is not None:
+                    tts_kwargs["output_format"] = transport_fmt
+                self.tts = OpenAITTSConfig(**tts_kwargs)
         self._validate()
 
     def _validate(self) -> None:
@@ -122,6 +131,7 @@ def create_session(config: EasyCatConfig) -> Session:
     tts = create_tts_provider_from_config(config.tts, event_bus)
     vad = create_vad(config.vad)
     noise_reducer = create_noise_reducer(config.noise_reduction)
+    echo_canceller = create_echo_canceller(config.echo_cancellation)
     transport = _create_transport(config.transport, event_bus)
 
     if config.agent is not None:
@@ -150,6 +160,7 @@ def create_session(config: EasyCatConfig) -> Session:
             tts=tts,
             vad=vad,
             noise_reducer=noise_reducer,
+            echo_canceller=echo_canceller,
             transport=transport,
             agent=agent,
             event_bus=event_bus,
