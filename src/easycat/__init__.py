@@ -119,6 +119,7 @@ from easycat.echo_cancellation import (
 from easycat.noise_reduction import (
     KrispNoiseReducer,
     NoiseReducerConfig,
+    PassthroughNoiseReducer,
     RNNoiseReducer,
     create_noise_reducer,
 )
@@ -251,6 +252,7 @@ __all__ = [
     # Noise reduction
     "RNNoiseReducer",
     "KrispNoiseReducer",
+    "PassthroughNoiseReducer",
     "NoiseReducerConfig",
     "create_noise_reducer",
     # Transports

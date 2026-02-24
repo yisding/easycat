@@ -58,23 +58,6 @@ class NoopVAD:
         pass
 
 
-class NoopNoiseReducer:
-    """Noise reducer that passes audio through unchanged — used as default."""
-
-    async def process(self, chunk: AudioChunk) -> AudioChunk:
-        return chunk
-
-
-class NoopEchoCanceller:
-    """Echo canceller that passes audio through unchanged — used as default."""
-
-    async def process(self, chunk: AudioChunk) -> AudioChunk:
-        return chunk
-
-    def feed_reference(self, chunk: AudioChunk) -> None:
-        pass
-
-
 class NoopTransport:
     """Transport that produces no audio — used as default."""
 

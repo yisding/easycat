@@ -24,6 +24,7 @@ from easycat._span_manager import SpanManager
 from easycat.agent_runner import AgentStreamEventType
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
+from easycat.echo_cancellation import PassthroughAEC
 from easycat.events import (
     AgentDelta,
     AgentFinal,
@@ -52,6 +53,7 @@ from easycat.metrics import (
     STT_LATENCY,
     MetricsCollector,
 )
+from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.providers import (
     EchoCanceller,
     NoiseReducer,
@@ -64,8 +66,6 @@ from easycat.providers import (
 from easycat.strip_markdown import strip_markdown
 from easycat.stubs import (
     NoopAgent,
-    NoopEchoCanceller,
-    NoopNoiseReducer,
     NoopSTT,
     NoopTransport,
     NoopTTS,
@@ -593,8 +593,8 @@ class Session:
         self.stt = cfg.stt or NoopSTT()
         self.tts = cfg.tts or NoopTTS()
         self.vad = cfg.vad or NoopVAD()
-        self.noise_reducer = cfg.noise_reducer or NoopNoiseReducer()
-        self.echo_canceller = cfg.echo_canceller or NoopEchoCanceller()
+        self.noise_reducer = cfg.noise_reducer or PassthroughNoiseReducer()
+        self.echo_canceller = cfg.echo_canceller or PassthroughAEC()
         self.transport = cfg.transport or NoopTransport()
         self.agent: Agent = cfg.agent or NoopAgent()
 
@@ -605,7 +605,7 @@ class Session:
             noops.append("tts")
         if isinstance(self.vad, NoopVAD):
             noops.append("vad")
-        if isinstance(self.noise_reducer, NoopNoiseReducer) and cfg.enable_noise_reduction:
+        if isinstance(self.noise_reducer, PassthroughNoiseReducer) and cfg.enable_noise_reduction:
             noops.append("noise_reducer")
         if isinstance(self.transport, NoopTransport):
             noops.append("transport")
@@ -627,7 +627,7 @@ class Session:
         # Pipeline flags
         self._enable_noise_reduction = cfg.enable_noise_reduction
         self._enable_aec = cfg.enable_echo_cancellation and not isinstance(
-            self.echo_canceller, NoopEchoCanceller
+            self.echo_canceller, PassthroughAEC
         )
         self._enable_vad = cfg.enable_vad
         self._interruption_mode = cfg.interruption_mode
