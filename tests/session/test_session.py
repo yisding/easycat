@@ -30,8 +30,8 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
+from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.session import Session, SessionConfig, TurnState
-from easycat.stubs import NoopNoiseReducer
 from easycat.timeouts import AgentTimeoutError
 from easycat.tracing import InMemoryTraceExporter, SpanStatus, Tracer
 from easycat.turn_manager import TurnManagerConfig
@@ -148,7 +148,7 @@ def _full_config(**overrides) -> SessionConfig:
         stt=FakeSTT(),
         agent=FakeAgent(),
         tts=FakeTTS(),
-        noise_reducer=NoopNoiseReducer(),
+        noise_reducer=PassthroughNoiseReducer(),
         enable_noise_reduction=False,
     )
     defaults.update(overrides)
