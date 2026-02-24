@@ -232,12 +232,20 @@ async def test_krisp_vad_configure():
 # ── Factory tests ────────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(
+    any(importlib.util.find_spec(m) is not None for m in ("torch", "ten_vad", "krisp_audio")),
+    reason="A VAD backend is installed; cannot test no-backends path",
+)
 def test_vad_factory_no_backends():
     """Factory should raise RuntimeError when no backends are available."""
     with pytest.raises(RuntimeError, match="No VAD backend"):
         create_vad(VADConfig(backend="auto"))
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("torch") is not None,
+    reason="torch is installed; cannot test missing-torch path",
+)
 def test_vad_factory_explicit_silero_fails():
     """Explicitly requesting silero without torch should raise."""
     with pytest.raises(RuntimeError, match="torch|PyTorch|Silero"):

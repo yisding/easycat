@@ -1,7 +1,7 @@
 [project]
 name = "easycat"
 version = "0.1.0"
-description = "Slim, batteries-included voice bot framework for the OpenAI Agents SDK"
+description = "Slim, batteries-included voice bot framework for AI Agents"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,6 +17,7 @@ openai = ["openai>=1.0.0"]
 deepgram = ["deepgram-sdk>=3.0.0"]
 elevenlabs = ["elevenlabs>=1.0.0"]
 telephony = ["fastapi>=0.110.0", "python-multipart>=0.0.9", "twilio>=9.0.0", "uvicorn>=0.29.0"]
+aec = ["livekit>=1.0.0"]
 local = ["sounddevice>=0.4.6"]
 rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.31.0"]
 ten-vad = ["ten-vad>=1.0.6.8", "numpy>=1.24.0"]
@@ -24,6 +25,7 @@ smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.16.0", "transformers>=4.36.0"]
 webrtc = ["aiortc>=1.9.0", "aiohttp>=3.9.0"]
 all = [
     "aiortc>=1.9.0",
+    "livekit>=1.0.0",
     "aiohttp>=3.9.0",
     "deepgram-sdk>=3.0.0",
     "elevenlabs>=1.0.0",

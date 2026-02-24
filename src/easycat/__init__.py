@@ -88,7 +88,14 @@ from easycat.events import (
 
 # ── Provider protocols ────────────────────────────────────────────
 
-from easycat.providers import NoiseReducer, STTProvider, Transport, TTSProvider, VADProvider
+from easycat.providers import (
+    EchoCanceller,
+    NoiseReducer,
+    STTProvider,
+    Transport,
+    TTSProvider,
+    VADProvider,
+)
 
 # ── Audio format ──────────────────────────────────────────────────
 
@@ -103,9 +110,16 @@ from easycat.audio_format import (
 
 # ── Provider implementations ─────────────────────────────────────
 
+from easycat.echo_cancellation import (
+    EchoCancellationConfig,
+    LiveKitAEC,
+    PassthroughAEC,
+    create_echo_canceller,
+)
 from easycat.noise_reduction import (
     KrispNoiseReducer,
     NoiseReducerConfig,
+    PassthroughNoiseReducer,
     RNNoiseReducer,
     create_noise_reducer,
 )
@@ -197,6 +211,7 @@ __all__ = [
     "VADStopSpeaking",
     "VoicemailDetected",
     # Provider protocols
+    "EchoCanceller",
     "NoiseReducer",
     "STTProvider",
     "Transport",
@@ -229,9 +244,15 @@ __all__ = [
     "TenVAD",
     "VADConfig",
     "create_vad",
+    # Echo cancellation
+    "EchoCancellationConfig",
+    "LiveKitAEC",
+    "PassthroughAEC",
+    "create_echo_canceller",
     # Noise reduction
     "RNNoiseReducer",
     "KrispNoiseReducer",
+    "PassthroughNoiseReducer",
     "NoiseReducerConfig",
     "create_noise_reducer",
     # Transports
