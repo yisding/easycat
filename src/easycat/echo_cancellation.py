@@ -64,6 +64,13 @@ class LiveKitAEC:
         self._apm: Any = rtc.AudioProcessingModule(echo_cancellation=True)
         logger.info("LiveKit AEC initialized")
 
+    def close(self) -> None:
+        """Release AudioProcessingModule resources."""
+        self._apm = None
+
+    def __del__(self) -> None:
+        self.close()
+
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         """Process a near-end (microphone) audio chunk through AEC."""
         frame_samples = _frame_samples_for_rate(chunk.format.sample_rate)
