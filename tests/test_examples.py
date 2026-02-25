@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import types
@@ -116,6 +117,17 @@ def test_build_openai_agents_adapter_falls_back_to_responses_api_toggle(
     assert called == ["responses"]
 
 
+def _python_executable() -> str:
+    candidate = sys.executable or ""
+    if candidate:
+        return candidate
+    for name in ("python3", "python"):
+        resolved = shutil.which(name)
+        if resolved:
+            return resolved
+    pytest.skip("No python executable available for subprocess test")
+
+
 @pytest.mark.parametrize(
     "script_path",
     [
@@ -131,7 +143,7 @@ def test_examples_can_run_as_scripts_without_package_import_errors(script_path: 
     env.pop("OPENAI_API_KEY", None)
 
     completed = subprocess.run(
-        [sys.executable, script_path],
+        [_python_executable(), script_path],
         cwd="/workspace/easycat",
         env=env,
         capture_output=True,
