@@ -97,6 +97,7 @@ async def main() -> None:
             static_dir=_STATIC_DIR,
         ),
         agent=adapter,
+        wrap_agent=False,
         event_logging=default_event_logging(),
     )
     session = create_session(config)

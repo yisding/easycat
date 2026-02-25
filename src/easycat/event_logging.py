@@ -94,6 +94,11 @@ class EventTraceLogger:
     def _ensure_root_logging_configured(self) -> None:
         if not self._config.auto_configure_root_logger:
             return
+        trace_logger = logging.getLogger(self._config.logger_name)
+        if trace_logger.handlers:
+            return
+        if not trace_logger.propagate:
+            return
         root_logger = logging.getLogger()
         if root_logger.handlers:
             return

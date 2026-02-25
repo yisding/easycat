@@ -49,6 +49,34 @@ def test_event_trace_logger_auto_configures_root_logger_when_missing() -> None:
     basic_config.assert_called_once()
 
 
+def test_event_trace_logger_does_not_configure_root_when_trace_logger_has_handlers() -> None:
+    bus = EventBus()
+    tracer = EventTraceLogger(bus, EventLoggingConfig(enabled=True))
+
+    with (
+        patch("logging.getLogger") as get_logger_mock,
+        patch("logging.basicConfig") as basic_config,
+    ):
+        trace_logger = logging.Logger("easycat.event_trace")
+        trace_logger.handlers = [logging.NullHandler()]
+        trace_logger.propagate = True
+        fake_root = type("Root", (), {"handlers": []})()
+
+        def _get_logger(name: str | None = None):
+            if name is None:
+                return fake_root
+            if name == "easycat.event_trace":
+                return trace_logger
+            return logging.Logger(name)
+
+        get_logger_mock.side_effect = _get_logger
+
+        tracer.start()
+        tracer.stop()
+
+    basic_config.assert_not_called()
+
+
 def test_event_trace_logger_does_not_reconfigure_existing_root_logger() -> None:
     bus = EventBus()
     tracer = EventTraceLogger(bus, EventLoggingConfig(enabled=True))
