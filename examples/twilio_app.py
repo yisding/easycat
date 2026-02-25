@@ -13,8 +13,13 @@ import os
 
 from easycat import EasyCatConfig, TelephonyConfig, TwilioTransportConfig, create_session
 from easycat.transports.twilio_media import twiml_connect_stream
-from examples.common import build_openai_agents_adapter, default_event_logging
-from examples.runtime_feedback import attach_runtime_feedback
+
+try:
+    from examples.common import build_openai_agents_adapter, default_event_logging
+    from examples.runtime_feedback import attach_runtime_feedback
+except ModuleNotFoundError:  # direct script execution from examples/
+    from common import build_openai_agents_adapter, default_event_logging
+    from runtime_feedback import attach_runtime_feedback
 
 
 def create_app(*, api_key: str | None = None, stream_url: str | None = None):

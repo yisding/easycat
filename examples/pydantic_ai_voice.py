@@ -13,12 +13,13 @@ from __future__ import annotations
 import asyncio
 
 from easycat import EasyCatConfig, LocalTransportConfig, PydanticAIAdapter, create_session
-from examples.common import (
-    default_event_logging,
-    require_env,
-    wait_for_shutdown_signal,
-)
-from examples.runtime_feedback import attach_runtime_feedback
+
+try:
+    from examples.common import default_event_logging, require_env, wait_for_shutdown_signal
+    from examples.runtime_feedback import attach_runtime_feedback
+except ModuleNotFoundError:  # direct script execution from examples/
+    from common import default_event_logging, require_env, wait_for_shutdown_signal
+    from runtime_feedback import attach_runtime_feedback
 
 
 async def main() -> None:
