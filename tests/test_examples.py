@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 import types
 
@@ -112,6 +114,34 @@ def test_build_openai_agents_adapter_falls_back_to_responses_api_toggle(
     adapter = build_openai_agents_adapter(instructions="hello")
     assert adapter._run_config is None
     assert called == ["responses"]
+
+
+@pytest.mark.parametrize(
+    "script_path",
+    [
+        "examples/local_chat.py",
+        "examples/ws_server.py",
+        "examples/ws_browser_example.py",
+        "examples/webrtc_server.py",
+        "examples/pydantic_ai_voice.py",
+    ],
+)
+def test_examples_can_run_as_scripts_without_package_import_errors(script_path: str):
+    env = dict(os.environ)
+    env.pop("OPENAI_API_KEY", None)
+
+    completed = subprocess.run(
+        [sys.executable, script_path],
+        cwd="/workspace/easycat",
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "ModuleNotFoundError" not in completed.stderr
+    assert "OPENAI_API_KEY is required." in completed.stderr
 
 
 def test_twilio_example_factory():
