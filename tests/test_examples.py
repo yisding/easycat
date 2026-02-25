@@ -6,10 +6,13 @@ import shutil
 import subprocess
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
 from easycat import EasyCatConfig, WebSocketTransportConfig, create_session
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class _DummyAgent:
@@ -144,7 +147,7 @@ def test_examples_can_run_as_scripts_without_package_import_errors(script_path: 
 
     completed = subprocess.run(
         [_python_executable(), script_path],
-        cwd="/workspace/easycat",
+        cwd=str(REPO_ROOT),
         env=env,
         capture_output=True,
         text=True,
