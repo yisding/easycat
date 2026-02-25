@@ -30,10 +30,21 @@ def build_openai_agents_adapter(
 
     run_config = None
     try:
-        from agents import OpenAIProvider, RunConfig  # type: ignore[import-untyped]
+        from agents import ModelSettings, OpenAIProvider, RunConfig  # type: ignore[import-untyped]
+
+        reasoning = None
+        try:
+            from openai.types.shared import Reasoning  # type: ignore[import-untyped]
+
+            reasoning = Reasoning(effort="none")
+        except Exception:
+            reasoning = {"effort": "none"}
 
         provider = OpenAIProvider(use_responses=True, use_responses_websocket=True)
-        run_config = RunConfig(model_provider=provider)
+        run_config = RunConfig(
+            model_provider=provider,
+            model_settings=ModelSettings(reasoning=reasoning, verbosity="low"),
+        )
     except Exception:
         try:
             from agents import set_default_openai_api  # type: ignore[import-untyped]
