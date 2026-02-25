@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from unittest.mock import patch
 
 import pytest
 
@@ -16,6 +17,59 @@ from easycat.events import (
     ToolCallStarted,
     TTSAudio,
 )
+
+
+def test_event_logging_config_defaults_for_easy_runs() -> None:
+    config = EventLoggingConfig()
+    assert config.enabled is True
+    assert config.include_partials is False
+    assert config.auto_configure_root_logger is True
+
+
+def test_event_trace_logger_auto_configures_root_logger_when_missing() -> None:
+    bus = EventBus()
+    tracer = EventTraceLogger(bus, EventLoggingConfig(enabled=True))
+
+    with (
+        patch("logging.getLogger") as get_logger_mock,
+        patch("logging.basicConfig") as basic_config,
+    ):
+        fake_root = type("Root", (), {"handlers": []})()
+
+        def _get_logger(name: str | None = None):
+            if name is None:
+                return fake_root
+            return logging.Logger(name)
+
+        get_logger_mock.side_effect = _get_logger
+
+        tracer.start()
+        tracer.stop()
+
+    basic_config.assert_called_once()
+
+
+def test_event_trace_logger_does_not_reconfigure_existing_root_logger() -> None:
+    bus = EventBus()
+    tracer = EventTraceLogger(bus, EventLoggingConfig(enabled=True))
+
+    with (
+        patch("logging.getLogger") as get_logger_mock,
+        patch("logging.basicConfig") as basic_config,
+    ):
+        fake_root = type("Root", (), {"handlers": [object()]})()
+
+        def _get_logger(name: str | None = None):
+            if name is None:
+                return fake_root
+            return logging.Logger(name)
+
+        get_logger_mock.side_effect = _get_logger
+
+        tracer.start()
+        tracer.stop()
+
+    basic_config.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -106,7 +160,10 @@ async def test_event_trace_logger_can_hide_tool_text(caplog: pytest.LogCaptureFi
 async def test_event_trace_logger_json_mode_and_ring_buffer(caplog: pytest.LogCaptureFixture):
     bus = EventBus()
     tracer = EventTraceLogger(
-        bus, EventLoggingConfig(enabled=True, json_mode=True, ring_buffer_size=2)
+        bus,
+        EventLoggingConfig(
+            enabled=True, include_partials=True, json_mode=True, ring_buffer_size=2
+        ),
     )
     tracer.start()
 

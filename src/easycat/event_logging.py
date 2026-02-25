@@ -43,15 +43,18 @@ from easycat.events import (
 class EventLoggingConfig:
     """Configuration for event-by-event logging from the EventBus."""
 
-    enabled: bool = False
+    enabled: bool = True
     logger_name: str = "easycat.event_trace"
     level: int = logging.INFO
     include_audio_events: bool = False
-    include_partials: bool = True
+    include_partials: bool = False
     include_text: bool = True
     text_limit: int = 160
     include_event_index: bool = True
     json_mode: bool = False
+    auto_configure_root_logger: bool = True
+    root_level: int = logging.INFO
+    root_format: str = "%(asctime)s %(name)s %(levelname)s %(message)s"
     sample_rates: dict[str, float] = field(default_factory=dict)
     min_interval_s: dict[str, float] = field(default_factory=dict)
     ring_buffer_size: int = 200
@@ -80,12 +83,21 @@ class EventTraceLogger:
         """Attach logger as a global EventBus subscriber."""
         if self._active:
             return
+        self._ensure_root_logging_configured()
         self._state = _TraceState()
         self._last_emit_time.clear()
         self._seen_counts.clear()
         self._recent.clear()
         self._event_bus.subscribe_all(self._log_event)
         self._active = True
+
+    def _ensure_root_logging_configured(self) -> None:
+        if not self._config.auto_configure_root_logger:
+            return
+        root_logger = logging.getLogger()
+        if root_logger.handlers:
+            return
+        logging.basicConfig(level=self._config.root_level, format=self._config.root_format)
 
     def stop(self) -> None:
         """Detach logger from EventBus."""

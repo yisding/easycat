@@ -11,16 +11,18 @@ Setup:
 from __future__ import annotations
 
 import asyncio
-import os
-import signal
 
 from easycat import EasyCatConfig, LocalTransportConfig, PydanticAIAdapter, create_session
+from examples.common import (
+    default_event_logging,
+    require_env,
+    wait_for_shutdown_signal,
+)
+from examples.runtime_feedback import attach_runtime_feedback
 
 
 async def main() -> None:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise SystemExit("OPENAI_API_KEY is required.")
+    api_key = require_env("OPENAI_API_KEY")
 
     try:
         from pydantic_ai import Agent  # type: ignore[import-untyped]
@@ -39,19 +41,14 @@ async def main() -> None:
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
         agent=adapter,
-        wrap_agent=False,
+        event_logging=default_event_logging(),
     )
     session = create_session(config)
+    attach_runtime_feedback(session)
 
     await session.start()
 
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
-
-    await stop_event.wait()
-    await session.stop()
+    await wait_for_shutdown_signal(session)
 
 
 if __name__ == "__main__":
