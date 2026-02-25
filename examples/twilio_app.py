@@ -11,14 +11,10 @@ from __future__ import annotations
 
 import os
 
-from easycat import (
-    EasyCatConfig,
-    OpenAIAgentsAdapter,
-    TelephonyConfig,
-    TwilioTransportConfig,
-    create_session,
-)
+from easycat import EasyCatConfig, TelephonyConfig, TwilioTransportConfig, create_session
 from easycat.transports.twilio_media import twiml_connect_stream
+from examples.common import build_openai_agents_adapter, default_event_logging
+from examples.runtime_feedback import attach_runtime_feedback
 
 
 def create_app(*, api_key: str | None = None, stream_url: str | None = None):
@@ -28,17 +24,9 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
         raise RuntimeError("OPENAI_API_KEY and TWILIO_STREAM_URL are required.")
 
     try:
-        from agents import Agent  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise RuntimeError(
-            "OpenAI Agents SDK is required. Install with: uv add easycat[openai-agents]"
-        ) from exc
-
-    voice_agent = Agent(
-        name="VoiceAssistant",
-        instructions="You are a helpful voice assistant.",
-    )
-    adapter = OpenAIAgentsAdapter(voice_agent)
+        adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
+    except SystemExit as exc:
+        raise RuntimeError(str(exc)) from exc
 
     config = EasyCatConfig(
         openai_api_key=api_key,
@@ -48,9 +36,10 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
             enable_voicemail_detector=True,
         ),
         agent=adapter,
-        wrap_agent=False,
+        event_logging=default_event_logging(),
     )
     session = create_session(config)
+    attach_runtime_feedback(session)
 
     from fastapi import FastAPI, Response
 
