@@ -137,6 +137,7 @@ async def main() -> None:
         openai_api_key=api_key,
         transport=WebSocketTransportConfig(port=WS_PORT),
         agent=adapter,
+        wrap_agent=False,
         event_logging=default_event_logging(),
     )
     session = create_session(config)

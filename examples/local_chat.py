@@ -40,6 +40,7 @@ async def main() -> None:
         transport=LocalTransportConfig(),
         echo_cancellation=EchoCancellationConfig(enabled=True),
         agent=adapter,
+        wrap_agent=False,
         event_logging=default_event_logging(),
     )
     session = create_session(config)

@@ -41,6 +41,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
             enable_voicemail_detector=True,
         ),
         agent=adapter,
+        wrap_agent=False,
         event_logging=default_event_logging(),
     )
     session = create_session(config)
