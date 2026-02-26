@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 
 from easycat import EventLoggingConfig, OpenAIAgentsAdapter, Session
+
+logger = logging.getLogger(__name__)
 
 
 def require_env(name: str) -> str:
@@ -37,7 +40,7 @@ def build_openai_agents_adapter(
             from openai.types.shared import Reasoning  # type: ignore[import-untyped]
 
             reasoning = Reasoning(effort="none")
-        except Exception:
+        except (ImportError, TypeError):
             reasoning = {"effort": "none"}
 
         provider = OpenAIProvider(use_responses=True, use_responses_websocket=True)
@@ -45,13 +48,14 @@ def build_openai_agents_adapter(
             model_provider=provider,
             model_settings=ModelSettings(reasoning=reasoning, verbosity="low"),
         )
-    except Exception:
+    except (ImportError, TypeError) as exc:
+        logger.debug("RunConfig/OpenAIProvider setup failed, falling back: %s", exc)
         try:
             from agents import set_default_openai_api  # type: ignore[import-untyped]
 
             set_default_openai_api("responses")
-        except Exception:
-            pass
+        except (ImportError, AttributeError) as exc:
+            logger.debug("set_default_openai_api unavailable: %s", exc)
 
     voice_agent = Agent(name=name, instructions=instructions)
     return OpenAIAgentsAdapter(voice_agent, run_config=run_config)

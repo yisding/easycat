@@ -10,16 +10,18 @@ Setup:
 from __future__ import annotations
 
 import os
+import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from easycat import EasyCatConfig, TelephonyConfig, TwilioTransportConfig, create_session
 from easycat.transports.twilio_media import twiml_connect_stream
 
-try:
-    from examples.common import build_openai_agents_adapter, default_event_logging
-    from examples.runtime_feedback import attach_runtime_feedback
-except ModuleNotFoundError:  # direct script execution from examples/
-    from common import build_openai_agents_adapter, default_event_logging
-    from runtime_feedback import attach_runtime_feedback
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from common import build_openai_agents_adapter, default_event_logging  # noqa: E402
+from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 
 def create_app(*, api_key: str | None = None, stream_url: str | None = None):
@@ -49,15 +51,13 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
 
     from fastapi import FastAPI, Response
 
-    app = FastAPI()
-
-    @app.on_event("startup")
-    async def _startup() -> None:
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await session.start()
-
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
+        yield
         await session.stop()
+
+    app = FastAPI(lifespan=lifespan)
 
     @app.post("/twiml")
     async def twiml() -> Response:
