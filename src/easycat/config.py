@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -10,6 +11,7 @@ from easycat.agents.factory import auto_adapt_agent
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.event_logging import EventLoggingConfig, EventTraceLogger
 from easycat.events import EventBus
+from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.session import Session, SessionConfig
@@ -92,6 +94,7 @@ class EasyCatConfig:
     agent_runner: AgentRunnerConfig | None = None
     wrap_agent: bool = True
     strip_markdown: bool = False
+    output_processors: Sequence[LLMOutputProcessor] = ()
 
     def __post_init__(self) -> None:
         if self.openai_api_key:
@@ -170,6 +173,7 @@ def create_session(config: EasyCatConfig) -> Session:
             tracer=tracer,
             telephony_helpers=telephony_helpers,
             strip_markdown=config.strip_markdown,
+            output_processors=config.output_processors,
         )
     )
 

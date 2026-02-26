@@ -18,6 +18,7 @@ from easycat.providers import (
     TTSProvider,
     VADProvider,
 )
+from easycat.tts.input import TTSInput
 
 # ── Stub implementations ──────────────────────────────────────────
 
@@ -37,7 +38,11 @@ class StubSTT:
 
 
 class StubTTS:
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    @property
+    def supports_ssml(self) -> bool:
+        return False
+
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
         yield TTSEvent(
             type=TTSEventType.AUDIO,
             audio=AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K),

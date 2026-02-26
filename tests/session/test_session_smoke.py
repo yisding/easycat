@@ -36,6 +36,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.session import Session, SessionConfig, TurnState
+from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
@@ -116,7 +117,7 @@ class SmokeAgent:
 class SmokeTTS:
     """TTS using provider-scoped TTSEvent."""
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
 

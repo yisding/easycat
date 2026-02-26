@@ -46,6 +46,13 @@ from easycat.smart_turn import (
 )
 from easycat.session import Session, SessionConfig, TurnState
 from easycat.turn_manager import TurnMode
+from easycat.llm_output_processing import (
+    LLMOutputProcessor,
+    MarkdownStripProcessor,
+    PhoneNumberSSMLProcessor,
+    PhoneticReplacementProcessor,
+    default_pronunciation_processors,
+)
 from easycat.config import (
     EasyCatConfig,
     EventLoggingConfig,
@@ -134,6 +141,7 @@ from easycat.stt import (
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
+from easycat.tts.input import TTSInput, TTSInputFormat
 from easycat.vad import KrispVAD, SileroVAD, TenVAD, VADConfig, create_vad
 
 # ── Transport implementations ────────────────────────────────────
@@ -177,6 +185,11 @@ __all__ = [
     "PydanticAIAdapter",
     "serialize_output",
     "CancelToken",
+    "LLMOutputProcessor",
+    "MarkdownStripProcessor",
+    "PhoneNumberSSMLProcessor",
+    "PhoneticReplacementProcessor",
+    "default_pronunciation_processors",
     # Smart turn
     "SmartTurnConfig",
     "SmartTurnONNX",
@@ -216,6 +229,8 @@ __all__ = [
     "STTProvider",
     "Transport",
     "TTSProvider",
+    "TTSInput",
+    "TTSInputFormat",
     "VADProvider",
     # Audio format
     "AudioChunk",

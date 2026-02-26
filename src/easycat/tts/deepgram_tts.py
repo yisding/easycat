@@ -11,6 +11,7 @@ from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.tts.base import TTSBase
+from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,11 @@ class DeepgramTTS(TTSBase):
             provider_name="deepgram_tts",
         )
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    @property
+    def supports_ssml(self) -> bool:
+        return False
+
+    async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using Deepgram's WebSocket TTS API.
 
         Opens a WebSocket, sends the text, and yields audio chunks as
@@ -79,6 +84,8 @@ class DeepgramTTS(TTSBase):
         """
         self._start_synthesis()
         self._ws = self._create_ws()
+        payload = coerce_tts_input(payload)
+        text = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
 
         try:
             await self._ws.connect()

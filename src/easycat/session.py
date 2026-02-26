@@ -45,6 +45,11 @@ from easycat.events import (
     TurnStarted,
 )
 from easycat.health_check import PeriodicHealthChecker
+from easycat.llm_output_processing import (
+    LLMOutputProcessor,
+    MarkdownStripProcessor,
+    apply_output_processors,
+)
 from easycat.metrics import (
     AGENT_LATENCY,
     ERRORS,
@@ -79,6 +84,7 @@ from easycat.timeouts import (
     with_agent_timeout,
 )
 from easycat.tracing import SpanStatus, Tracer
+from easycat.tts.input import TTSInput, strip_ssml_tags
 from easycat.tts_synthesizer import TTSSynthesizer
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
 
@@ -165,6 +171,7 @@ class SessionConfig:
     enable_echo_cancellation: bool = True
     enable_vad: bool = True
     strip_markdown: bool = False
+    output_processors: Sequence[LLMOutputProcessor] = ()
 
     # Interruption behaviour.
     # "truncate" (default): truncate the assistant message to what was
@@ -560,6 +567,19 @@ def _has_unclosed_markdown_delimiters(text: str) -> bool:
     )
 
 
+def _text_for_spoken_estimation(payload: TTSInput) -> str:
+    """Return plain spoken text for interruption accounting.
+
+    Interruption text estimation compares audio-byte progress against text
+    length. SSML markup should not count toward spoken-character estimates,
+    so SSML payloads are normalized to plain text here.
+    """
+
+    if payload.format == "ssml":
+        return strip_ssml_tags(payload.text)
+    return payload.text
+
+
 def _replace_last_assistant_text(agent: Any, text: str) -> None:
     """Update the last assistant message in the agent's chat history.
 
@@ -637,6 +657,9 @@ class Session:
         self._interruption_ack_stale_ms = max(0, cfg.interruption_ack_stale_ms)
         self._interruption_ack_tail_cap_ms = max(0, cfg.interruption_ack_tail_cap_ms)
         self._strip_markdown = cfg.strip_markdown
+        self._output_processors: list[LLMOutputProcessor] = list(cfg.output_processors)
+        if cfg.strip_markdown:
+            self._output_processors.insert(0, MarkdownStripProcessor())
 
         # Turn manager — single source of truth for turn state
         self._turn_manager = cfg.turn_manager or TurnManager(
@@ -1253,7 +1276,6 @@ class Session:
             self._reset_turn_state()
             return
 
-        # Strip markdown formatting when enabled so TTS speaks clean text.
         if self._strip_markdown:
             stripped = strip_markdown(agent_response, normalize_code_spans=True)
             if stripped != agent_response:
@@ -1276,7 +1298,9 @@ class Session:
                 (time.monotonic() - self._stt_final_time) * 1000,
             )
 
-        await self._synthesize_tts(agent_response, token)
+        await self._synthesize_tts(
+            self._prepare_tts_payload(agent_response, is_streaming=False, is_final=True), token
+        )
 
     # ── Streaming agent path ───────────────────────────────────
 
@@ -1288,7 +1312,7 @@ class Session:
           complete sentences for TTS synthesis.
         - TTS task: dequeues text chunks and synthesizes them sequentially.
         """
-        tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
         turn_id = self._current_turn_id
         accumulated_text = ""
         structured_output: Any = None
@@ -1310,16 +1334,14 @@ class Session:
 
             async def _flush_pending_tts_buffer() -> None:
                 nonlocal text_buffer
-                if self._strip_markdown:
-                    remaining = strip_markdown(
+                if text_buffer.strip():
+                    payload = self._prepare_tts_payload(
                         text_buffer,
-                        trim=False,
-                        normalize_code_spans=True,
+                        is_streaming=True,
+                        is_final=True,
                     )
-                    if remaining.strip():
-                        await tts_queue.put(remaining)
-                elif text_buffer.strip():
-                    await tts_queue.put(text_buffer)
+                    if payload.text.strip():
+                        await tts_queue.put(payload)
                 text_buffer = ""
 
             try:
@@ -1377,12 +1399,7 @@ class Session:
                                 )
 
                         if self._strip_markdown:
-                            # Keep a rolling, unsent window to avoid repeatedly
-                            # stripping the full transcript on every delta.
                             text_buffer += event.text
-
-                            # If markdown spans are still open, hold the window
-                            # until closing delimiters arrive.
                             if _has_unclosed_markdown_delimiters(text_buffer):
                                 continue
 
@@ -1393,14 +1410,28 @@ class Session:
                             )
                             ready, remaining = _split_at_sentence_boundaries(stripped_window)
                             if ready:
-                                await tts_queue.put(ready)
-                                text_buffer = remaining
+                                payload = self._prepare_tts_payload(
+                                    ready,
+                                    is_streaming=True,
+                                    is_final=False,
+                                )
+                                if payload.text.strip():
+                                    await tts_queue.put(payload)
+                            text_buffer = remaining
                         else:
-                            # Original path: sentence-split the raw buffer.
                             text_buffer += event.text
+                            if _has_unclosed_markdown_delimiters(text_buffer):
+                                continue
+
                             ready, text_buffer = _split_at_sentence_boundaries(text_buffer)
                             if ready:
-                                await tts_queue.put(ready)
+                                payload = self._prepare_tts_payload(
+                                    ready,
+                                    is_streaming=True,
+                                    is_final=False,
+                                )
+                                if payload.text.strip():
+                                    await tts_queue.put(payload)
 
                     elif event.type == AgentStreamEventType.TOOL_STARTED:
                         pending_tool_calls += 1
@@ -1437,14 +1468,14 @@ class Session:
             started = False
             try:
                 while True:
-                    text = await tts_queue.get()
-                    if text is None:
+                    payload = await tts_queue.get()
+                    if payload is None:
                         break
                     if token and token.is_cancelled:
                         # Cancellation can land after dequeue but before synthesis.
                         # Preserve this chunk as incomplete so interruption
                         # accounting does not treat the turn as fully delivered.
-                        tts_chunks.append((text, 0, False))
+                        tts_chunks.append((_text_for_spoken_estimation(payload), 0, False))
                         break
 
                     if not started:
@@ -1453,7 +1484,7 @@ class Session:
                         tts_playback_started = True
 
                     result = await self._tts_synth.synthesize(
-                        text,
+                        payload,
                         token,
                         turn_end_time=self._turn_end_time,
                         is_active=lambda: (
@@ -1461,7 +1492,13 @@ class Session:
                         ),
                         record_latency=self._first_tts_audio_time is None,
                     )
-                    tts_chunks.append((text, result.audio_bytes, result.completed))
+                    tts_chunks.append(
+                        (
+                            _text_for_spoken_estimation(payload),
+                            result.audio_bytes,
+                            result.completed,
+                        )
+                    )
                     if result.first_audio_time is not None and self._first_tts_audio_time is None:
                         self._first_tts_audio_time = result.first_audio_time
             except asyncio.CancelledError:
@@ -1510,7 +1547,6 @@ class Session:
 
         stream_succeeded = agent_error is None and not (token and token.is_cancelled)
 
-        # Strip markdown from the final accumulated text and update agent history.
         if self._strip_markdown and accumulated_text and stream_succeeded:
             stripped = strip_markdown(accumulated_text, normalize_code_spans=True)
             if stripped != accumulated_text:
@@ -1570,15 +1606,29 @@ class Session:
             status = SpanStatus.ERROR if agent_error else SpanStatus.OK
             self._spans.finish("turn", status)
 
+    def _prepare_tts_payload(self, text: str, *, is_streaming: bool, is_final: bool) -> TTSInput:
+        payload = TTSInput(text=text, format="plain")
+        payload = apply_output_processors(
+            payload,
+            self._output_processors,
+            is_final=is_final,
+            is_streaming=is_streaming,
+        )
+        if payload.format == "ssml" and not getattr(self.tts, "supports_ssml", False):
+            return TTSInput(text=strip_ssml_tags(payload.text), format="plain")
+        return payload
+
     # ── TTS synthesis helper ───────────────────────────────────
 
-    async def _synthesize_tts(self, text: str, token: CancelToken | None) -> None:
-        """Synthesize TTS for a complete text and emit audio events."""
+    async def _synthesize_tts(self, payload: TTSInput | str, token: CancelToken | None) -> None:
+        """Synthesize TTS for a complete payload and emit audio events."""
+        if isinstance(payload, str):
+            payload = self._prepare_tts_payload(payload, is_streaming=False, is_final=True)
         turn_id = self._current_turn_id
         await self._turn_manager.bot_started_speaking()
         try:
             result = await self._tts_synth.synthesize(
-                text,
+                payload,
                 token,
                 turn_end_time=self._turn_end_time,
                 is_active=lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING,

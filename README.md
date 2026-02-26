@@ -43,6 +43,60 @@ session = create_session(config)
 > users, `EasyCatConfig` + `create_session` is the fastest way to get a working
 > pipeline.
 
+
+## Pre-TTS output processors (easy mode)
+If you want to change how the assistant is spoken (for example phone-number pacing
+or custom pronunciations), pass processors in config:
+
+```python
+from easycat import (
+    EasyCatConfig,
+    PhoneNumberSSMLProcessor,
+    PhoneticReplacementProcessor,
+    create_session,
+)
+
+config = EasyCatConfig(
+    openai_api_key="your-api-key",
+    output_processors=[
+        # Replace names/terms with pronunciation-friendly spellings.
+        # e.g. "Siobhan" -> "shi-vawn"
+        #      "Nguyen" -> "win"
+        #
+        # Then apply phone-number pause formatting.
+        # Note: processor order matters.
+        PhoneticReplacementProcessor(
+            {
+                "Siobhan": "shi-vawn",
+                "Nguyen": "win",
+            }
+        ),
+        PhoneNumberSSMLProcessor(pause_ms=140),
+    ],
+)
+session = create_session(config)
+```
+
+Or use the convenience helper for the common pronunciation + phone-number stack:
+
+```python
+from easycat import EasyCatConfig, create_session, default_pronunciation_processors
+
+config = EasyCatConfig(
+    openai_api_key="your-api-key",
+    output_processors=default_pronunciation_processors(
+        name_pronunciations={"Siobhan": "shi-vawn", "Nguyen": "win"},
+        phone_pause_ms=140,
+    ),
+)
+session = create_session(config)
+```
+
+Notes:
+- `strip_markdown=True` still works and is automatically composed with processors.
+- Providers that do not support SSML automatically fall back to plain text.
+- For provider authors, `synthesize` accepts either a legacy `str` or `TTSInput`.
+
 ### Local/open-source speech pipeline
 EasyCat ships with hosted STT/TTS providers (OpenAI, Deepgram, ElevenLabs). To
 run fully local speech, plug in your own STT/TTS implementations and use
