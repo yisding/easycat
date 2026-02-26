@@ -32,26 +32,20 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 
 from easycat import EasyCatConfig, ICEServer, WebRTCTransportConfig, create_session
 
-try:
-    from examples.common import (
-        build_openai_agents_adapter,
-        default_event_logging,
-        require_env,
-        wait_for_shutdown_signal,
-    )
-    from examples.runtime_feedback import attach_runtime_feedback
-except ModuleNotFoundError:  # direct script execution from examples/
-    from common import (
-        build_openai_agents_adapter,
-        default_event_logging,
-        require_env,
-        wait_for_shutdown_signal,
-    )
-    from runtime_feedback import attach_runtime_feedback
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from common import (  # noqa: E402
+    build_openai_agents_adapter,
+    default_event_logging,
+    require_env,
+    wait_for_shutdown_signal,
+)
+from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 # Serves only the webrtc_static/ subdirectory (contains only the HTML client).
 _STATIC_DIR = str(Path(__file__).parent / "webrtc_static")
