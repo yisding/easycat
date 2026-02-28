@@ -19,6 +19,7 @@ from easycat.events import EventBus, TTSAudio, TTSEventType, TTSMarkers
 from easycat.metrics import TTS_TTFB, TURN_E2E, MetricsCollector
 from easycat.timeouts import TimeoutConfig, with_tts_timeout
 from easycat.tracing import SpanStatus, Tracer
+from easycat.tts.input import TTSInput, coerce_tts_input
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class TTSSynthesizer:
 
     async def synthesize(
         self,
-        text: str,
+        payload: TTSInput | str,
         token: Any | None,
         *,
         turn_end_time: float | None = None,
@@ -75,7 +76,7 @@ class TTSSynthesizer:
         audio chunks for transport.
 
         Args:
-            text: Text to synthesize.
+            payload: Text payload to synthesize.
             token: CancelToken to check between chunks.
             turn_end_time: Monotonic timestamp of turn end (for E2E latency).
             is_active: Optional predicate; iteration stops when it returns False.
@@ -97,7 +98,7 @@ class TTSSynthesizer:
         tts_status = SpanStatus.OK
 
         try:
-            tts_iter = self._tts.synthesize(text)
+            tts_iter = self._tts.synthesize(coerce_tts_input(payload))
             if self._timeout_config and self._timeout_config.tts_first_byte_timeout:
                 tts_iter = with_tts_timeout(
                     tts_iter,

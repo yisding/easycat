@@ -42,10 +42,14 @@ from easycat.session import (
     _audio_bytes_acknowledged,
     _audio_bytes_likely_heard,
     _audio_bytes_likely_heard_hybrid,
+    _cleanup_estimation_text,
     _estimate_text_spoken,
     _has_unclosed_markdown_delimiters,
     _split_at_sentence_boundaries,
+    _text_for_estimation_timeline,
+    _text_for_spoken_estimation,
 )
+from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
@@ -121,8 +125,8 @@ class FakeTTS:
     def __init__(self) -> None:
         self.synthesized_texts: list[str] = []
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
-        self.synthesized_texts.append(text)
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+        self.synthesized_texts.append(payload.text)
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
 
     async def stop(self) -> None:
@@ -330,6 +334,43 @@ def test_split_chinese_sentence():
 
 
 # ── _estimate_text_spoken tests ─────────────────────────────────────
+
+
+def test_text_for_spoken_estimation_strips_ssml_markup() -> None:
+    payload = TTSInput(text='<speak>Hello<break time="120ms"/>world</speak>', format="ssml")
+    assert _text_for_spoken_estimation(payload) == "Hello world"
+
+
+def test_text_for_spoken_estimation_keeps_plain_text() -> None:
+    payload = TTSInput(text="Hello world", format="plain")
+    assert _text_for_spoken_estimation(payload) == "Hello world"
+
+
+def test_text_for_estimation_timeline_encodes_ssml_breaks() -> None:
+    payload = TTSInput(
+        text='<speak>Hello<break time="500ms"/>world</speak>',
+        format="ssml",
+    )
+    timeline = _text_for_estimation_timeline(payload)
+    assert "Hello" in timeline and "world" in timeline
+    assert timeline != "Hello world"
+
+
+def test_cleanup_estimation_text_removes_pause_markers() -> None:
+    payload = TTSInput(
+        text='<speak>A<break time="500ms"/>B</speak>',
+        format="ssml",
+    )
+    cleaned = _cleanup_estimation_text(_text_for_estimation_timeline(payload))
+    assert cleaned == "AB"
+
+
+def test_estimate_text_spoken_with_pause_markers_advances_less_text() -> None:
+    # First chunk contains synthetic pause markers, so half-byte progress should
+    # include less visible text than the same bytes on plain text.
+    with_pause = _estimate_text_spoken([("AB" + "\ue000" * 10 + "CD", 1000)], 500)
+    plain = _estimate_text_spoken([("ABCD", 1000)], 500)
+    assert len(with_pause.replace("\ue000", "")) <= len(plain)
 
 
 def test_estimate_text_spoken_empty():
@@ -1001,9 +1042,9 @@ async def test_streaming_done_flushes_tts_before_stream_cleanup_finishes():
             super().__init__()
             self.started = asyncio.Event()
 
-        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
             self.started.set()
-            async for event in super().synthesize(text):
+            async for event in super().synthesize(payload):
                 yield event
 
     tts = ObservableFakeTTS()
@@ -1170,8 +1211,8 @@ class SlowStartTTS(FakeTTS):
         super().__init__()
         self.started = asyncio.Event()
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
-        self.synthesized_texts.append(text)
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+        self.synthesized_texts.append(payload.text)
         self.started.set()
         await asyncio.sleep(0.1)
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
@@ -1420,7 +1461,7 @@ async def test_session_barge_in_during_tts_playback():
         def __init__(self) -> None:
             self.started = asyncio.Event()
 
-        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
             self.started.set()
             for _ in range(5):
                 await asyncio.sleep(0.1)
@@ -1495,7 +1536,7 @@ async def test_session_barge_in_records_dequeued_unsynthesized_text_as_incomplet
         def __init__(self) -> None:
             self.calls = 0
 
-        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
             self.calls += 1
             if self.calls == 1:
                 yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
@@ -1557,7 +1598,7 @@ async def test_session_barge_in_after_full_playback_does_not_notify_interruption
             self.interruption_notified = True
 
     class OneShotTTS:
-        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
             yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
 
         async def stop(self) -> None:
@@ -1612,7 +1653,7 @@ async def test_session_barge_in_after_full_playback_keeps_agent_runner_history()
             yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world.")
 
     class OneShotTTS:
-        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
             yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
 
         async def stop(self) -> None:
@@ -2188,8 +2229,8 @@ async def test_synthesize_tts_does_not_clear_newer_turn_id() -> None:
     """_synthesize_tts should not clear _current_turn_id after a newer turn starts."""
 
     class DelayedTTS(FakeTTS):
-        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
-            self.synthesized_texts.append(text)
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.synthesized_texts.append(payload.text)
             await asyncio.sleep(0.05)
             yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
 
