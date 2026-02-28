@@ -12,6 +12,7 @@ from easycat.cancel import CancelToken
 from easycat.events import EventBus, TTSAudio, TTSEvent, TTSEventType, TTSMarkers
 from easycat.metrics import TTS_TTFB, TURN_E2E, InMemoryMetrics
 from easycat.tracing import InMemoryTraceExporter, SpanStatus, Tracer
+from easycat.tts.input import TTSInput
 from easycat.tts_synthesizer import TTSSynthesizer
 
 # ── Test helpers ───────────────────────────────────────────────────
@@ -29,8 +30,8 @@ class FakeTTS:
         self.synthesized: list[str] = []
         self.cancelled = False
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
-        self.synthesized.append(text)
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+        self.synthesized.append(payload.text)
         for _ in range(self._chunks):
             yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
 
@@ -41,7 +42,7 @@ class FakeTTS:
 class MarkerTTS:
     """TTS that yields audio then markers."""
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
         yield TTSEvent(type=TTSEventType.MARKERS, markers=[{"word": "hello", "time": 0.1}])
 
@@ -52,7 +53,7 @@ class MarkerTTS:
 class SlowTTS:
     """TTS that yields audio slowly."""
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
         for _ in range(5):
             await asyncio.sleep(0.02)
             yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
@@ -64,7 +65,7 @@ class SlowTTS:
 class FailingTTS:
     """TTS that raises mid-stream."""
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
         raise RuntimeError("TTS failed")
 
@@ -75,7 +76,7 @@ class FailingTTS:
 class CancelledTTS:
     """TTS that raises CancelledError mid-stream."""
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
         raise asyncio.CancelledError()
 
@@ -112,7 +113,7 @@ async def test_synthesize_emits_tts_audio_event():
     received: list[TTSAudio] = []
     event_bus.subscribe(TTSAudio, lambda e: received.append(e))
 
-    result = await synth.synthesize("hello", None)
+    result = await synth.synthesize(TTSInput("hello"), None)
 
     assert result.audio_produced
     assert result.first_audio_time is not None
@@ -123,7 +124,7 @@ async def test_synthesize_emits_tts_audio_event():
 async def test_synthesize_queues_audio():
     synth, _, queue = _make_synth(tts=FakeTTS(chunks=3))
 
-    result = await synth.synthesize("hello", None)
+    result = await synth.synthesize(TTSInput("hello"), None)
 
     assert result.audio_produced
     assert not queue.empty()
@@ -135,7 +136,7 @@ async def test_synthesize_emits_markers():
     markers: list[TTSMarkers] = []
     event_bus.subscribe(TTSMarkers, lambda e: markers.append(e))
 
-    await synth.synthesize("hello", None)
+    await synth.synthesize(TTSInput("hello"), None)
 
     assert len(markers) == 1
     assert markers[0].markers[0]["word"] == "hello"
@@ -144,7 +145,7 @@ async def test_synthesize_emits_markers():
 @pytest.mark.asyncio
 async def test_synthesize_tracks_audio_bytes():
     synth, _, _ = _make_synth(tts=FakeTTS(chunks=3))
-    result = await synth.synthesize("hello", None)
+    result = await synth.synthesize(TTSInput("hello"), None)
 
     # Each chunk is 320 bytes, 3 chunks → 960 bytes
     assert result.audio_bytes == 320 * 3
@@ -153,7 +154,7 @@ async def test_synthesize_tracks_audio_bytes():
 @pytest.mark.asyncio
 async def test_synthesize_no_audio_returns_false():
     class EmptyTTS:
-        async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
             return
             yield  # make it an async generator
 
@@ -161,7 +162,7 @@ async def test_synthesize_no_audio_returns_false():
             pass
 
     synth, _, _ = _make_synth(tts=EmptyTTS())
-    result = await synth.synthesize("hello", None)
+    result = await synth.synthesize(TTSInput("hello"), None)
     assert not result.audio_produced
     assert result.first_audio_time is None
 
@@ -184,7 +185,7 @@ async def test_synthesize_stops_on_cancel_token():
         token.cancel()
 
     asyncio.create_task(cancel_later())
-    await synth.synthesize("hello", token)
+    await synth.synthesize(TTSInput("hello"), token)
 
     # Should have gotten some but not all 5 chunks
     assert len(received) < 5
@@ -204,7 +205,7 @@ async def test_synthesize_stops_on_is_active_false():
         active = False
 
     asyncio.create_task(deactivate_later())
-    await synth.synthesize("hello", None, is_active=lambda: active)
+    await synth.synthesize(TTSInput("hello"), None, is_active=lambda: active)
 
     assert len(received) < 5
 
@@ -213,7 +214,7 @@ async def test_synthesize_stops_on_is_active_false():
 async def test_synthesize_marks_incomplete_on_cancelled_error():
     synth, _, _ = _make_synth(tts=CancelledTTS())
 
-    result = await synth.synthesize("hello", None)
+    result = await synth.synthesize(TTSInput("hello"), None)
 
     assert result.audio_produced
     assert result.audio_bytes == 320
@@ -228,7 +229,7 @@ async def test_synthesize_records_ttfb_metric():
     metrics = InMemoryMetrics()
     synth, _, _ = _make_synth(metrics=metrics)
 
-    await synth.synthesize("hello", None)
+    await synth.synthesize(TTSInput("hello"), None)
 
     stats = metrics.get_latency(TTS_TTFB)
     assert stats.count == 1
@@ -243,7 +244,7 @@ async def test_synthesize_records_e2e_metric():
     synth, _, _ = _make_synth(metrics=metrics)
 
     turn_end = time.monotonic() - 0.1  # simulate 100ms ago
-    await synth.synthesize("hello", None, turn_end_time=turn_end)
+    await synth.synthesize(TTSInput("hello"), None, turn_end_time=turn_end)
 
     stats = metrics.get_latency(TURN_E2E)
     assert stats.count == 1
@@ -255,7 +256,7 @@ async def test_synthesize_no_e2e_without_turn_end_time():
     metrics = InMemoryMetrics()
     synth, _, _ = _make_synth(metrics=metrics)
 
-    await synth.synthesize("hello", None)
+    await synth.synthesize(TTSInput("hello"), None)
 
     stats = metrics.get_latency(TURN_E2E)
     assert stats.count == 0
@@ -272,7 +273,7 @@ async def test_synthesize_creates_and_finishes_tts_span():
 
     # Need a turn context for spans to work
     synth._spans.begin_turn()
-    await synth.synthesize("hello", None)
+    await synth.synthesize(TTSInput("hello"), None)
 
     tts_spans = exporter.get_spans_by_name("tts")
     assert len(tts_spans) == 1
@@ -287,7 +288,7 @@ async def test_synthesize_marks_span_error_on_exception():
 
     synth._spans.begin_turn()
     with pytest.raises(RuntimeError, match="TTS failed"):
-        await synth.synthesize("hello", None)
+        await synth.synthesize(TTSInput("hello"), None)
 
     tts_spans = exporter.get_spans_by_name("tts")
     assert len(tts_spans) == 1
