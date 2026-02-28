@@ -52,6 +52,7 @@ or custom pronunciations), pass processors in config:
 from easycat import (
     EasyCatConfig,
     PhoneNumberSSMLProcessor,
+    RegexPauseSSMLProcessor,
     PhoneticReplacementProcessor,
     create_session,
 )
@@ -90,6 +91,21 @@ config = EasyCatConfig(
     ),
 )
 session = create_session(config)
+```
+
+
+
+Need pauses for any custom pattern (not just phone numbers)?
+
+```python
+RegexPauseSSMLProcessor(
+    # match "ticket #48291" style spans
+    pattern=r"ticket\s+#?\d+",
+    # pause between matched digits
+    unit_pattern=r"\d",
+    pause_ms=180,
+    minimum_units=2,
+)
 ```
 
 Notes:

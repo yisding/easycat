@@ -14,6 +14,13 @@ from easycat.tts.input import TTSInput, strip_ssml_tags
 logger = logging.getLogger(__name__)
 
 
+def _to_ssml_payload(text_with_break_tags: str) -> TTSInput:
+    escaped = html.escape(text_with_break_tags)
+    escaped = escaped.replace("&lt;break time=&quot;", '<break time="')
+    escaped = escaped.replace("ms&quot;/&gt;", 'ms"/>')
+    return TTSInput(text=f"<speak>{escaped}</speak>", format="ssml")
+
+
 class LLMOutputProcessor(Protocol):
     """Processor that can transform text before TTS synthesis."""
 
@@ -36,29 +43,50 @@ class MarkdownStripProcessor:
 
 
 @dataclass(frozen=True)
+class RegexPauseSSMLProcessor:
+    """Apply pause-insertion to text spans matched by a user regex.
+
+    ``pattern`` finds spans to transform. Within each match, ``unit_pattern``
+    selects the units that should be separated by pauses (defaults to non-space
+    characters).
+    """
+
+    pattern: str
+    pause_ms: int = 120
+    unit_pattern: str = r"\S"
+    minimum_units: int = 2
+    flags: int = 0
+
+    def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
+        source = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
+        compiled = re.compile(self.pattern, self.flags)
+
+        def repl(match: re.Match[str]) -> str:
+            units = re.findall(self.unit_pattern, match.group(0))
+            if len(units) < self.minimum_units:
+                return match.group(0)
+            pause = f'<break time="{self.pause_ms}ms"/>'
+            return f" {pause} ".join(units)
+
+        transformed = compiled.sub(repl, source)
+        if transformed == source:
+            return payload
+        return _to_ssml_payload(transformed)
+
+
+@dataclass(frozen=True)
 class PhoneNumberSSMLProcessor:
     """Convert phone-number-like text spans into SSML with pauses."""
 
     pause_ms: int = 120
 
     def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
-        source = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
-
-        def repl(match: re.Match[str]) -> str:
-            digits = [ch for ch in match.group(0) if ch.isdigit()]
-            if len(digits) < 7:
-                return match.group(0)
-            pause = f'<break time="{self.pause_ms}ms"/>'
-            return f" {pause} ".join(digits)
-
-        transformed = re.sub(r"\+?\d[\d\s().-]{5,}\d", repl, source)
-        if transformed == source:
-            return payload
-
-        escaped = html.escape(transformed)
-        escaped = escaped.replace("&lt;break time=&quot;", '<break time="')
-        escaped = escaped.replace("ms&quot;/&gt;", 'ms"/>')
-        return TTSInput(text=f"<speak>{escaped}</speak>", format="ssml")
+        return RegexPauseSSMLProcessor(
+            pattern=r"\+?\d[\d\s().-]{5,}\d",
+            pause_ms=self.pause_ms,
+            unit_pattern=r"\d",
+            minimum_units=7,
+        ).process(payload, is_final=is_final, is_streaming=is_streaming)
 
 
 @dataclass(frozen=True)

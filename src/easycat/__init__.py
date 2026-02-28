@@ -50,6 +50,7 @@ from easycat.llm_output_processing import (
     LLMOutputProcessor,
     MarkdownStripProcessor,
     PhoneNumberSSMLProcessor,
+    RegexPauseSSMLProcessor,
     PhoneticReplacementProcessor,
     default_pronunciation_processors,
 )
@@ -188,6 +189,7 @@ __all__ = [
     "LLMOutputProcessor",
     "MarkdownStripProcessor",
     "PhoneNumberSSMLProcessor",
+    "RegexPauseSSMLProcessor",
     "PhoneticReplacementProcessor",
     "default_pronunciation_processors",
     # Smart turn
