@@ -22,6 +22,7 @@ import pysbd
 
 from easycat._span_manager import SpanManager
 from easycat.agent_runner import AgentStreamEventType
+from easycat.audio_format import AudioChunk
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -291,6 +292,32 @@ def _all_tts_audio_delivered(
         return False
     total_audio = sum(max(chunk_audio, 0) for _, chunk_audio, _ in tts_chunks)
     return audio_bytes_delivered >= total_audio
+
+
+def _chunk_has_speech_energy(chunk: AudioChunk, *, threshold: int = 500) -> bool:
+    """Heuristic speech gate for STT-driven turns when VAD is disabled.
+
+    Computes the peak absolute PCM sample value for mono 16-bit chunks and
+    compares it to ``threshold``. This filters continuous silent/background
+    frames (e.g. telephony keepalive silence) so they don't spuriously start
+    turns.
+    """
+    if chunk.format.sample_width != 2:
+        return bool(chunk.data)
+
+    data = chunk.data
+    if len(data) < 2:
+        return False
+
+    peak = 0
+    for i in range(0, len(data) - 1, 2):
+        sample = int.from_bytes(data[i : i + 2], "little", signed=True)
+        mag = abs(sample)
+        if mag > peak:
+            peak = mag
+            if peak >= threshold:
+                return True
+    return False
 
 
 def _audio_bytes_likely_heard(
@@ -700,6 +727,7 @@ class Session:
 
         # STT stream started for current turn
         self._stt_active = False
+        self._auto_turn_speech_frames = 0
 
         # Timing markers for metrics
         self._turn_end_time: float | None = None
@@ -744,6 +772,7 @@ class Session:
     def _reset_turn_state(self) -> None:
         """Clear turn correlation state and reset the turn manager."""
         self._current_turn_id = None
+        self._auto_turn_speech_frames = 0
         self._turn_manager.reset()
 
     # ── Properties ─────────────────────────────────────────────
@@ -1018,6 +1047,8 @@ class Session:
         # Establish a new cancel token from TurnManager
         self._cancel_token = self._turn_manager.cancel_token or CancelToken()
 
+        self._auto_turn_speech_frames = 0
+
         # Start STT stream
         try:
             await self.stt.start_stream()
@@ -1165,7 +1196,17 @@ class Session:
 
                 # Stage 4: Feed audio to STT (if listening)
                 if self._auto_turn_from_stt_final and not self._stt_active:
-                    await self._turn_manager.start_turn()
+                    if self._turn_manager.state == TurnManagerState.IDLE:
+                        if _chunk_has_speech_energy(chunk):
+                            self._auto_turn_speech_frames += 1
+                        else:
+                            self._auto_turn_speech_frames = 0
+
+                        if self._auto_turn_speech_frames >= 2:
+                            await self._turn_manager.start_turn()
+                            self._auto_turn_speech_frames = 0
+                    else:
+                        self._auto_turn_speech_frames = 0
 
                 if self.is_speaking and self._stt_active:
                     await self.stt.send_audio(chunk)
@@ -1704,6 +1745,7 @@ class Session:
         except Exception:
             pass
         self._stt_active = False
+        self._auto_turn_speech_frames = 0
         if self._stt_task and not self._stt_task.done():
             self._stt_task.cancel()
             try:
