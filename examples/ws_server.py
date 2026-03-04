@@ -11,58 +11,42 @@ Connect a client that streams raw PCM16 audio to ws://localhost:8765.
 from __future__ import annotations
 
 import asyncio
-import logging
-import os
-import signal
+import sys
+from pathlib import Path
 
-from easycat import (
-    EasyCatConfig,
-    OpenAIAgentsAdapter,
-    WebSocketTransportConfig,
-    create_session,
+from easycat import EasyCatConfig, WebSocketTransportConfig, create_session
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from common import (  # noqa: E402
+    build_openai_agents_adapter,
+    default_event_logging,
+    require_env,
+    wait_for_shutdown_signal,
 )
+from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 
 async def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise SystemExit("OPENAI_API_KEY is required.")
-
-    try:
-        from agents import Agent  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise SystemExit(
-            "OpenAI Agents SDK is required. Install with: uv sync --extra openai-agents"
-        ) from exc
-
-    voice_agent = Agent(
-        name="VoiceAssistant",
-        instructions="You are a helpful voice assistant.",
-    )
-    adapter = OpenAIAgentsAdapter(voice_agent)
+    api_key = require_env("OPENAI_API_KEY")
+    adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
 
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=WebSocketTransportConfig(),
         agent=adapter,
         wrap_agent=False,
+        event_logging=default_event_logging(),
     )
     session = create_session(config)
+    attach_runtime_feedback(session)
 
     await session.start()
 
     print("\nServer ready. Connect a WebSocket client to ws://localhost:8765")
     print("Press Ctrl+C to stop.\n")
 
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
-
-    await stop_event.wait()
-    await session.stop()
+    await wait_for_shutdown_signal(session)
 
 
 if __name__ == "__main__":
