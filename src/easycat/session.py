@@ -164,6 +164,7 @@ class SessionConfig:
     enable_noise_reduction: bool = True
     enable_echo_cancellation: bool = True
     enable_vad: bool = True
+    auto_turn_from_stt_final: bool = False
     strip_markdown: bool = False
 
     # Interruption behaviour.
@@ -603,7 +604,7 @@ class Session:
             noops.append("stt")
         if isinstance(self.tts, NoopTTS):
             noops.append("tts")
-        if isinstance(self.vad, NoopVAD):
+        if cfg.enable_vad and isinstance(self.vad, NoopVAD):
             noops.append("vad")
         if isinstance(self.noise_reducer, PassthroughNoiseReducer) and cfg.enable_noise_reduction:
             noops.append("noise_reducer")
@@ -630,6 +631,7 @@ class Session:
             self.echo_canceller, PassthroughAEC
         )
         self._enable_vad = cfg.enable_vad
+        self._auto_turn_from_stt_final = cfg.auto_turn_from_stt_final
         self._interruption_mode = cfg.interruption_mode
         self._interruption_latency_compensation_ms = max(
             0, cfg.interruption_latency_compensation_ms
@@ -1090,6 +1092,8 @@ class Session:
                         self._spans.finish(Tracer.STT)
                         if self._stt_final_future and not self._stt_final_future.done():
                             self._stt_final_future.set_result(stt_event.text)
+                        if self._auto_turn_from_stt_final:
+                            await self._turn_manager.end_turn()
                         break
             except Exception as exc:
                 logger.exception("STT event loop error")
@@ -1160,6 +1164,9 @@ class Session:
                 self._turn_manager.on_audio_frame(chunk)
 
                 # Stage 4: Feed audio to STT (if listening)
+                if self._auto_turn_from_stt_final and not self._stt_active:
+                    await self._turn_manager.start_turn()
+
                 if self.is_speaking and self._stt_active:
                     await self.stt.send_audio(chunk)
 

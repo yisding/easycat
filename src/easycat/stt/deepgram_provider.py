@@ -121,6 +121,7 @@ class DeepgramSTT(STTBase):
 
         confidence = best.get("confidence")
         is_final = msg.get("is_final", False)
+        speech_final = msg.get("speech_final")
 
         word_timestamps = None
         words = best.get("words")
@@ -129,7 +130,12 @@ class DeepgramSTT(STTBase):
                 WordTimestamp(word=w["word"], start=w["start"], end=w["end"]) for w in words
             ]
 
-        event_type = STTEventType.FINAL if is_final else STTEventType.PARTIAL
+        is_flux_model = self._config.model.lower().startswith("flux")
+        is_endpoint_final = bool(is_final)
+        if is_flux_model and speech_final is not None:
+            is_endpoint_final = bool(is_final and speech_final)
+
+        event_type = STTEventType.FINAL if is_endpoint_final else STTEventType.PARTIAL
         self._emit_event(
             STTEvent(
                 type=event_type,

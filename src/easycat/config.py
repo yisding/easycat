@@ -14,6 +14,7 @@ from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.session import Session, SessionConfig
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
+from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.factory import STTConfig, create_stt_provider_from_config
 from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.stubs import NoopAgent
@@ -124,12 +125,21 @@ class EasyCatConfig:
                 raise ValueError(f"{name} requires an API key.")
 
 
+def _is_deepgram_flux_stt(config: STTConfig) -> bool:
+    """Whether STT config is Deepgram Flux (provider-side turn detection)."""
+    if not isinstance(config, DeepgramSTTConfig):
+        return False
+    return config.model.lower().startswith("flux")
+
+
 def create_session(config: EasyCatConfig) -> Session:
     """Create a fully wired Session from EasyCatConfig."""
     event_bus = EventBus()
     stt = create_stt_provider_from_config(config.stt, event_bus)
     tts = create_tts_provider_from_config(config.tts, event_bus)
-    vad = create_vad(config.vad)
+    auto_turn_from_stt_final = _is_deepgram_flux_stt(config.stt)
+    enable_vad = not auto_turn_from_stt_final
+    vad = create_vad(config.vad) if enable_vad else None
     noise_reducer = create_noise_reducer(config.noise_reduction)
     echo_canceller = create_echo_canceller(config.echo_cancellation)
     transport = _create_transport(config.transport, event_bus)
@@ -169,6 +179,8 @@ def create_session(config: EasyCatConfig) -> Session:
             metrics=metrics,
             tracer=tracer,
             telephony_helpers=telephony_helpers,
+            enable_vad=enable_vad,
+            auto_turn_from_stt_final=auto_turn_from_stt_final,
             strip_markdown=config.strip_markdown,
         )
     )
