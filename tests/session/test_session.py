@@ -34,13 +34,18 @@ from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.session import Session, SessionConfig, TurnState
 from easycat.timeouts import AgentTimeoutError
 from easycat.tracing import InMemoryTraceExporter, SpanStatus, Tracer
-from easycat.turn_manager import TurnManagerConfig
+from easycat.turn_manager import TurnManagerConfig, TurnManagerState
 
 # ── Test helpers ───────────────────────────────────────────────────
 
 
 def _make_chunk(n_bytes: int = 320) -> AudioChunk:
     return AudioChunk(data=bytes(n_bytes), format=PCM16_MONO_16K)
+
+
+def _make_loud_chunk(n_samples: int = 160, amplitude: int = 6000) -> AudioChunk:
+    sample = int(amplitude).to_bytes(2, "little", signed=True)
+    return AudioChunk(data=sample * n_samples, format=PCM16_MONO_16K)
 
 
 class FakeTransport:
@@ -303,6 +308,35 @@ async def test_pipeline_emits_audio_in_events():
     await session.stop()
 
     assert len(received) == 2
+
+
+@pytest.mark.asyncio
+async def test_flux_auto_turn_does_not_start_on_silence_frames():
+    transport = FakeTransport(chunks=[_make_chunk(), _make_chunk(), _make_chunk()])
+    session = Session(
+        _full_config(transport=transport, enable_vad=False, auto_turn_from_stt_final=True)
+    )
+    session._is_running = True
+    session._turn_manager.start_turn = AsyncMock()  # type: ignore[method-assign]
+
+    await session._run_pipeline()
+
+    session._turn_manager.start_turn.assert_not_called()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_flux_auto_turn_does_not_barge_in_during_bot_playback():
+    transport = FakeTransport(chunks=[_make_loud_chunk(), _make_loud_chunk(), _make_loud_chunk()])
+    session = Session(
+        _full_config(transport=transport, enable_vad=False, auto_turn_from_stt_final=True)
+    )
+    session._is_running = True
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    session._turn_manager.start_turn = AsyncMock()  # type: ignore[method-assign]
+
+    await session._run_pipeline()
+
+    session._turn_manager.start_turn.assert_not_called()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
