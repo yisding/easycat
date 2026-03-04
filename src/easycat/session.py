@@ -1452,8 +1452,6 @@ class Session:
                             text_buffer = remaining
                         else:
                             text_buffer += event.text
-                            if _has_unclosed_markdown_delimiters(text_buffer):
-                                continue
 
                             ready, text_buffer = _split_at_sentence_boundaries(text_buffer)
                             if ready:

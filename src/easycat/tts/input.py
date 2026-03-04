@@ -24,10 +24,12 @@ class TTSInput:
 
 def strip_ssml_tags(text: str) -> str:
     """Best-effort conversion from SSML markup to plain text."""
+    import html
     import re
 
     without_tags = re.sub(r"<[^>]+>", " ", text)
-    return re.sub(r"\s+", " ", without_tags).strip()
+    collapsed = re.sub(r"\s+", " ", without_tags).strip()
+    return html.unescape(collapsed)
 
 
 def coerce_tts_input(payload: TTSInput | str) -> TTSInput:
