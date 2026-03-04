@@ -59,7 +59,15 @@ class FakeReconnectingWS:
         self._messages = messages or []
         self._sent: list[str | bytes] = []
         self._closed = False
-        self.connect = AsyncMock()
+        self._is_connected = False
+        self.connect = AsyncMock(side_effect=self._mark_connected)
+
+    async def _mark_connected(self) -> None:
+        self._is_connected = True
+
+    @property
+    def is_connected(self) -> bool:
+        return self._is_connected and not self._closed
 
     async def send(self, message: str | bytes) -> None:
         self._sent.append(message)
@@ -70,6 +78,7 @@ class FakeReconnectingWS:
 
     async def close(self) -> None:
         self._closed = True
+        self._is_connected = False
 
 
 class TestElevenLabsTTSConfig:
@@ -80,7 +89,7 @@ class TestElevenLabsTTSConfig:
         assert config.stability == 0.5
         assert config.similarity_boost == 0.75
         assert config.output_format == "pcm_24000"
-        assert config.stream_mode == ElevenLabsStreamMode.HTTP
+        assert config.stream_mode == ElevenLabsStreamMode.WEBSOCKET
 
     def test_websocket_mode(self):
         config = ElevenLabsTTSConfig(
@@ -319,7 +328,24 @@ class TestElevenLabsTTSWebSocket:
         assert len(events) == 2
         assert provider.is_cancelled
 
-    async def test_ws_closed_after_synthesis(self):
+
+    async def test_ws_reused_across_synthesis_calls(self):
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS(messages=[self._final_message()])
+
+        with patch(
+            "easycat.tts.elevenlabs_tts.ReconnectingWebSocket",
+            return_value=fake_ws,
+        ) as mock_ws_cls:
+            async for _ in provider.synthesize("test one"):
+                pass
+            async for _ in provider.synthesize("test two"):
+                pass
+
+        mock_ws_cls.assert_called_once()
+        fake_ws.connect.assert_awaited_once()
+
+    async def test_ws_kept_open_after_synthesis(self):
         provider = self._make_provider()
         fake_ws = FakeReconnectingWS(messages=[self._final_message()])
 
@@ -330,7 +356,7 @@ class TestElevenLabsTTSWebSocket:
             async for _ in provider.synthesize("test"):
                 pass
 
-        assert fake_ws._closed
+        assert not fake_ws._closed
 
 
 class TestElevenLabsTTSGeneral:
