@@ -43,11 +43,11 @@ from easycat.events import (
 class EventLoggingConfig:
     """Configuration for event-by-event logging from the EventBus."""
 
-    enabled: bool = False
+    enabled: bool = True
     logger_name: str = "easycat.event_trace"
     level: int = logging.INFO
     include_audio_events: bool = False
-    include_partials: bool = True
+    include_partials: bool = False
     include_text: bool = True
     text_limit: int = 160
     include_event_index: bool = True
@@ -71,6 +71,7 @@ class EventTraceLogger:
         self._config = config or EventLoggingConfig()
         self._logger = logging.getLogger(self._config.logger_name)
         self._active = False
+        self._handler: logging.Handler | None = None
         self._state = _TraceState()
         self._last_emit_time: dict[str, float] = {}
         self._seen_counts: dict[str, int] = {}
@@ -80,6 +81,13 @@ class EventTraceLogger:
         """Attach logger as a global EventBus subscriber."""
         if self._active:
             return
+        if not self._logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setLevel(self._config.level)
+            self._logger.addHandler(handler)
+            self._handler = handler
+        self._logger.setLevel(self._config.level)
+        self._logger.propagate = False
         self._state = _TraceState()
         self._last_emit_time.clear()
         self._seen_counts.clear()
@@ -92,6 +100,9 @@ class EventTraceLogger:
         if not self._active:
             return
         self._event_bus.unsubscribe_all(self._log_event)
+        if self._handler is not None:
+            self._logger.removeHandler(self._handler)
+            self._handler = None
         self._active = False
 
     async def _log_event(self, event: Event) -> None:

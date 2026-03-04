@@ -79,7 +79,7 @@ class EasyCatConfig:
     tts: TTSConfig | None = None
     vad: VADConfig = field(default_factory=VADConfig)
     noise_reduction: NoiseReducerConfig = field(default_factory=NoiseReducerConfig)
-    echo_cancellation: EchoCancellationConfig = field(default_factory=EchoCancellationConfig)
+    echo_cancellation: EchoCancellationConfig | None = None
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
     smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
@@ -106,7 +106,13 @@ class EasyCatConfig:
                 if transport_fmt is not None:
                     tts_kwargs["output_format"] = transport_fmt
                 self.tts = OpenAITTSConfig(**tts_kwargs)
+        if self.echo_cancellation is None:
+            self.echo_cancellation = self._default_echo_cancellation_for_transport()
         self._validate()
+
+    def _default_echo_cancellation_for_transport(self) -> EchoCancellationConfig:
+        enable_aec = isinstance(self.transport, (LocalTransportConfig, WebSocketTransportConfig))
+        return EchoCancellationConfig(enabled=enable_aec)
 
     def _validate(self) -> None:
         if self.stt is None:
@@ -131,7 +137,7 @@ def create_session(config: EasyCatConfig) -> Session:
     tts = create_tts_provider_from_config(config.tts, event_bus)
     vad = create_vad(config.vad)
     noise_reducer = create_noise_reducer(config.noise_reduction)
-    echo_canceller = create_echo_canceller(config.echo_cancellation)
+    echo_canceller = create_echo_canceller(config.echo_cancellation or EchoCancellationConfig())
     transport = _create_transport(config.transport, event_bus)
 
     if config.agent is not None:
