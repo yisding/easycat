@@ -7,6 +7,7 @@ from easycat.agent_runner import AgentRunner
 from easycat.agents import OpenAIAgentsAdapter, PydanticAIAdapter
 from easycat.config import EventLoggingConfig, TelephonyConfig
 from easycat.events import DTMFAggregated
+from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.telephony.dtmf import emit_twilio_dtmf
 from easycat.tts.openai_tts import OpenAITTSConfig
@@ -146,3 +147,31 @@ def test_create_session_adds_event_trace_logger_when_enabled():
     assert any(
         type(helper).__name__ == "EventTraceLogger" for helper in session._telephony_helpers
     )
+
+
+def test_create_session_disables_vad_for_deepgram_flux(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "easycat.config.create_vad",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("create_vad should not be called")
+        ),
+    )
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    monkeypatch.setattr(
+        "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+    )
+
+    config = EasyCatConfig(
+        stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        agent=_DummyAgent(),
+    )
+
+    session = create_session(config)
+
+    assert session._enable_vad is False
+    assert session._auto_turn_from_stt_final is True

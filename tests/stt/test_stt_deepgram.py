@@ -43,18 +43,20 @@ def _deepgram_result(
     is_final: bool = False,
     confidence: float = 0.95,
     words: list[dict] | None = None,
+    speech_final: bool | None = None,
 ) -> str:
     """Create a Deepgram-format Results message."""
     alt: dict = {"transcript": transcript, "confidence": confidence}
     if words:
         alt["words"] = words
-    return json.dumps(
-        {
-            "type": "Results",
-            "channel": {"alternatives": [alt]},
-            "is_final": is_final,
-        }
-    )
+    payload: dict[str, object] = {
+        "type": "Results",
+        "channel": {"alternatives": [alt]},
+        "is_final": is_final,
+    }
+    if speech_final is not None:
+        payload["speech_final"] = speech_final
+    return json.dumps(payload)
 
 
 def _make_deepgram_stt(
@@ -263,3 +265,28 @@ async def test_deepgram_reusable_across_streams():
 
     events2 = await collect_stt_events(stt, chunks)
     assert events2[0].text == "stream 2"
+
+
+@pytest.mark.asyncio
+async def test_deepgram_flux_waits_for_speech_final():
+    messages = [
+        _deepgram_result("hello", is_final=True, speech_final=False),
+        _deepgram_result("hello world", is_final=True, speech_final=True),
+    ]
+    ws = MockWebSocket(messages)
+
+    async def mock_connect(url: str, **kwargs) -> MockWebSocket:
+        return ws
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(api_key="test-key", model="flux-general-en", ws_connect=mock_connect)
+    )
+
+    pcm = generate_pcm_sine(duration_ms=200)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert len(events) == 2
+    assert events[0].type == STTEventType.PARTIAL
+    assert events[0].text == "hello"
+    assert events[1].type == STTEventType.FINAL
+    assert events[1].text == "hello world"
