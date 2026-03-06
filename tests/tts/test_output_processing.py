@@ -58,6 +58,25 @@ def test_default_pronunciation_helper_phone_regex_behavior() -> None:
     assert "4 <break" in payload.text
 
 
+def test_pause_processor_does_not_promote_literal_break_tags_from_source_text() -> None:
+    processor = PauseProcessor(
+        pattern=r"\+?\d[\d\s().-]{5,}\d",
+        pause_ms=120,
+        unit_pattern=r"\d",
+        minimum_units=7,
+    )
+    payload = processor.process(
+        TTSInput('Say <break time="999999ms"/> and then call 415-555-2671.'),
+        is_final=True,
+        is_streaming=False,
+    )
+
+    assert payload.format == "ssml"
+    assert '<break time="120ms"/>' in payload.text
+    assert '<break time="999999ms"/>' not in payload.text
+    assert "&lt;break time=&quot;999999ms&quot;/&gt;" in payload.text
+
+
 def test_pause_processor_plain_text_styles() -> None:
     base = TTSInput("ticket #48291")
 

@@ -356,6 +356,16 @@ def test_text_for_estimation_timeline_encodes_ssml_breaks() -> None:
     assert timeline != "Hello world"
 
 
+def test_text_for_estimation_timeline_supports_single_quoted_breaks() -> None:
+    payload = TTSInput(
+        text="<speak>Hello<break time='500ms'/>world</speak>",
+        format="ssml",
+    )
+    timeline = _text_for_estimation_timeline(payload)
+    assert "Hello" in timeline and "world" in timeline
+    assert timeline != "Hello world"
+
+
 def test_cleanup_estimation_text_removes_pause_markers() -> None:
     payload = TTSInput(
         text='<speak>A<break time="500ms"/>B</speak>',
@@ -1560,6 +1570,78 @@ async def test_session_barge_in_records_dequeued_unsynthesized_text_as_incomplet
             stt=FakeSTT(transcript="hello"),
             agent=agent,
             tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    await session.start()
+    try:
+        await session._run_streaming_agent("hello", token=token)
+    finally:
+        await session.stop()
+
+    assert agent.interruption_notified
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_records_queued_unsynthesized_text_as_incomplete():
+    """Cancellation should also account for chunks still left in the TTS queue."""
+
+    token = CancelToken()
+
+    class ThreeSentenceAgent:
+        interruption_notified = False
+
+        async def run(self, text: str) -> str:
+            return "First sentence. Second sentence. Third sentence."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.TEXT_DELTA,
+                text="First sentence. Second sentence. ",
+            )
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Third sentence.")
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="First sentence. Second sentence. Third sentence.",
+            )
+
+        def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+            self.interruption_notified = True
+
+    class CancelAfterFirstChunkTTS:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.calls += 1
+            if self.calls == 1:
+                yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+                token.cancel()
+                return
+            pytest.fail("No additional chunks should be synthesized after cancellation")
+
+        async def stop(self) -> None:
+            pass
+
+        async def cancel(self) -> None:
+            pass
+
+    agent = ThreeSentenceAgent()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=agent,
+            tts=CancelAfterFirstChunkTTS(),
             noise_reducer=FakeNoiseReducer(),
             turn_manager_config=_FAST_TURN,
         )
