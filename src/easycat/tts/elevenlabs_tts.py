@@ -188,12 +188,13 @@ class ElevenLabsTTS(TTSBase):
             await self._close_ws()
             raise
         finally:
+            await self._close_ws()
             self._end_synthesis()
 
     async def _start_ws_stream(self, text: str) -> ReconnectingWebSocket:
         """Send the full ElevenLabs stream-init sequence, retrying once on stale sockets."""
         messages = self._build_ws_messages(text)
-        ws = await self._get_or_connect_ws()
+        ws = await self._connect_ws()
 
         try:
             await self._send_ws_messages(ws, messages)
@@ -202,7 +203,7 @@ class ElevenLabsTTS(TTSBase):
             if self._cancelled:
                 raise
             await self._close_ws()
-            ws = await self._get_or_connect_ws()
+            ws = await self._connect_ws()
             await self._send_ws_messages(ws, messages)
             return ws
 
@@ -230,11 +231,8 @@ class ElevenLabsTTS(TTSBase):
         for message in messages:
             await ws.send(message)
 
-    async def _get_or_connect_ws(self) -> ReconnectingWebSocket:
-        """Get an existing active WebSocket or create/connect a new one."""
-        if self._ws is not None and self._ws.is_connected:
-            return self._ws
-
+    async def _connect_ws(self) -> ReconnectingWebSocket:
+        """Create and connect a fresh WebSocket for one synthesis request."""
         ws_url = (
             f"{self._config.ws_base_url}"
             f"/text-to-speech/{self._config.voice_id}"
