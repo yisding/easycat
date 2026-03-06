@@ -355,6 +355,7 @@ def test_text_for_estimation_timeline_encodes_ssml_breaks() -> None:
     assert "Hello" in timeline and "world" in timeline
     assert timeline != "Hello world"
 
+
 def test_text_for_estimation_timeline_supports_single_quoted_breaks() -> None:
     payload = TTSInput(
         text="<speak>Hello<break time='500ms'/>world</speak>",
