@@ -191,7 +191,7 @@ class DeepgramSTT(STTBase):
 
 def _flux_base_url(base_url: str) -> str:
     if base_url.endswith("/v1/listen"):
-        return f"{base_url[:-len('/v1/listen')]}/v2/listen"
+        return f"{base_url[: -len('/v1/listen')]}/v2/listen"
     return base_url
 
 
