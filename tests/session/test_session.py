@@ -121,6 +121,29 @@ class FakeSTT:
             yield event
 
 
+class AutoTurnSTT(FakeSTT):
+    def __init__(self, transcript: str = "hello flux", *, final_after_chunks: int = 3) -> None:
+        super().__init__(transcript=transcript)
+        self.final_after_chunks = final_after_chunks
+        self.sent_chunks: list[AudioChunk] = []
+        self.start_count = 0
+        self.end_count = 0
+        self._final_emitted = False
+
+    async def start_stream(self) -> None:
+        self.start_count += 1
+
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        self.sent_chunks.append(chunk)
+        if not self._final_emitted and len(self.sent_chunks) >= self.final_after_chunks:
+            self._final_emitted = True
+            await self._queue.put(STTEvent(type=STTEventType.FINAL, text=self._transcript))
+
+    async def end_stream(self) -> None:
+        self.end_count += 1
+        await self._queue.put(None)
+
+
 class FakeAgent:
     async def run(self, text: str) -> str:
         return text.upper()
@@ -337,6 +360,39 @@ async def test_flux_auto_turn_does_not_barge_in_during_bot_playback():
     await session._run_pipeline()
 
     session._turn_manager.start_turn.assert_not_called()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_flux_auto_turn_starts_once_and_ends_on_stt_final():
+    chunks = [_make_loud_chunk(), _make_loud_chunk(), _make_loud_chunk()]
+    transport = FakeTransport(chunks=chunks)
+    stt = AutoTurnSTT()
+    session = Session(
+        _full_config(
+            transport=transport,
+            stt=stt,
+            enable_vad=False,
+            auto_turn_from_stt_final=True,
+        )
+    )
+
+    events_received: list[Event] = []
+    for event_type in (TurnStarted, STTFinal, TurnEnded, AgentFinal):
+        session.event_bus.subscribe(event_type, lambda e: events_received.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.2)
+
+    type_names = [type(event).__name__ for event in events_received]
+    assert type_names.count("TurnStarted") == 1
+    assert "STTFinal" in type_names
+    assert "TurnEnded" in type_names
+    assert "AgentFinal" in type_names
+    assert stt.start_count == 1
+    assert stt.end_count == 1
+    assert stt.sent_chunks == chunks
+
+    await session.stop()
 
 
 @pytest.mark.asyncio

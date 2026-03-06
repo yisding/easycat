@@ -1086,7 +1086,8 @@ class Session:
         if self._turn_manager.state != TurnManagerState.PROCESSING:
             return
         self._turn_end_time = event.timestamp
-        self._spans.start(Tracer.STT)
+        if not self._auto_turn_from_stt_final:
+            self._spans.start(Tracer.STT)
         await self._handle_end_of_speech()
 
     @staticmethod
@@ -1106,6 +1107,7 @@ class Session:
         self._stt_final_future = loop.create_future()
 
         async def _consume() -> None:
+            saw_final = False
             try:
                 async for stt_event in self.stt.events():
                     if self._cancel_token and self._cancel_token.is_cancelled:
@@ -1113,6 +1115,7 @@ class Session:
                     if stt_event.type == STTEventType.PARTIAL:
                         await self._emit(STTPartial(text=stt_event.text))
                     elif stt_event.type == STTEventType.FINAL:
+                        saw_final = True
                         await self._emit(STTFinal(text=stt_event.text))
                         self._stt_final_time = time.monotonic()
                         if self._metrics and self._turn_end_time is not None:
@@ -1134,7 +1137,8 @@ class Session:
             finally:
                 if self._stt_final_future and not self._stt_final_future.done():
                     self._stt_final_future.set_result("")
-                self._spans.finish(Tracer.STT, SpanStatus.CANCELLED)
+                if not saw_final:
+                    self._spans.finish(Tracer.STT, SpanStatus.CANCELLED)
 
         self._stt_task = asyncio.create_task(_consume())
 
@@ -1195,6 +1199,7 @@ class Session:
                 self._turn_manager.on_audio_frame(chunk)
 
                 # Stage 4: Feed audio to STT (if listening)
+                started_turn_from_chunk = False
                 if self._auto_turn_from_stt_final and not self._stt_active:
                     if self._turn_manager.state == TurnManagerState.IDLE:
                         if _chunk_has_speech_energy(chunk):
@@ -1205,10 +1210,11 @@ class Session:
                         if self._auto_turn_speech_frames >= 2:
                             await self._turn_manager.start_turn()
                             self._auto_turn_speech_frames = 0
+                            started_turn_from_chunk = self._stt_active
                     else:
                         self._auto_turn_speech_frames = 0
 
-                if self.is_speaking and self._stt_active:
+                if self.is_speaking and self._stt_active and not started_turn_from_chunk:
                     await self.stt.send_audio(chunk)
 
         except asyncio.CancelledError:
