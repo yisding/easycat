@@ -6,10 +6,15 @@ from easycat import EasyCatConfig, create_session
 from easycat.agent_runner import AgentRunner
 from easycat.agents import OpenAIAgentsAdapter, PydanticAIAdapter
 from easycat.config import EventLoggingConfig, TelephonyConfig
+from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.events import DTMFAggregated
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.telephony.dtmf import emit_twilio_dtmf
+from easycat.transports.local import LocalTransportConfig
+from easycat.transports.twilio_media import TwilioTransportConfig
+from easycat.transports.webrtc import WebRTCTransportConfig
+from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig, TurnMode
 
@@ -28,6 +33,32 @@ def test_easycat_config_openai_defaults():
     config = EasyCatConfig(openai_api_key="test-key")
     assert isinstance(config.stt, OpenAISTTConfig)
     assert isinstance(config.tts, OpenAITTSConfig)
+
+
+def test_easycat_config_echo_cancellation_defaults_for_local_and_websocket():
+    local = EasyCatConfig(openai_api_key="test-key", transport=LocalTransportConfig())
+    websocket = EasyCatConfig(openai_api_key="test-key", transport=WebSocketTransportConfig())
+
+    assert local.echo_cancellation == EchoCancellationConfig(enabled=True)
+    assert websocket.echo_cancellation == EchoCancellationConfig(enabled=True)
+
+
+def test_easycat_config_echo_cancellation_defaults_off_for_other_transports():
+    twilio = EasyCatConfig(openai_api_key="test-key", transport=TwilioTransportConfig())
+    webrtc = EasyCatConfig(openai_api_key="test-key", transport=WebRTCTransportConfig())
+
+    assert twilio.echo_cancellation == EchoCancellationConfig(enabled=False)
+    assert webrtc.echo_cancellation == EchoCancellationConfig(enabled=False)
+
+
+def test_easycat_config_echo_cancellation_respects_explicit_override():
+    config = EasyCatConfig(
+        openai_api_key="test-key",
+        transport=LocalTransportConfig(),
+        echo_cancellation=EchoCancellationConfig(enabled=False),
+    )
+
+    assert config.echo_cancellation == EchoCancellationConfig(enabled=False)
 
 
 def test_easycat_config_wraps_agent():

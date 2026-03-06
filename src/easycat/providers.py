@@ -14,6 +14,7 @@ from typing import Protocol, runtime_checkable
 
 from easycat.audio_format import AudioChunk
 from easycat.events import Event, STTEvent, TTSEvent
+from easycat.tts.input import TTSInput
 
 # ── STT Provider ───────────────────────────────────────────────────
 
@@ -56,7 +57,12 @@ class TTSProvider(Protocol):
     Session maps these to EasyCat-level TTSAudio/TTSMarkers events.
     """
 
-    def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    @property
+    def supports_ssml(self) -> bool:
+        """Whether this provider accepts SSML input natively."""
+        ...
+
+    def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text into streaming TTSEvent objects."""
         ...
 

@@ -10,15 +10,18 @@ Setup:
 from __future__ import annotations
 
 import os
+import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 
-from easycat import (
-    EasyCatConfig,
-    OpenAIAgentsAdapter,
-    TelephonyConfig,
-    TwilioTransportConfig,
-    create_session,
-)
+from easycat import EasyCatConfig, TelephonyConfig, TwilioTransportConfig, create_session
 from easycat.transports.twilio_media import twiml_connect_stream
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from common import build_openai_agents_adapter, default_event_logging  # noqa: E402
+from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 
 def create_app(*, api_key: str | None = None, stream_url: str | None = None):
@@ -28,17 +31,9 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
         raise RuntimeError("OPENAI_API_KEY and TWILIO_STREAM_URL are required.")
 
     try:
-        from agents import Agent  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise RuntimeError(
-            "OpenAI Agents SDK is required. Install with: uv add easycat[openai-agents]"
-        ) from exc
-
-    voice_agent = Agent(
-        name="VoiceAssistant",
-        instructions="You are a helpful voice assistant.",
-    )
-    adapter = OpenAIAgentsAdapter(voice_agent)
+        adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
+    except SystemExit as exc:
+        raise RuntimeError(str(exc)) from exc
 
     config = EasyCatConfig(
         openai_api_key=api_key,
@@ -49,20 +44,20 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
         ),
         agent=adapter,
         wrap_agent=False,
+        event_logging=default_event_logging(),
     )
     session = create_session(config)
+    attach_runtime_feedback(session)
 
     from fastapi import FastAPI, Response
 
-    app = FastAPI()
-
-    @app.on_event("startup")
-    async def _startup() -> None:
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await session.start()
-
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
+        yield
         await session.stop()
+
+    app = FastAPI(lifespan=lifespan)
 
     @app.post("/twiml")
     async def twiml() -> Response:
