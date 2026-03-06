@@ -346,23 +346,25 @@ class TestElevenLabsTTSWebSocket:
         assert len(events) == 2
         assert provider.is_cancelled
 
-    async def test_ws_reused_across_synthesis_calls(self):
+    async def test_ws_recreated_for_each_synthesis_call(self):
         provider = self._make_provider()
-        fake_ws = FakeReconnectingWS(messages=[self._final_message()])
+        fake_ws_one = FakeReconnectingWS(messages=[self._final_message()])
+        fake_ws_two = FakeReconnectingWS(messages=[self._final_message()])
 
         with patch(
             "easycat.tts.elevenlabs_tts.ReconnectingWebSocket",
-            return_value=fake_ws,
+            side_effect=[fake_ws_one, fake_ws_two],
         ) as mock_ws_cls:
             async for _ in provider.synthesize("test one"):
                 pass
             async for _ in provider.synthesize("test two"):
                 pass
 
-        mock_ws_cls.assert_called_once()
-        fake_ws.connect.assert_awaited_once()
+        assert mock_ws_cls.call_count == 2
+        fake_ws_one.connect.assert_awaited_once()
+        fake_ws_two.connect.assert_awaited_once()
 
-    async def test_ws_kept_open_after_synthesis(self):
+    async def test_ws_closed_after_synthesis(self):
         provider = self._make_provider()
         fake_ws = FakeReconnectingWS(messages=[self._final_message()])
 
@@ -373,24 +375,23 @@ class TestElevenLabsTTSWebSocket:
             async for _ in provider.synthesize("test"):
                 pass
 
-        assert not fake_ws._closed
+        assert fake_ws._closed
 
     async def test_synthesize_ws_reconnects_and_replays_messages_after_send_failure(self):
         provider = self._make_provider()
         stale_ws = FakeReconnectingWS(fail_send_at={2})
-        stale_ws._is_connected = True
-        provider._ws = stale_ws
         fresh_ws = FakeReconnectingWS(messages=[self._final_message()])
 
         with patch(
             "easycat.tts.elevenlabs_tts.ReconnectingWebSocket",
-            return_value=fresh_ws,
+            side_effect=[stale_ws, fresh_ws],
         ) as mock_ws_cls:
             async for _ in provider.synthesize("Test"):
                 pass
 
         assert stale_ws._closed
-        mock_ws_cls.assert_called_once()
+        assert mock_ws_cls.call_count == 2
+        stale_ws.connect.assert_awaited_once()
         fresh_ws.connect.assert_awaited_once()
         assert [json.loads(msg)["text"] for msg in stale_ws._sent] == [" "]
         assert [json.loads(msg)["text"] for msg in fresh_ws._sent] == [" ", "Test", ""]
