@@ -12,6 +12,7 @@ import pytest
 from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import TTSEvent, TTSEventType
 from easycat.tts.base import TTSBase
+from easycat.tts.input import TTSInput
 from easycat.tts.test_harness import (
     collect_tts_output,
     concatenate_audio,
@@ -34,7 +35,7 @@ class FakeTTS(TTSBase):
         super().__init__(output_format=output_format)
         self._chunks = chunks or []
 
-    async def synthesize(self, text: str):
+    async def synthesize(self, payload: TTSInput):
         self._start_synthesis()
         try:
             for chunk_data in self._chunks:
@@ -136,7 +137,7 @@ class TestTTSBase:
     def test_synthesize_not_implemented(self):
         base = TTSBase()
         with pytest.raises(NotImplementedError):
-            base.synthesize("hello")
+            base.synthesize(TTSInput("hello"))
 
 
 # ── FakeTTS synthesize tests ──────────────────────────────────────
@@ -148,7 +149,7 @@ class TestFakeTTS:
         tts = FakeTTS(chunks=chunks)
 
         events = []
-        async for event in tts.synthesize("hello"):
+        async for event in tts.synthesize(TTSInput("hello")):
             events.append(event)
 
         assert len(events) == 2
@@ -159,7 +160,7 @@ class TestFakeTTS:
         tts = FakeTTS(chunks=[_make_pcm16_data(10)])
         assert not tts.is_active
 
-        async for _ in tts.synthesize("hi"):
+        async for _ in tts.synthesize(TTSInput("hi")):
             assert tts.is_active
 
         assert not tts.is_active
@@ -169,7 +170,7 @@ class TestFakeTTS:
         tts = FakeTTS(chunks=chunks)
 
         events = []
-        async for event in tts.synthesize("long text"):
+        async for event in tts.synthesize(TTSInput("long text")):
             events.append(event)
             if len(events) == 2:
                 await tts.cancel()

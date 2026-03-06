@@ -14,6 +14,7 @@ from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.tts.base import TTSBase
+from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
 
 logger = logging.getLogger(__name__)
 
@@ -93,8 +94,14 @@ class ElevenLabsTTS(TTSBase):
             )
         return self._client
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    @property
+    def supports_ssml(self) -> bool:
+        return False
+
+    async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using the configured streaming mode."""
+        payload = coerce_tts_input(payload)
+        text = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
         if self._config.stream_mode == ElevenLabsStreamMode.WEBSOCKET:
             async for event in self._synthesize_ws(text):
                 yield event

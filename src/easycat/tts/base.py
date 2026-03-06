@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.audio_utils import resample, to_mono
 from easycat.events import TTSEvent, TTSEventType
+from easycat.tts.input import TTSInput
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,12 @@ class TTSBase:
 
         return data
 
-    def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    @property
+    def supports_ssml(self) -> bool:
+        """Whether this provider accepts SSML input natively."""
+        return False
+
+    def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text into streaming TTSEvent objects.
 
         Subclasses must override this method.

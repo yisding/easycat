@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -10,6 +11,7 @@ from easycat.agents.factory import auto_adapt_agent
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.event_logging import EventLoggingConfig, EventTraceLogger
 from easycat.events import EventBus
+from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.session import Session, SessionConfig
@@ -80,7 +82,7 @@ class EasyCatConfig:
     tts: TTSConfig | None = None
     vad: VADConfig = field(default_factory=VADConfig)
     noise_reduction: NoiseReducerConfig = field(default_factory=NoiseReducerConfig)
-    echo_cancellation: EchoCancellationConfig = field(default_factory=EchoCancellationConfig)
+    echo_cancellation: EchoCancellationConfig | None = None
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
     smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
@@ -93,6 +95,7 @@ class EasyCatConfig:
     agent_runner: AgentRunnerConfig | None = None
     wrap_agent: bool = True
     strip_markdown: bool = False
+    output_processors: Sequence[LLMOutputProcessor] = ()
 
     def __post_init__(self) -> None:
         if self.openai_api_key:
@@ -107,7 +110,13 @@ class EasyCatConfig:
                 if transport_fmt is not None:
                     tts_kwargs["output_format"] = transport_fmt
                 self.tts = OpenAITTSConfig(**tts_kwargs)
+        if self.echo_cancellation is None:
+            self.echo_cancellation = self._default_echo_cancellation_for_transport()
         self._validate()
+
+    def _default_echo_cancellation_for_transport(self) -> EchoCancellationConfig:
+        enable_aec = isinstance(self.transport, (LocalTransportConfig, WebSocketTransportConfig))
+        return EchoCancellationConfig(enabled=enable_aec)
 
     def _validate(self) -> None:
         if self.stt is None:
@@ -143,7 +152,7 @@ def create_session(config: EasyCatConfig) -> Session:
     enable_vad = not auto_turn_from_stt_final
     vad = create_vad(config.vad) if enable_vad else None
     noise_reducer = create_noise_reducer(config.noise_reduction)
-    echo_canceller = create_echo_canceller(config.echo_cancellation)
+    echo_canceller = create_echo_canceller(config.echo_cancellation or EchoCancellationConfig())
     transport = _create_transport(config.transport, event_bus)
 
     if config.agent is not None:
@@ -184,6 +193,7 @@ def create_session(config: EasyCatConfig) -> Session:
             enable_vad=enable_vad,
             auto_turn_from_stt_final=auto_turn_from_stt_final,
             strip_markdown=config.strip_markdown,
+            output_processors=config.output_processors,
         )
     )
 
