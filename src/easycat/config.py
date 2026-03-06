@@ -140,6 +140,10 @@ def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
         return False
     if config.turn_taking.mode == TurnMode.PUSH_TO_TALK:
         return False
+    if config.smart_turn.enabled:
+        return False
+    if config.telephony and config.telephony.enable_voicemail_detector:
+        return False
     return config.stt.is_flux
 
 
