@@ -16,11 +16,19 @@ logger = logging.getLogger(__name__)
 PauseStyle = Literal["ssml", "ellipsis", "emdash"]
 
 
-def _to_ssml_payload(text_with_break_tags: str) -> TTSInput:
-    escaped = html.escape(text_with_break_tags)
-    escaped = escaped.replace("&lt;break time=&quot;", '<break time="')
-    escaped = escaped.replace("ms&quot;/&gt;", 'ms"/>')
-    return TTSInput(text=f"<speak>{escaped}</speak>", format="ssml")
+@dataclass(frozen=True)
+class _SSMLBreak:
+    pause_ms: int
+
+
+def _to_ssml_payload(parts: list[str | _SSMLBreak]) -> TTSInput:
+    rendered: list[str] = []
+    for part in parts:
+        if isinstance(part, _SSMLBreak):
+            rendered.append(f'<break time="{max(0, part.pause_ms)}ms"/>')
+        else:
+            rendered.append(html.escape(part))
+    return TTSInput(text=f"<speak>{''.join(rendered)}</speak>", format="ssml")
 
 
 class LLMOutputProcessor(Protocol):
@@ -68,13 +76,41 @@ class PauseProcessor:
         source = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
         compiled = re.compile(self.pattern, self.flags)
 
-        def repl(match: re.Match[str]) -> str:
-            units = re.findall(self.unit_pattern, match.group(0))
+        def matched_units(match_text: str) -> list[str] | None:
+            units = re.findall(self.unit_pattern, match_text)
             if len(units) < self.minimum_units:
+                return None
+            return units
+
+        if self.style == "ssml":
+            parts: list[str | _SSMLBreak] = []
+            cursor = 0
+            changed = False
+
+            for match in compiled.finditer(source):
+                units = matched_units(match.group(0))
+                if units is None:
+                    continue
+
+                changed = True
+                parts.append(source[cursor : match.start()])
+                for index, unit in enumerate(units):
+                    if index:
+                        parts.extend((" ", _SSMLBreak(self.pause_ms), " "))
+                    parts.append(unit)
+                cursor = match.end()
+
+            if not changed:
+                return payload
+
+            parts.append(source[cursor:])
+            return _to_ssml_payload(parts)
+
+        def repl(match: re.Match[str]) -> str:
+            units = matched_units(match.group(0))
+            if units is None:
                 return match.group(0)
-            if self.style == "ssml":
-                pause = f'<break time="{self.pause_ms}ms"/>'
-            elif self.style == "ellipsis":
+            if self.style == "ellipsis":
                 count = max(1, self.ellipsis_count)
                 pause = " ".join(["..."] * count)
             else:
@@ -84,8 +120,6 @@ class PauseProcessor:
         transformed = compiled.sub(repl, source)
         if transformed == source:
             return payload
-        if self.style == "ssml":
-            return _to_ssml_payload(transformed)
         return TTSInput(text=transformed, format="plain")
 
 

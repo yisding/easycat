@@ -47,7 +47,6 @@ from easycat.events import (
 from easycat.health_check import PeriodicHealthChecker
 from easycat.llm_output_processing import (
     LLMOutputProcessor,
-    MarkdownStripProcessor,
     apply_output_processors,
 )
 from easycat.metrics import (
@@ -597,8 +596,12 @@ def _text_for_estimation_timeline(payload: TTSInput) -> str:
 
     def _break_repl(match: re.Match[str]) -> str:
         attrs = match.group(1)
-        ms_match = re.search(r'time\s*=\s*"\s*(\d+)\s*ms\s*"', attrs, flags=re.IGNORECASE)
-        ms = int(ms_match.group(1)) if ms_match else 0
+        ms_match = re.search(
+            r"""time\s*=\s*(['"])\s*(\d+)\s*ms\s*\1""",
+            attrs,
+            flags=re.IGNORECASE,
+        )
+        ms = int(ms_match.group(2)) if ms_match else 0
         count = max(1, round((ms / 1000.0) * _PAUSE_CHARS_PER_SECOND)) if ms > 0 else 1
         return _PAUSE_MARKER * count
 
@@ -690,8 +693,6 @@ class Session:
         self._interruption_ack_tail_cap_ms = max(0, cfg.interruption_ack_tail_cap_ms)
         self._strip_markdown = cfg.strip_markdown
         self._output_processors: list[LLMOutputProcessor] = list(cfg.output_processors)
-        if cfg.strip_markdown:
-            self._output_processors.insert(0, MarkdownStripProcessor())
 
         # Turn manager — single source of truth for turn state
         self._turn_manager = cfg.turn_manager or TurnManager(
@@ -1544,7 +1545,7 @@ class Session:
             while not tts_queue.empty():
                 remaining = tts_queue.get_nowait()
                 if remaining is not None:
-                    tts_chunks.append((remaining, 0, False))
+                    tts_chunks.append((_text_for_estimation_timeline(remaining), 0, False))
 
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 await self._turn_manager.bot_stopped_speaking()

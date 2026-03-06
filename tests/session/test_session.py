@@ -778,6 +778,42 @@ async def test_session_falls_back_to_plain_when_ssml_not_supported() -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_falls_back_to_plain_unescapes_ssml_entities() -> None:
+    class CaptureTTS(FakeTTS):
+        def __init__(self) -> None:
+            self.payloads: list[TTSInput] = []
+
+        @property
+        def supports_ssml(self) -> bool:
+            return False
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.payloads.append(payload)
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
+
+    tts = CaptureTTS()
+    session = Session(
+        _full_config(
+            tts=tts,
+            output_processors=[
+                PauseProcessor(
+                    pattern=r"\+?\d[\d\s().-]{5,}\d",
+                    unit_pattern=r"\d",
+                    minimum_units=7,
+                )
+            ],
+        )
+    )
+
+    await session._run_basic_agent("Call AT&T at 415-555-2671", token=None)
+
+    assert tts.payloads
+    assert tts.payloads[0].format == "plain"
+    assert "AT&T" in tts.payloads[0].text
+    assert "AT&amp;T" not in tts.payloads[0].text
+
+
+@pytest.mark.asyncio
 async def test_session_composes_phonetic_and_phone_processors() -> None:
     class CaptureTTS(FakeTTS):
         def __init__(self) -> None:
