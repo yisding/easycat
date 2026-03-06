@@ -165,7 +165,13 @@ class ElevenLabsTTS(TTSBase):
                     "similarity_boost": self._config.similarity_boost,
                 },
             }
-            await ws.send(json.dumps(init_msg))
+            try:
+                await ws.send(json.dumps(init_msg))
+            except Exception:
+                # Connection may be stale; reconnect and retry
+                await self._close_ws()
+                ws = await self._get_or_connect_ws()
+                await ws.send(json.dumps(init_msg))
 
             # Send the actual text
             await ws.send(json.dumps({"text": text}))
@@ -199,6 +205,10 @@ class ElevenLabsTTS(TTSBase):
                 logger.error("ElevenLabs TTS WebSocket error: %s", exc)
                 await self._close_ws()
                 raise
+        except BaseException:
+            # CancelledError is a BaseException; close the ws since it's mid-stream
+            await self._close_ws()
+            raise
         finally:
             self._end_synthesis()
 
