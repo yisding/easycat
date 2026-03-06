@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 PauseStyle = Literal["ssml", "ellipsis", "emdash"]
 MAX_SSML_BREAK_MS = 5_000
 
+
 @dataclass(frozen=True)
 class _SSMLBreak:
     pause_ms: int
