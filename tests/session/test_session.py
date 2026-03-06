@@ -214,6 +214,17 @@ async def test_session_start_and_stop():
     assert session.turn_state == TurnState.IDLE
 
 
+def test_session_strip_markdown_does_not_inject_hidden_processor():
+    class MarkerProcessor:
+        def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
+            return payload
+
+    processor = MarkerProcessor()
+    session = Session(_full_config(strip_markdown=True, output_processors=[processor]))
+
+    assert session._output_processors == [processor]
+
+
 @pytest.mark.asyncio
 async def test_session_shutdown():
     transport = FakeTransport()
@@ -765,15 +776,17 @@ async def test_session_falls_back_to_plain_when_ssml_not_supported() -> None:
                 )
             ],
             transport=FakeTransport(chunks=[_make_chunk(), _make_chunk()]),
-            stt=FakeSTT(transcript="call me at 415-555-2671"),
+            stt=FakeSTT(transcript="call AT&T at 415-555-2671"),
         )
     )
 
-    await session._run_basic_agent("call me at 415-555-2671", token=None)
+    await session._run_basic_agent("call AT&T at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].format == "plain"
     assert "<break" not in tts.payloads[0].text
+    assert "AT&T" in tts.payloads[0].text
+    assert "AT&amp;T" not in tts.payloads[0].text
     assert "4 1 5" in tts.payloads[0].text
 
 

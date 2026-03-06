@@ -1,6 +1,7 @@
 """Tests for LLM output processor helpers."""
 
 from easycat.llm_output_processing import (
+    MAX_SSML_BREAK_MS,
     PauseProcessor,
     PhoneticReplacementProcessor,
     default_pronunciation_processors,
@@ -109,3 +110,40 @@ def test_pause_processor_plain_text_styles() -> None:
     ).process(base, is_final=True, is_streaming=False)
     assert emdash.format == "plain"
     assert "—" in emdash.text
+
+
+def test_pause_processor_escapes_literal_break_markup_from_model_text() -> None:
+    processor = PauseProcessor(
+        pattern=r"ticket\s+#?\d+",
+        pause_ms=180,
+        unit_pattern=r"\d",
+        minimum_units=2,
+    )
+    payload = processor.process(
+        TTSInput('Literal <break time="999999ms"/> text before ticket #48291.'),
+        is_final=True,
+        is_streaming=False,
+    )
+
+    assert payload.format == "ssml"
+    assert "&lt;break time=&quot;999999ms&quot;/&gt;" in payload.text
+    assert '<break time="999999ms"/>' not in payload.text
+    assert '<break time="180ms"/>' in payload.text
+
+
+def test_pause_processor_clamps_ssml_break_duration() -> None:
+    processor = PauseProcessor(
+        pattern=r"ticket\s+#?\d+",
+        pause_ms=99_999,
+        unit_pattern=r"\d",
+        minimum_units=2,
+    )
+    payload = processor.process(
+        TTSInput("Please reference ticket #48291 before the call."),
+        is_final=True,
+        is_streaming=False,
+    )
+
+    assert payload.format == "ssml"
+    assert f'<break time="{MAX_SSML_BREAK_MS}ms"/>' in payload.text
+    assert '<break time="99999ms"/>' not in payload.text

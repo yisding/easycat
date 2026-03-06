@@ -355,15 +355,16 @@ def test_text_for_estimation_timeline_encodes_ssml_breaks() -> None:
     assert "Hello" in timeline and "world" in timeline
     assert timeline != "Hello world"
 
-
 def test_text_for_estimation_timeline_supports_single_quoted_breaks() -> None:
     payload = TTSInput(
         text="<speak>Hello<break time='500ms'/>world</speak>",
         format="ssml",
     )
+
     timeline = _text_for_estimation_timeline(payload)
     assert "Hello" in timeline and "world" in timeline
     assert timeline != "Hello world"
+    assert timeline.count("\ue000") == 7
 
 
 def test_cleanup_estimation_text_removes_pause_markers() -> None:
@@ -1657,6 +1658,82 @@ async def test_session_barge_in_records_queued_unsynthesized_text_as_incomplete(
 
 
 @pytest.mark.asyncio
+async def test_session_barge_in_drain_records_timeline_strings(monkeypatch: pytest.MonkeyPatch):
+    """Queued leftovers should be normalized to timeline strings before interruption math."""
+
+    token = CancelToken()
+    captured = {"called": False}
+
+    class TwoSentenceAgent:
+        def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
+            pass
+
+        async def run(self, text: str) -> str:
+            return "First sentence. Second sentence."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="First sentence. ")
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Second sentence.")
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="First sentence. Second sentence.",
+            )
+
+    class ExplodingTTS:
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            token.cancel()
+            raise RuntimeError("boom")
+            yield  # pragma: no cover
+
+        async def stop(self) -> None:
+            pass
+
+        async def cancel(self) -> None:
+            pass
+
+    def _fake_heard_bytes(*args: object, **kwargs: object) -> int:
+        return 1
+
+    def _assert_string_chunks(
+        chunks: list[tuple[str, int]],
+        audio_bytes_sent: int,
+    ) -> str:
+        captured["called"] = True
+        assert audio_bytes_sent == 1
+        assert all(isinstance(text, str) for text, _ in chunks)
+        return ""
+
+    monkeypatch.setattr("easycat.session._audio_bytes_likely_heard_hybrid", _fake_heard_bytes)
+    monkeypatch.setattr("easycat.session._estimate_text_spoken", _assert_string_chunks)
+
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=TwoSentenceAgent(),
+            tts=ExplodingTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    await session.start()
+    try:
+        await session._run_streaming_agent("hello", token=token)
+    finally:
+        await session.stop()
+
+    assert captured["called"]
+
+
+@pytest.mark.asyncio
 async def test_session_barge_in_after_full_playback_does_not_notify_interruption():
     """If all synthesized audio is already delivered, interruption should not rewrite history."""
 
@@ -2196,6 +2273,44 @@ async def test_streaming_strip_markdown_unclosed_link_multiple_sentences():
     assert len(finals) == 1
     assert "https://openai.com/docs" in finals[0].text
     assert "](" not in finals[0].text
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_flushes_tail_without_sentence_boundary():
+    class TailOnlyMarkdownAgent:
+        async def run(self, text: str) -> str:
+            return "**Final sentence without punctuation**"
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            full = "**Final sentence without punctuation**"
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=full)
+            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(chunks=[_chunk(), _chunk()]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="test"),
+            agent=TailOnlyMarkdownAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            strip_markdown=True,
+        )
+    )
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["Final sentence without punctuation"]
 
 
 @pytest.mark.asyncio

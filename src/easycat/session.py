@@ -1368,6 +1368,11 @@ class Session:
             async def _flush_pending_tts_buffer() -> None:
                 nonlocal text_buffer
                 if text_buffer.strip():
+                    if self._strip_markdown:
+                        text_buffer = strip_markdown(
+                            text_buffer,
+                            normalize_code_spans=True,
+                        )
                     payload = self._prepare_tts_payload(
                         text_buffer,
                         is_streaming=True,
