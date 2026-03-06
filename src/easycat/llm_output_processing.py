@@ -14,7 +14,7 @@ from easycat.tts.input import TTSInput, strip_ssml_tags
 logger = logging.getLogger(__name__)
 
 PauseStyle = Literal["ssml", "ellipsis", "emdash"]
-
+MAX_SSML_BREAK_MS = 5_000
 
 @dataclass(frozen=True)
 class _SSMLBreak:
@@ -25,7 +25,8 @@ def _to_ssml_payload(parts: list[str | _SSMLBreak]) -> TTSInput:
     rendered: list[str] = []
     for part in parts:
         if isinstance(part, _SSMLBreak):
-            rendered.append(f'<break time="{max(0, part.pause_ms)}ms"/>')
+            pause_ms = max(0, min(part.pause_ms, MAX_SSML_BREAK_MS))
+            rendered.append(f'<break time="{pause_ms}ms"/>')
         else:
             rendered.append(html.escape(part))
     return TTSInput(text=f"<speak>{''.join(rendered)}</speak>", format="ssml")
