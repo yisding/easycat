@@ -28,7 +28,7 @@ from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
 from easycat.tts.factory import TTSConfig, create_tts_provider_from_config
 from easycat.tts.openai_tts import OpenAITTSConfig
-from easycat.turn_manager import TurnManagerConfig
+from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, create_vad
 
 
@@ -125,11 +125,13 @@ class EasyCatConfig:
                 raise ValueError(f"{name} requires an API key.")
 
 
-def _is_deepgram_flux_stt(config: STTConfig) -> bool:
-    """Whether STT config is Deepgram Flux (provider-side turn detection)."""
-    if not isinstance(config, DeepgramSTTConfig):
+def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
+    """Whether this session should derive turn boundaries from STT finals."""
+    if not isinstance(config.stt, DeepgramSTTConfig):
         return False
-    return config.model.lower().startswith("flux")
+    if config.turn_taking.mode == TurnMode.PUSH_TO_TALK:
+        return False
+    return config.stt.is_flux
 
 
 def create_session(config: EasyCatConfig) -> Session:
@@ -137,7 +139,7 @@ def create_session(config: EasyCatConfig) -> Session:
     event_bus = EventBus()
     stt = create_stt_provider_from_config(config.stt, event_bus)
     tts = create_tts_provider_from_config(config.tts, event_bus)
-    auto_turn_from_stt_final = _is_deepgram_flux_stt(config.stt)
+    auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
     enable_vad = not auto_turn_from_stt_final
     vad = create_vad(config.vad) if enable_vad else None
     noise_reducer = create_noise_reducer(config.noise_reduction)

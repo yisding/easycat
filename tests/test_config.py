@@ -11,7 +11,7 @@ from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.telephony.dtmf import emit_twilio_dtmf
 from easycat.tts.openai_tts import OpenAITTSConfig
-from easycat.turn_manager import TurnManagerConfig
+from easycat.turn_manager import TurnManagerConfig, TurnMode
 
 
 class _DummyAgent:
@@ -175,3 +175,44 @@ def test_create_session_disables_vad_for_deepgram_flux(monkeypatch: pytest.Monke
 
     assert session._enable_vad is False
     assert session._auto_turn_from_stt_final is True
+
+
+def test_create_session_keeps_flux_auto_turn_disabled_for_push_to_talk(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    create_vad_called = False
+
+    class _VAD:
+        async def process(self, chunk):
+            if False:
+                yield chunk
+
+        def configure(self, **kwargs):
+            pass
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    def _create_vad(*_args, **_kwargs):
+        nonlocal create_vad_called
+        create_vad_called = True
+        return _VAD()
+
+    monkeypatch.setattr("easycat.config.create_vad", _create_vad)
+    monkeypatch.setattr(
+        "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+    )
+
+    config = EasyCatConfig(
+        stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        turn_taking=TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK),
+        agent=_DummyAgent(),
+    )
+
+    session = create_session(config)
+
+    assert create_vad_called is True
+    assert session._enable_vad is True
+    assert session._auto_turn_from_stt_final is False

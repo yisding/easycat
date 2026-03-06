@@ -39,6 +39,11 @@ class DeepgramSTTConfig:
     # Optional EventBus for reconnect observability
     event_bus: Any = field(default=None, repr=False)
 
+    @property
+    def is_flux(self) -> bool:
+        """Whether this config uses a Flux model with provider-side endpointing."""
+        return self.model.lower().startswith("flux")
+
 
 class DeepgramSTT(STTBase):
     """Real-time streaming STT using Deepgram WebSocket API.
@@ -130,9 +135,8 @@ class DeepgramSTT(STTBase):
                 WordTimestamp(word=w["word"], start=w["start"], end=w["end"]) for w in words
             ]
 
-        is_flux_model = self._config.model.lower().startswith("flux")
         is_endpoint_final = bool(is_final)
-        if is_flux_model and speech_final is not None:
+        if self._config.is_flux and speech_final is not None:
             is_endpoint_final = bool(is_final and speech_final)
 
         event_type = STTEventType.FINAL if is_endpoint_final else STTEventType.PARTIAL
