@@ -155,29 +155,7 @@ class ElevenLabsTTS(TTSBase):
         self._start_synthesis()
 
         try:
-            ws = await self._get_or_connect_ws()
-
-            # Send initial message with voice settings
-            init_msg = {
-                "text": " ",
-                "voice_settings": {
-                    "stability": self._config.stability,
-                    "similarity_boost": self._config.similarity_boost,
-                },
-            }
-            try:
-                await ws.send(json.dumps(init_msg))
-            except Exception:
-                # Connection may be stale; reconnect and retry
-                await self._close_ws()
-                ws = await self._get_or_connect_ws()
-                await ws.send(json.dumps(init_msg))
-
-            # Send the actual text
-            await ws.send(json.dumps({"text": text}))
-
-            # Send empty string to signal end of input
-            await ws.send(json.dumps({"text": ""}))
+            ws = await self._start_ws_stream(text)
 
             # Receive audio chunks
             async for message in ws.recv_iter():
@@ -201,9 +179,9 @@ class ElevenLabsTTS(TTSBase):
                         pass
 
         except Exception as exc:
+            await self._close_ws()
             if not self._cancelled:
                 logger.error("ElevenLabs TTS WebSocket error: %s", exc)
-                await self._close_ws()
                 raise
         except BaseException:
             # CancelledError is a BaseException; close the ws since it's mid-stream
@@ -211,6 +189,46 @@ class ElevenLabsTTS(TTSBase):
             raise
         finally:
             self._end_synthesis()
+
+    async def _start_ws_stream(self, text: str) -> ReconnectingWebSocket:
+        """Send the full ElevenLabs stream-init sequence, retrying once on stale sockets."""
+        messages = self._build_ws_messages(text)
+        ws = await self._get_or_connect_ws()
+
+        try:
+            await self._send_ws_messages(ws, messages)
+            return ws
+        except Exception:
+            if self._cancelled:
+                raise
+            await self._close_ws()
+            ws = await self._get_or_connect_ws()
+            await self._send_ws_messages(ws, messages)
+            return ws
+
+    def _build_ws_messages(self, text: str) -> tuple[str, str, str]:
+        """Build the init, text, and EOS messages for a synthesis request."""
+        init_msg = {
+            "text": " ",
+            "voice_settings": {
+                "stability": self._config.stability,
+                "similarity_boost": self._config.similarity_boost,
+            },
+        }
+        return (
+            json.dumps(init_msg),
+            json.dumps({"text": text}),
+            json.dumps({"text": ""}),
+        )
+
+    async def _send_ws_messages(
+        self,
+        ws: ReconnectingWebSocket,
+        messages: tuple[str, ...],
+    ) -> None:
+        """Send a complete synthesis request over the active WebSocket."""
+        for message in messages:
+            await ws.send(message)
 
     async def _get_or_connect_ws(self) -> ReconnectingWebSocket:
         """Get an existing active WebSocket or create/connect a new one."""
