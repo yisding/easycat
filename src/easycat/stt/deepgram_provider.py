@@ -39,6 +39,11 @@ class DeepgramSTTConfig:
     # Optional EventBus for reconnect observability
     event_bus: Any = field(default=None, repr=False)
 
+    @property
+    def is_flux(self) -> bool:
+        """Whether this config uses a Flux model with provider-side endpointing."""
+        return self.model.lower().startswith("flux")
+
 
 class DeepgramSTT(STTBase):
     """Real-time streaming STT using Deepgram WebSocket API.
@@ -106,6 +111,9 @@ class DeepgramSTT(STTBase):
 
     def _handle_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type", "")
+        if self._config.is_flux:
+            self._handle_flux_message(msg_type, msg)
+            return
         if msg_type != "Results":
             return
 
@@ -121,14 +129,7 @@ class DeepgramSTT(STTBase):
 
         confidence = best.get("confidence")
         is_final = msg.get("is_final", False)
-
-        word_timestamps = None
-        words = best.get("words")
-        if words:
-            word_timestamps = [
-                WordTimestamp(word=w["word"], start=w["start"], end=w["end"]) for w in words
-            ]
-
+        word_timestamps = _word_timestamps_from_words(best.get("words"))
         event_type = STTEventType.FINAL if is_final else STTEventType.PARTIAL
         self._emit_event(
             STTEvent(
@@ -140,15 +141,73 @@ class DeepgramSTT(STTBase):
             )
         )
 
+    def _handle_flux_message(self, msg_type: str, msg: dict[str, Any]) -> None:
+        if msg_type != "TurnInfo":
+            return
+
+        transcript = msg.get("transcript", "")
+        if not transcript:
+            return
+
+        turn_event = msg.get("event", "")
+        if turn_event == "EndOfTurn":
+            event_type = STTEventType.FINAL
+            confidence = msg.get("end_of_turn_confidence")
+        else:
+            event_type = STTEventType.PARTIAL
+            confidence = None
+
+        self._emit_event(
+            STTEvent(
+                type=event_type,
+                text=transcript,
+                confidence=confidence,
+                language=self._config.language,
+                word_timestamps=_word_timestamps_from_words(msg.get("words")),
+            )
+        )
+
     def _build_url(self) -> str:
         params = {
             "model": self._config.model,
-            "language": self._config.language,
             "encoding": self._config.encoding,
             "sample_rate": str(self._config.sample_rate),
-            "channels": str(self._config.channels),
-            "punctuate": str(self._config.punctuate).lower(),
-            "interim_results": str(self._config.interim_results).lower(),
-            "smart_format": str(self._config.smart_format).lower(),
         }
-        return f"{self._config.base_url}?{urlencode(params)}"
+        if self._config.is_flux:
+            base_url = _flux_base_url(self._config.base_url)
+        else:
+            base_url = self._config.base_url
+            params.update(
+                {
+                    "language": self._config.language,
+                    "channels": str(self._config.channels),
+                    "punctuate": str(self._config.punctuate).lower(),
+                    "interim_results": str(self._config.interim_results).lower(),
+                    "smart_format": str(self._config.smart_format).lower(),
+                }
+            )
+        return f"{base_url}?{urlencode(params)}"
+
+
+def _flux_base_url(base_url: str) -> str:
+    if base_url.endswith("/v1/listen"):
+        return f"{base_url[: -len('/v1/listen')]}/v2/listen"
+    return base_url
+
+
+def _word_timestamps_from_words(words: Any) -> list[WordTimestamp] | None:
+    if not isinstance(words, list):
+        return None
+
+    timestamps: list[WordTimestamp] = []
+    for item in words:
+        if not isinstance(item, dict):
+            continue
+        word = item.get("word")
+        start = item.get("start")
+        end = item.get("end")
+        if not isinstance(word, str) or start is None or end is None:
+            continue
+        timestamps.append(WordTimestamp(word=word, start=float(start), end=float(end)))
+
+    return timestamps or None

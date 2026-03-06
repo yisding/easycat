@@ -39,13 +39,18 @@ from easycat.session import Session, SessionConfig, TurnState
 from easycat.timeouts import AgentTimeoutError
 from easycat.tracing import InMemoryTraceExporter, SpanStatus, Tracer
 from easycat.tts.input import TTSInput
-from easycat.turn_manager import TurnManagerConfig
+from easycat.turn_manager import TurnManagerConfig, TurnManagerState
 
 # ── Test helpers ───────────────────────────────────────────────────
 
 
 def _make_chunk(n_bytes: int = 320) -> AudioChunk:
     return AudioChunk(data=bytes(n_bytes), format=PCM16_MONO_16K)
+
+
+def _make_loud_chunk(n_samples: int = 160, amplitude: int = 6000) -> AudioChunk:
+    sample = int(amplitude).to_bytes(2, "little", signed=True)
+    return AudioChunk(data=sample * n_samples, format=PCM16_MONO_16K)
 
 
 class FakeTransport:
@@ -119,6 +124,29 @@ class FakeSTT:
             if event is None:
                 break
             yield event
+
+
+class AutoTurnSTT(FakeSTT):
+    def __init__(self, transcript: str = "hello flux", *, final_after_chunks: int = 3) -> None:
+        super().__init__(transcript=transcript)
+        self.final_after_chunks = final_after_chunks
+        self.sent_chunks: list[AudioChunk] = []
+        self.start_count = 0
+        self.end_count = 0
+        self._final_emitted = False
+
+    async def start_stream(self) -> None:
+        self.start_count += 1
+
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        self.sent_chunks.append(chunk)
+        if not self._final_emitted and len(self.sent_chunks) >= self.final_after_chunks:
+            self._final_emitted = True
+            await self._queue.put(STTEvent(type=STTEventType.FINAL, text=self._transcript))
+
+    async def end_stream(self) -> None:
+        self.end_count += 1
+        await self._queue.put(None)
 
 
 class FakeAgent:
@@ -319,6 +347,68 @@ async def test_pipeline_emits_audio_in_events():
     await session.stop()
 
     assert len(received) == 2
+
+
+@pytest.mark.asyncio
+async def test_flux_auto_turn_does_not_start_on_silence_frames():
+    transport = FakeTransport(chunks=[_make_chunk(), _make_chunk(), _make_chunk()])
+    session = Session(
+        _full_config(transport=transport, enable_vad=False, auto_turn_from_stt_final=True)
+    )
+    session._is_running = True
+    session._turn_manager.start_turn = AsyncMock()  # type: ignore[method-assign]
+
+    await session._run_pipeline()
+
+    session._turn_manager.start_turn.assert_not_called()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_flux_auto_turn_does_not_barge_in_during_bot_playback():
+    transport = FakeTransport(chunks=[_make_loud_chunk(), _make_loud_chunk(), _make_loud_chunk()])
+    session = Session(
+        _full_config(transport=transport, enable_vad=False, auto_turn_from_stt_final=True)
+    )
+    session._is_running = True
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    session._turn_manager.start_turn = AsyncMock()  # type: ignore[method-assign]
+
+    await session._run_pipeline()
+
+    session._turn_manager.start_turn.assert_not_called()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_flux_auto_turn_starts_once_and_ends_on_stt_final():
+    chunks = [_make_loud_chunk(), _make_loud_chunk(), _make_loud_chunk()]
+    transport = FakeTransport(chunks=chunks)
+    stt = AutoTurnSTT()
+    session = Session(
+        _full_config(
+            transport=transport,
+            stt=stt,
+            enable_vad=False,
+            auto_turn_from_stt_final=True,
+        )
+    )
+
+    events_received: list[Event] = []
+    for event_type in (TurnStarted, STTFinal, TurnEnded, AgentFinal):
+        session.event_bus.subscribe(event_type, lambda e: events_received.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.2)
+
+    type_names = [type(event).__name__ for event in events_received]
+    assert type_names.count("TurnStarted") == 1
+    assert "STTFinal" in type_names
+    assert "TurnEnded" in type_names
+    assert "AgentFinal" in type_names
+    assert stt.start_count == 1
+    assert stt.end_count == 1
+    assert stt.sent_chunks == chunks
+
+    await session.stop()
 
 
 @pytest.mark.asyncio

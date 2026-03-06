@@ -8,6 +8,8 @@ from easycat.agents import OpenAIAgentsAdapter, PydanticAIAdapter
 from easycat.config import EventLoggingConfig, TelephonyConfig
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.events import DTMFAggregated
+from easycat.smart_turn import SmartTurnConfig
+from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.telephony.dtmf import emit_twilio_dtmf
 from easycat.transports.local import LocalTransportConfig
@@ -15,7 +17,7 @@ from easycat.transports.twilio_media import TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.tts.openai_tts import OpenAITTSConfig
-from easycat.turn_manager import TurnManagerConfig
+from easycat.turn_manager import TurnManagerConfig, TurnMode
 
 
 class _DummyAgent:
@@ -177,3 +179,154 @@ def test_create_session_adds_event_trace_logger_when_enabled():
     assert any(
         type(helper).__name__ == "EventTraceLogger" for helper in session._telephony_helpers
     )
+
+
+def test_create_session_disables_vad_for_deepgram_flux(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "easycat.config.create_vad",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("create_vad should not be called")
+        ),
+    )
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    monkeypatch.setattr(
+        "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+    )
+
+    config = EasyCatConfig(
+        stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        agent=_DummyAgent(),
+    )
+
+    session = create_session(config)
+
+    assert session._enable_vad is False
+    assert session._auto_turn_from_stt_final is True
+
+
+def test_create_session_keeps_flux_auto_turn_disabled_for_push_to_talk(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    create_vad_called = False
+
+    class _VAD:
+        async def process(self, chunk):
+            if False:
+                yield chunk
+
+        def configure(self, **kwargs):
+            pass
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    def _create_vad(*_args, **_kwargs):
+        nonlocal create_vad_called
+        create_vad_called = True
+        return _VAD()
+
+    monkeypatch.setattr("easycat.config.create_vad", _create_vad)
+    monkeypatch.setattr(
+        "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+    )
+
+    config = EasyCatConfig(
+        stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        turn_taking=TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK),
+        agent=_DummyAgent(),
+    )
+
+    session = create_session(config)
+
+    assert create_vad_called is True
+    assert session._enable_vad is True
+    assert session._auto_turn_from_stt_final is False
+
+
+def test_create_session_keeps_vad_enabled_for_flux_when_smart_turn_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    create_vad_called = False
+
+    class _VAD:
+        async def process(self, chunk):
+            if False:
+                yield chunk
+
+        def configure(self, **kwargs):
+            pass
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    def _create_vad(*_args, **_kwargs):
+        nonlocal create_vad_called
+        create_vad_called = True
+        return _VAD()
+
+    monkeypatch.setattr("easycat.config.create_vad", _create_vad)
+    monkeypatch.setattr(
+        "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+    )
+
+    config = EasyCatConfig(
+        stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        smart_turn=SmartTurnConfig(enabled=True),
+        agent=_DummyAgent(),
+    )
+
+    session = create_session(config)
+
+    assert create_vad_called is True
+    assert session._enable_vad is True
+    assert session._auto_turn_from_stt_final is False
+
+
+def test_create_session_keeps_vad_enabled_for_flux_when_voicemail_detector_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    create_vad_called = False
+
+    class _VAD:
+        async def process(self, chunk):
+            if False:
+                yield chunk
+
+        def configure(self, **kwargs):
+            pass
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    def _create_vad(*_args, **_kwargs):
+        nonlocal create_vad_called
+        create_vad_called = True
+        return _VAD()
+
+    monkeypatch.setattr("easycat.config.create_vad", _create_vad)
+    monkeypatch.setattr(
+        "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+    )
+
+    config = EasyCatConfig(
+        stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        telephony=TelephonyConfig(enable_voicemail_detector=True),
+        agent=_DummyAgent(),
+    )
+
+    session = create_session(config)
+
+    assert create_vad_called is True
+    assert session._enable_vad is True
+    assert session._auto_turn_from_stt_final is False

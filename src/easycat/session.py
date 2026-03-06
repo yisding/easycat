@@ -22,6 +22,7 @@ import pysbd
 
 from easycat._span_manager import SpanManager
 from easycat.agent_runner import AgentStreamEventType
+from easycat.audio_format import AudioChunk
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -169,6 +170,7 @@ class SessionConfig:
     enable_noise_reduction: bool = True
     enable_echo_cancellation: bool = True
     enable_vad: bool = True
+    auto_turn_from_stt_final: bool = False
     strip_markdown: bool = False
     output_processors: Sequence[LLMOutputProcessor] = ()
 
@@ -296,6 +298,32 @@ def _all_tts_audio_delivered(
         return False
     total_audio = sum(max(chunk_audio, 0) for _, chunk_audio, _ in tts_chunks)
     return audio_bytes_delivered >= total_audio
+
+
+def _chunk_has_speech_energy(chunk: AudioChunk, *, threshold: int = 500) -> bool:
+    """Heuristic speech gate for STT-driven turns when VAD is disabled.
+
+    Computes the peak absolute PCM sample value for mono 16-bit chunks and
+    compares it to ``threshold``. This filters continuous silent/background
+    frames (e.g. telephony keepalive silence) so they don't spuriously start
+    turns.
+    """
+    if chunk.format.sample_width != 2:
+        return bool(chunk.data)
+
+    data = chunk.data
+    if len(data) < 2:
+        return False
+
+    peak = 0
+    for i in range(0, len(data) - 1, 2):
+        sample = int.from_bytes(data[i : i + 2], "little", signed=True)
+        mag = abs(sample)
+        if mag > peak:
+            peak = mag
+            if peak >= threshold:
+                return True
+    return False
 
 
 def _audio_bytes_likely_heard(
@@ -658,7 +686,7 @@ class Session:
             noops.append("stt")
         if isinstance(self.tts, NoopTTS):
             noops.append("tts")
-        if isinstance(self.vad, NoopVAD):
+        if cfg.enable_vad and isinstance(self.vad, NoopVAD):
             noops.append("vad")
         if isinstance(self.noise_reducer, PassthroughNoiseReducer) and cfg.enable_noise_reduction:
             noops.append("noise_reducer")
@@ -685,6 +713,7 @@ class Session:
             self.echo_canceller, PassthroughAEC
         )
         self._enable_vad = cfg.enable_vad
+        self._auto_turn_from_stt_final = cfg.auto_turn_from_stt_final
         self._interruption_mode = cfg.interruption_mode
         self._interruption_latency_compensation_ms = max(
             0, cfg.interruption_latency_compensation_ms
@@ -754,6 +783,7 @@ class Session:
 
         # STT stream started for current turn
         self._stt_active = False
+        self._auto_turn_speech_frames = 0
 
         # Timing markers for metrics
         self._turn_end_time: float | None = None
@@ -798,6 +828,7 @@ class Session:
     def _reset_turn_state(self) -> None:
         """Clear turn correlation state and reset the turn manager."""
         self._current_turn_id = None
+        self._auto_turn_speech_frames = 0
         self._turn_manager.reset()
 
     # ── Properties ─────────────────────────────────────────────
@@ -1072,6 +1103,8 @@ class Session:
         # Establish a new cancel token from TurnManager
         self._cancel_token = self._turn_manager.cancel_token or CancelToken()
 
+        self._auto_turn_speech_frames = 0
+
         # Start STT stream
         try:
             await self.stt.start_stream()
@@ -1109,7 +1142,8 @@ class Session:
         if self._turn_manager.state != TurnManagerState.PROCESSING:
             return
         self._turn_end_time = event.timestamp
-        self._spans.start(Tracer.STT)
+        if not self._auto_turn_from_stt_final:
+            self._spans.start(Tracer.STT)
         await self._handle_end_of_speech()
 
     @staticmethod
@@ -1129,6 +1163,7 @@ class Session:
         self._stt_final_future = loop.create_future()
 
         async def _consume() -> None:
+            saw_final = False
             try:
                 async for stt_event in self.stt.events():
                     if self._cancel_token and self._cancel_token.is_cancelled:
@@ -1136,6 +1171,7 @@ class Session:
                     if stt_event.type == STTEventType.PARTIAL:
                         await self._emit(STTPartial(text=stt_event.text))
                     elif stt_event.type == STTEventType.FINAL:
+                        saw_final = True
                         await self._emit(STTFinal(text=stt_event.text))
                         self._stt_final_time = time.monotonic()
                         if self._metrics and self._turn_end_time is not None:
@@ -1146,6 +1182,8 @@ class Session:
                         self._spans.finish(Tracer.STT)
                         if self._stt_final_future and not self._stt_final_future.done():
                             self._stt_final_future.set_result(stt_event.text)
+                        if self._auto_turn_from_stt_final:
+                            await self._turn_manager.end_turn()
                         break
             except Exception as exc:
                 logger.exception("STT event loop error")
@@ -1155,7 +1193,8 @@ class Session:
             finally:
                 if self._stt_final_future and not self._stt_final_future.done():
                     self._stt_final_future.set_result("")
-                self._spans.finish(Tracer.STT, SpanStatus.CANCELLED)
+                if not saw_final:
+                    self._spans.finish(Tracer.STT, SpanStatus.CANCELLED)
 
         self._stt_task = asyncio.create_task(_consume())
 
@@ -1216,7 +1255,22 @@ class Session:
                 self._turn_manager.on_audio_frame(chunk)
 
                 # Stage 4: Feed audio to STT (if listening)
-                if self.is_speaking and self._stt_active:
+                started_turn_from_chunk = False
+                if self._auto_turn_from_stt_final and not self._stt_active:
+                    if self._turn_manager.state == TurnManagerState.IDLE:
+                        if _chunk_has_speech_energy(chunk):
+                            self._auto_turn_speech_frames += 1
+                        else:
+                            self._auto_turn_speech_frames = 0
+
+                        if self._auto_turn_speech_frames >= 2:
+                            await self._turn_manager.start_turn()
+                            self._auto_turn_speech_frames = 0
+                            started_turn_from_chunk = self._stt_active
+                    else:
+                        self._auto_turn_speech_frames = 0
+
+                if self.is_speaking and self._stt_active and not started_turn_from_chunk:
                     await self.stt.send_audio(chunk)
 
         except asyncio.CancelledError:
@@ -1785,6 +1839,7 @@ class Session:
         except Exception:
             pass
         self._stt_active = False
+        self._auto_turn_speech_frames = 0
         if self._stt_task and not self._stt_task.done():
             self._stt_task.cancel()
             try:

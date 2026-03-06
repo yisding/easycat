@@ -16,6 +16,7 @@ from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.session import Session, SessionConfig
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
+from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.factory import STTConfig, create_stt_provider_from_config
 from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.stubs import NoopAgent
@@ -29,7 +30,7 @@ from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
 from easycat.tts.factory import TTSConfig, create_tts_provider_from_config
 from easycat.tts.openai_tts import OpenAITTSConfig
-from easycat.turn_manager import TurnManagerConfig
+from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, create_vad
 
 
@@ -133,12 +134,27 @@ class EasyCatConfig:
                 raise ValueError(f"{name} requires an API key.")
 
 
+def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
+    """Whether this session should derive turn boundaries from STT finals."""
+    if not isinstance(config.stt, DeepgramSTTConfig):
+        return False
+    if config.turn_taking.mode == TurnMode.PUSH_TO_TALK:
+        return False
+    if config.smart_turn.enabled:
+        return False
+    if config.telephony and config.telephony.enable_voicemail_detector:
+        return False
+    return config.stt.is_flux
+
+
 def create_session(config: EasyCatConfig) -> Session:
     """Create a fully wired Session from EasyCatConfig."""
     event_bus = EventBus()
     stt = create_stt_provider_from_config(config.stt, event_bus)
     tts = create_tts_provider_from_config(config.tts, event_bus)
-    vad = create_vad(config.vad)
+    auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
+    enable_vad = not auto_turn_from_stt_final
+    vad = create_vad(config.vad) if enable_vad else None
     noise_reducer = create_noise_reducer(config.noise_reduction)
     echo_canceller = create_echo_canceller(config.echo_cancellation or EchoCancellationConfig())
     transport = _create_transport(config.transport, event_bus)
@@ -178,6 +194,8 @@ def create_session(config: EasyCatConfig) -> Session:
             metrics=metrics,
             tracer=tracer,
             telephony_helpers=telephony_helpers,
+            enable_vad=enable_vad,
+            auto_turn_from_stt_final=auto_turn_from_stt_final,
             strip_markdown=config.strip_markdown,
             output_processors=config.output_processors,
         )
