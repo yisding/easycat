@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import struct
@@ -55,11 +56,21 @@ class FakeHTTPStreamResponse:
 class FakeReconnectingWS:
     """Mock ReconnectingWebSocket for ElevenLabs WebSocket mode."""
 
-    def __init__(self, messages: list[str] | None = None):
+    def __init__(
+        self,
+        messages: list[str] | None = None,
+        fail_send_at: set[int] | None = None,
+        recv_started: asyncio.Event | None = None,
+        recv_wait: asyncio.Event | None = None,
+    ):
         self._messages = messages or []
         self._sent: list[str | bytes] = []
         self._closed = False
         self._is_connected = False
+        self._send_count = 0
+        self._fail_send_at = fail_send_at or set()
+        self._recv_started = recv_started
+        self._recv_wait = recv_wait
         self.connect = AsyncMock(side_effect=self._mark_connected)
 
     async def _mark_connected(self) -> None:
@@ -70,11 +81,18 @@ class FakeReconnectingWS:
         return self._is_connected and not self._closed
 
     async def send(self, message: str | bytes) -> None:
+        self._send_count += 1
+        if self._send_count in self._fail_send_at:
+            raise RuntimeError("stale websocket")
         self._sent.append(message)
 
     async def recv_iter(self):
+        if self._recv_started is not None:
+            self._recv_started.set()
         for msg in self._messages:
             yield msg
+        if self._recv_wait is not None:
+            await self._recv_wait.wait()
 
     async def close(self) -> None:
         self._closed = True
@@ -328,7 +346,6 @@ class TestElevenLabsTTSWebSocket:
         assert len(events) == 2
         assert provider.is_cancelled
 
-
     async def test_ws_reused_across_synthesis_calls(self):
         provider = self._make_provider()
         fake_ws = FakeReconnectingWS(messages=[self._final_message()])
@@ -357,6 +374,53 @@ class TestElevenLabsTTSWebSocket:
                 pass
 
         assert not fake_ws._closed
+
+    async def test_synthesize_ws_reconnects_and_replays_messages_after_send_failure(self):
+        provider = self._make_provider()
+        stale_ws = FakeReconnectingWS(fail_send_at={2})
+        stale_ws._is_connected = True
+        provider._ws = stale_ws
+        fresh_ws = FakeReconnectingWS(messages=[self._final_message()])
+
+        with patch(
+            "easycat.tts.elevenlabs_tts.ReconnectingWebSocket",
+            return_value=fresh_ws,
+        ) as mock_ws_cls:
+            async for _ in provider.synthesize("Test"):
+                pass
+
+        assert stale_ws._closed
+        mock_ws_cls.assert_called_once()
+        fresh_ws.connect.assert_awaited_once()
+        assert [json.loads(msg)["text"] for msg in stale_ws._sent] == [" "]
+        assert [json.loads(msg)["text"] for msg in fresh_ws._sent] == [" ", "Test", ""]
+
+    async def test_synthesize_ws_task_cancellation_closes_socket(self):
+        provider = self._make_provider()
+        recv_started = asyncio.Event()
+        recv_wait = asyncio.Event()
+        fake_ws = FakeReconnectingWS(
+            recv_started=recv_started,
+            recv_wait=recv_wait,
+        )
+
+        with patch(
+            "easycat.tts.elevenlabs_tts.ReconnectingWebSocket",
+            return_value=fake_ws,
+        ):
+
+            async def consume() -> None:
+                async for _ in provider.synthesize("Test"):
+                    pass
+
+            task = asyncio.create_task(consume())
+            await recv_started.wait()
+            task.cancel()
+
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert fake_ws._closed
 
 
 class TestElevenLabsTTSGeneral:
