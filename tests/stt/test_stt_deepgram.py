@@ -59,6 +59,22 @@ def _deepgram_result(
     return json.dumps(payload)
 
 
+def _deepgram_turn_info(
+    transcript: str,
+    *,
+    event: str = "Update",
+    end_of_turn_confidence: float | None = None,
+) -> str:
+    payload: dict[str, object] = {
+        "type": "TurnInfo",
+        "event": event,
+        "transcript": transcript,
+    }
+    if end_of_turn_confidence is not None:
+        payload["end_of_turn_confidence"] = end_of_turn_confidence
+    return json.dumps(payload)
+
+
 def _make_deepgram_stt(
     messages: list[str] | None = None,
 ) -> tuple[DeepgramSTT, MockWebSocket]:
@@ -242,6 +258,23 @@ def test_deepgram_build_url():
     assert "interim_results=true" in url
 
 
+def test_deepgram_flux_build_url_uses_v2_without_legacy_params():
+    config = DeepgramSTTConfig(
+        api_key="k",
+        model="flux-general-en",
+        language="en",
+        base_url="wss://api.deepgram.com/v1/listen",
+    )
+    stt = DeepgramSTT(config)
+    url = stt._build_url()
+
+    assert url.startswith("wss://api.deepgram.com/v2/listen?")
+    assert "model=flux-general-en" in url
+    assert "language=" not in url
+    assert "interim_results=" not in url
+    assert "punctuate=" not in url
+
+
 # ── Multiple streams ─────────────────────────────────────────────
 
 
@@ -268,10 +301,10 @@ async def test_deepgram_reusable_across_streams():
 
 
 @pytest.mark.asyncio
-async def test_deepgram_flux_waits_for_speech_final():
+async def test_deepgram_flux_parses_turn_info_updates_and_end_of_turn():
     messages = [
-        _deepgram_result("hello", is_final=True, speech_final=False),
-        _deepgram_result("hello world", is_final=True, speech_final=True),
+        _deepgram_turn_info("hello", event="Update"),
+        _deepgram_turn_info("hello world", event="EndOfTurn", end_of_turn_confidence=0.88),
     ]
     ws = MockWebSocket(messages)
 
@@ -290,3 +323,4 @@ async def test_deepgram_flux_waits_for_speech_final():
     assert events[0].text == "hello"
     assert events[1].type == STTEventType.FINAL
     assert events[1].text == "hello world"
+    assert events[1].confidence == 0.88
