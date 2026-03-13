@@ -7,6 +7,7 @@ and emits DTMF / control events into the Session event bus.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -20,7 +21,7 @@ from websockets.asyncio.server import ServerConnection
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.audio_utils import resample
 from easycat.events import DTMF, EventBus, PlaybackMarkAck
-from easycat.transports._base import _ServerTransportBase
+from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
 
 logger = logging.getLogger(__name__)
 
@@ -329,6 +330,163 @@ def _mulaw_encode_sample(sample: int) -> int:
         exp_mask >>= 1
     mantissa = (sample >> (exponent + 3)) & 0x0F
     return (~(sign | (exponent << 4) | mantissa)) & 0xFF
+
+
+class TwilioConnectionTransport(_AudioQueueMixin):
+    """Twilio Media Streams transport for one accepted WebSocket connection."""
+
+    def __init__(
+        self,
+        ws: ServerConnection,
+        *,
+        event_bus: EventBus | None = None,
+        config: TwilioTransportConfig | None = None,
+    ) -> None:
+        self._ws = ws
+        self._config = config or TwilioTransportConfig()
+        self._audio_format = self._config.audio_format
+        self._event_bus = event_bus
+        self._stream_sid: str | None = None
+        self._call_sid: str | None = None
+        self._mark_counter = 0
+        self._receive_task: asyncio.Task[None] | None = None
+        self._init_audio_queue(self._config.max_pending_chunks)
+
+    async def connect(self) -> None:
+        if self._connected:
+            return
+        self._connected = True
+        self._reset_audio_queue()
+        self._client_connected.set()
+        self._receive_task = asyncio.create_task(self._receive_loop())
+
+    async def disconnect(self) -> None:
+        if not self._connected:
+            return
+        self._connected = False
+        self._client_connected.clear()
+        if self._receive_task is not None and not self._receive_task.done():
+            self._receive_task.cancel()
+            try:
+                await self._receive_task
+            except asyncio.CancelledError:
+                pass
+        self._receive_task = None
+        self._stream_sid = None
+        self._call_sid = None
+        try:
+            await self._ws.close()
+        except Exception:
+            logger.debug("Error closing Twilio WebSocket", exc_info=True)
+        self._enqueue_sentinel()
+
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        if self._stream_sid is None:
+            return
+        mulaw_data = pcm16_to_mulaw(chunk.data, chunk.format.sample_rate)
+        payload = base64.b64encode(mulaw_data).decode("ascii")
+        message = json.dumps(
+            {
+                "event": "media",
+                "streamSid": self._stream_sid,
+                "media": {"payload": payload},
+            }
+        )
+        try:
+            await self._ws.send(message)
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot send audio: Twilio disconnected")
+
+    async def clear_audio(self) -> None:
+        if self._stream_sid is None:
+            return
+        try:
+            await self._ws.send(json.dumps({"event": "clear", "streamSid": self._stream_sid}))
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot clear audio: Twilio disconnected")
+
+    async def send_mark(self, name: str | None = None) -> str:
+        if self._stream_sid is None:
+            raise RuntimeError("No active Twilio stream")
+        if name is None:
+            self._mark_counter += 1
+            name = f"mark_{self._mark_counter}"
+        await self._ws.send(
+            json.dumps(
+                {
+                    "event": "mark",
+                    "streamSid": self._stream_sid,
+                    "mark": {"name": name},
+                }
+            )
+        )
+        return name
+
+    async def send_playback_mark(self, name: str | None = None) -> str:
+        return await self.send_mark(name=name)
+
+    async def _receive_loop(self) -> None:
+        try:
+            async for raw in self._ws:
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8")
+                await self._handle_message(raw)
+        except websockets.exceptions.ConnectionClosed:
+            logger.info("Twilio Media Streams disconnected")
+        finally:
+            self._connected = False
+            self._client_connected.clear()
+            self._stream_sid = None
+            self._call_sid = None
+            self._enqueue_sentinel()
+
+    async def _handle_message(self, raw: str) -> None:
+        try:
+            msg: dict[str, Any] = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("Ignoring invalid JSON from Twilio")
+            return
+
+        event = msg.get("event", "")
+        if event == "start":
+            self._handle_start(msg)
+        elif event == "media":
+            await self._handle_media(msg)
+        elif event == "stop":
+            self._stream_sid = None
+            self._call_sid = None
+            self._enqueue_sentinel()
+        elif event == "mark":
+            mark_name = msg.get("mark", {}).get("name", "")
+            if mark_name and self._event_bus is not None:
+                await self._event_bus.emit(PlaybackMarkAck(mark_name=mark_name))
+        elif event == "dtmf":
+            await self._handle_dtmf(msg)
+
+    def _handle_start(self, msg: dict[str, Any]) -> None:
+        start = msg.get("start", {})
+        self._stream_sid = msg.get("streamSid") or start.get("streamSid")
+        self._call_sid = start.get("callSid")
+
+    async def _handle_media(self, msg: dict[str, Any]) -> None:
+        media = msg.get("media", {})
+        payload = media.get("payload", "")
+        if not payload:
+            return
+        try:
+            mulaw_data = base64.b64decode(payload)
+        except Exception:
+            logger.warning("Ignoring Twilio media frame with invalid base64 payload")
+            return
+        pcm_data = mulaw_to_pcm16(mulaw_data, self._audio_format.sample_rate)
+        chunk = AudioChunk(data=pcm_data, format=self._audio_format)
+        self._enqueue_chunk(chunk, context="Twilio")
+
+    async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
+        dtmf_data = msg.get("dtmf", {})
+        digit = dtmf_data.get("digit", "")
+        if digit and self._event_bus is not None:
+            await self._event_bus.emit(DTMF(digit=digit))
 
 
 # ── TwiML helpers ─────────────────────────────────────────────────

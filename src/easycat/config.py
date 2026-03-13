@@ -14,6 +14,7 @@ from easycat.events import EventBus
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
+from easycat.providers import Transport
 from easycat.session import Session, SessionConfig
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
@@ -61,7 +62,11 @@ class TelephonyConfig:
 
 
 TransportConfig = (
-    LocalTransportConfig | WebSocketTransportConfig | TwilioTransportConfig | WebRTCTransportConfig
+    LocalTransportConfig
+    | WebSocketTransportConfig
+    | TwilioTransportConfig
+    | WebRTCTransportConfig
+    | Transport
 )
 _TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
     LocalTransportConfig: lambda config, event_bus: LocalTransport(config),
@@ -203,6 +208,8 @@ def create_session(config: EasyCatConfig) -> Session:
 
 
 def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
+    if isinstance(config, Transport):
+        return config
     factory = _TRANSPORT_FACTORIES.get(type(config))
     if factory is None:
         raise ValueError("Unsupported transport configuration type.")
