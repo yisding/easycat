@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyCat WebRTC Observability</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            panel: '#0f172a',
+            borderc: '#27354f',
+            incoming: '#0f766e',
+            outgoing: '#15803d',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    .track-lane {
+      min-width: 900px;
+      position: relative;
+      height: 100%;
+      background-image: linear-gradient(to right, rgba(148, 163, 184, 0.1) 1px, transparent 1px);
+      background-size: 100px 100%;
+    }
+
+    .timeline-marker {
+      position: absolute;
+      top: 0.55rem;
+      height: 1.65rem;
+      border-radius: 0.375rem;
+      padding: 0.15rem 0.35rem;
+      font-size: 0.65rem;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    .timeline-marker.is-linked {
+      transform: translateY(-1px);
+      box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.75);
+    }
+
+    .marker-asr { background: #0f766e; }
+    .marker-llm { background: #7c3aed; }
+    .marker-tts { background: #15803d; }
+    .marker-audio-in { background: #1d4ed8; }
+    .marker-tools { background: #d97706; }
+    .marker-barge { background: #dc2626; }
+    .marker-playback { background: #475569; }
+
+    @media (max-width: 639px) {
+      .track-lane { min-width: 780px; }
+    }
+  </style>
+</head>
+<body class="h-full text-slate-100">
+  <div class="mx-auto max-w-7xl p-3 sm:p-4 lg:p-6">
+    <div class="rounded-xl border border-borderc bg-panel p-4 shadow-lg sm:p-5">
+      <h1 class="text-lg font-semibold sm:text-xl">EasyCat Live Conversation Timeline</h1>
+      <p class="mt-1 text-xs text-slate-300 sm:text-sm">
+        Link incoming/outgoing sentences to their audio chunks by clicking a sentence in the panels below.
+      </p>
+
+      <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] sm:items-end">
+        <label class="text-xs font-medium text-slate-300 sm:text-sm">
+          Signaling URL
+          <input
+            id="signalingUrl"
+            value="http://localhost:8080"
+            class="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none ring-indigo-400 focus:ring"
+          >
+        </label>
+        <button id="startBtn" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40">
+          Start
+        </button>
+        <button id="stopBtn" disabled class="rounded-md bg-slate-700 px-4 py-2 text-sm font-medium hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-40">
+          Stop
+        </button>
+        <span id="status" class="text-sm font-semibold text-emerald-300">Ready</span>
+      </div>
+    </div>
+
+    <div class="mt-4 rounded-xl border border-borderc bg-panel shadow-lg">
+      <div class="border-b border-borderc px-4 py-3">
+        <h2 class="text-sm font-semibold sm:text-base">Timeline</h2>
+        <p class="text-xs text-slate-300">Horizontal tracks for speech, text, tools, interruptions, and playback.</p>
+      </div>
+      <div id="timeline" class="overflow-x-auto p-2 sm:p-3"></div>
+    </div>
+
+    <div class="mt-4 grid gap-4 lg:grid-cols-2">
+      <div class="rounded-xl border border-borderc bg-panel p-4 shadow-lg">
+        <h2 class="text-sm font-semibold sm:text-base">Sentence ↔ Audio Links</h2>
+        <p class="mt-1 text-xs text-slate-300">Tap a sentence to highlight matching text and audio chunks by turn.</p>
+
+        <div class="mt-3 grid gap-3 sm:grid-cols-2">
+          <div>
+            <h3 class="text-xs font-semibold uppercase tracking-wide text-cyan-300">Incoming (ASR)</h3>
+            <div id="incomingSentences" class="mt-2 max-h-48 space-y-2 overflow-auto pr-1"></div>
+          </div>
+          <div>
+            <h3 class="text-xs font-semibold uppercase tracking-wide text-emerald-300">Outgoing (LLM→TTS)</h3>
+            <div id="outgoingSentences" class="mt-2 max-h-48 space-y-2 overflow-auto pr-1"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-borderc bg-panel p-4 shadow-lg">
+        <h2 class="text-sm font-semibold sm:text-base">Playback</h2>
+        <div class="mt-3 space-y-3 text-xs sm:text-sm">
+          <label class="block">Mic chunk (latest)<audio id="micChunk" controls class="mt-1 w-full"></audio></label>
+          <label class="block">Agent chunk (latest)<audio id="agentChunk" controls class="mt-1 w-full"></audio></label>
+          <label class="block">Mic full recording<audio id="micFull" controls class="mt-1 w-full"></audio></label>
+          <label class="block">Agent full recording<audio id="agentFull" controls class="mt-1 w-full"></audio></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4 rounded-xl border border-borderc bg-panel p-4 shadow-lg">
+      <h2 class="text-sm font-semibold sm:text-base">Event Log</h2>
+      <div id="eventLog" class="mt-3 max-h-64 overflow-auto rounded-md border border-slate-800 bg-slate-950 p-2 font-mono text-[11px] sm:text-xs"></div>
+    </div>
+  </div>
+
+<script>
+const tracks = [
+  ["audio_to_asr", "Audio → ASR"],
+  ["asr_text", "ASR text chunks"],
+  ["llm_text", "LLM text chunks"],
+  ["audio_from_tts", "TTS audio chunks"],
+  ["playback", "Playback state"],
+  ["tool_calls", "Tool calls"],
+  ["barge_in", "Barge-in"],
+];
+
+const timeline = document.getElementById("timeline");
+const eventLog = document.getElementById("eventLog");
+const statusEl = document.getElementById("status");
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const signalingUrl = document.getElementById("signalingUrl");
+const micChunk = document.getElementById("micChunk");
+const agentChunk = document.getElementById("agentChunk");
+const micFull = document.getElementById("micFull");
+const agentFull = document.getElementById("agentFull");
+const incomingSentencesEl = document.getElementById("incomingSentences");
+const outgoingSentencesEl = document.getElementById("outgoingSentences");
+
+let startTs = 0;
+let pc = null;
+let localStream = null;
+let evtSource = null;
+let remoteStream = null;
+let micRecorder = null;
+let agentRecorder = null;
+const pxPerSec = 100;
+
+const rowEls = new Map();
+const sentenceSeenKeys = new Set();
+
+for (const [trackId, label] of tracks) {
+  const row = document.createElement("div");
+  row.className = "mb-2 grid grid-cols-[128px_minmax(0,1fr)] items-stretch gap-2 sm:grid-cols-[180px_minmax(0,1fr)]";
+  row.innerHTML = `
+    <div class="rounded-md border border-slate-800 bg-slate-950 px-2 py-2 text-[11px] text-slate-300 sm:text-xs">${label}</div>
+    <div class="track-lane rounded-md border border-slate-800 bg-slate-950" id="track-${trackId}"></div>
+  `;
+  timeline.appendChild(row);
+  rowEls.set(trackId, row.querySelector(".track-lane"));
+}
+
+function kindToClass(track) {
+  return {
+    asr_text: "marker-asr",
+    llm_text: "marker-llm",
+    audio_from_tts: "marker-tts",
+    audio_to_asr: "marker-audio-in",
+    tool_calls: "marker-tools",
+    barge_in: "marker-barge",
+    playback: "marker-playback",
+  }[track] || "marker-llm";
+}
+
+function splitSentences(text) {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 0);
+}
+
+function highlightTurn(turnId, direction) {
+  for (const marker of document.querySelectorAll(".timeline-marker")) {
+    marker.classList.remove("is-linked");
+    if (!turnId) continue;
+
+    const markerTurnId = marker.dataset.turnId || "";
+    const markerTrack = marker.dataset.track || "";
+    const isIncomingTrack = markerTrack === "audio_to_asr" || markerTrack === "asr_text";
+    const isOutgoingTrack = markerTrack === "llm_text" || markerTrack === "audio_from_tts";
+
+    if (
+      markerTurnId === turnId
+      && (
+        (direction === "incoming" && isIncomingTrack)
+        || (direction === "outgoing" && isOutgoingTrack)
+      )
+    ) {
+      marker.classList.add("is-linked");
+    }
+  }
+
+  const first = document.querySelector(".timeline-marker.is-linked");
+  if (first) first.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+}
+
+function addSentenceLink({ direction, text, turnId, timestamp }) {
+  if (!text || !turnId) return;
+
+  const bucket = direction === "incoming" ? incomingSentencesEl : outgoingSentencesEl;
+  const color = direction === "incoming"
+    ? "border-cyan-800/80 bg-cyan-950/30"
+    : "border-emerald-800/80 bg-emerald-950/30";
+
+  const sentences = splitSentences(text);
+  for (let idx = 0; idx < sentences.length; idx++) {
+    const sentence = sentences[idx];
+    const key = `${direction}:${turnId}:${sentence}`;
+    if (sentenceSeenKeys.has(key)) continue;
+    sentenceSeenKeys.add(key);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `w-full rounded-md border px-2 py-1.5 text-left text-xs text-slate-100 transition hover:bg-slate-900/80 ${color}`;
+    button.innerHTML = `
+      <div class="line-clamp-2">${sentence}</div>
+      <div class="mt-1 text-[10px] text-slate-400">turn: ${turnId} · ${(timestamp - startTs).toFixed(2)}s</div>
+    `;
+    button.addEventListener("click", () => highlightTurn(turnId, direction));
+    bucket.prepend(button);
+  }
+}
+
+function addEvent(evt) {
+  if (!startTs) startTs = evt.timestamp;
+  const t = Math.max(0, evt.timestamp - startTs);
+  const lane = rowEls.get(evt.track);
+  if (!lane) return;
+
+  lane.style.minWidth = Math.max(900, (t + 3) * pxPerSec) + "px";
+
+  const marker = document.createElement("div");
+  marker.className = `timeline-marker ${kindToClass(evt.track)}`;
+  marker.style.left = `${t * pxPerSec}px`;
+  marker.style.width = `${Math.max(10, ((evt.duration_ms || 120) / 1000) * pxPerSec)}px`;
+  marker.title = JSON.stringify(evt, null, 2);
+  marker.textContent = evt.text || evt.tool_name || evt.type;
+  marker.dataset.turnId = evt.turn_id || "";
+  marker.dataset.track = evt.track;
+  lane.appendChild(marker);
+
+  if (evt.type === "STTFinal") {
+    addSentenceLink({
+      direction: "incoming",
+      text: evt.text,
+      turnId: evt.turn_id,
+      timestamp: evt.timestamp,
+    });
+  } else if (evt.type === "AgentFinal") {
+    addSentenceLink({
+      direction: "outgoing",
+      text: evt.text,
+      turnId: evt.turn_id,
+      timestamp: evt.timestamp,
+    });
+  }
+
+  const line = document.createElement("div");
+  line.textContent = `[${t.toFixed(2)}s] ${evt.type} ${evt.text || evt.result || ""}`;
+  eventLog.prepend(line);
+}
+
+async function fetchIceConfig(baseUrl) {
+  const response = await fetch(baseUrl + "/config");
+  if (!response.ok) return { iceServers: [] };
+  return response.json();
+}
+
+async function negotiate(baseUrl) {
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await new Promise(resolve => {
+    if (pc.iceGatheringState === "complete") return resolve();
+    pc.addEventListener("icegatheringstatechange", function check() {
+      if (pc.iceGatheringState === "complete") {
+        pc.removeEventListener("icegatheringstatechange", check);
+        resolve();
+      }
+    });
+  });
+
+  const response = await fetch(baseUrl + "/offer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(pc.localDescription),
+  });
+  const answer = await response.json();
+  await pc.setRemoteDescription(answer);
+}
+
+function startRecorder(stream, onChunk, onDone) {
+  const recorder = new MediaRecorder(stream);
+  const parts = [];
+  recorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      parts.push(e.data);
+      onChunk(e.data);
+    }
+  };
+  recorder.onstop = () => {
+    onDone(new Blob(parts, { type: "audio/webm" }));
+  };
+  recorder.start(1000);
+  return { recorder, parts };
+}
+
+function setAudioFromBlob(el, blob) {
+  if (!blob || blob.size === 0) return;
+  el.src = URL.createObjectURL(blob);
+}
+
+async function startConversation() {
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  statusEl.textContent = "Connecting...";
+  statusEl.className = "text-sm font-semibold text-amber-300";
+  startTs = 0;
+
+  evtSource = new EventSource("/events");
+  evtSource.onmessage = (e) => addEvent(JSON.parse(e.data));
+
+  localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const mic = startRecorder(
+    localStream,
+    blob => setAudioFromBlob(micChunk, blob),
+    blob => setAudioFromBlob(micFull, blob),
+  );
+  micRecorder = mic.recorder;
+
+  const baseUrl = signalingUrl.value.replace(/\/$/, "");
+  const iceConfig = await fetchIceConfig(baseUrl);
+  pc = new RTCPeerConnection(iceConfig);
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+  pc.addEventListener("track", (evt) => {
+    if (evt.track.kind !== "audio") return;
+    remoteStream = evt.streams[0];
+    const agent = startRecorder(
+      remoteStream,
+      blob => setAudioFromBlob(agentChunk, blob),
+      blob => setAudioFromBlob(agentFull, blob),
+    );
+    agentRecorder = agent.recorder;
+  });
+
+  await negotiate(baseUrl);
+  statusEl.textContent = "Connected";
+  statusEl.className = "text-sm font-semibold text-emerald-300";
+}
+
+function stopConversation() {
+  if (evtSource) evtSource.close();
+  if (micRecorder && micRecorder.state !== "inactive") micRecorder.stop();
+  if (agentRecorder && agentRecorder.state !== "inactive") agentRecorder.stop();
+  if (localStream) localStream.getTracks().forEach(t => t.stop());
+  if (pc) pc.close();
+  statusEl.textContent = "Stopped";
+  statusEl.className = "text-sm font-semibold text-slate-300";
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+}
+
+startBtn.addEventListener("click", () => startConversation().catch((e) => {
+  statusEl.textContent = "Error: " + e.message;
+  statusEl.className = "text-sm font-semibold text-rose-300";
+  console.error(e);
+  stopConversation();
+}));
+stopBtn.addEventListener("click", stopConversation);
+</script>
+</body>
+</html>
