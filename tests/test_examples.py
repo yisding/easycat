@@ -30,6 +30,12 @@ def test_pydantic_ai_example_imports():
     assert callable(pydantic_example.main)
 
 
+def test_webrtc_observability_example_imports():
+    import examples.webrtc_observability_server as webrtc_observability
+
+    assert callable(webrtc_observability.main)
+
+
 def test_twilio_example_factory():
     if importlib.util.find_spec("fastapi") is None:
         pytest.skip("fastapi not installed")
