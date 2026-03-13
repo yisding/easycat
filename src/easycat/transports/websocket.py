@@ -8,6 +8,7 @@ to a single audio session. The wire protocol uses:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -16,7 +17,7 @@ import websockets
 from websockets.asyncio.server import ServerConnection
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
-from easycat.transports._base import _ServerTransportBase
+from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
 
 logger = logging.getLogger(__name__)
 
@@ -135,3 +136,91 @@ class WebSocketTransport(_ServerTransportBase):
             logger.debug("Client sent stop signal")
         else:
             logger.debug("Unknown control message type: %s", msg_type)
+
+
+class WebSocketConnectionTransport(_AudioQueueMixin):
+    """Transport bound to a single existing WebSocket connection.
+
+    Useful for servers that already own the WebSocket accept loop and want
+    one EasyCat Session per client connection.
+    """
+
+    def __init__(
+        self,
+        ws: ServerConnection,
+        config: WebSocketTransportConfig | None = None,
+    ) -> None:
+        self._ws = ws
+        self._config = config or WebSocketTransportConfig()
+        self._audio_format = self._config.audio_format
+        self._receive_task: asyncio.Task[None] | None = None
+        self._init_audio_queue(self._config.max_pending_chunks)
+
+    async def connect(self) -> None:
+        if self._connected:
+            return
+        self._reset_audio_queue()
+        self._connected = True
+        self._client_connected.set()
+        await self._ws.send(json.dumps({"type": "ready"}))
+        self._receive_task = asyncio.create_task(self._receive_loop())
+
+    async def disconnect(self) -> None:
+        if not self._connected:
+            return
+        self._connected = False
+        self._client_connected.clear()
+        if self._receive_task is not None and not self._receive_task.done():
+            self._receive_task.cancel()
+            try:
+                await self._receive_task
+            except asyncio.CancelledError:
+                pass
+        self._receive_task = None
+        try:
+            await self._ws.close()
+        except Exception:
+            logger.debug("Error closing WebSocket connection", exc_info=True)
+        self._enqueue_sentinel()
+
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        try:
+            await self._ws.send(chunk.data)
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot send audio: client disconnected")
+
+    async def clear_audio(self) -> None:
+        """No-op — WebSocket sends frames immediately without buffering."""
+
+    async def _receive_loop(self) -> None:
+        try:
+            async for message in self._ws:
+                if isinstance(message, bytes):
+                    chunk = AudioChunk(data=message, format=self._audio_format)
+                    self._enqueue_chunk(chunk, context="WebSocket")
+                elif isinstance(message, str):
+                    self._handle_control_message(message)
+        except websockets.exceptions.ConnectionClosed:
+            logger.info("WebSocket client disconnected")
+        finally:
+            self._connected = False
+            self._client_connected.clear()
+            self._audio_format = self._config.audio_format
+            self._enqueue_sentinel()
+
+    def _handle_control_message(self, raw: str) -> None:
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("Ignoring invalid JSON control message")
+            return
+
+        if msg.get("type") == "config":
+            sample_rate = msg.get("sample_rate")
+            if sample_rate and isinstance(sample_rate, int):
+                self._audio_format = AudioFormat(
+                    sample_rate=sample_rate,
+                    channels=self._audio_format.channels,
+                    sample_width=self._audio_format.sample_width,
+                    encoding=self._audio_format.encoding,
+                )
