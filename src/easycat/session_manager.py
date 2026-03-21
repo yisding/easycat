@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Generic, TypeVar
 
 from easycat.session import Session
+
+logger = logging.getLogger(__name__)
 
 TKey = TypeVar("TKey")
 
@@ -46,7 +49,12 @@ class SessionManager(Generic[TKey]):
         async with self._lock:
             sessions = list(self._sessions.items())
             self._sessions.clear()
-        await asyncio.gather(*(session.stop() for _, session in sessions), return_exceptions=False)
+        results = await asyncio.gather(
+            *(session.stop() for _, session in sessions), return_exceptions=True
+        )
+        for (key, _), result in zip(sessions, results):
+            if isinstance(result, Exception):
+                logger.error("Failed to stop session %s: %s", key, result)
 
     @asynccontextmanager
     async def connection(self, key: TKey, session: Session) -> AsyncIterator[Session]:
