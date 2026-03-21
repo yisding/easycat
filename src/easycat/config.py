@@ -209,6 +209,8 @@ def create_session(config: EasyCatConfig) -> Session:
 
 def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
     if isinstance(config, Transport):
+        if hasattr(config, "_event_bus") and getattr(config, "_event_bus") is None:
+            config._event_bus = event_bus
         return config
     factory = _TRANSPORT_FACTORIES.get(type(config))
     if factory is None:
