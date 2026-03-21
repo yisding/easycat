@@ -407,19 +407,23 @@ class TwilioConnectionTransport(_AudioQueueMixin):
 
     async def send_mark(self, name: str | None = None) -> str:
         if self._stream_sid is None:
-            raise RuntimeError("No active Twilio stream")
+            logger.debug("Cannot send mark: no active Twilio stream")
+            return name or ""
         if name is None:
             self._mark_counter += 1
             name = f"mark_{self._mark_counter}"
-        await self._ws.send(
-            json.dumps(
-                {
-                    "event": "mark",
-                    "streamSid": self._stream_sid,
-                    "mark": {"name": name},
-                }
+        try:
+            await self._ws.send(
+                json.dumps(
+                    {
+                        "event": "mark",
+                        "streamSid": self._stream_sid,
+                        "mark": {"name": name},
+                    }
+                )
             )
-        )
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot send mark: Twilio disconnected")
         return name
 
     async def send_playback_mark(self, name: str | None = None) -> str:
