@@ -156,6 +156,11 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
         self._receive_task: asyncio.Task[None] | None = None
         self._init_audio_queue(self._config.max_pending_chunks)
 
+    @property
+    def audio_format(self) -> AudioFormat:
+        """The current audio format for this transport."""
+        return self._audio_format
+
     async def connect(self) -> None:
         if self._connected:
             return

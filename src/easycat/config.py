@@ -28,7 +28,11 @@ from easycat.tracing import TraceExporter, Tracer
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
-from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
+from easycat.transports.websocket import (
+    WebSocketConnectionTransport,
+    WebSocketTransport,
+    WebSocketTransportConfig,
+)
 from easycat.tts.factory import TTSConfig, create_tts_provider_from_config
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig, TurnMode
@@ -120,7 +124,10 @@ class EasyCatConfig:
         self._validate()
 
     def _default_echo_cancellation_for_transport(self) -> EchoCancellationConfig:
-        enable_aec = isinstance(self.transport, (LocalTransportConfig, WebSocketTransportConfig))
+        enable_aec = isinstance(
+            self.transport,
+            (LocalTransportConfig, WebSocketTransportConfig, WebSocketConnectionTransport),
+        )
         return EchoCancellationConfig(enabled=enable_aec)
 
     def _validate(self) -> None:
