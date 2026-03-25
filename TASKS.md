@@ -79,11 +79,15 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 #### `TestScreeningPatterns`
 - [ ] `test_ios_pattern_record_name` — `"Please record your name and reason for calling"` → matches iOS
 - [ ] `test_ios_pattern_see_if_available` — `"Let me see if this person is available"` → matches iOS
+- [ ] `test_ios_pattern_hi_if_you_record` — `"hi if you record your name and reason for calling"` → matches iOS (actual Twilio-observed wording)
 - [ ] `test_android_pattern_screening_service` — `"The person you're calling is using a screening service"` → matches Android
 - [ ] `test_android_pattern_say_name` — `"Go ahead and say your name and why you're calling"` → matches Android
+- [ ] `test_android_pattern_get_copy_of_conversation` — `"will get a copy of this conversation"` → matches Android (Google's full phrasing)
 - [ ] `test_carrier_pattern_caller_id` — `"The person you're calling has caller ID screening"` → matches carrier
+- [ ] `test_nomorobo_press_1_screening` — `"press 1 to be connected"` → matches third-party (Nomorobo-style DTMF screening)
 - [ ] `test_no_match_normal_speech` — `"Hello, this is John"` → no match
 - [ ] `test_no_match_voicemail_greeting` — `"Hi you've reached John, leave a message"` → no match
+- [ ] `test_no_match_robokiller_answer_bot` — `"Oh hi there, what did you say your name was?"` → no match (fake conversation bot, not a screening prompt)
 - [ ] `test_partial_match_sufficient` — `"record your name"` (substring of iOS prompt) → matches iOS
 - [ ] `test_case_insensitive` — `"USING A SCREENING SERVICE"` → matches Android
 - [ ] `test_custom_patterns` — user-provided patterns override or extend defaults
@@ -194,6 +198,9 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_human_speech_not_ivr` — `"Hello, how can I help you?"` not classified as IVR
 - [ ] `test_hold_music_detection` — extended silence after IVR prompt → in hold state
 - [ ] `test_transfer_to_human_detected` — after IVR, new greeting-style speech → human detected
+- [ ] `test_auto_attendant_extension_prompt` — `"If you know your party's extension, dial it now"` classified as IVR (PBX auto-attendant without numbered options)
+- [ ] `test_pbx_call_confirmation_prompt` — `"You have a call. Press 1 to accept"` detected as call confirmation (ring group feature), bot sends DTMF 1
+- [ ] `test_hunt_group_variable_ring_time` — call rings for 30+ seconds through multiple extensions before voicemail; state machine doesn't prematurely classify
 
 ---
 
@@ -210,6 +217,12 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_ambiguous_short_greeting` — `"Hi"` → `"unknown"`
 - [ ] `test_carrier_voicemail` — `"The person you are trying to reach is not available"` → `"machine"`
 - [ ] `test_google_voice_greeting` — `"The Google subscriber you are trying to reach"` → `"machine"`
+- [ ] `test_youmail_out_of_service` — YouMail plays out-of-service tone to robocallers; greeting text empty or absent → `"machine"` (rely on tone/AMD, not text)
+- [ ] `test_youmail_custom_greeting` — `"Hey! If this is important, leave a message. Otherwise text me."` → `"machine"` (still a recorded greeting despite casual tone)
+- [ ] `test_voicemail_full_no_beep` — `"The voicemail box is full and cannot accept messages"` → `"machine"` (no beep follows, call may disconnect)
+- [ ] `test_silent_voicemail_no_greeting` — empty/silence-only transcript → `"unknown"` (must fall back to beep detection or AMD)
+- [ ] `test_human_double_hello` — `"Hello? ... Hello?"` (two utterances with silence gap) → `"human"` (not misclassified as machine despite gap)
+- [ ] `test_auto_attendant_extension_prompt` — `"If you know your party's extension, you may dial it at any time"` → `"machine"` (PBX auto-attendant, not human)
 
 #### `TestPostScreeningVoicemailDetection`
 - [ ] `test_screening_then_voicemail` — screening prompt → bot responds → voicemail greeting plays → detected as voicemail
@@ -246,6 +259,16 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_screening_response_within_time_window` — bot responds within 5s of screening detection
 - [ ] `test_screening_with_agent_response` — agent-generated screening response is spoken via TTS
 - [ ] `test_screening_agent_timeout_fallback` — agent too slow → static response used instead
+- [ ] `test_nomorobo_dtmf_screening` — Nomorobo asks "press 1 to connect" → bot detects DTMF screening and sends digit 1
+- [ ] `test_robokiller_answer_bot_detection` — call answered by RoboKiller Answer Bot engaging in fake conversation → not mistaken for human; timeout → classified as UNKNOWN or machine
+- [ ] `test_ios_screening_low_power_mode_bypass` — when iOS Low Power Mode is on, screening is disabled; call rings normally; bot should not assume screening
+
+#### `TestVoicemailEdgeCases`
+- [ ] `test_dual_greeting_silence_gap` — carrier greeting → 1.5s silence → personal greeting; AMD may false-positive as human during the gap; state machine should wait for full classification
+- [ ] `test_short_greeting_2s` — 2-second voicemail greeting detected correctly (not misclassified as human)
+- [ ] `test_silent_voicemail_beep_only` — no greeting, just silence → beep; detected via beep detection, not STT
+- [ ] `test_voicemail_full_disconnect` — "voicemail box is full" → call disconnects; no beep, no message; state machine transitions to ENDED
+- [ ] `test_human_double_hello_not_machine` — "Hello?" + 2s silence + "Hello?" not misclassified as machine
 
 #### `TestExistingTestsUnbroken`
 - [ ] `test_existing_dtmf_tests_pass` — all `test_dtmf.py` tests still pass (regression)
