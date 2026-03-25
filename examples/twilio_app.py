@@ -1,4 +1,4 @@
-"""Twilio Media Streams example with a TwiML webhook.
+"""Twilio Media Streams example with per-call EasyCat sessions.
 
 Setup:
   export OPENAI_API_KEY="..."
@@ -15,7 +15,16 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from easycat import EasyCatConfig, TelephonyConfig, TwilioTransportConfig, create_session
+import websockets
+from websockets.asyncio.server import ServerConnection
+
+from easycat import (
+    EasyCatConfig,
+    SessionManager,
+    TelephonyConfig,
+    TwilioConnectionTransport,
+    create_session,
+)
 from easycat.transports.twilio_media import twiml_connect_stream
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -30,32 +39,40 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
     if not api_key or not stream_url:
         raise RuntimeError("OPENAI_API_KEY and TWILIO_STREAM_URL are required.")
 
-    try:
-        adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
-    except SystemExit as exc:
-        raise RuntimeError(str(exc)) from exc
+    manager: SessionManager[int] = SessionManager()
 
-    config = EasyCatConfig(
-        openai_api_key=api_key,
-        transport=TwilioTransportConfig(),
-        telephony=TelephonyConfig(
-            enable_dtmf_aggregator=True,
-            enable_voicemail_detector=True,
-        ),
-        agent=adapter,
-        wrap_agent=False,
-        event_logging=default_event_logging(),
-    )
-    session = create_session(config)
-    attach_runtime_feedback(session)
+    async def handle_twilio_connection(ws: ServerConnection) -> None:
+        adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
+        transport = TwilioConnectionTransport(ws)
+        session = create_session(
+            EasyCatConfig(
+                openai_api_key=api_key,
+                transport=transport,
+                telephony=TelephonyConfig(
+                    enable_dtmf_aggregator=True,
+                    enable_voicemail_detector=True,
+                ),
+                agent=adapter,
+                wrap_agent=False,
+                event_logging=default_event_logging(),
+            )
+        )
+        attach_runtime_feedback(session)
+        key = id(ws)
+        async with manager.connection(key, session):
+            await ws.wait_closed()
 
     from fastapi import FastAPI, Response
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        await session.start()
-        yield
-        await session.stop()
+        twilio_server = await websockets.serve(handle_twilio_connection, "0.0.0.0", 8766)
+        try:
+            yield
+        finally:
+            twilio_server.close()
+            await twilio_server.wait_closed()
+            await manager.stop_all()
 
     app = FastAPI(lifespan=lifespan)
 
