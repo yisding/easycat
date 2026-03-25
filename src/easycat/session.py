@@ -1819,17 +1819,18 @@ class Session:
 
     def _maybe_attach_event_bus(self, provider: Any) -> None:
         """Attach the session EventBus to provider configs that support it."""
+        attached = False
         cfg = getattr(provider, "_config", None)
-        if cfg is None:
-            if hasattr(provider, "_event_bus") and getattr(provider, "_event_bus") is None:
-                try:
-                    setattr(provider, "_event_bus", self.event_bus)
-                except Exception:
-                    pass
-            return
-        if hasattr(cfg, "event_bus") and getattr(cfg, "event_bus") is None:
+        if cfg is not None and hasattr(cfg, "event_bus") and getattr(cfg, "event_bus") is None:
             try:
                 setattr(cfg, "event_bus", self.event_bus)
+                attached = True
+            except Exception:
+                pass
+        has_unset_bus = hasattr(provider, "_event_bus") and getattr(provider, "_event_bus") is None
+        if not attached and has_unset_bus:
+            try:
+                setattr(provider, "_event_bus", self.event_bus)
             except Exception:
                 pass
 

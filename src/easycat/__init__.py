@@ -45,6 +45,7 @@ from easycat.smart_turn import (
     create_smart_turn,
 )
 from easycat.session import Session, SessionConfig, TurnState
+from easycat.session_manager import SessionManager
 from easycat.turn_manager import TurnMode
 from easycat.llm_output_processing import (
     LLMOutputProcessor,
@@ -147,9 +148,17 @@ from easycat.vad import KrispVAD, SileroVAD, TenVAD, VADConfig, create_vad
 # ── Transport implementations ────────────────────────────────────
 
 from easycat.transports.local import LocalTransport, LocalTransportConfig
-from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
+from easycat.transports.twilio_media import (
+    TwilioConnectionTransport,
+    TwilioTransport,
+    TwilioTransportConfig,
+)
 from easycat.transports.webrtc import ICEServer, WebRTCTransport, WebRTCTransportConfig
-from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
+from easycat.transports.websocket import (
+    WebSocketConnectionTransport,
+    WebSocketTransport,
+    WebSocketTransportConfig,
+)
 
 # ── Configuration & errors ────────────────────────────────────────
 
@@ -168,6 +177,7 @@ __all__ = [
     "SessionConfig",
     "TurnState",
     "TurnMode",
+    "SessionManager",
     "EasyCatConfig",
     "EventLoggingConfig",
     "MetricsConfig",
@@ -278,8 +288,10 @@ __all__ = [
     "WebRTCTransportConfig",
     "WebSocketTransport",
     "WebSocketTransportConfig",
+    "WebSocketConnectionTransport",
     "TwilioTransport",
     "TwilioTransportConfig",
+    "TwilioConnectionTransport",
     # Configuration & errors
     "TimeoutConfig",
     "STTTimeoutError",
