@@ -1,52 +1,70 @@
-"""WebSocket server example for EasyCat.
+"""WebSocket server example for EasyCat (multi-session).
 
 Setup:
   export OPENAI_API_KEY="..."
   uv sync --extra openai-agents
   uv run python examples/ws_server.py
 
-Connect a client that streams raw PCM16 audio to ws://localhost:8765.
+Connect multiple clients streaming raw PCM16 audio to ws://localhost:8765.
+Each connection gets its own EasyCat Session.
 """
 
 from __future__ import annotations
 
 import asyncio
+import signal
 import sys
 from pathlib import Path
 
-from easycat import EasyCatConfig, WebSocketTransportConfig, create_session
+import websockets
+from websockets.asyncio.server import ServerConnection
+
+from easycat import EasyCatConfig, SessionManager, WebSocketConnectionTransport, create_session
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from common import (  # noqa: E402
-    build_openai_agents_adapter,
-    default_event_logging,
-    require_env,
-    wait_for_shutdown_signal,
-)
+from common import default_event_logging, require_env  # noqa: E402
 from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 
 async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
-    adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
+    manager: SessionManager[int] = SessionManager()
 
-    config = EasyCatConfig(
-        openai_api_key=api_key,
-        transport=WebSocketTransportConfig(),
-        agent=adapter,
-        wrap_agent=False,
-        event_logging=default_event_logging(),
-    )
-    session = create_session(config)
-    attach_runtime_feedback(session)
+    async def handle_connection(ws: ServerConnection) -> None:
+        transport = WebSocketConnectionTransport(ws)
 
-    await session.start()
+        from common import build_openai_agents_adapter
 
-    print("\nServer ready. Connect a WebSocket client to ws://localhost:8765")
+        adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
+        session = create_session(
+            EasyCatConfig(
+                openai_api_key=api_key,
+                transport=transport,
+                agent=adapter,
+                wrap_agent=False,
+                event_logging=default_event_logging(),
+            )
+        )
+        attach_runtime_feedback(session)
+
+        key = id(ws)
+        async with manager.connection(key, session):
+            await ws.wait_closed()
+
+    server = await websockets.serve(handle_connection, "0.0.0.0", 8765)
+    print("\nServer ready. Connect WebSocket clients to ws://localhost:8765")
     print("Press Ctrl+C to stop.\n")
 
-    await wait_for_shutdown_signal(session)
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop_event.set)
+
+    await stop_event.wait()
+    server.close()
+    await server.wait_closed()
+    await manager.stop_all()
 
 
 if __name__ == "__main__":
