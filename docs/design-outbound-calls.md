@@ -32,12 +32,17 @@ Each scenario requires detecting *what* answered, deciding *what to do*, and exe
 - **STT transcript analysis** — use the transcribed greeting text to classify (phrases like "leave a message after the tone", "not available right now"). This is NOT yet implemented and would be a valuable addition.
 
 **Corner cases:**
-- Short voicemail greetings (<3s) that AMD may classify as human
+- Short voicemail greetings (<3s) that AMD may classify as human — tune `MachineDetectionSpeechEndThreshold` to ~2500ms to handle 1-2s greetings followed by silence gaps
 - Carrier-level voicemail (Google Voice, YouMail) with non-standard greetings
 - Voicemail greetings that ask questions ("press 1 to leave a message")
 - No beep — some systems use silence instead of beep (`machine_end_silence`)
-- Dual-greeting systems (carrier greeting → personal greeting)
+- Dual-greeting systems (carrier greeting → personal greeting) — the silence gap between carrier and personal greeting can fool AMD into thinking a human answered; this is a major false-positive source
 - Voicemail-to-text services that transcribe your message in real-time
+- **Silent voicemail** — no greeting at all, just silence → beep; transcript-based detection fails entirely, must rely on beep detection or AMD
+- **Voicemail full** — "The voicemail box is full" plays and call disconnects; no beep, cannot leave message; AMD may report `machine_end_other`
+- **Human double-hello** — "Hello?" ... 2s silence ... "Hello?" can be misclassified as machine (two utterances with silence gap); tuning `MachineDetectionSpeechEndThreshold` helps but creates latency for true machine detection
+- **Background noise analysis** — voicemail has characteristic static/machine-generated noise vs. natural ambient noise on live calls; could supplement acoustic classification
+- **ASR/STT latency** — real-time transcription lags 0.5-2+ seconds behind audio; by the time transcript arrives and classification runs, the optimal response window may be closing; must use `STTPartial` aggressively
 
 ### Scenario 2: IVR / Phone Tree
 
@@ -62,6 +67,10 @@ Each scenario requires detecting *what* answered, deciding *what to do*, and exe
 - IVR that requires account numbers or PINs
 - Transfer to human after IVR navigation — bot must detect the transition
 - IVR systems that use speech recognition and mishear the bot's TTS
+- **PBX hunt groups** — call rings through multiple extensions sequentially/simultaneously before hitting voicemail; variable ring times confuse answer detection
+- **PBX call confirmation** — some ring groups require the answering party to press a digit to accept (preventing voicemail pickup); bot must detect DTMF prompts during ring phase
+- **Auto-attendant vs. IVR distinction** — corporate auto-attendants may say "If you know your party's extension, dial it now" without numbered menu options; needs broader detection than just "press N for X"
+- **DTMF mode issues** — different PBX systems use different DTMF signaling (RFC 2833 vs. SIP INFO vs. in-band); Twilio handles this, but latency varies
 
 ### Scenario 3: Call Screening (the new challenge)
 
@@ -95,13 +104,24 @@ Each scenario requires detecting *what* answered, deciding *what to do*, and exe
    - **Call declined** — handle gracefully (retry later, different channel, etc.)
 
 **Corner cases:**
-- Bot must respond quickly to screening prompts (~3-5s window)
+- Bot must respond quickly to screening prompts (~3-5s window, iOS gives ~30s total but response should be fast)
 - Screening → brief silence → human picks up (must not mistake for voicemail)
 - Screening → voicemail (must leave appropriate message)
 - Multiple screening layers (carrier screening → iOS screening)
-- Non-English screening prompts (international calls)
+- Non-English screening prompts (international calls, Siri speaks device language)
 - Custom screening messages (some apps let users record their own)
 - Bot's identification response may itself be screened/rejected
+- **iOS 26 "Recent Interaction Bypass"** — after a ~30s connected call, the same number bypasses screening for ~90-150 minutes; follow-up calls may not be screened
+- **iOS 26 Low Power Mode** — screening is disabled when Low Power Mode is on; call rings normally
+- **iOS 26 callers don't need to identify** — saying just "hello" is enough to ring through; the screening prompt asks but doesn't require a name
+- **Branded Caller ID during screening** — if the agent says "my name is Dave", iOS may display "Maybe: Dave"; verified brand identity (BCID) persists and builds trust
+- **Google Pixel AI contextual replies (Pixel 9+)** — beyond preset follow-ups, Pixel 9 generates real-time AI responses; bot may face multi-turn screening conversation
+- **Third-party screening apps:**
+  - **RoboKiller Answer Bots** — intercept calls and engage caller in fake conversation to waste time; bot must recognize when talking to another bot (not a human or screener)
+  - **Nomorobo** — asks caller to press 1 to connect (DTMF-based screening, not voice); bot must detect and send DTMF
+  - **YouMail** — plays out-of-service tone to suspected robocallers; custom greetings per caller; asks private/blocked numbers to unblock caller ID before connecting
+- **Caller ID reputation** — if number is flagged as spam (SIP 608), carriers may block the call before screening even engages; need to monitor reputation
+- **STIR/SHAKEN gaps** — 85% of Tier-1 carrier traffic signed, but only 17.5% of smaller carriers; improper attestation means some scam calls still get through, making carriers more aggressive with screening
 
 ---
 
@@ -190,7 +210,14 @@ CARRIER_PATTERNS = [
 ]
 ```
 
-**Important timing note:** iOS 26 screening gives ~10s for the caller to respond before routing to voicemail. The bot must detect the screening prompt via STT partial transcripts and begin responding within 3-5s to be effective. Using `STTPartial` events (not waiting for `STTFinal`) is critical here.
+**Important timing note:** iOS 26 screening gives the caller ~30 seconds before offering voicemail. However, the bot should detect the screening prompt via STT partial transcripts and begin responding within 3-5s for best results. Using `STTPartial` events (not waiting for `STTFinal`) is critical here.
+
+**Screening response best practices (per Retell AI):**
+- Keep to 12-18 words, under 5 seconds
+- Include: name + company + specific reason (e.g., "Hi, it's Sarah from Acme Corp calling about your appointment on Thursday")
+- Avoid vague openers: "touching base", "checking in", "special offers"
+
+**Alternative architecture note (Pipecat pattern):** Pipecat uses a dual-LLM gate pattern — a classifier LLM runs in parallel with the main conversation LLM, and TTS output is held in a gate until classification completes. This prevents inappropriate responses to voicemail while maintaining low latency for live conversations. Worth considering if we add LLM-based voicemail classification.
 
 ### Phase 3: Outbound Call State Machine (Coordinator)
 
@@ -276,6 +303,17 @@ INITIATING → RINGING → ANSWERED → CLASSIFYING
 
 ---
 
+## Regulatory Considerations (TCPA / FCC)
+
+- **AI voice = artificial voice under TCPA** — the FCC confirmed in Feb 2024 that AI-generated voices are "artificial or pre-recorded voices" under the TCPA. Prior express written consent is required for telemarketing to mobile phones.
+- **Abandoned call rules** — must connect to a live representative within 2 seconds of answer. Max 3% abandon rate over 30-day period. AMD delay can create "silent call" experiences that feel like robocalls and increase complaint risk.
+- **Disclosure requirements** — callers must clearly identify when an AI is speaking. FCC is proposing even stricter rules for AI-specific disclosure and opt-in consent.
+- **Calling hours** — 8am-9pm in the recipient's time zone only.
+- **DNC compliance** — must honor both national DNC list and internal opt-out lists.
+- **Consent revocation** — FCC's "Revoke-All" rule (effective date stayed to Jan 2027) will require that revoking consent for one type of communication revokes it for all types from that caller.
+- **Caller ID requirements** — FCC proposes requiring callers to provide a working, verifiable number. Offshore call centers may be restricted from using US numbers.
+- **Note:** The FCC under Chairman Brendan Carr is considering relaxing some rules (FNPRM adopted Oct 2025), but AI voice calls are being brought MORE strictly under TCPA, not less.
+
 ## Open Questions for Future Implementation
 
 1. **Retry strategy** — when a call is declined via screening, should we retry with a different approach (SMS fallback, different time of day, different caller ID)?
@@ -283,6 +321,9 @@ INITIATING → RINGING → ANSWERED → CLASSIFYING
 3. **Recording** — should outbound calls be recorded for compliance/QA? Twilio supports call recording, but there are legal requirements (consent, notification).
 4. **Analytics** — should we track call disposition rates (human answer rate, voicemail rate, screening rate) for tuning AMD parameters?
 5. **Non-Twilio providers** — should `OutboundCallManager` be a Protocol so users can plug in Vonage, Bandwidth, etc.?
+6. **Caller ID reputation monitoring** — should we surface SIP 608 (spam flagging) events and track reputation health?
+7. **Bot-to-bot detection** — how do we handle calling a number that's protected by RoboKiller Answer Bots or similar systems that engage callers in fake conversations?
+8. **LLM-based classification gate** — should we adopt Pipecat's dual-LLM pattern where TTS output is gated until voicemail/human classification completes?
 
 ---
 
@@ -297,3 +338,12 @@ INITIATING → RINGING → ANSWERED → CLASSIFYING
 - [Nooks: iOS Call Screening Will Not Kill Parallel Dialing](https://www.nooks.ai/blog-posts/no-ios-call-screening-will-not-kill-parallel-dialing-heres-what-you-need-to-know)
 - [Bland AI: Building a Robust Voicemail Detection System](https://www.bland.ai/blogs/building-a-robust-voicemail-detection-system-at-bland) (open-sourced Wave2Vec + CNN models on HuggingFace)
 - [Pipecat: Open Source Voice AI Framework](https://github.com/pipecat-ai/pipecat)
+- [Pipecat Voicemail Detection (dual-LLM gate pattern)](https://docs.pipecat.ai/guides/fundamentals/voicemail)
+- [Retell AI: iOS 26 Call Screening Best Practices](https://www.retellai.com/blog/ios-call-screening)
+- [Numeracle: iOS 26 Launch Update (adoption analysis)](https://www.numeracle.com/insights/ios-26-launch-update)
+- [Google Pixel Call Screen (official support)](https://support.google.com/phoneapp/answer/9118387)
+- [VoiceInfra: Voicemail Detection for Outbound Calls](https://voiceinfra.ai/blog/voicemail-detection-outbound-calls-efficiency)
+- [Anyreach: Voicemail Detection + Beep Detection (96.1% accuracy)](https://blog.anyreach.ai/anyreach-voicemail-detection-when-your-brand-speaks-make-sure-it-lands/)
+- [TNS 2026 Robocall Report (STIR/SHAKEN gaps)](https://tnsi.com/resource/com/tns-2026-robocall-report-going-further-than-stir-shaken-blog/)
+- [FCC: TCPA Applies to AI-Generated Voices](https://www.fcc.gov/document/fcc-confirms-tcpa-applies-ai-technologies-generate-human-voices)
+- [TCPA Abandoned Call Rules](https://www.dnc.com/blog/tcpa-tools-necessary-for-compliance-0-0)
