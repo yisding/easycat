@@ -29,9 +29,12 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 ### `tests/telephony/test_outbound_config.py`
 
 #### `TestOutboundCallConfig`
-- [ ] `test_defaults` — `OutboundCallConfig(from_number="+1555")` has correct defaults: `amd_mode="DetectMessageEnd"`, `async_amd=True`, `amd_timeout=30`, etc.
+- [ ] `test_defaults` — `OutboundCallConfig(from_number="+1555")` has correct defaults: `amd_mode="DetectMessageEnd"`, `async_amd=True`, `amd_timeout=30`, `classification_gate=True`, `max_call_duration_s=300`, `callee_language="en"`, etc.
 - [ ] `test_all_fields_configurable` — every field can be overridden at construction
 - [ ] `test_screening_response_modes` — `screening_use_agent=False` with `screening_response="Hi I'm Sarah"` stores both fields
+- [ ] `test_classification_gate_defaults` — `classification_gate=True`, `classification_gate_timeout_s=5.0`, `classification_gate_hold_audio=""` by default
+- [ ] `test_max_screening_turns_default` — `max_screening_turns=3` by default
+- [ ] `test_callee_language_configurable` — `callee_language="es"` stored correctly
 
 #### `TestTelephonyConfigExtension`
 - [ ] `test_enable_outbound_flag` — `TelephonyConfig(enable_outbound_call_manager=True)` accepted
@@ -51,6 +54,9 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_canceled_status` — `{"CallStatus": "canceled"}` → `CallFailed(reason="canceled")`
 - [ ] `test_missing_call_status` — `{"CallSid": "CA123"}` → `None`
 - [ ] `test_unknown_status` — `{"CallStatus": "something_new"}` → `None`
+- [ ] `test_sip_response_code_607_blocked` — `{"CallStatus": "failed", "SipResponseCode": "607"}` → `CallFailed(reason="blocked_unwanted")` with SIP code preserved
+- [ ] `test_sip_response_code_608_rejected` — `{"CallStatus": "failed", "SipResponseCode": "608"}` → `CallFailed(reason="blocked_rejected")` with SIP code preserved
+- [ ] `test_sip_response_code_603_declined` — `{"CallStatus": "failed", "SipResponseCode": "603"}` → `CallFailed(reason="declined")` with SIP code preserved
 
 #### `TestEmitCallStatus`
 - [ ] `test_emits_to_bus` — `await emit_call_status(params, bus)` parses and emits the correct event type
@@ -91,6 +97,10 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_partial_match_sufficient` — `"record your name"` (substring of iOS prompt) → matches iOS
 - [ ] `test_case_insensitive` — `"USING A SCREENING SERVICE"` → matches Android
 - [ ] `test_custom_patterns` — user-provided patterns override or extend defaults
+- [ ] `test_no_match_early_media_announcement` — `"This call may be monitored for quality assurance"` → no match (early media, not screening)
+- [ ] `test_no_match_carrier_hold_message` — `"Please hold while we connect your call"` → no match (early media)
+- [ ] `test_short_partial_no_premature_match` — `"Please rec"` (< 30 chars partial) → no match (too short to trigger screening detection to avoid false positives)
+- [ ] `test_sliding_window_accumulation` — successive `STTPartial` events accumulate; `"Please"` then `"Please record your name"` → match only on second partial when length threshold met
 
 #### `TestCallScreeningDetector`
 - [ ] `test_detects_ios_screening_from_stt_partial` — emit `STTPartial(text="please record your name and reason for calling")` → emits `CallScreening(platform="ios")`
@@ -103,6 +113,7 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_start_stop_lifecycle` — `start()` subscribes, `stop()` unsubscribes and resets
 - [ ] `test_reset_allows_re_detection` — after `reset()`, can detect again
 - [ ] `test_disabled_when_config_false` — `enable_screening_detection=False` → no subscriptions, no detection
+- [ ] `test_filters_inbound_track_only` — when transcript events include track metadata, only inbound (callee) track is analyzed; bot's own outbound speech is ignored
 
 #### `TestScreeningResponseStatic`
 - [ ] `test_static_response_emitted` — when screening detected + `screening_response="Hi, this is Sarah"`, emits `ScreeningResponse(text="Hi, this is Sarah", mode="static")`
@@ -111,6 +122,12 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 #### `TestScreeningResponseAgent`
 - [ ] `test_agent_response_requested` — when `screening_use_agent=True`, emits `ScreeningResponse(mode="agent")` with context
 - [ ] `test_agent_timeout_falls_back_to_static` — when agent doesn't respond within 3s, emits `ScreeningResponse(mode="static")` with fallback text
+- [ ] `test_agent_response_includes_callee_context` — agent receives callee name, call purpose, platform (ios/android) in context
+
+#### `TestScreeningMultiTurn`
+- [ ] `test_max_screening_turns_enforced` — after `max_screening_turns` (default 3) exchanges without human pickup, transitions to `SCREENING_TIMEOUT`
+- [ ] `test_android_multi_turn_follow_up` — Google Pixel AI asks follow-up → bot responds → AI asks again → tracked as screening turns
+- [ ] `test_coherence_check_flags_answer_bot` — if callee responses don't semantically relate to bot's statements for 2+ turns, flagged as potential answer bot
 
 #### `TestScreeningStateMachine`
 - [ ] `test_initial_state_waiting` — detector starts in `WAITING` state
@@ -136,6 +153,7 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_initiated_to_ringing` — `CallRinging` event → `RINGING`
 - [ ] `test_ringing_to_answered` — `CallAnswered` event → `ANSWERED` → immediately `CLASSIFYING`
 - [ ] `test_ringing_to_failed` — `CallFailed(reason="busy")` → `ENDED`
+- [ ] `test_initiating_direct_to_answered` — `CallAnswered` event arrives without prior `CallRinging` (some carriers skip ring-back signaling) → `ANSWERED` → `CLASSIFYING`
 - [ ] `test_classify_human_from_amd` — `VoicemailDetected(result="human")` during CLASSIFYING → `HUMAN`
 - [ ] `test_classify_voicemail_from_amd` — `VoicemailDetected(result="machine")` during CLASSIFYING → `VOICEMAIL`
 - [ ] `test_classify_screening` — `CallScreening(platform="ios")` during CLASSIFYING → `SCREENING`
@@ -148,6 +166,9 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_state_change_emits_event` — each state transition emits a `CallStateChanged(old, new)` event
 - [ ] `test_start_stop_lifecycle` — `start()` subscribes to all relevant events, `stop()` cleans up
 - [ ] `test_idempotent_start_stop` — double start/stop doesn't error
+- [ ] `test_max_call_duration_enforced` — after `max_call_duration_s`, call is terminated regardless of state (bot-to-bot prevention)
+- [ ] `test_max_call_duration_timer_cancelled_on_call_end` — if call ends naturally, max duration timer is cancelled
+- [ ] `test_sip_607_608_maps_to_ended` — `CallFailed` with SIP 607/608 reason transitions to `ENDED` and preserves blocking info
 
 #### `TestCallStateMachineWithExistingHelpers`
 - [ ] `test_integrates_with_voicemail_detector` — VoicemailDetector's `VoicemailDetected` consumed by state machine
@@ -159,6 +180,23 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_classification_timeout_configurable` — `classification_timeout_s=5.0` respected
 - [ ] `test_short_timeout_fast_fallback` — 1s timeout → falls back to UNKNOWN quickly
 - [ ] `test_timeout_cancels_on_classification` — if classified before timeout, timer is cancelled
+
+#### `TestClassificationGate`
+- [ ] `test_gate_buffers_agent_tts_during_classifying` — when `classification_gate=True` and state is `CLASSIFYING`, agent TTS output is buffered (not sent to transport)
+- [ ] `test_gate_releases_on_amd_result` — when AMD result arrives, gate opens and buffered TTS is sent
+- [ ] `test_gate_releases_on_stt_classification` — when STT classifier makes determination, gate opens
+- [ ] `test_gate_releases_on_timeout` — when `classification_gate_timeout_s` expires, gate opens regardless
+- [ ] `test_gate_releases_on_first_signal` — whichever signal arrives first (AMD, STT, timeout) opens the gate; later signals ignored for gate
+- [ ] `test_gate_hold_audio_plays` — when `classification_gate_hold_audio` is set, audio cue is played during gate window
+- [ ] `test_gate_disabled_no_buffering` — when `classification_gate=False`, agent TTS passes through immediately
+- [ ] `test_gate_no_buffering_after_classifying` — once state leaves `CLASSIFYING`, gate is permanently open for this call
+
+#### `TestSmartTurnSuppression`
+- [ ] `test_smart_turn_disabled_during_classifying` — SmartTurn endpoint detection is suppressed during `CLASSIFYING` state
+- [ ] `test_smart_turn_disabled_during_screening` — SmartTurn suppressed during `SCREENING` state
+- [ ] `test_smart_turn_disabled_during_ivr` — SmartTurn suppressed during `IVR` state
+- [ ] `test_smart_turn_reenabled_on_human` — SmartTurn re-enabled when state transitions to `HUMAN`
+- [ ] `test_longer_vad_timeout_during_screening` — silence-based VAD timeout is extended during screening/IVR states (structured speech patterns differ from conversation)
 
 ---
 
@@ -192,6 +230,12 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_max_depth_exceeded` — after max_depth navigations, emits `IVRAction(type="hangup")` or falls back
 - [ ] `test_ivr_timeout_reprompt` — if no new STTFinal within `prompt_timeout_s`, emits timeout event
 
+#### `TestIVRDTMFDelivery`
+- [ ] `test_dtmf_sent_via_rest_api_not_websocket` — DTMF action produces a REST API `Call.update()` with TwiML `<Play digits="..."/>`, NOT a WebSocket message (Twilio doesn't support outbound DTMF via Media Streams)
+- [ ] `test_dtmf_inter_digit_delay` — when sending multi-digit DTMF (e.g., account number), `W` pause characters inserted between digits to prevent duplicate registration
+- [ ] `test_dtmf_verify_option` — when `ivr_dtmf_verify=True`, after sending DTMF the navigator listens for expected IVR response; if no response after 2 attempts, falls back to speech input
+- [ ] `test_dtmf_delivery_failure_fallback` — when DTMF delivery fails (REST API error), navigator retries once then falls back to speech-based input
+
 #### `TestIVRDetection`
 - [ ] `test_detects_ivr_prompt_with_numbers` — `"Press 1 for sales, 2 for support"` classified as IVR
 - [ ] `test_detects_speech_ivr` — `"Say billing or sales"` classified as IVR
@@ -201,6 +245,8 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_auto_attendant_extension_prompt` — `"If you know your party's extension, dial it now"` classified as IVR (PBX auto-attendant without numbered options)
 - [ ] `test_pbx_call_confirmation_prompt` — `"You have a call. Press 1 to accept"` detected as call confirmation (ring group feature), bot sends DTMF 1
 - [ ] `test_hunt_group_variable_ring_time` — call rings for 30+ seconds through multiple extensions before voicemail; state machine doesn't prematurely classify
+- [ ] `test_early_media_not_classified_as_ivr` — `"This call may be monitored for quality"` during early media phase (pre-answer) is not classified as IVR prompt
+- [ ] `test_early_media_hold_message_ignored` — `"Please hold while we connect your call"` during early media is ignored, classification delayed until actual answer
 
 ---
 
@@ -223,6 +269,21 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_silent_voicemail_no_greeting` — empty/silence-only transcript → `"unknown"` (must fall back to beep detection or AMD)
 - [ ] `test_human_double_hello` — `"Hello? ... Hello?"` (two utterances with silence gap) → `"human"` (not misclassified as machine despite gap)
 - [ ] `test_auto_attendant_extension_prompt` — `"If you know your party's extension, you may dial it at any time"` → `"machine"` (PBX auto-attendant, not human)
+- [ ] `test_early_media_announcement_not_voicemail` — `"This call may be monitored for quality assurance"` → `"unknown"` (early media, not voicemail greeting)
+
+#### `TestSITToneDetection`
+- [ ] `test_sit_tone_sequence_detected` — audio with 950 Hz → 1400 Hz → 1800 Hz tone sequence (Special Information Tones) → classified as `"sit_tone"` (YouMail out-of-service trick)
+- [ ] `test_sit_tone_not_confused_with_beep` — SIT tones are multi-frequency sequence, not a single-frequency beep; detected separately from voicemail beep
+- [ ] `test_sit_tone_followed_by_greeting` — SIT tones → custom YouMail greeting; SIT detection takes priority, classified as `"machine"` immediately
+
+#### `TestCNGDetection`
+- [ ] `test_cng_treated_as_silence` — comfort noise generation (low amplitude, flat spectrum) treated as silence for dual-greeting gap detection
+- [ ] `test_cng_does_not_reset_silence_timer` — CNG packets during silence gap between carrier + personal greeting don't reset the silence duration counter
+- [ ] `test_beep_detection_through_cng` — beep tone (800-1200 Hz) still detected correctly even when interleaved with CNG frames
+
+#### `TestCodecTranscodingRobustness`
+- [ ] `test_beep_detection_with_g711_encoded_audio` — beep detection works with G.711 (u-law/a-law) encoded audio samples, not just clean PCM
+- [ ] `test_beep_detection_wider_frequency_tolerance` — beep at 750 Hz or 1250 Hz (outside nominal 800-1200 range due to codec artifacts) still detected when tolerance mode enabled
 
 #### `TestPostScreeningVoicemailDetection`
 - [ ] `test_screening_then_voicemail` — screening prompt → bot responds → voicemail greeting plays → detected as voicemail
@@ -234,6 +295,7 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_stt_classification_agrees_with_amd` — when both agree on "machine", single VoicemailDetected emitted
 - [ ] `test_stt_classification_disagrees_with_amd` — when AMD says human but greeting says machine, configurable which wins
 - [ ] `test_short_greeting_classified_by_stt` — greeting <3s (too short for monologue detector) classified by text content
+- [ ] `test_transcription_unavailable_fallback` — when no STT transcript arrives within 5s of audio start, classifier degrades gracefully to AMD + beep + monologue only (no crash, no false positive)
 
 ---
 
@@ -262,6 +324,16 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_nomorobo_dtmf_screening` — Nomorobo asks "press 1 to connect" → bot detects DTMF screening and sends digit 1
 - [ ] `test_robokiller_answer_bot_detection` — call answered by RoboKiller Answer Bot engaging in fake conversation → not mistaken for human; timeout → classified as UNKNOWN or machine
 - [ ] `test_ios_screening_low_power_mode_bypass` — when iOS Low Power Mode is on, screening is disabled; call rings normally; bot should not assume screening
+- [ ] `test_dnd_focus_mode_fast_voicemail` — call goes from `ringing` to `completed` in < 2 rings (DND/Focus Mode); classified as fast voicemail/rejected, not human
+- [ ] `test_google_call_screen_auto_reject` — bot gives generic/robotic response → Google auto-rejects → `CallEnded` arrives; classified as `DECLINED`
+- [ ] `test_multi_turn_screening_timeout` — after `max_screening_turns` exchanges with Google Pixel AI, transitions to `SCREENING_TIMEOUT` and either waits or hangs up
+- [ ] `test_youmail_sit_tone_then_greeting` — SIT tones played → followed by custom YouMail greeting → classified as `NUMBER_UNAVAILABLE` (not voicemail)
+
+#### `TestWebhookTimingEdgeCases`
+- [ ] `test_skip_ringing_direct_to_answered` — Twilio goes `initiated` → `in-progress` without `ringing` webhook (some international carriers); state machine transitions correctly
+- [ ] `test_amd_webhook_arrives_after_stt_classification` — STT classifier makes determination before AMD webhook arrives; first classification wins, AMD result logged but doesn't override
+- [ ] `test_amd_webhook_arrives_before_any_stt` — AMD webhook arrives during initial silence (before any STT); classification gate opens immediately
+- [ ] `test_early_media_before_answer` — audio arrives on media stream before `in-progress` callback (early media); classification delayed until actual answer webhook
 
 #### `TestVoicemailEdgeCases`
 - [ ] `test_dual_greeting_silence_gap` — carrier greeting → 1.5s silence → personal greeting; AMD may false-positive as human during the gap; state machine should wait for full classification
@@ -269,6 +341,13 @@ Red-green TDD acceptance criteria for each implementation phase. Write all tests
 - [ ] `test_silent_voicemail_beep_only` — no greeting, just silence → beep; detected via beep detection, not STT
 - [ ] `test_voicemail_full_disconnect` — "voicemail box is full" → call disconnects; no beep, no message; state machine transitions to ENDED
 - [ ] `test_human_double_hello_not_machine` — "Hello?" + 2s silence + "Hello?" not misclassified as machine
+- [ ] `test_cng_silence_gap_dual_greeting` — CNG (comfort noise) during carrier→personal greeting gap treated as silence; not mistaken for speech
+- [ ] `test_codec_artifact_beep_still_detected` — beep tone slightly shifted by G.711 transcoding (e.g., 780 Hz instead of 800 Hz) still detected
+
+#### `TestBotToBotDetection`
+- [ ] `test_max_call_duration_terminates_call` — bot-to-bot conversation hits `max_call_duration_s` hard limit → call terminated → state transitions to `ENDED`
+- [ ] `test_no_human_behavior_indicators` — after 60s of conversation with no hesitation, no "um/uh", no background noise, and perfectly fluent responses → flagged as potential bot-to-bot
+- [ ] `test_robokiller_incoherent_responses` — callee gives semantically unrelated responses for 3 turns → classified as answer bot, not human
 
 #### `TestExistingTestsUnbroken`
 - [ ] `test_existing_dtmf_tests_pass` — all `test_dtmf.py` tests still pass (regression)

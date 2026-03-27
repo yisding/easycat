@@ -274,6 +274,75 @@ class VoicemailDetected:
     timestamp: float = field(default_factory=time.monotonic)
 
 
+# Outbound call lifecycle
+@dataclass(frozen=True)
+class CallInitiated:
+    """Bot placed an outbound call."""
+
+    call_sid: str
+    to: str
+    from_: str
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class CallRinging:
+    """Remote phone is ringing."""
+
+    call_sid: str
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class CallAnswered:
+    """Call was answered (by human, machine, or screener)."""
+
+    call_sid: str
+    answered_by: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class CallScreening:
+    """Call screening detected."""
+
+    call_sid: str
+    platform: str  # "ios" | "android" | "carrier" | "unknown"
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class CallFailed:
+    """Call failed (busy, no answer, rejected, error)."""
+
+    call_sid: str
+    reason: str
+    sip_code: int | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class CallEnded:
+    """Call terminated."""
+
+    call_sid: str
+    duration_s: float | None = None
+    disposition: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
 # Error
 @dataclass(frozen=True)
 class Error:
@@ -312,6 +381,12 @@ Event = (
     | DTMF
     | DTMFAggregated
     | VoicemailDetected
+    | CallInitiated
+    | CallRinging
+    | CallAnswered
+    | CallScreening
+    | CallFailed
+    | CallEnded
     | Error
 )
 
