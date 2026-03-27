@@ -70,6 +70,7 @@ class TTSSynthesizer:
         turn_end_time: float | None = None,
         is_active: Callable[[], bool] | None = None,
         record_latency: bool = True,
+        bypass_gate: bool = False,
     ) -> TTSSynthResult:
         """Synthesize text and stream audio to the outbound queue.
 
@@ -138,7 +139,7 @@ class TTSSynthesizer:
                                     TURN_E2E,
                                     (result.first_audio_time - turn_end_time) * 1000,
                                 )
-                    if not (self._audio_gate and self._audio_gate()):
+                    if bypass_gate or not (self._audio_gate and self._audio_gate()):
                         await self._outbound_queue.put(tts_event.audio)
 
                 elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:

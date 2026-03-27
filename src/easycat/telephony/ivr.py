@@ -279,6 +279,7 @@ class IVRNavigator:
                 return
 
             await self._event_bus.emit(action)
+            self._start_prompt_timeout()
 
             # Deliver DTMF via REST API if available.
             if self._dtmf_delivery:
@@ -310,6 +311,7 @@ class IVRNavigator:
                 return
 
             await self._event_bus.emit(action)
+            self._start_prompt_timeout()
 
         elif action_str == "hangup":
             await self._event_bus.emit(
