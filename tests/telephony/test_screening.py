@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from easycat.events import CallScreening, EventBus, STTPartial
+from easycat.events import (
+    CallEnded,
+    CallScreening,
+    EventBus,
+    STTFinal,
+    STTPartial,
+    VoicemailDetected,
+)
 from easycat.telephony.screening import (
     CallScreeningDetector,
     ScreeningPatternSet,
@@ -355,6 +364,31 @@ class TestScreeningResponseAgent:
             detector.stop()
 
     @pytest.mark.asyncio
+    async def test_agent_timeout_falls_back_to_static(self) -> None:
+        bus = EventBus()
+        responses: list[ScreeningResponse] = []
+        bus.subscribe(ScreeningResponse, responses.append)
+        detector = CallScreeningDetector(
+            bus,
+            screening_use_agent=True,
+            screening_response="Fallback: Hi, this is Sarah",
+            agent_timeout_s=0.05,
+            track_filter=None,
+        )
+        detector.start()
+        try:
+            await bus.emit(STTPartial(text="please record your name and reason for calling"))
+            assert len(responses) == 1
+            assert responses[0].mode == "agent"
+            # Wait for timeout to fire the fallback.
+            await asyncio.sleep(0.1)
+            assert len(responses) == 2
+            assert responses[1].mode == "static"
+            assert responses[1].text == "Fallback: Hi, this is Sarah"
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
     async def test_agent_response_includes_callee_context(self) -> None:
         # Agent mode emits with mode="agent"; context is provided at the
         # application layer, not by the detector itself.
@@ -407,3 +441,105 @@ class TestScreeningStateMachine:
         bus = EventBus()
         detector = CallScreeningDetector(bus)
         assert isinstance(detector.state, ScreeningState)
+
+    @pytest.mark.asyncio
+    async def test_human_answered_outcome(self) -> None:
+        bus = EventBus()
+        detector = CallScreeningDetector(bus, track_filter=None)
+        detector.start()
+        try:
+            await bus.emit(STTPartial(text="please record your name and reason for calling"))
+            assert detector.state == ScreeningState.SCREENING_DETECTED
+            await bus.emit(STTFinal(text="Hello, how can I help you?"))
+            assert detector.state == ScreeningState.HUMAN_ANSWERED
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
+    async def test_voicemail_outcome(self) -> None:
+        bus = EventBus()
+        detector = CallScreeningDetector(bus, track_filter=None)
+        detector.start()
+        try:
+            await bus.emit(STTPartial(text="please record your name and reason for calling"))
+            assert detector.state == ScreeningState.SCREENING_DETECTED
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert detector.state == ScreeningState.VOICEMAIL
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
+    async def test_declined_outcome(self) -> None:
+        bus = EventBus()
+        detector = CallScreeningDetector(bus, track_filter=None)
+        detector.start()
+        try:
+            await bus.emit(STTPartial(text="please record your name and reason for calling"))
+            assert detector.state == ScreeningState.SCREENING_DETECTED
+            await bus.emit(CallEnded(call_sid="CA1"))
+            assert detector.state == ScreeningState.DECLINED
+        finally:
+            detector.stop()
+
+
+# ── Multi-turn screening ────────────────────────────────────────
+
+
+class TestScreeningMultiTurn:
+    @pytest.mark.asyncio
+    async def test_max_screening_turns_enforced(self) -> None:
+        bus = EventBus()
+        detector = CallScreeningDetector(bus, max_screening_turns=3, track_filter=None)
+        detector.start()
+        try:
+            await bus.emit(STTPartial(text="please record your name and reason for calling"))
+            assert detector.state == ScreeningState.SCREENING_DETECTED
+            # Simulate 3 follow-up turns from screening AI (non-conversational).
+            msg1 = "Can you tell me more about why you're calling us?"
+            await bus.emit(STTFinal(text=msg1))
+            msg2 = "What is this about exactly, could you explain?"
+            await bus.emit(STTFinal(text=msg2))
+            msg3 = "Why are you calling this number, please elaborate?"
+            await bus.emit(STTFinal(text=msg3))
+            assert detector.state == ScreeningState.SCREENING_TIMEOUT
+            assert detector.screening_turns == 3
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
+    async def test_android_multi_turn_follow_up(self) -> None:
+        bus = EventBus()
+        detector = CallScreeningDetector(bus, max_screening_turns=3, track_filter=None)
+        detector.start()
+        try:
+            text = "The person you're calling is using a screening service"
+            await bus.emit(STTPartial(text=text))
+            assert detector.state == ScreeningState.SCREENING_DETECTED
+            # Pixel AI asks follow-up.
+            msg = "Can you tell me more about why you're calling us?"
+            await bus.emit(STTFinal(text=msg))
+            assert detector.screening_turns == 1
+            # Second follow-up.
+            msg2 = "What is this about exactly, could you explain?"
+            await bus.emit(STTFinal(text=msg2))
+            assert detector.screening_turns == 2
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
+    async def test_coherence_check_flags_answer_bot(self) -> None:
+        bus = EventBus()
+        detector = CallScreeningDetector(bus, track_filter=None)
+        detector.start()
+        try:
+            await bus.emit(STTPartial(text="please record your name and reason for calling"))
+            # Simulate incoherent callee responses (RoboKiller-style).
+            detector.record_bot_utterance(
+                "Hi, this is Sarah from Acme Corp about your appointment"
+            )
+            detector.record_screening_turn("What's your favorite color of dinosaur?")
+            detector.record_bot_utterance("I'm calling about your Thursday appointment")
+            detector.record_screening_turn("Do you like pizza with pineapple?")
+            assert not detector.is_coherent()
+        finally:
+            detector.stop()

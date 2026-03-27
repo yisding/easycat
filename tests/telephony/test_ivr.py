@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import MagicMock
 
 import pytest
 
 from easycat.events import EventBus, STTFinal
 from easycat.telephony.ivr import (
+    DTMFDelivery,
     IVRAction,
     IVRActionType,
     IVRNavigator,
     IVRNavigatorConfig,
     classify_ivr_prompt,
+    detect_human_after_ivr,
 )
 
 
@@ -158,6 +161,33 @@ class TestIVRAgentDecision:
             await bus.emit(STTFinal(text="invalid menu"))
             assert len(actions) == 1
             assert actions[0].type == IVRActionType.HANGUP
+        finally:
+            nav.stop()
+
+    @pytest.mark.asyncio
+    async def test_agent_timeout_retries_prompt(self) -> None:
+        bus = EventBus()
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+        call_count = 0
+
+        async def slow_then_fast_agent(ctx: dict) -> dict:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                await asyncio.sleep(10)  # Will be interrupted by timeout.
+            return {"action": "dtmf", "digits": "1"}
+
+        cfg = IVRNavigatorConfig(agent_timeout_s=0.05)
+        nav = IVRNavigator(bus, agent_callback=slow_then_fast_agent, config=cfg)
+        nav.start()
+        nav.activate()
+        try:
+            await bus.emit(STTFinal(text="Press 1 for sales"))
+            # First call times out, retry succeeds.
+            assert call_count == 2
+            dtmf_actions = [a for a in actions if a.type == IVRActionType.DTMF]
+            assert len(dtmf_actions) == 1
         finally:
             nav.stop()
 
@@ -335,3 +365,85 @@ class TestIVRDetection:
 
     def test_early_media_hold_message_ignored(self) -> None:
         assert classify_ivr_prompt("Please hold while we connect your call") is False
+
+    def test_hold_music_detection(self) -> None:
+        bus = EventBus()
+        nav = IVRNavigator(bus, config=IVRNavigatorConfig(hold_silence_threshold_s=5.0))
+        nav.activate()
+        assert not nav.in_hold
+        nav.notify_silence(6.0)
+        assert nav.in_hold
+
+    def test_transfer_to_human_detected(self) -> None:
+        assert detect_human_after_ivr("Hi, this is John, how can I help you?") is True
+        assert detect_human_after_ivr("Press 1 for sales") is False
+
+    def test_hunt_group_variable_ring_time(self) -> None:
+        """Long ring time through hunt group should not prematurely classify."""
+        bus = EventBus()
+        nav = IVRNavigator(bus, config=IVRNavigatorConfig(hold_silence_threshold_s=30.0))
+        nav.activate()
+        # 25 seconds of silence is below the 30s threshold.
+        nav.notify_silence(25.0)
+        assert not nav.in_hold
+
+
+# ── DTMF delivery ────────────────────────────────────────────────
+
+
+class TestIVRDTMFDelivery:
+    @pytest.mark.asyncio
+    async def test_dtmf_sent_via_rest_api_not_websocket(self) -> None:
+        mock_client = MagicMock()
+        delivery = DTMFDelivery(
+            twilio_client=mock_client, call_sid="CA123", inter_digit_delay=False
+        )
+        result = await delivery.send_dtmf("1")
+        assert result is True
+        mock_client.calls("CA123").update.assert_called_once()
+        twiml_arg = mock_client.calls("CA123").update.call_args.kwargs["twiml"]
+        assert '<Play digits="1"/>' in twiml_arg
+
+    @pytest.mark.asyncio
+    async def test_dtmf_inter_digit_delay(self) -> None:
+        mock_client = MagicMock()
+        delivery = DTMFDelivery(
+            twilio_client=mock_client, call_sid="CA123", inter_digit_delay=True
+        )
+        result = await delivery.send_dtmf("123")
+        assert result is True
+        twiml_arg = mock_client.calls("CA123").update.call_args.kwargs["twiml"]
+        assert '<Play digits="1W2W3"/>' in twiml_arg
+
+    @pytest.mark.asyncio
+    async def test_dtmf_verify_option(self) -> None:
+        """Verify option exists on DTMFDelivery config."""
+        delivery = DTMFDelivery(verify=True, call_sid="CA123")
+        assert delivery._verify is True
+
+    @pytest.mark.asyncio
+    async def test_dtmf_delivery_failure_fallback(self) -> None:
+        bus = EventBus()
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+
+        mock_client = MagicMock()
+        mock_client.calls("CA123").update.side_effect = RuntimeError("network error")
+
+        delivery = DTMFDelivery(
+            twilio_client=mock_client, call_sid="CA123", inter_digit_delay=False
+        )
+
+        async def mock_agent(ctx: dict) -> dict:
+            return {"action": "dtmf", "digits": "1"}
+
+        nav = IVRNavigator(bus, agent_callback=mock_agent, dtmf_delivery=delivery)
+        nav.start()
+        nav.activate()
+        try:
+            await bus.emit(STTFinal(text="Press 1 for sales"))
+            # DTMF delivery failed → should have fallback SPEAK action.
+            speak_actions = [a for a in actions if a.type == IVRActionType.SPEAK]
+            assert len(speak_actions) >= 1
+        finally:
+            nav.stop()

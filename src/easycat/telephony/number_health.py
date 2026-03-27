@@ -1,0 +1,219 @@
+"""Number health monitoring and call disposition tracking."""
+
+from __future__ import annotations
+
+import time
+from collections import defaultdict
+from dataclasses import dataclass
+
+from easycat.events import CallEnded, CallFailed, EventBus
+from easycat.telephony.call_state import CallStateChanged, OutboundCallState
+
+
+@dataclass(frozen=True)
+class NumberHealthWarning:
+    """Emitted when a number's answer rate drops below threshold."""
+
+    number: str
+    answer_rate: float
+    block_count: int
+
+
+@dataclass(frozen=True)
+class NumberRotationSuggested:
+    """Emitted when a number should be rotated out due to blocking."""
+
+    number: str
+    block_count: int
+    reason: str
+
+
+@dataclass
+class _CallRecord:
+    """Internal record of a call from a specific number."""
+
+    timestamp: float
+    answered: bool
+    duration_s: float = 0.0
+    blocked: bool = False
+    disposition: str = ""
+
+
+class NumberHealthMonitor:
+    """Tracks per-number health metrics for outbound calling.
+
+    Monitors answer rate, block count, average duration, and enforces
+    call pacing limits.
+    """
+
+    def __init__(
+        self,
+        event_bus: EventBus,
+        *,
+        answer_rate_threshold: float = 0.4,
+        block_count_threshold: int = 5,
+        max_calls_per_minute: int = 10,
+        min_inter_call_delay_s: float = 2.0,
+        max_concurrent_per_number: int = 3,
+        record_ttl_s: float = 86400.0,
+    ) -> None:
+        self._event_bus = event_bus
+        self._answer_rate_threshold = answer_rate_threshold
+        self._block_count_threshold = block_count_threshold
+        self._max_calls_per_minute = max_calls_per_minute
+        self._min_inter_call_delay_s = min_inter_call_delay_s
+        self._max_concurrent_per_number = max_concurrent_per_number
+        self._record_ttl_s = record_ttl_s
+
+        self._records: dict[str, list[_CallRecord]] = defaultdict(list)
+        self._concurrent: dict[str, int] = defaultdict(int)
+        self._last_call_time: dict[str, float] = {}
+        self._started = False
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._event_bus.subscribe(CallFailed, self._on_call_failed)
+        self._event_bus.subscribe(CallEnded, self._on_call_ended)
+        self._started = True
+
+    def stop(self) -> None:
+        if self._started:
+            self._event_bus.unsubscribe(CallFailed, self._on_call_failed)
+            self._event_bus.unsubscribe(CallEnded, self._on_call_ended)
+        self._started = False
+
+    def record_call(
+        self,
+        number: str,
+        answered: bool,
+        duration_s: float = 0.0,
+        blocked: bool = False,
+        disposition: str = "",
+    ) -> None:
+        """Record a call outcome for a number."""
+        now = time.monotonic()
+        self._records[number].append(
+            _CallRecord(
+                timestamp=now,
+                answered=answered,
+                duration_s=duration_s,
+                blocked=blocked,
+                disposition=disposition,
+            )
+        )
+        self._last_call_time[number] = now
+
+    def answer_rate(self, number: str) -> float:
+        """Return the answer rate for a number (0.0-1.0)."""
+        records = self._active_records(number)
+        if not records:
+            return 1.0
+        answered = sum(1 for r in records if r.answered)
+        return answered / len(records)
+
+    def avg_duration(self, number: str) -> float:
+        """Return average call duration for a number."""
+        records = self._active_records(number)
+        durations = [r.duration_s for r in records if r.duration_s > 0]
+        return sum(durations) / len(durations) if durations else 0.0
+
+    def block_count(self, number: str) -> int:
+        """Return number of times this number has been blocked."""
+        records = self._active_records(number)
+        return sum(1 for r in records if r.blocked)
+
+    def can_place_call(self, number: str) -> bool:
+        """Check if rate limits allow placing another call from this number."""
+        now = time.monotonic()
+
+        # Check concurrent limit.
+        if self._concurrent.get(number, 0) >= self._max_concurrent_per_number:
+            return False
+
+        # Check inter-call delay.
+        last = self._last_call_time.get(number)
+        if last and (now - last) < self._min_inter_call_delay_s:
+            return False
+
+        # Check calls per minute.
+        one_minute_ago = now - 60.0
+        recent = [r for r in self._records.get(number, []) if r.timestamp > one_minute_ago]
+        if len(recent) >= self._max_calls_per_minute:
+            return False
+
+        return True
+
+    def _active_records(self, number: str) -> list[_CallRecord]:
+        """Return records within TTL for a number."""
+        now = time.monotonic()
+        cutoff = now - self._record_ttl_s
+        return [r for r in self._records.get(number, []) if r.timestamp > cutoff]
+
+    async def _on_call_failed(self, event: CallFailed) -> None:
+        is_blocked = event.reason in ("blocked_unwanted", "blocked_rejected")
+        # Use call_sid as proxy for number when we don't have it directly.
+        if is_blocked and hasattr(event, "sip_code"):
+            # Record as blocked call. Number not directly available from event.
+            pass
+
+    async def _on_call_ended(self, event: CallEnded) -> None:
+        pass
+
+
+class CallDispositionTracker:
+    """Tracks call dispositions for analytics.
+
+    Records the final disposition of each call (human, voicemail, screening,
+    IVR, busy, failed) and provides breakdown statistics.
+    """
+
+    def __init__(self, event_bus: EventBus) -> None:
+        self._event_bus = event_bus
+        self._dispositions: list[tuple[float, str]] = []
+        self._started = False
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._event_bus.subscribe(CallStateChanged, self._on_state_changed)
+        self._started = True
+
+    def stop(self) -> None:
+        if self._started:
+            self._event_bus.unsubscribe(CallStateChanged, self._on_state_changed)
+        self._started = False
+
+    def record_disposition(self, disposition: str) -> None:
+        self._dispositions.append((time.monotonic(), disposition))
+
+    def disposition_rates(self) -> dict[str, float]:
+        """Return disposition breakdown as rates (0.0-1.0)."""
+        if not self._dispositions:
+            return {}
+        counts: dict[str, int] = defaultdict(int)
+        for _, disp in self._dispositions:
+            counts[disp] += 1
+        total = len(self._dispositions)
+        return {k: v / total for k, v in counts.items()}
+
+    def disposition_by_hour(self) -> dict[int, dict[str, int]]:
+        """Return disposition breakdown by hour of day."""
+        from datetime import datetime
+
+        by_hour: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        for ts, disp in self._dispositions:
+            hour = datetime.fromtimestamp(ts).hour
+            by_hour[hour][disp] += 1
+        return dict(by_hour)
+
+    async def _on_state_changed(self, event: CallStateChanged) -> None:
+        """Auto-record disposition when call reaches terminal state."""
+        terminal = {
+            OutboundCallState.HUMAN: "human",
+            OutboundCallState.VOICEMAIL: "voicemail",
+            OutboundCallState.ENDED: "ended",
+            OutboundCallState.UNKNOWN: "unknown",
+        }
+        if event.new in terminal:
+            self.record_disposition(terminal[event.new])

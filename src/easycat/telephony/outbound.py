@@ -162,6 +162,10 @@ class OutboundCallManager:
             "machine_detection_speech_end_threshold": self._speech_end_threshold,
             "machine_detection_silence_timeout": self._silence_timeout,
         }
+        if self._enable_realtime_transcription:
+            create_kwargs["transcription"] = True
+            create_kwargs["transcription_track"] = "both"
+
         if self._status_callback_url:
             create_kwargs["status_callback"] = self._status_callback_url
             create_kwargs["status_callback_event"] = [

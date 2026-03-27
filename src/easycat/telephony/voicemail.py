@@ -7,6 +7,7 @@ Task 6.7: Voicemail policy handler (hang up, leave message, transfer).
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import logging
 import math
@@ -16,6 +17,7 @@ from typing import Any
 
 from easycat.events import (
     EventBus,
+    STTFinal,
     VADStartSpeaking,
     VADStopSpeaking,
     VoicemailDetected,
@@ -512,3 +514,193 @@ def is_comfort_noise(
 
     rms = math.sqrt(sum(s * s for s in samples) / len(samples)) / 32768.0
     return rms < max_rms
+
+
+# ── Post-screening voicemail detection ────────────────────────────
+
+
+class PostScreeningVoicemailDetector:
+    """Detects voicemail after call screening completes.
+
+    When screening is detected, the initial voicemail/AMD classification
+    may have already fired for the screening prompt. This detector watches
+    for a subsequent greeting after screening and applies the greeting
+    classifier to determine whether it went to voicemail or a human picked up.
+
+    Subscribes to ``STTFinal`` events. After activation (by screening),
+    classifies the next greeting-length utterance.
+    """
+
+    def __init__(self, event_bus: EventBus) -> None:
+        self._event_bus = event_bus
+        self._active = False
+        self._started = False
+        self._classified = False
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._event_bus.subscribe(STTFinal, self._on_stt_final)
+        self._started = True
+
+    def stop(self) -> None:
+        if self._started:
+            self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
+        self._started = False
+        self._active = False
+        self._classified = False
+
+    def activate(self) -> None:
+        """Start watching for post-screening greeting."""
+        self._active = True
+        self._classified = False
+
+    async def _on_stt_final(self, event: STTFinal) -> None:
+        if not self._active or self._classified:
+            return
+
+        text = event.text.strip()
+        if not text:
+            return
+
+        result = classify_greeting(text)
+        if result == "unknown":
+            return  # Not enough signal yet.
+
+        self._classified = True
+        self._active = False
+        await self._event_bus.emit(VoicemailDetected(result=result))
+
+
+# ── STT + AMD fusion classifier ──────────────────────────────────
+
+
+class STTAMDFusionClassifier:
+    """Fuses AMD webhook results with STT-based greeting classification.
+
+    When AMD arrives first, it takes effect. If STT classification arrives
+    first, it takes effect. When both arrive, the configured priority wins.
+
+    Emits a single ``VoicemailDetected`` based on the fused result.
+    """
+
+    def __init__(
+        self,
+        event_bus: EventBus,
+        *,
+        prefer_stt: bool = True,
+        stt_timeout_s: float = 5.0,
+    ) -> None:
+        self._event_bus = event_bus
+        self._prefer_stt = prefer_stt
+        self._stt_timeout_s = stt_timeout_s
+
+        self._amd_result: str | None = None
+        self._stt_result: str | None = None
+        self._emitted = False
+        self._started = False
+        self._timeout_task: asyncio.Task[None] | None = None
+
+    @property
+    def amd_result(self) -> str | None:
+        return self._amd_result
+
+    @property
+    def stt_result(self) -> str | None:
+        return self._stt_result
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._event_bus.subscribe(VoicemailDetected, self._on_voicemail_detected)
+        self._event_bus.subscribe(STTFinal, self._on_stt_final)
+        self._started = True
+
+    def stop(self) -> None:
+        if self._started:
+            self._event_bus.unsubscribe(VoicemailDetected, self._on_voicemail_detected)
+            self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
+        self._cancel_timeout()
+        self._started = False
+        self._amd_result = None
+        self._stt_result = None
+        self._emitted = False
+
+    def _cancel_timeout(self) -> None:
+        if self._timeout_task and not self._timeout_task.done():
+            self._timeout_task.cancel()
+        self._timeout_task = None
+
+    async def _on_voicemail_detected(self, event: VoicemailDetected) -> None:
+        """Receive AMD result (upstream VoicemailDetected)."""
+        if self._emitted:
+            return
+        self._amd_result = event.result
+        await self._try_fuse()
+
+    async def _on_stt_final(self, event: STTFinal) -> None:
+        """Classify greeting text via STT."""
+        if self._emitted:
+            return
+        text = event.text.strip()
+        if not text:
+            return
+        result = classify_greeting(text)
+        if result == "unknown":
+            return
+        self._stt_result = result
+        await self._try_fuse()
+
+    async def _try_fuse(self) -> None:
+        """Attempt to produce a fused classification."""
+        if self._emitted:
+            return
+
+        # If both signals available, fuse them.
+        if self._amd_result is not None and self._stt_result is not None:
+            # Agreement — easy.
+            if self._amd_result == self._stt_result:
+                await self._emit(self._amd_result)
+            else:
+                # Disagreement — use preference.
+                winner = self._stt_result if self._prefer_stt else self._amd_result
+                await self._emit(winner)
+            return
+
+        # Only one signal — use it if it's decisive, else wait.
+        if self._amd_result is not None and self._amd_result != "unknown":
+            if self._stt_result is None and self._timeout_task is None:
+                # Start timeout to wait for STT.
+                self._start_timeout()
+            return
+
+        if self._stt_result is not None:
+            # STT classified before AMD arrived — emit immediately.
+            await self._emit(self._stt_result)
+
+    async def _emit(self, result: str) -> None:
+        if self._emitted:
+            return
+        self._emitted = True
+        self._cancel_timeout()
+        await self._event_bus.emit(VoicemailDetected(result=result))
+
+    def _start_timeout(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._timeout_task = loop.create_task(self._timeout_coro())
+
+    async def _timeout_coro(self) -> None:
+        """Timeout waiting for STT — use AMD result alone."""
+        try:
+            await asyncio.sleep(self._stt_timeout_s)
+            if not self._emitted and self._amd_result is not None:
+                await self._emit(self._amd_result)
+        except asyncio.CancelledError:
+            pass
