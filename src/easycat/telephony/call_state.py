@@ -334,7 +334,10 @@ class OutboundCallStateMachine:
         # When a fusion classifier is active, ignore raw AMD events.
         if self._expect_fused_voicemail and event.source != "fusion":
             return
-        if event.result == "human" and self._state == OutboundCallState.CLASSIFYING:
+        if event.result == "human" and self._state in {
+            OutboundCallState.CLASSIFYING,
+            OutboundCallState.SCREENING,
+        }:
             self._cancel_classification_timeout()
             await self._transition(OutboundCallState.HUMAN)
         elif event.result == "machine" and self._state in {
