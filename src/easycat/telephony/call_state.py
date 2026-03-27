@@ -96,6 +96,8 @@ class ClassificationGate:
         self._started = False
         self._hold_audio_playing = False
         self._on_flush_async: Callable[[list[TTSAudio]], Any] | None = None
+        # Callback invoked when hold audio should be played (set by session wiring).
+        self._on_hold_audio: Callable[[str], Any] | None = None
 
     @property
     def is_closed(self) -> bool:
@@ -129,6 +131,8 @@ class ClassificationGate:
         self._start_timeout()
         if self._hold_audio:
             self._hold_audio_playing = True
+            if self._on_hold_audio:
+                self._on_hold_audio(self._hold_audio)
 
     def release(self) -> list[TTSAudio]:
         """Open the gate — flush buffered audio and stop buffering."""

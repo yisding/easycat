@@ -151,14 +151,19 @@ class NumberHealthMonitor:
         return [r for r in self._records.get(number, []) if r.timestamp > cutoff]
 
     async def _on_call_failed(self, event: CallFailed) -> None:
+        number = getattr(event, "number", None) or event.call_sid
         is_blocked = event.reason in ("blocked_unwanted", "blocked_rejected")
-        # Use call_sid as proxy for number when we don't have it directly.
-        if is_blocked and hasattr(event, "sip_code"):
-            # Record as blocked call. Number not directly available from event.
-            pass
+        self.record_call(number, answered=False, blocked=is_blocked)
 
     async def _on_call_ended(self, event: CallEnded) -> None:
-        pass
+        number = getattr(event, "number", None) or event.call_sid
+        duration = event.duration_s or 0.0
+        self.record_call(
+            number,
+            answered=True,
+            duration_s=duration,
+            disposition=event.disposition or "",
+        )
 
 
 class CallDispositionTracker:
@@ -212,6 +217,7 @@ class CallDispositionTracker:
         terminal = {
             OutboundCallState.HUMAN: "human",
             OutboundCallState.VOICEMAIL: "voicemail",
+            OutboundCallState.IVR: "ivr",
             OutboundCallState.ENDED: "ended",
             OutboundCallState.UNKNOWN: "unknown",
         }

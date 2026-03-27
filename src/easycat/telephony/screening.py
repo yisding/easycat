@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from easycat.events import (
+    CallAnswered,
     CallEnded,
     CallScreening,
     EventBus,
@@ -302,6 +303,8 @@ class CallScreeningDetector:
 
         self._state = ScreeningState.WAITING
         self._detected = False
+        self._call_answered = False
+        self._pending_screening: tuple[str, str] | None = None  # (call_sid, platform)
         self._accumulated_text = ""
         self._screening_turns = 0
         self._started = False
@@ -322,6 +325,7 @@ class CallScreeningDetector:
     def start(self) -> None:
         if not self._enabled:
             return
+        self._event_bus.subscribe(CallAnswered, self._on_call_answered)
         self._event_bus.subscribe(STTPartial, self._on_stt_partial)
         self._event_bus.subscribe(STTFinal, self._on_stt_final)
         self._event_bus.subscribe(VoicemailDetected, self._on_voicemail)
@@ -330,6 +334,7 @@ class CallScreeningDetector:
 
     def stop(self) -> None:
         if self._started:
+            self._event_bus.unsubscribe(CallAnswered, self._on_call_answered)
             self._event_bus.unsubscribe(STTPartial, self._on_stt_partial)
             self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
             self._event_bus.unsubscribe(VoicemailDetected, self._on_voicemail)
@@ -345,6 +350,8 @@ class CallScreeningDetector:
     def _reset_internal(self) -> None:
         self._state = ScreeningState.WAITING
         self._detected = False
+        self._call_answered = False
+        self._pending_screening = None
         self._accumulated_text = ""
         self._screening_turns = 0
         self._callee_texts = []
@@ -375,6 +382,15 @@ class CallScreeningDetector:
         self._screening_turns += 1
         self._callee_texts.append(callee_text)
 
+    async def _on_call_answered(self, event: CallAnswered) -> None:
+        self._call_answered = True
+        # If screening was detected before the call was answered (early media),
+        # emit the deferred CallScreening event now.
+        if self._pending_screening is not None:
+            call_sid, platform = self._pending_screening
+            self._pending_screening = None
+            await self._emit_screening(call_sid, platform)
+
     async def _on_stt_partial(self, event: STTPartial) -> None:
         if self._detected:
             return
@@ -398,7 +414,16 @@ class CallScreeningDetector:
         self._detected = True
         self._state = ScreeningState.SCREENING_DETECTED
 
-        await self._event_bus.emit(CallScreening(call_sid=self._call_sid, platform=platform))
+        if self._call_answered:
+            await self._emit_screening(self._call_sid, platform)
+        else:
+            # Defer emission until CallAnswered arrives so the state machine
+            # is in a state that can process the screening event.
+            self._pending_screening = (self._call_sid, platform)
+
+    async def _emit_screening(self, call_sid: str, platform: str) -> None:
+        """Emit CallScreening and optional response events."""
+        await self._event_bus.emit(CallScreening(call_sid=call_sid, platform=platform))
 
         # Emit screening response if configured.
         if self._screening_use_agent:
