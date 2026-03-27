@@ -156,6 +156,12 @@ def _is_conversational(text: str) -> bool:
         if pattern in lower:
             return False
 
+    # Exclude text that matches a known screening prompt — e.g., Android's
+    # "Go ahead and say your name and why you're calling" should NOT be
+    # treated as a human conversational utterance.
+    if match_screening_platform(lower) is not None:
+        return False
+
     # Short conversational starters indicate a live human.
     conversational_starters = [
         "hello",
@@ -349,6 +355,14 @@ class CallScreeningDetector:
             self._agent_timeout_task.cancel()
         self._agent_timeout_task = None
 
+    def notify_agent_responded(self) -> None:
+        """Signal that the agent has delivered its screening reply.
+
+        Cancels the static-response fallback timer so the caller does not
+        receive a duplicate reply.
+        """
+        self._cancel_agent_timeout()
+
     def record_bot_utterance(self, text: str) -> None:
         """Record a bot utterance for multi-turn coherence tracking."""
         self._bot_texts.append(text)
@@ -431,6 +445,14 @@ class CallScreeningDetector:
             if getattr(event, "track", None) != self._track_filter:
                 return
 
+        # Check if this looks like a human answering (conversational speech)
+        # *before* enforcing the turn limit, so a human picking up on the
+        # last allowed exchange is classified as HUMAN_ANSWERED, not timeout.
+        if _is_conversational(text):
+            self._state = ScreeningState.HUMAN_ANSWERED
+            self._cancel_agent_timeout()
+            return
+
         # Record as a screening turn.
         self.record_screening_turn(text)
 
@@ -438,12 +460,6 @@ class CallScreeningDetector:
         if self._screening_turns >= self._max_screening_turns:
             self._state = ScreeningState.SCREENING_TIMEOUT
             logger.info("Max screening turns (%d) reached", self._max_screening_turns)
-            return
-
-        # Check if this looks like a human answering (conversational speech).
-        if _is_conversational(text):
-            self._state = ScreeningState.HUMAN_ANSWERED
-            self._cancel_agent_timeout()
             return
 
     async def _on_voicemail(self, event: VoicemailDetected) -> None:

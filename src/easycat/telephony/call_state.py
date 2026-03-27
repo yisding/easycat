@@ -95,6 +95,7 @@ class ClassificationGate:
         self._timeout_task: asyncio.Task[None] | None = None
         self._started = False
         self._hold_audio_playing = False
+        self._on_flush_async: Callable[[list[TTSAudio]], Any] | None = None
 
     @property
     def is_closed(self) -> bool:
@@ -160,7 +161,9 @@ class ClassificationGate:
         try:
             await asyncio.sleep(self._timeout_s)
             if self._closed:
-                self.release()
+                buffered = self.release()
+                if buffered and self._on_flush_async:
+                    await self._on_flush_async(buffered)
         except asyncio.CancelledError:
             pass
 
@@ -184,11 +187,13 @@ class OutboundCallStateMachine:
         classification_gate_hold_audio: str = "",
         smart_turn_suppress: bool = False,
         vad_timeout_extension_s: float = 0.0,
+        expect_fused_voicemail: bool = False,
     ) -> None:
         self._event_bus = event_bus
         self._call_sid = call_sid
         self._classification_timeout_s = classification_timeout_s
         self._max_call_duration_s = max_call_duration_s
+        self._expect_fused_voicemail = expect_fused_voicemail
         self._smart_turn_suppress = smart_turn_suppress
         self._vad_timeout_extension_s = vad_timeout_extension_s
 
@@ -322,6 +327,9 @@ class OutboundCallStateMachine:
         await self._transition(OutboundCallState.ENDED)
 
     async def _on_voicemail(self, event: VoicemailDetected) -> None:
+        # When a fusion classifier is active, ignore raw AMD events.
+        if self._expect_fused_voicemail and event.source != "fusion":
+            return
         if event.result == "human" and self._state == OutboundCallState.CLASSIFYING:
             self._cancel_classification_timeout()
             await self._transition(OutboundCallState.HUMAN)

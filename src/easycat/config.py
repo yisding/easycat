@@ -274,6 +274,7 @@ def create_session(config: EasyCatConfig) -> Session:
                 await queue.put(ev.chunk)
 
         _outbound_sm._on_gate_flush = _flush_gated_audio
+        _outbound_sm.gate._on_flush_async = _flush_gated_audio
 
     return session
 
@@ -305,7 +306,7 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
         # State machine.
         sm = OutboundCallStateMachine(
             event_bus,
-            classification_timeout_s=oc.classification_gate_timeout_s,
+            classification_timeout_s=float(oc.amd_timeout),
             max_call_duration_s=oc.max_call_duration_s,
             classification_gate=oc.classification_gate,
             classification_gate_timeout_s=oc.classification_gate_timeout_s,

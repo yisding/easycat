@@ -639,6 +639,8 @@ class STTAMDFusionClassifier:
         """Receive AMD result (upstream VoicemailDetected)."""
         if self._emitted:
             return
+        if event.source == "fusion":
+            return  # Ignore our own emissions.
         self._amd_result = event.result
         await self._try_fuse()
 
@@ -687,7 +689,7 @@ class STTAMDFusionClassifier:
             return
         self._emitted = True
         self._cancel_timeout()
-        await self._event_bus.emit(VoicemailDetected(result=result))
+        await self._event_bus.emit(VoicemailDetected(result=result, source="fusion"))
 
     def _start_timeout(self) -> None:
         try:

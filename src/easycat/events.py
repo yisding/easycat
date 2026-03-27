@@ -269,6 +269,7 @@ class VoicemailDetected:
     """Voicemail / answering machine detection result."""
 
     result: str  # "human" | "machine" | "unknown"
+    source: str = ""  # "" = raw AMD, "fusion" = fused AMD+STT
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
