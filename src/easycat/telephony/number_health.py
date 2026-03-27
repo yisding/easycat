@@ -185,7 +185,7 @@ class CallDispositionTracker:
         self._started = False
 
     def record_disposition(self, disposition: str) -> None:
-        self._dispositions.append((time.monotonic(), disposition))
+        self._dispositions.append((time.time(), disposition))
 
     def disposition_rates(self) -> dict[str, float]:
         """Return disposition breakdown as rates (0.0-1.0)."""
