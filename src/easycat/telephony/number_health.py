@@ -176,6 +176,7 @@ class CallDispositionTracker:
     def __init__(self, event_bus: EventBus) -> None:
         self._event_bus = event_bus
         self._dispositions: list[tuple[float, str]] = []
+        self._disposed_calls: set[str] = set()
         self._started = False
 
     def start(self) -> None:
@@ -222,4 +223,8 @@ class CallDispositionTracker:
             OutboundCallState.UNKNOWN: "unknown",
         }
         if event.new in terminal:
+            call_sid = event.call_sid
+            if call_sid in self._disposed_calls:
+                return
+            self._disposed_calls.add(call_sid)
             self.record_disposition(terminal[event.new])

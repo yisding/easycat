@@ -270,9 +270,9 @@ def create_session(config: EasyCatConfig) -> Session:
 
     # Wire gate flush callback to re-enqueue buffered audio on release.
     if _outbound_sm is not None:
-        queue = session._outbound_queue
 
         async def _flush_gated_audio(events: list) -> None:
+            queue = session._outbound_queue
             for ev in events:
                 await queue.put(ev.chunk)
 
@@ -284,7 +284,7 @@ def create_session(config: EasyCatConfig) -> Session:
 
         def _play_hold_audio(text: str) -> None:
             async def _synthesize_hold() -> None:
-                await tts_synth.synthesize(text)
+                await tts_synth.synthesize(text, token=None)
 
             try:
                 loop = asyncio.get_running_loop()

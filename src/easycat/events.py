@@ -327,6 +327,7 @@ class CallFailed:
     call_sid: str
     reason: str
     sip_code: int | None = None
+    number: str | None = None
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
@@ -339,6 +340,7 @@ class CallEnded:
     call_sid: str
     duration_s: float | None = None
     disposition: str | None = None
+    number: str | None = None
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
