@@ -56,13 +56,40 @@ class TracingConfig:
 
 
 @dataclass
+class OutboundCallConfig:
+    """Configuration for outbound call manager."""
+
+    from_number: str = ""
+    amd_mode: str = "DetectMessageEnd"
+    async_amd: bool = True
+    amd_timeout: int = 30
+    speech_threshold: int = 2400
+    speech_end_threshold: int = 1200
+    silence_timeout: int = 5000
+    enable_screening_detection: bool = True
+    screening_response: str = ""
+    screening_use_agent: bool = False
+    max_screening_turns: int = 3
+    enable_realtime_transcription: bool = True
+    classification_gate: bool = True
+    classification_gate_timeout_s: float = 5.0
+    classification_gate_hold_audio: str = ""
+    max_call_duration_s: int = 300
+    callee_language: str = "en"
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+
+
+@dataclass
 class TelephonyConfig:
     """Configuration for telephony helpers."""
 
     enable_dtmf_aggregator: bool = False
     enable_voicemail_detector: bool = False
+    enable_outbound_call_manager: bool = False
     dtmf_aggregator: DTMFAggregatorConfig = field(default_factory=DTMFAggregatorConfig)
     voicemail_detector: VoicemailDetectorConfig = field(default_factory=VoicemailDetectorConfig)
+    outbound: OutboundCallConfig | None = None
 
 
 TransportConfig = (

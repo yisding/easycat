@@ -358,3 +358,157 @@ class VoicemailPolicyHandler:
             "twiml": twiml,
         }
         logger.info("Voicemail policy: transferring to %s", self._config.transfer_number)
+
+
+# ── Enhanced voicemail: STT-based greeting classification ──────────
+
+_VOICEMAIL_PHRASES: list[str] = [
+    "leave a message",
+    "leave me a message",
+    "not available right now",
+    "not available to take your call",
+    "can't come to the phone",
+    "cannot come to the phone",
+    "you've reached",
+    "you have reached",
+    "voicemail box",
+    "mailbox is full",
+    "cannot accept messages",
+    "at the tone",
+    "after the beep",
+    "after the tone",
+    "record your message",
+    "the person you are trying to reach",
+    "the google subscriber",
+    "subscriber you are trying to reach",
+    "please try again later",
+    "press 1 to leave a callback",
+    "if you know your party's extension",
+]
+
+_HUMAN_PHRASES: list[str] = [
+    "hello?",
+    "what's up",
+    "who is this",
+    "how can i help",
+    "speaking",
+    "yes?",
+    "yeah?",
+]
+
+
+def classify_greeting(text: str) -> str:
+    """Classify a greeting transcript as ``"human"``, ``"machine"``, or ``"unknown"``.
+
+    Uses phrase-matching heuristics on the transcribed greeting text.
+    """
+    if not text or not text.strip():
+        return "unknown"
+
+    lower = text.lower().strip()
+
+    # Very short ambiguous greetings.
+    if len(lower) <= 3:
+        return "unknown"
+
+    for phrase in _VOICEMAIL_PHRASES:
+        if phrase in lower:
+            return "machine"
+
+    # "Hello?" with a question mark or short conversational openers.
+    for phrase in _HUMAN_PHRASES:
+        if phrase in lower:
+            return "human"
+
+    # Double-hello pattern: "Hello? ... Hello?" is human, not machine.
+    if lower.count("hello") >= 2 and len(lower) < 40:
+        return "human"
+
+    return "unknown"
+
+
+# ── Enhanced voicemail: SIT tone detection ─────────────────────────
+
+# Special Information Tones (SIT) are three tones in sequence:
+# 950 Hz, 1400 Hz, 1800 Hz — used to signal "number not in service".
+# YouMail plays these to trick autodialers.
+
+_SIT_FREQUENCIES: list[tuple[float, float]] = [
+    (900.0, 1000.0),  # ~950 Hz
+    (1350.0, 1450.0),  # ~1400 Hz
+    (1750.0, 1850.0),  # ~1800 Hz
+]
+
+
+def detect_sit_tones(
+    pcm16_data: bytes,
+    sample_rate: int = 16000,
+    *,
+    energy_threshold: float = 0.02,
+    min_tone_duration_ms: int = 200,
+) -> bool:
+    """Detect SIT (Special Information Tones) in PCM16 audio.
+
+    Returns True if the three-tone SIT sequence (950→1400→1800 Hz) is detected.
+    """
+    if len(pcm16_data) < 4:
+        return False
+
+    num_samples = len(pcm16_data) // 2
+    samples = struct.unpack(f"<{num_samples}h", pcm16_data[: num_samples * 2])
+
+    # Divide audio into 50ms windows and analyze each.
+    window_size = sample_rate // 20  # 50ms
+    if window_size < 2:
+        return False
+
+    detected_tones: list[int] = []  # indices of SIT frequency bands detected in order
+
+    for start in range(0, num_samples - window_size, window_size):
+        window = samples[start : start + window_size]
+
+        # RMS energy check.
+        rms = math.sqrt(sum(s * s for s in window) / len(window)) / 32768.0
+        if rms < energy_threshold:
+            continue
+
+        # Estimate dominant frequency via zero crossings.
+        crossings = sum(
+            1 for i in range(1, len(window)) if (window[i - 1] >= 0) != (window[i] >= 0)
+        )
+        freq_estimate = (crossings / 2) * (sample_rate / len(window))
+
+        # Check against each SIT frequency band.
+        for idx, (lo, hi) in enumerate(_SIT_FREQUENCIES):
+            if lo <= freq_estimate <= hi:
+                if not detected_tones or detected_tones[-1] <= idx:
+                    if not detected_tones or detected_tones[-1] != idx:
+                        detected_tones.append(idx)
+                break
+
+    # All three tones detected in sequence?
+    return detected_tones == [0, 1, 2]
+
+
+# ── Enhanced voicemail: CNG (Comfort Noise) detection ──────────────
+
+
+def is_comfort_noise(
+    pcm16_data: bytes,
+    sample_rate: int = 16000,
+    *,
+    max_rms: float = 0.005,
+) -> bool:
+    """Detect comfort noise generation in PCM16 audio.
+
+    CNG has very low amplitude and flat spectral characteristics.
+    Returns True if the audio is likely CNG (should be treated as silence).
+    """
+    if len(pcm16_data) < 4:
+        return False
+
+    num_samples = len(pcm16_data) // 2
+    samples = struct.unpack(f"<{num_samples}h", pcm16_data[: num_samples * 2])
+
+    rms = math.sqrt(sum(s * s for s in samples) / len(samples)) / 32768.0
+    return rms < max_rms
