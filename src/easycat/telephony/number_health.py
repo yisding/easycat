@@ -6,7 +6,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 
-from easycat.events import CallEnded, CallFailed, EventBus
+from easycat.events import CallEnded, CallFailed, CallInitiated, EventBus
 from easycat.telephony.call_state import CallStateChanged, OutboundCallState
 
 
@@ -73,12 +73,14 @@ class NumberHealthMonitor:
     def start(self) -> None:
         if self._started:
             return
+        self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
         self._event_bus.subscribe(CallFailed, self._on_call_failed)
         self._event_bus.subscribe(CallEnded, self._on_call_ended)
         self._started = True
 
     def stop(self) -> None:
         if self._started:
+            self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
             self._event_bus.unsubscribe(CallFailed, self._on_call_failed)
             self._event_bus.unsubscribe(CallEnded, self._on_call_ended)
         self._started = False
@@ -150,13 +152,20 @@ class NumberHealthMonitor:
         cutoff = now - self._record_ttl_s
         return [r for r in self._records.get(number, []) if r.timestamp > cutoff]
 
+    async def _on_call_initiated(self, event: CallInitiated) -> None:
+        number = event.from_
+        self._concurrent[number] = self._concurrent.get(number, 0) + 1
+        self._last_call_time[number] = time.monotonic()
+
     async def _on_call_failed(self, event: CallFailed) -> None:
         number = getattr(event, "number", None) or event.call_sid
+        self._concurrent[number] = max(0, self._concurrent.get(number, 0) - 1)
         is_blocked = event.reason in ("blocked_unwanted", "blocked_rejected")
         self.record_call(number, answered=False, blocked=is_blocked)
 
     async def _on_call_ended(self, event: CallEnded) -> None:
         number = getattr(event, "number", None) or event.call_sid
+        self._concurrent[number] = max(0, self._concurrent.get(number, 0) - 1)
         duration = event.duration_s or 0.0
         self.record_call(
             number,

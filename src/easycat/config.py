@@ -284,7 +284,7 @@ def create_session(config: EasyCatConfig) -> Session:
 
         def _play_hold_audio(text: str) -> None:
             async def _synthesize_hold() -> None:
-                await tts_synth.synthesize(text, token=None)
+                await tts_synth.synthesize(text, token=None, bypass_gate=True)
 
             try:
                 loop = asyncio.get_running_loop()

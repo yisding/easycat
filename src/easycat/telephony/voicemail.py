@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from easycat.events import (
+    CallScreening,
     EventBus,
     STTFinal,
     VADStartSpeaking,
@@ -465,6 +466,10 @@ def detect_sit_tones(
         return False
 
     detected_tones: list[int] = []  # indices of SIT frequency bands detected in order
+    window_ms = 50
+    min_windows = max(1, min_tone_duration_ms // window_ms)
+    current_tone_idx: int | None = None
+    current_tone_windows = 0
 
     for start in range(0, num_samples - window_size, window_size):
         window = samples[start : start + window_size]
@@ -472,6 +477,11 @@ def detect_sit_tones(
         # RMS energy check.
         rms = math.sqrt(sum(s * s for s in window) / len(window)) / 32768.0
         if rms < energy_threshold:
+            if current_tone_idx is not None and current_tone_windows >= min_windows:
+                if not detected_tones or detected_tones[-1] < current_tone_idx:
+                    detected_tones.append(current_tone_idx)
+            current_tone_idx = None
+            current_tone_windows = 0
             continue
 
         # Estimate dominant frequency via zero crossings.
@@ -481,12 +491,32 @@ def detect_sit_tones(
         freq_estimate = (crossings / 2) * (sample_rate / len(window))
 
         # Check against each SIT frequency band.
+        matched_idx: int | None = None
         for idx, (lo, hi) in enumerate(_SIT_FREQUENCIES):
             if lo <= freq_estimate <= hi:
-                if not detected_tones or detected_tones[-1] <= idx:
-                    if not detected_tones or detected_tones[-1] != idx:
-                        detected_tones.append(idx)
+                matched_idx = idx
                 break
+
+        if matched_idx is not None and matched_idx == current_tone_idx:
+            current_tone_windows += 1
+        elif matched_idx is not None:
+            # New tone — commit the previous one if it met the duration threshold.
+            if current_tone_idx is not None and current_tone_windows >= min_windows:
+                if not detected_tones or detected_tones[-1] < current_tone_idx:
+                    detected_tones.append(current_tone_idx)
+            current_tone_idx = matched_idx
+            current_tone_windows = 1
+        else:
+            if current_tone_idx is not None and current_tone_windows >= min_windows:
+                if not detected_tones or detected_tones[-1] < current_tone_idx:
+                    detected_tones.append(current_tone_idx)
+            current_tone_idx = None
+            current_tone_windows = 0
+
+    # Commit the last tone if it met the duration threshold.
+    if current_tone_idx is not None and current_tone_windows >= min_windows:
+        if not detected_tones or detected_tones[-1] < current_tone_idx:
+            detected_tones.append(current_tone_idx)
 
     # All three tones detected in sequence?
     return detected_tones == [0, 1, 2]
@@ -618,12 +648,14 @@ class STTAMDFusionClassifier:
             return
         self._event_bus.subscribe(VoicemailDetected, self._on_voicemail_detected)
         self._event_bus.subscribe(STTFinal, self._on_stt_final)
+        self._event_bus.subscribe(CallScreening, self._on_screening)
         self._started = True
 
     def stop(self) -> None:
         if self._started:
             self._event_bus.unsubscribe(VoicemailDetected, self._on_voicemail_detected)
             self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
+            self._event_bus.unsubscribe(CallScreening, self._on_screening)
         self._cancel_timeout()
         self._started = False
         self._amd_result = None
@@ -634,6 +666,10 @@ class STTAMDFusionClassifier:
         if self._timeout_task and not self._timeout_task.done():
             self._timeout_task.cancel()
         self._timeout_task = None
+
+    async def _on_screening(self, event: CallScreening) -> None:
+        """Cancel AMD-only fallback when screening is detected."""
+        self._cancel_timeout()
 
     async def _on_voicemail_detected(self, event: VoicemailDetected) -> None:
         """Receive AMD result (upstream VoicemailDetected)."""
