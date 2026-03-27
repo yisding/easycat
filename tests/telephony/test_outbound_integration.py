@@ -291,6 +291,7 @@ class TestScreeningEdgeCases:
         )
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert len(responses) == 1
             assert responses[0].mode == "static"
@@ -305,6 +306,7 @@ class TestScreeningEdgeCases:
         detector = CallScreeningDetector(bus, screening_use_agent=True, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert len(responses) == 1
             assert responses[0].mode == "agent"
@@ -345,6 +347,7 @@ class TestScreeningEdgeCases:
         )
         det.start()
         try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert responses[0].mode == "agent"
             await asyncio.sleep(0.1)
@@ -362,6 +365,7 @@ class TestScreeningEdgeCases:
         det = CallScreeningDetector(bus, call_sid="CA1", track_filter=None)
         det.start()
         try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(
                 STTPartial(text="To connect this call, please press 1 to be connected now")
             )

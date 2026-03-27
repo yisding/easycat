@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from easycat.events import (
+    CallAnswered,
     CallEnded,
     CallScreening,
     EventBus,
@@ -127,6 +128,7 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, call_sid="CA1")
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert len(received) == 1
             assert received[0].platform == "ios"
@@ -142,6 +144,7 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, call_sid="CA2", track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid="CA2"))
             await bus.emit(
                 STTPartial(text="The person you're calling is using a screening service")
             )
@@ -158,6 +161,7 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, call_sid="CA3", track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid="CA3"))
             await bus.emit(
                 STTPartial(text="The person you're calling has caller ID screening enabled")
             )
@@ -174,6 +178,7 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="Hi how are you doing today my friend"))
             assert len(received) == 0
         finally:
@@ -187,6 +192,7 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(
                 STTPartial(text="Hi you've reached John, please leave a message after the beep")
             )
@@ -202,6 +208,7 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             await bus.emit(STTPartial(text="please record your name and reason for calling again"))
             assert len(received) == 1
@@ -216,6 +223,7 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert len(received) == 1
         finally:
@@ -238,9 +246,11 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert len(received) == 1
             detector.reset()
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert len(received) == 2
         finally:
@@ -254,6 +264,7 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, enabled=False, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert len(received) == 0
         finally:
@@ -267,6 +278,8 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, track_filter="inbound")
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
+
             # Simulate an outbound-track partial (bot's own speech).
             ev = STTPartial(text="please record your name and reason for calling")
             # Attach a track attribute dynamically for testing.
@@ -291,6 +304,7 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="record your name"))
             assert len(received) == 0
         finally:
@@ -305,6 +319,7 @@ class TestCallScreeningDetector:
         detector = CallScreeningDetector(bus, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="Please"))
             assert len(received) == 0
             await bus.emit(STTPartial(text="Please record your name and reason for calling"))
@@ -327,6 +342,7 @@ class TestScreeningResponseStatic:
         )
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert len(responses) == 1
             assert responses[0].text == "Hi, this is Sarah"
@@ -342,6 +358,7 @@ class TestScreeningResponseStatic:
         detector = CallScreeningDetector(bus, screening_response="", track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert len(responses) == 0
         finally:
@@ -357,6 +374,7 @@ class TestScreeningResponseAgent:
         detector = CallScreeningDetector(bus, screening_use_agent=True, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert len(responses) == 1
             assert responses[0].mode == "agent"
@@ -377,6 +395,7 @@ class TestScreeningResponseAgent:
         )
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert len(responses) == 1
             assert responses[0].mode == "agent"
@@ -398,6 +417,7 @@ class TestScreeningResponseAgent:
         detector = CallScreeningDetector(bus, screening_use_agent=True, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert responses[0].mode == "agent"
         finally:
@@ -419,6 +439,7 @@ class TestScreeningStateMachine:
         detector = CallScreeningDetector(bus, screening_response="", track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert detector.state == ScreeningState.SCREENING_DETECTED
         finally:
@@ -432,6 +453,7 @@ class TestScreeningStateMachine:
         )
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert detector.state == ScreeningState.RESPONDING
         finally:
@@ -448,6 +470,7 @@ class TestScreeningStateMachine:
         detector = CallScreeningDetector(bus, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert detector.state == ScreeningState.SCREENING_DETECTED
             await bus.emit(STTFinal(text="Hello, how can I help you?"))
@@ -461,6 +484,7 @@ class TestScreeningStateMachine:
         detector = CallScreeningDetector(bus, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert detector.state == ScreeningState.SCREENING_DETECTED
             await bus.emit(VoicemailDetected(result="machine"))
@@ -474,6 +498,7 @@ class TestScreeningStateMachine:
         detector = CallScreeningDetector(bus, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert detector.state == ScreeningState.SCREENING_DETECTED
             await bus.emit(CallEnded(call_sid="CA1"))
@@ -492,6 +517,7 @@ class TestScreeningMultiTurn:
         detector = CallScreeningDetector(bus, max_screening_turns=3, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert detector.state == ScreeningState.SCREENING_DETECTED
             # Simulate 3 follow-up turns from screening AI (non-conversational).
@@ -512,6 +538,7 @@ class TestScreeningMultiTurn:
         detector = CallScreeningDetector(bus, max_screening_turns=3, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             text = "The person you're calling is using a screening service"
             await bus.emit(STTPartial(text=text))
             assert detector.state == ScreeningState.SCREENING_DETECTED
@@ -532,6 +559,7 @@ class TestScreeningMultiTurn:
         detector = CallScreeningDetector(bus, track_filter=None)
         detector.start()
         try:
+            await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             # Simulate incoherent callee responses (RoboKiller-style).
             detector.record_bot_utterance(

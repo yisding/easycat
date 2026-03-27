@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -10,7 +11,7 @@ from easycat.agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.agents.factory import auto_adapt_agent
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.event_logging import EventLoggingConfig, EventTraceLogger
-from easycat.events import EventBus
+from easycat.events import CallScreening, EventBus
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
@@ -27,9 +28,11 @@ from easycat.telephony.call_state import (
     OutboundCallStateMachine,
 )
 from easycat.telephony.dtmf import DTMFAggregator, DTMFAggregatorConfig
-from easycat.telephony.ivr import IVRNavigator
+from easycat.telephony.ivr import IVRAction, IVRActionType, IVRNavigator
 from easycat.telephony.screening import CallScreeningDetector
 from easycat.telephony.voicemail import (
+    PostScreeningVoicemailDetector,
+    STTAMDFusionClassifier,
     VoicemailDetector,
     VoicemailDetectorConfig,
     VoicemailPolicyHandler,
@@ -276,6 +279,21 @@ def create_session(config: EasyCatConfig) -> Session:
         _outbound_sm._on_gate_flush = _flush_gated_audio
         _outbound_sm.gate._on_flush_async = _flush_gated_audio
 
+        # Wire hold audio callback — synthesize hold text via TTS when gate closes.
+        tts_synth = session._tts_synth
+
+        def _play_hold_audio(text: str) -> None:
+            async def _synthesize_hold() -> None:
+                await tts_synth.synthesize(text)
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_synthesize_hold())
+            except RuntimeError:
+                pass
+
+        _outbound_sm.gate._on_hold_audio = _play_hold_audio
+
     return session
 
 
@@ -303,7 +321,23 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
 
     if config.enable_outbound_call_manager and config.outbound:
         oc = config.outbound
-        # State machine.
+
+        # STT+AMD fusion classifier — must be wired before the state machine
+        # so that raw AMD events are intercepted and re-emitted with source="fusion".
+        fusion = STTAMDFusionClassifier(event_bus)
+        helpers.append(fusion)
+
+        # Post-screening voicemail detector — re-classifies after screening.
+        post_screening_vm = PostScreeningVoicemailDetector(event_bus)
+        helpers.append(post_screening_vm)
+
+        # Activate post-screening detector when screening is detected.
+        def _on_screening_for_post_vm(event: CallScreening) -> None:
+            post_screening_vm.activate()
+
+        event_bus.subscribe(CallScreening, _on_screening_for_post_vm)
+
+        # State machine — expect fused voicemail events (ignore raw AMD).
         sm = OutboundCallStateMachine(
             event_bus,
             classification_timeout_s=float(oc.amd_timeout),
@@ -311,6 +345,7 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
             classification_gate=oc.classification_gate,
             classification_gate_timeout_s=oc.classification_gate_timeout_s,
             classification_gate_hold_audio=oc.classification_gate_hold_audio,
+            expect_fused_voicemail=True,
         )
         helpers.append(sm)
 
@@ -336,6 +371,14 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
                 ivr.deactivate()
 
         event_bus.subscribe(CallStateChanged, _on_state_changed_for_ivr)
+
+        # When IVR navigator detects a human pickup, transition the state machine.
+        async def _on_ivr_human_detected(event: IVRAction) -> None:
+            if event.type == IVRActionType.HUMAN_DETECTED:
+                if sm.state == OutboundCallState.IVR:
+                    await sm._transition(OutboundCallState.HUMAN)
+
+        event_bus.subscribe(IVRAction, _on_ivr_human_detected)
 
         # Voicemail policy handler.
         helpers.append(VoicemailPolicyHandler(event_bus))
