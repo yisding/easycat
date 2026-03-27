@@ -21,8 +21,19 @@ from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.factory import STTConfig, create_stt_provider_from_config
 from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.stubs import NoopAgent
+from easycat.telephony.call_state import (
+    CallStateChanged,
+    OutboundCallState,
+    OutboundCallStateMachine,
+)
 from easycat.telephony.dtmf import DTMFAggregator, DTMFAggregatorConfig
-from easycat.telephony.voicemail import VoicemailDetector, VoicemailDetectorConfig
+from easycat.telephony.ivr import IVRNavigator
+from easycat.telephony.screening import CallScreeningDetector
+from easycat.telephony.voicemail import (
+    VoicemailDetector,
+    VoicemailDetectorConfig,
+    VoicemailPolicyHandler,
+)
 from easycat.timeouts import TimeoutConfig
 from easycat.tracing import TraceExporter, Tracer
 from easycat.transports.local import LocalTransport, LocalTransportConfig
@@ -218,7 +229,20 @@ def create_session(config: EasyCatConfig) -> Session:
     if config.event_logging.enabled:
         telephony_helpers.append(EventTraceLogger(event_bus, config.event_logging))
 
-    return Session(
+    # Extract audio gate from the outbound call state machine, if present.
+    audio_gate = None
+    _outbound_sm = None
+    for h in telephony_helpers:
+        if isinstance(h, OutboundCallStateMachine):
+            _outbound_sm = h
+            break
+
+    if _outbound_sm is not None:
+
+        def audio_gate() -> bool:
+            return _outbound_sm.gate.is_closed
+
+    session = Session(
         SessionConfig(
             stt=stt,
             tts=tts,
@@ -237,8 +261,21 @@ def create_session(config: EasyCatConfig) -> Session:
             auto_turn_from_stt_final=auto_turn_from_stt_final,
             strip_markdown=config.strip_markdown,
             output_processors=config.output_processors,
+            audio_gate=audio_gate,
         )
     )
+
+    # Wire gate flush callback to re-enqueue buffered audio on release.
+    if _outbound_sm is not None:
+        queue = session._outbound_queue
+
+        async def _flush_gated_audio(events: list) -> None:
+            for ev in events:
+                await queue.put(ev.chunk)
+
+        _outbound_sm._on_gate_flush = _flush_gated_audio
+
+    return session
 
 
 def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
@@ -262,6 +299,45 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
 
     if config.enable_voicemail_detector:
         helpers.append(VoicemailDetector(event_bus, config.voicemail_detector))
+
+    if config.enable_outbound_call_manager and config.outbound:
+        oc = config.outbound
+        # State machine.
+        sm = OutboundCallStateMachine(
+            event_bus,
+            classification_timeout_s=oc.classification_gate_timeout_s,
+            max_call_duration_s=oc.max_call_duration_s,
+            classification_gate=oc.classification_gate,
+            classification_gate_timeout_s=oc.classification_gate_timeout_s,
+            classification_gate_hold_audio=oc.classification_gate_hold_audio,
+        )
+        helpers.append(sm)
+
+        # Screening detector.
+        if oc.enable_screening_detection:
+            screening = CallScreeningDetector(
+                event_bus,
+                enabled=True,
+                screening_response=oc.screening_response,
+                screening_use_agent=oc.screening_use_agent,
+                max_screening_turns=oc.max_screening_turns,
+            )
+            helpers.append(screening)
+
+        # IVR navigator — activated/deactivated by state machine transitions.
+        ivr = IVRNavigator(event_bus)
+        helpers.append(ivr)
+
+        def _on_state_changed_for_ivr(event: CallStateChanged) -> None:
+            if event.new == OutboundCallState.IVR:
+                ivr.activate()
+            elif event.new in {OutboundCallState.HUMAN, OutboundCallState.ENDED}:
+                ivr.deactivate()
+
+        event_bus.subscribe(CallStateChanged, _on_state_changed_for_ivr)
+
+        # Voicemail policy handler.
+        helpers.append(VoicemailPolicyHandler(event_bus))
 
     return helpers
 

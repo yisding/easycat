@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from easycat.events import EventBus, STTFinal
 
@@ -31,6 +33,17 @@ _EARLY_MEDIA_PATTERNS: list[str] = [
     "call may be recorded",
 ]
 
+# Patterns that indicate a human receptionist answered after IVR navigation.
+_HUMAN_AFTER_IVR_PATTERNS: list[str] = [
+    "how can i help",
+    "how may i help",
+    "what can i do for you",
+    "thank you for calling",
+    "hi, this is",
+    "hello, this is",
+    "speaking",
+]
+
 
 def classify_ivr_prompt(text: str) -> bool:
     """Return True if *text* looks like an IVR prompt."""
@@ -41,11 +54,22 @@ def classify_ivr_prompt(text: str) -> bool:
     return any(p.search(text) for p in _IVR_PATTERNS)
 
 
+def detect_human_after_ivr(text: str) -> bool:
+    """Return True if *text* suggests a human answered after IVR navigation."""
+    lower = text.lower()
+    for phrase in _HUMAN_AFTER_IVR_PATTERNS:
+        if phrase in lower:
+            return True
+    return False
+
+
 class IVRActionType(Enum):
     DTMF = "dtmf"
     SPEAK = "speak"
     WAIT = "wait"
     HANGUP = "hangup"
+    HOLD = "hold"
+    HUMAN_DETECTED = "human_detected"
 
 
 @dataclass(frozen=True)
@@ -62,6 +86,63 @@ class IVRAction:
 class IVRNavigatorConfig:
     max_depth: int = 10
     prompt_timeout_s: float = 15.0
+    agent_timeout_s: float = 10.0
+    dtmf_inter_digit_delay: bool = True
+    ivr_dtmf_verify: bool = False
+    hold_silence_threshold_s: float = 10.0
+
+
+class DTMFDelivery:
+    """Sends DTMF digits via Twilio REST API (not WebSocket).
+
+    Twilio doesn't support outbound DTMF through bidirectional Media Streams.
+    Instead, we update the call with TwiML containing ``<Play digits="..."/>``.
+    """
+
+    def __init__(
+        self,
+        *,
+        twilio_client: Any = None,
+        call_sid: str = "",
+        inter_digit_delay: bool = True,
+        verify: bool = False,
+    ) -> None:
+        self._client = twilio_client
+        self._call_sid = call_sid
+        self._inter_digit_delay = inter_digit_delay
+        self._verify = verify
+        self._delivery_attempts = 0
+
+    async def send_dtmf(self, digits: str) -> bool:
+        """Send DTMF digits via REST API. Returns True on success."""
+        if not self._client or not self._call_sid:
+            return False
+
+        # Insert W (1-second delay) between digits if inter-digit delay is enabled.
+        if self._inter_digit_delay and len(digits) > 1:
+            digits = "W".join(digits)
+
+        twiml = f'<Response><Play digits="{digits}"/><Pause length="30"/></Response>'
+
+        try:
+            self._client.calls(self._call_sid).update(twiml=twiml)
+            self._delivery_attempts += 1
+            return True
+        except Exception:
+            logger.exception("DTMF delivery failed for call %s", self._call_sid)
+            return False
+
+    async def send_dtmf_with_retry(self, digits: str) -> bool:
+        """Send DTMF with retry and fallback to speech."""
+        success = await self.send_dtmf(digits)
+        if not success:
+            # Retry once.
+            success = await self.send_dtmf(digits)
+        return success
+
+
+# Type alias for the agent callback.
+AgentCallback = Callable[[dict[str, object]], Awaitable[dict[str, str]]]
 
 
 class IVRNavigator:
@@ -83,15 +164,19 @@ class IVRNavigator:
         *,
         agent_callback: AgentCallback | None = None,
         config: IVRNavigatorConfig | None = None,
+        dtmf_delivery: DTMFDelivery | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._agent_callback = agent_callback
         self._config = config or IVRNavigatorConfig()
+        self._dtmf_delivery = dtmf_delivery
         self._active = False
         self._started = False
         self._menu_depth = 0
         self._history: list[tuple[str, dict[str, str]]] = []
         self._prompt_timeout_task: asyncio.Task[None] | None = None
+        self._silence_start: float | None = None
+        self._in_hold = False
 
     @property
     def menu_depth(self) -> int:
@@ -100,6 +185,10 @@ class IVRNavigator:
     @property
     def history(self) -> list[tuple[str, dict[str, str]]]:
         return list(self._history)
+
+    @property
+    def in_hold(self) -> bool:
+        return self._in_hold
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -130,6 +219,14 @@ class IVRNavigator:
             return
 
         self._cancel_prompt_timeout()
+        self._in_hold = False
+
+        # Check if a human answered after IVR navigation.
+        if self._menu_depth > 0 and detect_human_after_ivr(event.text):
+            await self._event_bus.emit(
+                IVRAction(type=IVRActionType.HUMAN_DETECTED, menu_depth=self._menu_depth)
+            )
+            return
 
         if not self._agent_callback:
             return
@@ -142,7 +239,22 @@ class IVRNavigator:
         }
 
         try:
-            result = await self._agent_callback(context)
+            result = await asyncio.wait_for(
+                self._agent_callback(context),
+                timeout=self._config.agent_timeout_s,
+            )
+        except TimeoutError:
+            logger.warning("IVR agent timed out, retrying prompt")
+            # Re-send the same prompt to the agent.
+            try:
+                result = await asyncio.wait_for(
+                    self._agent_callback(context),
+                    timeout=self._config.agent_timeout_s,
+                )
+            except (TimeoutError, Exception):
+                logger.exception("IVR agent retry also failed")
+                self._start_prompt_timeout()
+                return
         except Exception:
             logger.exception("IVR agent callback failed")
             self._start_prompt_timeout()
@@ -167,6 +279,19 @@ class IVRNavigator:
                 return
 
             await self._event_bus.emit(action)
+
+            # Deliver DTMF via REST API if available.
+            if self._dtmf_delivery:
+                success = await self._dtmf_delivery.send_dtmf_with_retry(digits)
+                if not success:
+                    # Fall back to speech-based input.
+                    await self._event_bus.emit(
+                        IVRAction(
+                            type=IVRActionType.SPEAK,
+                            text=digits,
+                            menu_depth=self._menu_depth,
+                        )
+                    )
 
         elif action_str == "speak":
             text = result.get("text", "")
@@ -195,6 +320,16 @@ class IVRNavigator:
             # "wait" — do nothing, wait for next prompt.
             self._start_prompt_timeout()
 
+    # ── Hold detection ─────────────────────────────────────────────
+
+    def notify_silence(self, duration_s: float) -> None:
+        """Called by the session when extended silence is detected.
+
+        If silence exceeds the threshold while active, transition to hold state.
+        """
+        if self._active and duration_s >= self._config.hold_silence_threshold_s:
+            self._in_hold = True
+
     # ── Timeout ───────────────────────────────────────────────────
 
     def _start_prompt_timeout(self) -> None:
@@ -215,9 +350,3 @@ class IVRNavigator:
             await self._event_bus.emit(
                 IVRAction(type=IVRActionType.WAIT, menu_depth=self._menu_depth)
             )
-
-
-# Type alias for the agent callback.
-from collections.abc import Awaitable, Callable  # noqa: E402
-
-AgentCallback = Callable[[dict[str, object]], Awaitable[dict[str, str]]]

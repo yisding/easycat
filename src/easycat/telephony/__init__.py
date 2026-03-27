@@ -2,6 +2,7 @@
 
 from easycat.telephony.call_state import (
     CallStateChanged,
+    ClassificationGate,
     OutboundCallState,
     OutboundCallStateMachine,
 )
@@ -11,11 +12,13 @@ from easycat.telephony.dtmf import (
     parse_twilio_dtmf_message,
 )
 from easycat.telephony.ivr import (
+    DTMFDelivery,
     IVRAction,
     IVRActionType,
     IVRNavigator,
     IVRNavigatorConfig,
     classify_ivr_prompt,
+    detect_human_after_ivr,
 )
 from easycat.telephony.outbound import (
     OutboundCallManager,
@@ -39,6 +42,8 @@ from easycat.telephony.twiml import (
 )
 from easycat.telephony.voicemail import (
     BeepDetectorConfig,
+    PostScreeningVoicemailDetector,
+    STTAMDFusionClassifier,
     VoicemailDetector,
     VoicemailDetectorConfig,
     VoicemailPolicy,
@@ -85,12 +90,18 @@ __all__ = [
     "match_screening_platform",
     # Call state machine
     "CallStateChanged",
+    "ClassificationGate",
     "OutboundCallState",
     "OutboundCallStateMachine",
+    # Enhanced voicemail
+    "PostScreeningVoicemailDetector",
+    "STTAMDFusionClassifier",
     # IVR navigator
     "IVRAction",
     "IVRActionType",
     "IVRNavigator",
     "IVRNavigatorConfig",
     "classify_ivr_prompt",
+    "DTMFDelivery",
+    "detect_human_after_ivr",
 ]

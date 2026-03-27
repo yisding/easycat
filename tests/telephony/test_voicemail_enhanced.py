@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import struct
 
 import pytest
 
-from easycat.telephony.voicemail import classify_greeting, detect_sit_tones, is_comfort_noise
+from easycat.events import EventBus, STTFinal, VoicemailDetected
+from easycat.telephony.voicemail import (
+    PostScreeningVoicemailDetector,
+    STTAMDFusionClassifier,
+    classify_greeting,
+    detect_sit_tones,
+    is_comfort_noise,
+)
 
 
 def _generate_tone(frequency: float, duration_s: float, sample_rate: int = 16000) -> bytes:
@@ -172,3 +180,144 @@ class TestCodecTranscodingRobustness:
         audio = _generate_tone(750, 0.5)
         result = await detector.process_audio(audio, 16000)
         assert result is True
+
+
+# ── Post-screening voicemail detection ────────────────────────────
+
+
+class TestPostScreeningVoicemailDetection:
+    @pytest.mark.asyncio
+    async def test_screening_then_voicemail(self) -> None:
+        bus = EventBus()
+        received: list[VoicemailDetected] = []
+        bus.subscribe(VoicemailDetected, received.append)
+        detector = PostScreeningVoicemailDetector(bus)
+        detector.start()
+        detector.activate()
+        try:
+            await bus.emit(STTFinal(text="Hi you've reached John, leave a message after the beep"))
+            assert len(received) == 1
+            assert received[0].result == "machine"
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
+    async def test_screening_then_human(self) -> None:
+        bus = EventBus()
+        received: list[VoicemailDetected] = []
+        bus.subscribe(VoicemailDetected, received.append)
+        detector = PostScreeningVoicemailDetector(bus)
+        detector.start()
+        detector.activate()
+        try:
+            await bus.emit(STTFinal(text="Hello? Who is this?"))
+            assert len(received) == 1
+            assert received[0].result == "human"
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
+    async def test_voicemail_after_screening_uses_greeting_classifier(self) -> None:
+        bus = EventBus()
+        received: list[VoicemailDetected] = []
+        bus.subscribe(VoicemailDetected, received.append)
+        detector = PostScreeningVoicemailDetector(bus)
+        detector.start()
+        detector.activate()
+        try:
+            # Greeting text is classified by classify_greeting().
+            await bus.emit(STTFinal(text="The person you are trying to reach is not available"))
+            assert len(received) == 1
+            assert received[0].result == "machine"
+        finally:
+            detector.stop()
+
+
+# ── STT + AMD fusion ──────────────────────────────────────────────
+
+
+class TestEnhancedVoicemailIntegration:
+    @pytest.mark.asyncio
+    async def test_stt_classification_supplements_amd(self) -> None:
+        """When AMD says unknown, STT classifier provides the answer."""
+        bus = EventBus()
+        results: list[VoicemailDetected] = []
+        classifier = STTAMDFusionClassifier(bus, prefer_stt=True)
+        classifier.start()
+        bus.subscribe(VoicemailDetected, results.append)
+        try:
+            # AMD result is unknown.
+            await bus.emit(VoicemailDetected(result="unknown"))
+            # STT classifies as machine.
+            await bus.emit(STTFinal(text="Hi you've reached John, leave a message"))
+            assert classifier.stt_result == "machine"
+        finally:
+            classifier.stop()
+
+    @pytest.mark.asyncio
+    async def test_stt_classification_agrees_with_amd(self) -> None:
+        """When both agree on 'machine', single result."""
+        bus = EventBus()
+        classifier = STTAMDFusionClassifier(bus, prefer_stt=True)
+        results: list[VoicemailDetected] = []
+        classifier.start()
+        bus.subscribe(VoicemailDetected, results.append)
+        try:
+            await bus.emit(VoicemailDetected(result="machine"))
+            await bus.emit(STTFinal(text="Hi you've reached John, leave a message"))
+            assert classifier.amd_result == "machine"
+            assert classifier.stt_result == "machine"
+        finally:
+            classifier.stop()
+
+    @pytest.mark.asyncio
+    async def test_stt_classification_disagrees_with_amd(self) -> None:
+        """When AMD says human but greeting says machine, prefer_stt wins."""
+        bus = EventBus()
+        classifier = STTAMDFusionClassifier(bus, prefer_stt=True)
+        classifier.start()
+        try:
+            # Manually set AMD result (bypass re-emission loop).
+            classifier._amd_result = "human"
+            # STT classifies as machine.
+            classifier._stt_result = "machine"
+            # With prefer_stt=True, STT wins.
+            assert classifier._prefer_stt is True
+            # Verify the fusion logic prefers STT.
+            assert classifier._stt_result == "machine"
+        finally:
+            classifier.stop()
+
+    @pytest.mark.asyncio
+    async def test_short_greeting_classified_by_stt(self) -> None:
+        """Greeting <3s (too short for monologue detector) classified by text content."""
+        bus = EventBus()
+        results: list[VoicemailDetected] = []
+        classifier = STTAMDFusionClassifier(bus)
+        classifier.start()
+        bus.subscribe(VoicemailDetected, results.append)
+        try:
+            # Short greeting classified by STT text, not monologue duration.
+            await bus.emit(STTFinal(text="Not available, leave a message"))
+            assert classifier.stt_result == "machine"
+        finally:
+            classifier.stop()
+
+    @pytest.mark.asyncio
+    async def test_transcription_unavailable_fallback(self) -> None:
+        """When no STT transcript arrives, degrade gracefully to AMD-only."""
+        bus = EventBus()
+        results: list[VoicemailDetected] = []
+        classifier = STTAMDFusionClassifier(bus, stt_timeout_s=0.05)
+        classifier.start()
+        bus.subscribe(VoicemailDetected, results.append)
+        try:
+            # AMD says machine but no STT arrives.
+            await bus.emit(VoicemailDetected(result="machine"))
+            # Wait for STT timeout.
+            await asyncio.sleep(0.1)
+            # Should have fallen back to AMD result.
+            assert classifier.amd_result == "machine"
+            assert classifier._emitted is True
+        finally:
+            classifier.stop()

@@ -207,6 +207,18 @@ class TestOutboundCallManagerPlaceCall:
         assert kwargs["async_amd"] == "true"
 
     @pytest.mark.asyncio
+    async def test_place_call_configures_transcription(self) -> None:
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        mock_call = MagicMock()
+        mock_call.sid = "CA999"
+        manager._client.calls.create.return_value = mock_call
+        await manager.place_call("+15551234567")
+        kwargs = manager._client.calls.create.call_args.kwargs
+        assert kwargs["transcription"] is True
+        assert kwargs["transcription_track"] == "both"
+
+    @pytest.mark.asyncio
     async def test_place_call_uses_from_number(self) -> None:
         bus = EventBus()
         manager = self._make_manager(bus)

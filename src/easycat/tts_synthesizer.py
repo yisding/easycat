@@ -51,6 +51,7 @@ class TTSSynthesizer:
         metrics: MetricsCollector | None = None,
         timeout_config: TimeoutConfig | None = None,
         correlation_ids: Callable[[], tuple[str | None, str | None]] | None = None,
+        audio_gate: Callable[[], bool] | None = None,
     ) -> None:
         self._tts = tts
         self._event_bus = event_bus
@@ -58,6 +59,7 @@ class TTSSynthesizer:
         self._spans = spans
         self._metrics = metrics
         self._timeout_config = timeout_config
+        self._audio_gate = audio_gate
         self._correlation_ids = correlation_ids
 
     async def synthesize(
@@ -136,7 +138,8 @@ class TTSSynthesizer:
                                     TURN_E2E,
                                     (result.first_audio_time - turn_end_time) * 1000,
                                 )
-                    await self._outbound_queue.put(tts_event.audio)
+                    if not (self._audio_gate and self._audio_gate()):
+                        await self._outbound_queue.put(tts_event.audio)
 
                 elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
                     session_id, turn_id = (

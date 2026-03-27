@@ -13,7 +13,7 @@ import logging
 import re
 import time
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import uuid4
@@ -165,6 +165,7 @@ class SessionConfig:
     tracer: Tracer | None = None
     outbound_queue: BoundedAudioQueue | None = None
     telephony_helpers: Sequence[SessionHelper] = ()
+    audio_gate: Callable[[], bool] | None = None
 
     # Pipeline flags
     enable_noise_reduction: bool = True
@@ -757,6 +758,7 @@ class Session:
             metrics=self._metrics,
             timeout_config=self._timeout_config,
             correlation_ids=lambda: (self.session_id, self._current_turn_id),
+            audio_gate=cfg.audio_gate,
         )
         self._health_checkers: list[PeriodicHealthChecker] = []
         self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)

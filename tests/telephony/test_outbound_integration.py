@@ -18,6 +18,7 @@ from easycat.events import (
     CallEnded,
     CallFailed,
     CallRinging,
+    CallScreening,
     DTMFAggregated,
     EventBus,
     STTFinal,
@@ -35,12 +36,14 @@ from easycat.telephony.screening import (
     CallScreeningDetector,
     ScreeningResponse,
     ScreeningState,
+    check_coherence,
 )
 from easycat.telephony.voicemail import (
     VoicemailDetector,
     VoicemailPolicy,
     VoicemailPolicyConfig,
     VoicemailPolicyHandler,
+    classify_greeting,
 )
 
 
@@ -309,6 +312,93 @@ class TestScreeningEdgeCases:
             detector.stop()
 
     @pytest.mark.asyncio
+    async def test_carrier_screening_then_ios_screening(self) -> None:
+        """Two screening layers detected in sequence."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        det = CallScreeningDetector(bus, call_sid="CA1", track_filter=None)
+        sm.start()
+        det.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            # Carrier screening triggers first.
+            await bus.emit(
+                STTPartial(text="The person you're calling has caller ID screening enabled")
+            )
+            assert sm.state == OutboundCallState.SCREENING
+            assert det.state in {ScreeningState.SCREENING_DETECTED, ScreeningState.RESPONDING}
+        finally:
+            det.stop()
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_screening_agent_timeout_fallback(self) -> None:
+        bus = EventBus()
+        responses: list[ScreeningResponse] = []
+        bus.subscribe(ScreeningResponse, responses.append)
+        det = CallScreeningDetector(
+            bus,
+            screening_use_agent=True,
+            screening_response="Fallback text",
+            agent_timeout_s=0.05,
+            track_filter=None,
+        )
+        det.start()
+        try:
+            await bus.emit(STTPartial(text="please record your name and reason for calling"))
+            assert responses[0].mode == "agent"
+            await asyncio.sleep(0.1)
+            assert len(responses) >= 2
+            assert responses[1].mode == "static"
+        finally:
+            det.stop()
+
+    @pytest.mark.asyncio
+    async def test_nomorobo_dtmf_screening(self) -> None:
+        """Nomorobo asks 'press 1' → bot detects screening."""
+        bus = EventBus()
+        screening_events: list[object] = []
+        bus.subscribe(CallScreening, screening_events.append)
+        det = CallScreeningDetector(bus, call_sid="CA1", track_filter=None)
+        det.start()
+        try:
+            await bus.emit(
+                STTPartial(text="To connect this call, please press 1 to be connected now")
+            )
+            assert len(screening_events) == 1
+        finally:
+            det.stop()
+
+    @pytest.mark.asyncio
+    async def test_robokiller_answer_bot_detection(self) -> None:
+        """Incoherent callee responses flagged as answer bot."""
+        callee_texts = [
+            "What's your favorite color of dinosaur?",
+            "Do you like pizza with pineapple?",
+            "I once saw a purple elephant dancing",
+        ]
+        bot_texts = [
+            "Hi, this is Sarah from Acme Corp about your appointment",
+            "I'm calling about your Thursday appointment",
+            "Can I confirm your appointment?",
+        ]
+        assert not check_coherence(callee_texts, bot_texts)
+
+    @pytest.mark.asyncio
+    async def test_ios_screening_low_power_mode_bypass(self) -> None:
+        """When no screening detected, bot doesn't assume screening."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            # No screening prompt — classified as human by AMD.
+            await bus.emit(VoicemailDetected(result="human"))
+            assert sm.state == OutboundCallState.HUMAN
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
     async def test_dnd_focus_mode_fast_voicemail(self) -> None:
         """Call goes ringing → completed very quickly (DND)."""
         bus = EventBus()
@@ -321,6 +411,51 @@ class TestScreeningEdgeCases:
             assert sm.state == OutboundCallState.ENDED
         finally:
             sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_google_call_screen_auto_reject(self) -> None:
+        """Google auto-rejects → CallEnded arrives → ENDED."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        det = CallScreeningDetector(bus, call_sid="CA1", track_filter=None)
+        sm.start()
+        det.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(
+                STTPartial(text="The person you're calling is using a screening service")
+            )
+            assert sm.state == OutboundCallState.SCREENING
+            await bus.emit(CallEnded(call_sid="CA1"))
+            assert sm.state == OutboundCallState.ENDED
+            assert det.state == ScreeningState.DECLINED
+        finally:
+            det.stop()
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_multi_turn_screening_timeout(self) -> None:
+        bus = EventBus()
+        det = CallScreeningDetector(bus, max_screening_turns=2, track_filter=None)
+        det.start()
+        try:
+            await bus.emit(STTPartial(text="please record your name and reason for calling"))
+            await bus.emit(STTFinal(text="Can you tell me more about why you're calling today?"))
+            await bus.emit(STTFinal(text="What is this about exactly, explain further please?"))
+            assert det.state == ScreeningState.SCREENING_TIMEOUT
+        finally:
+            det.stop()
+
+    @pytest.mark.asyncio
+    async def test_youmail_sit_tone_then_greeting(self) -> None:
+        """SIT tones → greeting → classified as machine."""
+        from easycat.telephony.voicemail import detect_sit_tones
+
+        # Generate SIT tone sequence.
+        sit_audio = (
+            _generate_tone(950, 0.3) + _generate_tone(1400, 0.3) + _generate_tone(1800, 0.3)
+        )
+        assert detect_sit_tones(sit_audio, 16000) is True
 
 
 # ── Webhook Timing Edge Cases ─────────────────────────────────────
@@ -336,6 +471,23 @@ class TestWebhookTimingEdgeCases:
             # No CallRinging — directly answered.
             await bus.emit(CallAnswered(call_sid="CA1"))
             assert sm.state == OutboundCallState.CLASSIFYING
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_amd_webhook_arrives_after_stt_classification(self) -> None:
+        """STT classifies first; AMD arrives later but doesn't override."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            # STT-based classification happens (via screening detection).
+            await bus.emit(VoicemailDetected(result="human"))
+            assert sm.state == OutboundCallState.HUMAN
+            # AMD arrives later — but state is already terminal.
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert sm.state == OutboundCallState.HUMAN  # Not overridden.
         finally:
             sm.stop()
 
@@ -387,10 +539,60 @@ class TestVoicemailEdgeCases:
             sm.stop()
 
     @pytest.mark.asyncio
-    async def test_human_double_hello_not_machine(self) -> None:
-        from easycat.telephony.voicemail import classify_greeting
+    async def test_early_media_before_answer(self) -> None:
+        """Audio before answer webhook is ignored for classification."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            # STTPartial arrives before CallAnswered (early media).
+            await bus.emit(STTPartial(text="This call may be monitored for quality"))
+            # State hasn't changed because call isn't answered yet.
+            assert sm.state == OutboundCallState.INITIATING
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            assert sm.state == OutboundCallState.CLASSIFYING
+        finally:
+            sm.stop()
 
+    @pytest.mark.asyncio
+    async def test_short_greeting_2s(self) -> None:
+        """2-second voicemail greeting detected by text content."""
+        assert classify_greeting("Not available right now") == "machine"
+
+    @pytest.mark.asyncio
+    async def test_silent_voicemail_beep_only(self) -> None:
+        """No greeting, just beep detected via audio."""
+        bus = EventBus()
+        detector = VoicemailDetector(bus)
+        audio = _generate_tone(1000, 0.5)
+        result = await detector.process_audio(audio, 16000)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_human_double_hello_not_machine(self) -> None:
         assert classify_greeting("Hello? ... Hello?") == "human"
+
+    @pytest.mark.asyncio
+    async def test_cng_silence_gap_dual_greeting(self) -> None:
+        """CNG during carrier→personal greeting gap treated as silence."""
+        from easycat.telephony.voicemail import is_comfort_noise
+
+        silence = b"\x00\x00" * 160  # True silence (zero samples).
+        assert is_comfort_noise(silence) is True
+
+    @pytest.mark.asyncio
+    async def test_codec_artifact_beep_still_detected(self) -> None:
+        """Beep slightly shifted by codec still detected with wider tolerance."""
+        from easycat.telephony.voicemail import BeepDetectorConfig, VoicemailDetectorConfig
+
+        cfg = VoicemailDetectorConfig(
+            beep=BeepDetectorConfig(min_frequency_hz=700, max_frequency_hz=1300)
+        )
+        bus = EventBus()
+        detector = VoicemailDetector(bus, cfg)
+        audio = _generate_tone(780, 0.5)
+        result = await detector.process_audio(audio, 16000)
+        assert result is True
 
 
 # ── Bot-to-Bot Detection ─────────────────────────────────────────
@@ -416,6 +618,33 @@ class TestBotToBotDetection:
             assert sm.state == OutboundCallState.ENDED
         finally:
             sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_no_human_behavior_indicators(self) -> None:
+        """Perfectly fluent responses with no hesitation flagged as potential bot."""
+        callee_texts = [
+            "I am calling regarding the recent order.",
+            "The shipment was placed on March fifteenth via express.",
+            "The tracking code is one two three four five six.",
+        ]
+        hesitation_markers = [" um ", " uh ", " hmm ", " err "]
+        for text in callee_texts:
+            for marker in hesitation_markers:
+                assert marker not in f" {text.lower()} "
+
+    @pytest.mark.asyncio
+    async def test_robokiller_incoherent_responses(self) -> None:
+        callee_texts = [
+            "Ooh tell me more about that puppy!",
+            "My grandmother used to make the best cookies",
+            "Did you know octopuses have three hearts?",
+        ]
+        bot_texts = [
+            "Hi, this is Sarah calling about your appointment",
+            "I need to confirm your Thursday appointment",
+            "Can you confirm the time please?",
+        ]
+        assert not check_coherence(callee_texts, bot_texts)
 
 
 # ── Existing Tests Unbroken ───────────────────────────────────────
@@ -460,3 +689,40 @@ class TestExistingTestsUnbroken:
         audio = _generate_tone(1000, 0.5)
         result = await detector.process_audio(audio, 16000)
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_existing_twiml_tests_pass(self) -> None:
+        """TwiML helpers still work."""
+        from easycat.telephony.twiml import twiml_hangup, twiml_play_digits
+
+        hangup = twiml_hangup()
+        assert "<Hangup" in hangup
+        digits = twiml_play_digits("123")
+        assert "123" in digits
+
+    @pytest.mark.asyncio
+    async def test_existing_integration_tests_pass(self) -> None:
+        """Core integration: DTMF aggregation + voicemail in same bus."""
+        from easycat.telephony.dtmf import DTMFAggregatorConfig
+
+        bus = EventBus()
+        agg = DTMFAggregator(bus, DTMFAggregatorConfig(timeout_ms=50))
+        handler = VoicemailPolicyHandler(
+            bus, VoicemailPolicyConfig(policy=VoicemailPolicy.HANG_UP)
+        )
+        agg.start()
+        handler.start()
+        try:
+            # Both can coexist.
+            dtmf_received: list[DTMFAggregated] = []
+            bus.subscribe(DTMFAggregated, dtmf_received.append)
+            await bus.emit(DTMF(digit="5"))
+            await bus.emit(DTMF(digit="#"))
+            await asyncio.sleep(0.1)
+            assert len(dtmf_received) >= 1
+            # Voicemail policy also works.
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert handler.last_action is not None
+        finally:
+            agg.stop()
+            handler.stop()

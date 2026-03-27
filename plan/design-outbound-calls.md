@@ -1,10 +1,28 @@
 # Outbound Calls: Voicemail, IVR, and Call Screening — Design Document
 
-> **Scope:** Design only. This document captures architecture, corner cases, and implementation plan for future development. No code changes in this iteration.
->
 > **Decisions made:**
 > - **Twilio SDK** (`twilio` Python package) as an optional dependency for REST API calls
 > - **Screening response:** both configurable string (default, fast) and agent-generated (opt-in, contextual)
+
+## Implementation Status (updated 2026-03-26)
+
+**Overall: COMPLETE — 394 telephony tests passing, all modules wired into session pipeline.**
+
+| Module | File | Status | Notes |
+|--------|------|--------|-------|
+| Call lifecycle events | `events.py` | **DONE** | All 6 events, in Event union, EventBus-emittable |
+| Outbound config | `config.py` | **DONE** | `OutboundCallConfig` + `TelephonyConfig` extension, wired into `_create_telephony_helpers()` |
+| Outbound call manager | `telephony/outbound.py` | **DONE** | Twilio REST API, webhook parsing, SIP codes, realtime transcription |
+| Screening detector | `telephony/screening.py` | **DONE** | Pattern matching, multi-turn tracking, agent timeout fallback, outcome transitions (HUMAN/VOICEMAIL/DECLINED), coherence checking |
+| Call state machine | `telephony/call_state.py` | **DONE** | Full FSM, classification gate, SmartTurn suppression, screening→human transition, VAD timeout extension |
+| IVR navigator | `telephony/ivr.py` | **DONE** | Agent decisions, DTMF delivery via REST API, hold detection, transfer-to-human detection, agent timeout retry |
+| Enhanced voicemail | `telephony/voicemail.py` | **DONE** | Greeting classifier, SIT/CNG, STT+AMD fusion, post-screening voicemail detection |
+| Session integration | `config.py` | **DONE** | `_create_telephony_helpers()` instantiates all outbound helpers when `enable_outbound_call_manager=True` |
+| Classification gate | `telephony/call_state.py` | **DONE** | `ClassificationGate` buffers TTS during CLASSIFYING, auto-releases on timeout |
+| Compliance/health | `telephony/compliance.py`, `telephony/number_health.py` | **DONE** | Calling hours, AI disclosure, DNC list, number health monitoring, call disposition tracking |
+| Retry strategy | `telephony/retry.py` | **DONE** | Exponential backoff, max retries, SMS fallback, no-retry for blocked calls |
+| ML voicemail | `telephony/ml_voicemail.py` | **DONE** | Pluggable ML interface (Wave2Vec-ready), graceful fallback, conversation coherence detector |
+| Early media | `telephony/ml_voicemail.py` | **DONE** | Early media phase detection, announcement filtering |
 
 ## Context
 
