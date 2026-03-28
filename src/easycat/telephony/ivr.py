@@ -125,9 +125,7 @@ class DTMFDelivery:
         twiml = f'<Response><Play digits="{digits}"/><Pause length="30"/></Response>'
 
         try:
-            await asyncio.to_thread(
-                self._client.calls(self._call_sid).update, twiml=twiml
-            )
+            await asyncio.to_thread(self._client.calls(self._call_sid).update, twiml=twiml)
             self._delivery_attempts += 1
             return True
         except Exception:

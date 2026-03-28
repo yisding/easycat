@@ -406,8 +406,7 @@ class CallScreeningDetector:
             synthesis to avoid a duplicate response).
         """
         cancelled_in_time = (
-            self._agent_timeout_task is not None
-            and not self._agent_timeout_task.done()
+            self._agent_timeout_task is not None and not self._agent_timeout_task.done()
         )
         self._cancel_agent_timeout()
         return cancelled_in_time
