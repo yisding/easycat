@@ -154,6 +154,21 @@ class ClassificationGate:
             self._on_flush(buffered)
         return buffered
 
+    async def discard(self) -> None:
+        """Cancel timeout and discard buffered audio, keeping the gate closed.
+
+        Used when leaving CLASSIFYING for non-human states (VOICEMAIL,
+        SCREENING, IVR) so that the remaining opener TTS chunks are still
+        blocked by the gate instead of leaking to the outbound queue.
+        Also invokes the async flush callback (with an empty list) so that
+        hold audio is cancelled even when no opener audio was buffered.
+        """
+        self._cancel_timeout()
+        self._hold_audio_playing = False
+        self._buffer.clear()
+        if self._on_flush_async:
+            await self._on_flush_async([])
+
     async def _on_tts_audio(self, event: TTSAudio) -> None:
         if self._closed and not event.bypass_gate:
             self._buffer.append(event)
@@ -185,7 +200,7 @@ class ClassificationGate:
                 self._buffer.clear()
                 if self._on_flush and buffered:
                     self._on_flush(buffered)
-                if buffered and self._on_flush_async:
+                if self._on_flush_async:
                     await self._on_flush_async(buffered)
         except asyncio.CancelledError:
             pass
@@ -341,12 +356,15 @@ class OutboundCallStateMachine:
 
         # Release classification gate when leaving CLASSIFYING.
         # Only re-enqueue buffered opener audio for HUMAN/UNKNOWN — for
-        # VOICEMAIL, SCREENING, and IVR the opener should not be played.
+        # VOICEMAIL, SCREENING, and IVR the opener should not be played
+        # and the gate stays closed to block any remaining TTS chunks.
         if old == OutboundCallState.CLASSIFYING and self._gate.is_closed:
-            buffered = self._gate.release()
             if new_state in {OutboundCallState.HUMAN, OutboundCallState.UNKNOWN}:
-                if self._gate._on_flush_async and buffered:
+                buffered = self._gate.release()
+                if self._gate._on_flush_async:
                     await self._gate._on_flush_async(buffered)
+            else:
+                await self._gate.discard()
 
         # Start late voicemail detection window when entering HUMAN.
         if new_state == OutboundCallState.HUMAN and self._late_voicemail_window_s > 0:
@@ -420,6 +438,7 @@ class OutboundCallStateMachine:
         """Handle STTFinal for IVR detection (CLASSIFYING) and SCREENING → HUMAN."""
         from easycat.telephony.ivr import classify_ivr_prompt
         from easycat.telephony.screening import is_conversational
+        from easycat.telephony.voicemail import classify_greeting
 
         text = event.text.strip()
         if not text:
@@ -429,6 +448,12 @@ class OutboundCallStateMachine:
             if classify_ivr_prompt(text):
                 self._cancel_classification_timeout()
                 await self._transition(OutboundCallState.IVR)
+            elif classify_greeting(text) == "machine":
+                # Short voicemail greetings (e.g. "Please leave a message")
+                # pass is_conversational's word-count check but contain known
+                # voicemail phrases — let the fusion classifier handle them
+                # instead of misrouting to HUMAN.
+                pass
             elif is_conversational(text):
                 self._cancel_classification_timeout()
                 await self._transition(OutboundCallState.HUMAN)
