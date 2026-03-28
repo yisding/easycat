@@ -66,6 +66,18 @@ from easycat.config import (
 # ── EasyCat-level events ─────────────────────────────────────────
 
 from easycat.events import (
+    AGENT_EVENTS,
+    ALL_EVENTS,
+    AUDIO_EVENTS,
+    ERROR_EVENTS,
+    INTERRUPTION_EVENTS,
+    LIFECYCLE_EVENTS,
+    RECONNECT_EVENTS,
+    STT_EVENTS,
+    TELEPHONY_EVENTS,
+    TOOL_EVENTS,
+    TTS_EVENTS,
+    VAD_EVENTS,
     AgentDelta,
     AgentFinal,
     AudioIn,
@@ -206,6 +218,19 @@ __all__ = [
     "SmartTurnProvider",
     "SmartTurnResult",
     "create_smart_turn",
+    # Event groups
+    "AUDIO_EVENTS",
+    "VAD_EVENTS",
+    "STT_EVENTS",
+    "AGENT_EVENTS",
+    "TTS_EVENTS",
+    "TOOL_EVENTS",
+    "LIFECYCLE_EVENTS",
+    "INTERRUPTION_EVENTS",
+    "RECONNECT_EVENTS",
+    "TELEPHONY_EVENTS",
+    "ERROR_EVENTS",
+    "ALL_EVENTS",
     # EasyCat-level events
     "AgentDelta",
     "AgentFinal",

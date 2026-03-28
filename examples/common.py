@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import signal
+from typing import Any
 
 from easycat import EventLoggingConfig, OpenAIAgentsAdapter, Session
 
@@ -21,7 +22,7 @@ def require_env(name: str) -> str:
 
 
 def build_openai_agents_adapter(
-    *, name: str = "VoiceAssistant", instructions: str
+    *, name: str = "VoiceAssistant", instructions: str, tools: list[Any] | None = None
 ) -> OpenAIAgentsAdapter:
     """Create an OpenAI Agents SDK adapter configured for Responses WebSocket API."""
     try:
@@ -57,7 +58,10 @@ def build_openai_agents_adapter(
         except (ImportError, AttributeError) as exc:
             logger.debug("set_default_openai_api unavailable: %s", exc)
 
-    voice_agent = Agent(name=name, instructions=instructions)
+    agent_kwargs: dict[str, Any] = {"name": name, "instructions": instructions}
+    if tools is not None:
+        agent_kwargs["tools"] = tools
+    voice_agent = Agent(**agent_kwargs)
     return OpenAIAgentsAdapter(voice_agent, run_config=run_config)
 
 
