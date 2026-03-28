@@ -154,7 +154,7 @@ class ClassificationGate:
         return buffered
 
     async def _on_tts_audio(self, event: TTSAudio) -> None:
-        if self._closed:
+        if self._closed and not event.bypass_gate:
             self._buffer.append(event)
 
     def _start_timeout(self) -> None:
@@ -337,10 +337,14 @@ class OutboundCallStateMachine:
 
     async def _on_ringing(self, event: CallRinging) -> None:
         if self._state == OutboundCallState.INITIATING:
+            if event.call_sid:
+                self._call_sid = event.call_sid
             await self._transition(OutboundCallState.RINGING)
 
     async def _on_answered(self, event: CallAnswered) -> None:
         if self._state in {OutboundCallState.INITIATING, OutboundCallState.RINGING}:
+            if event.call_sid:
+                self._call_sid = event.call_sid
             await self._transition(OutboundCallState.CLASSIFYING)
             self._gate.close()
             self._start_classification_timeout()

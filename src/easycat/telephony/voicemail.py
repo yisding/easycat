@@ -275,9 +275,12 @@ class VoicemailPolicyHandler:
         self,
         event_bus: EventBus,
         config: VoicemailPolicyConfig | None = None,
+        *,
+        expect_fused: bool = False,
     ) -> None:
         self._event_bus = event_bus
         self._config = config or VoicemailPolicyConfig()
+        self._expect_fused = expect_fused
         self._started = False
         self._action_taken = False
         self._last_action: dict[str, Any] | None = None
@@ -304,6 +307,10 @@ class VoicemailPolicyHandler:
     async def _on_voicemail_detected(self, event: VoicemailDetected) -> None:
         """Apply policy based on detection result."""
         if self._action_taken:
+            return
+
+        # When fusion is active, ignore raw AMD events.
+        if self._expect_fused and event.source != "fusion":
             return
 
         # Only act on machine detections
@@ -621,6 +628,7 @@ class STTAMDFusionClassifier:
         self._stt_result: str | None = None
         self._emitted = False
         self._started = False
+        self._screening_active = False
         self._timeout_task: asyncio.Task[None] | None = None
 
     @property
@@ -649,6 +657,7 @@ class STTAMDFusionClassifier:
         self._amd_result = None
         self._stt_result = None
         self._emitted = False
+        self._screening_active = False
 
     def _cancel_timeout(self) -> None:
         if self._timeout_task and not self._timeout_task.done():
@@ -656,8 +665,9 @@ class STTAMDFusionClassifier:
         self._timeout_task = None
 
     async def _on_screening(self, event: CallScreening) -> None:
-        """Cancel AMD-only fallback when screening is detected."""
+        """Cancel AMD-only fallback and stop STT classification when screening is detected."""
         self._cancel_timeout()
+        self._screening_active = True
 
     async def _on_voicemail_detected(self, event: VoicemailDetected) -> None:
         """Receive AMD result (upstream VoicemailDetected)."""
@@ -670,7 +680,7 @@ class STTAMDFusionClassifier:
 
     async def _on_stt_final(self, event: STTFinal) -> None:
         """Classify greeting text via STT."""
-        if self._emitted:
+        if self._emitted or self._screening_active:
             return
         text = event.text.strip()
         if not text:
