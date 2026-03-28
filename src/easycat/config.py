@@ -29,7 +29,7 @@ from easycat.telephony.call_state import (
 )
 from easycat.telephony.dtmf import DTMFAggregator, DTMFAggregatorConfig
 from easycat.telephony.ivr import IVRAction, IVRActionType, IVRNavigator
-from easycat.telephony.screening import CallScreeningDetector
+from easycat.telephony.screening import CallScreeningDetector, ScreeningResponse
 from easycat.telephony.voicemail import (
     PostScreeningVoicemailDetector,
     STTAMDFusionClassifier,
@@ -306,6 +306,14 @@ def create_session(config: EasyCatConfig) -> Session:
 
         _outbound_sm.gate.set_hold_audio_callback(_play_hold_audio)
 
+        # Wire ScreeningResponse → TTS so the bot actually speaks the
+        # screening identification (e.g. "Hi, this is Sarah from Acme").
+        async def _on_screening_response(event: ScreeningResponse) -> None:
+            if event.text:
+                await _tts.synthesize(event.text, token=None, bypass_gate=True)
+
+        event_bus.subscribe(ScreeningResponse, _on_screening_response)
+
     return session
 
 
@@ -370,6 +378,7 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
                 screening_response=oc.screening_response,
                 screening_use_agent=oc.screening_use_agent,
                 max_screening_turns=oc.max_screening_turns,
+                track_filter=None,
             )
             helpers.append(screening)
 
