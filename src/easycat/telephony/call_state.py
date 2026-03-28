@@ -340,12 +340,13 @@ class OutboundCallStateMachine:
         self._update_smart_turn_suppression()
 
         # Release classification gate when leaving CLASSIFYING.
-        # The gate's async flush callback (set via set_gate_flush_callback)
-        # handles re-enqueuing the buffered audio.
+        # Only re-enqueue buffered opener audio for HUMAN/UNKNOWN — for
+        # VOICEMAIL, SCREENING, and IVR the opener should not be played.
         if old == OutboundCallState.CLASSIFYING and self._gate.is_closed:
             buffered = self._gate.release()
-            if self._gate._on_flush_async:
-                await self._gate._on_flush_async(buffered)
+            if new_state in {OutboundCallState.HUMAN, OutboundCallState.UNKNOWN}:
+                if self._gate._on_flush_async and buffered:
+                    await self._gate._on_flush_async(buffered)
 
         # Start late voicemail detection window when entering HUMAN.
         if new_state == OutboundCallState.HUMAN and self._late_voicemail_window_s > 0:

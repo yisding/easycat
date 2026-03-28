@@ -30,6 +30,7 @@ from easycat.telephony.call_state import (
 )
 from easycat.telephony.dtmf import DTMFAggregator, DTMFAggregatorConfig
 from easycat.telephony.ivr import IVRAction, IVRActionType, IVRNavigator
+from easycat.telephony.outbound import OutboundCallManager
 from easycat.telephony.screening import CallScreeningDetector, ScreeningResponse
 from easycat.telephony.voicemail import (
     PostScreeningVoicemailDetector,
@@ -313,8 +314,29 @@ def create_session(config: EasyCatConfig) -> Session:
 
         # Wire ScreeningResponse → TTS so the bot actually speaks the
         # screening identification (e.g. "Hi, this is Sarah from Acme").
+        _screening_detector: CallScreeningDetector | None = None
+        for _h in telephony_helpers:
+            if isinstance(_h, CallScreeningDetector):
+                _screening_detector = _h
+                break
+
         async def _on_screening_response(event: ScreeningResponse) -> None:
-            if event.text:
+            if event.mode == "agent" and _screening_detector is not None:
+                try:
+                    prompt = _screening_detector._accumulated_text
+                    response_text = await agent.run(
+                        f"The callee's phone is screening this call. "
+                        f'Their screening prompt says: "{prompt}". '
+                        f"Identify yourself briefly."
+                    )
+                    if response_text:
+                        await _tts.synthesize(
+                            response_text, token=None, bypass_gate=True
+                        )
+                    _screening_detector.notify_agent_responded()
+                except Exception:
+                    logger.exception("Agent-mode screening response failed")
+            elif event.text:
                 await _tts.synthesize(event.text, token=None, bypass_gate=True)
 
         event_bus.subscribe(ScreeningResponse, _on_screening_response)
@@ -413,6 +435,28 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
 
         # Voicemail policy handler.
         helpers.append(VoicemailPolicyHandler(event_bus, expect_fused=True))
+
+        # Outbound call manager (requires Twilio credentials).
+        if oc.twilio_account_sid and oc.twilio_auth_token:
+            try:
+                manager = OutboundCallManager(
+                    event_bus,
+                    from_number=oc.from_number,
+                    amd_mode=oc.amd_mode,
+                    async_amd=oc.async_amd,
+                    amd_timeout=oc.amd_timeout,
+                    speech_threshold=oc.speech_threshold,
+                    speech_end_threshold=oc.speech_end_threshold,
+                    silence_timeout=oc.silence_timeout,
+                    enable_realtime_transcription=oc.enable_realtime_transcription,
+                    twilio_account_sid=oc.twilio_account_sid,
+                    twilio_auth_token=oc.twilio_auth_token,
+                )
+                helpers.append(manager)
+            except ImportError:
+                logger.warning(
+                    "twilio package not installed — OutboundCallManager disabled"
+                )
 
     return helpers
 
