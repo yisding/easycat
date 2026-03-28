@@ -394,13 +394,23 @@ class CallScreeningDetector:
             self._agent_timeout_task.cancel()
         self._agent_timeout_task = None
 
-    def notify_agent_responded(self) -> None:
+    def notify_agent_responded(self) -> bool:
         """Signal that the agent has delivered its screening reply.
 
         Cancels the static-response fallback timer so the caller does not
         receive a duplicate reply.
+
+        Returns:
+            ``True`` if the fallback timer was cancelled before it fired,
+            ``False`` if the fallback already executed (caller should skip
+            synthesis to avoid a duplicate response).
         """
+        cancelled_in_time = (
+            self._agent_timeout_task is not None
+            and not self._agent_timeout_task.done()
+        )
         self._cancel_agent_timeout()
+        return cancelled_in_time
 
     def record_bot_utterance(self, text: str) -> None:
         """Record a bot utterance for multi-turn coherence tracking."""
@@ -421,9 +431,12 @@ class CallScreeningDetector:
         # If screening was detected before the call was answered (early media),
         # emit the deferred CallScreening event now.
         if self._pending_screening is not None:
-            call_sid, platform = self._pending_screening
+            _, platform = self._pending_screening
             self._pending_screening = None
-            await self._emit_screening(call_sid, platform)
+            # Use self._call_sid (just updated from event.call_sid) instead
+            # of the stale value stored when screening was first detected
+            # during early media — before CallAnswered provided the real SID.
+            await self._emit_screening(self._call_sid, platform)
 
     async def _on_stt_partial(self, event: STTPartial) -> None:
         if self._detected:
