@@ -14,7 +14,6 @@ from easycat.events import (
     AGENT_EVENTS,
     DTMF,
     ERROR_EVENTS,
-    INTERRUPTION_EVENTS,
     LIFECYCLE_EVENTS,
     RECONNECT_EVENTS,
     TELEPHONY_EVENTS,
@@ -26,6 +25,7 @@ from easycat.events import (
     Error,
     Event,
     EventBus,
+    Interruption,
     ReconnectAttempt,
     ReconnectFailure,
     ReconnectSuccess,
@@ -260,7 +260,7 @@ _DEFAULT_LOGGED_EVENTS = (
     + (TTSMarkers,)
     + TOOL_EVENTS
     + LIFECYCLE_EVENTS
-    + INTERRUPTION_EVENTS
+    + (Interruption,)
     + RECONNECT_EVENTS
     + TELEPHONY_EVENTS
     + ERROR_EVENTS
