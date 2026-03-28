@@ -137,7 +137,7 @@ def _serialize_event(event: Any) -> dict[str, Any]:
     elif isinstance(event, ToolCallDelta):
         payload["track"] = "tool_calls"
         payload["call_id"] = event.call_id
-        payload["text"] = event.text
+        payload["text"] = event.delta
     elif isinstance(event, ToolCallResult):
         payload["track"] = "tool_calls"
         payload["call_id"] = event.call_id
@@ -152,7 +152,7 @@ def _serialize_event(event: Any) -> dict[str, Any]:
         payload["track"] = "vad"
     elif isinstance(event, Error):
         payload["track"] = "errors"
-        payload["message"] = str(event.error)
+        payload["message"] = str(event.exception)
         payload["context"] = event.context
     elif isinstance(event, ReconnectAttempt | ReconnectSuccess | ReconnectFailure):
         payload["track"] = "reconnect"

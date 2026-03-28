@@ -402,6 +402,10 @@ async function startConversation() {
   pc.addEventListener("track", (evt) => {
     if (evt.track.kind !== "audio") return;
     remoteStream = evt.streams[0];
+    // Play the agent's audio through an <audio> element so the user hears TTS.
+    const remoteAudio = document.createElement("audio");
+    remoteAudio.srcObject = remoteStream;
+    remoteAudio.autoplay = true;
     const agent = startRecorder(
       remoteStream,
       blob => setAudioFromBlob(agentChunk, blob),
