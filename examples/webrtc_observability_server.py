@@ -133,9 +133,11 @@ def _serialize_event(event: Any) -> dict[str, Any]:
         payload["context"] = event.context
     elif isinstance(event, ReconnectAttempt | ReconnectSuccess | ReconnectFailure):
         payload["track"] = "reconnect"
+        payload["provider"] = event.provider
         if isinstance(event, ReconnectAttempt):
-            payload["provider"] = event.provider
             payload["attempt"] = event.attempt
+        elif isinstance(event, ReconnectFailure):
+            payload["error"] = event.error
 
     for key in ("session_id", "turn_id"):
         val = getattr(event, key, None)

@@ -327,10 +327,12 @@ function addEvent(evt) {
     });
   }
 
-  const line = document.createElement("div");
-  line.textContent = `[${t.toFixed(2)}s] ${evt.type} ${evt.text || evt.result || evt.message || ""}`;
-  eventLog.prepend(line);
-  while (eventLog.childElementCount > 500) eventLog.lastElementChild.remove();
+  if (!AUDIO_TRACKS.has(evt.track)) {
+    const line = document.createElement("div");
+    line.textContent = `[${t.toFixed(2)}s] ${evt.type} ${evt.text || evt.result || evt.message || ""}`;
+    eventLog.prepend(line);
+    while (eventLog.childElementCount > 500) eventLog.lastElementChild.remove();
+  }
 }
 
 /* ── SSE with auto-reconnect ──────────────────────────────────── */
