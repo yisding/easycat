@@ -416,6 +416,8 @@ class CallScreeningDetector:
 
     async def _on_call_answered(self, event: CallAnswered) -> None:
         self._call_answered = True
+        if event.call_sid:
+            self._call_sid = event.call_sid
         # If screening was detected before the call was answered (early media),
         # emit the deferred CallScreening event now.
         if self._pending_screening is not None:
