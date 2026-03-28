@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -10,10 +11,13 @@ from easycat.agents.factory import auto_adapt_agent
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.event_logging import EventLoggingConfig, EventTraceLogger
 from easycat.events import EventBus
+from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
+from easycat.providers import Transport
 from easycat.session import Session, SessionConfig
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
+from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.factory import STTConfig, create_stt_provider_from_config
 from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.stubs import NoopAgent
@@ -24,10 +28,14 @@ from easycat.tracing import TraceExporter, Tracer
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
-from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
+from easycat.transports.websocket import (
+    WebSocketConnectionTransport,
+    WebSocketTransport,
+    WebSocketTransportConfig,
+)
 from easycat.tts.factory import TTSConfig, create_tts_provider_from_config
 from easycat.tts.openai_tts import OpenAITTSConfig
-from easycat.turn_manager import TurnManagerConfig
+from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, create_vad
 
 
@@ -58,7 +66,11 @@ class TelephonyConfig:
 
 
 TransportConfig = (
-    LocalTransportConfig | WebSocketTransportConfig | TwilioTransportConfig | WebRTCTransportConfig
+    LocalTransportConfig
+    | WebSocketTransportConfig
+    | TwilioTransportConfig
+    | WebRTCTransportConfig
+    | Transport
 )
 _TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
     LocalTransportConfig: lambda config, event_bus: LocalTransport(config),
@@ -79,7 +91,7 @@ class EasyCatConfig:
     tts: TTSConfig | None = None
     vad: VADConfig = field(default_factory=VADConfig)
     noise_reduction: NoiseReducerConfig = field(default_factory=NoiseReducerConfig)
-    echo_cancellation: EchoCancellationConfig = field(default_factory=EchoCancellationConfig)
+    echo_cancellation: EchoCancellationConfig | None = None
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
     smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
@@ -92,6 +104,7 @@ class EasyCatConfig:
     agent_runner: AgentRunnerConfig | None = None
     wrap_agent: bool = True
     strip_markdown: bool = False
+    output_processors: Sequence[LLMOutputProcessor] = ()
 
     def __post_init__(self) -> None:
         if self.openai_api_key:
@@ -106,7 +119,16 @@ class EasyCatConfig:
                 if transport_fmt is not None:
                     tts_kwargs["output_format"] = transport_fmt
                 self.tts = OpenAITTSConfig(**tts_kwargs)
+        if self.echo_cancellation is None:
+            self.echo_cancellation = self._default_echo_cancellation_for_transport()
         self._validate()
+
+    def _default_echo_cancellation_for_transport(self) -> EchoCancellationConfig:
+        enable_aec = isinstance(
+            self.transport,
+            (LocalTransportConfig, WebSocketTransportConfig, WebSocketConnectionTransport),
+        )
+        return EchoCancellationConfig(enabled=enable_aec)
 
     def _validate(self) -> None:
         if self.stt is None:
@@ -124,14 +146,29 @@ class EasyCatConfig:
                 raise ValueError(f"{name} requires an API key.")
 
 
+def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
+    """Whether this session should derive turn boundaries from STT finals."""
+    if not isinstance(config.stt, DeepgramSTTConfig):
+        return False
+    if config.turn_taking.mode == TurnMode.PUSH_TO_TALK:
+        return False
+    if config.smart_turn.enabled:
+        return False
+    if config.telephony and config.telephony.enable_voicemail_detector:
+        return False
+    return config.stt.is_flux
+
+
 def create_session(config: EasyCatConfig) -> Session:
     """Create a fully wired Session from EasyCatConfig."""
     event_bus = EventBus()
     stt = create_stt_provider_from_config(config.stt, event_bus)
     tts = create_tts_provider_from_config(config.tts, event_bus)
-    vad = create_vad(config.vad)
+    auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
+    enable_vad = not auto_turn_from_stt_final
+    vad = create_vad(config.vad) if enable_vad else None
     noise_reducer = create_noise_reducer(config.noise_reduction)
-    echo_canceller = create_echo_canceller(config.echo_cancellation)
+    echo_canceller = create_echo_canceller(config.echo_cancellation or EchoCancellationConfig())
     transport = _create_transport(config.transport, event_bus)
 
     if config.agent is not None:
@@ -169,12 +206,19 @@ def create_session(config: EasyCatConfig) -> Session:
             metrics=metrics,
             tracer=tracer,
             telephony_helpers=telephony_helpers,
+            enable_vad=enable_vad,
+            auto_turn_from_stt_final=auto_turn_from_stt_final,
             strip_markdown=config.strip_markdown,
+            output_processors=config.output_processors,
         )
     )
 
 
 def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
+    if isinstance(config, Transport):
+        if hasattr(config, "_event_bus") and getattr(config, "_event_bus") is None:
+            config._event_bus = event_bus
+        return config
     factory = _TRANSPORT_FACTORIES.get(type(config))
     if factory is None:
         raise ValueError("Unsupported transport configuration type.")

@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 from easycat.audio_format import AudioChunk
 from easycat.events import Event, STTEvent, TTSEvent
+from easycat.tts.input import TTSInput, coerce_tts_input
 
 
 class NoopSTT:
@@ -28,7 +29,12 @@ class NoopSTT:
 class NoopTTS:
     """TTS provider that does nothing — used as default."""
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    @property
+    def supports_ssml(self) -> bool:
+        return True
+
+    async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
+        _ = coerce_tts_input(payload)
         return
         yield  # make this an async generator
 

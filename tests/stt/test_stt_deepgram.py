@@ -43,18 +43,36 @@ def _deepgram_result(
     is_final: bool = False,
     confidence: float = 0.95,
     words: list[dict] | None = None,
+    speech_final: bool | None = None,
 ) -> str:
     """Create a Deepgram-format Results message."""
     alt: dict = {"transcript": transcript, "confidence": confidence}
     if words:
         alt["words"] = words
-    return json.dumps(
-        {
-            "type": "Results",
-            "channel": {"alternatives": [alt]},
-            "is_final": is_final,
-        }
-    )
+    payload: dict[str, object] = {
+        "type": "Results",
+        "channel": {"alternatives": [alt]},
+        "is_final": is_final,
+    }
+    if speech_final is not None:
+        payload["speech_final"] = speech_final
+    return json.dumps(payload)
+
+
+def _deepgram_turn_info(
+    transcript: str,
+    *,
+    event: str = "Update",
+    end_of_turn_confidence: float | None = None,
+) -> str:
+    payload: dict[str, object] = {
+        "type": "TurnInfo",
+        "event": event,
+        "transcript": transcript,
+    }
+    if end_of_turn_confidence is not None:
+        payload["end_of_turn_confidence"] = end_of_turn_confidence
+    return json.dumps(payload)
 
 
 def _make_deepgram_stt(
@@ -240,6 +258,23 @@ def test_deepgram_build_url():
     assert "interim_results=true" in url
 
 
+def test_deepgram_flux_build_url_uses_v2_without_legacy_params():
+    config = DeepgramSTTConfig(
+        api_key="k",
+        model="flux-general-en",
+        language="en",
+        base_url="wss://api.deepgram.com/v1/listen",
+    )
+    stt = DeepgramSTT(config)
+    url = stt._build_url()
+
+    assert url.startswith("wss://api.deepgram.com/v2/listen?")
+    assert "model=flux-general-en" in url
+    assert "language=" not in url
+    assert "interim_results=" not in url
+    assert "punctuate=" not in url
+
+
 # ── Multiple streams ─────────────────────────────────────────────
 
 
@@ -263,3 +298,29 @@ async def test_deepgram_reusable_across_streams():
 
     events2 = await collect_stt_events(stt, chunks)
     assert events2[0].text == "stream 2"
+
+
+@pytest.mark.asyncio
+async def test_deepgram_flux_parses_turn_info_updates_and_end_of_turn():
+    messages = [
+        _deepgram_turn_info("hello", event="Update"),
+        _deepgram_turn_info("hello world", event="EndOfTurn", end_of_turn_confidence=0.88),
+    ]
+    ws = MockWebSocket(messages)
+
+    async def mock_connect(url: str, **kwargs) -> MockWebSocket:
+        return ws
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(api_key="test-key", model="flux-general-en", ws_connect=mock_connect)
+    )
+
+    pcm = generate_pcm_sine(duration_ms=200)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert len(events) == 2
+    assert events[0].type == STTEventType.PARTIAL
+    assert events[0].text == "hello"
+    assert events[1].type == STTEventType.FINAL
+    assert events[1].text == "hello world"
+    assert events[1].confidence == 0.88

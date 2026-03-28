@@ -30,17 +30,27 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
+from easycat.llm_output_processing import (
+    PauseProcessor,
+    PhoneticReplacementProcessor,
+)
 from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.session import Session, SessionConfig, TurnState
 from easycat.timeouts import AgentTimeoutError
 from easycat.tracing import InMemoryTraceExporter, SpanStatus, Tracer
-from easycat.turn_manager import TurnManagerConfig
+from easycat.tts.input import TTSInput
+from easycat.turn_manager import TurnManagerConfig, TurnManagerState
 
 # ── Test helpers ───────────────────────────────────────────────────
 
 
 def _make_chunk(n_bytes: int = 320) -> AudioChunk:
     return AudioChunk(data=bytes(n_bytes), format=PCM16_MONO_16K)
+
+
+def _make_loud_chunk(n_samples: int = 160, amplitude: int = 6000) -> AudioChunk:
+    sample = int(amplitude).to_bytes(2, "little", signed=True)
+    return AudioChunk(data=sample * n_samples, format=PCM16_MONO_16K)
 
 
 class FakeTransport:
@@ -116,6 +126,29 @@ class FakeSTT:
             yield event
 
 
+class AutoTurnSTT(FakeSTT):
+    def __init__(self, transcript: str = "hello flux", *, final_after_chunks: int = 3) -> None:
+        super().__init__(transcript=transcript)
+        self.final_after_chunks = final_after_chunks
+        self.sent_chunks: list[AudioChunk] = []
+        self.start_count = 0
+        self.end_count = 0
+        self._final_emitted = False
+
+    async def start_stream(self) -> None:
+        self.start_count += 1
+
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        self.sent_chunks.append(chunk)
+        if not self._final_emitted and len(self.sent_chunks) >= self.final_after_chunks:
+            self._final_emitted = True
+            await self._queue.put(STTEvent(type=STTEventType.FINAL, text=self._transcript))
+
+    async def end_stream(self) -> None:
+        self.end_count += 1
+        await self._queue.put(None)
+
+
 class FakeAgent:
     async def run(self, text: str) -> str:
         return text.upper()
@@ -124,7 +157,7 @@ class FakeAgent:
 class FakeTTS:
     """TTS that uses provider-scoped TTSEvent."""
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
         yield TTSEvent(
             type=TTSEventType.AUDIO,
             audio=_make_chunk(),
@@ -207,6 +240,17 @@ async def test_session_start_and_stop():
     assert not session.is_running
     assert transport.disconnected
     assert session.turn_state == TurnState.IDLE
+
+
+def test_session_strip_markdown_does_not_inject_hidden_processor():
+    class MarkerProcessor:
+        def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
+            return payload
+
+    processor = MarkerProcessor()
+    session = Session(_full_config(strip_markdown=True, output_processors=[processor]))
+
+    assert session._output_processors == [processor]
 
 
 @pytest.mark.asyncio
@@ -303,6 +347,68 @@ async def test_pipeline_emits_audio_in_events():
     await session.stop()
 
     assert len(received) == 2
+
+
+@pytest.mark.asyncio
+async def test_flux_auto_turn_does_not_start_on_silence_frames():
+    transport = FakeTransport(chunks=[_make_chunk(), _make_chunk(), _make_chunk()])
+    session = Session(
+        _full_config(transport=transport, enable_vad=False, auto_turn_from_stt_final=True)
+    )
+    session._is_running = True
+    session._turn_manager.start_turn = AsyncMock()  # type: ignore[method-assign]
+
+    await session._run_pipeline()
+
+    session._turn_manager.start_turn.assert_not_called()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_flux_auto_turn_does_not_barge_in_during_bot_playback():
+    transport = FakeTransport(chunks=[_make_loud_chunk(), _make_loud_chunk(), _make_loud_chunk()])
+    session = Session(
+        _full_config(transport=transport, enable_vad=False, auto_turn_from_stt_final=True)
+    )
+    session._is_running = True
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    session._turn_manager.start_turn = AsyncMock()  # type: ignore[method-assign]
+
+    await session._run_pipeline()
+
+    session._turn_manager.start_turn.assert_not_called()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_flux_auto_turn_starts_once_and_ends_on_stt_final():
+    chunks = [_make_loud_chunk(), _make_loud_chunk(), _make_loud_chunk()]
+    transport = FakeTransport(chunks=chunks)
+    stt = AutoTurnSTT()
+    session = Session(
+        _full_config(
+            transport=transport,
+            stt=stt,
+            enable_vad=False,
+            auto_turn_from_stt_final=True,
+        )
+    )
+
+    events_received: list[Event] = []
+    for event_type in (TurnStarted, STTFinal, TurnEnded, AgentFinal):
+        session.event_bus.subscribe(event_type, lambda e: events_received.append(e))
+
+    await session.start()
+    await asyncio.sleep(0.2)
+
+    type_names = [type(event).__name__ for event in events_received]
+    assert type_names.count("TurnStarted") == 1
+    assert "STTFinal" in type_names
+    assert "TurnEnded" in type_names
+    assert "AgentFinal" in type_names
+    assert stt.start_count == 1
+    assert stt.end_count == 1
+    assert stt.sent_chunks == chunks
+
+    await session.stop()
 
 
 @pytest.mark.asyncio
@@ -429,7 +535,7 @@ async def test_run_basic_agent_timeout_clears_turn_id():
     session = Session(_full_config(agent=TimeoutAgent()))
     session._current_turn_id = "turn-stale"
 
-    await session._run_basic_agent("hello", token=None)
+    await session._run_basic_agent("call me at 415-555-2671", token=None)
 
     assert session._current_turn_id is None
     assert session.turn_state == TurnState.IDLE
@@ -442,7 +548,7 @@ async def test_run_basic_agent_tts_error_cleans_turn_state_and_turn_id():
     session._tts_synth.synthesize = AsyncMock(side_effect=RuntimeError("tts boom"))
 
     with pytest.raises(RuntimeError, match="tts boom"):
-        await session._run_basic_agent("hello", token=None)
+        await session._run_basic_agent("call me at 415-555-2671", token=None)
 
     assert session._current_turn_id is None
     assert session.turn_state == TurnState.IDLE
@@ -697,3 +803,155 @@ async def test_trailing_playback_mark_emitted_while_session_running():
 
     assert len(transport.playback_marks) == 1
     await session.stop()
+
+
+@pytest.mark.asyncio
+async def test_session_applies_output_processors_before_tts() -> None:
+    class CaptureTTS(FakeTTS):
+        def __init__(self) -> None:
+            self.payloads: list[TTSInput] = []
+
+        @property
+        def supports_ssml(self) -> bool:
+            return True
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.payloads.append(payload)
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
+
+    class PrefixProcessor:
+        def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
+            return TTSInput(text=f"speak: {payload.text}", format=payload.format)
+
+    tts = CaptureTTS()
+    session = Session(
+        _full_config(
+            tts=tts,
+            output_processors=[PrefixProcessor()],
+            transport=FakeTransport(chunks=[_make_chunk(), _make_chunk()]),
+            stt=FakeSTT(transcript="hello"),
+        )
+    )
+
+    await session._run_basic_agent("call me at 415-555-2671", token=None)
+
+    assert tts.payloads
+    assert tts.payloads[0].text.startswith("speak: ")
+    assert tts.payloads[0].format == "plain"
+
+
+@pytest.mark.asyncio
+async def test_session_falls_back_to_plain_when_ssml_not_supported() -> None:
+    class CaptureTTS(FakeTTS):
+        def __init__(self) -> None:
+            self.payloads: list[TTSInput] = []
+
+        @property
+        def supports_ssml(self) -> bool:
+            return False
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.payloads.append(payload)
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
+
+    tts = CaptureTTS()
+    session = Session(
+        _full_config(
+            tts=tts,
+            output_processors=[
+                PauseProcessor(
+                    pattern=r"\+?\d[\d\s().-]{5,}\d",
+                    unit_pattern=r"\d",
+                    minimum_units=7,
+                )
+            ],
+            transport=FakeTransport(chunks=[_make_chunk(), _make_chunk()]),
+            stt=FakeSTT(transcript="call AT&T at 415-555-2671"),
+        )
+    )
+
+    await session._run_basic_agent("call AT&T at 415-555-2671", token=None)
+
+    assert tts.payloads
+    assert tts.payloads[0].format == "plain"
+    assert "<break" not in tts.payloads[0].text
+    assert "AT&T" in tts.payloads[0].text
+    assert "AT&amp;T" not in tts.payloads[0].text
+    assert "4 1 5" in tts.payloads[0].text
+
+
+@pytest.mark.asyncio
+async def test_session_falls_back_to_plain_unescapes_ssml_entities() -> None:
+    class CaptureTTS(FakeTTS):
+        def __init__(self) -> None:
+            self.payloads: list[TTSInput] = []
+
+        @property
+        def supports_ssml(self) -> bool:
+            return False
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.payloads.append(payload)
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
+
+    tts = CaptureTTS()
+    session = Session(
+        _full_config(
+            tts=tts,
+            output_processors=[
+                PauseProcessor(
+                    pattern=r"\+?\d[\d\s().-]{5,}\d",
+                    unit_pattern=r"\d",
+                    minimum_units=7,
+                )
+            ],
+        )
+    )
+
+    await session._run_basic_agent("Call AT&T at 415-555-2671", token=None)
+
+    assert tts.payloads
+    assert tts.payloads[0].format == "plain"
+    assert "AT&T" in tts.payloads[0].text
+    assert "AT&amp;T" not in tts.payloads[0].text
+
+
+@pytest.mark.asyncio
+async def test_session_composes_phonetic_and_phone_processors() -> None:
+    class CaptureTTS(FakeTTS):
+        def __init__(self) -> None:
+            self.payloads: list[TTSInput] = []
+
+        @property
+        def supports_ssml(self) -> bool:
+            return False
+
+        async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
+            if isinstance(payload, str):
+                payload = TTSInput(payload)
+            self.payloads.append(payload)
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
+
+    tts = CaptureTTS()
+    session = Session(
+        _full_config(
+            tts=tts,
+            output_processors=[
+                PhoneticReplacementProcessor({"Siobhan": "shi-vawn"}),
+                PauseProcessor(
+                    pattern=r"\+?\d[\d\s().-]{5,}\d",
+                    unit_pattern=r"\d",
+                    minimum_units=7,
+                    pause_ms=140,
+                ),
+            ],
+        )
+    )
+
+    await session._run_basic_agent("call Siobhan at 415-555-2671", token=None)
+
+    assert tts.payloads
+    # provider doesn't support SSML, so we should receive plain text fallback.
+    assert tts.payloads[0].format == "plain"
+    assert "shi-vawn" in tts.payloads[0].text
+    assert "4 1 5" in tts.payloads[0].text
