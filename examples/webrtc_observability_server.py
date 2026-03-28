@@ -258,9 +258,12 @@ async def main() -> None:
 
     app = FastAPI(title="EasyCat WebRTC Observability")
 
+    signaling_url = f"http://localhost:{signaling_port}"
+
     @app.get("/", response_class=HTMLResponse)
     async def observability_page() -> str:
-        return _OBSERVABILITY_HTML.read_text(encoding="utf-8")
+        html = _OBSERVABILITY_HTML.read_text(encoding="utf-8")
+        return html.replace("{{SIGNALING_URL}}", signaling_url)
 
     @app.get("/events")
     async def stream_events(request: Request) -> StreamingResponse:

@@ -77,7 +77,7 @@
           Signaling URL
           <input
             id="signalingUrl"
-            value="http://localhost:8080"
+            value="{{SIGNALING_URL}}"
             class="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none ring-indigo-400 focus:ring"
           >
         </label>
@@ -280,7 +280,8 @@ function addEvent(evt) {
   if (AUDIO_TRACKS.has(evt.track)) {
     const tMs = t * 1000;
     const prev = lastAudioMarker.get(evt.track);
-    if (prev && tMs - prev.endMs < AUDIO_COALESCE_MS) {
+    const sameTurn = !evt.turn_id || !prev || prev.el.dataset.turnId === evt.turn_id;
+    if (prev && sameTurn && tMs - prev.endMs < AUDIO_COALESCE_MS) {
       prev.endMs = tMs + durMs;
       const startMs = parseFloat(prev.el.dataset.startMs);
       prev.el.style.width = `${Math.max(10, ((prev.endMs - startMs) / 1000) * pxPerSec)}px`;
