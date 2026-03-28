@@ -218,7 +218,7 @@ class CallDispositionTracker:
     def record_disposition(self, disposition: str) -> None:
         self._dispositions.append((time.time(), disposition))
         if len(self._dispositions) > self._MAX_DISPOSITIONS:
-            self._dispositions = self._dispositions[-self._MAX_DISPOSITIONS:]
+            self._dispositions = self._dispositions[-self._MAX_DISPOSITIONS :]
 
     def disposition_rates(self) -> dict[str, float]:
         """Return disposition breakdown as rates (0.0-1.0)."""

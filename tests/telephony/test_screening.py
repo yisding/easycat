@@ -628,6 +628,4 @@ class TestIsConversational:
         assert not is_conversational("One moment please")
 
     def test_ivr_prompts_rejected(self) -> None:
-        assert not is_conversational(
-            "Press 1 for sales, press 2 for support, press 3 for billing"
-        )
+        assert not is_conversational("Press 1 for sales, press 2 for support, press 3 for billing")

@@ -36,9 +36,7 @@ def _zero_crossing_freq(samples: Sequence[int], sample_rate: int) -> float:
     n = len(samples)
     if n < 2:
         return 0.0
-    crossings = sum(
-        1 for i in range(1, n) if (samples[i] >= 0) != (samples[i - 1] >= 0)
-    )
+    crossings = sum(1 for i in range(1, n) if (samples[i] >= 0) != (samples[i - 1] >= 0))
     return crossings * sample_rate / (2 * n)
 
 
