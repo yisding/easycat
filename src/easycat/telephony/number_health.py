@@ -164,6 +164,11 @@ class NumberHealthMonitor:
         return self._call_sid_to_number.get(call_sid, call_sid)
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
+        # Guard against duplicate CallInitiated for the same call_sid
+        # (place_call() emits one, and the Twilio "initiated" status callback
+        # emits another via emit_call_status).
+        if event.call_sid in self._call_sid_to_number:
+            return
         number = event.from_
         self._call_sid_to_number[event.call_sid] = number
         self._concurrent[number] = self._concurrent.get(number, 0) + 1

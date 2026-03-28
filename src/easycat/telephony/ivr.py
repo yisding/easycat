@@ -221,8 +221,10 @@ class IVRNavigator:
         self._cancel_prompt_timeout()
         self._in_hold = False
 
-        # Check if a human answered after IVR navigation.
-        if self._menu_depth > 0 and detect_human_after_ivr(event.text):
+        # Check if a human answered after IVR navigation.  A human can pick up
+        # even when no digits were sent (e.g. agent chose "wait"), so this check
+        # does not require menu_depth > 0.
+        if detect_human_after_ivr(event.text):
             await self._event_bus.emit(
                 IVRAction(type=IVRActionType.HUMAN_DETECTED, menu_depth=self._menu_depth)
             )
