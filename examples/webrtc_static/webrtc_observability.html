@@ -250,10 +250,13 @@ function addSentenceLink({ direction, text, turnId, timestamp }) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `w-full rounded-md border px-2 py-1.5 text-left text-xs text-slate-100 transition hover:bg-slate-900/80 ${color}`;
-    button.innerHTML = `
-      <div class="line-clamp-2">${sentence}</div>
-      <div class="mt-1 text-[10px] text-slate-400">turn: ${turnId} · ${(timestamp - startTs).toFixed(2)}s</div>
-    `;
+    const sentDiv = document.createElement("div");
+    sentDiv.className = "line-clamp-2";
+    sentDiv.textContent = sentence;
+    const metaDiv = document.createElement("div");
+    metaDiv.className = "mt-1 text-[10px] text-slate-400";
+    metaDiv.textContent = `turn: ${turnId} · ${(timestamp - startTs).toFixed(2)}s`;
+    button.append(sentDiv, metaDiv);
     button.addEventListener("click", () => highlightTurn(turnId, direction));
     bucket.prepend(button);
   }
@@ -374,6 +377,7 @@ function startRecorder(stream, onChunk, onDone) {
 
 function setAudioFromBlob(el, blob) {
   if (!blob || blob.size === 0) return;
+  if (el.src) URL.revokeObjectURL(el.src);
   el.src = URL.createObjectURL(blob);
 }
 
