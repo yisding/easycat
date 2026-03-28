@@ -316,6 +316,41 @@ Event = (
 )
 
 
+# ── Event groups ──────────────────────────────────────────────────
+# Semantic groupings of EasyCat-level events for bulk subscription.
+
+AUDIO_EVENTS: tuple[type, ...] = (AudioIn,)
+VAD_EVENTS: tuple[type, ...] = (VADStartSpeaking, VADStopSpeaking)
+STT_EVENTS: tuple[type, ...] = (STTPartial, STTFinal)
+AGENT_EVENTS: tuple[type, ...] = (AgentDelta, AgentFinal)
+TTS_EVENTS: tuple[type, ...] = (TTSAudio, TTSMarkers)
+TOOL_EVENTS: tuple[type, ...] = (ToolCallStarted, ToolCallDelta, ToolCallResult)
+LIFECYCLE_EVENTS: tuple[type, ...] = (
+    TurnStarted,
+    TurnEnded,
+    BotStartedSpeaking,
+    BotStoppedSpeaking,
+)
+INTERRUPTION_EVENTS: tuple[type, ...] = (Interruption, PlaybackMarkAck)
+RECONNECT_EVENTS: tuple[type, ...] = (ReconnectAttempt, ReconnectSuccess, ReconnectFailure)
+TELEPHONY_EVENTS: tuple[type, ...] = (DTMF, DTMFAggregated, VoicemailDetected)
+ERROR_EVENTS: tuple[type, ...] = (Error,)
+
+ALL_EVENTS: tuple[type, ...] = (
+    AUDIO_EVENTS
+    + VAD_EVENTS
+    + STT_EVENTS
+    + AGENT_EVENTS
+    + TTS_EVENTS
+    + TOOL_EVENTS
+    + LIFECYCLE_EVENTS
+    + INTERRUPTION_EVENTS
+    + RECONNECT_EVENTS
+    + TELEPHONY_EVENTS
+    + ERROR_EVENTS
+)
+
+
 # ── Provider-scoped event types ────────────────────────────────────
 # Internal to provider implementations. Session maps these to EasyCat events.
 
