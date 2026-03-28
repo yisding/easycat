@@ -59,13 +59,19 @@ def parse_call_status_callback(
             call_sid=call_sid,
             duration_s=duration_s,
             disposition="completed",
+            number=params.get("From", ""),
         )
 
     if status in {"busy", "no-answer", "failed", "canceled"}:
         sip_code_raw = params.get("SipResponseCode")
         sip_code = int(sip_code_raw) if sip_code_raw is not None else None
         reason = _SIP_BLOCK_REASONS.get(sip_code, status) if sip_code else status
-        return CallFailed(call_sid=call_sid, reason=reason, sip_code=sip_code)
+        return CallFailed(
+            call_sid=call_sid,
+            reason=reason,
+            sip_code=sip_code,
+            number=params.get("From", ""),
+        )
 
     return None
 

@@ -186,7 +186,7 @@ class VoicemailDetector:
 
         if duration >= self._config.monologue_threshold_s:
             self._has_emitted = True
-            await self._event_bus.emit(VoicemailDetected(result="machine"))
+            await self._event_bus.emit(VoicemailDetected(result="machine", source="detector"))
 
     async def process_audio(self, pcm16_data: bytes, sample_rate: int | None = None) -> bool:
         """Analyze a PCM16 audio chunk for beep detection.
@@ -225,7 +225,7 @@ class VoicemailDetector:
             if self._tone_duration_s * 1000 >= cfg.min_duration_ms:
                 self._beep_detected = True
                 self._has_emitted = True
-                await self._event_bus.emit(VoicemailDetected(result="machine"))
+                await self._event_bus.emit(VoicemailDetected(result="machine", source="detector"))
                 return True
         else:
             self._tone_duration_s = 0.0
@@ -311,7 +311,7 @@ class VoicemailPolicyHandler:
             return
 
         # When fusion is active, ignore raw AMD events.
-        if self._expect_fused and event.source != "fusion":
+        if self._expect_fused and not event.source:
             return
 
         # Only act on machine detections

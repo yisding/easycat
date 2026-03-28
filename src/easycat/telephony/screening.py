@@ -12,6 +12,7 @@ from easycat.events import (
     CallEnded,
     CallScreening,
     EventBus,
+    ScreeningTimedOut,
     STTFinal,
     STTPartial,
     VoicemailDetected,
@@ -519,6 +520,7 @@ class CallScreeningDetector:
         if self._screening_turns >= self._max_screening_turns:
             self._state = ScreeningState.SCREENING_TIMEOUT
             logger.info("Max screening turns (%d) reached", self._max_screening_turns)
+            await self._event_bus.emit(ScreeningTimedOut(call_sid=self._call_sid))
             return
 
     async def _on_voicemail(self, event: VoicemailDetected) -> None:
