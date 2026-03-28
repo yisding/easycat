@@ -54,6 +54,10 @@
     .marker-tools { background: #d97706; }
     .marker-barge { background: #dc2626; }
     .marker-playback { background: #475569; }
+    .marker-turn { background: #6366f1; }
+    .marker-vad { background: #0891b2; }
+    .marker-errors { background: #be123c; }
+    .marker-reconnect { background: #a16207; }
 
     @media (max-width: 639px) {
       .track-lane { min-width: 780px; }
@@ -138,6 +142,10 @@ const tracks = [
   ["playback", "Playback state"],
   ["tool_calls", "Tool calls"],
   ["barge_in", "Barge-in"],
+  ["turn_lifecycle", "Turn lifecycle"],
+  ["vad", "VAD"],
+  ["errors", "Errors"],
+  ["reconnect", "Reconnect"],
 ];
 
 const timeline = document.getElementById("timeline");
@@ -185,6 +193,10 @@ function kindToClass(track) {
     tool_calls: "marker-tools",
     barge_in: "marker-barge",
     playback: "marker-playback",
+    turn_lifecycle: "marker-turn",
+    vad: "marker-vad",
+    errors: "marker-errors",
+    reconnect: "marker-reconnect",
   }[track] || "marker-llm";
 }
 
@@ -260,7 +272,7 @@ function addEvent(evt) {
   marker.style.left = `${t * pxPerSec}px`;
   marker.style.width = `${Math.max(10, ((evt.duration_ms || 120) / 1000) * pxPerSec)}px`;
   marker.title = JSON.stringify(evt, null, 2);
-  marker.textContent = evt.text || evt.tool_name || evt.type;
+  marker.textContent = evt.text || evt.tool_name || evt.message || evt.type;
   marker.dataset.turnId = evt.turn_id || "";
   marker.dataset.track = evt.track;
   lane.appendChild(marker);
@@ -282,9 +294,39 @@ function addEvent(evt) {
   }
 
   const line = document.createElement("div");
-  line.textContent = `[${t.toFixed(2)}s] ${evt.type} ${evt.text || evt.result || ""}`;
+  line.textContent = `[${t.toFixed(2)}s] ${evt.type} ${evt.text || evt.result || evt.message || ""}`;
   eventLog.prepend(line);
 }
+
+/* ── SSE with auto-reconnect ──────────────────────────────────── */
+
+let sseRetryDelay = 1000;
+const SSE_MAX_RETRY = 30000;
+
+function connectSSE() {
+  if (evtSource) evtSource.close();
+  evtSource = new EventSource("/events");
+
+  evtSource.onopen = () => {
+    sseRetryDelay = 1000; // reset backoff on successful connect
+  };
+
+  evtSource.onmessage = (e) => addEvent(JSON.parse(e.data));
+
+  evtSource.onerror = () => {
+    evtSource.close();
+    evtSource = null;
+    // Exponential backoff reconnect (only while conversation is active).
+    if (!stopBtn.disabled) {
+      setTimeout(() => {
+        if (!stopBtn.disabled) connectSSE();
+      }, sseRetryDelay);
+      sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_MAX_RETRY);
+    }
+  };
+}
+
+/* ── WebRTC ──────────────────────────────────────────────────── */
 
 async function fetchIceConfig(baseUrl) {
   const response = await fetch(baseUrl + "/config");
@@ -342,8 +384,7 @@ async function startConversation() {
   statusEl.className = "text-sm font-semibold text-amber-300";
   startTs = 0;
 
-  evtSource = new EventSource("/events");
-  evtSource.onmessage = (e) => addEvent(JSON.parse(e.data));
+  connectSSE();
 
   localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const mic = startRecorder(
@@ -375,7 +416,7 @@ async function startConversation() {
 }
 
 function stopConversation() {
-  if (evtSource) evtSource.close();
+  if (evtSource) { evtSource.close(); evtSource = null; }
   if (micRecorder && micRecorder.state !== "inactive") micRecorder.stop();
   if (agentRecorder && agentRecorder.state !== "inactive") agentRecorder.stop();
   if (localStream) localStream.getTracks().forEach(t => t.stop());
