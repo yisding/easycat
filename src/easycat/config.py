@@ -386,7 +386,7 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
         event_bus.subscribe(IVRAction, _on_ivr_human_detected)
 
         # Voicemail policy handler.
-        helpers.append(VoicemailPolicyHandler(event_bus))
+        helpers.append(VoicemailPolicyHandler(event_bus, expect_fused=True))
 
     return helpers
 

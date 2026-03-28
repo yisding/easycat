@@ -124,7 +124,12 @@ class TTSSynthesizer:
                         self._correlation_ids() if self._correlation_ids else (None, None)
                     )
                     await self._event_bus.emit(
-                        TTSAudio(chunk=tts_event.audio, session_id=session_id, turn_id=turn_id)
+                        TTSAudio(
+                            chunk=tts_event.audio,
+                            session_id=session_id,
+                            turn_id=turn_id,
+                            bypass_gate=bypass_gate,
+                        )
                     )
                     if not result.audio_produced:
                         result.audio_produced = True

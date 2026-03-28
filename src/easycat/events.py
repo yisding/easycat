@@ -108,6 +108,7 @@ class TTSAudio:
     chunk: AudioChunk
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
+    bypass_gate: bool = field(default=False, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
