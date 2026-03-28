@@ -31,18 +31,21 @@ reverse proxy (e.g. nginx or Caddy with a TLS certificate).
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
-import signal
+import sys
 from pathlib import Path
 
-from easycat import (
-    EasyCatConfig,
-    ICEServer,
-    OpenAIAgentsAdapter,
-    WebRTCTransportConfig,
-    create_session,
+from easycat import EasyCatConfig, ICEServer, WebRTCTransportConfig, create_session
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from common import (  # noqa: E402
+    build_openai_agents_adapter,
+    default_event_logging,
+    require_env,
+    wait_for_shutdown_signal,
 )
+from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 # Serves only the webrtc_static/ subdirectory (contains only the HTML client).
 _STATIC_DIR = str(Path(__file__).parent / "webrtc_static")
@@ -69,27 +72,10 @@ def _build_ice_servers() -> list[ICEServer]:
 
 
 async def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    api_key = require_env("OPENAI_API_KEY")
+    adapter = build_openai_agents_adapter(
+        instructions="You are a helpful voice assistant. Keep responses concise."
     )
-
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise SystemExit("OPENAI_API_KEY is required.")
-
-    try:
-        from agents import Agent  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise SystemExit(
-            "OpenAI Agents SDK is required. Install with: uv add easycat[openai-agents]"
-        ) from exc
-
-    voice_agent = Agent(
-        name="VoiceAssistant",
-        instructions="You are a helpful voice assistant. Keep responses concise.",
-    )
-    adapter = OpenAIAgentsAdapter(voice_agent)
 
     signaling_host = os.getenv("SIGNALING_HOST", "0.0.0.0")
     signaling_port = int(os.getenv("SIGNALING_PORT", "8080"))
@@ -106,8 +92,10 @@ async def main() -> None:
         ),
         agent=adapter,
         wrap_agent=False,
+        event_logging=default_event_logging(),
     )
     session = create_session(config)
+    attach_runtime_feedback(session)
 
     print(f"Open http://localhost:{signaling_port}/webrtc_client.html in your browser")
     if any(any("turn:" in u for u in s.urls) for s in ice_servers):
@@ -117,13 +105,7 @@ async def main() -> None:
 
     await session.start()
 
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
-
-    await stop_event.wait()
-    await session.stop()
+    await wait_for_shutdown_signal(session)
 
 
 if __name__ == "__main__":

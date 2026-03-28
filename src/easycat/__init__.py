@@ -45,7 +45,15 @@ from easycat.smart_turn import (
     create_smart_turn,
 )
 from easycat.session import Session, SessionConfig, TurnState
+from easycat.session_manager import SessionManager
 from easycat.turn_manager import TurnMode
+from easycat.llm_output_processing import (
+    LLMOutputProcessor,
+    MarkdownStripProcessor,
+    PauseProcessor,
+    PhoneticReplacementProcessor,
+    default_pronunciation_processors,
+)
 from easycat.config import (
     EasyCatConfig,
     EventLoggingConfig,
@@ -134,14 +142,23 @@ from easycat.stt import (
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
+from easycat.tts.input import TTSInput, TTSInputFormat
 from easycat.vad import KrispVAD, SileroVAD, TenVAD, VADConfig, create_vad
 
 # ── Transport implementations ────────────────────────────────────
 
 from easycat.transports.local import LocalTransport, LocalTransportConfig
-from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
+from easycat.transports.twilio_media import (
+    TwilioConnectionTransport,
+    TwilioTransport,
+    TwilioTransportConfig,
+)
 from easycat.transports.webrtc import ICEServer, WebRTCTransport, WebRTCTransportConfig
-from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
+from easycat.transports.websocket import (
+    WebSocketConnectionTransport,
+    WebSocketTransport,
+    WebSocketTransportConfig,
+)
 
 # ── Configuration & errors ────────────────────────────────────────
 
@@ -160,6 +177,7 @@ __all__ = [
     "SessionConfig",
     "TurnState",
     "TurnMode",
+    "SessionManager",
     "EasyCatConfig",
     "EventLoggingConfig",
     "MetricsConfig",
@@ -177,6 +195,11 @@ __all__ = [
     "PydanticAIAdapter",
     "serialize_output",
     "CancelToken",
+    "LLMOutputProcessor",
+    "MarkdownStripProcessor",
+    "PauseProcessor",
+    "PhoneticReplacementProcessor",
+    "default_pronunciation_processors",
     # Smart turn
     "SmartTurnConfig",
     "SmartTurnONNX",
@@ -216,6 +239,8 @@ __all__ = [
     "STTProvider",
     "Transport",
     "TTSProvider",
+    "TTSInput",
+    "TTSInputFormat",
     "VADProvider",
     # Audio format
     "AudioChunk",
@@ -263,8 +288,10 @@ __all__ = [
     "WebRTCTransportConfig",
     "WebSocketTransport",
     "WebSocketTransportConfig",
+    "WebSocketConnectionTransport",
     "TwilioTransport",
     "TwilioTransportConfig",
+    "TwilioConnectionTransport",
     # Configuration & errors
     "TimeoutConfig",
     "STTTimeoutError",

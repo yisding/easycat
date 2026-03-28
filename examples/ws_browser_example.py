@@ -24,8 +24,7 @@ import asyncio
 import functools
 import json
 import logging
-import os
-import signal
+import sys
 import threading
 from collections.abc import AsyncIterator
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -35,11 +34,20 @@ from easycat import (
     PCM16_MONO_16K,
     AudioChunk,
     EasyCatConfig,
-    OpenAIAgentsAdapter,
     WebSocketTransportConfig,
     create_session,
 )
 from easycat.audio_utils import resample_chunk
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from common import (  # noqa: E402
+    build_openai_agents_adapter,
+    default_event_logging,
+    require_env,
+    wait_for_shutdown_signal,
+)
+from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -114,30 +122,20 @@ def _run_http_server() -> None:
 
 
 async def main() -> None:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise SystemExit("OPENAI_API_KEY is required.")
-
-    try:
-        from agents import Agent  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise SystemExit(
-            "OpenAI Agents SDK is required. Install with: uv sync --extra openai-agents"
-        ) from exc
-
-    voice_agent = Agent(
-        name="VoiceAssistant",
-        instructions="You are a helpful voice assistant. Keep responses concise.",
+    api_key = require_env("OPENAI_API_KEY")
+    adapter = build_openai_agents_adapter(
+        instructions="You are a helpful voice assistant. Keep responses concise."
     )
-    adapter = OpenAIAgentsAdapter(voice_agent)
 
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=WebSocketTransportConfig(port=WS_PORT),
         agent=adapter,
         wrap_agent=False,
+        event_logging=default_event_logging(),
     )
     session = create_session(config)
+    attach_runtime_feedback(session)
 
     # Wrap the transport so the pipeline always sees 16 kHz audio regardless
     # of the browser's actual capture rate.
@@ -151,13 +149,7 @@ async def main() -> None:
     # Start the EasyCat session (launches WebSocket server on WS_PORT).
     await session.start()
 
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
-
-    await stop_event.wait()
-    await session.stop()
+    await wait_for_shutdown_signal(session)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Twilio Media Streams example with a TwiML webhook.
+"""Twilio Media Streams example with per-call EasyCat sessions.
 
 Setup:
   export OPENAI_API_KEY="..."
@@ -10,15 +10,27 @@ Setup:
 from __future__ import annotations
 
 import os
+import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import websockets
+from websockets.asyncio.server import ServerConnection
 
 from easycat import (
     EasyCatConfig,
-    OpenAIAgentsAdapter,
+    SessionManager,
     TelephonyConfig,
-    TwilioTransportConfig,
+    TwilioConnectionTransport,
     create_session,
 )
 from easycat.transports.twilio_media import twiml_connect_stream
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from common import build_openai_agents_adapter, default_event_logging  # noqa: E402
+from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 
 def create_app(*, api_key: str | None = None, stream_url: str | None = None):
@@ -27,42 +39,42 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
     if not api_key or not stream_url:
         raise RuntimeError("OPENAI_API_KEY and TWILIO_STREAM_URL are required.")
 
-    try:
-        from agents import Agent  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise RuntimeError(
-            "OpenAI Agents SDK is required. Install with: uv add easycat[openai-agents]"
-        ) from exc
+    manager: SessionManager[int] = SessionManager()
 
-    voice_agent = Agent(
-        name="VoiceAssistant",
-        instructions="You are a helpful voice assistant.",
-    )
-    adapter = OpenAIAgentsAdapter(voice_agent)
-
-    config = EasyCatConfig(
-        openai_api_key=api_key,
-        transport=TwilioTransportConfig(),
-        telephony=TelephonyConfig(
-            enable_dtmf_aggregator=True,
-            enable_voicemail_detector=True,
-        ),
-        agent=adapter,
-        wrap_agent=False,
-    )
-    session = create_session(config)
+    async def handle_twilio_connection(ws: ServerConnection) -> None:
+        adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
+        transport = TwilioConnectionTransport(ws)
+        session = create_session(
+            EasyCatConfig(
+                openai_api_key=api_key,
+                transport=transport,
+                telephony=TelephonyConfig(
+                    enable_dtmf_aggregator=True,
+                    enable_voicemail_detector=True,
+                ),
+                agent=adapter,
+                wrap_agent=False,
+                event_logging=default_event_logging(),
+            )
+        )
+        attach_runtime_feedback(session)
+        key = id(ws)
+        async with manager.connection(key, session):
+            await ws.wait_closed()
 
     from fastapi import FastAPI, Response
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        twilio_server = await websockets.serve(handle_twilio_connection, "0.0.0.0", 8766)
+        try:
+            yield
+        finally:
+            twilio_server.close()
+            await twilio_server.wait_closed()
+            await manager.stop_all()
 
-    @app.on_event("startup")
-    async def _startup() -> None:
-        await session.start()
-
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
-        await session.stop()
+    app = FastAPI(lifespan=lifespan)
 
     @app.post("/twiml")
     async def twiml() -> Response:

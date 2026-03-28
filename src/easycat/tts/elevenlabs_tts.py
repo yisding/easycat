@@ -14,6 +14,7 @@ from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.tts.base import TTSBase
+from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class ElevenLabsTTSConfig:
     stability: float = 0.5
     similarity_boost: float = 0.75
     output_format: str = "pcm_24000"
-    stream_mode: ElevenLabsStreamMode = ElevenLabsStreamMode.HTTP
+    stream_mode: ElevenLabsStreamMode = ElevenLabsStreamMode.WEBSOCKET
     base_url: str = "https://api.elevenlabs.io/v1"
     ws_base_url: str = "wss://api.elevenlabs.io/v1"
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_24K)
@@ -93,8 +94,14 @@ class ElevenLabsTTS(TTSBase):
             )
         return self._client
 
-    async def synthesize(self, text: str) -> AsyncIterator[TTSEvent]:
+    @property
+    def supports_ssml(self) -> bool:
+        return False
+
+    async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using the configured streaming mode."""
+        payload = coerce_tts_input(payload)
+        text = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
         if self._config.stream_mode == ElevenLabsStreamMode.WEBSOCKET:
             async for event in self._synthesize_ws(text):
                 yield event
@@ -154,43 +161,11 @@ class ElevenLabsTTS(TTSBase):
         """Synthesize via WebSocket streaming."""
         self._start_synthesis()
 
-        ws_url = (
-            f"{self._config.ws_base_url}"
-            f"/text-to-speech/{self._config.voice_id}"
-            f"/stream-input?model_id={self._config.model_id}"
-            f"&output_format={self._config.output_format}"
-        )
-
-        self._ws = ReconnectingWebSocket(
-            url=ws_url,
-            config=ReconnectConfig(
-                extra_headers={"xi-api-key": self._config.api_key},
-            ),
-            event_bus=self._config.event_bus,
-            provider_name="elevenlabs_tts",
-        )
-
         try:
-            await self._ws.connect()
-
-            # Send initial message with voice settings
-            init_msg = {
-                "text": " ",
-                "voice_settings": {
-                    "stability": self._config.stability,
-                    "similarity_boost": self._config.similarity_boost,
-                },
-            }
-            await self._ws.send(json.dumps(init_msg))
-
-            # Send the actual text
-            await self._ws.send(json.dumps({"text": text}))
-
-            # Send empty string to signal end of input
-            await self._ws.send(json.dumps({"text": ""}))
+            ws = await self._start_ws_stream(text)
 
             # Receive audio chunks
-            async for message in self._ws.recv_iter():
+            async for message in ws.recv_iter():
                 if self._cancelled:
                     break
 
@@ -211,12 +186,77 @@ class ElevenLabsTTS(TTSBase):
                         pass
 
         except Exception as exc:
+            await self._close_ws()
             if not self._cancelled:
                 logger.error("ElevenLabs TTS WebSocket error: %s", exc)
                 raise
+        except BaseException:
+            # CancelledError is a BaseException; close the ws since it's mid-stream
+            await self._close_ws()
+            raise
         finally:
             await self._close_ws()
             self._end_synthesis()
+
+    async def _start_ws_stream(self, text: str) -> ReconnectingWebSocket:
+        """Send the full ElevenLabs stream-init sequence, retrying once on stale sockets."""
+        messages = self._build_ws_messages(text)
+        ws = await self._connect_ws()
+
+        try:
+            await self._send_ws_messages(ws, messages)
+            return ws
+        except Exception:
+            if self._cancelled:
+                raise
+            await self._close_ws()
+            ws = await self._connect_ws()
+            await self._send_ws_messages(ws, messages)
+            return ws
+
+    def _build_ws_messages(self, text: str) -> tuple[str, str, str]:
+        """Build the init, text, and EOS messages for a synthesis request."""
+        init_msg = {
+            "text": " ",
+            "voice_settings": {
+                "stability": self._config.stability,
+                "similarity_boost": self._config.similarity_boost,
+            },
+        }
+        return (
+            json.dumps(init_msg),
+            json.dumps({"text": text}),
+            json.dumps({"text": ""}),
+        )
+
+    async def _send_ws_messages(
+        self,
+        ws: ReconnectingWebSocket,
+        messages: tuple[str, ...],
+    ) -> None:
+        """Send a complete synthesis request over the active WebSocket."""
+        for message in messages:
+            await ws.send(message)
+
+    async def _connect_ws(self) -> ReconnectingWebSocket:
+        """Create and connect a fresh WebSocket for one synthesis request."""
+        ws_url = (
+            f"{self._config.ws_base_url}"
+            f"/text-to-speech/{self._config.voice_id}"
+            f"/stream-input?model_id={self._config.model_id}"
+            f"&output_format={self._config.output_format}"
+        )
+
+        self._ws = ReconnectingWebSocket(
+            url=ws_url,
+            config=ReconnectConfig(
+                extra_headers={"xi-api-key": self._config.api_key},
+            ),
+            event_bus=self._config.event_bus,
+            provider_name="elevenlabs_tts",
+        )
+        await self._ws.connect()
+        return self._ws
 
     async def _close_ws(self) -> None:
         """Close the WebSocket connection."""
