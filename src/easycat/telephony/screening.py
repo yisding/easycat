@@ -320,7 +320,7 @@ class CallScreeningDetector:
         agent_timeout_s: float = AGENT_RESPONSE_TIMEOUT_S,
         max_screening_turns: int = 3,
         patterns: ScreeningPatternSet | None = None,
-        track_filter: str | None = "inbound",
+        track_filter: str | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._call_sid = call_sid
