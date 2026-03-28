@@ -34,14 +34,14 @@ _EARLY_MEDIA_PATTERNS: list[str] = [
 ]
 
 # Patterns that indicate a human receptionist answered after IVR navigation.
+# Avoid generic phrases like "thank you for calling" or "speaking" — those
+# commonly appear in IVR prompts themselves and cause false human-detection.
 _HUMAN_AFTER_IVR_PATTERNS: list[str] = [
     "how can i help",
     "how may i help",
     "what can i do for you",
-    "thank you for calling",
     "hi, this is",
     "hello, this is",
-    "speaking",
 ]
 
 

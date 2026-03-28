@@ -126,7 +126,7 @@ class TestCallScreeningDetector:
         bus = EventBus()
         received: list[CallScreening] = []
         bus.subscribe(CallScreening, received.append)
-        detector = CallScreeningDetector(bus, call_sid="CA1")
+        detector = CallScreeningDetector(bus, call_sid="CA1", track_filter=None)
         detector.start()
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from easycat.events import (
+    CallAnswered,
     CallScreening,
     EventBus,
     STTFinal,
@@ -631,6 +632,7 @@ class STTAMDFusionClassifier:
         self._stt_result: str | None = None
         self._emitted = False
         self._started = False
+        self._call_answered = False
         self._screening_active = False
         self._timeout_task: asyncio.Task[None] | None = None
 
@@ -645,6 +647,7 @@ class STTAMDFusionClassifier:
     def start(self) -> None:
         if self._started:
             return
+        self._event_bus.subscribe(CallAnswered, self._on_call_answered)
         self._event_bus.subscribe(VoicemailDetected, self._on_voicemail_detected)
         self._event_bus.subscribe(STTFinal, self._on_stt_final)
         self._event_bus.subscribe(CallScreening, self._on_screening)
@@ -652,6 +655,7 @@ class STTAMDFusionClassifier:
 
     def stop(self) -> None:
         if self._started:
+            self._event_bus.unsubscribe(CallAnswered, self._on_call_answered)
             self._event_bus.unsubscribe(VoicemailDetected, self._on_voicemail_detected)
             self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
             self._event_bus.unsubscribe(CallScreening, self._on_screening)
@@ -660,12 +664,16 @@ class STTAMDFusionClassifier:
         self._amd_result = None
         self._stt_result = None
         self._emitted = False
+        self._call_answered = False
         self._screening_active = False
 
     def _cancel_timeout(self) -> None:
         if self._timeout_task and not self._timeout_task.done():
             self._timeout_task.cancel()
         self._timeout_task = None
+
+    async def _on_call_answered(self, event: CallAnswered) -> None:
+        self._call_answered = True
 
     async def _on_screening(self, event: CallScreening) -> None:
         """Cancel AMD-only fallback and stop STT classification when screening is detected."""
@@ -683,7 +691,7 @@ class STTAMDFusionClassifier:
 
     async def _on_stt_final(self, event: STTFinal) -> None:
         """Classify greeting text via STT."""
-        if self._emitted or self._screening_active:
+        if self._emitted or self._screening_active or not self._call_answered:
             return
         text = event.text.strip()
         if not text:

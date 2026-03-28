@@ -8,7 +8,7 @@ import struct
 
 import pytest
 
-from easycat.events import EventBus, STTFinal, VoicemailDetected
+from easycat.events import CallAnswered, EventBus, STTFinal, VoicemailDetected
 from easycat.telephony.voicemail import (
     PostScreeningVoicemailDetector,
     STTAMDFusionClassifier,
@@ -246,6 +246,7 @@ class TestEnhancedVoicemailIntegration:
         classifier.start()
         bus.subscribe(VoicemailDetected, results.append)
         try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
             # AMD result is unknown.
             await bus.emit(VoicemailDetected(result="unknown"))
             # STT classifies as machine.
@@ -263,6 +264,7 @@ class TestEnhancedVoicemailIntegration:
         classifier.start()
         bus.subscribe(VoicemailDetected, results.append)
         try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="machine"))
             await bus.emit(STTFinal(text="Hi you've reached John, leave a message"))
             assert classifier.amd_result == "machine"
@@ -297,6 +299,7 @@ class TestEnhancedVoicemailIntegration:
         classifier.start()
         bus.subscribe(VoicemailDetected, results.append)
         try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
             # Short greeting classified by STT text, not monologue duration.
             await bus.emit(STTFinal(text="Not available, leave a message"))
             assert classifier.stt_result == "machine"

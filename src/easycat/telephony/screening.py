@@ -427,7 +427,10 @@ class CallScreeningDetector:
             return
 
         # Track filtering: only analyze inbound (callee) audio.
-        if self._track_filter and hasattr(event, "track"):
+        # If track_filter is set, skip events that either lack a track
+        # attribute or carry a different track — prevents bot-side
+        # transcripts from triggering false screening matches.
+        if self._track_filter:
             if getattr(event, "track", None) != self._track_filter:
                 return
 

@@ -173,7 +173,17 @@ class ClassificationGate:
         try:
             await asyncio.sleep(self._timeout_s)
             if self._closed:
-                buffered = self.release()
+                # Inline the release logic instead of calling self.release(),
+                # because release() cancels _timeout_task — which is *this* task.
+                # That would inject CancelledError on the next await and drop
+                # the buffered audio before _on_flush_async can re-enqueue it.
+                self._closed = False
+                self._hold_audio_playing = False
+                self._timeout_task = None
+                buffered = list(self._buffer)
+                self._buffer.clear()
+                if self._on_flush and buffered:
+                    self._on_flush(buffered)
                 if buffered and self._on_flush_async:
                     await self._on_flush_async(buffered)
         except asyncio.CancelledError:
@@ -351,10 +361,14 @@ class OutboundCallStateMachine:
             self._start_max_duration_timer()
 
     async def _on_failed(self, event: CallFailed) -> None:
+        if event.call_sid:
+            self._call_sid = event.call_sid
         self._cancel_timers()
         await self._transition(OutboundCallState.ENDED)
 
     async def _on_ended(self, event: CallEnded) -> None:
+        if event.call_sid:
+            self._call_sid = event.call_sid
         self._cancel_timers()
         await self._transition(OutboundCallState.ENDED)
 
