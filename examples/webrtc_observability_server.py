@@ -6,6 +6,7 @@ in an Audacity-style multi-track timeline.
 
 Setup:
     export OPENAI_API_KEY="..."
+    # telephony extra includes FastAPI/uvicorn
     uv sync --extra openai-agents --extra webrtc --extra telephony
     uv run python examples/webrtc_observability_server.py
 
@@ -21,7 +22,6 @@ import logging
 import os
 import sys
 import time
-from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -160,11 +160,10 @@ def _serialize_event(event: Any) -> dict[str, Any]:
             payload["provider"] = event.provider
             payload["attempt"] = event.attempt
 
-    if is_dataclass(event):
-        data = asdict(event)
-        for key in ("session_id", "turn_id"):
-            if key in data and data[key] is not None:
-                payload[key] = data[key]
+    for key in ("session_id", "turn_id"):
+        val = getattr(event, key, None)
+        if val is not None:
+            payload[key] = val
 
     return payload
 
@@ -306,7 +305,11 @@ async def main() -> None:
             finally:
                 broadcaster.disconnect(client_id)
 
-        return StreamingResponse(gen(), media_type="text/event-stream")
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     await session.start()
 
