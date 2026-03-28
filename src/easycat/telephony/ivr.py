@@ -125,7 +125,9 @@ class DTMFDelivery:
         twiml = f'<Response><Play digits="{digits}"/><Pause length="30"/></Response>'
 
         try:
-            self._client.calls(self._call_sid).update(twiml=twiml)
+            await asyncio.to_thread(
+                self._client.calls(self._call_sid).update, twiml=twiml
+            )
             self._delivery_attempts += 1
             return True
         except Exception:
@@ -349,8 +351,11 @@ class IVRNavigator:
             self._prompt_timeout_task = None
 
     async def _prompt_timeout_coro(self) -> None:
-        await asyncio.sleep(self._config.prompt_timeout_s)
-        if self._active:
-            await self._event_bus.emit(
-                IVRAction(type=IVRActionType.WAIT, menu_depth=self._menu_depth)
-            )
+        try:
+            await asyncio.sleep(self._config.prompt_timeout_s)
+            if self._active:
+                await self._event_bus.emit(
+                    IVRAction(type=IVRActionType.WAIT, menu_depth=self._menu_depth)
+                )
+        except asyncio.CancelledError:
+            pass

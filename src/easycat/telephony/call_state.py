@@ -244,9 +244,6 @@ class OutboundCallStateMachine:
         self._on_smart_turn_suppress: Callable[[bool], None] | None = None
         self._on_vad_timeout_change: Callable[[float], None] | None = None
 
-        # Async callback to re-enqueue gated audio when the gate releases.
-        self._on_gate_flush: Callable[[list[TTSAudio]], Any] | None = None
-
     @property
     def state(self) -> OutboundCallState:
         return self._state
@@ -260,8 +257,12 @@ class OutboundCallStateMachine:
         return self._smart_turn_suppressed
 
     def set_gate_flush_callback(self, callback: Callable[[list[TTSAudio]], Any]) -> None:
-        """Set the async callback for re-enqueuing gated audio on release."""
-        self._on_gate_flush = callback
+        """Set the async callback for re-enqueuing gated audio on release.
+
+        This sets the callback on the gate directly so both explicit release
+        (from state transition) and timeout release use the same path.
+        """
+        self._gate.set_flush_async_callback(callback)
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -339,10 +340,12 @@ class OutboundCallStateMachine:
         self._update_smart_turn_suppression()
 
         # Release classification gate when leaving CLASSIFYING.
+        # The gate's async flush callback (set via set_gate_flush_callback)
+        # handles re-enqueuing the buffered audio.
         if old == OutboundCallState.CLASSIFYING and self._gate.is_closed:
             buffered = self._gate.release()
-            if buffered and self._on_gate_flush:
-                await self._on_gate_flush(buffered)
+            if buffered and self._gate._on_flush_async:
+                await self._gate._on_flush_async(buffered)
 
         # Start late voicemail detection window when entering HUMAN.
         if new_state == OutboundCallState.HUMAN and self._late_voicemail_window_s > 0:

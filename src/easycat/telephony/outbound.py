@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from enum import Enum
@@ -182,7 +183,7 @@ class OutboundCallManager:
             ]
 
         try:
-            call = self._client.calls.create(**create_kwargs)
+            call = await asyncio.to_thread(self._client.calls.create, **create_kwargs)
             call_sid: str = call.sid
             self._state = OutboundCallManagerState.ACTIVE
             await self._event_bus.emit(
