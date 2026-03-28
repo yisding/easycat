@@ -760,6 +760,7 @@ class Session:
             correlation_ids=lambda: (self.session_id, self._current_turn_id),
             audio_gate=cfg.audio_gate,
         )
+        self._audio_gate = cfg.audio_gate
         self._health_checkers: list[PeriodicHealthChecker] = []
         self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)
 
@@ -1727,7 +1728,13 @@ class Session:
         if isinstance(payload, str):
             payload = self._prepare_tts_payload(payload, is_streaming=False, is_final=True)
         turn_id = self._current_turn_id
-        await self._turn_manager.bot_started_speaking()
+        # When the classification gate is closed, audio is buffered (not sent
+        # to the transport).  Don't transition the turn manager through
+        # BOT_SPEAKING so that the replayed audio triggers the correct state
+        # transitions later via the gate-flush callback.
+        gated = self._audio_gate is not None and self._audio_gate()
+        if not gated:
+            await self._turn_manager.bot_started_speaking()
         try:
             result = await self._tts_synth.synthesize(
                 payload,
@@ -1742,7 +1749,8 @@ class Session:
         finally:
             try:
                 if (
-                    self._current_turn_id == turn_id
+                    not gated
+                    and self._current_turn_id == turn_id
                     and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
                 ):
                     await self._turn_manager.bot_stopped_speaking()

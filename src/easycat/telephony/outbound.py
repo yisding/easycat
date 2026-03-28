@@ -15,9 +15,21 @@ from easycat.events import (
     CallInitiated,
     CallRinging,
     EventBus,
+    VoicemailDetected,
 )
 
 logger = logging.getLogger(__name__)
+
+# Twilio AnsweredBy → VoicemailDetected result mapping (mirrors voicemail._TWILIO_AMD_MAP).
+_ANSWERED_BY_MAP: dict[str, str] = {
+    "human": "human",
+    "machine_start": "machine",
+    "machine_end_beep": "machine",
+    "machine_end_silence": "machine",
+    "machine_end_other": "machine",
+    "fax": "machine",
+    "unknown": "unknown",
+}
 
 # SIP response codes indicating call blocking (FCC March 2026 mandate).
 _SIP_BLOCK_REASONS: dict[int, str] = {
@@ -80,10 +92,21 @@ def parse_call_status_callback(
 async def emit_call_status(
     params: dict[str, Any], event_bus: EventBus
 ) -> CallInitiated | CallRinging | CallAnswered | CallEnded | CallFailed | None:
-    """Parse a Twilio status callback and emit the resulting event."""
+    """Parse a Twilio status callback and emit the resulting event.
+
+    When the callback is an ``in-progress`` status that includes an
+    ``AnsweredBy`` field (Twilio async AMD), a ``VoicemailDetected`` event
+    is also emitted so the call state machine can classify the call without
+    requiring a separate ``emit_twilio_amd()`` call.
+    """
     event = parse_call_status_callback(params)
     if event is not None:
         await event_bus.emit(event)
+        # Emit AMD classification when AnsweredBy is present on the answered callback.
+        if isinstance(event, CallAnswered) and event.answered_by:
+            amd_result = _ANSWERED_BY_MAP.get(event.answered_by.lower())
+            if amd_result is not None:
+                await event_bus.emit(VoicemailDetected(result=amd_result))
     return event
 
 

@@ -331,11 +331,12 @@ def create_session(config: EasyCatConfig) -> Session:
                         f'Their screening prompt says: "{prompt}". '
                         f"Identify yourself briefly."
                     )
-                    # Cancel the fallback timer *before* TTS synthesis so that
-                    # a slow TTS doesn't let the fallback fire and produce a
-                    # duplicate screening reply.
-                    _screening_detector.notify_agent_responded()
-                    if response_text:
+                    # Cancel the fallback timer and check whether it already
+                    # fired.  If the agent was slower than agent_timeout_s the
+                    # static fallback has already been spoken — skip synthesis
+                    # to avoid a duplicate screening reply.
+                    in_time = _screening_detector.notify_agent_responded()
+                    if response_text and in_time:
                         await _tts.synthesize(
                             response_text, token=None, bypass_gate=True
                         )
