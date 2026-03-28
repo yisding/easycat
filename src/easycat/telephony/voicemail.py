@@ -598,7 +598,10 @@ class PostScreeningVoicemailDetector:
 
         self._classified = True
         self._active = False
-        await self._event_bus.emit(VoicemailDetected(result=result))
+        # Emit with source="fusion" so downstream consumers that filter on
+        # expect_fused (e.g. OutboundCallStateMachine, VoicemailPolicyHandler)
+        # accept the event without waiting for the AMD fallback timer.
+        await self._event_bus.emit(VoicemailDetected(result=result, source="fusion"))
 
 
 # ── STT + AMD fusion classifier ──────────────────────────────────

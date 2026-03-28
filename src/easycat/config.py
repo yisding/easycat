@@ -93,6 +93,8 @@ class OutboundCallConfig:
     callee_language: str = "en"
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
+    ivr_agent_callback: Any = None  # AgentCallback for IVR navigation
+    ivr_dtmf_delivery: Any = None  # DTMFDelivery instance for IVR
 
 
 @dataclass
@@ -274,6 +276,12 @@ def create_session(config: EasyCatConfig) -> Session:
         _hold_audio_task: asyncio.Task[None] | None = None
 
         async def _flush_gated_audio(events: list[TTSAudio]) -> None:
+            nonlocal _hold_audio_task
+            # Cancel any in-progress hold-audio synthesis so it doesn't
+            # overlap with real conversation audio after the gate opens.
+            if _hold_audio_task is not None and not _hold_audio_task.done():
+                _hold_audio_task.cancel()
+                _hold_audio_task = None
             queue = session.outbound_queue
             for ev in events:
                 await queue.put(ev.chunk)
@@ -366,7 +374,11 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
             helpers.append(screening)
 
         # IVR navigator — activated/deactivated by state machine transitions.
-        ivr = IVRNavigator(event_bus)
+        ivr = IVRNavigator(
+            event_bus,
+            agent_callback=oc.ivr_agent_callback,
+            dtmf_delivery=oc.ivr_dtmf_delivery,
+        )
         helpers.append(ivr)
 
         def _on_state_changed_for_ivr(event: CallStateChanged) -> None:
