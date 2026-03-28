@@ -172,6 +172,9 @@ const pxPerSec = 100;
 
 const rowEls = new Map();
 const sentenceSeenKeys = new Set();
+const AUDIO_TRACKS = new Set(["audio_to_asr", "audio_from_tts"]);
+const AUDIO_COALESCE_MS = 200;
+const lastAudioMarker = new Map(); // track → { el, endMs }
 
 for (const [trackId, label] of tracks) {
   const row = document.createElement("div");
@@ -270,15 +273,43 @@ function addEvent(evt) {
 
   lane.style.minWidth = Math.max(900, (t + 3) * pxPerSec) + "px";
 
-  const marker = document.createElement("div");
-  marker.className = `timeline-marker ${kindToClass(evt.track)}`;
-  marker.style.left = `${t * pxPerSec}px`;
-  marker.style.width = `${Math.max(10, ((evt.duration_ms || 120) / 1000) * pxPerSec)}px`;
-  marker.title = JSON.stringify(evt, null, 2);
-  marker.textContent = evt.text || evt.tool_name || evt.message || evt.type;
-  marker.dataset.turnId = evt.turn_id || "";
-  marker.dataset.track = evt.track;
-  lane.appendChild(marker);
+  const durMs = evt.duration_ms || 120;
+
+  // Coalesce high-frequency audio events into a single timeline marker to
+  // avoid creating tens of thousands of DOM nodes in long conversations.
+  if (AUDIO_TRACKS.has(evt.track)) {
+    const tMs = t * 1000;
+    const prev = lastAudioMarker.get(evt.track);
+    if (prev && tMs - prev.endMs < AUDIO_COALESCE_MS) {
+      prev.endMs = tMs + durMs;
+      const startMs = parseFloat(prev.el.dataset.startMs);
+      prev.el.style.width = `${Math.max(10, ((prev.endMs - startMs) / 1000) * pxPerSec)}px`;
+      prev.el.dataset.turnId = evt.turn_id || prev.el.dataset.turnId;
+      // Skip new marker but still update the event log below.
+    } else {
+      const marker = document.createElement("div");
+      marker.className = `timeline-marker ${kindToClass(evt.track)}`;
+      marker.style.left = `${t * pxPerSec}px`;
+      marker.style.width = `${Math.max(10, (durMs / 1000) * pxPerSec)}px`;
+      marker.title = evt.type;
+      marker.textContent = evt.type;
+      marker.dataset.turnId = evt.turn_id || "";
+      marker.dataset.track = evt.track;
+      marker.dataset.startMs = tMs;
+      lane.appendChild(marker);
+      lastAudioMarker.set(evt.track, { el: marker, endMs: tMs + durMs });
+    }
+  } else {
+    const marker = document.createElement("div");
+    marker.className = `timeline-marker ${kindToClass(evt.track)}`;
+    marker.style.left = `${t * pxPerSec}px`;
+    marker.style.width = `${Math.max(10, (durMs / 1000) * pxPerSec)}px`;
+    marker.title = JSON.stringify(evt, null, 2);
+    marker.textContent = evt.text || evt.tool_name || evt.message || evt.type;
+    marker.dataset.turnId = evt.turn_id || "";
+    marker.dataset.track = evt.track;
+    lane.appendChild(marker);
+  }
 
   if (evt.type === "STTFinal") {
     addSentenceLink({
@@ -311,26 +342,34 @@ function connectSSE() {
   if (evtSource) evtSource.close();
   evtSource = new EventSource("/events");
 
-  const ready = new Promise((resolve) => {
+  let settled = false;
+  const ready = new Promise((resolve, reject) => {
     evtSource.onopen = () => {
+      settled = true;
       sseRetryDelay = 1000; // reset backoff on successful connect
       resolve();
+    };
+
+    evtSource.onerror = () => {
+      evtSource.close();
+      evtSource = null;
+      if (!settled) {
+        // First connection attempt failed — reject so the caller can handle it.
+        settled = true;
+        reject(new Error("SSE connection failed"));
+        return;
+      }
+      // Exponential backoff reconnect (only while conversation is active).
+      if (!stopBtn.disabled) {
+        setTimeout(() => {
+          if (!stopBtn.disabled) connectSSE();
+        }, sseRetryDelay);
+        sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_MAX_RETRY);
+      }
     };
   });
 
   evtSource.onmessage = (e) => addEvent(JSON.parse(e.data));
-
-  evtSource.onerror = () => {
-    evtSource.close();
-    evtSource = null;
-    // Exponential backoff reconnect (only while conversation is active).
-    if (!stopBtn.disabled) {
-      setTimeout(() => {
-        if (!stopBtn.disabled) connectSSE();
-      }, sseRetryDelay);
-      sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_MAX_RETRY);
-    }
-  };
 
   return ready;
 }
@@ -403,12 +442,21 @@ async function startConversation() {
 
   // Clear state from any previous session so Start/Stop cycles don't overlap.
   sentenceSeenKeys.clear();
+  lastAudioMarker.clear();
   for (const lane of rowEls.values()) lane.innerHTML = "";
   eventLog.innerHTML = "";
   incomingSentencesEl.innerHTML = "";
   outgoingSentencesEl.innerHTML = "";
 
-  await connectSSE();
+  try {
+    await connectSSE();
+  } catch {
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    statusEl.textContent = "SSE failed — is the dashboard server running?";
+    statusEl.className = "text-sm font-semibold text-rose-300";
+    return;
+  }
 
   localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const mic = startRecorder(
