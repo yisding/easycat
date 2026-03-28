@@ -139,10 +139,11 @@ class NumberHealthMonitor:
         if last and (now - last) < self._min_inter_call_delay_s:
             return False
 
-        # Check calls per minute.
+        # Check calls per minute (completed records + in-flight attempts).
         one_minute_ago = now - 60.0
         recent = [r for r in self._records.get(number, []) if r.timestamp > one_minute_ago]
-        if len(recent) >= self._max_calls_per_minute:
+        in_flight = self._concurrent.get(number, 0)
+        if len(recent) + in_flight >= self._max_calls_per_minute:
             return False
 
         return True
@@ -207,6 +208,7 @@ class CallDispositionTracker:
         self._event_bus = event_bus
         self._dispositions: list[tuple[float, str]] = []
         self._disposed_calls: set[str] = set()
+        self._call_dispositions: dict[str, str] = {}
         self._started = False
 
     def start(self) -> None:
@@ -224,6 +226,18 @@ class CallDispositionTracker:
         self._dispositions.append((time.time(), disposition))
         if len(self._dispositions) > self._MAX_DISPOSITIONS:
             self._dispositions = self._dispositions[-self._MAX_DISPOSITIONS :]
+
+    def _replace_disposition(self, call_sid: str, new_disposition: str) -> None:
+        """Replace the recorded disposition for a call (e.g. late voicemail)."""
+        old = self._call_dispositions.get(call_sid)
+        if old is None:
+            return
+        # Walk backwards to find and replace the most recent matching entry.
+        for i in range(len(self._dispositions) - 1, -1, -1):
+            if self._dispositions[i][1] == old:
+                self._dispositions[i] = (self._dispositions[i][0], new_disposition)
+                break
+        self._call_dispositions[call_sid] = new_disposition
 
     def disposition_rates(self) -> dict[str, float]:
         """Return disposition breakdown as rates (0.0-1.0)."""
@@ -246,7 +260,11 @@ class CallDispositionTracker:
         return dict(by_hour)
 
     async def _on_state_changed(self, event: CallStateChanged) -> None:
-        """Auto-record disposition when call reaches terminal state."""
+        """Auto-record disposition when call reaches terminal state.
+
+        Late voicemail reclassification (HUMAN → VOICEMAIL) overwrites the
+        earlier disposition so analytics reflect the corrected outcome.
+        """
         terminal = {
             OutboundCallState.HUMAN: "human",
             OutboundCallState.VOICEMAIL: "voicemail",
@@ -256,7 +274,14 @@ class CallDispositionTracker:
         }
         if event.new in terminal:
             call_sid = event.call_sid
+            disposition = terminal[event.new]
+
+            # Allow late voicemail to overwrite an earlier human disposition.
             if call_sid in self._disposed_calls:
+                if event.new == OutboundCallState.VOICEMAIL:
+                    self._replace_disposition(call_sid, disposition)
                 return
+
             self._disposed_calls.add(call_sid)
-            self.record_disposition(terminal[event.new])
+            self._call_dispositions[call_sid] = disposition
+            self.record_disposition(disposition)

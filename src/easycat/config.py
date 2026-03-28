@@ -283,6 +283,9 @@ def create_session(config: EasyCatConfig) -> Session:
                 _hold_audio_task.cancel()
                 _hold_audio_task = None
             queue = session.outbound_queue
+            # Discard any stale hold-audio chunks that were already queued
+            # with bypass_gate=True before replaying the buffered speech.
+            queue.flush()
             for ev in events:
                 await queue.put(ev.chunk)
 
