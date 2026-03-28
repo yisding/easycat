@@ -388,6 +388,13 @@ async function startConversation() {
   statusEl.className = "text-sm font-semibold text-amber-300";
   startTs = 0;
 
+  // Clear state from any previous session so Start/Stop cycles don't overlap.
+  sentenceSeenKeys.clear();
+  for (const lane of rowEls.values()) lane.innerHTML = "";
+  eventLog.innerHTML = "";
+  incomingSentencesEl.innerHTML = "";
+  outgoingSentencesEl.innerHTML = "";
+
   connectSSE();
 
   localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -418,9 +425,24 @@ async function startConversation() {
     agentRecorder = agent.recorder;
   });
 
+  pc.addEventListener("connectionstatechange", () => {
+    switch (pc.connectionState) {
+      case "connected":
+        statusEl.textContent = "Connected";
+        statusEl.className = "text-sm font-semibold text-emerald-300";
+        break;
+      case "failed":
+        statusEl.textContent = "Connection failed";
+        statusEl.className = "text-sm font-semibold text-rose-300";
+        break;
+      case "disconnected":
+        statusEl.textContent = "Disconnected";
+        statusEl.className = "text-sm font-semibold text-amber-300";
+        break;
+    }
+  });
+
   await negotiate(baseUrl);
-  statusEl.textContent = "Connected";
-  statusEl.className = "text-sm font-semibold text-emerald-300";
 }
 
 function stopConversation() {
