@@ -67,6 +67,15 @@ _SCREENING_FOLLOW_UP_PATTERNS: list[str] = [
     "one moment",
 ]
 
+# Shared stopwords for coherence/overlap scoring across telephony modules.
+COHERENCE_STOPWORDS: frozenset[str] = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "i", "you", "we", "they",
+    "it", "and", "or", "but", "in", "on", "to", "for", "of", "with", "at",
+    "by", "from", "do", "does", "did", "have", "has", "had", "be", "been",
+    "am", "this", "that", "my", "your", "me", "him", "her", "what", "so",
+    "um", "uh", "oh",
+})
+
 
 @dataclass
 class ScreeningPatternSet:
@@ -209,56 +218,8 @@ def check_coherence(callee_texts: list[str], bot_texts: list[str]) -> bool:
         if i > 0:
             context_words |= set(callee_texts[i - 1].lower().split())
 
-        # Remove stopwords for comparison.
-        stopwords = {
-            "the",
-            "a",
-            "an",
-            "is",
-            "are",
-            "was",
-            "were",
-            "i",
-            "you",
-            "we",
-            "they",
-            "it",
-            "and",
-            "or",
-            "but",
-            "in",
-            "on",
-            "to",
-            "for",
-            "of",
-            "with",
-            "at",
-            "by",
-            "from",
-            "do",
-            "does",
-            "did",
-            "have",
-            "has",
-            "had",
-            "be",
-            "been",
-            "am",
-            "this",
-            "that",
-            "my",
-            "your",
-            "me",
-            "him",
-            "her",
-            "what",
-            "so",
-            "um",
-            "uh",
-            "oh",
-        }
-        callee_content = callee_words - stopwords
-        context_content = context_words - stopwords
+        callee_content = callee_words - COHERENCE_STOPWORDS
+        context_content = context_words - COHERENCE_STOPWORDS
 
         if not callee_content or not context_content:
             continue

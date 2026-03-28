@@ -135,46 +135,19 @@ class ConversationCoherenceDetector:
         if len(self._callee_turns) < self._min_turns:
             return 1.0
 
-        # Simple keyword overlap scoring.
-        stopwords = {
-            "the",
-            "a",
-            "an",
-            "is",
-            "are",
-            "was",
-            "were",
-            "i",
-            "you",
-            "we",
-            "they",
-            "it",
-            "and",
-            "or",
-            "but",
-            "in",
-            "on",
-            "to",
-            "for",
-            "of",
-            "with",
-            "at",
-            "by",
-            "from",
-            "do",
-            "does",
-        }
+        from easycat.telephony.screening import COHERENCE_STOPWORDS
 
         total_overlap = 0
         comparisons = 0
 
+        sw = COHERENCE_STOPWORDS
         for i, callee_text in enumerate(self._callee_turns):
-            callee_words = set(callee_text.lower().split()) - stopwords
+            callee_words = set(callee_text.lower().split()) - sw
             context_words: set[str] = set()
             if i < len(self._bot_turns):
-                context_words |= set(self._bot_turns[i].lower().split()) - stopwords
+                context_words |= set(self._bot_turns[i].lower().split()) - sw
             if i > 0:
-                context_words |= set(self._callee_turns[i - 1].lower().split()) - stopwords
+                context_words |= set(self._callee_turns[i - 1].lower().split()) - sw
 
             if not callee_words or not context_words:
                 continue

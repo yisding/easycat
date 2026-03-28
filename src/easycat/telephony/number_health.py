@@ -147,10 +147,14 @@ class NumberHealthMonitor:
         return True
 
     def _active_records(self, number: str) -> list[_CallRecord]:
-        """Return records within TTL for a number."""
+        """Return records within TTL for a number, pruning expired entries."""
         now = time.monotonic()
         cutoff = now - self._record_ttl_s
-        return [r for r in self._records.get(number, []) if r.timestamp > cutoff]
+        records = self._records.get(number, [])
+        active = [r for r in records if r.timestamp > cutoff]
+        if len(active) < len(records):
+            self._records[number] = active
+        return active
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
         number = event.from_
@@ -182,6 +186,8 @@ class CallDispositionTracker:
     IVR, busy, failed) and provides breakdown statistics.
     """
 
+    _MAX_DISPOSITIONS = 10_000
+
     def __init__(self, event_bus: EventBus) -> None:
         self._event_bus = event_bus
         self._dispositions: list[tuple[float, str]] = []
@@ -201,6 +207,8 @@ class CallDispositionTracker:
 
     def record_disposition(self, disposition: str) -> None:
         self._dispositions.append((time.time(), disposition))
+        if len(self._dispositions) > self._MAX_DISPOSITIONS:
+            self._dispositions = self._dispositions[-self._MAX_DISPOSITIONS:]
 
     def disposition_rates(self) -> dict[str, float]:
         """Return disposition breakdown as rates (0.0-1.0)."""

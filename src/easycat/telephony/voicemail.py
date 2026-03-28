@@ -1,9 +1,4 @@
-"""Voicemail / answering machine detection for EasyCat telephony.
-
-Task 6.5: Twilio AMD result consumer (HTTP callback handler).
-Task 6.6: Heuristic voicemail detection (long monologues + beep detection).
-Task 6.7: Voicemail policy handler (hang up, leave message, transfer).
-"""
+"""Voicemail / answering machine detection for EasyCat telephony."""
 
 from __future__ import annotations
 
@@ -12,6 +7,7 @@ import enum
 import logging
 import math
 import struct
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,7 +23,24 @@ from easycat.events import (
 logger = logging.getLogger(__name__)
 
 
-# ── Task 6.5: Twilio AMD result consumer ─────────────────────────
+# ── Shared audio analysis helpers ────────────────────────────────
+
+
+def _pcm16_rms(samples: Sequence[int]) -> float:
+    """Compute RMS energy from raw PCM16 samples, normalized to [0, 1]."""
+    return math.sqrt(sum(s * s for s in samples) / len(samples)) / 32768.0
+
+
+def _zero_crossing_freq(samples: Sequence[int], sample_rate: int) -> float:
+    """Estimate dominant frequency via zero-crossing rate."""
+    n = len(samples)
+    if n < 2:
+        return 0.0
+    crossings = sum(
+        1 for i in range(1, n) if (samples[i] >= 0) != (samples[i - 1] >= 0)
+    )
+    return crossings * sample_rate / (2 * n)
+
 
 # Twilio AnsweredBy values -> EasyCat result mapping
 _TWILIO_AMD_MAP: dict[str, str] = {
@@ -75,9 +88,6 @@ async def emit_twilio_amd(
     if event is not None:
         await event_bus.emit(event)
     return event
-
-
-# ── Task 6.6: Heuristic voicemail detection ──────────────────────
 
 
 @dataclass
@@ -195,30 +205,19 @@ class VoicemailDetector:
         sr = sample_rate or self._config.beep.sample_rate
         cfg = self._config.beep
 
-        # Decode PCM16 samples
         num_samples = len(pcm16_data) // 2
         if num_samples == 0:
             return False
         samples = struct.unpack(f"<{num_samples}h", pcm16_data[: num_samples * 2])
 
-        # Compute RMS energy (normalized to [-1, 1])
-        float_samples = [s / 32768.0 for s in samples]
-        rms = math.sqrt(sum(s * s for s in float_samples) / len(float_samples))
-
+        rms = _pcm16_rms(samples)
         chunk_duration_s = num_samples / sr
 
         if rms < cfg.energy_threshold:
-            # Silence or very low energy — reset tone tracking
             self._tone_duration_s = 0.0
             return False
 
-        # Zero-crossing rate for simple frequency estimation
-        zero_crossings = sum(
-            1
-            for i in range(1, len(float_samples))
-            if (float_samples[i] >= 0) != (float_samples[i - 1] >= 0)
-        )
-        estimated_freq = zero_crossings / (2.0 * chunk_duration_s) if chunk_duration_s > 0 else 0
+        estimated_freq = _zero_crossing_freq(samples, sr)
 
         in_freq_range = cfg.min_frequency_hz <= estimated_freq <= cfg.max_frequency_hz
 
@@ -233,9 +232,6 @@ class VoicemailDetector:
             self._tone_duration_s = 0.0
 
         return False
-
-
-# ── Task 6.7: Voicemail policy handler ───────────────────────────
 
 
 class VoicemailPolicy(enum.Enum):
@@ -474,8 +470,7 @@ def detect_sit_tones(
     for start in range(0, num_samples - window_size, window_size):
         window = samples[start : start + window_size]
 
-        # RMS energy check.
-        rms = math.sqrt(sum(s * s for s in window) / len(window)) / 32768.0
+        rms = _pcm16_rms(window)
         if rms < energy_threshold:
             if current_tone_idx is not None and current_tone_windows >= min_windows:
                 if not detected_tones or detected_tones[-1] < current_tone_idx:
@@ -484,11 +479,7 @@ def detect_sit_tones(
             current_tone_windows = 0
             continue
 
-        # Estimate dominant frequency via zero crossings.
-        crossings = sum(
-            1 for i in range(1, len(window)) if (window[i - 1] >= 0) != (window[i] >= 0)
-        )
-        freq_estimate = (crossings / 2) * (sample_rate / len(window))
+        freq_estimate = _zero_crossing_freq(window, sample_rate)
 
         # Check against each SIT frequency band.
         matched_idx: int | None = None
@@ -542,8 +533,7 @@ def is_comfort_noise(
     num_samples = len(pcm16_data) // 2
     samples = struct.unpack(f"<{num_samples}h", pcm16_data[: num_samples * 2])
 
-    rms = math.sqrt(sum(s * s for s in samples) / len(samples)) / 32768.0
-    return rms < max_rms
+    return _pcm16_rms(samples) < max_rms
 
 
 # ── Post-screening voicemail detection ────────────────────────────

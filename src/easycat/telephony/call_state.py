@@ -107,6 +107,14 @@ class ClassificationGate:
     def buffer(self) -> list[TTSAudio]:
         return list(self._buffer)
 
+    def set_flush_async_callback(self, callback: Callable[[list[TTSAudio]], Any]) -> None:
+        """Set the async callback invoked when the gate releases on timeout."""
+        self._on_flush_async = callback
+
+    def set_hold_audio_callback(self, callback: Callable[[str], Any]) -> None:
+        """Set the callback invoked when hold audio should be played."""
+        self._on_hold_audio = callback
+
     def start(self) -> None:
         if not self._enabled or self._started:
             return
@@ -237,6 +245,10 @@ class OutboundCallStateMachine:
     def smart_turn_suppressed(self) -> bool:
         return self._smart_turn_suppressed
 
+    def set_gate_flush_callback(self, callback: Callable[[list[TTSAudio]], Any]) -> None:
+        """Set the async callback for re-enqueuing gated audio on release."""
+        self._on_gate_flush = callback
+
     # ── Lifecycle ─────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -294,6 +306,10 @@ class OutboundCallStateMachine:
                 self._on_vad_timeout_change(0.0)  # Reset to default.
 
     # ── State transitions ─────────────────────────────────────────
+
+    async def transition(self, new_state: OutboundCallState) -> None:
+        """Public API for external callers to trigger a state transition."""
+        await self._transition(new_state)
 
     async def _transition(self, new_state: OutboundCallState) -> None:
         if self._state == new_state:
