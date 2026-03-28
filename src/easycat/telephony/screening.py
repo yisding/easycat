@@ -70,13 +70,55 @@ _SCREENING_FOLLOW_UP_PATTERNS: list[str] = [
 ]
 
 # Shared stopwords for coherence/overlap scoring across telephony modules.
-COHERENCE_STOPWORDS: frozenset[str] = frozenset({
-    "the", "a", "an", "is", "are", "was", "were", "i", "you", "we", "they",
-    "it", "and", "or", "but", "in", "on", "to", "for", "of", "with", "at",
-    "by", "from", "do", "does", "did", "have", "has", "had", "be", "been",
-    "am", "this", "that", "my", "your", "me", "him", "her", "what", "so",
-    "um", "uh", "oh",
-})
+COHERENCE_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "i",
+        "you",
+        "we",
+        "they",
+        "it",
+        "and",
+        "or",
+        "but",
+        "in",
+        "on",
+        "to",
+        "for",
+        "of",
+        "with",
+        "at",
+        "by",
+        "from",
+        "do",
+        "does",
+        "did",
+        "have",
+        "has",
+        "had",
+        "be",
+        "been",
+        "am",
+        "this",
+        "that",
+        "my",
+        "your",
+        "me",
+        "him",
+        "her",
+        "what",
+        "so",
+        "um",
+        "uh",
+        "oh",
+    }
+)
 
 
 @dataclass
@@ -179,10 +221,19 @@ def is_conversational(text: str) -> bool:
     # specific questions — so this generalises across phrasings and
     # languages that borrow English question words.
     _INTERROGATIVE_STARTERS = (
-        "can you", "could you", "would you", "will you",
-        "what is", "what's", "what are",
-        "why are", "why do", "why is",
-        "who is", "who are", "who's",
+        "can you",
+        "could you",
+        "would you",
+        "will you",
+        "what is",
+        "what's",
+        "what are",
+        "why are",
+        "why do",
+        "why is",
+        "who is",
+        "who are",
+        "who's",
         "please ",
     )
     if word_count >= 6 and any(lower.startswith(q) for q in _INTERROGATIVE_STARTERS):
