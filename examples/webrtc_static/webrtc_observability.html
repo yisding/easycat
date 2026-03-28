@@ -355,6 +355,10 @@ async function negotiate(baseUrl) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(pc.localDescription),
   });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`/offer failed (${response.status}): ${text}`);
+  }
   const answer = await response.json();
   await pc.setRemoteDescription(answer);
 }
@@ -414,9 +418,12 @@ async function startConversation() {
     if (evt.track.kind !== "audio") return;
     remoteStream = evt.streams[0];
     // Play the agent's audio through an <audio> element so the user hears TTS.
+    // The element must stay in the DOM — browsers (Safari especially) may stop
+    // decoding if the element is garbage-collected or detached.
     const remoteAudio = document.createElement("audio");
     remoteAudio.srcObject = remoteStream;
     remoteAudio.autoplay = true;
+    document.body.appendChild(remoteAudio);
     const agent = startRecorder(
       remoteStream,
       blob => setAudioFromBlob(agentChunk, blob),
@@ -450,6 +457,7 @@ function stopConversation() {
   if (micRecorder && micRecorder.state !== "inactive") micRecorder.stop();
   if (agentRecorder && agentRecorder.state !== "inactive") agentRecorder.stop();
   if (localStream) localStream.getTracks().forEach(t => t.stop());
+  document.querySelectorAll("audio[autoplay]").forEach(el => { el.srcObject = null; el.remove(); });
   if (pc) pc.close();
   statusEl.textContent = "Stopped";
   statusEl.className = "text-sm font-semibold text-slate-300";
