@@ -63,7 +63,9 @@ _SCREENING_FOLLOW_UP_PATTERNS: list[str] = [
     "what is this about",
     "who is this",
     "why are you calling",
-    "go ahead",
+    "could you explain",
+    "please elaborate",
+    "tell me more",
     "one moment",
 ]
 
@@ -140,58 +142,75 @@ class ScreeningResponse:
     mode: str  # "static" | "agent"
 
 
-def _is_conversational(text: str) -> bool:
+def is_conversational(text: str) -> bool:
     """Return True if *text* looks like a human conversational utterance.
 
-    Screening AI follow-up questions (e.g., "Can you tell me more about why
-    you're calling?") are long and structured — they should NOT be classified
-    as human conversational speech.
+    Uses structural heuristics rather than hardcoded phrase lists so that
+    novel phrasing and non-English greetings are handled correctly.
+
+    The core insight (backed by Twilio AMD research and Bland AI's findings):
+    humans answer with **short utterances** (1-6 words) then pause; screening
+    AIs and IVRs produce **long, structured sentences** (8+ words), often
+    interrogative.
+
+    Decision order:
+      1. Reject known screening platform prompts (iOS/Android/carrier).
+      2. Reject long interrogative sentences (screening AI follow-ups).
+      3. Accept short utterances (≤6 content words) that aren't screening.
+      4. Reject everything else (long non-question = voicemail greeting, etc.).
     """
     lower = text.strip().lower()
     if not lower:
         return False
 
-    # Screening AI follow-ups are typically long interrogative sentences.
-    # Real human pickups are short greetings.
-    screening_follow_up_patterns = [
-        "can you tell me",
-        "what is this about",
-        "could you explain",
-        "why are you calling",
-        "please elaborate",
-        "tell me more",
-        "one moment",
-    ]
-    for pattern in screening_follow_up_patterns:
-        if pattern in lower:
-            return False
-
-    # Exclude text that matches a known screening prompt — e.g., Android's
-    # "Go ahead and say your name and why you're calling" should NOT be
-    # treated as a human conversational utterance.
+    # ── Step 1: Reject known screening / IVR prompts ─────────────
     if match_screening_platform(lower) is not None:
         return False
 
-    # Short conversational starters indicate a live human.
-    conversational_starters = [
-        "hello",
-        "hi ",
-        "hi,",
-        "hey",
-        "yes",
-        "yeah",
-        "ok",
-        "sure",
-        "go ahead",
-        "speaking",
-    ]
-    for starter in conversational_starters:
-        if lower.startswith(starter):
-            return True
+    # ── Step 2: Reject long interrogative / instructional sentences ──
+    # Screening AIs ask follow-up questions; humans don't interrogate
+    # the caller.  We detect this structurally rather than matching
+    # specific phrases.
+    words = lower.split()
+    word_count = len(words)
 
-    # Very short utterances that don't match screening are likely human.
-    if len(lower) < 30 and match_screening_platform(lower) is None:
+    # Interrogative starters used by screening bots.  We only need to
+    # recognise the *structure* ("can you ...", "could you ...") — not
+    # specific questions — so this generalises across phrasings and
+    # languages that borrow English question words.
+    _INTERROGATIVE_STARTERS = (
+        "can you", "could you", "would you", "will you",
+        "what is", "what's", "what are",
+        "why are", "why do", "why is",
+        "who is", "who are", "who's",
+        "please ",
+    )
+    if word_count >= 6 and any(lower.startswith(q) for q in _INTERROGATIVE_STARTERS):
+        return False
+
+    # Long sentences (8+ words) that aren't questions are almost never
+    # a human pickup — they're voicemail greetings or IVR announcements.
+    # However, we still need the phrase-list backstop for medium-length
+    # screening follow-ups (6-7 words) like "one moment" or "tell me more".
+    for pattern in _SCREENING_FOLLOW_UP_PATTERNS:
+        if pattern in lower:
+            return False
+
+    # ── Step 3: Accept short utterances ──────────────────────────
+    # Humans typically answer with 1-8 words: "Hello?", "Yeah",
+    # "Go ahead", "This is John speaking", "Hi how can I help you".
+    # Threshold of 8 words covers natural greetings (including
+    # receptionist pickups like "Hello how can I help you today")
+    # while excluding voicemail greetings and IVR announcements which
+    # are almost always 9+ words.  Screening follow-ups in the 6-8
+    # word range are caught by the interrogative-starter check above.
+    if word_count <= 8:
         return True
+
+    # ── Step 4: Reject longer utterances ─────────────────────────
+    # 9+ word non-interrogative utterances that don't match screening
+    # are likely voicemail greetings, carrier announcements, or other
+    # non-conversational speech.
     return False
 
 
@@ -434,7 +453,7 @@ class CallScreeningDetector:
         # Check if this looks like a human answering (conversational speech)
         # *before* enforcing the turn limit, so a human picking up on the
         # last allowed exchange is classified as HUMAN_ANSWERED, not timeout.
-        if _is_conversational(text):
+        if is_conversational(text):
             self._state = ScreeningState.HUMAN_ANSWERED
             self._cancel_agent_timeout()
             return

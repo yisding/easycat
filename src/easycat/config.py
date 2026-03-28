@@ -11,7 +11,7 @@ from easycat.agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.agents.factory import auto_adapt_agent
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.event_logging import EventLoggingConfig, EventTraceLogger
-from easycat.events import CallScreening, EventBus
+from easycat.events import CallScreening, EventBus, TTSAudio
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
@@ -89,6 +89,7 @@ class OutboundCallConfig:
     classification_gate_timeout_s: float = 5.0
     classification_gate_hold_audio: str = ""
     max_call_duration_s: int = 300
+    late_voicemail_window_s: float = 30.0
     callee_language: str = "en"
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
@@ -270,9 +271,10 @@ def create_session(config: EasyCatConfig) -> Session:
 
     # Wire gate flush callback to re-enqueue buffered audio on release.
     if _outbound_sm is not None:
+        _hold_audio_task: asyncio.Task[None] | None = None
 
-        async def _flush_gated_audio(events: list) -> None:
-            queue = session._outbound_queue
+        async def _flush_gated_audio(events: list[TTSAudio]) -> None:
+            queue = session.outbound_queue
             for ev in events:
                 await queue.put(ev.chunk)
 
@@ -280,15 +282,17 @@ def create_session(config: EasyCatConfig) -> Session:
         _outbound_sm.gate.set_flush_async_callback(_flush_gated_audio)
 
         # Wire hold audio callback — synthesize hold text via TTS when gate closes.
-        tts_synth = session._tts_synth
+        _tts = session.tts_synth
 
         def _play_hold_audio(text: str) -> None:
+            nonlocal _hold_audio_task
+
             async def _synthesize_hold() -> None:
-                await tts_synth.synthesize(text, token=None, bypass_gate=True)
+                await _tts.synthesize(text, token=None, bypass_gate=True)
 
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(_synthesize_hold())
+                _hold_audio_task = loop.create_task(_synthesize_hold())
             except RuntimeError:
                 pass
 
@@ -346,6 +350,7 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
             classification_gate_timeout_s=oc.classification_gate_timeout_s,
             classification_gate_hold_audio=oc.classification_gate_hold_audio,
             expect_fused_voicemail=True,
+            late_voicemail_window_s=oc.late_voicemail_window_s,
         )
         helpers.append(sm)
 

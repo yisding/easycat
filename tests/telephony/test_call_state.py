@@ -160,6 +160,36 @@ class TestOutboundCallStateMachine:
             sm.stop()
 
     @pytest.mark.asyncio
+    async def test_classifying_to_human_via_stt(self) -> None:
+        """Conversational STTFinal during CLASSIFYING transitions to HUMAN."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            assert sm.state == OutboundCallState.CLASSIFYING
+            await bus.emit(STTFinal(text="Hello?"))
+            assert sm.state == OutboundCallState.HUMAN
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_classifying_stays_on_long_non_conversational_stt(self) -> None:
+        """Long non-conversational text during CLASSIFYING does not transition."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            assert sm.state == OutboundCallState.CLASSIFYING
+            await bus.emit(
+                STTFinal(text="Please leave a message after the tone and we will get back to you")
+            )
+            assert sm.state == OutboundCallState.CLASSIFYING
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
     async def test_screening_to_voicemail(self) -> None:
         bus = EventBus()
         sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
@@ -663,5 +693,152 @@ class TestSmartTurnSuppression:
             await bus.emit(STTFinal(text="Hello"))
             assert sm.state == OutboundCallState.HUMAN
             assert 0.0 in vad_changes
+        finally:
+            sm.stop()
+
+
+# ── Late voicemail detection ────────────────────────────────────
+
+
+class TestLateVoicemailDetection:
+    @pytest.mark.asyncio
+    async def test_human_to_voicemail_on_late_beep(self) -> None:
+        """A VoicemailDetected(machine) during the late window transitions HUMAN → VOICEMAIL."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(
+            bus, classification_timeout_s=60, late_voicemail_window_s=5.0
+        )
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="human"))
+            assert sm.state == OutboundCallState.HUMAN
+            # Late beep detected while still within window.
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert sm.state == OutboundCallState.VOICEMAIL
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_late_voicemail_ignored_after_window_expires(self) -> None:
+        """After the late voicemail window closes, machine events stay in HUMAN."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(
+            bus, classification_timeout_s=60, late_voicemail_window_s=0.05
+        )
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="human"))
+            assert sm.state == OutboundCallState.HUMAN
+            # Wait for window to expire.
+            await asyncio.sleep(0.1)
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert sm.state == OutboundCallState.HUMAN
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_late_voicemail_disabled_by_default(self) -> None:
+        """With late_voicemail_window_s=0, HUMAN ignores late machine events."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="human"))
+            assert sm.state == OutboundCallState.HUMAN
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert sm.state == OutboundCallState.HUMAN
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_late_voicemail_emits_state_change(self) -> None:
+        """HUMAN → VOICEMAIL transition emits CallStateChanged."""
+        bus = EventBus()
+        changes: list[CallStateChanged] = []
+        bus.subscribe(CallStateChanged, changes.append)
+        sm = OutboundCallStateMachine(
+            bus, call_sid="CA1", classification_timeout_s=60, late_voicemail_window_s=5.0
+        )
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="human"))
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert sm.state == OutboundCallState.VOICEMAIL
+            # Find the HUMAN → VOICEMAIL transition.
+            late = [c for c in changes if c.old == OutboundCallState.HUMAN]
+            assert len(late) == 1
+            assert late[0].new == OutboundCallState.VOICEMAIL
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_late_voicemail_triggers_policy_handler(self) -> None:
+        """VoicemailPolicyHandler fires on late HUMAN → VOICEMAIL."""
+        from easycat.telephony.voicemail import VoicemailPolicyConfig, VoicemailPolicyHandler
+
+        bus = EventBus()
+        sm = OutboundCallStateMachine(
+            bus, classification_timeout_s=60, late_voicemail_window_s=5.0
+        )
+        policy = VoicemailPolicyHandler(bus, VoicemailPolicyConfig())
+        sm.start()
+        policy.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="human"))
+            assert sm.state == OutboundCallState.HUMAN
+            assert policy._action_taken is False
+            # Late voicemail detection.
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert sm.state == OutboundCallState.VOICEMAIL
+            assert policy._action_taken is True
+        finally:
+            sm.stop()
+            policy.stop()
+
+    @pytest.mark.asyncio
+    async def test_late_voicemail_window_cancelled_on_call_end(self) -> None:
+        """CallEnded cancels the late voicemail window."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(
+            bus, classification_timeout_s=60, late_voicemail_window_s=60.0
+        )
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="human"))
+            assert sm.state == OutboundCallState.HUMAN
+            assert sm._late_voicemail_task is not None
+            await bus.emit(CallEnded(call_sid="CA1"))
+            assert sm.state == OutboundCallState.ENDED
+            assert sm._late_voicemail_task is None
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_late_voicemail_respects_fused_voicemail(self) -> None:
+        """With expect_fused_voicemail=True, raw AMD events are still ignored."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(
+            bus,
+            classification_timeout_s=60,
+            late_voicemail_window_s=5.0,
+            expect_fused_voicemail=True,
+        )
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="human", source="fusion"))
+            assert sm.state == OutboundCallState.HUMAN
+            # Raw AMD event should be ignored.
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert sm.state == OutboundCallState.HUMAN
+            # Fused event should trigger late voicemail.
+            await bus.emit(VoicemailDetected(result="machine", source="fusion"))
+            assert sm.state == OutboundCallState.VOICEMAIL
         finally:
             sm.stop()
