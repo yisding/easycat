@@ -11,16 +11,21 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from easycat.events import (
+    AGENT_EVENTS,
     DTMF,
+    ERROR_EVENTS,
+    INTERRUPTION_EVENTS,
+    LIFECYCLE_EVENTS,
+    RECONNECT_EVENTS,
+    TELEPHONY_EVENTS,
+    TOOL_EVENTS,
+    VAD_EVENTS,
     AgentDelta,
     AgentFinal,
-    BotStartedSpeaking,
-    BotStoppedSpeaking,
     DTMFAggregated,
     Error,
     Event,
     EventBus,
-    Interruption,
     ReconnectAttempt,
     ReconnectFailure,
     ReconnectSuccess,
@@ -31,10 +36,6 @@ from easycat.events import (
     ToolCallStarted,
     TTSAudio,
     TTSMarkers,
-    TurnEnded,
-    TurnStarted,
-    VADStartSpeaking,
-    VADStopSpeaking,
     VoicemailDetected,
 )
 
@@ -250,26 +251,17 @@ class EventTraceLogger:
         return f"{value[: self._config.text_limit]}…"
 
 
+# Default set: everything except high-frequency audio/partial events
+# (TTSAudio, STTPartial, AudioIn) which are gated by config flags.
 _DEFAULT_LOGGED_EVENTS = (
-    TurnStarted,
-    TurnEnded,
-    Interruption,
-    VADStartSpeaking,
-    VADStopSpeaking,
-    STTFinal,
-    AgentDelta,
-    AgentFinal,
-    TTSMarkers,
-    BotStartedSpeaking,
-    BotStoppedSpeaking,
-    ToolCallStarted,
-    ToolCallDelta,
-    ToolCallResult,
-    ReconnectAttempt,
-    ReconnectSuccess,
-    ReconnectFailure,
-    DTMF,
-    DTMFAggregated,
-    VoicemailDetected,
-    Error,
+    VAD_EVENTS
+    + (STTFinal,)
+    + AGENT_EVENTS
+    + (TTSMarkers,)
+    + TOOL_EVENTS
+    + LIFECYCLE_EVENTS
+    + INTERRUPTION_EVENTS
+    + RECONNECT_EVENTS
+    + TELEPHONY_EVENTS
+    + ERROR_EVENTS
 )
