@@ -31,6 +31,7 @@ from easycat.telephony.screening import (
     ScreeningPatternSet,
     ScreeningResponse,
     ScreeningState,
+    is_conversational,
     match_screening_platform,
 )
 from easycat.telephony.twiml import (
@@ -87,6 +88,7 @@ __all__ = [
     "ScreeningPatternSet",
     "ScreeningResponse",
     "ScreeningState",
+    "is_conversational",
     "match_screening_platform",
     # Call state machine
     "CallStateChanged",

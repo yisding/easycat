@@ -899,6 +899,14 @@ class Session:
         return self._turn_manager.state == TurnManagerState.BOT_SPEAKING
 
     @property
+    def outbound_queue(self) -> BoundedAudioQueue:
+        return self._outbound_queue
+
+    @property
+    def tts_synth(self) -> TTSSynthesizer:
+        return self._tts_synth
+
+    @property
     def cancel_token(self) -> CancelToken | None:
         return self._cancel_token
 

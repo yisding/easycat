@@ -200,6 +200,7 @@ class OutboundCallStateMachine:
         smart_turn_suppress: bool = False,
         vad_timeout_extension_s: float = 0.0,
         expect_fused_voicemail: bool = False,
+        late_voicemail_window_s: float = 0.0,
     ) -> None:
         self._event_bus = event_bus
         self._call_sid = call_sid
@@ -208,12 +209,14 @@ class OutboundCallStateMachine:
         self._expect_fused_voicemail = expect_fused_voicemail
         self._smart_turn_suppress = smart_turn_suppress
         self._vad_timeout_extension_s = vad_timeout_extension_s
+        self._late_voicemail_window_s = late_voicemail_window_s
 
         self._state = OutboundCallState.INITIATING
         self._started = False
         self._classification_timer: asyncio.TimerHandle | None = None
         self._classification_task: asyncio.Task[None] | None = None
         self._max_duration_task: asyncio.Task[None] | None = None
+        self._late_voicemail_task: asyncio.Task[None] | None = None
 
         # Classification gate.
         self._gate = ClassificationGate(
@@ -285,6 +288,7 @@ class OutboundCallStateMachine:
         if self._max_duration_task and not self._max_duration_task.done():
             self._max_duration_task.cancel()
             self._max_duration_task = None
+        self._cancel_late_voicemail_window()
 
     # ── SmartTurn suppression ─────────────────────────────────────
 
@@ -327,6 +331,10 @@ class OutboundCallStateMachine:
             if buffered and self._on_gate_flush:
                 await self._on_gate_flush(buffered)
 
+        # Start late voicemail detection window when entering HUMAN.
+        if new_state == OutboundCallState.HUMAN and self._late_voicemail_window_s > 0:
+            self._start_late_voicemail_window()
+
     async def _on_ringing(self, event: CallRinging) -> None:
         if self._state == OutboundCallState.INITIATING:
             await self._transition(OutboundCallState.RINGING)
@@ -362,6 +370,16 @@ class OutboundCallStateMachine:
         }:
             self._cancel_classification_timeout()
             await self._transition(OutboundCallState.VOICEMAIL)
+        elif (
+            event.result == "machine"
+            and self._state == OutboundCallState.HUMAN
+            and self._late_voicemail_task is not None
+            and not self._late_voicemail_task.done()
+        ):
+            # Late voicemail detection: beep or long monologue after HUMAN.
+            self._cancel_late_voicemail_window()
+            logger.info("Late voicemail detected during HUMAN state — transitioning to VOICEMAIL")
+            await self._transition(OutboundCallState.VOICEMAIL)
 
     async def _on_screening(self, event: CallScreening) -> None:
         if self._state == OutboundCallState.CLASSIFYING:
@@ -371,7 +389,7 @@ class OutboundCallStateMachine:
     async def _on_stt_final(self, event: STTFinal) -> None:
         """Handle STTFinal for IVR detection (CLASSIFYING) and SCREENING → HUMAN."""
         from easycat.telephony.ivr import classify_ivr_prompt
-        from easycat.telephony.screening import _is_conversational
+        from easycat.telephony.screening import is_conversational
 
         text = event.text.strip()
         if not text:
@@ -381,10 +399,13 @@ class OutboundCallStateMachine:
             if classify_ivr_prompt(text):
                 self._cancel_classification_timeout()
                 await self._transition(OutboundCallState.IVR)
+            elif is_conversational(text):
+                self._cancel_classification_timeout()
+                await self._transition(OutboundCallState.HUMAN)
             return
 
         if self._state == OutboundCallState.SCREENING:
-            if _is_conversational(text):
+            if is_conversational(text):
                 await self._transition(OutboundCallState.HUMAN)
 
     # ── Timers ────────────────────────────────────────────────────
@@ -402,9 +423,12 @@ class OutboundCallStateMachine:
             self._classification_task = None
 
     async def _classification_timeout_coro(self) -> None:
-        await asyncio.sleep(self._classification_timeout_s)
-        if self._state == OutboundCallState.CLASSIFYING:
-            await self._transition(OutboundCallState.UNKNOWN)
+        try:
+            await asyncio.sleep(self._classification_timeout_s)
+            if self._state == OutboundCallState.CLASSIFYING:
+                await self._transition(OutboundCallState.UNKNOWN)
+        except asyncio.CancelledError:
+            pass
 
     def _start_max_duration_timer(self) -> None:
         try:
@@ -414,9 +438,36 @@ class OutboundCallStateMachine:
         self._max_duration_task = loop.create_task(self._max_duration_coro())
 
     async def _max_duration_coro(self) -> None:
-        await asyncio.sleep(self._max_call_duration_s)
-        if self._state != OutboundCallState.ENDED:
-            await self._transition(OutboundCallState.ENDED)
-            await self._event_bus.emit(
-                CallEnded(call_sid=self._call_sid, disposition="max_duration")
-            )
+        try:
+            await asyncio.sleep(self._max_call_duration_s)
+            if self._state != OutboundCallState.ENDED:
+                await self._transition(OutboundCallState.ENDED)
+                await self._event_bus.emit(
+                    CallEnded(call_sid=self._call_sid, disposition="max_duration")
+                )
+        except asyncio.CancelledError:
+            pass
+
+    # ── Late voicemail window ────────────────────────────────────
+
+    def _start_late_voicemail_window(self) -> None:
+        self._cancel_late_voicemail_window()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._late_voicemail_task = loop.create_task(self._late_voicemail_coro())
+
+    def _cancel_late_voicemail_window(self) -> None:
+        if self._late_voicemail_task and not self._late_voicemail_task.done():
+            self._late_voicemail_task.cancel()
+        self._late_voicemail_task = None
+
+    async def _late_voicemail_coro(self) -> None:
+        """After the window expires, stop accepting late voicemail signals."""
+        try:
+            await asyncio.sleep(self._late_voicemail_window_s)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._late_voicemail_task = None

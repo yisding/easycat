@@ -68,6 +68,7 @@ class NumberHealthMonitor:
         self._records: dict[str, list[_CallRecord]] = defaultdict(list)
         self._concurrent: dict[str, int] = defaultdict(int)
         self._last_call_time: dict[str, float] = {}
+        self._call_sid_to_number: dict[str, str] = {}
         self._started = False
 
     def start(self) -> None:
@@ -156,19 +157,27 @@ class NumberHealthMonitor:
             self._records[number] = active
         return active
 
+    def _resolve_number(self, call_sid: str, event_number: str | None) -> str:
+        """Resolve the from-number for a call, using the call_sid mapping as fallback."""
+        if event_number:
+            return event_number
+        return self._call_sid_to_number.get(call_sid, call_sid)
+
     async def _on_call_initiated(self, event: CallInitiated) -> None:
         number = event.from_
+        self._call_sid_to_number[event.call_sid] = number
         self._concurrent[number] = self._concurrent.get(number, 0) + 1
         self._last_call_time[number] = time.monotonic()
 
     async def _on_call_failed(self, event: CallFailed) -> None:
-        number = getattr(event, "number", None) or event.call_sid
+        number = self._resolve_number(event.call_sid, event.number)
         self._concurrent[number] = max(0, self._concurrent.get(number, 0) - 1)
         is_blocked = event.reason in ("blocked_unwanted", "blocked_rejected")
         self.record_call(number, answered=False, blocked=is_blocked)
+        self._call_sid_to_number.pop(event.call_sid, None)
 
     async def _on_call_ended(self, event: CallEnded) -> None:
-        number = getattr(event, "number", None) or event.call_sid
+        number = self._resolve_number(event.call_sid, event.number)
         self._concurrent[number] = max(0, self._concurrent.get(number, 0) - 1)
         duration = event.duration_s or 0.0
         self.record_call(
@@ -177,6 +186,7 @@ class NumberHealthMonitor:
             duration_s=duration,
             disposition=event.disposition or "",
         )
+        self._call_sid_to_number.pop(event.call_sid, None)
 
 
 class CallDispositionTracker:

@@ -20,6 +20,7 @@ from easycat.telephony.screening import (
     ScreeningPatternSet,
     ScreeningResponse,
     ScreeningState,
+    is_conversational,
     match_screening_platform,
 )
 
@@ -571,3 +572,62 @@ class TestScreeningMultiTurn:
             assert not detector.is_coherent()
         finally:
             detector.stop()
+
+
+# ── is_conversational structural heuristics ────────────────────
+
+
+class TestIsConversational:
+    """Tests for structural heuristic classification of human vs. screening speech."""
+
+    def test_short_greetings_are_conversational(self) -> None:
+        assert is_conversational("Hello?")
+        assert is_conversational("Yeah")
+        assert is_conversational("Speaking")
+        assert is_conversational("Go ahead")
+        assert is_conversational("This is John")
+
+    def test_non_english_short_greetings(self) -> None:
+        assert is_conversational("Hola")
+        assert is_conversational("Bonjour")
+        assert is_conversational("Oui")
+
+    def test_receptionist_pickup_within_word_limit(self) -> None:
+        assert is_conversational("Hello, how can I help you?")
+        assert is_conversational("Hello how can I help you today")
+        assert is_conversational("Thanks for calling how can I help")
+        assert is_conversational("Hi this is John how may I help")
+
+    def test_empty_and_whitespace_rejected(self) -> None:
+        assert not is_conversational("")
+        assert not is_conversational("   ")
+
+    def test_screening_prompts_rejected(self) -> None:
+        assert not is_conversational("please record your name and reason for calling")
+        assert not is_conversational("The person you're calling is using a screening service")
+
+    def test_long_interrogative_screening_rejected(self) -> None:
+        assert not is_conversational("Can you tell me more about why you are calling today?")
+        assert not is_conversational("Could you explain the reason for your call please?")
+        assert not is_conversational("Why are you calling this number, please elaborate?")
+        assert not is_conversational("What is this about exactly, could you explain?")
+
+    def test_please_starter_rejected(self) -> None:
+        assert not is_conversational("Please state your name and the reason you are calling today")
+
+    def test_voicemail_greetings_rejected(self) -> None:
+        assert not is_conversational(
+            "Please leave a message after the tone and we will get back to you"
+        )
+        assert not is_conversational(
+            "You have reached the voicemail box of John Smith please leave a message"
+        )
+
+    def test_screening_follow_up_patterns_rejected(self) -> None:
+        assert not is_conversational("Tell me more about your reason for calling")
+        assert not is_conversational("One moment please")
+
+    def test_ivr_prompts_rejected(self) -> None:
+        assert not is_conversational(
+            "Press 1 for sales, press 2 for support, press 3 for billing"
+        )
