@@ -276,8 +276,8 @@ def create_session(config: EasyCatConfig) -> Session:
             for ev in events:
                 await queue.put(ev.chunk)
 
-        _outbound_sm._on_gate_flush = _flush_gated_audio
-        _outbound_sm.gate._on_flush_async = _flush_gated_audio
+        _outbound_sm.set_gate_flush_callback(_flush_gated_audio)
+        _outbound_sm.gate.set_flush_async_callback(_flush_gated_audio)
 
         # Wire hold audio callback — synthesize hold text via TTS when gate closes.
         tts_synth = session._tts_synth
@@ -292,7 +292,7 @@ def create_session(config: EasyCatConfig) -> Session:
             except RuntimeError:
                 pass
 
-        _outbound_sm.gate._on_hold_audio = _play_hold_audio
+        _outbound_sm.gate.set_hold_audio_callback(_play_hold_audio)
 
     return session
 
@@ -376,7 +376,7 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
         async def _on_ivr_human_detected(event: IVRAction) -> None:
             if event.type == IVRActionType.HUMAN_DETECTED:
                 if sm.state == OutboundCallState.IVR:
-                    await sm._transition(OutboundCallState.HUMAN)
+                    await sm.transition(OutboundCallState.HUMAN)
 
         event_bus.subscribe(IVRAction, _on_ivr_human_detected)
 
