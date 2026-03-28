@@ -59,7 +59,7 @@ def build_openai_agents_adapter(
             logger.debug("set_default_openai_api unavailable: %s", exc)
 
     agent_kwargs: dict[str, Any] = {"name": name, "instructions": instructions}
-    if tools:
+    if tools is not None:
         agent_kwargs["tools"] = tools
     voice_agent = Agent(**agent_kwargs)
     return OpenAIAgentsAdapter(voice_agent, run_config=run_config)

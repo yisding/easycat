@@ -299,6 +299,7 @@ function addEvent(evt) {
   const line = document.createElement("div");
   line.textContent = `[${t.toFixed(2)}s] ${evt.type} ${evt.text || evt.result || evt.message || ""}`;
   eventLog.prepend(line);
+  while (eventLog.childElementCount > 500) eventLog.lastElementChild.remove();
 }
 
 /* ── SSE with auto-reconnect ──────────────────────────────────── */
@@ -340,15 +341,18 @@ async function fetchIceConfig(baseUrl) {
 async function negotiate(baseUrl) {
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  await new Promise(resolve => {
-    if (pc.iceGatheringState === "complete") return resolve();
-    pc.addEventListener("icegatheringstatechange", function check() {
-      if (pc.iceGatheringState === "complete") {
-        pc.removeEventListener("icegatheringstatechange", check);
-        resolve();
-      }
-    });
-  });
+  await Promise.race([
+    new Promise(resolve => {
+      if (pc.iceGatheringState === "complete") return resolve();
+      pc.addEventListener("icegatheringstatechange", function check() {
+        if (pc.iceGatheringState === "complete") {
+          pc.removeEventListener("icegatheringstatechange", check);
+          resolve();
+        }
+      });
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("ICE gathering timed out")), 10000)),
+  ]);
 
   const response = await fetch(baseUrl + "/offer", {
     method: "POST",
