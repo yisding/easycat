@@ -19,11 +19,21 @@ import asyncio
 import json
 import logging
 import os
-import signal
+import sys
 import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from common import (  # noqa: E402
+    build_openai_agents_adapter,
+    default_event_logging,
+    require_env,
+    wait_for_shutdown_signal,
+)
+from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 from easycat import (
     AgentDelta,
@@ -32,23 +42,58 @@ from easycat import (
     BotStartedSpeaking,
     BotStoppedSpeaking,
     EasyCatConfig,
+    Error,
     ICEServer,
     Interruption,
-    OpenAIAgentsAdapter,
+    ReconnectAttempt,
+    ReconnectFailure,
+    ReconnectSuccess,
     STTFinal,
     STTPartial,
+    ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
     TTSAudio,
+    TurnEnded,
+    TurnStarted,
+    VADStartSpeaking,
+    VADStopSpeaking,
     WebRTCTransportConfig,
     create_session,
 )
 
+logger = logging.getLogger(__name__)
+
 _STATIC_DIR = str(Path(__file__).parent / "webrtc_static")
 _OBSERVABILITY_HTML = Path(__file__).parent / "webrtc_static" / "webrtc_observability.html"
 
+# All event types the observability dashboard subscribes to.
+_SUBSCRIBED_EVENTS: list[type] = [
+    AudioIn,
+    STTPartial,
+    STTFinal,
+    AgentDelta,
+    AgentFinal,
+    TTSAudio,
+    ToolCallStarted,
+    ToolCallDelta,
+    ToolCallResult,
+    Interruption,
+    BotStartedSpeaking,
+    BotStoppedSpeaking,
+    TurnStarted,
+    TurnEnded,
+    VADStartSpeaking,
+    VADStopSpeaking,
+    Error,
+    ReconnectAttempt,
+    ReconnectSuccess,
+    ReconnectFailure,
+]
+
 
 def _build_ice_servers() -> list[ICEServer]:
+    """Build ICE server list from environment variables."""
     servers: list[ICEServer] = [ICEServer(urls="stun:stun.l.google.com:19302")]
 
     turn_url = os.getenv("TURN_SERVER_URL")
@@ -65,6 +110,7 @@ def _build_ice_servers() -> list[ICEServer]:
 
 
 def _serialize_event(event: Any) -> dict[str, Any]:
+    """Serialize an EasyCat event into a JSON-friendly dict for SSE clients."""
     payload: dict[str, Any] = {
         "type": type(event).__name__,
         "timestamp": getattr(event, "timestamp", time.monotonic()),
@@ -88,6 +134,10 @@ def _serialize_event(event: Any) -> dict[str, Any]:
         payload["track"] = "tool_calls"
         payload["tool_name"] = event.tool_name
         payload["call_id"] = event.call_id
+    elif isinstance(event, ToolCallDelta):
+        payload["track"] = "tool_calls"
+        payload["call_id"] = event.call_id
+        payload["text"] = event.text
     elif isinstance(event, ToolCallResult):
         payload["track"] = "tool_calls"
         payload["call_id"] = event.call_id
@@ -96,9 +146,21 @@ def _serialize_event(event: Any) -> dict[str, Any]:
         payload["track"] = "barge_in"
     elif isinstance(event, BotStartedSpeaking | BotStoppedSpeaking):
         payload["track"] = "playback"
+    elif isinstance(event, TurnStarted | TurnEnded):
+        payload["track"] = "turn_lifecycle"
+    elif isinstance(event, VADStartSpeaking | VADStopSpeaking):
+        payload["track"] = "vad"
+    elif isinstance(event, Error):
+        payload["track"] = "errors"
+        payload["message"] = str(event.error)
+        payload["context"] = event.context
+    elif isinstance(event, ReconnectAttempt | ReconnectSuccess | ReconnectFailure):
+        payload["track"] = "reconnect"
+        if isinstance(event, ReconnectAttempt):
+            payload["provider"] = event.provider
+            payload["attempt"] = event.attempt
 
     if is_dataclass(event):
-        # Keep primitive correlation fields where available.
         data = asdict(event)
         for key in ("session_id", "turn_id"):
             if key in data and data[key] is not None:
@@ -107,30 +169,59 @@ def _serialize_event(event: Any) -> dict[str, Any]:
     return payload
 
 
+class _Broadcaster:
+    """Fan-out event broadcaster for SSE clients.
+
+    Each connected SSE client gets its own asyncio.Queue.  Events are
+    broadcast to all connected clients.  Disconnected clients are
+    automatically cleaned up.
+    """
+
+    def __init__(self, maxsize: int = 2000) -> None:
+        self._clients: dict[int, asyncio.Queue[dict[str, Any] | None]] = {}
+        self._next_id = 0
+        self._maxsize = maxsize
+
+    def connect(self) -> tuple[int, asyncio.Queue[dict[str, Any] | None]]:
+        """Register a new client.  Returns (client_id, queue)."""
+        client_id = self._next_id
+        self._next_id += 1
+        q: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(maxsize=self._maxsize)
+        self._clients[client_id] = q
+        logger.info("SSE client %d connected (%d total)", client_id, len(self._clients))
+        return client_id, q
+
+    def disconnect(self, client_id: int) -> None:
+        """Remove a client by id."""
+        self._clients.pop(client_id, None)
+        logger.info("SSE client %d disconnected (%d remaining)", client_id, len(self._clients))
+
+    def broadcast(self, item: dict[str, Any]) -> None:
+        """Send an item to all connected clients, dropping on overflow."""
+        for client_id, q in list(self._clients.items()):
+            try:
+                q.put_nowait(item)
+            except asyncio.QueueFull:
+                logger.warning(
+                    "SSE client %d queue full; dropping event %s",
+                    client_id,
+                    item.get("type"),
+                )
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise SystemExit("OPENAI_API_KEY is required.")
+    api_key = require_env("OPENAI_API_KEY")
 
     try:
-        from agents import Agent, function_tool  # type: ignore[import-untyped]
+        from agents import function_tool  # type: ignore[import-untyped]
     except ImportError as exc:
         raise SystemExit(
             "OpenAI Agents SDK is required. Install with: uv sync --extra openai-agents"
-        ) from exc
-
-    try:
-        import uvicorn
-        from fastapi import FastAPI
-        from fastapi.responses import HTMLResponse, StreamingResponse
-    except ImportError as exc:
-        raise SystemExit(
-            "FastAPI + uvicorn are required. Install with: uv sync --group dev"
         ) from exc
 
     @function_tool
@@ -143,15 +234,22 @@ async def main() -> None:
         """Return a * b."""
         return a * b
 
-    voice_agent = Agent(
-        name="ObservableVoiceAssistant",
+    adapter = build_openai_agents_adapter(
         instructions=(
             "You are a helpful voice assistant. Keep responses concise. "
             "When a user asks math questions, use the available math tools."
         ),
         tools=[add_numbers, multiply_numbers],
     )
-    adapter = OpenAIAgentsAdapter(voice_agent)
+
+    try:
+        import uvicorn
+        from fastapi import FastAPI, Request
+        from fastapi.responses import HTMLResponse, StreamingResponse
+    except ImportError as exc:
+        raise SystemExit(
+            "FastAPI + uvicorn are required. Install with: uv sync --extra fastapi"
+        ) from exc
 
     signaling_host = os.getenv("SIGNALING_HOST", "0.0.0.0")
     signaling_port = int(os.getenv("SIGNALING_PORT", "8080"))
@@ -168,31 +266,17 @@ async def main() -> None:
         ),
         agent=adapter,
         wrap_agent=False,
+        event_logging=default_event_logging(),
     )
     session = create_session(config)
+    attach_runtime_feedback(session)
 
-    event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=5000)
+    broadcaster = _Broadcaster()
 
     def _on_event(event: Any) -> None:
-        item = _serialize_event(event)
-        try:
-            event_queue.put_nowait(item)
-        except asyncio.QueueFull:
-            logging.warning("Observability queue full; dropping event %s", item.get("type"))
+        broadcaster.broadcast(_serialize_event(event))
 
-    for event_type in (
-        AudioIn,
-        STTPartial,
-        STTFinal,
-        AgentDelta,
-        AgentFinal,
-        TTSAudio,
-        ToolCallStarted,
-        ToolCallResult,
-        Interruption,
-        BotStartedSpeaking,
-        BotStoppedSpeaking,
-    ):
+    for event_type in _SUBSCRIBED_EVENTS:
         session.subscribe_event(event_type, _on_event)
 
     app = FastAPI(title="EasyCat WebRTC Observability")
@@ -202,11 +286,25 @@ async def main() -> None:
         return _OBSERVABILITY_HTML.read_text(encoding="utf-8")
 
     @app.get("/events")
-    async def stream_events() -> StreamingResponse:
+    async def stream_events(request: Request) -> StreamingResponse:
+        client_id, queue = broadcaster.connect()
+
         async def gen() -> Any:
-            while True:
-                item = await event_queue.get()
-                yield f"data: {json.dumps(item)}\n\n"
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except TimeoutError:
+                        # Send SSE keepalive comment to detect broken connections.
+                        yield ": keepalive\n\n"
+                        continue
+                    if item is None:
+                        break
+                    yield f"data: {json.dumps(item)}\n\n"
+            finally:
+                broadcaster.disconnect(client_id)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -219,16 +317,10 @@ async def main() -> None:
     print(f"WebRTC signaling:   http://localhost:{signaling_port}/webrtc_client.html")
     print(f"Observability UI:   http://localhost:{dashboard_port}")
 
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
-
-    await stop_event.wait()
+    await wait_for_shutdown_signal(session)
 
     uvicorn_server.should_exit = True
     await server_task
-    await session.stop()
 
 
 if __name__ == "__main__":

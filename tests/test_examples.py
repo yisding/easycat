@@ -144,6 +144,7 @@ def _python_executable() -> str:
         "examples/ws_server.py",
         "examples/ws_browser_example.py",
         "examples/webrtc_server.py",
+        "examples/webrtc_observability_server.py",
         "examples/pydantic_ai_voice.py",
     ],
 )
