@@ -311,9 +311,12 @@ function connectSSE() {
   if (evtSource) evtSource.close();
   evtSource = new EventSource("/events");
 
-  evtSource.onopen = () => {
-    sseRetryDelay = 1000; // reset backoff on successful connect
-  };
+  const ready = new Promise((resolve) => {
+    evtSource.onopen = () => {
+      sseRetryDelay = 1000; // reset backoff on successful connect
+      resolve();
+    };
+  });
 
   evtSource.onmessage = (e) => addEvent(JSON.parse(e.data));
 
@@ -328,6 +331,8 @@ function connectSSE() {
       sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_MAX_RETRY);
     }
   };
+
+  return ready;
 }
 
 /* ── WebRTC ──────────────────────────────────────────────────── */
@@ -403,7 +408,7 @@ async function startConversation() {
   incomingSentencesEl.innerHTML = "";
   outgoingSentencesEl.innerHTML = "";
 
-  connectSSE();
+  await connectSSE();
 
   localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const mic = startRecorder(
@@ -443,10 +448,12 @@ async function startConversation() {
         statusEl.className = "text-sm font-semibold text-emerald-300";
         break;
       case "failed":
+        stopConversation();
         statusEl.textContent = "Connection failed";
         statusEl.className = "text-sm font-semibold text-rose-300";
         break;
       case "disconnected":
+        stopConversation();
         statusEl.textContent = "Disconnected";
         statusEl.className = "text-sm font-semibold text-amber-300";
         break;
