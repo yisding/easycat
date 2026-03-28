@@ -55,7 +55,7 @@ def parse_call_status_callback(
 
     if status == "completed":
         duration_raw = params.get("Duration")
-        duration_s = float(duration_raw) if duration_raw is not None else None
+        duration_s = float(duration_raw) if duration_raw not in (None, "") else None
         return CallEnded(
             call_sid=call_sid,
             duration_s=duration_s,
@@ -65,7 +65,7 @@ def parse_call_status_callback(
 
     if status in {"busy", "no-answer", "failed", "canceled"}:
         sip_code_raw = params.get("SipResponseCode")
-        sip_code = int(sip_code_raw) if sip_code_raw is not None else None
+        sip_code = int(sip_code_raw) if sip_code_raw not in (None, "") else None
         reason = _SIP_BLOCK_REASONS.get(sip_code, status) if sip_code else status
         return CallFailed(
             call_sid=call_sid,

@@ -209,16 +209,19 @@ class CallDispositionTracker:
         self._dispositions: list[tuple[float, str, str]] = []  # (timestamp, disposition, call_sid)
         self._disposed_calls: set[str] = set()
         self._call_dispositions: dict[str, str] = {}
+        self._failure_reasons: dict[str, str] = {}
         self._started = False
 
     def start(self) -> None:
         if self._started:
             return
+        self._event_bus.subscribe(CallFailed, self._on_call_failed)
         self._event_bus.subscribe(CallStateChanged, self._on_state_changed)
         self._started = True
 
     def stop(self) -> None:
         if self._started:
+            self._event_bus.unsubscribe(CallFailed, self._on_call_failed)
             self._event_bus.unsubscribe(CallStateChanged, self._on_state_changed)
         self._started = False
 
@@ -258,6 +261,11 @@ class CallDispositionTracker:
             by_hour[hour][disp] += 1
         return dict(by_hour)
 
+    async def _on_call_failed(self, event: CallFailed) -> None:
+        """Stash failure reason so ENDED disposition preserves it."""
+        if event.call_sid:
+            self._failure_reasons[event.call_sid] = event.reason
+
     async def _on_state_changed(self, event: CallStateChanged) -> None:
         """Auto-record disposition when call reaches terminal state.
 
@@ -274,6 +282,10 @@ class CallDispositionTracker:
         if event.new in terminal:
             call_sid = event.call_sid
             disposition = terminal[event.new]
+            # Preserve the specific failure reason (busy, no-answer, etc.)
+            # instead of collapsing everything to generic "ended".
+            if event.new == OutboundCallState.ENDED and call_sid in self._failure_reasons:
+                disposition = self._failure_reasons.pop(call_sid)
 
             # Allow late voicemail to overwrite an earlier human disposition.
             if call_sid in self._disposed_calls:

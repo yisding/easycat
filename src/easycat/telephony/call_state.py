@@ -344,7 +344,7 @@ class OutboundCallStateMachine:
         # handles re-enqueuing the buffered audio.
         if old == OutboundCallState.CLASSIFYING and self._gate.is_closed:
             buffered = self._gate.release()
-            if buffered and self._gate._on_flush_async:
+            if self._gate._on_flush_async:
                 await self._gate._on_flush_async(buffered)
 
         # Start late voicemail detection window when entering HUMAN.
@@ -434,6 +434,11 @@ class OutboundCallStateMachine:
             return
 
         if self._state == OutboundCallState.SCREENING:
+            # Skip outbound-track transcripts (bot's own speech fed back
+            # when transcription_track="both") to avoid misclassifying the
+            # bot's screening reply as the callee picking up.
+            if getattr(event, "track", None) == "outbound":
+                return
             if is_conversational(text):
                 await self._transition(OutboundCallState.HUMAN)
 
