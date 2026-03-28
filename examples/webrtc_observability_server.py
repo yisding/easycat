@@ -36,6 +36,7 @@ from common import (  # noqa: E402
 from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 from easycat import (
+    ALL_EVENTS,
     AgentDelta,
     AgentFinal,
     AudioIn,
@@ -66,30 +67,6 @@ logger = logging.getLogger(__name__)
 
 _STATIC_DIR = str(Path(__file__).parent / "webrtc_static")
 _OBSERVABILITY_HTML = Path(__file__).parent / "webrtc_static" / "webrtc_observability.html"
-
-# All event types the observability dashboard subscribes to.
-_SUBSCRIBED_EVENTS: list[type] = [
-    AudioIn,
-    STTPartial,
-    STTFinal,
-    AgentDelta,
-    AgentFinal,
-    TTSAudio,
-    ToolCallStarted,
-    ToolCallDelta,
-    ToolCallResult,
-    Interruption,
-    BotStartedSpeaking,
-    BotStoppedSpeaking,
-    TurnStarted,
-    TurnEnded,
-    VADStartSpeaking,
-    VADStopSpeaking,
-    Error,
-    ReconnectAttempt,
-    ReconnectSuccess,
-    ReconnectFailure,
-]
 
 
 def _build_ice_servers() -> list[ICEServer]:
@@ -275,8 +252,7 @@ async def main() -> None:
     def _on_event(event: Any) -> None:
         broadcaster.broadcast(_serialize_event(event))
 
-    for event_type in _SUBSCRIBED_EVENTS:
-        session.subscribe_event(event_type, _on_event)
+    session.subscribe_events(ALL_EVENTS, _on_event)
 
     app = FastAPI(title="EasyCat WebRTC Observability")
 
