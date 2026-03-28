@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from easycat.telephony.compliance import (
     AIDisclosureConfig,
-    DNCSList,
+    DNCList,
     check_calling_hours,
     detect_opt_out,
     lookup_timezone,
@@ -58,11 +58,11 @@ class TestAIDisclosure:
 
 class TestDNCIntegration:
     def test_dnc_check_before_call(self) -> None:
-        dnc = DNCSList()
+        dnc = DNCList()
         assert not dnc.is_on_dnc("+15551234567")
 
     def test_dnc_blocks_call(self) -> None:
-        dnc = DNCSList()
+        dnc = DNCList()
         dnc.add("+15551234567")
         assert dnc.is_on_dnc("+15551234567")
 

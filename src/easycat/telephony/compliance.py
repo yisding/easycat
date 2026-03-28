@@ -94,7 +94,7 @@ class CallBlocked:
     reason: str
 
 
-class DNCSList:
+class DNCList:
     """Internal Do Not Call list.
 
     Maintains a set of phone numbers that should not be called.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -51,6 +52,8 @@ from easycat.tts.factory import TTSConfig, create_tts_provider_from_config
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, create_vad
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -290,7 +293,6 @@ def create_session(config: EasyCatConfig) -> Session:
                 await queue.put(ev.chunk)
 
         _outbound_sm.set_gate_flush_callback(_flush_gated_audio)
-        _outbound_sm.gate.set_flush_async_callback(_flush_gated_audio)
 
         # Wire hold audio callback — synthesize hold text via TTS when gate closes.
         _tts = session.tts_synth
@@ -305,7 +307,7 @@ def create_session(config: EasyCatConfig) -> Session:
                 loop = asyncio.get_running_loop()
                 _hold_audio_task = loop.create_task(_synthesize_hold())
             except RuntimeError:
-                pass
+                logger.warning("No running event loop — hold audio skipped")
 
         _outbound_sm.gate.set_hold_audio_callback(_play_hold_audio)
 
