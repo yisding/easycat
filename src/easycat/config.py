@@ -97,6 +97,8 @@ class OutboundCallConfig:
     callee_language: str = "en"
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
+    twiml_url: str = ""
+    status_callback_url: str = ""
     ivr_agent_callback: Any = None  # AgentCallback for IVR navigation
     ivr_dtmf_delivery: Any = None  # DTMFDelivery instance for IVR
 
@@ -329,11 +331,14 @@ def create_session(config: EasyCatConfig) -> Session:
                         f'Their screening prompt says: "{prompt}". '
                         f"Identify yourself briefly."
                     )
+                    # Cancel the fallback timer *before* TTS synthesis so that
+                    # a slow TTS doesn't let the fallback fire and produce a
+                    # duplicate screening reply.
+                    _screening_detector.notify_agent_responded()
                     if response_text:
                         await _tts.synthesize(
                             response_text, token=None, bypass_gate=True
                         )
-                    _screening_detector.notify_agent_responded()
                 except Exception:
                     logger.exception("Agent-mode screening response failed")
             elif event.text:
@@ -451,6 +456,8 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
                     enable_realtime_transcription=oc.enable_realtime_transcription,
                     twilio_account_sid=oc.twilio_account_sid,
                     twilio_auth_token=oc.twilio_auth_token,
+                    twiml_url=oc.twiml_url,
+                    status_callback_url=oc.status_callback_url,
                 )
                 helpers.append(manager)
             except ImportError:
