@@ -6,7 +6,7 @@ in an Audacity-style multi-track timeline.
 
 Setup:
     export OPENAI_API_KEY="..."
-    uv sync --extra openai-agents --extra webrtc --extra fastapi
+    uv sync --extra openai-agents --extra webrtc --extra telephony
     uv run python examples/webrtc_observability_server.py
 
 Open:
@@ -248,7 +248,7 @@ async def main() -> None:
         from fastapi.responses import HTMLResponse, StreamingResponse
     except ImportError as exc:
         raise SystemExit(
-            "FastAPI + uvicorn are required. Install with: uv sync --extra fastapi"
+            "FastAPI + uvicorn are required. Install with: uv sync --extra telephony"
         ) from exc
 
     signaling_host = os.getenv("SIGNALING_HOST", "0.0.0.0")
@@ -312,6 +312,9 @@ async def main() -> None:
 
     uvicorn_cfg = uvicorn.Config(app, host=dashboard_host, port=dashboard_port, log_level="info")
     uvicorn_server = uvicorn.Server(uvicorn_cfg)
+    # Prevent uvicorn from overriding our signal handlers so
+    # wait_for_shutdown_signal() can trigger a clean EasyCat shutdown.
+    uvicorn_server.install_signal_handlers = lambda: None  # type: ignore[assignment]
     server_task = asyncio.create_task(uvicorn_server.serve())
 
     print(f"WebRTC signaling:   http://localhost:{signaling_port}/webrtc_client.html")
