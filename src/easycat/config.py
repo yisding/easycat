@@ -337,9 +337,7 @@ def create_session(config: EasyCatConfig) -> Session:
                     # to avoid a duplicate screening reply.
                     in_time = _screening_detector.notify_agent_responded()
                     if response_text and in_time:
-                        await _tts.synthesize(
-                            response_text, token=None, bypass_gate=True
-                        )
+                        await _tts.synthesize(response_text, token=None, bypass_gate=True)
                 except Exception:
                     logger.exception("Agent-mode screening response failed")
             elif event.text:
@@ -462,9 +460,7 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
                 )
                 helpers.append(manager)
             except ImportError:
-                logger.warning(
-                    "twilio package not installed — OutboundCallManager disabled"
-                )
+                logger.warning("twilio package not installed — OutboundCallManager disabled")
 
     return helpers
 
