@@ -366,6 +366,17 @@ class OutboundCallStateMachine:
             else:
                 await self._gate.discard()
 
+        # Reopen the gate when SCREENING or IVR resolves to HUMAN.
+        # discard() above kept the gate closed to block opener TTS during
+        # classification, but once the callee is confirmed human the gate
+        # must open so normal agent TTS can reach the transport.
+        if (
+            old in {OutboundCallState.SCREENING, OutboundCallState.IVR}
+            and new_state == OutboundCallState.HUMAN
+            and self._gate.is_closed
+        ):
+            self._gate.release()
+
         # Start late voicemail detection window when entering HUMAN.
         if new_state == OutboundCallState.HUMAN and self._late_voicemail_window_s > 0:
             self._start_late_voicemail_window()
@@ -445,6 +456,12 @@ class OutboundCallStateMachine:
             return
 
         if self._state == OutboundCallState.CLASSIFYING:
+            # Skip outbound-track transcripts (bot's own opener fed back
+            # when transcription_track="both") to avoid the assistant's
+            # greeting satisfying is_conversational() and short-circuiting
+            # classification before AMD/screening/voicemail has resolved.
+            if getattr(event, "track", None) == "outbound":
+                return
             if classify_ivr_prompt(text):
                 self._cancel_classification_timeout()
                 await self._transition(OutboundCallState.IVR)
