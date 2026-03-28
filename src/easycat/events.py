@@ -322,6 +322,16 @@ class CallScreening:
 
 
 @dataclass(frozen=True)
+class ScreeningTimedOut:
+    """Screening exhausted max turns without resolution."""
+
+    call_sid: str = ""
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
 class CallFailed:
     """Call failed (busy, no answer, rejected, error)."""
 

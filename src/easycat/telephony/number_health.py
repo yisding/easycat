@@ -206,7 +206,7 @@ class CallDispositionTracker:
 
     def __init__(self, event_bus: EventBus) -> None:
         self._event_bus = event_bus
-        self._dispositions: list[tuple[float, str]] = []
+        self._dispositions: list[tuple[float, str, str]] = []  # (timestamp, disposition, call_sid)
         self._disposed_calls: set[str] = set()
         self._call_dispositions: dict[str, str] = {}
         self._started = False
@@ -222,20 +222,19 @@ class CallDispositionTracker:
             self._event_bus.unsubscribe(CallStateChanged, self._on_state_changed)
         self._started = False
 
-    def record_disposition(self, disposition: str) -> None:
-        self._dispositions.append((time.time(), disposition))
+    def record_disposition(self, disposition: str, call_sid: str = "") -> None:
+        self._dispositions.append((time.time(), disposition, call_sid))
         if len(self._dispositions) > self._MAX_DISPOSITIONS:
             self._dispositions = self._dispositions[-self._MAX_DISPOSITIONS :]
 
     def _replace_disposition(self, call_sid: str, new_disposition: str) -> None:
         """Replace the recorded disposition for a call (e.g. late voicemail)."""
-        old = self._call_dispositions.get(call_sid)
-        if old is None:
+        if call_sid not in self._call_dispositions:
             return
-        # Walk backwards to find and replace the most recent matching entry.
+        # Walk backwards to find the entry for this specific call_sid.
         for i in range(len(self._dispositions) - 1, -1, -1):
-            if self._dispositions[i][1] == old:
-                self._dispositions[i] = (self._dispositions[i][0], new_disposition)
+            if self._dispositions[i][2] == call_sid:
+                self._dispositions[i] = (self._dispositions[i][0], new_disposition, call_sid)
                 break
         self._call_dispositions[call_sid] = new_disposition
 
@@ -244,7 +243,7 @@ class CallDispositionTracker:
         if not self._dispositions:
             return {}
         counts: dict[str, int] = defaultdict(int)
-        for _, disp in self._dispositions:
+        for _, disp, _ in self._dispositions:
             counts[disp] += 1
         total = len(self._dispositions)
         return {k: v / total for k, v in counts.items()}
@@ -254,7 +253,7 @@ class CallDispositionTracker:
         from datetime import datetime
 
         by_hour: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        for ts, disp in self._dispositions:
+        for ts, disp, _ in self._dispositions:
             hour = datetime.fromtimestamp(ts).hour
             by_hour[hour][disp] += 1
         return dict(by_hour)
@@ -284,4 +283,4 @@ class CallDispositionTracker:
 
             self._disposed_calls.add(call_sid)
             self._call_dispositions[call_sid] = disposition
-            self.record_disposition(disposition)
+            self.record_disposition(disposition, call_sid=call_sid)

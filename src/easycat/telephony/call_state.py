@@ -16,6 +16,7 @@ from easycat.events import (
     CallRinging,
     CallScreening,
     EventBus,
+    ScreeningTimedOut,
     STTFinal,
     TTSAudio,
     VoicemailDetected,
@@ -273,6 +274,7 @@ class OutboundCallStateMachine:
         self._event_bus.subscribe(CallEnded, self._on_ended)
         self._event_bus.subscribe(VoicemailDetected, self._on_voicemail)
         self._event_bus.subscribe(CallScreening, self._on_screening)
+        self._event_bus.subscribe(ScreeningTimedOut, self._on_screening_timed_out)
         self._event_bus.subscribe(STTFinal, self._on_stt_final)
         self._gate.start()
         self._started = True
@@ -286,6 +288,7 @@ class OutboundCallStateMachine:
         self._event_bus.unsubscribe(CallEnded, self._on_ended)
         self._event_bus.unsubscribe(VoicemailDetected, self._on_voicemail)
         self._event_bus.unsubscribe(CallScreening, self._on_screening)
+        self._event_bus.unsubscribe(ScreeningTimedOut, self._on_screening_timed_out)
         self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
         self._gate.stop()
         self._cancel_timers()
@@ -373,8 +376,9 @@ class OutboundCallStateMachine:
         await self._transition(OutboundCallState.ENDED)
 
     async def _on_voicemail(self, event: VoicemailDetected) -> None:
-        # When a fusion classifier is active, ignore raw AMD events.
-        if self._expect_fused_voicemail and event.source != "fusion":
+        # When a fusion classifier is active, ignore raw AMD events (empty source)
+        # but accept both fused and detector-sourced events.
+        if self._expect_fused_voicemail and not event.source:
             return
         if event.result == "human" and self._state in {
             OutboundCallState.CLASSIFYING,
@@ -403,6 +407,10 @@ class OutboundCallStateMachine:
         if self._state == OutboundCallState.CLASSIFYING:
             self._cancel_classification_timeout()
             await self._transition(OutboundCallState.SCREENING)
+
+    async def _on_screening_timed_out(self, event: ScreeningTimedOut) -> None:
+        if self._state == OutboundCallState.SCREENING:
+            await self._transition(OutboundCallState.UNKNOWN)
 
     async def _on_stt_final(self, event: STTFinal) -> None:
         """Handle STTFinal for IVR detection (CLASSIFYING) and SCREENING → HUMAN."""
