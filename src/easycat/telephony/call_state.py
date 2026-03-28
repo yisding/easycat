@@ -410,7 +410,7 @@ class OutboundCallStateMachine:
 
     async def _on_screening_timed_out(self, event: ScreeningTimedOut) -> None:
         if self._state == OutboundCallState.SCREENING:
-            await self._transition(OutboundCallState.UNKNOWN)
+            await self._transition(OutboundCallState.HUMAN)
 
     async def _on_stt_final(self, event: STTFinal) -> None:
         """Handle STTFinal for IVR detection (CLASSIFYING) and SCREENING → HUMAN."""
