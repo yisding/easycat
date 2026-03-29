@@ -497,11 +497,15 @@ class OutboundCallStateMachine:
             return
 
         if self._state == OutboundCallState.CLASSIFYING:
-            # Skip outbound-track transcripts (bot's own opener fed back
-            # when transcription_track="both") to avoid the assistant's
-            # greeting satisfying is_conversational() and short-circuiting
+            # Skip non-inbound transcripts (bot's own opener fed back when
+            # transcription_track="both") to avoid the assistant's greeting
+            # satisfying is_conversational() and short-circuiting
             # classification before AMD/screening/voicemail has resolved.
-            if getattr(event, "track", None) == "outbound":
+            # Check for any explicitly non-inbound track (including unknown
+            # tracks), not just "outbound", so the guard works even when the
+            # transport tags frames with variant names.
+            track = getattr(event, "track", None)
+            if track is not None and track != "inbound":
                 return
             if classify_ivr_prompt(text):
                 self._cancel_classification_timeout()
@@ -518,10 +522,11 @@ class OutboundCallStateMachine:
             return
 
         if self._state == OutboundCallState.SCREENING:
-            # Skip outbound-track transcripts (bot's own speech fed back
-            # when transcription_track="both") to avoid misclassifying the
-            # bot's screening reply as the callee picking up.
-            if getattr(event, "track", None) == "outbound":
+            # Skip non-inbound transcripts (bot's own speech fed back when
+            # transcription_track="both") to avoid misclassifying the bot's
+            # screening reply as the callee picking up.
+            track = getattr(event, "track", None)
+            if track is not None and track != "inbound":
                 return
             if is_conversational(text, self._screening_patterns):
                 await self._transition(OutboundCallState.HUMAN)
@@ -531,8 +536,9 @@ class OutboundCallStateMachine:
             and self._voicemail_pickup_task is not None
             and not self._voicemail_pickup_task.done()
         ):
-            # Skip outbound-track transcripts (bot's own voicemail message).
-            if getattr(event, "track", None) == "outbound":
+            # Skip non-inbound transcripts (bot's own voicemail message).
+            track = getattr(event, "track", None)
+            if track is not None and track != "inbound":
                 return
             # Exclude voicemail system prompts from triggering false human detection.
             if classify_greeting(text) == "machine":

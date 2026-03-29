@@ -401,6 +401,7 @@ Event = (
     | CallRinging
     | CallAnswered
     | CallScreening
+    | ScreeningTimedOut
     | CallFailed
     | CallEnded
     | Error
@@ -432,6 +433,7 @@ TELEPHONY_EVENTS: tuple[type, ...] = (
     CallRinging,
     CallAnswered,
     CallScreening,
+    ScreeningTimedOut,
     CallFailed,
     CallEnded,
 )

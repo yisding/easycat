@@ -474,6 +474,12 @@ class TwilioConnectionTransport(_AudioQueueMixin):
 
     async def _handle_media(self, msg: dict[str, Any]) -> None:
         media = msg.get("media", {})
+        # When streaming both tracks, skip the outbound (bot's own speech)
+        # so it never enters the VAD/STT pipeline and cannot be mistaken
+        # for callee audio by downstream classifiers.
+        track = media.get("track", "")
+        if track in ("outbound", "outbound_track"):
+            return
         payload = media.get("payload", "")
         if not payload:
             return
