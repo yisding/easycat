@@ -194,7 +194,7 @@ class OutboundCallManager:
         }
         if self._enable_realtime_transcription:
             create_kwargs["transcription"] = True
-            create_kwargs["transcription_track"] = "both"
+            create_kwargs["transcription_track"] = "inbound_track"
 
         if self._status_callback_url:
             create_kwargs["status_callback"] = self._status_callback_url
