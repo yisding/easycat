@@ -29,7 +29,13 @@ from easycat.telephony.call_state import (
     OutboundCallStateMachine,
 )
 from easycat.telephony.dtmf import DTMFAggregator, DTMFAggregatorConfig
-from easycat.telephony.ivr import IVRAction, IVRActionType, IVRNavigator
+from easycat.telephony.ivr import (
+    AgentCallback,
+    DTMFDelivery,
+    IVRAction,
+    IVRActionType,
+    IVRNavigator,
+)
 from easycat.telephony.outbound import OutboundCallManager
 from easycat.telephony.screening import (
     CallScreeningDetector,
@@ -104,8 +110,8 @@ class OutboundCallConfig:
     twilio_auth_token: str = ""
     twiml_url: str = ""
     status_callback_url: str = ""
-    ivr_agent_callback: Any = None  # AgentCallback for IVR navigation
-    ivr_dtmf_delivery: Any = None  # DTMFDelivery instance for IVR
+    ivr_agent_callback: AgentCallback | None = None
+    ivr_dtmf_delivery: DTMFDelivery | None = None
 
 
 @dataclass
@@ -282,84 +288,77 @@ def create_session(config: EasyCatConfig) -> Session:
         )
     )
 
-    # Wire gate flush callback to re-enqueue buffered audio on release.
     if _outbound_sm is not None:
-        _hold_audio_task: asyncio.Task[None] | None = None
-
-        async def _flush_gated_audio(events: list[TTSAudio]) -> None:
-            nonlocal _hold_audio_task
-            # Cancel any in-progress hold-audio synthesis so it doesn't
-            # overlap with real conversation audio after the gate opens.
-            if _hold_audio_task is not None and not _hold_audio_task.done():
-                _hold_audio_task.cancel()
-                _hold_audio_task = None
-            queue = session.outbound_queue
-            # Discard any stale hold-audio chunks that were already queued
-            # with bypass_gate=True before replaying the buffered speech.
-            queue.flush()
-            if events:
-                # Transition through BOT_SPEAKING so that caller speech
-                # during the replay is treated as barge-in, and the
-                # BotStartedSpeaking / BotStoppedSpeaking events fire.
-                await session._turn_manager.bot_started_speaking()
-                for ev in events:
-                    await queue.put(ev.chunk)
-                await session._turn_manager.bot_stopped_speaking()
-
-        _outbound_sm.set_gate_flush_callback(_flush_gated_audio)
-
-        # Wire hold audio callback — synthesize hold text via TTS when gate closes.
-        _tts = session.tts_synth
-
-        def _play_hold_audio(text: str) -> None:
-            nonlocal _hold_audio_task
-
-            async def _synthesize_hold() -> None:
-                await _tts.synthesize(text, token=None, bypass_gate=True)
-
-            try:
-                loop = asyncio.get_running_loop()
-                _hold_audio_task = loop.create_task(_synthesize_hold())
-            except RuntimeError:
-                logger.warning("No running event loop — hold audio skipped")
-
-        _outbound_sm.gate.set_hold_audio_callback(_play_hold_audio)
-
-        # Wire ScreeningResponse → TTS so the bot actually speaks the
-        # screening identification (e.g. "Hi, this is Sarah from Acme").
-        _screening_detector: CallScreeningDetector | None = None
-        for _h in telephony_helpers:
-            if isinstance(_h, CallScreeningDetector):
-                _screening_detector = _h
-                break
-
-        async def _on_screening_response(event: ScreeningResponse) -> None:
-            if event.mode == "agent" and _screening_detector is not None:
-                try:
-                    prompt = _screening_detector._accumulated_text
-                    response_text = await agent.run(
-                        f"The callee's phone is screening this call. "
-                        f'Their screening prompt says: "{prompt}". '
-                        f"Identify yourself briefly."
-                    )
-                    # Cancel the fallback timer and check whether it already
-                    # fired.  If the agent was slower than agent_timeout_s AND
-                    # a static fallback was actually spoken, skip synthesis to
-                    # avoid a duplicate reply.  When no screening_response is
-                    # configured the timeout fires without speaking anything,
-                    # so the agent's reply should still be used.
-                    in_time = _screening_detector.notify_agent_responded()
-                    fallback_spoken = not in_time and _screening_detector._screening_response
-                    if response_text and not fallback_spoken:
-                        await _tts.synthesize(response_text, token=None, bypass_gate=True)
-                except Exception:
-                    logger.exception("Agent-mode screening response failed")
-            elif event.text:
-                await _tts.synthesize(event.text, token=None, bypass_gate=True)
-
-        event_bus.subscribe(ScreeningResponse, _on_screening_response)
+        _wire_outbound_pipeline(
+            session, _outbound_sm, telephony_helpers, event_bus, agent,
+        )
 
     return session
+
+
+def _wire_outbound_pipeline(
+    session: Session,
+    sm: OutboundCallStateMachine,
+    helpers: list[Any],
+    event_bus: EventBus,
+    agent: Any,
+) -> None:
+    """Connect the outbound call state machine to the session pipeline.
+
+    Wires the classification gate flush/hold callbacks and the screening
+    response handler so that TTS audio is buffered, replayed, and the bot
+    responds to screening prompts.
+    """
+    _hold_audio_task: asyncio.Task[None] | None = None
+
+    async def _flush_gated_audio(events: list[TTSAudio]) -> None:
+        nonlocal _hold_audio_task
+        if _hold_audio_task is not None and not _hold_audio_task.done():
+            _hold_audio_task.cancel()
+            _hold_audio_task = None
+        await session.replay_gated_audio(events)
+
+    sm.set_gate_flush_callback(_flush_gated_audio)
+
+    def _play_hold_audio(text: str) -> None:
+        nonlocal _hold_audio_task
+
+        async def _synthesize_hold() -> None:
+            await session.synthesize_bypass(text)
+
+        try:
+            loop = asyncio.get_running_loop()
+            _hold_audio_task = loop.create_task(_synthesize_hold())
+        except RuntimeError:
+            logger.warning("No running event loop — hold audio skipped")
+
+    sm.gate.set_hold_audio_callback(_play_hold_audio)
+
+    _screening_detector: CallScreeningDetector | None = None
+    for _h in helpers:
+        if isinstance(_h, CallScreeningDetector):
+            _screening_detector = _h
+            break
+
+    async def _on_screening_response(event: ScreeningResponse) -> None:
+        if event.mode == "agent" and _screening_detector is not None:
+            try:
+                prompt = _screening_detector._accumulated_text
+                response_text = await agent.run(
+                    f"The callee's phone is screening this call. "
+                    f'Their screening prompt says: "{prompt}". '
+                    f"Identify yourself briefly."
+                )
+                in_time = _screening_detector.notify_agent_responded()
+                fallback_spoken = not in_time and _screening_detector._screening_response
+                if response_text and not fallback_spoken:
+                    await session.synthesize_bypass(response_text)
+            except Exception:
+                logger.exception("Agent-mode screening response failed")
+        elif event.text:
+            await session.synthesize_bypass(event.text)
+
+    event_bus.subscribe(ScreeningResponse, _on_screening_response)
 
 
 def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:

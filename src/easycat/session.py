@@ -917,16 +917,33 @@ class Session:
         return self._turn_manager.state == TurnManagerState.BOT_SPEAKING
 
     @property
-    def outbound_queue(self) -> BoundedAudioQueue:
-        return self._outbound_queue
-
-    @property
-    def tts_synth(self) -> TTSSynthesizer:
-        return self._tts_synth
-
-    @property
     def cancel_token(self) -> CancelToken | None:
         return self._cancel_token
+
+    async def replay_gated_audio(self, events: list[Any]) -> None:
+        """Replay buffered TTS audio chunks through the outbound queue.
+
+        Transitions through BOT_SPEAKING so that caller speech during
+        replay is treated as barge-in and the corresponding events fire.
+        Called by the classification gate flush callback.
+        """
+        from easycat.events import TTSAudio
+
+        self._outbound_queue.flush()
+        chunks = [ev.chunk for ev in events if isinstance(ev, TTSAudio)]
+        if chunks:
+            await self._turn_manager.bot_started_speaking()
+            for chunk in chunks:
+                await self._outbound_queue.put(chunk)
+            await self._turn_manager.bot_stopped_speaking()
+
+    async def synthesize_bypass(self, text: str) -> None:
+        """Synthesize text via TTS, bypassing the classification gate.
+
+        Used for hold audio and screening responses that must reach the
+        transport even while the gate is closed.
+        """
+        await self._tts_synth.synthesize(text, token=None, bypass_gate=True)
 
     # ── Lifecycle ──────────────────────────────────────────────
 

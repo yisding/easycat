@@ -507,8 +507,7 @@ class OutboundCallStateMachine:
             # Check for any explicitly non-inbound track (including unknown
             # tracks), not just "outbound", so the guard works even when the
             # transport tags frames with variant names.
-            track = getattr(event, "track", None)
-            if track is not None and track != "inbound":
+            if event.track is not None and event.track != "inbound":
                 return
             if classify_ivr_prompt(text):
                 self._cancel_classification_timeout()
@@ -528,8 +527,7 @@ class OutboundCallStateMachine:
             # Skip non-inbound transcripts (bot's own speech fed back when
             # transcription_track="both") to avoid misclassifying the bot's
             # screening reply as the callee picking up.
-            track = getattr(event, "track", None)
-            if track is not None and track != "inbound":
+            if event.track is not None and event.track != "inbound":
                 return
             if is_conversational(text, self._screening_patterns):
                 await self._transition(OutboundCallState.HUMAN)
@@ -540,8 +538,7 @@ class OutboundCallStateMachine:
             and not self._voicemail_pickup_task.done()
         ):
             # Skip non-inbound transcripts (bot's own voicemail message).
-            track = getattr(event, "track", None)
-            if track is not None and track != "inbound":
+            if event.track is not None and event.track != "inbound":
                 return
             # Exclude voicemail system prompts from triggering false human detection.
             if classify_greeting(text) == "machine":

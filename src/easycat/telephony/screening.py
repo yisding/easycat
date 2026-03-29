@@ -21,10 +21,6 @@ from easycat.events import (
 
 logger = logging.getLogger(__name__)
 
-# Minimum transcript length before screening patterns are checked,
-# to prevent false-positive triggers on short human utterances.
-MIN_TRANSCRIPT_LENGTH = 30
-
 # Default timeout (seconds) for agent-generated screening response.
 AGENT_RESPONSE_TIMEOUT_S = 3.0
 
@@ -625,10 +621,8 @@ class CallScreeningDetector:
         text = event.text
         self._accumulated_text = text
 
-        # Try known screening patterns first — CJK patterns (ja/ko/zh) are
-        # well under MIN_TRANSCRIPT_LENGTH so checking after the length floor
-        # would make them unreachable.  Pattern matching uses exact substring
-        # checks, so short transcripts cannot false-positive.
+        # Pattern matching uses exact substring checks, so short
+        # transcripts (including CJK) cannot false-positive.
         platform = match_screening_platform(self._accumulated_text, self._patterns)
         if platform is None:
             return
