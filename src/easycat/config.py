@@ -31,7 +31,11 @@ from easycat.telephony.call_state import (
 from easycat.telephony.dtmf import DTMFAggregator, DTMFAggregatorConfig
 from easycat.telephony.ivr import IVRAction, IVRActionType, IVRNavigator
 from easycat.telephony.outbound import OutboundCallManager
-from easycat.telephony.screening import CallScreeningDetector, ScreeningResponse
+from easycat.telephony.screening import (
+    CallScreeningDetector,
+    ScreeningResponse,
+    screening_patterns_for_languages,
+)
 from easycat.telephony.voicemail import (
     PostScreeningVoicemailDetector,
     STTAMDFusionClassifier,
@@ -403,12 +407,19 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
 
         # Screening detector.
         if oc.enable_screening_detection:
+            # Build language-aware patterns: always include English plus the
+            # callee's language (if different) so we detect screening prompts
+            # in the callee's locale.
+            screening_langs = ["en"]
+            if oc.callee_language and oc.callee_language != "en":
+                screening_langs.append(oc.callee_language)
             screening = CallScreeningDetector(
                 event_bus,
                 enabled=True,
                 screening_response=oc.screening_response,
                 screening_use_agent=oc.screening_use_agent,
                 max_screening_turns=oc.max_screening_turns,
+                patterns=screening_patterns_for_languages(screening_langs),
                 track_filter=None,
             )
             helpers.append(screening)

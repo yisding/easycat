@@ -22,6 +22,7 @@ from easycat.telephony.screening import (
     ScreeningState,
     is_conversational,
     match_screening_platform,
+    screening_patterns_for_languages,
 )
 
 # ── Pattern matching ──────────────────────────────────────────────
@@ -63,11 +64,23 @@ class TestScreeningPatterns:
             == "carrier"
         )
 
+    def test_carrier_pattern_unidentified_calls(self) -> None:
+        assert (
+            match_screening_platform("The person you called does not accept unidentified calls")
+            == "carrier"
+        )
+
     def test_nomorobo_press_1_screening(self) -> None:
         assert (
             match_screening_platform("Please press 1 to be connected to this person")
             == "third_party"
         )
+
+    def test_third_party_branded_app(self) -> None:
+        assert match_screening_platform("This call is being screened by Nomorobo") == "third_party"
+        assert match_screening_platform("YouMail smart greeting is active now") == "third_party"
+        assert match_screening_platform("RoboKiller is screening this call now") == "third_party"
+        assert match_screening_platform("Truecaller is screening this call now") == "third_party"
 
     def test_no_match_normal_speech(self) -> None:
         assert match_screening_platform("Hello, this is John") is None
@@ -77,6 +90,14 @@ class TestScreeningPatterns:
 
     def test_no_match_robokiller_answer_bot(self) -> None:
         assert match_screening_platform("Oh hi there, what did you say your name was?") is None
+
+    def test_no_false_positive_identify_yourself(self) -> None:
+        """'identify yourself' was removed — too broad (matches human receptionists)."""
+        assert match_screening_platform("Can you identify yourself please?") is None
+
+    def test_no_false_positive_short_hiya(self) -> None:
+        """'hiya' is not a pattern — it collides with the common greeting."""
+        assert match_screening_platform("Hiya, how's it going today my friend") is None
 
     def test_partial_match_sufficient(self) -> None:
         # "record your name" is a substring of the full iOS prompt
@@ -629,3 +650,200 @@ class TestIsConversational:
 
     def test_ivr_prompts_rejected(self) -> None:
         assert not is_conversational("Press 1 for sales, press 2 for support, press 3 for billing")
+
+
+# ── Multi-language screening patterns ────────────────────────────
+
+
+class TestMultiLanguagePatterns:
+    def test_spanish_ios_screening(self) -> None:
+        patterns = screening_patterns_for_languages(["es"])
+        assert (
+            match_screening_platform(
+                "Si grabe su nombre y el motivo de la llamada veré si está disponible",
+                patterns,
+            )
+            == "ios"
+        )
+
+    def test_french_ios_screening(self) -> None:
+        patterns = screening_patterns_for_languages(["fr"])
+        assert (
+            match_screening_platform(
+                "Veuillez enregistrez votre nom et la raison de votre appel",
+                patterns,
+            )
+            == "ios"
+        )
+
+    def test_german_ios_screening(self) -> None:
+        patterns = screening_patterns_for_languages(["de"])
+        assert (
+            match_screening_platform(
+                "Bitte nennen sie ihren namen und den grund ihres anrufs",
+                patterns,
+            )
+            == "ios"
+        )
+
+    def test_portuguese_ios_screening(self) -> None:
+        patterns = screening_patterns_for_languages(["pt"])
+        assert (
+            match_screening_platform(
+                "Por favor grave seu nome e o motivo da ligação",
+                patterns,
+            )
+            == "ios"
+        )
+
+    def test_japanese_ios_screening(self) -> None:
+        patterns = screening_patterns_for_languages(["ja"])
+        assert (
+            match_screening_platform("お名前とお電話の理由を録音してください", patterns) == "ios"
+        )
+
+    def test_korean_ios_screening(self) -> None:
+        patterns = screening_patterns_for_languages(["ko"])
+        assert (
+            match_screening_platform(
+                "이름과 전화하시는 이유를 녹음해 주시면 확인하겠습니다", patterns
+            )
+            == "ios"
+        )
+
+    def test_chinese_ios_screening(self) -> None:
+        patterns = screening_patterns_for_languages(["zh"])
+        assert match_screening_platform("请录下您的名字和来电原因", patterns) == "ios"
+
+    def test_spanish_android_screening(self) -> None:
+        patterns = screening_patterns_for_languages(["es"])
+        assert (
+            match_screening_platform(
+                "La persona usa un servicio de filtrado de llamadas de Google",
+                patterns,
+            )
+            == "android"
+        )
+
+    def test_french_android_screening(self) -> None:
+        patterns = screening_patterns_for_languages(["fr"])
+        assert (
+            match_screening_platform(
+                "Cette personne utilise un service de filtrage d'appels de Google",
+                patterns,
+            )
+            == "android"
+        )
+
+    def test_spanish_carrier_screening(self) -> None:
+        patterns = screening_patterns_for_languages(["es"])
+        assert (
+            match_screening_platform(
+                "Esta persona no acepta llamadas no identificadas",
+                patterns,
+            )
+            == "carrier"
+        )
+
+    def test_english_still_detected_with_non_english_language(self) -> None:
+        """English patterns are NOT included when only a non-English language is requested."""
+        patterns = screening_patterns_for_languages(["es"])
+        # English iOS prompt should NOT match Spanish-only patterns.
+        assert (
+            match_screening_platform(
+                "Please record your name and reason for calling",
+                patterns,
+            )
+            is None
+        )
+
+    def test_combined_languages_include_both(self) -> None:
+        patterns = screening_patterns_for_languages(["en", "es"])
+        # English works.
+        assert (
+            match_screening_platform(
+                "Please record your name and reason for calling",
+                patterns,
+            )
+            == "ios"
+        )
+        # Spanish works.
+        assert (
+            match_screening_platform(
+                "Si grabe su nombre y el motivo de la llamada",
+                patterns,
+            )
+            == "ios"
+        )
+
+    def test_none_languages_includes_all(self) -> None:
+        patterns = screening_patterns_for_languages(None)
+        # Should detect all languages.
+        assert (
+            match_screening_platform(
+                "Please record your name and reason for calling",
+                patterns,
+            )
+            == "ios"
+        )
+        assert (
+            match_screening_platform(
+                "Si grabe su nombre y el motivo de la llamada",
+                patterns,
+            )
+            == "ios"
+        )
+        assert (
+            match_screening_platform("お名前とお電話の理由を録音してください", patterns) == "ios"
+        )
+
+    def test_no_false_positive_spanish_greeting(self) -> None:
+        patterns = screening_patterns_for_languages(["es"])
+        assert match_screening_platform("Hola, buenos días", patterns) is None
+
+    def test_bcp47_subtag_handled(self) -> None:
+        """e.g. 'es-MX' should resolve to 'es' patterns."""
+        patterns = screening_patterns_for_languages(["es-MX"])
+        assert (
+            match_screening_platform(
+                "Si grabe su nombre y el motivo de la llamada",
+                patterns,
+            )
+            == "ios"
+        )
+
+
+# ── screening_patterns_for_languages factory ────────────────────
+
+
+class TestScreeningPatternsFactory:
+    def test_returns_screening_pattern_set(self) -> None:
+        result = screening_patterns_for_languages(["en"])
+        assert isinstance(result, ScreeningPatternSet)
+
+    def test_english_only_matches_defaults(self) -> None:
+        result = screening_patterns_for_languages(["en"])
+        default = ScreeningPatternSet()
+        assert set(result.ios) == set(default.ios)
+        assert set(result.android) == set(default.android)
+        assert set(result.carrier) == set(default.carrier)
+
+    def test_no_duplicates(self) -> None:
+        result = screening_patterns_for_languages(["en", "en"])
+        assert len(result.ios) == len(set(result.ios))
+
+    def test_unknown_language_returns_empty_platform_lists(self) -> None:
+        result = screening_patterns_for_languages(["xx"])
+        assert result.ios == []
+        assert result.android == []
+        assert result.carrier == []
+
+    def test_third_party_always_included(self) -> None:
+        result = screening_patterns_for_languages(["es"])
+        default = ScreeningPatternSet()
+        assert set(result.third_party) == set(default.third_party)
+
+    def test_exclusions_always_included(self) -> None:
+        result = screening_patterns_for_languages(["ja"])
+        default = ScreeningPatternSet()
+        assert set(result.exclusions) == set(default.exclusions)
