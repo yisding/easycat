@@ -287,9 +287,10 @@ class CallDispositionTracker:
             if event.new == OutboundCallState.ENDED and call_sid in self._failure_reasons:
                 disposition = self._failure_reasons.pop(call_sid)
 
-            # Allow late voicemail to overwrite an earlier human disposition.
+            # Allow reclassification: late voicemail (HUMAN→VOICEMAIL) and
+            # voicemail pickup (VOICEMAIL→HUMAN) overwrite the earlier disposition.
             if call_sid in self._disposed_calls:
-                if event.new == OutboundCallState.VOICEMAIL:
+                if event.new in {OutboundCallState.VOICEMAIL, OutboundCallState.HUMAN}:
                     self._replace_disposition(call_sid, disposition)
                 return
 

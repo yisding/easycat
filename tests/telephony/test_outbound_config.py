@@ -25,6 +25,7 @@ class TestOutboundCallConfig:
         assert cfg.max_call_duration_s == 300
         assert cfg.callee_language == "en"
         assert cfg.max_screening_turns == 3
+        assert cfg.voicemail_pickup_window_s == 60.0
 
     def test_all_fields_configurable(self) -> None:
         cfg = OutboundCallConfig(
@@ -44,6 +45,7 @@ class TestOutboundCallConfig:
             classification_gate_timeout_s=3.0,
             classification_gate_hold_audio="One moment please",
             max_call_duration_s=600,
+            voicemail_pickup_window_s=45.0,
             callee_language="es",
             twilio_account_sid="AC123",
             twilio_auth_token="token",
@@ -63,6 +65,7 @@ class TestOutboundCallConfig:
         assert cfg.classification_gate_timeout_s == 3.0
         assert cfg.classification_gate_hold_audio == "One moment please"
         assert cfg.max_call_duration_s == 600
+        assert cfg.voicemail_pickup_window_s == 45.0
         assert cfg.callee_language == "es"
         assert cfg.twilio_account_sid == "AC123"
         assert cfg.twilio_auth_token == "token"
