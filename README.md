@@ -271,14 +271,22 @@ Python 3.11+ is required.
 uv sync
 ```
 
-### Simplest setup (local mic/speaker + OpenAI STT/TTS + OpenAI Agents SDK)
-If you want the shortest path to a working end-to-end pipeline on your machine:
+### Quickstart (local mic/speaker + OpenAI STT/TTS + OpenAI Agents SDK)
+The fastest path to a working end-to-end pipeline on your machine:
+
+```
+uv sync --extra quickstart
+export OPENAI_API_KEY="your-api-key"
+uv run python examples/local_chat.py
+```
+
+The `quickstart` extra bundles local audio, OpenAI providers, noise reduction,
+and a lightweight VAD (TEN VAD) so you can skip torch.  If you prefer Silero
+VAD (requires torch), install extras individually:
 
 ```
 uv sync --extra local --extra openai --extra openai-agents --extra rnnoise
 uv pip install torch
-export OPENAI_API_KEY="your-api-key"
-uv run python examples/local_chat.py
 ```
 
 Optional dependencies you may need depending on providers/transports:

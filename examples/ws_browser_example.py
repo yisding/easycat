@@ -24,7 +24,6 @@ import asyncio
 import functools
 import json
 import logging
-import sys
 import threading
 from collections.abc import AsyncIterator
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -35,19 +34,14 @@ from easycat import (
     AudioChunk,
     EasyCatConfig,
     WebSocketTransportConfig,
-    create_session,
-)
-from easycat.audio_utils import resample_chunk
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from common import (  # noqa: E402
+    attach_runtime_feedback,
     build_openai_agents_adapter,
+    create_session,
     default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
-from runtime_feedback import attach_runtime_feedback  # noqa: E402
+from easycat.audio_utils import resample_chunk
 
 logger = logging.getLogger(__name__)
 
