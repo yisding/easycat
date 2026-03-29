@@ -129,12 +129,19 @@ class AgentRunner:
         self._spans: list[Span] = []
         self._trace_context = TraceContext()
         self._is_streaming = isinstance(agent, StreamingAgent)
+        # When the inner agent manages its own history (e.g. BaseAgentAdapter
+        # subclasses), defer to it instead of maintaining a shadow copy.
+        self._delegates_history = hasattr(agent, "message_history") and hasattr(
+            agent, "clear_history"
+        )
 
     # ── Properties ─────────────────────────────────────────────
 
     @property
-    def history(self) -> list[dict[str, str]]:
+    def history(self) -> list[Any]:
         """Current conversation history (copies)."""
+        if self._delegates_history:
+            return self._agent.message_history
         return list(self._history)
 
     @property
@@ -147,11 +154,24 @@ class AgentRunner:
         """Whether the underlying agent supports streaming."""
         return self._is_streaming
 
+    @property
+    def output_type(self) -> type | None:
+        """Structured output type, delegated to the inner agent if available."""
+        return getattr(self._agent, "output_type", None)
+
+    @property
+    def last_output(self) -> Any:
+        """Last raw output value, delegated to the inner agent if available."""
+        return getattr(self._agent, "last_output", None)
+
     # ── History management ─────────────────────────────────────
 
     def clear_history(self) -> None:
         """Clear conversation context."""
-        self._history.clear()
+        if self._delegates_history:
+            self._agent.clear_history()
+        else:
+            self._history.clear()
 
     def clear_spans(self) -> None:
         """Clear recorded tracing spans."""
@@ -208,7 +228,8 @@ class AgentRunner:
                     "Error in underlying agent.notify_interruption",
                     exc_info=True,
                 )
-        self._apply_interruption(text_spoken, mode=mode)
+        if not self._delegates_history:
+            self._apply_interruption(text_spoken, mode=mode)
 
     def replace_last_assistant_text(self, text: str) -> None:
         """Replace the text content of the last assistant message in history.
@@ -220,11 +241,12 @@ class AgentRunner:
         Also delegates to the wrapped agent when it exposes
         ``replace_last_assistant_text`` (e.g. :class:`BaseAgentAdapter`).
         """
-        # Update AgentRunner's own history
-        for entry in reversed(self._history):
-            if entry.get("role") == "assistant":
-                entry["content"] = text
-                break
+        if not self._delegates_history:
+            # Update AgentRunner's own history
+            for entry in reversed(self._history):
+                if entry.get("role") == "assistant":
+                    entry["content"] = text
+                    break
 
         # Delegate to the wrapped agent/adapter
         fn = getattr(self._agent, "replace_last_assistant_text", None)
@@ -247,7 +269,8 @@ class AgentRunner:
         Satisfies the basic ``Agent`` protocol so AgentRunner can be used as a
         drop-in replacement wherever an Agent is expected.
         """
-        self._history.append({"role": "user", "content": text})
+        if not self._delegates_history:
+            self._history.append({"role": "user", "content": text})
 
         span = self._record_span("agent_execution") if self._config.enable_tracing else None
 
@@ -264,20 +287,22 @@ class AgentRunner:
             if span:
                 span.set_error(err)
                 span.finish(SpanStatus.ERROR)
-            # Remove the user message we just added since the turn failed
-            self._history.pop()
+            if not self._delegates_history:
+                self._history.pop()
             raise err
         except Exception as exc:
             if span:
                 span.set_error(exc)
                 span.finish(SpanStatus.ERROR)
-            self._history.pop()
+            if not self._delegates_history:
+                self._history.pop()
             raise
 
         if span:
             span.finish(SpanStatus.OK)
 
-        self._history.append({"role": "assistant", "content": response})
+        if not self._delegates_history:
+            self._history.append({"role": "assistant", "content": response})
         return response
 
     # ── Streaming run ──────────────────────────────────────────
@@ -297,7 +322,8 @@ class AgentRunner:
         If the underlying agent doesn't support streaming, falls back to
         wrapping the basic ``run()`` result as a single text delta + done event.
         """
-        self._history.append({"role": "user", "content": text})
+        if not self._delegates_history:
+            self._history.append({"role": "user", "content": text})
 
         if self._config.enable_tracing:
             stt_to_agent = self._record_span("stt_to_agent")
@@ -310,12 +336,18 @@ class AgentRunner:
 
         try:
             if self._is_streaming:
-                context = list(self._history[:-1])
-                stream = self._agent.run_streaming(
-                    text,
-                    context=context,
-                    cancel_token=cancel_token,
-                )
+                if self._delegates_history:
+                    stream = self._agent.run_streaming(
+                        text,
+                        cancel_token=cancel_token,
+                    )
+                else:
+                    context = list(self._history[:-1])
+                    stream = self._agent.run_streaming(
+                        text,
+                        context=context,
+                        cancel_token=cancel_token,
+                    )
 
                 async def _iter_stream() -> AsyncIterator[AgentStreamEvent]:
                     nonlocal accumulated
@@ -390,7 +422,8 @@ class AgentRunner:
             if exec_span:
                 exec_span.set_error(AgentTimeoutError(self._config.timeout or 0))
                 exec_span.finish(SpanStatus.ERROR)
-            self._history.pop()
+            if not self._delegates_history:
+                self._history.pop()
             raise AgentTimeoutError(self._config.timeout or 0)
         except GeneratorExit:
             # Generator was closed by caller (e.g., barge-in) — not an error.
@@ -398,13 +431,15 @@ class AgentRunner:
             # record the interruption in history.
             if exec_span:
                 exec_span.finish(SpanStatus.CANCELLED)
-            self._history.append({"role": "assistant", "content": accumulated})
+            if not self._delegates_history:
+                self._history.append({"role": "assistant", "content": accumulated})
             return
         except Exception as exc:
             if exec_span:
                 exec_span.set_error(exc)
                 exec_span.finish(SpanStatus.ERROR)
-            self._history.pop()
+            if not self._delegates_history:
+                self._history.pop()
             raise
 
         interrupted = cancel_token and cancel_token.is_cancelled
@@ -413,4 +448,5 @@ class AgentRunner:
         if self._config.enable_tracing and not interrupted:
             agent_to_tts = self._record_span("agent_to_tts")
             agent_to_tts.finish(SpanStatus.OK)
-        self._history.append({"role": "assistant", "content": accumulated})
+        if not self._delegates_history:
+            self._history.append({"role": "assistant", "content": accumulated})

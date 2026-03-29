@@ -42,7 +42,6 @@ async def main() -> None:
                 openai_api_key=api_key,
                 transport=transport,
                 agent=adapter,
-                wrap_agent=False,
                 event_logging=default_event_logging(),
             )
         )
