@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from easycat import EasyCatConfig, create_session
 from easycat.agent_runner import AgentRunner
 from easycat.agents import OpenAIAgentsAdapter, PydanticAIAdapter
-from easycat.config import EventLoggingConfig, TelephonyConfig
+from easycat.config import EventLoggingConfig, MetricsConfig, TelephonyConfig
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.events import DTMFAggregated
 from easycat.smart_turn import SmartTurnConfig
@@ -330,3 +332,38 @@ def test_create_session_keeps_vad_enabled_for_flux_when_voicemail_detector_enabl
     assert create_vad_called is True
     assert session._enable_vad is True
     assert session._auto_turn_from_stt_final is False
+
+
+# ── debug mode tests ──────────────────────────────────────────────────
+
+
+def test_debug_mode_enables_event_logging_with_partials():
+    config = EasyCatConfig(openai_api_key="test-key", debug=True)
+    assert config.event_logging.enabled is True
+    assert config.event_logging.include_partials is True
+    assert config.event_logging.level == logging.DEBUG
+
+
+def test_debug_mode_enables_metrics():
+    config = EasyCatConfig(openai_api_key="test-key", debug=True)
+    assert config.metrics is not None
+    assert config.metrics.enabled is True
+
+
+def test_debug_mode_sets_easycat_logger_to_debug():
+    EasyCatConfig(openai_api_key="test-key", debug=True)
+    assert logging.getLogger("easycat").level == logging.DEBUG
+
+
+def test_debug_mode_does_not_override_explicit_metrics():
+    explicit = MetricsConfig(enabled=False)
+    config = EasyCatConfig(openai_api_key="test-key", debug=True, metrics=explicit)
+    assert config.metrics is explicit
+    assert config.metrics.enabled is False
+
+
+def test_debug_false_does_not_change_defaults():
+    config = EasyCatConfig(openai_api_key="test-key", debug=False)
+    assert config.event_logging.include_partials is False
+    assert config.event_logging.level == logging.INFO
+    assert config.metrics is None

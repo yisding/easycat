@@ -157,9 +157,9 @@ class EasyCatConfig:
     tracing: TracingConfig | None = None
     agent: Any = None
     agent_runner: AgentRunnerConfig | None = None
-    wrap_agent: bool = True
     strip_markdown: bool = False
     output_processors: Sequence[LLMOutputProcessor] = ()
+    debug: bool = False
 
     def __post_init__(self) -> None:
         if self.openai_api_key:
@@ -176,6 +176,8 @@ class EasyCatConfig:
                 self.tts = OpenAITTSConfig(**tts_kwargs)
         if self.echo_cancellation is None:
             self.echo_cancellation = self._default_echo_cancellation_for_transport()
+        if self.debug:
+            self._apply_debug_defaults()
         self._validate()
 
     def _default_echo_cancellation_for_transport(self) -> EchoCancellationConfig:
@@ -184,6 +186,30 @@ class EasyCatConfig:
             (LocalTransportConfig, WebSocketTransportConfig, WebSocketConnectionTransport),
         )
         return EchoCancellationConfig(enabled=enable_aec)
+
+    def _apply_debug_defaults(self) -> None:
+        """Enable verbose logging, event tracing with partials, and metrics."""
+        # Ensure log output is visible — add a root handler if none exists.
+        if not logging.root.handlers:
+            logging.basicConfig(
+                level=logging.DEBUG,
+                format="%(asctime)s %(name)s %(levelname)s %(message)s",
+            )
+        # Set the easycat logger to DEBUG regardless of the root level.
+        logging.getLogger("easycat").setLevel(logging.DEBUG)
+
+        # Enable event trace logging with partials so STT progress is visible.
+        self.event_logging = EventLoggingConfig(
+            enabled=True,
+            include_partials=True,
+            level=logging.DEBUG,
+        )
+
+        # Enable in-memory metrics so latency data is always collected.
+        if self.metrics is None:
+            self.metrics = MetricsConfig(enabled=True)
+
+        logger.debug("EasyCat debug mode enabled")
 
     def _validate(self) -> None:
         if self.stt is None:
@@ -228,9 +254,8 @@ def create_session(config: EasyCatConfig) -> Session:
 
     if config.agent is not None:
         agent = auto_adapt_agent(config.agent)
-        if config.wrap_agent:
-            runner_cfg = config.agent_runner or AgentRunnerConfig()
-            agent = AgentRunner(agent, runner_cfg)
+        runner_cfg = config.agent_runner or AgentRunnerConfig()
+        agent = AgentRunner(agent, runner_cfg)
     else:
         agent = NoopAgent()
 
