@@ -1597,16 +1597,29 @@ class Session:
                         break
 
                     if not started:
-                        await self._turn_manager.bot_started_speaking()
+                        # When the classification gate is closed, audio is
+                        # buffered.  Don't enter BOT_SPEAKING so callee
+                        # speech during CLASSIFYING isn't treated as barge-in.
+                        gated = self._audio_gate is not None and self._audio_gate()
+                        if not gated:
+                            await self._turn_manager.bot_started_speaking()
+                            tts_playback_started = True
                         started = True
-                        tts_playback_started = True
 
                     result = await self._tts_synth.synthesize(
                         payload,
                         token,
                         turn_end_time=self._turn_end_time,
-                        is_active=lambda: (
-                            self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                        # When gated the turn manager stays in PROCESSING
+                        # (we skipped bot_started_speaking), so the
+                        # BOT_SPEAKING check would exit immediately.  Pass
+                        # None so the synth loop buffers all audio.
+                        is_active=(
+                            None
+                            if self._audio_gate is not None and self._audio_gate()
+                            else lambda: (
+                                self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                            )
                         ),
                         record_latency=self._first_tts_audio_time is None,
                     )
@@ -1637,6 +1650,10 @@ class Session:
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 await self._turn_manager.bot_stopped_speaking()
                 self._spans.finish("turn")
+            elif started and not tts_playback_started:
+                # Gated: TTS was buffered, reset to IDLE so callee speech
+                # can start new turns while waiting for classification.
+                self._reset_turn_state()
 
         # Run agent consumption and TTS synthesis concurrently
         agent_task = asyncio.create_task(_consume_agent())

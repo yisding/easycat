@@ -318,8 +318,23 @@ class TestCallScreeningDetector:
             detector.stop()
 
     @pytest.mark.asyncio
-    async def test_short_partial_ignored_by_detector(self) -> None:
-        """Short partials (<30 chars) are not checked to prevent false positives."""
+    async def test_short_partial_without_pattern_ignored(self) -> None:
+        """Short partials that don't match a known pattern are ignored."""
+        bus = EventBus()
+        received: list[CallScreening] = []
+        bus.subscribe(CallScreening, received.append)
+        detector = CallScreeningDetector(bus, track_filter=None)
+        detector.start()
+        try:
+            await bus.emit(CallAnswered(call_sid=""))
+            await bus.emit(STTPartial(text="hello how are you"))
+            assert len(received) == 0
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
+    async def test_short_partial_with_known_pattern_triggers(self) -> None:
+        """Short partials that match a known screening pattern still trigger."""
         bus = EventBus()
         received: list[CallScreening] = []
         bus.subscribe(CallScreening, received.append)
@@ -328,7 +343,7 @@ class TestCallScreeningDetector:
         try:
             await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="record your name"))
-            assert len(received) == 0
+            assert len(received) == 1
         finally:
             detector.stop()
 
