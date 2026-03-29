@@ -840,6 +840,23 @@ class Session:
         """Subscribe to a session event via the underlying EventBus."""
         self.event_bus.subscribe(event_type, handler)
 
+    def subscribe_events(
+        self, event_types: tuple[type, ...] | list[type], handler: EventHandler
+    ) -> list[tuple[type, EventHandler]]:
+        """Subscribe a single handler to multiple event types at once.
+
+        Accepts any of the event group tuples from :mod:`easycat.events`
+        (e.g. ``ALL_EVENTS``, ``STT_EVENTS``) or an ad-hoc sequence.
+
+        Returns a list of ``(event_type, handler)`` registrations that can be
+        passed to :meth:`unsubscribe_handlers`.
+        """
+        registrations: list[tuple[type, EventHandler]] = []
+        for event_type in event_types:
+            self.event_bus.subscribe(event_type, handler)
+            registrations.append((event_type, handler))
+        return registrations
+
     def unsubscribe_event(self, event_type: type, handler: EventHandler) -> None:
         """Unsubscribe a handler previously attached with ``subscribe_event``."""
         self.event_bus.unsubscribe(event_type, handler)

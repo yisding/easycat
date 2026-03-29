@@ -38,6 +38,12 @@ def test_pydantic_ai_example_imports():
     assert callable(pydantic_example.main)
 
 
+def test_webrtc_observability_example_imports():
+    import examples.webrtc_observability_server as webrtc_observability
+
+    assert callable(webrtc_observability.main)
+
+
 def test_build_openai_agents_adapter_prefers_responses_websocket(monkeypatch: pytest.MonkeyPatch):
     from examples.common import build_openai_agents_adapter
 
@@ -138,6 +144,7 @@ def _python_executable() -> str:
         "examples/ws_server.py",
         "examples/ws_browser_example.py",
         "examples/webrtc_server.py",
+        "examples/webrtc_observability_server.py",
         "examples/pydantic_ai_voice.py",
     ],
 )
