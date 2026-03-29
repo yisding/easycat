@@ -424,7 +424,17 @@ LIFECYCLE_EVENTS: tuple[type, ...] = (
 )
 INTERRUPTION_EVENTS: tuple[type, ...] = (Interruption, PlaybackMarkAck)
 RECONNECT_EVENTS: tuple[type, ...] = (ReconnectAttempt, ReconnectSuccess, ReconnectFailure)
-TELEPHONY_EVENTS: tuple[type, ...] = (DTMF, DTMFAggregated, VoicemailDetected)
+TELEPHONY_EVENTS: tuple[type, ...] = (
+    DTMF,
+    DTMFAggregated,
+    VoicemailDetected,
+    CallInitiated,
+    CallRinging,
+    CallAnswered,
+    CallScreening,
+    CallFailed,
+    CallEnded,
+)
 ERROR_EVENTS: tuple[type, ...] = (Error,)
 
 ALL_EVENTS: tuple[type, ...] = (

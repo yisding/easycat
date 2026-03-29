@@ -646,7 +646,11 @@ class TestIsConversational:
 
     def test_screening_follow_up_patterns_rejected(self) -> None:
         assert not is_conversational("Tell me more about your reason for calling")
-        assert not is_conversational("One moment please")
+        # Short human-like phrases ("one moment", "who is this") are now
+        # treated as conversational to avoid blocking real human handoffs.
+        assert is_conversational("One moment please")
+        assert is_conversational("Who is this")
+        assert is_conversational("Why are you calling")
 
     def test_ivr_prompts_rejected(self) -> None:
         assert not is_conversational("Press 1 for sales, press 2 for support, press 3 for billing")

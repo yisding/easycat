@@ -178,15 +178,15 @@ EARLY_MEDIA_PHRASES: list[str] = [
 ]
 
 # Known screening-related phrases from the callee side (not conversational).
+# Only include phrases that are clearly automated screening prompts — short
+# interrogative/imperative phrases like "who is this" or "why are you calling"
+# are common human handoff utterances and must NOT be blocked here, otherwise
+# OutboundCallStateMachine stays stuck in SCREENING when a real person picks up.
 _SCREENING_FOLLOW_UP_PATTERNS: list[str] = [
     "can you tell me more",
-    "what is this about",
-    "who is this",
-    "why are you calling",
     "could you explain",
     "please elaborate",
     "tell me more",
-    "one moment",
 ]
 
 # Shared stopwords for coherence/overlap scoring across telephony modules.
@@ -647,9 +647,10 @@ class CallScreeningDetector:
         # Emit screening response if configured.
         if self._screening_use_agent:
             self._state = ScreeningState.RESPONDING
-            await self._event_bus.emit(ScreeningResponse(text="", mode="agent"))
-            # Start agent timeout — fall back to static response if agent is slow.
+            # Start agent timeout BEFORE emitting so the fallback can fire
+            # while EventBus.emit() awaits the (potentially slow) agent handler.
             self._agent_timeout_task = asyncio.create_task(self._agent_timeout_fallback())
+            await self._event_bus.emit(ScreeningResponse(text="", mode="agent"))
         elif self._screening_response:
             self._state = ScreeningState.RESPONDING
             await self._event_bus.emit(

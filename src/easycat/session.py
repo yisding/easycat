@@ -1780,6 +1780,12 @@ class Session:
                 ):
                     await self._turn_manager.bot_stopped_speaking()
                     self._spans.finish("turn")
+                elif gated and self._current_turn_id == turn_id:
+                    # Gated opener TTS is buffered — reset to IDLE so the
+                    # callee's speech can start new turns while we wait for
+                    # classification.  The gate-flush callback replays the
+                    # buffered audio later.
+                    self._reset_turn_state()
             finally:
                 if self._current_turn_id == turn_id:
                     self._current_turn_id = None
