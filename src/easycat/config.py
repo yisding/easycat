@@ -337,11 +337,14 @@ def create_session(config: EasyCatConfig) -> Session:
                         f"Identify yourself briefly."
                     )
                     # Cancel the fallback timer and check whether it already
-                    # fired.  If the agent was slower than agent_timeout_s the
-                    # static fallback has already been spoken — skip synthesis
-                    # to avoid a duplicate screening reply.
+                    # fired.  If the agent was slower than agent_timeout_s AND
+                    # a static fallback was actually spoken, skip synthesis to
+                    # avoid a duplicate reply.  When no screening_response is
+                    # configured the timeout fires without speaking anything,
+                    # so the agent's reply should still be used.
                     in_time = _screening_detector.notify_agent_responded()
-                    if response_text and in_time:
+                    fallback_spoken = not in_time and _screening_detector._screening_response
+                    if response_text and not fallback_spoken:
                         await _tts.synthesize(response_text, token=None, bypass_gate=True)
                 except Exception:
                     logger.exception("Agent-mode screening response failed")

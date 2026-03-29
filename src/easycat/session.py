@@ -1197,10 +1197,10 @@ class Session:
                     if self._cancel_token and self._cancel_token.is_cancelled:
                         break
                     if stt_event.type == STTEventType.PARTIAL:
-                        await self._emit(STTPartial(text=stt_event.text))
+                        await self._emit(STTPartial(text=stt_event.text, track=stt_event.track))
                     elif stt_event.type == STTEventType.FINAL:
                         saw_final = True
-                        await self._emit(STTFinal(text=stt_event.text))
+                        await self._emit(STTFinal(text=stt_event.text, track=stt_event.track))
                         self._stt_final_time = time.monotonic()
                         if self._metrics and self._turn_end_time is not None:
                             self._metrics.record_latency(
@@ -1757,7 +1757,15 @@ class Session:
                 payload,
                 token,
                 turn_end_time=self._turn_end_time,
-                is_active=lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING,
+                # When gated, the turn manager stays in PROCESSING (we skipped
+                # bot_started_speaking), so the BOT_SPEAKING check would exit
+                # immediately. Pass None so the synth loop runs to completion
+                # and all audio gets buffered for replay when the gate opens.
+                is_active=(
+                    None
+                    if gated
+                    else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                ),
             )
             if result.first_audio_time is not None:
                 self._first_tts_audio_time = result.first_audio_time

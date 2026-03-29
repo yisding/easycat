@@ -60,6 +60,7 @@ class STTPartial:
     text: str
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
+    track: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -70,6 +71,7 @@ class STTFinal:
     text: str
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
+    track: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -467,6 +469,7 @@ class STTEvent:
     confidence: float | None = None
     language: str | None = None
     word_timestamps: list[WordTimestamp] | None = None
+    track: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
