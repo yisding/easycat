@@ -34,7 +34,7 @@ from easycat.agent_runner import (  # noqa: I001
     StreamingAgent,
 )
 from easycat.agents.base import BaseAgentAdapter, serialize_output
-from easycat.agents.openai_agents import OpenAIAgentsAdapter
+from easycat.agents.openai_agents import OpenAIAgentsAdapter, build_openai_agents_adapter
 from easycat.agents.pydantic_ai import PydanticAIAdapter
 from easycat.cancel import CancelToken
 from easycat.smart_turn import (
@@ -61,6 +61,12 @@ from easycat.config import (
     TelephonyConfig,
     TracingConfig,
     create_session,
+)
+from easycat.helpers import (
+    attach_runtime_feedback,
+    default_event_logging,
+    require_env,
+    wait_for_shutdown_signal,
 )
 
 # ── EasyCat-level events ─────────────────────────────────────────
@@ -148,6 +154,8 @@ from easycat.stt import (
     DeepgramSTTConfig,
     ElevenLabsSTT,
     ElevenLabsSTTConfig,
+    OpenAIRealtimeSTT,
+    OpenAIRealtimeSTTConfig,
     OpenAISTT,
     OpenAISTTConfig,
 )
@@ -205,6 +213,7 @@ __all__ = [
     "BaseAgentAdapter",
     "OpenAIAgentsAdapter",
     "PydanticAIAdapter",
+    "build_openai_agents_adapter",
     "serialize_output",
     "CancelToken",
     "LLMOutputProcessor",
@@ -277,6 +286,8 @@ __all__ = [
     # STT providers
     "OpenAISTT",
     "OpenAISTTConfig",
+    "OpenAIRealtimeSTT",
+    "OpenAIRealtimeSTTConfig",
     "DeepgramSTT",
     "DeepgramSTTConfig",
     "ElevenLabsSTT",
@@ -327,4 +338,9 @@ __all__ = [
     "LatencyStats",
     "Tracer",
     "TraceExporter",
+    # Helpers
+    "attach_runtime_feedback",
+    "default_event_logging",
+    "require_env",
+    "wait_for_shutdown_signal",
 ]

@@ -11,15 +11,17 @@ Setup:
 from __future__ import annotations
 
 import asyncio
-import sys
-from pathlib import Path
 
-from easycat import EasyCatConfig, LocalTransportConfig, PydanticAIAdapter, create_session
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from common import default_event_logging, require_env, wait_for_shutdown_signal  # noqa: E402
-from runtime_feedback import attach_runtime_feedback  # noqa: E402
+from easycat import (
+    EasyCatConfig,
+    LocalTransportConfig,
+    PydanticAIAdapter,
+    attach_runtime_feedback,
+    create_session,
+    default_event_logging,
+    require_env,
+    wait_for_shutdown_signal,
+)
 
 
 async def main() -> None:

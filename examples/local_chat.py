@@ -2,28 +2,25 @@
 
 Setup:
   export OPENAI_API_KEY="..."
-  uv sync --extra local --extra openai
-  uv sync --extra openai-agents
+  uv sync --extra quickstart
   uv run python examples/local_chat.py
 """
 
 from __future__ import annotations
 
 import asyncio
-import sys
-from pathlib import Path
 
-from easycat import EasyCatConfig, EchoCancellationConfig, LocalTransportConfig, create_session
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from common import (  # noqa: E402
+from easycat import (
+    EasyCatConfig,
+    EchoCancellationConfig,
+    LocalTransportConfig,
+    attach_runtime_feedback,
     build_openai_agents_adapter,
+    create_session,
     default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
-from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 
 async def main() -> None:

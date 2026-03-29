@@ -13,18 +13,20 @@ from __future__ import annotations
 
 import asyncio
 import signal
-import sys
-from pathlib import Path
 
 import websockets
 from websockets.asyncio.server import ServerConnection
 
-from easycat import EasyCatConfig, SessionManager, WebSocketConnectionTransport, create_session
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from common import default_event_logging, require_env  # noqa: E402
-from runtime_feedback import attach_runtime_feedback  # noqa: E402
+from easycat import (
+    EasyCatConfig,
+    SessionManager,
+    WebSocketConnectionTransport,
+    attach_runtime_feedback,
+    build_openai_agents_adapter,
+    create_session,
+    default_event_logging,
+    require_env,
+)
 
 
 async def main() -> None:
@@ -33,8 +35,6 @@ async def main() -> None:
 
     async def handle_connection(ws: ServerConnection) -> None:
         transport = WebSocketConnectionTransport(ws)
-
-        from common import build_openai_agents_adapter
 
         adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
         session = create_session(
