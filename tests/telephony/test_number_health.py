@@ -115,3 +115,33 @@ class TestCallDispositionTracker:
             assert tracker._dispositions[0][1] == "human"
         finally:
             tracker.stop()
+
+    @pytest.mark.asyncio
+    async def test_voicemail_to_human_reclassification(self) -> None:
+        """VOICEMAIL → HUMAN overwrites disposition (voicemail pickup)."""
+        bus = EventBus()
+        tracker = CallDispositionTracker(bus)
+        tracker.start()
+        try:
+            await bus.emit(
+                CallStateChanged(
+                    old=OutboundCallState.CLASSIFYING,
+                    new=OutboundCallState.VOICEMAIL,
+                    call_sid="CA1",
+                )
+            )
+            assert tracker._call_dispositions["CA1"] == "voicemail"
+            await bus.emit(
+                CallStateChanged(
+                    old=OutboundCallState.VOICEMAIL,
+                    new=OutboundCallState.HUMAN,
+                    call_sid="CA1",
+                )
+            )
+            assert tracker._call_dispositions["CA1"] == "human"
+            # Only one entry in the list (replaced, not duplicated).
+            ca1_entries = [d for d in tracker._dispositions if d[2] == "CA1"]
+            assert len(ca1_entries) == 1
+            assert ca1_entries[0][1] == "human"
+        finally:
+            tracker.stop()

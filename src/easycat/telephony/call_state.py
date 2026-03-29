@@ -227,6 +227,7 @@ class OutboundCallStateMachine:
         vad_timeout_extension_s: float = 0.0,
         expect_fused_voicemail: bool = False,
         late_voicemail_window_s: float = 0.0,
+        voicemail_pickup_window_s: float = 0.0,
     ) -> None:
         self._event_bus = event_bus
         self._call_sid = call_sid
@@ -236,6 +237,7 @@ class OutboundCallStateMachine:
         self._smart_turn_suppress = smart_turn_suppress
         self._vad_timeout_extension_s = vad_timeout_extension_s
         self._late_voicemail_window_s = late_voicemail_window_s
+        self._voicemail_pickup_window_s = voicemail_pickup_window_s
 
         self._state = OutboundCallState.INITIATING
         self._started = False
@@ -243,6 +245,7 @@ class OutboundCallStateMachine:
         self._classification_task: asyncio.Task[None] | None = None
         self._max_duration_task: asyncio.Task[None] | None = None
         self._late_voicemail_task: asyncio.Task[None] | None = None
+        self._voicemail_pickup_task: asyncio.Task[None] | None = None
 
         # Classification gate.
         self._gate = ClassificationGate(
@@ -318,6 +321,7 @@ class OutboundCallStateMachine:
             self._max_duration_task.cancel()
             self._max_duration_task = None
         self._cancel_late_voicemail_window()
+        self._cancel_voicemail_pickup_window()
 
     # ── SmartTurn suppression ─────────────────────────────────────
 
@@ -366,12 +370,13 @@ class OutboundCallStateMachine:
             else:
                 await self._gate.discard()
 
-        # Reopen the gate when SCREENING or IVR resolves to HUMAN.
+        # Reopen the gate when SCREENING, IVR, or VOICEMAIL resolves to HUMAN.
         # discard() above kept the gate closed to block opener TTS during
         # classification, but once the callee is confirmed human the gate
         # must open so normal agent TTS can reach the transport.
         if (
-            old in {OutboundCallState.SCREENING, OutboundCallState.IVR}
+            old
+            in {OutboundCallState.SCREENING, OutboundCallState.IVR, OutboundCallState.VOICEMAIL}
             and new_state == OutboundCallState.HUMAN
             and self._gate.is_closed
         ):
@@ -380,6 +385,10 @@ class OutboundCallStateMachine:
         # Start late voicemail detection window when entering HUMAN.
         if new_state == OutboundCallState.HUMAN and self._late_voicemail_window_s > 0:
             self._start_late_voicemail_window()
+
+        # Start voicemail pickup detection window when entering VOICEMAIL.
+        if new_state == OutboundCallState.VOICEMAIL and self._voicemail_pickup_window_s > 0:
+            self._start_voicemail_pickup_window()
 
     async def _on_ringing(self, event: CallRinging) -> None:
         if self._state == OutboundCallState.INITIATING:
@@ -435,6 +444,16 @@ class OutboundCallStateMachine:
             self._cancel_late_voicemail_window()
             logger.info("Late voicemail detected during HUMAN state — transitioning to VOICEMAIL")
             await self._transition(OutboundCallState.VOICEMAIL)
+        elif (
+            event.result == "human"
+            and self._state == OutboundCallState.VOICEMAIL
+            and self._voicemail_pickup_task is not None
+            and not self._voicemail_pickup_task.done()
+        ):
+            # Voicemail pickup: human answered during voicemail (e.g. iOS Live Voicemail).
+            self._cancel_voicemail_pickup_window()
+            logger.info("Human pickup detected during VOICEMAIL state — transitioning to HUMAN")
+            await self._transition(OutboundCallState.HUMAN)
 
     async def _on_screening(self, event: CallScreening) -> None:
         if self._state == OutboundCallState.CLASSIFYING:
@@ -483,6 +502,24 @@ class OutboundCallStateMachine:
             if getattr(event, "track", None) == "outbound":
                 return
             if is_conversational(text):
+                await self._transition(OutboundCallState.HUMAN)
+
+        if (
+            self._state == OutboundCallState.VOICEMAIL
+            and self._voicemail_pickup_task is not None
+            and not self._voicemail_pickup_task.done()
+        ):
+            # Skip outbound-track transcripts (bot's own voicemail message).
+            if getattr(event, "track", None) == "outbound":
+                return
+            # Exclude voicemail system prompts from triggering false human detection.
+            if classify_greeting(text) == "machine":
+                return
+            if is_conversational(text):
+                self._cancel_voicemail_pickup_window()
+                logger.info(
+                    "Conversational speech during VOICEMAIL — transitioning to HUMAN"
+                )
                 await self._transition(OutboundCallState.HUMAN)
 
     # ── Timers ────────────────────────────────────────────────────
@@ -548,3 +585,27 @@ class OutboundCallStateMachine:
             pass
         finally:
             self._late_voicemail_task = None
+
+    # ── Voicemail pickup window ─────────────────────────────────
+
+    def _start_voicemail_pickup_window(self) -> None:
+        self._cancel_voicemail_pickup_window()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._voicemail_pickup_task = loop.create_task(self._voicemail_pickup_coro())
+
+    def _cancel_voicemail_pickup_window(self) -> None:
+        if self._voicemail_pickup_task and not self._voicemail_pickup_task.done():
+            self._voicemail_pickup_task.cancel()
+        self._voicemail_pickup_task = None
+
+    async def _voicemail_pickup_coro(self) -> None:
+        """After the window expires, stop accepting voicemail pickup signals."""
+        try:
+            await asyncio.sleep(self._voicemail_pickup_window_s)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._voicemail_pickup_task = None

@@ -98,6 +98,7 @@ class OutboundCallConfig:
     classification_gate_hold_audio: str = ""
     max_call_duration_s: int = 300
     late_voicemail_window_s: float = 30.0
+    voicemail_pickup_window_s: float = 60.0
     callee_language: str = "en"
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
@@ -402,6 +403,7 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
             classification_gate_hold_audio=oc.classification_gate_hold_audio,
             expect_fused_voicemail=True,
             late_voicemail_window_s=oc.late_voicemail_window_s,
+            voicemail_pickup_window_s=oc.voicemail_pickup_window_s,
         )
         helpers.append(sm)
 
