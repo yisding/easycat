@@ -1,4 +1,9 @@
-"""Compliance utilities for outbound calling (TCPA, FCC, DNC)."""
+"""Compliance utilities for outbound calling (TCPA, FCC, DNC).
+
+Warning: The area-code-to-timezone mapping in this module covers only a small
+subset of US area codes.  For production use, replace ``_AREA_CODE_TZ`` with a
+complete database or third-party API (e.g. libphonenumber, Twilio Lookup).
+"""
 
 from __future__ import annotations
 
@@ -36,10 +41,22 @@ def _extract_area_code(phone: str) -> str | None:
 
 
 def lookup_timezone(phone: str) -> str | None:
-    """Look up approximate timezone for a US phone number by area code."""
+    """Look up approximate timezone for a US phone number by area code.
+
+    Returns ``None`` (and logs a warning) when the area code is not in the
+    built-in mapping.  Callers should treat ``None`` conservatively.
+    """
     area_code = _extract_area_code(phone)
     if area_code:
-        return _AREA_CODE_TZ.get(area_code)
+        tz = _AREA_CODE_TZ.get(area_code)
+        if tz is None:
+            logger.warning(
+                "Area code %s not in timezone mapping for %s — "
+                "consider using a complete database",
+                area_code,
+                phone,
+            )
+        return tz
     return None
 
 

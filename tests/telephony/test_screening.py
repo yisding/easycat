@@ -127,9 +127,8 @@ class TestScreeningPatterns:
         assert match_screening_platform("Please hold while we connect your call now") is None
 
     def test_short_partial_no_premature_match(self) -> None:
-        # The function itself matches regardless of length;
-        # the MIN_TRANSCRIPT_LENGTH guard is in the detector, not here.
-        # We still test the detector for this behavior below.
+        # The function itself matches regardless of length via exact
+        # substring checks; accumulation happens in the detector.
         assert match_screening_platform("record your name") == "ios"
 
     def test_sliding_window_accumulation(self) -> None:
