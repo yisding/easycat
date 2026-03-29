@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -32,6 +33,8 @@ IOS_PATTERNS: list[str] = [
     "reason for calling",
     "see if this person is available",
     "state your name and reason",
+    "if you record your name",
+    "name and reason for calling",
 ]
 
 ANDROID_PATTERNS: list[str] = [
@@ -44,13 +47,129 @@ ANDROID_PATTERNS: list[str] = [
 
 CARRIER_PATTERNS: list[str] = [
     "caller id screening",
-    "identify yourself",
+    "does not accept unidentified calls",
+    "does not accept calls from unidentified",
+    "anonymous call rejection",
 ]
 
 THIRD_PARTY_PATTERNS: list[str] = [
     "press 1 to be connected",
     "press one to be connected",
+    "nomorobo",
+    "youmail",
+    "robokiller",
+    "truecaller",
 ]
+
+# ── Per-language pattern registries ──────────────────────────────
+# Key substrings from localized iOS 26 screening prompts.
+# iOS 26 supports: en, es, fr, de, pt, ja, ko, zh (Mandarin/Cantonese).
+
+_IOS_PATTERNS_BY_LANG: dict[str, list[str]] = {
+    "en": IOS_PATTERNS,
+    "es": [
+        "grabe su nombre",
+        "motivo de la llamada",
+        "si esta persona está disponible",
+        "diga su nombre y el motivo",
+        "razón de su llamada",
+    ],
+    "fr": [
+        "enregistrez votre nom",
+        "raison de votre appel",
+        "si cette personne est disponible",
+        "indiquez votre nom et la raison",
+        "motif de votre appel",
+    ],
+    "de": [
+        "ihren namen aufnehmen",
+        "grund ihres anrufs",
+        "ob diese person verfügbar ist",
+        "nennen sie ihren namen",
+        "grund ihres anrufes",
+    ],
+    "pt": [
+        "grave seu nome",
+        "motivo da ligação",
+        "se essa pessoa está disponível",
+        "diga seu nome e o motivo",
+        "razão da chamada",
+    ],
+    "ja": [
+        "お名前と",
+        "お電話の理由",
+        "対応可能か確認",
+        "録音してください",
+    ],
+    "ko": [
+        "이름과",
+        "전화하시는 이유",
+        "통화 가능한지",
+        "녹음해 주시면",
+    ],
+    "zh": [
+        "录下您的名字",
+        "来电原因",
+        "是否有空",
+        "请说明您的姓名",
+    ],
+}
+
+# Localized Google Call Screen prompts.
+_ANDROID_PATTERNS_BY_LANG: dict[str, list[str]] = {
+    "en": ANDROID_PATTERNS,
+    "es": [
+        "servicio de filtrado",
+        "diga su nombre y por qué",
+        "filtrado de llamadas de google",
+        "recibirá una copia de esta conversación",
+    ],
+    "fr": [
+        "service de filtrage",
+        "dites votre nom et pourquoi",
+        "filtrage d'appels de google",
+        "recevra une copie de cette conversation",
+    ],
+    "de": [
+        "einen anruffilter",
+        "sagen sie ihren namen und warum",
+        "anruffilter von google",
+        "erhält eine kopie dieses gesprächs",
+    ],
+    "pt": [
+        "serviço de triagem",
+        "diga seu nome e por que",
+        "triagem de chamadas do google",
+        "receberá uma cópia desta conversa",
+    ],
+    "ja": [
+        "通話スクリーニング",
+        "お名前とご用件を",
+        "googleの通話スクリーニング",
+        "会話のコピーが届きます",
+    ],
+}
+
+# Localized carrier patterns.
+_CARRIER_PATTERNS_BY_LANG: dict[str, list[str]] = {
+    "en": CARRIER_PATTERNS,
+    "es": [
+        "filtrado de identificador",
+        "no acepta llamadas no identificadas",
+    ],
+    "fr": [
+        "filtrage d'identité",
+        "n'accepte pas les appels non identifiés",
+    ],
+    "de": [
+        "anrufer-id-überprüfung",
+        "akzeptiert keine unbekannten anrufe",
+    ],
+    "pt": [
+        "triagem de identificação",
+        "não aceita chamadas não identificadas",
+    ],
+}
 
 # Patterns that should NOT match screening (early media, voicemail, etc.)
 EARLY_MEDIA_PHRASES: list[str] = [
@@ -131,6 +250,57 @@ class ScreeningPatternSet:
     carrier: list[str] = field(default_factory=lambda: list(CARRIER_PATTERNS))
     third_party: list[str] = field(default_factory=lambda: list(THIRD_PARTY_PATTERNS))
     exclusions: list[str] = field(default_factory=lambda: list(EARLY_MEDIA_PHRASES))
+
+
+def screening_patterns_for_languages(
+    languages: Sequence[str] | None = None,
+) -> ScreeningPatternSet:
+    """Build a :class:`ScreeningPatternSet` with patterns for the given languages.
+
+    Args:
+        languages: BCP-47 language codes (e.g. ``["en", "es", "fr"]``).
+            ``None`` includes **all** available languages.
+
+    Returns:
+        A ``ScreeningPatternSet`` whose ``ios``, ``android``, and ``carrier``
+        lists contain deduplicated patterns for every requested language.
+        Third-party and exclusion patterns are language-independent.
+    """
+    if languages is None:
+        langs = (
+            set(_IOS_PATTERNS_BY_LANG)
+            | set(_ANDROID_PATTERNS_BY_LANG)
+            | set(_CARRIER_PATTERNS_BY_LANG)
+        )
+    else:
+        langs = {code.split("-")[0].lower() for code in languages}
+
+    seen_ios: set[str] = set()
+    seen_android: set[str] = set()
+    seen_carrier: set[str] = set()
+    ios: list[str] = []
+    android: list[str] = []
+    carrier: list[str] = []
+
+    for lang in sorted(langs):
+        for p in _IOS_PATTERNS_BY_LANG.get(lang, []):
+            if p not in seen_ios:
+                seen_ios.add(p)
+                ios.append(p)
+        for p in _ANDROID_PATTERNS_BY_LANG.get(lang, []):
+            if p not in seen_android:
+                seen_android.add(p)
+                android.append(p)
+        for p in _CARRIER_PATTERNS_BY_LANG.get(lang, []):
+            if p not in seen_carrier:
+                seen_carrier.add(p)
+                carrier.append(p)
+
+    return ScreeningPatternSet(
+        ios=ios,
+        android=android,
+        carrier=carrier,
+    )
 
 
 def match_screening_platform(
