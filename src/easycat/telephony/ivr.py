@@ -113,6 +113,31 @@ class DTMFDelivery:
         self._verify = verify
         self._delivery_attempts = 0
 
+    @property
+    def call_sid(self) -> str:
+        return self._call_sid
+
+    @call_sid.setter
+    def call_sid(self, value: str) -> None:
+        self._call_sid = value
+
+    async def send_speech(self, text: str) -> bool:
+        """Send speech via REST API ``<Say>`` TwiML. Returns True on success."""
+        if not self._client or not self._call_sid:
+            return False
+
+        from xml.sax.saxutils import escape
+
+        safe_text = escape(text)
+        twiml = f'<Response><Say>{safe_text}</Say><Pause length="30"/></Response>'
+
+        try:
+            await asyncio.to_thread(self._client.calls(self._call_sid).update, twiml=twiml)
+            return True
+        except Exception:
+            logger.exception("Speech delivery failed for call %s", self._call_sid)
+            return False
+
     async def send_dtmf(self, digits: str) -> bool:
         """Send DTMF digits via REST API. Returns True on success."""
         if not self._client or not self._call_sid:

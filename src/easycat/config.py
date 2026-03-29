@@ -12,7 +12,7 @@ from easycat.agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.agents.factory import auto_adapt_agent
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.event_logging import EventLoggingConfig, EventTraceLogger
-from easycat.events import CallScreening, EventBus, TTSAudio
+from easycat.events import CallInitiated, CallScreening, EventBus, TTSAudio
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
@@ -438,12 +438,21 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
             helpers.append(screening)
 
         # IVR navigator — activated/deactivated by state machine transitions.
+        ivr_delivery = oc.ivr_dtmf_delivery
         ivr = IVRNavigator(
             event_bus,
             agent_callback=oc.ivr_agent_callback,
-            dtmf_delivery=oc.ivr_dtmf_delivery,
+            dtmf_delivery=ivr_delivery,
         )
         helpers.append(ivr)
+
+        # Propagate the live call SID so DTMFDelivery can send digits/speech.
+        if ivr_delivery is not None:
+
+            async def _on_call_initiated_for_ivr(event: CallInitiated) -> None:
+                ivr_delivery.call_sid = event.call_sid
+
+            event_bus.subscribe(CallInitiated, _on_call_initiated_for_ivr)
 
         def _on_state_changed_for_ivr(event: CallStateChanged) -> None:
             if event.new == OutboundCallState.IVR:
@@ -453,13 +462,19 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
 
         event_bus.subscribe(CallStateChanged, _on_state_changed_for_ivr)
 
-        # When IVR navigator detects a human pickup, transition the state machine.
-        async def _on_ivr_human_detected(event: IVRAction) -> None:
+        # React to IVR navigator actions: human pickup, speech, and hangup.
+        async def _on_ivr_action(event: IVRAction) -> None:
             if event.type == IVRActionType.HUMAN_DETECTED:
                 if sm.state == OutboundCallState.IVR:
                     await sm.transition(OutboundCallState.HUMAN)
+            elif event.type == IVRActionType.HANGUP:
+                if sm.state == OutboundCallState.IVR:
+                    await sm.transition(OutboundCallState.ENDED)
+            elif event.type == IVRActionType.SPEAK:
+                if ivr_delivery is not None:
+                    await ivr_delivery.send_speech(event.text)
 
-        event_bus.subscribe(IVRAction, _on_ivr_human_detected)
+        event_bus.subscribe(IVRAction, _on_ivr_action)
 
         # Voicemail policy handler.
         helpers.append(VoicemailPolicyHandler(event_bus, expect_fused=True))

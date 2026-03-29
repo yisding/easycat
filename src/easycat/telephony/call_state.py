@@ -215,7 +215,6 @@ class ClassificationGate:
                 # because release() cancels _timeout_task — which is *this* task.
                 # That would inject CancelledError on the next await and drop
                 # the buffered audio before _on_flush_async can re-enqueue it.
-                self._closed = False
                 self._hold_audio_playing = False
                 self._timeout_task = None
                 buffered = list(self._buffer)
@@ -224,6 +223,10 @@ class ClassificationGate:
                     self._on_flush(buffered)
                 if self._on_flush_async:
                     await self._on_flush_async(buffered)
+                # Open the gate after flushing so late TTS chunks cannot
+                # slip past the buffer during the async replay — matching
+                # the ordering in flush_and_release().
+                self._closed = False
         except asyncio.CancelledError:
             pass
 
