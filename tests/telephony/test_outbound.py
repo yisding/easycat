@@ -216,7 +216,7 @@ class TestOutboundCallManagerPlaceCall:
         await manager.place_call("+15551234567")
         kwargs = manager._client.calls.create.call_args.kwargs
         assert kwargs["transcription"] is True
-        assert kwargs["transcription_track"] == "both"
+        assert kwargs["transcription_track"] == "inbound_track"
 
     @pytest.mark.asyncio
     async def test_place_call_uses_from_number(self) -> None:

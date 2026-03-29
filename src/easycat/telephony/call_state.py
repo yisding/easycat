@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from easycat.events import (
     CallAnswered,
@@ -21,6 +21,9 @@ from easycat.events import (
     TTSAudio,
     VoicemailDetected,
 )
+
+if TYPE_CHECKING:
+    from easycat.telephony.screening import ScreeningPatternSet
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +157,25 @@ class ClassificationGate:
             self._on_flush(buffered)
         return buffered
 
+    async def flush_and_release(self) -> list[TTSAudio]:
+        """Replay buffered audio via the async callback, then open the gate.
+
+        Unlike :meth:`release`, the async flush callback is invoked while the
+        gate is still closed.  This prevents in-flight TTS chunks from reaching
+        the outbound queue (and being dropped by ``queue.flush()`` inside the
+        callback) between gate release and replay.
+        """
+        self._cancel_timeout()
+        self._hold_audio_playing = False
+        buffered = list(self._buffer)
+        self._buffer.clear()
+        # Replay while gate is still closed.
+        if self._on_flush_async and buffered:
+            await self._on_flush_async(buffered)
+        # Now open the gate for future TTS chunks.
+        self._closed = False
+        return buffered
+
     async def discard(self) -> None:
         """Cancel timeout and discard buffered audio, keeping the gate closed.
 
@@ -228,6 +250,7 @@ class OutboundCallStateMachine:
         expect_fused_voicemail: bool = False,
         late_voicemail_window_s: float = 0.0,
         voicemail_pickup_window_s: float = 0.0,
+        screening_patterns: ScreeningPatternSet | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._call_sid = call_sid
@@ -238,6 +261,7 @@ class OutboundCallStateMachine:
         self._vad_timeout_extension_s = vad_timeout_extension_s
         self._late_voicemail_window_s = late_voicemail_window_s
         self._voicemail_pickup_window_s = voicemail_pickup_window_s
+        self._screening_patterns = screening_patterns
 
         self._state = OutboundCallState.INITIATING
         self._started = False
@@ -364,9 +388,7 @@ class OutboundCallStateMachine:
         # and the gate stays closed to block any remaining TTS chunks.
         if old == OutboundCallState.CLASSIFYING and self._gate.is_closed:
             if new_state in {OutboundCallState.HUMAN, OutboundCallState.UNKNOWN}:
-                buffered = self._gate.release()
-                if self._gate._on_flush_async:
-                    await self._gate._on_flush_async(buffered)
+                await self._gate.flush_and_release()
             else:
                 await self._gate.discard()
 
@@ -490,7 +512,7 @@ class OutboundCallStateMachine:
                 # voicemail phrases — let the fusion classifier handle them
                 # instead of misrouting to HUMAN.
                 pass
-            elif is_conversational(text):
+            elif is_conversational(text, self._screening_patterns):
                 self._cancel_classification_timeout()
                 await self._transition(OutboundCallState.HUMAN)
             return
@@ -501,7 +523,7 @@ class OutboundCallStateMachine:
             # bot's screening reply as the callee picking up.
             if getattr(event, "track", None) == "outbound":
                 return
-            if is_conversational(text):
+            if is_conversational(text, self._screening_patterns):
                 await self._transition(OutboundCallState.HUMAN)
 
         if (
@@ -515,7 +537,7 @@ class OutboundCallStateMachine:
             # Exclude voicemail system prompts from triggering false human detection.
             if classify_greeting(text) == "machine":
                 return
-            if is_conversational(text):
+            if is_conversational(text, self._screening_patterns):
                 self._cancel_voicemail_pickup_window()
                 logger.info(
                     "Conversational speech during VOICEMAIL — transitioning to HUMAN"

@@ -355,7 +355,9 @@ class ScreeningResponse:
     mode: str  # "static" | "agent"
 
 
-def is_conversational(text: str) -> bool:
+def is_conversational(
+    text: str, patterns: ScreeningPatternSet | None = None
+) -> bool:
     """Return True if *text* looks like a human conversational utterance.
 
     Uses structural heuristics rather than hardcoded phrase lists so that
@@ -377,7 +379,7 @@ def is_conversational(text: str) -> bool:
         return False
 
     # ── Step 1: Reject known screening / IVR prompts ─────────────
-    if match_screening_platform(lower) is not None:
+    if match_screening_platform(lower, patterns) is not None:
         return False
 
     # ── Step 2: Reject long interrogative / instructional sentences ──
@@ -693,7 +695,7 @@ class CallScreeningDetector:
         # Check if this looks like a human answering (conversational speech)
         # *before* enforcing the turn limit, so a human picking up on the
         # last allowed exchange is classified as HUMAN_ANSWERED, not timeout.
-        if is_conversational(text):
+        if is_conversational(text, self._patterns):
             self._state = ScreeningState.HUMAN_ANSWERED
             self._cancel_agent_timeout()
             return

@@ -297,8 +297,14 @@ def create_session(config: EasyCatConfig) -> Session:
             # Discard any stale hold-audio chunks that were already queued
             # with bypass_gate=True before replaying the buffered speech.
             queue.flush()
-            for ev in events:
-                await queue.put(ev.chunk)
+            if events:
+                # Transition through BOT_SPEAKING so that caller speech
+                # during the replay is treated as barge-in, and the
+                # BotStartedSpeaking / BotStoppedSpeaking events fire.
+                await session._turn_manager.bot_started_speaking()
+                for ev in events:
+                    await queue.put(ev.chunk)
+                await session._turn_manager.bot_stopped_speaking()
 
         _outbound_sm.set_gate_flush_callback(_flush_gated_audio)
 
@@ -396,6 +402,13 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
 
         event_bus.subscribe(CallScreening, _on_screening_for_post_vm)
 
+        # Build language-aware screening patterns once so both the state
+        # machine and the screening detector share the same set.
+        screening_langs = ["en"]
+        if oc.callee_language and oc.callee_language != "en":
+            screening_langs.append(oc.callee_language)
+        _screening_patterns = screening_patterns_for_languages(screening_langs)
+
         # State machine — expect fused voicemail events (ignore raw AMD).
         sm = OutboundCallStateMachine(
             event_bus,
@@ -407,24 +420,19 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
             expect_fused_voicemail=True,
             late_voicemail_window_s=oc.late_voicemail_window_s,
             voicemail_pickup_window_s=oc.voicemail_pickup_window_s,
+            screening_patterns=_screening_patterns,
         )
         helpers.append(sm)
 
         # Screening detector.
         if oc.enable_screening_detection:
-            # Build language-aware patterns: always include English plus the
-            # callee's language (if different) so we detect screening prompts
-            # in the callee's locale.
-            screening_langs = ["en"]
-            if oc.callee_language and oc.callee_language != "en":
-                screening_langs.append(oc.callee_language)
             screening = CallScreeningDetector(
                 event_bus,
                 enabled=True,
                 screening_response=oc.screening_response,
                 screening_use_agent=oc.screening_use_agent,
                 max_screening_turns=oc.max_screening_turns,
-                patterns=screening_patterns_for_languages(screening_langs),
+                patterns=_screening_patterns,
                 track_filter=None,
             )
             helpers.append(screening)
