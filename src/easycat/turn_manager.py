@@ -247,9 +247,12 @@ class TurnManager:
         "incomplete" (or raises an error), falls back to the normal sleep.
         """
         try:
+            detector_elapsed = 0.0
             if self._endpoint_detector is not None and self._turn_audio:
                 try:
+                    t0 = time.monotonic()
                     result = await self._endpoint_detector.detect(list(self._turn_audio))
+                    detector_elapsed = time.monotonic() - t0
                     logger.debug(
                         "Smart-turn prediction=%d probability=%.3f",
                         result.prediction,
@@ -275,7 +278,8 @@ class TurnManager:
                 except Exception:
                     logger.exception("Endpoint detection failed, falling back to silence timeout")
 
-            await asyncio.sleep(self._config.end_of_turn_silence_ms / 1000.0)
+            remaining = max(0, self._config.end_of_turn_silence_ms / 1000.0 - detector_elapsed)
+            await asyncio.sleep(remaining)
 
             if self._state == TurnManagerState.USER_PAUSED:
                 self._state = TurnManagerState.PROCESSING
