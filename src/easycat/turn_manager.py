@@ -425,5 +425,11 @@ class TurnManager:
 
     async def shutdown(self) -> None:
         """Clean up any pending tasks."""
-        self._cancel_silence_timer()
+        if self._silence_timer_task and not self._silence_timer_task.done():
+            self._silence_timer_task.cancel()
+            try:
+                await self._silence_timer_task
+            except asyncio.CancelledError:
+                pass
+        self._silence_timer_task = None
         self.reset()
