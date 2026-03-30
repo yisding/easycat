@@ -99,6 +99,7 @@ class TestWebRTCTransportConformance:
 # ── Lifecycle tests (require aiohttp) ────────────────────────────
 
 
+@pytest.mark.integration_socket
 @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
 class TestWebRTCTransportLifecycle:
     @pytest.mark.asyncio

@@ -23,6 +23,8 @@ from easycat.transports.websocket import WebSocketConnectionTransport
 
 from .conftest import find_free_port, make_chunk
 
+pytestmark = pytest.mark.integration_socket
+
 # ── Helpers ────────────────────────────────────────────────────────
 
 
