@@ -384,7 +384,9 @@ async def test_cancel_tts_playback_resets_state():
     session._cancel_token = CancelToken()
     await session.cancel_tts_playback()
     assert session.turn_state == TurnState.IDLE
-    assert session._cancel_token.is_cancelled
+    # cancel_tts_playback should NOT cancel the shared token —
+    # only TTS is stopped, agent streams can continue.
+    assert not session._cancel_token.is_cancelled
 
 
 @pytest.mark.asyncio
