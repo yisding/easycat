@@ -1767,7 +1767,6 @@ class Session:
 
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 await self._turn_manager.bot_stopped_speaking()
-                self._spans.finish("turn")
             elif started and not tts_playback_started:
                 # Gated: TTS was buffered, reset to IDLE so callee speech
                 # can start new turns while waiting for classification.
