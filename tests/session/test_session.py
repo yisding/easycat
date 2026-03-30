@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.bounded_queue import BoundedAudioQueue
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
@@ -265,6 +266,20 @@ async def test_session_shutdown():
 
     assert not session.is_running
     assert transport.disconnected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
+async def test_external_outbound_queue_survives_session_teardown(method_name: str):
+    transport = FakeTransport()
+    queue = BoundedAudioQueue()
+    session = Session(_full_config(transport=transport, outbound_queue=queue))
+
+    await session.start()
+    await getattr(session, method_name)()
+
+    assert await queue.put(_make_chunk())
+    assert queue.qsize() == 1
 
 
 @pytest.mark.asyncio

@@ -1105,7 +1105,8 @@ class Session:
         self._health_checkers = []
         self._stop_helpers()
         self._spans.finish_all(SpanStatus.CANCELLED)
-        self._outbound_queue.close()
+        if not self._outbound_queue_external:
+            self._outbound_queue.close()
         if self._outbound_task and not self._outbound_task.done():
             self._outbound_task.cancel()
             try:
@@ -1147,7 +1148,8 @@ class Session:
         self._health_checkers = []
         self._stop_helpers()
         self._spans.finish_all(SpanStatus.CANCELLED)
-        self._outbound_queue.close()
+        if not self._outbound_queue_external:
+            self._outbound_queue.close()
         await self.transport.disconnect()
         self._reset_turn_state()
 
