@@ -186,14 +186,15 @@ class ReconnectingWebSocket:
 
     async def close(self) -> None:
         """Close the WebSocket connection permanently."""
-        self._closed = True
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception:
-                logger.debug("Error closing WebSocket", exc_info=True)
-            finally:
-                self._ws = None
+        async with self._connect_lock:
+            self._closed = True
+            if self._ws is not None:
+                try:
+                    await self._ws.close()
+                except Exception:
+                    logger.debug("Error closing WebSocket", exc_info=True)
+                finally:
+                    self._ws = None
 
     # ── Event emission helpers ────────────────────────────────────
 
