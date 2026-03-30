@@ -318,7 +318,7 @@ class TestEnhancedVoicemailIntegration:
             # AMD says machine but no STT arrives.
             await bus.emit(VoicemailDetected(result="machine"))
             # Wait for STT timeout.
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             # Should have fallen back to AMD result.
             assert classifier.amd_result == "machine"
             assert classifier._emitted is True

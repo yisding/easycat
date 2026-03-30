@@ -2,6 +2,17 @@
 
 from __future__ import annotations
 
+__all__ = [
+    "AgentCallback",
+    "DTMFDelivery",
+    "IVRAction",
+    "IVRActionType",
+    "IVRNavigator",
+    "IVRNavigatorConfig",
+    "classify_ivr_prompt",
+    "detect_human_after_ivr",
+]
+
 import asyncio
 import logging
 import re
@@ -11,8 +22,13 @@ from enum import Enum
 from typing import Any
 
 from easycat.events import EventBus, STTFinal
+from easycat.telephony.dtmf import VALID_DTMF_DIGITS
+from easycat.telephony.screening import EARLY_MEDIA_PHRASES as _EARLY_MEDIA_PATTERNS
 
 logger = logging.getLogger(__name__)
+
+# Valid DTMF characters: standard digits + W/w pauses for inter-digit delays.
+_VALID_DTMF = VALID_DTMF_DIGITS | frozenset("wW")
 
 # Heuristic patterns that indicate IVR prompts.
 _IVR_PATTERNS: list[re.Pattern[str]] = [
@@ -24,13 +40,6 @@ _IVR_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"press\s+(one|1)\s+to\s+accept", re.IGNORECASE),
     re.compile(r"you have a call", re.IGNORECASE),
     re.compile(r"extension.{0,10}dial", re.IGNORECASE),
-]
-
-# Early-media phrases that should NOT be classified as IVR.
-_EARLY_MEDIA_PATTERNS: list[str] = [
-    "this call may be monitored",
-    "please hold while we connect",
-    "call may be recorded",
 ]
 
 # Patterns that indicate a human receptionist answered after IVR navigation.
@@ -87,6 +96,7 @@ class IVRNavigatorConfig:
     max_depth: int = 10
     prompt_timeout_s: float = 15.0
     agent_timeout_s: float = 10.0
+    agent_retry_delay_s: float = 2.0
     dtmf_inter_digit_delay: bool = True
     ivr_dtmf_verify: bool = False
     hold_silence_threshold_s: float = 10.0
@@ -111,11 +121,41 @@ class DTMFDelivery:
         self._call_sid = call_sid
         self._inter_digit_delay = inter_digit_delay
         self._verify = verify
-        self._delivery_attempts = 0
+
+    @property
+    def call_sid(self) -> str:
+        return self._call_sid
+
+    @call_sid.setter
+    def call_sid(self, value: str) -> None:
+        self._call_sid = value
+
+    async def send_speech(self, text: str) -> bool:
+        """Send speech via REST API ``<Say>`` TwiML. Returns True on success."""
+        if not self._client or not self._call_sid:
+            return False
+
+        from xml.sax.saxutils import escape
+
+        safe_text = escape(text, {'"': "&quot;", "'": "&apos;"})
+        twiml = f'<Response><Say>{safe_text}</Say><Pause length="30"/></Response>'
+
+        try:
+            await asyncio.to_thread(self._client.calls(self._call_sid).update, twiml=twiml)
+            return True
+        except Exception:
+            logger.exception("Speech delivery failed for call %s", self._call_sid)
+            return False
 
     async def send_dtmf(self, digits: str) -> bool:
         """Send DTMF digits via REST API. Returns True on success."""
         if not self._client or not self._call_sid:
+            return False
+
+        # Validate that digits contains only valid DTMF characters to
+        # prevent TwiML injection via the agent callback.
+        if not digits or not all(c in _VALID_DTMF for c in digits):
+            logger.warning("Invalid DTMF digits rejected: %r", digits)
             return False
 
         # Insert W (1-second delay) between digits if inter-digit delay is enabled.
@@ -126,7 +166,6 @@ class DTMFDelivery:
 
         try:
             await asyncio.to_thread(self._client.calls(self._call_sid).update, twiml=twiml)
-            self._delivery_attempts += 1
             return True
         except Exception:
             logger.exception("DTMF delivery failed for call %s", self._call_sid)
@@ -136,7 +175,7 @@ class DTMFDelivery:
         """Send DTMF with retry and fallback to speech."""
         success = await self.send_dtmf(digits)
         if not success:
-            # Retry once.
+            await asyncio.sleep(0.5)
             success = await self.send_dtmf(digits)
         return success
 
@@ -175,7 +214,6 @@ class IVRNavigator:
         self._menu_depth = 0
         self._history: list[tuple[str, dict[str, str]]] = []
         self._prompt_timeout_task: asyncio.Task[None] | None = None
-        self._silence_start: float | None = None
         self._in_hold = False
 
     @property
@@ -246,8 +284,8 @@ class IVRNavigator:
                 timeout=self._config.agent_timeout_s,
             )
         except TimeoutError:
-            logger.warning("IVR agent timed out, retrying prompt")
-            # Re-send the same prompt to the agent.
+            logger.warning("IVR agent timed out, retrying after delay")
+            await asyncio.sleep(self._config.agent_retry_delay_s)
             try:
                 result = await asyncio.wait_for(
                     self._agent_callback(context),
@@ -264,58 +302,49 @@ class IVRNavigator:
 
         action_str = result.get("action", "wait")
 
-        if action_str == "dtmf":
-            digits = result.get("digits", "")
-            action = IVRAction(
-                type=IVRActionType.DTMF,
-                digits=digits,
-                menu_depth=self._menu_depth,
-            )
-            self._history.append((event.text, {"action": "dtmf", "digits": digits}))
+        if action_str in ("dtmf", "speak"):
+            if action_str == "dtmf":
+                payload = result.get("digits", "")
+                action_type = IVRActionType.DTMF
+                history_entry = {"action": "dtmf", "digits": payload}
+            else:
+                payload = result.get("text", "")
+                action_type = IVRActionType.SPEAK
+                history_entry = {"action": "speak", "text": payload}
+
+            self._history.append((event.text, history_entry))
             self._menu_depth += 1
 
             if self._menu_depth > self._config.max_depth:
+                self._active = False
                 await self._event_bus.emit(
                     IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
                 )
                 return
 
+            action = IVRAction(
+                type=action_type,
+                digits=payload if action_str == "dtmf" else "",
+                text=payload if action_str == "speak" else "",
+                menu_depth=self._menu_depth,
+            )
             await self._event_bus.emit(action)
             self._start_prompt_timeout()
 
             # Deliver DTMF via REST API if available.
-            if self._dtmf_delivery:
-                success = await self._dtmf_delivery.send_dtmf_with_retry(digits)
+            if action_str == "dtmf" and self._dtmf_delivery:
+                success = await self._dtmf_delivery.send_dtmf_with_retry(payload)
                 if not success:
-                    # Fall back to speech-based input.
                     await self._event_bus.emit(
                         IVRAction(
                             type=IVRActionType.SPEAK,
-                            text=digits,
+                            text=payload,
                             menu_depth=self._menu_depth,
                         )
                     )
 
-        elif action_str == "speak":
-            text = result.get("text", "")
-            action = IVRAction(
-                type=IVRActionType.SPEAK,
-                text=text,
-                menu_depth=self._menu_depth,
-            )
-            self._history.append((event.text, {"action": "speak", "text": text}))
-            self._menu_depth += 1
-
-            if self._menu_depth > self._config.max_depth:
-                await self._event_bus.emit(
-                    IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
-                )
-                return
-
-            await self._event_bus.emit(action)
-            self._start_prompt_timeout()
-
         elif action_str == "hangup":
+            self._active = False
             await self._event_bus.emit(
                 IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
             )

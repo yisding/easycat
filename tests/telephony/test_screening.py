@@ -127,9 +127,8 @@ class TestScreeningPatterns:
         assert match_screening_platform("Please hold while we connect your call now") is None
 
     def test_short_partial_no_premature_match(self) -> None:
-        # The function itself matches regardless of length;
-        # the MIN_TRANSCRIPT_LENGTH guard is in the detector, not here.
-        # We still test the detector for this behavior below.
+        # The function itself matches regardless of length via exact
+        # substring checks; accumulation happens in the detector.
         assert match_screening_platform("record your name") == "ios"
 
     def test_sliding_window_accumulation(self) -> None:
@@ -303,23 +302,41 @@ class TestCallScreeningDetector:
             await bus.emit(CallAnswered(call_sid=""))
 
             # Simulate an outbound-track partial (bot's own speech).
-            ev = STTPartial(text="please record your name and reason for calling")
-            # Attach a track attribute dynamically for testing.
-            object.__setattr__(ev, "track", "outbound")
+            ev = STTPartial(
+                text="please record your name and reason for calling",
+                track="outbound",
+            )
             await bus.emit(ev)
             assert len(received) == 0
 
             # Now an inbound-track partial.
-            ev2 = STTPartial(text="please record your name and reason for calling")
-            object.__setattr__(ev2, "track", "inbound")
+            ev2 = STTPartial(
+                text="please record your name and reason for calling",
+                track="inbound",
+            )
             await bus.emit(ev2)
             assert len(received) == 1
         finally:
             detector.stop()
 
     @pytest.mark.asyncio
-    async def test_short_partial_ignored_by_detector(self) -> None:
-        """Short partials (<30 chars) are not checked to prevent false positives."""
+    async def test_short_partial_without_pattern_ignored(self) -> None:
+        """Short partials that don't match a known pattern are ignored."""
+        bus = EventBus()
+        received: list[CallScreening] = []
+        bus.subscribe(CallScreening, received.append)
+        detector = CallScreeningDetector(bus, track_filter=None)
+        detector.start()
+        try:
+            await bus.emit(CallAnswered(call_sid=""))
+            await bus.emit(STTPartial(text="hello how are you"))
+            assert len(received) == 0
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
+    async def test_short_partial_with_known_pattern_triggers(self) -> None:
+        """Short partials that match a known screening pattern still trigger."""
         bus = EventBus()
         received: list[CallScreening] = []
         bus.subscribe(CallScreening, received.append)
@@ -328,7 +345,7 @@ class TestCallScreeningDetector:
         try:
             await bus.emit(CallAnswered(call_sid=""))
             await bus.emit(STTPartial(text="record your name"))
-            assert len(received) == 0
+            assert len(received) == 1
         finally:
             detector.stop()
 
@@ -422,7 +439,7 @@ class TestScreeningResponseAgent:
             assert len(responses) == 1
             assert responses[0].mode == "agent"
             # Wait for timeout to fire the fallback.
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             assert len(responses) == 2
             assert responses[1].mode == "static"
             assert responses[1].text == "Fallback: Hi, this is Sarah"
@@ -646,7 +663,11 @@ class TestIsConversational:
 
     def test_screening_follow_up_patterns_rejected(self) -> None:
         assert not is_conversational("Tell me more about your reason for calling")
-        assert not is_conversational("One moment please")
+        # Short human-like phrases ("one moment", "who is this") are now
+        # treated as conversational to avoid blocking real human handoffs.
+        assert is_conversational("One moment please")
+        assert is_conversational("Who is this")
+        assert is_conversational("Why are you calling")
 
     def test_ivr_prompts_rejected(self) -> None:
         assert not is_conversational("Press 1 for sales, press 2 for support, press 3 for billing")
@@ -745,7 +766,7 @@ class TestMultiLanguagePatterns:
             == "carrier"
         )
 
-    def test_english_still_detected_with_non_english_language(self) -> None:
+    def test_english_not_included_with_non_english_only(self) -> None:
         """English patterns are NOT included when only a non-English language is requested."""
         patterns = screening_patterns_for_languages(["es"])
         # English iOS prompt should NOT match Spanish-only patterns.

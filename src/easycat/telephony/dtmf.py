@@ -1,8 +1,4 @@
-"""DTMF parsing and aggregation for EasyCat telephony.
-
-Task 6.1: Parse DTMF from Twilio Media Streams WebSocket messages.
-Task 6.3: DTMFAggregator that collects individual digits into sequences.
-"""
+"""DTMF parsing and aggregation for EasyCat telephony."""
 
 from __future__ import annotations
 
@@ -20,7 +16,7 @@ logger = logging.getLogger(__name__)
 VALID_DTMF_DIGITS = frozenset("0123456789*#ABCD")
 
 
-# ── Task 6.1: Twilio Media Streams DTMF parsing ──────────────────
+# ── Twilio Media Streams DTMF parsing ────────────────────────────
 
 
 def parse_twilio_dtmf_message(message: str | dict[str, Any]) -> DTMF | None:
@@ -82,7 +78,7 @@ async def emit_twilio_dtmf(
     return event
 
 
-# ── Task 6.3: DTMF Aggregator ────────────────────────────────────
+# ── DTMF Aggregator ──────────────────────────────────────────────
 
 
 @dataclass

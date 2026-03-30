@@ -12,7 +12,7 @@ from easycat.agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.agents.factory import auto_adapt_agent
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.event_logging import EventLoggingConfig, EventTraceLogger
-from easycat.events import CallScreening, EventBus, TTSAudio
+from easycat.events import CallInitiated, CallScreening, EventBus, TTSAudio
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
@@ -29,7 +29,13 @@ from easycat.telephony.call_state import (
     OutboundCallStateMachine,
 )
 from easycat.telephony.dtmf import DTMFAggregator, DTMFAggregatorConfig
-from easycat.telephony.ivr import IVRAction, IVRActionType, IVRNavigator
+from easycat.telephony.ivr import (
+    AgentCallback,
+    DTMFDelivery,
+    IVRAction,
+    IVRActionType,
+    IVRNavigator,
+)
 from easycat.telephony.outbound import OutboundCallManager
 from easycat.telephony.screening import (
     CallScreeningDetector,
@@ -100,12 +106,18 @@ class OutboundCallConfig:
     late_voicemail_window_s: float = 30.0
     voicemail_pickup_window_s: float = 60.0
     callee_language: str = "en"
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
+    twilio_account_sid: str = field(default="", repr=False)
+    twilio_auth_token: str = field(default="", repr=False)
     twiml_url: str = ""
     status_callback_url: str = ""
-    ivr_agent_callback: Any = None  # AgentCallback for IVR navigation
-    ivr_dtmf_delivery: Any = None  # DTMFDelivery instance for IVR
+    ivr_agent_callback: AgentCallback | None = None
+    ivr_dtmf_delivery: DTMFDelivery | None = None
+
+    def __post_init__(self) -> None:
+        if self.classification_gate_timeout_s <= 0:
+            raise ValueError("classification_gate_timeout_s must be positive")
+        if self.max_call_duration_s <= 0:
+            raise ValueError("max_call_duration_s must be positive")
 
 
 @dataclass
@@ -282,7 +294,7 @@ def create_session(config: EasyCatConfig) -> Session:
     if _outbound_sm is not None:
 
         def audio_gate() -> bool:
-            return _outbound_sm.gate.is_closed
+            return _outbound_sm.gate.is_buffering
 
     session = Session(
         SessionConfig(
@@ -307,75 +319,100 @@ def create_session(config: EasyCatConfig) -> Session:
         )
     )
 
-    # Wire gate flush callback to re-enqueue buffered audio on release.
     if _outbound_sm is not None:
-        _hold_audio_task: asyncio.Task[None] | None = None
-
-        async def _flush_gated_audio(events: list[TTSAudio]) -> None:
-            nonlocal _hold_audio_task
-            # Cancel any in-progress hold-audio synthesis so it doesn't
-            # overlap with real conversation audio after the gate opens.
-            if _hold_audio_task is not None and not _hold_audio_task.done():
-                _hold_audio_task.cancel()
-                _hold_audio_task = None
-            queue = session.outbound_queue
-            # Discard any stale hold-audio chunks that were already queued
-            # with bypass_gate=True before replaying the buffered speech.
-            queue.flush()
-            for ev in events:
-                await queue.put(ev.chunk)
-
-        _outbound_sm.set_gate_flush_callback(_flush_gated_audio)
-
-        # Wire hold audio callback — synthesize hold text via TTS when gate closes.
-        _tts = session.tts_synth
-
-        def _play_hold_audio(text: str) -> None:
-            nonlocal _hold_audio_task
-
-            async def _synthesize_hold() -> None:
-                await _tts.synthesize(text, token=None, bypass_gate=True)
-
-            try:
-                loop = asyncio.get_running_loop()
-                _hold_audio_task = loop.create_task(_synthesize_hold())
-            except RuntimeError:
-                logger.warning("No running event loop — hold audio skipped")
-
-        _outbound_sm.gate.set_hold_audio_callback(_play_hold_audio)
-
-        # Wire ScreeningResponse → TTS so the bot actually speaks the
-        # screening identification (e.g. "Hi, this is Sarah from Acme").
-        _screening_detector: CallScreeningDetector | None = None
-        for _h in telephony_helpers:
-            if isinstance(_h, CallScreeningDetector):
-                _screening_detector = _h
-                break
-
-        async def _on_screening_response(event: ScreeningResponse) -> None:
-            if event.mode == "agent" and _screening_detector is not None:
-                try:
-                    prompt = _screening_detector._accumulated_text
-                    response_text = await agent.run(
-                        f"The callee's phone is screening this call. "
-                        f'Their screening prompt says: "{prompt}". '
-                        f"Identify yourself briefly."
-                    )
-                    # Cancel the fallback timer and check whether it already
-                    # fired.  If the agent was slower than agent_timeout_s the
-                    # static fallback has already been spoken — skip synthesis
-                    # to avoid a duplicate screening reply.
-                    in_time = _screening_detector.notify_agent_responded()
-                    if response_text and in_time:
-                        await _tts.synthesize(response_text, token=None, bypass_gate=True)
-                except Exception:
-                    logger.exception("Agent-mode screening response failed")
-            elif event.text:
-                await _tts.synthesize(event.text, token=None, bypass_gate=True)
-
-        event_bus.subscribe(ScreeningResponse, _on_screening_response)
+        _wire_outbound_pipeline(
+            session,
+            _outbound_sm,
+            telephony_helpers,
+            event_bus,
+            agent,
+        )
 
     return session
+
+
+class _OutboundPipelineWiring:
+    """Encapsulates mutable state for the outbound pipeline callbacks.
+
+    Replaces bare closures with ``nonlocal`` to avoid unsynchronized
+    access to ``_hold_audio_task`` from concurrent async callbacks.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+        self._lock = asyncio.Lock()
+        self._hold_audio_task: asyncio.Task[None] | None = None
+
+    async def flush_gated_audio(self, events: list[TTSAudio]) -> None:
+        async with self._lock:
+            if self._hold_audio_task is not None and not self._hold_audio_task.done():
+                self._hold_audio_task.cancel()
+                self._hold_audio_task = None
+        await self._session.replay_gated_audio(events)
+
+    def play_hold_audio(self, text: str) -> None:
+        async def _synthesize_hold() -> None:
+            await self._session.synthesize_bypass(text)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("No running event loop — hold audio skipped")
+            return
+
+        # The lock is async-only; since this is a sync callback we just
+        # do a best-effort swap — the flush side holds the lock and will
+        # cancel whatever task reference it sees.
+        self._hold_audio_task = loop.create_task(_synthesize_hold())
+
+
+def _wire_outbound_pipeline(
+    session: Session,
+    sm: OutboundCallStateMachine,
+    helpers: list[Any],
+    event_bus: EventBus,
+    agent: Any,
+) -> None:
+    """Connect the outbound call state machine to the session pipeline.
+
+    Wires the classification gate flush/hold callbacks and the screening
+    response handler so that TTS audio is buffered, replayed, and the bot
+    responds to screening prompts.
+    """
+    wiring = _OutboundPipelineWiring(session)
+
+    sm.set_gate_flush_callback(wiring.flush_gated_audio)
+    sm.gate.set_hold_audio_callback(wiring.play_hold_audio)
+
+    _screening_detector: CallScreeningDetector | None = None
+    for _h in helpers:
+        if isinstance(_h, CallScreeningDetector):
+            _screening_detector = _h
+            break
+
+    async def _on_screening_response(event: ScreeningResponse) -> None:
+        if event.mode == "agent" and _screening_detector is not None:
+            try:
+                prompt = _screening_detector.accumulated_text
+                response_text = await agent.run(
+                    f"The callee's phone is screening this call. "
+                    f'Their screening prompt says: "{prompt}". '
+                    f"Identify yourself briefly."
+                )
+                in_time = _screening_detector.notify_agent_responded()
+                fallback_spoken = not in_time and _screening_detector.screening_response
+                if response_text and not fallback_spoken:
+                    await session.synthesize_bypass(response_text)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Agent-mode screening response failed, using static fallback")
+                if _screening_detector.screening_response:
+                    await session.synthesize_bypass(_screening_detector.screening_response)
+        elif event.text:
+            await session.synthesize_bypass(event.text)
+
+    event_bus.subscribe(ScreeningResponse, _on_screening_response)
 
 
 def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
@@ -401,63 +438,81 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
         helpers.append(VoicemailDetector(event_bus, config.voicemail_detector))
 
     if config.enable_outbound_call_manager and config.outbound:
-        oc = config.outbound
+        _create_outbound_helpers(event_bus, config.outbound, helpers)
 
-        # STT+AMD fusion classifier — must be wired before the state machine
-        # so that raw AMD events are intercepted and re-emitted with source="fusion".
-        fusion = STTAMDFusionClassifier(event_bus)
-        helpers.append(fusion)
+    return helpers
 
-        # Post-screening voicemail detector — re-classifies after screening.
-        post_screening_vm = PostScreeningVoicemailDetector(event_bus)
-        helpers.append(post_screening_vm)
 
-        # Activate post-screening detector when screening is detected.
-        def _on_screening_for_post_vm(event: CallScreening) -> None:
-            post_screening_vm.activate()
+def _create_outbound_helpers(
+    event_bus: EventBus, oc: OutboundCallConfig, helpers: list[Any]
+) -> None:
+    """Build and wire the outbound call pipeline helpers."""
+    # STT+AMD fusion classifier — must be wired before the state machine
+    # so that raw AMD events are intercepted and re-emitted with source="fusion".
+    fusion = STTAMDFusionClassifier(event_bus)
+    helpers.append(fusion)
 
-        event_bus.subscribe(CallScreening, _on_screening_for_post_vm)
+    # Post-screening voicemail detector — re-classifies after screening.
+    post_screening_vm = PostScreeningVoicemailDetector(event_bus)
+    helpers.append(post_screening_vm)
 
-        # State machine — expect fused voicemail events (ignore raw AMD).
-        sm = OutboundCallStateMachine(
+    def _on_screening_for_post_vm(event: CallScreening) -> None:
+        post_screening_vm.activate()
+
+    event_bus.subscribe(CallScreening, _on_screening_for_post_vm)
+
+    # Build language-aware screening patterns once so both the state
+    # machine and the screening detector share the same set.
+    screening_langs = ["en"]
+    if oc.callee_language and oc.callee_language != "en":
+        screening_langs.append(oc.callee_language)
+    _screening_patterns = screening_patterns_for_languages(screening_langs)
+
+    # State machine — expect fused voicemail events (ignore raw AMD).
+    sm = OutboundCallStateMachine(
+        event_bus,
+        classification_timeout_s=float(oc.amd_timeout),
+        max_call_duration_s=oc.max_call_duration_s,
+        classification_gate=oc.classification_gate,
+        classification_gate_timeout_s=oc.classification_gate_timeout_s,
+        classification_gate_hold_audio=oc.classification_gate_hold_audio,
+        expect_fused_voicemail=True,
+        late_voicemail_window_s=oc.late_voicemail_window_s,
+        voicemail_pickup_window_s=oc.voicemail_pickup_window_s,
+        screening_patterns=_screening_patterns,
+    )
+    helpers.append(sm)
+
+    # Screening detector.
+    if oc.enable_screening_detection:
+        screening = CallScreeningDetector(
             event_bus,
-            classification_timeout_s=float(oc.amd_timeout),
-            max_call_duration_s=oc.max_call_duration_s,
-            classification_gate=oc.classification_gate,
-            classification_gate_timeout_s=oc.classification_gate_timeout_s,
-            classification_gate_hold_audio=oc.classification_gate_hold_audio,
-            expect_fused_voicemail=True,
-            late_voicemail_window_s=oc.late_voicemail_window_s,
-            voicemail_pickup_window_s=oc.voicemail_pickup_window_s,
+            enabled=True,
+            screening_response=oc.screening_response,
+            screening_use_agent=oc.screening_use_agent,
+            max_screening_turns=oc.max_screening_turns,
+            patterns=_screening_patterns,
+            track_filter=None,
         )
-        helpers.append(sm)
+        helpers.append(screening)
 
-        # Screening detector.
-        if oc.enable_screening_detection:
-            # Build language-aware patterns: always include English plus the
-            # callee's language (if different) so we detect screening prompts
-            # in the callee's locale.
-            screening_langs = ["en"]
-            if oc.callee_language and oc.callee_language != "en":
-                screening_langs.append(oc.callee_language)
-            screening = CallScreeningDetector(
-                event_bus,
-                enabled=True,
-                screening_response=oc.screening_response,
-                screening_use_agent=oc.screening_use_agent,
-                max_screening_turns=oc.max_screening_turns,
-                patterns=screening_patterns_for_languages(screening_langs),
-                track_filter=None,
-            )
-            helpers.append(screening)
-
-        # IVR navigator — activated/deactivated by state machine transitions.
+    # IVR navigator — only created when an agent callback is configured.
+    if oc.ivr_agent_callback is not None:
+        ivr_delivery = oc.ivr_dtmf_delivery
         ivr = IVRNavigator(
             event_bus,
             agent_callback=oc.ivr_agent_callback,
-            dtmf_delivery=oc.ivr_dtmf_delivery,
+            dtmf_delivery=ivr_delivery,
         )
         helpers.append(ivr)
+
+        # Propagate the live call SID so DTMFDelivery can send digits/speech.
+        if ivr_delivery is not None:
+
+            async def _on_call_initiated_for_ivr(event: CallInitiated) -> None:
+                ivr_delivery.call_sid = event.call_sid
+
+            event_bus.subscribe(CallInitiated, _on_call_initiated_for_ivr)
 
         def _on_state_changed_for_ivr(event: CallStateChanged) -> None:
             if event.new == OutboundCallState.IVR:
@@ -467,40 +522,44 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
 
         event_bus.subscribe(CallStateChanged, _on_state_changed_for_ivr)
 
-        # When IVR navigator detects a human pickup, transition the state machine.
-        async def _on_ivr_human_detected(event: IVRAction) -> None:
+        # React to IVR navigator actions: human pickup, speech, and hangup.
+        async def _on_ivr_action(event: IVRAction) -> None:
             if event.type == IVRActionType.HUMAN_DETECTED:
                 if sm.state == OutboundCallState.IVR:
                     await sm.transition(OutboundCallState.HUMAN)
+            elif event.type == IVRActionType.HANGUP:
+                if sm.state == OutboundCallState.IVR:
+                    await sm.transition(OutboundCallState.ENDED)
+            elif event.type == IVRActionType.SPEAK:
+                if ivr_delivery is not None:
+                    await ivr_delivery.send_speech(event.text)
 
-        event_bus.subscribe(IVRAction, _on_ivr_human_detected)
+        event_bus.subscribe(IVRAction, _on_ivr_action)
 
-        # Voicemail policy handler.
-        helpers.append(VoicemailPolicyHandler(event_bus, expect_fused=True))
+    # Voicemail policy handler.
+    helpers.append(VoicemailPolicyHandler(event_bus, expect_fused=True))
 
-        # Outbound call manager (requires Twilio credentials).
-        if oc.twilio_account_sid and oc.twilio_auth_token:
-            try:
-                manager = OutboundCallManager(
-                    event_bus,
-                    from_number=oc.from_number,
-                    amd_mode=oc.amd_mode,
-                    async_amd=oc.async_amd,
-                    amd_timeout=oc.amd_timeout,
-                    speech_threshold=oc.speech_threshold,
-                    speech_end_threshold=oc.speech_end_threshold,
-                    silence_timeout=oc.silence_timeout,
-                    enable_realtime_transcription=oc.enable_realtime_transcription,
-                    twilio_account_sid=oc.twilio_account_sid,
-                    twilio_auth_token=oc.twilio_auth_token,
-                    twiml_url=oc.twiml_url,
-                    status_callback_url=oc.status_callback_url,
-                )
-                helpers.append(manager)
-            except ImportError:
-                logger.warning("twilio package not installed — OutboundCallManager disabled")
-
-    return helpers
+    # Outbound call manager (requires Twilio credentials).
+    if oc.twilio_account_sid and oc.twilio_auth_token:
+        try:
+            manager = OutboundCallManager(
+                event_bus,
+                from_number=oc.from_number,
+                amd_mode=oc.amd_mode,
+                async_amd=oc.async_amd,
+                amd_timeout=oc.amd_timeout,
+                speech_threshold=oc.speech_threshold,
+                speech_end_threshold=oc.speech_end_threshold,
+                silence_timeout=oc.silence_timeout,
+                enable_realtime_transcription=oc.enable_realtime_transcription,
+                twilio_account_sid=oc.twilio_account_sid,
+                twilio_auth_token=oc.twilio_auth_token,
+                twiml_url=oc.twiml_url,
+                status_callback_url=oc.status_callback_url,
+            )
+            helpers.append(manager)
+        except ImportError:
+            logger.warning("twilio package not installed — OutboundCallManager disabled")
 
 
 def _create_metrics(config: MetricsConfig | None) -> MetricsCollector | None:

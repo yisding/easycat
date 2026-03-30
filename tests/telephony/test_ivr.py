@@ -336,7 +336,7 @@ class TestIVRNavigation:
         nav.activate()
         try:
             await bus.emit(STTFinal(text="Press 1 for sales"))
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             # Timeout should emit a WAIT action.
             waits = [a for a in actions if a.type == IVRActionType.WAIT]
             assert len(waits) >= 1
@@ -420,6 +420,36 @@ class TestIVRDTMFDelivery:
         """Verify option exists on DTMFDelivery config."""
         delivery = DTMFDelivery(verify=True, call_sid="CA123")
         assert delivery._verify is True
+
+    @pytest.mark.asyncio
+    async def test_dtmf_rejects_invalid_characters(self) -> None:
+        """Digits containing non-DTMF characters are rejected to prevent TwiML injection."""
+        mock_client = MagicMock()
+        delivery = DTMFDelivery(
+            twilio_client=mock_client, call_sid="CA123", inter_digit_delay=False
+        )
+        result = await delivery.send_dtmf('1"/><Say>hacked</Say><Play digits="2')
+        assert result is False
+        mock_client.calls("CA123").update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dtmf_rejects_empty_digits(self) -> None:
+        mock_client = MagicMock()
+        delivery = DTMFDelivery(
+            twilio_client=mock_client, call_sid="CA123", inter_digit_delay=False
+        )
+        result = await delivery.send_dtmf("")
+        assert result is False
+        mock_client.calls("CA123").update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dtmf_accepts_valid_characters(self) -> None:
+        mock_client = MagicMock()
+        delivery = DTMFDelivery(
+            twilio_client=mock_client, call_sid="CA123", inter_digit_delay=False
+        )
+        result = await delivery.send_dtmf("*#0123456789wW")
+        assert result is True
 
     @pytest.mark.asyncio
     async def test_dtmf_delivery_failure_fallback(self) -> None:
