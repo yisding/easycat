@@ -33,6 +33,8 @@ class _MockWSConnection:
 
     async def send(self, data: str | bytes) -> None:
         self.sent.append(data)
+        # Yield to the event loop so the concurrent receive task can run.
+        await asyncio.sleep(0)
 
     async def recv(self) -> str:
         if not self._messages:
@@ -52,6 +54,9 @@ class _MockWSConnection:
     async def _aiter(self) -> AsyncIterator[str]:
         while self._messages:
             yield self._messages.pop(0)
+        # Block until close, like a real long-lived WebSocket connection.
+        while not self._closed:
+            await asyncio.sleep(0.01)
 
 
 class _MockWSFactory:
