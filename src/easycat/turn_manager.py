@@ -380,7 +380,7 @@ class TurnManager:
 
     async def bot_started_speaking(self) -> None:
         """Called when TTS playback begins."""
-        if self._state in (TurnManagerState.USER_SPEAKING, TurnManagerState.USER_PAUSED):
+        if self._state == TurnManagerState.USER_SPEAKING:
             logger.warning(
                 "bot_started_speaking called in unexpected state %s, ignoring",
                 self._state.value,
