@@ -297,6 +297,38 @@ async def test_session_start_idempotent():
 
 
 @pytest.mark.asyncio
+async def test_session_start_rolls_back_after_connect_failure():
+    class FlakyTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connect_calls = 0
+
+        async def connect(self) -> None:
+            self.connect_calls += 1
+            if self.connect_calls == 1:
+                raise RuntimeError("boom")
+            await super().connect()
+
+    transport = FlakyTransport()
+    session = Session(_full_config(transport=transport))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await session.start()
+
+    assert not session.is_running
+    assert session._pipeline_task is None
+    assert session._outbound_task is None
+
+    await session.start()
+
+    assert session.is_running
+    assert transport.connect_calls == 2
+    assert transport.connected
+
+    await session.stop()
+
+
+@pytest.mark.asyncio
 async def test_session_stop_idempotent():
     session = Session(_full_config())
     await session.stop()
