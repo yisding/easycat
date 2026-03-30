@@ -51,6 +51,7 @@ class TTSSynthesizer:
         metrics: MetricsCollector | None = None,
         timeout_config: TimeoutConfig | None = None,
         correlation_ids: Callable[[], tuple[str | None, str | None]] | None = None,
+        audio_gate: Callable[[], bool] | None = None,
     ) -> None:
         self._tts = tts
         self._event_bus = event_bus
@@ -58,6 +59,7 @@ class TTSSynthesizer:
         self._spans = spans
         self._metrics = metrics
         self._timeout_config = timeout_config
+        self._audio_gate = audio_gate
         self._correlation_ids = correlation_ids
 
     async def synthesize(
@@ -68,6 +70,7 @@ class TTSSynthesizer:
         turn_end_time: float | None = None,
         is_active: Callable[[], bool] | None = None,
         record_latency: bool = True,
+        bypass_gate: bool = False,
     ) -> TTSSynthResult:
         """Synthesize text and stream audio to the outbound queue.
 
@@ -94,6 +97,11 @@ class TTSSynthesizer:
         """
         result = TTSSynthResult()
         tts_start = time.monotonic()
+        # Snapshot the gate state at the start of synthesis.  If the gate is
+        # closed when we begin, ALL chunks for this call must be buffered —
+        # even if the gate opens mid-stream — so playback goes through the
+        # replay path and doesn't interleave with the replayed prefix.
+        gated_at_start = not bypass_gate and bool(self._audio_gate and self._audio_gate())
         tts_span = self._spans.start(Tracer.TTS)
         tts_status = SpanStatus.OK
 
@@ -121,7 +129,12 @@ class TTSSynthesizer:
                         self._correlation_ids() if self._correlation_ids else (None, None)
                     )
                     await self._event_bus.emit(
-                        TTSAudio(chunk=tts_event.audio, session_id=session_id, turn_id=turn_id)
+                        TTSAudio(
+                            chunk=tts_event.audio,
+                            session_id=session_id,
+                            turn_id=turn_id,
+                            bypass_gate=bypass_gate,
+                        )
                     )
                     if not result.audio_produced:
                         result.audio_produced = True
@@ -136,7 +149,10 @@ class TTSSynthesizer:
                                     TURN_E2E,
                                     (result.first_audio_time - turn_end_time) * 1000,
                                 )
-                    await self._outbound_queue.put(tts_event.audio)
+                    if not gated_at_start and (
+                        bypass_gate or not (self._audio_gate and self._audio_gate())
+                    ):
+                        await self._outbound_queue.put(tts_event.audio)
 
                 elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
                     session_id, turn_id = (

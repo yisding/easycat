@@ -13,7 +13,7 @@ import logging
 import re
 import time
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import uuid4
@@ -165,6 +165,7 @@ class SessionConfig:
     tracer: Tracer | None = None
     outbound_queue: BoundedAudioQueue | None = None
     telephony_helpers: Sequence[SessionHelper] = ()
+    audio_gate: Callable[[], bool] | None = None
 
     # Pipeline flags
     enable_noise_reduction: bool = True
@@ -757,7 +758,9 @@ class Session:
             metrics=self._metrics,
             timeout_config=self._timeout_config,
             correlation_ids=lambda: (self.session_id, self._current_turn_id),
+            audio_gate=cfg.audio_gate,
         )
+        self._audio_gate = cfg.audio_gate
         self._health_checkers: list[PeriodicHealthChecker] = []
         self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)
 
@@ -830,6 +833,11 @@ class Session:
         self._current_turn_id = None
         self._auto_turn_speech_frames = 0
         self._turn_manager.reset()
+
+    @property
+    def _is_gated(self) -> bool:
+        """Whether the classification gate is currently buffering TTS audio."""
+        return self._audio_gate is not None and self._audio_gate()
 
     # ── Properties ─────────────────────────────────────────────
 
@@ -916,6 +924,31 @@ class Session:
     @property
     def cancel_token(self) -> CancelToken | None:
         return self._cancel_token
+
+    async def replay_gated_audio(self, events: list[Any]) -> None:
+        """Replay buffered TTS audio chunks through the outbound queue.
+
+        Transitions through BOT_SPEAKING so that caller speech during
+        replay is treated as barge-in and the corresponding events fire.
+        Called by the classification gate flush callback.
+        """
+        from easycat.events import TTSAudio
+
+        self._outbound_queue.flush()
+        chunks = [ev.chunk for ev in events if isinstance(ev, TTSAudio)]
+        if chunks:
+            await self._turn_manager.bot_started_speaking()
+            for chunk in chunks:
+                await self._outbound_queue.put(chunk)
+            await self._turn_manager.bot_stopped_speaking()
+
+    async def synthesize_bypass(self, text: str) -> None:
+        """Synthesize text via TTS, bypassing the classification gate.
+
+        Used for hold audio and screening responses that must reach the
+        transport even while the gate is closed.
+        """
+        await self._tts_synth.synthesize(text, token=None, bypass_gate=True)
 
     # ── Lifecycle ──────────────────────────────────────────────
 
@@ -1186,10 +1219,10 @@ class Session:
                     if self._cancel_token and self._cancel_token.is_cancelled:
                         break
                     if stt_event.type == STTEventType.PARTIAL:
-                        await self._emit(STTPartial(text=stt_event.text))
+                        await self._emit(STTPartial(text=stt_event.text, track=stt_event.track))
                     elif stt_event.type == STTEventType.FINAL:
                         saw_final = True
-                        await self._emit(STTFinal(text=stt_event.text))
+                        await self._emit(STTFinal(text=stt_event.text, track=stt_event.track))
                         self._stt_final_time = time.monotonic()
                         if self._metrics and self._turn_end_time is not None:
                             self._metrics.record_latency(
@@ -1586,16 +1619,27 @@ class Session:
                         break
 
                     if not started:
-                        await self._turn_manager.bot_started_speaking()
+                        # When the classification gate is closed, audio is
+                        # buffered.  Don't enter BOT_SPEAKING so callee
+                        # speech during CLASSIFYING isn't treated as barge-in.
+                        gated = self._is_gated
+                        if not gated:
+                            await self._turn_manager.bot_started_speaking()
+                            tts_playback_started = True
                         started = True
-                        tts_playback_started = True
 
                     result = await self._tts_synth.synthesize(
                         payload,
                         token,
                         turn_end_time=self._turn_end_time,
-                        is_active=lambda: (
-                            self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                        # When gated the turn manager stays in PROCESSING
+                        # (we skipped bot_started_speaking), so the
+                        # BOT_SPEAKING check would exit immediately.  Pass
+                        # None so the synth loop buffers all audio.
+                        is_active=(
+                            None
+                            if self._is_gated
+                            else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
                         ),
                         record_latency=self._first_tts_audio_time is None,
                     )
@@ -1626,6 +1670,10 @@ class Session:
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 await self._turn_manager.bot_stopped_speaking()
                 self._spans.finish("turn")
+            elif started and not tts_playback_started:
+                # Gated: TTS was buffered, reset to IDLE so callee speech
+                # can start new turns while waiting for classification.
+                self._reset_turn_state()
 
         # Run agent consumption and TTS synthesis concurrently
         agent_task = asyncio.create_task(_consume_agent())
@@ -1734,13 +1782,23 @@ class Session:
         if isinstance(payload, str):
             payload = self._prepare_tts_payload(payload, is_streaming=False, is_final=True)
         turn_id = self._current_turn_id
-        await self._turn_manager.bot_started_speaking()
+        # When the classification gate is closed, audio is buffered (not sent
+        # to the transport).  Don't transition the turn manager through
+        # BOT_SPEAKING so that the replayed audio triggers the correct state
+        # transitions later via the gate-flush callback.
+        gated = self._is_gated
+        if not gated:
+            await self._turn_manager.bot_started_speaking()
         try:
             result = await self._tts_synth.synthesize(
                 payload,
                 token,
                 turn_end_time=self._turn_end_time,
-                is_active=lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING,
+                is_active=(
+                    None
+                    if gated
+                    else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                ),
             )
             if result.first_audio_time is not None:
                 self._first_tts_audio_time = result.first_audio_time
@@ -1749,11 +1807,18 @@ class Session:
         finally:
             try:
                 if (
-                    self._current_turn_id == turn_id
+                    not gated
+                    and self._current_turn_id == turn_id
                     and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
                 ):
                     await self._turn_manager.bot_stopped_speaking()
                     self._spans.finish("turn")
+                elif gated and self._current_turn_id == turn_id:
+                    # Gated opener TTS is buffered — reset to IDLE so the
+                    # callee's speech can start new turns while we wait for
+                    # classification.  The gate-flush callback replays the
+                    # buffered audio later.
+                    self._reset_turn_state()
             finally:
                 if self._current_turn_id == turn_id:
                     self._current_turn_id = None

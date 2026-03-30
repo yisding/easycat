@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from easycat.audio_format import AudioChunk
 
@@ -60,6 +60,7 @@ class STTPartial:
     text: str
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
+    track: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -70,6 +71,7 @@ class STTFinal:
     text: str
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
+    track: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -108,6 +110,7 @@ class TTSAudio:
     chunk: AudioChunk
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
+    bypass_gate: bool = field(default=False, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -268,7 +271,89 @@ class DTMFAggregated:
 class VoicemailDetected:
     """Voicemail / answering machine detection result."""
 
-    result: str  # "human" | "machine" | "unknown"
+    result: Literal["human", "machine", "unknown"]
+    source: Literal["", "fusion", "detector"] = ""
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+# Outbound call lifecycle
+@dataclass(frozen=True)
+class CallInitiated:
+    """Bot placed an outbound call."""
+
+    call_sid: str
+    to: str
+    from_: str
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class CallRinging:
+    """Remote phone is ringing."""
+
+    call_sid: str
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class CallAnswered:
+    """Call was answered (by human, machine, or screener)."""
+
+    call_sid: str
+    answered_by: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class CallScreening:
+    """Call screening detected."""
+
+    call_sid: str
+    platform: Literal["ios", "android", "carrier", "third_party", "unknown"]
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class ScreeningTimedOut:
+    """Screening exhausted max turns without resolution."""
+
+    call_sid: str = ""
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class CallFailed:
+    """Call failed (busy, no answer, rejected, error)."""
+
+    call_sid: str
+    reason: str
+    sip_code: int | None = None
+    number: str | None = None
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True)
+class CallEnded:
+    """Call terminated."""
+
+    call_sid: str
+    duration_s: float | None = None
+    disposition: str | None = None
+    number: str | None = None
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
@@ -312,6 +397,13 @@ Event = (
     | DTMF
     | DTMFAggregated
     | VoicemailDetected
+    | CallInitiated
+    | CallRinging
+    | CallAnswered
+    | CallScreening
+    | ScreeningTimedOut
+    | CallFailed
+    | CallEnded
     | Error
 )
 
@@ -333,7 +425,18 @@ LIFECYCLE_EVENTS: tuple[type, ...] = (
 )
 INTERRUPTION_EVENTS: tuple[type, ...] = (Interruption, PlaybackMarkAck)
 RECONNECT_EVENTS: tuple[type, ...] = (ReconnectAttempt, ReconnectSuccess, ReconnectFailure)
-TELEPHONY_EVENTS: tuple[type, ...] = (DTMF, DTMFAggregated, VoicemailDetected)
+TELEPHONY_EVENTS: tuple[type, ...] = (
+    DTMF,
+    DTMFAggregated,
+    VoicemailDetected,
+    CallInitiated,
+    CallRinging,
+    CallAnswered,
+    CallScreening,
+    ScreeningTimedOut,
+    CallFailed,
+    CallEnded,
+)
 ERROR_EVENTS: tuple[type, ...] = (Error,)
 
 ALL_EVENTS: tuple[type, ...] = (
@@ -378,6 +481,7 @@ class STTEvent:
     confidence: float | None = None
     language: str | None = None
     word_timestamps: list[WordTimestamp] | None = None
+    track: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 
