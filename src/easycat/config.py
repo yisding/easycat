@@ -356,7 +356,12 @@ class _OutboundPipelineWiring:
 
     def play_hold_audio(self, text: str) -> None:
         async def _synthesize_hold() -> None:
-            await self._session.synthesize_bypass(text)
+            try:
+                await self._session.synthesize_bypass(text)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Hold audio synthesis failed")
 
         try:
             loop = asyncio.get_running_loop()
