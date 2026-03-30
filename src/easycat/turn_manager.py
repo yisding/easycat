@@ -196,6 +196,12 @@ class TurnManager:
             await self._handle_barge_in()
             return
 
+        if self._state == TurnManagerState.PROCESSING:
+            # User spoke again while agent is processing — treat as barge-in
+            # to cancel the stale response and start a fresh turn.
+            await self._handle_barge_in()
+            return
+
         if self._state == TurnManagerState.USER_PAUSED:
             # Speech resumed before timeout — cancel silence timer
             self._cancel_silence_timer()
