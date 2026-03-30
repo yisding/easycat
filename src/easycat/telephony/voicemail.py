@@ -1,21 +1,22 @@
-"""Voicemail / answering machine detection for EasyCat telephony.
-
-Task 6.5: Twilio AMD result consumer (HTTP callback handler).
-Task 6.6: Heuristic voicemail detection (long monologues + beep detection).
-Task 6.7: Voicemail policy handler (hang up, leave message, transfer).
-"""
+"""Voicemail / answering machine detection for EasyCat telephony."""
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import logging
 import math
 import struct
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from easycat.events import (
+    CallAnswered,
+    CallInitiated,
+    CallScreening,
     EventBus,
+    STTFinal,
     VADStartSpeaking,
     VADStopSpeaking,
     VoicemailDetected,
@@ -24,10 +25,31 @@ from easycat.events import (
 logger = logging.getLogger(__name__)
 
 
-# ── Task 6.5: Twilio AMD result consumer ─────────────────────────
+# ── Shared audio analysis helpers ────────────────────────────────
+
+
+def _unpack_pcm16(data: bytes) -> tuple[int, ...]:
+    """Decode raw PCM16 (signed 16-bit LE) bytes into a tuple of samples."""
+    n = len(data) // 2
+    return struct.unpack(f"<{n}h", data[: n * 2])
+
+
+def _pcm16_rms(samples: Sequence[int]) -> float:
+    """Compute RMS energy from raw PCM16 samples, normalized to [0, 1]."""
+    return math.sqrt(sum(s * s for s in samples) / len(samples)) / 32768.0
+
+
+def _zero_crossing_freq(samples: Sequence[int], sample_rate: int) -> float:
+    """Estimate dominant frequency via zero-crossing rate."""
+    n = len(samples)
+    if n < 2:
+        return 0.0
+    crossings = sum(1 for i in range(1, n) if (samples[i] >= 0) != (samples[i - 1] >= 0))
+    return crossings * sample_rate / (2 * n)
+
 
 # Twilio AnsweredBy values -> EasyCat result mapping
-_TWILIO_AMD_MAP: dict[str, str] = {
+TWILIO_AMD_MAP: dict[str, str] = {
     "human": "human",
     "machine_start": "machine",
     "machine_end_beep": "machine",
@@ -55,7 +77,7 @@ def parse_twilio_amd_webhook(params: dict[str, Any]) -> VoicemailDetected | None
     if not isinstance(answered_by, str) or not answered_by:
         return None
 
-    result = _TWILIO_AMD_MAP.get(answered_by.lower(), "unknown")
+    result = TWILIO_AMD_MAP.get(answered_by.lower(), "unknown")
     return VoicemailDetected(result=result)
 
 
@@ -72,9 +94,6 @@ async def emit_twilio_amd(
     if event is not None:
         await event_bus.emit(event)
     return event
-
-
-# ── Task 6.6: Heuristic voicemail detection ──────────────────────
 
 
 @dataclass
@@ -174,7 +193,7 @@ class VoicemailDetector:
 
         if duration >= self._config.monologue_threshold_s:
             self._has_emitted = True
-            await self._event_bus.emit(VoicemailDetected(result="machine"))
+            await self._event_bus.emit(VoicemailDetected(result="machine", source="detector"))
 
     async def process_audio(self, pcm16_data: bytes, sample_rate: int | None = None) -> bool:
         """Analyze a PCM16 audio chunk for beep detection.
@@ -192,30 +211,18 @@ class VoicemailDetector:
         sr = sample_rate or self._config.beep.sample_rate
         cfg = self._config.beep
 
-        # Decode PCM16 samples
-        num_samples = len(pcm16_data) // 2
-        if num_samples == 0:
+        samples = _unpack_pcm16(pcm16_data)
+        if not samples:
             return False
-        samples = struct.unpack(f"<{num_samples}h", pcm16_data[: num_samples * 2])
 
-        # Compute RMS energy (normalized to [-1, 1])
-        float_samples = [s / 32768.0 for s in samples]
-        rms = math.sqrt(sum(s * s for s in float_samples) / len(float_samples))
-
-        chunk_duration_s = num_samples / sr
+        rms = _pcm16_rms(samples)
+        chunk_duration_s = len(samples) / sr
 
         if rms < cfg.energy_threshold:
-            # Silence or very low energy — reset tone tracking
             self._tone_duration_s = 0.0
             return False
 
-        # Zero-crossing rate for simple frequency estimation
-        zero_crossings = sum(
-            1
-            for i in range(1, len(float_samples))
-            if (float_samples[i] >= 0) != (float_samples[i - 1] >= 0)
-        )
-        estimated_freq = zero_crossings / (2.0 * chunk_duration_s) if chunk_duration_s > 0 else 0
+        estimated_freq = _zero_crossing_freq(samples, sr)
 
         in_freq_range = cfg.min_frequency_hz <= estimated_freq <= cfg.max_frequency_hz
 
@@ -224,15 +231,12 @@ class VoicemailDetector:
             if self._tone_duration_s * 1000 >= cfg.min_duration_ms:
                 self._beep_detected = True
                 self._has_emitted = True
-                await self._event_bus.emit(VoicemailDetected(result="machine"))
+                await self._event_bus.emit(VoicemailDetected(result="machine", source="detector"))
                 return True
         else:
             self._tone_duration_s = 0.0
 
         return False
-
-
-# ── Task 6.7: Voicemail policy handler ───────────────────────────
 
 
 class VoicemailPolicy(enum.Enum):
@@ -278,9 +282,12 @@ class VoicemailPolicyHandler:
         self,
         event_bus: EventBus,
         config: VoicemailPolicyConfig | None = None,
+        *,
+        expect_fused: bool = False,
     ) -> None:
         self._event_bus = event_bus
         self._config = config or VoicemailPolicyConfig()
+        self._expect_fused = expect_fused
         self._started = False
         self._action_taken = False
         self._last_action: dict[str, Any] | None = None
@@ -293,20 +300,31 @@ class VoicemailPolicyHandler:
     def start(self) -> None:
         """Subscribe to VoicemailDetected events."""
         if not self._started:
+            self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
             self._event_bus.subscribe(VoicemailDetected, self._on_voicemail_detected)
             self._started = True
 
     def stop(self) -> None:
         """Unsubscribe and reset state."""
         if self._started:
+            self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
             self._event_bus.unsubscribe(VoicemailDetected, self._on_voicemail_detected)
             self._started = False
+        self._action_taken = False
+        self._last_action = None
+
+    async def _on_call_initiated(self, event: CallInitiated) -> None:
+        """Reset policy state for a new outbound call."""
         self._action_taken = False
         self._last_action = None
 
     async def _on_voicemail_detected(self, event: VoicemailDetected) -> None:
         """Apply policy based on detection result."""
         if self._action_taken:
+            return
+
+        # When fusion is active, ignore raw AMD events.
+        if self._expect_fused and not event.source:
             return
 
         # Only act on machine detections
@@ -358,3 +376,432 @@ class VoicemailPolicyHandler:
             "twiml": twiml,
         }
         logger.info("Voicemail policy: transferring to %s", self._config.transfer_number)
+
+
+# ── STT-based greeting classification ──────────────────────────────
+
+_VOICEMAIL_PHRASES: list[str] = [
+    "leave a message",
+    "leave me a message",
+    "not available right now",
+    "not available to take your call",
+    "can't come to the phone",
+    "cannot come to the phone",
+    "you've reached",
+    "you have reached",
+    "voicemail box",
+    "mailbox is full",
+    "cannot accept messages",
+    "at the tone",
+    "after the beep",
+    "after the tone",
+    "record your message",
+    "the person you are trying to reach",
+    "the google subscriber",
+    "subscriber you are trying to reach",
+    "please try again later",
+    "press 1 to leave a callback",
+    "if you know your party's extension",
+]
+
+_HUMAN_PHRASES: list[str] = [
+    "hello?",
+    "what's up",
+    "who is this",
+    "how can i help",
+    "speaking",
+    "yes?",
+    "yeah?",
+]
+
+
+def classify_greeting(text: str) -> Literal["human", "machine", "unknown"]:
+    """Classify a greeting transcript as ``"human"``, ``"machine"``, or ``"unknown"``.
+
+    Uses phrase-matching heuristics on the transcribed greeting text.
+    """
+    if not text or not text.strip():
+        return "unknown"
+
+    lower = text.lower().strip()
+
+    # Very short ambiguous greetings.
+    if len(lower) <= 3:
+        return "unknown"
+
+    for phrase in _VOICEMAIL_PHRASES:
+        if phrase in lower:
+            return "machine"
+
+    # "Hello?" with a question mark or short conversational openers.
+    for phrase in _HUMAN_PHRASES:
+        if phrase in lower:
+            return "human"
+
+    # Double-hello pattern: "Hello? ... Hello?" is human, not machine.
+    if lower.count("hello") >= 2 and len(lower) < 40:
+        return "human"
+
+    return "unknown"
+
+
+# ── SIT tone detection ─────────────────────────────────────────────
+
+# Special Information Tones (SIT) are three tones in sequence:
+# 950 Hz, 1400 Hz, 1800 Hz — used to signal "number not in service".
+# YouMail plays these to trick autodialers.
+
+_SIT_FREQUENCIES: list[tuple[float, float]] = [
+    (900.0, 1000.0),  # ~950 Hz
+    (1350.0, 1450.0),  # ~1400 Hz
+    (1750.0, 1850.0),  # ~1800 Hz
+]
+
+
+def detect_sit_tones(
+    pcm16_data: bytes,
+    sample_rate: int = 16000,
+    *,
+    energy_threshold: float = 0.02,
+    min_tone_duration_ms: int = 200,
+) -> bool:
+    """Detect SIT (Special Information Tones) in PCM16 audio.
+
+    Returns True if the three-tone SIT sequence (950→1400→1800 Hz) is detected.
+    """
+    if len(pcm16_data) < 4:
+        return False
+
+    samples = _unpack_pcm16(pcm16_data)
+
+    # Divide audio into 50ms windows and analyze each.
+    window_size = sample_rate // 20  # 50ms
+    if window_size < 2:
+        return False
+
+    detected_tones: list[int] = []  # indices of SIT frequency bands detected in order
+    window_ms = 50
+    min_windows = max(1, min_tone_duration_ms // window_ms)
+    current_tone_idx: int | None = None
+    current_tone_windows = 0
+
+    for start in range(0, len(samples) - window_size, window_size):
+        window = samples[start : start + window_size]
+
+        rms = _pcm16_rms(window)
+        if rms < energy_threshold:
+            if current_tone_idx is not None and current_tone_windows >= min_windows:
+                if not detected_tones or detected_tones[-1] < current_tone_idx:
+                    detected_tones.append(current_tone_idx)
+            current_tone_idx = None
+            current_tone_windows = 0
+            continue
+
+        freq_estimate = _zero_crossing_freq(window, sample_rate)
+
+        # Check against each SIT frequency band.
+        matched_idx: int | None = None
+        for idx, (lo, hi) in enumerate(_SIT_FREQUENCIES):
+            if lo <= freq_estimate <= hi:
+                matched_idx = idx
+                break
+
+        if matched_idx is not None and matched_idx == current_tone_idx:
+            current_tone_windows += 1
+        elif matched_idx is not None:
+            # New tone — commit the previous one if it met the duration threshold.
+            if current_tone_idx is not None and current_tone_windows >= min_windows:
+                if not detected_tones or detected_tones[-1] < current_tone_idx:
+                    detected_tones.append(current_tone_idx)
+            current_tone_idx = matched_idx
+            current_tone_windows = 1
+        else:
+            if current_tone_idx is not None and current_tone_windows >= min_windows:
+                if not detected_tones or detected_tones[-1] < current_tone_idx:
+                    detected_tones.append(current_tone_idx)
+            current_tone_idx = None
+            current_tone_windows = 0
+
+    # Commit the last tone if it met the duration threshold.
+    if current_tone_idx is not None and current_tone_windows >= min_windows:
+        if not detected_tones or detected_tones[-1] < current_tone_idx:
+            detected_tones.append(current_tone_idx)
+
+    # All three tones detected in sequence?
+    return detected_tones == [0, 1, 2]
+
+
+# ── Enhanced voicemail: CNG (Comfort Noise) detection ──────────────
+
+
+def is_comfort_noise(
+    pcm16_data: bytes,
+    sample_rate: int = 16000,
+    *,
+    max_rms: float = 0.005,
+) -> bool:
+    """Detect comfort noise generation in PCM16 audio.
+
+    CNG has very low amplitude and flat spectral characteristics.
+    Returns True if the audio is likely CNG (should be treated as silence).
+    """
+    if len(pcm16_data) < 4:
+        return False
+
+    samples = _unpack_pcm16(pcm16_data)
+    if not samples:
+        return False
+
+    return _pcm16_rms(samples) < max_rms
+
+
+# ── Post-screening voicemail detection ────────────────────────────
+
+
+class PostScreeningVoicemailDetector:
+    """Detects voicemail after call screening completes.
+
+    When screening is detected, the initial voicemail/AMD classification
+    may have already fired for the screening prompt. This detector watches
+    for a subsequent greeting after screening and applies the greeting
+    classifier to determine whether it went to voicemail or a human picked up.
+
+    Subscribes to ``STTFinal`` events. After activation (by screening),
+    classifies the next greeting-length utterance. Falls back to ``"unknown"``
+    if no decisive classification is made within ``timeout_s``.
+    """
+
+    def __init__(self, event_bus: EventBus, *, timeout_s: float = 15.0) -> None:
+        self._event_bus = event_bus
+        self._timeout_s = timeout_s
+        self._active = False
+        self._started = False
+        self._classified = False
+        self._timeout_task: asyncio.Task[None] | None = None
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._event_bus.subscribe(STTFinal, self._on_stt_final)
+        self._started = True
+
+    def stop(self) -> None:
+        if self._started:
+            self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
+        self._cancel_timeout()
+        self._started = False
+        self._active = False
+        self._classified = False
+
+    def _cancel_timeout(self) -> None:
+        if self._timeout_task and not self._timeout_task.done():
+            self._timeout_task.cancel()
+        self._timeout_task = None
+
+    def activate(self) -> None:
+        """Start watching for post-screening greeting."""
+        self._active = True
+        self._classified = False
+        self._start_timeout()
+
+    def _start_timeout(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._timeout_task = loop.create_task(self._timeout_coro())
+
+    async def _timeout_coro(self) -> None:
+        """Fall back to 'unknown' if no decisive classification within timeout."""
+        try:
+            await asyncio.sleep(self._timeout_s)
+            if self._active and not self._classified:
+                self._classified = True
+                self._active = False
+                logger.info("PostScreeningVoicemailDetector timed out — emitting unknown")
+                await self._event_bus.emit(VoicemailDetected(result="unknown", source="fusion"))
+        except asyncio.CancelledError:
+            pass
+
+    async def _on_stt_final(self, event: STTFinal) -> None:
+        if not self._active or self._classified:
+            return
+
+        text = event.text.strip()
+        if not text:
+            return
+
+        result = classify_greeting(text)
+        if result == "unknown":
+            return  # Not enough signal yet.
+
+        self._classified = True
+        self._active = False
+        self._cancel_timeout()
+        # Emit with source="fusion" so downstream consumers that filter on
+        # expect_fused (e.g. OutboundCallStateMachine, VoicemailPolicyHandler)
+        # accept the event without waiting for the AMD fallback timer.
+        await self._event_bus.emit(VoicemailDetected(result=result, source="fusion"))
+
+
+# ── STT + AMD fusion classifier ──────────────────────────────────
+
+
+class STTAMDFusionClassifier:
+    """Fuses AMD webhook results with STT-based greeting classification.
+
+    When AMD arrives first, it takes effect. If STT classification arrives
+    first, it takes effect. When both arrive, the configured priority wins.
+
+    Emits a single ``VoicemailDetected`` based on the fused result.
+    """
+
+    def __init__(
+        self,
+        event_bus: EventBus,
+        *,
+        prefer_stt: bool = True,
+        stt_timeout_s: float = 5.0,
+    ) -> None:
+        self._event_bus = event_bus
+        self._prefer_stt = prefer_stt
+        self._stt_timeout_s = stt_timeout_s
+
+        self._amd_result: str | None = None
+        self._stt_result: str | None = None
+        self._emitted = False
+        self._started = False
+        self._call_answered = False
+        self._screening_active = False
+        self._timeout_task: asyncio.Task[None] | None = None
+
+    @property
+    def amd_result(self) -> str | None:
+        return self._amd_result
+
+    @property
+    def stt_result(self) -> str | None:
+        return self._stt_result
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
+        self._event_bus.subscribe(CallAnswered, self._on_call_answered)
+        self._event_bus.subscribe(VoicemailDetected, self._on_voicemail_detected)
+        self._event_bus.subscribe(STTFinal, self._on_stt_final)
+        self._event_bus.subscribe(CallScreening, self._on_screening)
+        self._started = True
+
+    def stop(self) -> None:
+        if self._started:
+            self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
+            self._event_bus.unsubscribe(CallAnswered, self._on_call_answered)
+            self._event_bus.unsubscribe(VoicemailDetected, self._on_voicemail_detected)
+            self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
+            self._event_bus.unsubscribe(CallScreening, self._on_screening)
+        self._cancel_timeout()
+        self._started = False
+        self._amd_result = None
+        self._stt_result = None
+        self._emitted = False
+        self._call_answered = False
+        self._screening_active = False
+
+    async def _on_call_initiated(self, event: CallInitiated) -> None:
+        """Reset classification state for a new outbound call."""
+        self._cancel_timeout()
+        self._amd_result = None
+        self._stt_result = None
+        self._emitted = False
+        self._call_answered = False
+        self._screening_active = False
+
+    def _cancel_timeout(self) -> None:
+        if self._timeout_task and not self._timeout_task.done():
+            self._timeout_task.cancel()
+        self._timeout_task = None
+
+    async def _on_call_answered(self, event: CallAnswered) -> None:
+        self._call_answered = True
+
+    async def _on_screening(self, event: CallScreening) -> None:
+        """Cancel AMD-only fallback and stop STT classification when screening is detected."""
+        self._cancel_timeout()
+        self._screening_active = True
+
+    async def _on_voicemail_detected(self, event: VoicemailDetected) -> None:
+        """Receive AMD result (upstream VoicemailDetected)."""
+        if self._emitted:
+            return
+        if event.source == "fusion":
+            return  # Ignore our own emissions.
+        self._amd_result = event.result
+        await self._try_fuse()
+
+    async def _on_stt_final(self, event: STTFinal) -> None:
+        """Classify greeting text via STT."""
+        if self._emitted or self._screening_active or not self._call_answered:
+            return
+        text = event.text.strip()
+        if not text:
+            return
+        result = classify_greeting(text)
+        if result == "unknown":
+            return
+        self._stt_result = result
+        await self._try_fuse()
+
+    async def _try_fuse(self) -> None:
+        """Attempt to produce a fused classification."""
+        if self._emitted:
+            return
+
+        # If both signals available, fuse them.
+        if self._amd_result is not None and self._stt_result is not None:
+            # Agreement — easy.
+            if self._amd_result == self._stt_result:
+                await self._emit(self._amd_result)
+            else:
+                # Disagreement — use preference.
+                winner = self._stt_result if self._prefer_stt else self._amd_result
+                await self._emit(winner)
+            return
+
+        # Only one signal — use it if it's decisive, else wait.
+        if self._amd_result is not None and self._amd_result != "unknown":
+            if self._stt_result is None and self._timeout_task is None:
+                # Start timeout to wait for STT.
+                self._start_timeout()
+            return
+
+        if self._stt_result is not None:
+            # STT classified before AMD arrived — emit immediately.
+            await self._emit(self._stt_result)
+
+    async def _emit(self, result: str) -> None:
+        if self._emitted:
+            return
+        self._emitted = True
+        self._cancel_timeout()
+        await self._event_bus.emit(VoicemailDetected(result=result, source="fusion"))
+
+    def _start_timeout(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._timeout_task = loop.create_task(self._timeout_coro())
+
+    async def _timeout_coro(self) -> None:
+        """Timeout waiting for STT — use AMD result alone."""
+        try:
+            await asyncio.sleep(self._stt_timeout_s)
+            if not self._emitted and self._amd_result is not None:
+                await self._emit(self._amd_result)
+        except asyncio.CancelledError:
+            pass
