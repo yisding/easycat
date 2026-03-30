@@ -1178,10 +1178,12 @@ class Session:
         self._spans.finish_all(SpanStatus.CANCELLED)
 
     async def cancel_tts_playback(self) -> None:
-        """Stop TTS provider and flush outbound audio."""
-        if self._cancel_token:
-            self._cancel_token.cancel()
+        """Stop TTS provider and flush outbound audio.
 
+        Unlike :meth:`cancel_turn`, this does NOT cancel the shared
+        ``_cancel_token`` so any in-flight agent stream can continue
+        producing text (which will simply not be synthesized).
+        """
         await self._cancel_tts()
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
