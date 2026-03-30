@@ -13,6 +13,7 @@ __all__ = [
 
 import asyncio
 import logging
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -104,7 +105,7 @@ class ClassificationGate:
         self._on_flush = on_flush
 
         self._closed = False
-        self._buffer: list[TTSAudio] = []
+        self._buffer: deque[TTSAudio] = deque(maxlen=500)
         self._timeout_task: asyncio.Task[None] | None = None
         self._started = False
         self._hold_audio_playing = False
@@ -417,11 +418,9 @@ class OutboundCallStateMachine:
         ):
             self._gate.release()
 
-        # Start late voicemail detection window when entering HUMAN.
         if new_state == OutboundCallState.HUMAN and self._late_voicemail_window_s > 0:
             self._start_late_voicemail_window()
 
-        # Start voicemail pickup detection window when entering VOICEMAIL.
         if new_state == OutboundCallState.VOICEMAIL and self._voicemail_pickup_window_s > 0:
             self._start_voicemail_pickup_window()
 
