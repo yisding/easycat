@@ -347,6 +347,10 @@ class _OutboundPipelineWiring:
         async with self._lock:
             if self._hold_audio_task is not None and not self._hold_audio_task.done():
                 self._hold_audio_task.cancel()
+                try:
+                    await self._hold_audio_task
+                except (asyncio.CancelledError, Exception):
+                    pass
                 self._hold_audio_task = None
         await self._session.replay_gated_audio(events)
 
