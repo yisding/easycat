@@ -214,6 +214,8 @@ class TestWebSocketTransport:
             # Send audio from server to client.
             chunk = _make_chunk(640)
             await transport.send_audio(chunk)
+            fmt_msg = await asyncio.wait_for(ws.recv(), timeout=2.0)  # audio_format
+            assert json.loads(fmt_msg)["type"] == "audio_format"
             data = await asyncio.wait_for(ws.recv(), timeout=2.0)
             assert isinstance(data, bytes)
             assert len(data) == 640
