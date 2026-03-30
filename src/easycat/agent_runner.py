@@ -275,7 +275,7 @@ class AgentRunner:
         span = self._record_span("agent_execution") if self._config.enable_tracing else None
 
         try:
-            if self._config.timeout:
+            if self._config.timeout is not None:
                 response = await asyncio.wait_for(
                     self._agent.run(text),
                     timeout=self._config.timeout,
@@ -388,7 +388,7 @@ class AgentRunner:
                             pending_tool_calls = max(0, pending_tool_calls - 1)
                         yield event
 
-                if self._config.timeout:
+                if self._config.timeout is not None:
                     async with asyncio.timeout(self._config.timeout):
                         async for event in _iter_stream():
                             yield event
@@ -397,7 +397,7 @@ class AgentRunner:
                         yield event
             else:
                 # Non-streaming fallback: wrap run() result
-                if self._config.timeout:
+                if self._config.timeout is not None:
                     response = await asyncio.wait_for(
                         self._agent.run(text),
                         timeout=self._config.timeout,
