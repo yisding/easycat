@@ -1,4 +1,6 @@
 import asyncio
+import functools
+import logging
 
 import pytest
 
@@ -282,6 +284,32 @@ async def test_eventbus_handler_error_does_not_stop_others():
 
     await bus.emit(STTFinal(text="hello"))
     assert len(received) == 1
+
+
+@pytest.mark.asyncio
+async def test_eventbus_handler_error_with_partial_logs_and_continues(
+    caplog: pytest.LogCaptureFixture,
+):
+    bus = EventBus()
+    received: list[STTFinal] = []
+
+    def boom(event: STTFinal) -> None:
+        raise RuntimeError("handler error")
+
+    def good_handler(event: STTFinal) -> None:
+        received.append(event)
+
+    bus.subscribe(STTFinal, functools.partial(boom))
+    bus.subscribe(STTFinal, good_handler)
+
+    with caplog.at_level(logging.ERROR):
+        await bus.emit(STTFinal(text="hello"))
+
+    assert len(received) == 1
+    assert any(
+        "Error in handler boom for event STTFinal" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
