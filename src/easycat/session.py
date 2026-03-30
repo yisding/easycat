@@ -809,6 +809,7 @@ class Session:
         self._playback_mark_bytes_interval: int = 4_000  # throttle: ~125ms at 16kHz/16-bit
         self._bytes_since_last_mark: int = 0
         self._last_barge_in_time: float | None = None
+        self._replay_chunks_pending: int = 0
 
         self._playback_ack_transport: PlaybackAckTransport | None = None
         if isinstance(self.transport, PlaybackAckTransport):
@@ -836,6 +837,7 @@ class Session:
         """Clear turn correlation state and reset the turn manager."""
         self._current_turn_id = None
         self._auto_turn_speech_frames = 0
+        self._replay_chunks_pending = 0
         self._turn_manager.reset()
 
     @property
@@ -998,10 +1000,10 @@ class Session:
         self._outbound_queue.flush()
         chunks = [ev.chunk for ev in events if isinstance(ev, TTSAudio)]
         if chunks:
+            self._replay_chunks_pending = len(chunks)
             await self._turn_manager.bot_started_speaking()
             for chunk in chunks:
                 await self._outbound_queue.put(chunk)
-            await self._turn_manager.bot_stopped_speaking()
 
     async def synthesize_bypass(self, text: str) -> None:
         """Synthesize text via TTS, bypassing the classification gate.
@@ -1136,6 +1138,7 @@ class Session:
         await self._cancel_stt()
         await self._cancel_tts()
         self._outbound_queue.flush_for_new_turn()
+        self._replay_chunks_pending = 0
 
         if not barge_in:
             self._reset_turn_state()
@@ -1149,6 +1152,7 @@ class Session:
 
         await self._cancel_tts()
         self._outbound_queue.flush_for_new_turn()
+        self._replay_chunks_pending = 0
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             self._reset_turn_state()
 
@@ -1163,6 +1167,7 @@ class Session:
         await self._cancel_stt()
         await self._cancel_tts()
         self._outbound_queue.flush_for_new_turn()
+        self._replay_chunks_pending = 0
 
         # Clear agent history if supported (e.g., AgentRunner)
         if hasattr(self.agent, "clear_history"):
@@ -1895,6 +1900,7 @@ class Session:
                 chunk = await self._outbound_queue.get()
             except asyncio.QueueEmpty:
                 break
+            replayed_chunk = self._replay_chunks_pending > 0
             try:
                 await self.transport.send_audio(chunk)
                 if self._enable_aec:
@@ -1925,6 +1931,14 @@ class Session:
                     await self._send_playback_mark()
             except Exception:
                 logger.exception("Failed to send audio to transport")
+            finally:
+                if replayed_chunk:
+                    self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
+                    if (
+                        self._replay_chunks_pending == 0
+                        and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                    ):
+                        await self._turn_manager.bot_stopped_speaking()
 
         # Send a final mark for any trailing bytes that didn't reach the
         # throttle threshold, so the last playback position gets acked.
