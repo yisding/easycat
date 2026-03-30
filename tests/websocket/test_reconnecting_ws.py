@@ -188,7 +188,12 @@ class TestReconnectingWebSocket:
 
     async def test_recv_iter_reconnects_on_connection_closed(self):
         """recv_iter should reconnect and keep yielding after a transient drop."""
-        ws = self._make_ws(base_delay=0.01, max_retries=2, jitter_factor=0.0)
+        config = ReconnectConfig(base_delay=0.01, max_retries=2, jitter_factor=0.0)
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=config,
+            on_reconnect=AsyncMock(),  # Required for recv_iter to attempt reconnection
+        )
 
         close_frame = websockets.frames.Close(1006, "abnormal")
 
@@ -221,6 +226,33 @@ class TestReconnectingWebSocket:
                 messages.append(msg)
 
         assert messages == ["msg1", "msg2", "msg3", "msg4"]
+
+    async def test_recv_iter_raises_when_no_on_reconnect(self):
+        """recv_iter should re-raise ConnectionClosed when on_reconnect is not set."""
+        ws = self._make_ws(base_delay=0.01, max_retries=2, jitter_factor=0.0)
+
+        close_frame = websockets.frames.Close(1006, "abnormal")
+
+        class DroppingConnection:
+            def __init__(self):
+                self.close_code = None
+                self.close = AsyncMock()
+
+            def __aiter__(self):
+                return self._iter()
+
+            async def _iter(self):
+                yield "msg1"
+                raise websockets.exceptions.ConnectionClosed(close_frame, None)
+
+        ws._ws = DroppingConnection()
+
+        messages = []
+        with pytest.raises(websockets.exceptions.ConnectionClosed):
+            async for msg in ws.recv_iter():
+                messages.append(msg)
+
+        assert messages == ["msg1"]
 
     async def test_recv_iter_gives_up_when_reconnect_fails(self):
         ws = self._make_ws(base_delay=0.01, max_retries=1, jitter_factor=0.0)
