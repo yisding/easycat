@@ -140,16 +140,14 @@ class NumberHealthMonitor:
         """Check if rate limits allow placing another call from this number."""
         now = time.monotonic()
 
-        # Check concurrent limit.
         if self._concurrent.get(number, 0) >= self._max_concurrent_per_number:
             return False
 
-        # Check inter-call delay.
         last = self._last_call_time.get(number)
         if last and (now - last) < self._min_inter_call_delay_s:
             return False
 
-        # Check calls per minute (completed records + in-flight attempts).
+        # Completed records + in-flight attempts.
         one_minute_ago = now - 60.0
         recent = [r for r in self._records.get(number, []) if r.timestamp > one_minute_ago]
         in_flight = self._concurrent.get(number, 0)
