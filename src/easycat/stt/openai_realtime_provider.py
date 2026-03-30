@@ -107,10 +107,12 @@ class OpenAIRealtimeSTT(STTBase):
     async def _on_audio(self, chunk: AudioChunk) -> None:
         if self._ws is not None:
             audio_b64 = base64.b64encode(chunk.data).decode("ascii")
-            msg = json.dumps({
-                "type": "input_audio_buffer.append",
-                "audio": audio_b64,
-            })
+            msg = json.dumps(
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": audio_b64,
+                }
+            )
             await self._ws.send(msg)
 
     async def _on_end(self) -> None:
@@ -156,9 +158,7 @@ class OpenAIRealtimeSTT(STTBase):
             delta = msg.get("delta", "")
             if delta:
                 self._partial_text += delta
-                self._emit_event(
-                    STTEvent(type=STTEventType.PARTIAL, text=self._partial_text)
-                )
+                self._emit_event(STTEvent(type=STTEventType.PARTIAL, text=self._partial_text))
 
         elif msg_type == "conversation.item.input_audio_transcription.completed":
             transcript = msg.get("transcript", "")
