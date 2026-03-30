@@ -1786,6 +1786,19 @@ class Session:
                 )
             else:
                 await agent_task
+        except asyncio.CancelledError:
+            # Task was cancelled (e.g. barge-in via _schedule_turn_ended).
+            # Clean up inner tasks to prevent orphans.
+            if not agent_task.done():
+                agent_task.cancel()
+            if not tts_task.done():
+                tts_task.cancel()
+            for t in (agent_task, tts_task):
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            raise
         except Exception as exc:
             agent_error = exc
             if not agent_task.done():
