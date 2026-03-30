@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+__all__ = [
+    "OutboundCallManager",
+    "OutboundCallManagerState",
+    "emit_call_status",
+    "parse_call_status_callback",
+]
+
 import asyncio
 import logging
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -17,19 +23,9 @@ from easycat.events import (
     EventBus,
     VoicemailDetected,
 )
+from easycat.telephony.voicemail import TWILIO_AMD_MAP
 
 logger = logging.getLogger(__name__)
-
-# Twilio AnsweredBy → VoicemailDetected result mapping (mirrors voicemail._TWILIO_AMD_MAP).
-_ANSWERED_BY_MAP: dict[str, str] = {
-    "human": "human",
-    "machine_start": "machine",
-    "machine_end_beep": "machine",
-    "machine_end_silence": "machine",
-    "machine_end_other": "machine",
-    "fax": "machine",
-    "unknown": "unknown",
-}
 
 # SIP response codes indicating call blocking (FCC March 2026 mandate).
 _SIP_BLOCK_REASONS: dict[int, str] = {
@@ -37,6 +33,9 @@ _SIP_BLOCK_REASONS: dict[int, str] = {
     607: "blocked_unwanted",
     608: "blocked_rejected",
 }
+
+# Reason strings that indicate carrier/callee blocking (for number_health).
+BLOCK_REASONS: frozenset[str] = frozenset({"blocked_unwanted", "blocked_rejected"})
 
 
 def parse_call_status_callback(
@@ -72,7 +71,7 @@ def parse_call_status_callback(
             call_sid=call_sid,
             duration_s=duration_s,
             disposition="completed",
-            number=params.get("From", ""),
+            number=params.get("To", ""),
         )
 
     if status in {"busy", "no-answer", "failed", "canceled"}:
@@ -83,7 +82,7 @@ def parse_call_status_callback(
             call_sid=call_sid,
             reason=reason,
             sip_code=sip_code,
-            number=params.get("From", ""),
+            number=params.get("To", ""),
         )
 
     return None
@@ -104,7 +103,7 @@ async def emit_call_status(
         await event_bus.emit(event)
         # Emit AMD classification when AnsweredBy is present on the answered callback.
         if isinstance(event, CallAnswered) and event.answered_by:
-            amd_result = _ANSWERED_BY_MAP.get(event.answered_by.lower())
+            amd_result = TWILIO_AMD_MAP.get(event.answered_by.lower())
             if amd_result is not None:
                 await event_bus.emit(VoicemailDetected(result=amd_result))
     return event
@@ -113,11 +112,6 @@ async def emit_call_status(
 class OutboundCallManagerState(Enum):
     IDLE = "idle"
     ACTIVE = "active"
-
-
-@dataclass
-class _PlaceCallResult:
-    call_sid: str
 
 
 class OutboundCallManager:
@@ -151,6 +145,11 @@ class OutboundCallManager:
                 "The 'twilio' package is required for OutboundCallManager. "
                 "Install it with: pip install easycat[twilio]"
             ) from None
+
+        if not twilio_account_sid or not twilio_auth_token:
+            raise ValueError(
+                "twilio_account_sid and twilio_auth_token are required for OutboundCallManager"
+            )
 
         self._event_bus = event_bus
         self._from_number = from_number
@@ -194,7 +193,7 @@ class OutboundCallManager:
         }
         if self._enable_realtime_transcription:
             create_kwargs["transcription"] = True
-            create_kwargs["transcription_track"] = "both"
+            create_kwargs["transcription_track"] = "inbound_track"
 
         if self._status_callback_url:
             create_kwargs["status_callback"] = self._status_callback_url

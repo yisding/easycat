@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass
 
 from easycat.events import CallEnded, CallFailed, CallInitiated, EventBus
 from easycat.telephony.call_state import CallStateChanged, OutboundCallState
+from easycat.telephony.outbound import BLOCK_REASONS
+
+logger = logging.getLogger(__name__)
+
+_TERMINAL_DISPOSITIONS: dict[OutboundCallState, str] = {
+    OutboundCallState.HUMAN: "human",
+    OutboundCallState.VOICEMAIL: "voicemail",
+    OutboundCallState.IVR: "ivr",
+    OutboundCallState.ENDED: "ended",
+    OutboundCallState.UNKNOWN: "unknown",
+}
 
 
 @dataclass(frozen=True)
@@ -46,6 +58,8 @@ class NumberHealthMonitor:
     call pacing limits.
     """
 
+    _MAX_RECORDS_PER_NUMBER = 500
+
     def __init__(
         self,
         event_bus: EventBus,
@@ -69,6 +83,7 @@ class NumberHealthMonitor:
         self._concurrent: dict[str, int] = defaultdict(int)
         self._last_call_time: dict[str, float] = {}
         self._call_sid_to_number: dict[str, str] = {}
+        self._max_sid_tracking = 10_000
         self._started = False
 
     def start(self) -> None:
@@ -96,7 +111,8 @@ class NumberHealthMonitor:
     ) -> None:
         """Record a call outcome for a number."""
         now = time.monotonic()
-        self._records[number].append(
+        records = self._records[number]
+        records.append(
             _CallRecord(
                 timestamp=now,
                 answered=answered,
@@ -105,6 +121,9 @@ class NumberHealthMonitor:
                 disposition=disposition,
             )
         )
+        # Cap per-number records to prevent unbounded growth.
+        if len(records) > self._MAX_RECORDS_PER_NUMBER:
+            self._records[number] = records[-self._MAX_RECORDS_PER_NUMBER :]
         self._last_call_time[number] = now
 
     def answer_rate(self, number: str) -> float:
@@ -130,16 +149,14 @@ class NumberHealthMonitor:
         """Check if rate limits allow placing another call from this number."""
         now = time.monotonic()
 
-        # Check concurrent limit.
         if self._concurrent.get(number, 0) >= self._max_concurrent_per_number:
             return False
 
-        # Check inter-call delay.
         last = self._last_call_time.get(number)
         if last and (now - last) < self._min_inter_call_delay_s:
             return False
 
-        # Check calls per minute (completed records + in-flight attempts).
+        # Completed records + in-flight attempts.
         one_minute_ago = now - 60.0
         recent = [r for r in self._records.get(number, []) if r.timestamp > one_minute_ago]
         in_flight = self._concurrent.get(number, 0)
@@ -175,16 +192,43 @@ class NumberHealthMonitor:
         self._concurrent[number] = self._concurrent.get(number, 0) + 1
         self._last_call_time[number] = time.monotonic()
 
+        # Evict stale SID mappings (zombie calls that never ended).
+        if len(self._call_sid_to_number) > self._max_sid_tracking:
+            evict_count = self._max_sid_tracking // 2
+            logger.warning(
+                "SID tracking limit exceeded (%d > %d), evicting %d oldest entries",
+                len(self._call_sid_to_number),
+                self._max_sid_tracking,
+                evict_count,
+            )
+            oldest = list(self._call_sid_to_number.keys())[:evict_count]
+            for sid in oldest:
+                # Decrement concurrent count for evicted calls.
+                evicted_number = self._call_sid_to_number.pop(sid, None)
+                if evicted_number:
+                    self._concurrent[evicted_number] = max(
+                        0, self._concurrent.get(evicted_number, 0) - 1
+                    )
+
+    def _decrement_concurrent(self, number: str) -> None:
+        prev = self._concurrent.get(number, 0)
+        if prev <= 0:
+            logger.debug(
+                "Concurrent count already 0 for %s — possible unbalanced init/end events",
+                number,
+            )
+        self._concurrent[number] = max(0, prev - 1)
+
     async def _on_call_failed(self, event: CallFailed) -> None:
         number = self._resolve_number(event.call_sid, event.number)
-        self._concurrent[number] = max(0, self._concurrent.get(number, 0) - 1)
-        is_blocked = event.reason in ("blocked_unwanted", "blocked_rejected")
+        self._decrement_concurrent(number)
+        is_blocked = event.reason in BLOCK_REASONS
         self.record_call(number, answered=False, blocked=is_blocked)
         self._call_sid_to_number.pop(event.call_sid, None)
 
     async def _on_call_ended(self, event: CallEnded) -> None:
         number = self._resolve_number(event.call_sid, event.number)
-        self._concurrent[number] = max(0, self._concurrent.get(number, 0) - 1)
+        self._decrement_concurrent(number)
         duration = event.duration_s or 0.0
         self.record_call(
             number,
@@ -200,14 +244,18 @@ class CallDispositionTracker:
 
     Records the final disposition of each call (human, voicemail, screening,
     IVR, busy, failed) and provides breakdown statistics.
+
+    Note: Uses ``time.time()`` (wall-clock) for disposition timestamps because
+    :meth:`disposition_by_hour` needs real calendar hours. This differs from
+    :class:`NumberHealthMonitor` which uses ``time.monotonic()`` for TTL.
     """
 
     _MAX_DISPOSITIONS = 10_000
+    _MAX_CALL_TRACKING = 50_000
 
     def __init__(self, event_bus: EventBus) -> None:
         self._event_bus = event_bus
         self._dispositions: list[tuple[float, str, str]] = []  # (timestamp, disposition, call_sid)
-        self._disposed_calls: set[str] = set()
         self._call_dispositions: dict[str, str] = {}
         self._failure_reasons: dict[str, str] = {}
         self._started = False
@@ -252,12 +300,12 @@ class CallDispositionTracker:
         return {k: v / total for k, v in counts.items()}
 
     def disposition_by_hour(self) -> dict[int, dict[str, int]]:
-        """Return disposition breakdown by hour of day."""
-        from datetime import datetime
+        """Return disposition breakdown by hour of day (UTC)."""
+        from datetime import UTC, datetime
 
         by_hour: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         for ts, disp, _ in self._dispositions:
-            hour = datetime.fromtimestamp(ts).hour
+            hour = datetime.fromtimestamp(ts, tz=UTC).hour
             by_hour[hour][disp] += 1
         return dict(by_hour)
 
@@ -272,16 +320,9 @@ class CallDispositionTracker:
         Late voicemail reclassification (HUMAN → VOICEMAIL) overwrites the
         earlier disposition so analytics reflect the corrected outcome.
         """
-        terminal = {
-            OutboundCallState.HUMAN: "human",
-            OutboundCallState.VOICEMAIL: "voicemail",
-            OutboundCallState.IVR: "ivr",
-            OutboundCallState.ENDED: "ended",
-            OutboundCallState.UNKNOWN: "unknown",
-        }
-        if event.new in terminal:
+        if event.new in _TERMINAL_DISPOSITIONS:
             call_sid = event.call_sid
-            disposition = terminal[event.new]
+            disposition = _TERMINAL_DISPOSITIONS[event.new]
             # Preserve the specific failure reason (busy, no-answer, etc.)
             # instead of collapsing everything to generic "ended".
             if event.new == OutboundCallState.ENDED and call_sid in self._failure_reasons:
@@ -289,11 +330,19 @@ class CallDispositionTracker:
 
             # Allow reclassification: late voicemail (HUMAN→VOICEMAIL) and
             # voicemail pickup (VOICEMAIL→HUMAN) overwrite the earlier disposition.
-            if call_sid in self._disposed_calls:
+            if call_sid in self._call_dispositions:
                 if event.new in {OutboundCallState.VOICEMAIL, OutboundCallState.HUMAN}:
                     self._replace_disposition(call_sid, disposition)
                 return
 
-            self._disposed_calls.add(call_sid)
             self._call_dispositions[call_sid] = disposition
             self.record_disposition(disposition, call_sid=call_sid)
+
+            # Evict oldest entries when tracking dicts grow too large.
+            if len(self._call_dispositions) > self._MAX_CALL_TRACKING:
+                from itertools import islice
+
+                oldest_sids = list(islice(self._call_dispositions, self._MAX_CALL_TRACKING // 2))
+                for sid in oldest_sids:
+                    self._call_dispositions.pop(sid, None)
+                    self._failure_reasons.pop(sid, None)

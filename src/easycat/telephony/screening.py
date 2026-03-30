@@ -2,15 +2,29 @@
 
 from __future__ import annotations
 
+__all__ = [
+    "CallScreeningDetector",
+    "ScreeningPatternSet",
+    "ScreeningResponse",
+    "ScreeningState",
+    "check_coherence",
+    "coherence_score",
+    "is_conversational",
+    "match_screening_platform",
+    "screening_patterns_for_languages",
+]
+
 import asyncio
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Literal
 
 from easycat.events import (
     CallAnswered,
     CallEnded,
+    CallInitiated,
     CallScreening,
     EventBus,
     ScreeningTimedOut,
@@ -20,10 +34,6 @@ from easycat.events import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Minimum transcript length before screening patterns are checked,
-# to prevent false-positive triggers on short human utterances.
-MIN_TRANSCRIPT_LENGTH = 30
 
 # Default timeout (seconds) for agent-generated screening response.
 AGENT_RESPONSE_TIMEOUT_S = 3.0
@@ -174,20 +184,41 @@ _CARRIER_PATTERNS_BY_LANG: dict[str, list[str]] = {
 # Patterns that should NOT match screening (early media, voicemail, etc.)
 EARLY_MEDIA_PHRASES: list[str] = [
     "this call may be monitored",
+    "call may be recorded",
     "please hold while we connect",
+    "your call is important",
 ]
 
 # Known screening-related phrases from the callee side (not conversational).
+# Only include phrases that are clearly automated screening prompts — short
+# interrogative/imperative phrases like "who is this" or "why are you calling"
+# are common human handoff utterances and must NOT be blocked here, otherwise
+# OutboundCallStateMachine stays stuck in SCREENING when a real person picks up.
 _SCREENING_FOLLOW_UP_PATTERNS: list[str] = [
     "can you tell me more",
-    "what is this about",
-    "who is this",
-    "why are you calling",
     "could you explain",
     "please elaborate",
     "tell me more",
-    "one moment",
 ]
+
+# Interrogative starters used by screening bots.  Recognised structurally
+# ("can you ...", "could you ...") so this generalises across phrasings.
+_INTERROGATIVE_STARTERS: tuple[str, ...] = (
+    "can you",
+    "could you",
+    "would you",
+    "will you",
+    "what is",
+    "what's",
+    "what are",
+    "why are",
+    "why do",
+    "why is",
+    "who is",
+    "who are",
+    "who's",
+    "please ",
+)
 
 # Shared stopwords for coherence/overlap scoring across telephony modules.
 COHERENCE_STOPWORDS: frozenset[str] = frozenset(
@@ -237,6 +268,17 @@ COHERENCE_STOPWORDS: frozenset[str] = frozenset(
         "um",
         "uh",
         "oh",
+        "just",
+        "like",
+        "well",
+        "okay",
+        "ok",
+        "yeah",
+        "yes",
+        "no",
+        "not",
+        "actually",
+        "basically",
     }
 )
 
@@ -306,7 +348,9 @@ def screening_patterns_for_languages(
 def match_screening_platform(
     text: str,
     patterns: ScreeningPatternSet | None = None,
-) -> str | None:
+    *,
+    _pre_lowered: bool = False,
+) -> Literal["ios", "android", "carrier", "third_party"] | None:
     """Match transcript text against screening patterns.
 
     Returns the platform string (``"ios"``, ``"android"``, ``"carrier"``,
@@ -315,7 +359,7 @@ def match_screening_platform(
     if patterns is None:
         patterns = ScreeningPatternSet()
 
-    lower = text.lower()
+    lower = text if _pre_lowered else text.lower()
 
     # Check exclusions first.
     for phrase in patterns.exclusions:
@@ -347,19 +391,40 @@ class ScreeningState(Enum):
     SCREENING_TIMEOUT = "screening_timeout"
 
 
+_TERMINAL_SCREENING_STATES = frozenset(
+    {
+        ScreeningState.HUMAN_ANSWERED,
+        ScreeningState.VOICEMAIL,
+        ScreeningState.DECLINED,
+        ScreeningState.SCREENING_TIMEOUT,
+    }
+)
+
+
 @dataclass(frozen=True)
 class ScreeningResponse:
     """Emitted when the detector decides to respond to screening."""
 
     text: str
-    mode: str  # "static" | "agent"
+    mode: Literal["static", "agent"]
 
 
-def is_conversational(text: str) -> bool:
+def is_conversational(
+    text: str,
+    patterns: ScreeningPatternSet | None = None,
+    *,
+    max_words: int = 8,
+) -> bool:
     """Return True if *text* looks like a human conversational utterance.
 
     Uses structural heuristics rather than hardcoded phrase lists so that
     novel phrasing and non-English greetings are handled correctly.
+
+    Args:
+        text: Transcript text to classify.
+        patterns: Screening pattern set for exclusion checks.
+        max_words: Maximum word count to accept as conversational (default 8).
+            Utterances with more words are rejected as likely voicemail/IVR.
 
     The core insight (backed by Twilio AMD research and Bland AI's findings):
     humans answer with **short utterances** (1-6 words) then pause; screening
@@ -369,7 +434,7 @@ def is_conversational(text: str) -> bool:
     Decision order:
       1. Reject known screening platform prompts (iOS/Android/carrier).
       2. Reject long interrogative sentences (screening AI follow-ups).
-      3. Accept short utterances (≤6 content words) that aren't screening.
+      3. Accept short utterances (≤ *max_words*) that aren't screening.
       4. Reject everything else (long non-question = voicemail greeting, etc.).
     """
     lower = text.strip().lower()
@@ -377,7 +442,7 @@ def is_conversational(text: str) -> bool:
         return False
 
     # ── Step 1: Reject known screening / IVR prompts ─────────────
-    if match_screening_platform(lower) is not None:
+    if match_screening_platform(lower, patterns, _pre_lowered=True) is not None:
         return False
 
     # ── Step 2: Reject long interrogative / instructional sentences ──
@@ -387,26 +452,6 @@ def is_conversational(text: str) -> bool:
     words = lower.split()
     word_count = len(words)
 
-    # Interrogative starters used by screening bots.  We only need to
-    # recognise the *structure* ("can you ...", "could you ...") — not
-    # specific questions — so this generalises across phrasings and
-    # languages that borrow English question words.
-    _INTERROGATIVE_STARTERS = (
-        "can you",
-        "could you",
-        "would you",
-        "will you",
-        "what is",
-        "what's",
-        "what are",
-        "why are",
-        "why do",
-        "why is",
-        "who is",
-        "who are",
-        "who's",
-        "please ",
-    )
     if word_count >= 6 and any(lower.startswith(q) for q in _INTERROGATIVE_STARTERS):
         return False
 
@@ -421,19 +466,49 @@ def is_conversational(text: str) -> bool:
     # ── Step 3: Accept short utterances ──────────────────────────
     # Humans typically answer with 1-8 words: "Hello?", "Yeah",
     # "Go ahead", "This is John speaking", "Hi how can I help you".
-    # Threshold of 8 words covers natural greetings (including
+    # Default threshold of 8 words covers natural greetings (including
     # receptionist pickups like "Hello how can I help you today")
     # while excluding voicemail greetings and IVR announcements which
     # are almost always 9+ words.  Screening follow-ups in the 6-8
     # word range are caught by the interrogative-starter check above.
-    if word_count <= 8:
+    if word_count <= max_words:
         return True
 
     # ── Step 4: Reject longer utterances ─────────────────────────
-    # 9+ word non-interrogative utterances that don't match screening
+    # Utterances exceeding max_words that don't match screening
     # are likely voicemail greetings, carrier announcements, or other
     # non-conversational speech.
     return False
+
+
+def coherence_score(callee_texts: list[str], bot_texts: list[str]) -> float:
+    """Compute keyword-overlap coherence score between callee and bot utterances.
+
+    Returns a float in [0.0, 1.0] where 1.0 = fully coherent.
+    """
+    if len(callee_texts) < 2:
+        return 1.0
+
+    total_overlap = 0.0
+    comparisons = 0
+
+    for i, callee_text in enumerate(callee_texts):
+        callee_words = set(callee_text.lower().split()) - COHERENCE_STOPWORDS
+        context_words: set[str] = set()
+        if i < len(bot_texts):
+            context_words |= set(bot_texts[i].lower().split()) - COHERENCE_STOPWORDS
+        if i > 0:
+            context_words |= set(callee_texts[i - 1].lower().split()) - COHERENCE_STOPWORDS
+
+        if not callee_words or not context_words:
+            continue
+
+        overlap = len(callee_words & context_words)
+        max_possible = min(len(callee_words), len(context_words))
+        total_overlap += overlap / max_possible if max_possible > 0 else 0
+        comparisons += 1
+
+    return total_overlap / comparisons if comparisons > 0 else 1.0
 
 
 def check_coherence(callee_texts: list[str], bot_texts: list[str]) -> bool:
@@ -504,7 +579,6 @@ class CallScreeningDetector:
         self._track_filter = track_filter
 
         self._state = ScreeningState.WAITING
-        self._detected = False
         self._call_answered = False
         self._pending_screening: tuple[str, str] | None = None  # (call_sid, platform)
         self._accumulated_text = ""
@@ -524,9 +598,20 @@ class CallScreeningDetector:
     def screening_turns(self) -> int:
         return self._screening_turns
 
+    @property
+    def accumulated_text(self) -> str:
+        """The most recent accumulated STT partial text from screening."""
+        return self._accumulated_text
+
+    @property
+    def screening_response(self) -> str:
+        """The configured static screening response text."""
+        return self._screening_response
+
     def start(self) -> None:
         if not self._enabled:
             return
+        self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
         self._event_bus.subscribe(CallAnswered, self._on_call_answered)
         self._event_bus.subscribe(STTPartial, self._on_stt_partial)
         self._event_bus.subscribe(STTFinal, self._on_stt_final)
@@ -536,6 +621,7 @@ class CallScreeningDetector:
 
     def stop(self) -> None:
         if self._started:
+            self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
             self._event_bus.unsubscribe(CallAnswered, self._on_call_answered)
             self._event_bus.unsubscribe(STTPartial, self._on_stt_partial)
             self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
@@ -545,13 +631,17 @@ class CallScreeningDetector:
         self._started = False
         self._reset_internal()
 
+    async def _on_call_initiated(self, event: CallInitiated) -> None:
+        """Reset screening state for a new outbound call."""
+        self._cancel_agent_timeout()
+        self._reset_internal()
+
     def reset(self) -> None:
         self._cancel_agent_timeout()
         self._reset_internal()
 
     def _reset_internal(self) -> None:
         self._state = ScreeningState.WAITING
-        self._detected = False
         self._call_answered = False
         self._pending_screening = None
         self._accumulated_text = ""
@@ -608,29 +698,26 @@ class CallScreeningDetector:
             await self._emit_screening(self._call_sid, platform)
 
     async def _on_stt_partial(self, event: STTPartial) -> None:
-        if self._detected:
+        if self._state != ScreeningState.WAITING:
             return
 
         # Track filtering: only analyze inbound (callee) audio.
-        # If track_filter is set, skip events that either lack a track
-        # attribute or carry a different track — prevents bot-side
-        # transcripts from triggering false screening matches.
-        if self._track_filter:
-            if getattr(event, "track", None) != self._track_filter:
-                return
+        # If track_filter is set, skip events that carry a different
+        # track — prevents bot-side transcripts from triggering false
+        # screening matches.
+        if self._track_filter and event.track != self._track_filter:
+            return
 
         # Always use the latest partial — STT providers may revise/correct earlier text.
         text = event.text
         self._accumulated_text = text
 
-        if len(self._accumulated_text) < MIN_TRANSCRIPT_LENGTH:
-            return
-
+        # Pattern matching uses exact substring checks, so short
+        # transcripts (including CJK) cannot false-positive.
         platform = match_screening_platform(self._accumulated_text, self._patterns)
         if platform is None:
             return
 
-        self._detected = True
         self._state = ScreeningState.SCREENING_DETECTED
 
         if self._call_answered:
@@ -647,9 +734,10 @@ class CallScreeningDetector:
         # Emit screening response if configured.
         if self._screening_use_agent:
             self._state = ScreeningState.RESPONDING
-            await self._event_bus.emit(ScreeningResponse(text="", mode="agent"))
-            # Start agent timeout — fall back to static response if agent is slow.
+            # Start agent timeout BEFORE emitting so the fallback can fire
+            # while EventBus.emit() awaits the (potentially slow) agent handler.
             self._agent_timeout_task = asyncio.create_task(self._agent_timeout_fallback())
+            await self._event_bus.emit(ScreeningResponse(text="", mode="agent"))
         elif self._screening_response:
             self._state = ScreeningState.RESPONDING
             await self._event_bus.emit(
@@ -670,14 +758,9 @@ class CallScreeningDetector:
 
     async def _on_stt_final(self, event: STTFinal) -> None:
         """Handle final transcript after screening detected."""
-        if not self._detected:
+        if self._state == ScreeningState.WAITING:
             return
-        if self._state in (
-            ScreeningState.HUMAN_ANSWERED,
-            ScreeningState.VOICEMAIL,
-            ScreeningState.DECLINED,
-            ScreeningState.SCREENING_TIMEOUT,
-        ):
+        if self._state in _TERMINAL_SCREENING_STATES:
             return
 
         text = event.text.strip()
@@ -685,14 +768,13 @@ class CallScreeningDetector:
             return
 
         # Track filtering for multi-turn.
-        if self._track_filter and hasattr(event, "track"):
-            if getattr(event, "track", None) != self._track_filter:
-                return
+        if self._track_filter and event.track != self._track_filter:
+            return
 
         # Check if this looks like a human answering (conversational speech)
         # *before* enforcing the turn limit, so a human picking up on the
         # last allowed exchange is classified as HUMAN_ANSWERED, not timeout.
-        if is_conversational(text):
+        if is_conversational(text, self._patterns):
             self._state = ScreeningState.HUMAN_ANSWERED
             self._cancel_agent_timeout()
             return
@@ -709,14 +791,9 @@ class CallScreeningDetector:
 
     async def _on_voicemail(self, event: VoicemailDetected) -> None:
         """Handle voicemail detection after screening."""
-        if not self._detected:
+        if self._state == ScreeningState.WAITING:
             return
-        if self._state in (
-            ScreeningState.HUMAN_ANSWERED,
-            ScreeningState.VOICEMAIL,
-            ScreeningState.DECLINED,
-            ScreeningState.SCREENING_TIMEOUT,
-        ):
+        if self._state in _TERMINAL_SCREENING_STATES:
             return
         if event.result == "machine":
             self._state = ScreeningState.VOICEMAIL
@@ -724,14 +801,9 @@ class CallScreeningDetector:
 
     async def _on_call_ended(self, event: CallEnded) -> None:
         """Handle call ended during screening — callee declined."""
-        if not self._detected:
+        if self._state == ScreeningState.WAITING:
             return
-        if self._state in (
-            ScreeningState.HUMAN_ANSWERED,
-            ScreeningState.VOICEMAIL,
-            ScreeningState.DECLINED,
-            ScreeningState.SCREENING_TIMEOUT,
-        ):
+        if self._state in _TERMINAL_SCREENING_STATES:
             return
         self._state = ScreeningState.DECLINED
         self._cancel_agent_timeout()

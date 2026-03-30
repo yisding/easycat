@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from easycat.audio_format import AudioChunk
 
@@ -60,6 +60,7 @@ class STTPartial:
     text: str
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
+    track: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -70,6 +71,7 @@ class STTFinal:
     text: str
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
+    track: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
 
 
@@ -269,8 +271,8 @@ class DTMFAggregated:
 class VoicemailDetected:
     """Voicemail / answering machine detection result."""
 
-    result: str  # "human" | "machine" | "unknown"
-    source: str = ""  # "" = raw AMD, "fusion" = fused AMD+STT
+    result: Literal["human", "machine", "unknown"]
+    source: Literal["", "fusion", "detector"] = ""
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
@@ -315,7 +317,7 @@ class CallScreening:
     """Call screening detected."""
 
     call_sid: str
-    platform: str  # "ios" | "android" | "carrier" | "unknown"
+    platform: Literal["ios", "android", "carrier", "third_party", "unknown"]
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
@@ -399,6 +401,7 @@ Event = (
     | CallRinging
     | CallAnswered
     | CallScreening
+    | ScreeningTimedOut
     | CallFailed
     | CallEnded
     | Error
@@ -422,7 +425,18 @@ LIFECYCLE_EVENTS: tuple[type, ...] = (
 )
 INTERRUPTION_EVENTS: tuple[type, ...] = (Interruption, PlaybackMarkAck)
 RECONNECT_EVENTS: tuple[type, ...] = (ReconnectAttempt, ReconnectSuccess, ReconnectFailure)
-TELEPHONY_EVENTS: tuple[type, ...] = (DTMF, DTMFAggregated, VoicemailDetected)
+TELEPHONY_EVENTS: tuple[type, ...] = (
+    DTMF,
+    DTMFAggregated,
+    VoicemailDetected,
+    CallInitiated,
+    CallRinging,
+    CallAnswered,
+    CallScreening,
+    ScreeningTimedOut,
+    CallFailed,
+    CallEnded,
+)
 ERROR_EVENTS: tuple[type, ...] = (Error,)
 
 ALL_EVENTS: tuple[type, ...] = (
@@ -467,6 +481,7 @@ class STTEvent:
     confidence: float | None = None
     language: str | None = None
     word_timestamps: list[WordTimestamp] | None = None
+    track: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
 
 

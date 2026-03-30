@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 
+from easycat.telephony.outbound import BLOCK_REASONS
+
 
 class RetryDecision(Enum):
     RETRY = "retry"
@@ -42,13 +44,7 @@ class RetryStrategyConfig:
     backoff_factor: float = 2.0
     sms_fallback_after: int = 2
     no_retry_reasons: frozenset[str] = field(
-        default_factory=lambda: frozenset(
-            {
-                "declined",
-                "blocked_unwanted",
-                "blocked_rejected",
-            }
-        )
+        default_factory=lambda: BLOCK_REASONS | frozenset({"declined"})
     )
     shorter_delay_reasons: frozenset[str] = field(default_factory=lambda: frozenset({"busy"}))
     shorter_delay_s: float = 30.0
@@ -67,7 +63,15 @@ class RetryStrategy:
         return self._states[number]
 
     def record_attempt(self, number: str, reason: str) -> RetryDecision:
-        """Record a failed call attempt and return the retry decision."""
+        """Record a failed call attempt and return the retry decision.
+
+        Returns:
+            ``NO_RETRY`` for permanently non-retryable reasons.
+            ``SMS_FALLBACK`` once ``sms_fallback_after`` attempts are reached
+            (check ``state.exhausted`` to distinguish "retry with SMS" from
+            "exhausted, send SMS instead").
+            ``RETRY`` when a retry is allowed.
+        """
         state = self.get_state(number)
         state.attempts += 1
         state.last_attempt_time = time.monotonic()
@@ -78,15 +82,14 @@ class RetryStrategy:
             state.exhausted = True
             return RetryDecision.NO_RETRY
 
-        # Check max retries.
+        # Check max retries — mark exhausted before SMS fallback check.
         if state.attempts >= self._config.max_retries:
             state.exhausted = True
-            # Suggest SMS fallback if configured.
-            if state.attempts >= self._config.sms_fallback_after:
+            if self._config.sms_fallback_after <= self._config.max_retries:
                 return RetryDecision.SMS_FALLBACK
             return RetryDecision.NO_RETRY
 
-        # Suggest SMS fallback after threshold.
+        # Suggest SMS fallback after threshold (still retryable).
         if state.attempts >= self._config.sms_fallback_after:
             return RetryDecision.SMS_FALLBACK
 

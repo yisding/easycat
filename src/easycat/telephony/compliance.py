@@ -1,4 +1,9 @@
-"""Compliance utilities for outbound calling (TCPA, FCC, DNC)."""
+"""Compliance utilities for outbound calling (TCPA, FCC, DNC).
+
+Warning: The area-code-to-timezone mapping in this module covers only a small
+subset of US area codes.  For production use, replace ``_AREA_CODE_TZ`` with a
+complete database or third-party API (e.g. libphonenumber, Twilio Lookup).
+"""
 
 from __future__ import annotations
 
@@ -25,9 +30,14 @@ _AREA_CODE_TZ: dict[str, str] = {
 }
 
 
+def _strip_to_digits(phone: str) -> str:
+    """Return only the digit characters from *phone*."""
+    return "".join(c for c in phone if c.isdigit())
+
+
 def _extract_area_code(phone: str) -> str | None:
     """Extract 3-digit area code from a US phone number."""
-    digits = "".join(c for c in phone if c.isdigit())
+    digits = _strip_to_digits(phone)
     if digits.startswith("1") and len(digits) >= 4:
         return digits[1:4]
     if len(digits) >= 3:
@@ -36,10 +46,21 @@ def _extract_area_code(phone: str) -> str | None:
 
 
 def lookup_timezone(phone: str) -> str | None:
-    """Look up approximate timezone for a US phone number by area code."""
+    """Look up approximate timezone for a US phone number by area code.
+
+    Returns ``None`` (and logs a warning) when the area code is not in the
+    built-in mapping.  Callers should treat ``None`` conservatively.
+    """
     area_code = _extract_area_code(phone)
     if area_code:
-        return _AREA_CODE_TZ.get(area_code)
+        tz = _AREA_CODE_TZ.get(area_code)
+        if tz is None:
+            logger.warning(
+                "Area code %s not in timezone mapping for %s — consider using a complete database",
+                area_code,
+                phone,
+            )
+        return tz
     return None
 
 
@@ -69,10 +90,10 @@ def check_calling_hours(
 
     tz_name = timezone_override or lookup_timezone(phone)
     if tz_name is None:
-        # Conservative: if we can't determine timezone, allow the call
-        # but log a warning.
-        logger.warning("Cannot determine timezone for %s, allowing call", phone)
-        return True
+        # Conservative: deny the call when we can't determine timezone.
+        # TCPA requires knowledge of the recipient's local time.
+        logger.warning("Cannot determine timezone for %s, blocking call", phone)
+        return False
 
     try:
         from datetime import datetime
@@ -81,9 +102,9 @@ def check_calling_hours(
         tz = ZoneInfo(tz_name)
         now = datetime.now(tz)
         return start_hour <= now.hour < end_hour
-    except Exception:
-        logger.warning("Timezone lookup failed for %s (%s)", phone, tz_name)
-        return True
+    except KeyError:
+        logger.warning("Unknown timezone %r for %s, blocking call", tz_name, phone)
+        return False
 
 
 @dataclass(frozen=True)
@@ -103,20 +124,21 @@ class DNCList:
     def __init__(self) -> None:
         self._numbers: set[str] = set()
 
+    @staticmethod
+    def _normalize(phone: str) -> str:
+        return _strip_to_digits(phone)
+
     def add(self, phone: str) -> None:
         """Add a number to the DNC list."""
-        normalized = "".join(c for c in phone if c.isdigit())
-        self._numbers.add(normalized)
+        self._numbers.add(self._normalize(phone))
 
     def remove(self, phone: str) -> None:
         """Remove a number from the DNC list."""
-        normalized = "".join(c for c in phone if c.isdigit())
-        self._numbers.discard(normalized)
+        self._numbers.discard(self._normalize(phone))
 
     def is_on_dnc(self, phone: str) -> bool:
         """Check if a number is on the DNC list."""
-        normalized = "".join(c for c in phone if c.isdigit())
-        return normalized in self._numbers
+        return self._normalize(phone) in self._numbers
 
     def __len__(self) -> int:
         return len(self._numbers)

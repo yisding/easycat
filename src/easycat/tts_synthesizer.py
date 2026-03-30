@@ -97,6 +97,11 @@ class TTSSynthesizer:
         """
         result = TTSSynthResult()
         tts_start = time.monotonic()
+        # Snapshot the gate state at the start of synthesis.  If the gate is
+        # closed when we begin, ALL chunks for this call must be buffered —
+        # even if the gate opens mid-stream — so playback goes through the
+        # replay path and doesn't interleave with the replayed prefix.
+        gated_at_start = not bypass_gate and bool(self._audio_gate and self._audio_gate())
         tts_span = self._spans.start(Tracer.TTS)
         tts_status = SpanStatus.OK
 
@@ -144,7 +149,9 @@ class TTSSynthesizer:
                                     TURN_E2E,
                                     (result.first_audio_time - turn_end_time) * 1000,
                                 )
-                    if bypass_gate or not (self._audio_gate and self._audio_gate()):
+                    if not gated_at_start and (
+                        bypass_gate or not (self._audio_gate and self._audio_gate())
+                    ):
                         await self._outbound_queue.put(tts_event.audio)
 
                 elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
