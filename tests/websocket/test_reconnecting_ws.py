@@ -255,7 +255,12 @@ class TestReconnectingWebSocket:
         assert messages == ["msg1"]
 
     async def test_recv_iter_gives_up_when_reconnect_fails(self):
-        ws = self._make_ws(base_delay=0.01, max_retries=1, jitter_factor=0.0)
+        config = ReconnectConfig(base_delay=0.01, max_retries=1, jitter_factor=0.0)
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=config,
+            on_reconnect=AsyncMock(),
+        )
 
         close_frame = websockets.frames.Close(1006, "abnormal")
 
