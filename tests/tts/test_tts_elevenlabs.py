@@ -441,7 +441,7 @@ class TestElevenLabsTTSGeneral:
         await provider.stop()
         assert not provider.is_active
 
-    @pytest.mark.integration
+    @pytest.mark.integration_live
     async def test_live_elevenlabs_tts(self):
         """Integration test requiring ELEVENLABS_API_KEY env var."""
         import os

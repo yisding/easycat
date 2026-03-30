@@ -169,7 +169,7 @@ class TestDeepgramTTS:
         msg = json.loads(fake_ws._sent[0])
         assert msg["type"] == "Flush"
 
-    @pytest.mark.integration
+    @pytest.mark.integration_live
     async def test_live_deepgram_tts(self):
         """Integration test requiring DEEPGRAM_API_KEY env var."""
         import os
