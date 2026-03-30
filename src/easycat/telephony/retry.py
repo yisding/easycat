@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 
+from easycat.telephony.outbound import BLOCK_REASONS
+
 
 class RetryDecision(Enum):
     RETRY = "retry"
@@ -42,13 +44,7 @@ class RetryStrategyConfig:
     backoff_factor: float = 2.0
     sms_fallback_after: int = 2
     no_retry_reasons: frozenset[str] = field(
-        default_factory=lambda: frozenset(
-            {
-                "declined",
-                "blocked_unwanted",
-                "blocked_rejected",
-            }
-        )
+        default_factory=lambda: BLOCK_REASONS | frozenset({"declined"})
     )
     shorter_delay_reasons: frozenset[str] = field(default_factory=lambda: frozenset({"busy"}))
     shorter_delay_s: float = 30.0
