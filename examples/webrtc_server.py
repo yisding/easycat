@@ -1,8 +1,8 @@
 """WebRTC voice chat server — deployable on EC2.
 
-Serves a signaling HTTP endpoint and the static HTML client from the same
-server.  A browser connects via WebRTC, sending microphone audio and
-receiving the agent's TTS response as a real-time Opus stream.
+A bundled HTML client is served automatically from the signaling server.
+A browser connects via WebRTC, sending microphone audio and receiving the
+agent's TTS response as a real-time Opus stream.
 
 Setup (local):
     export OPENAI_API_KEY="..."
@@ -21,7 +21,7 @@ Environment variables:
     SIGNALING_HOST        — Optional.  Bind address (default 0.0.0.0).
     SIGNALING_PORT        — Optional.  Listen port (default 8080).
 
-Then open http://localhost:8080/webrtc_client.html in your browser.
+Then open http://localhost:8080 in your browser.
 
 NOTE: getUserMedia() requires a secure context.  For localhost this works
 over plain HTTP.  For remote deployments, place the server behind an HTTPS
@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 
 from easycat import (
     EasyCatConfig,
@@ -45,9 +44,6 @@ from easycat import (
     require_env,
     wait_for_shutdown_signal,
 )
-
-# Serves only the webrtc_static/ subdirectory (contains only the HTML client).
-_STATIC_DIR = str(Path(__file__).parent / "webrtc_static")
 
 
 def _build_ice_servers() -> list[ICEServer]:
@@ -87,7 +83,6 @@ async def main() -> None:
             host=signaling_host,
             port=signaling_port,
             ice_servers=ice_servers,
-            static_dir=_STATIC_DIR,
         ),
         agent=adapter,
         event_logging=default_event_logging(),
@@ -95,7 +90,7 @@ async def main() -> None:
     session = create_session(config)
     attach_runtime_feedback(session)
 
-    print(f"Open http://localhost:{signaling_port}/webrtc_client.html in your browser")
+    print(f"Open http://localhost:{signaling_port} in your browser")
     if any(any("turn:" in u for u in s.urls) for s in ice_servers):
         print("TURN server:  configured")
     else:

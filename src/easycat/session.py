@@ -30,6 +30,8 @@ from easycat.events import (
     AgentDelta,
     AgentFinal,
     AudioIn,
+    BotStartedSpeaking,
+    BotStoppedSpeaking,
     Error,
     EventBus,
     EventHandler,
@@ -44,6 +46,8 @@ from easycat.events import (
     ToolCallStarted,
     TurnEnded,
     TurnStarted,
+    VADStartSpeaking,
+    VADStopSpeaking,
 )
 from easycat.health_check import PeriodicHealthChecker
 from easycat.llm_output_processing import (
@@ -889,6 +893,63 @@ class Session:
             self.event_bus.subscribe(event_type, handler)
             registrations.append((event_type, handler))
 
+        return registrations
+
+    def on(
+        self,
+        *,
+        user_started_speaking: Callable[[], Any] | None = None,
+        user_stopped_speaking: Callable[[], Any] | None = None,
+        user_transcript: Callable[[str], Any] | None = None,
+        agent_delta: Callable[[str], Any] | None = None,
+        agent_response: Callable[[str], Any] | None = None,
+        tool_started: Callable[[str, str], Any] | None = None,
+        tool_result: Callable[[str, str], Any] | None = None,
+        turn_started: Callable[[], Any] | None = None,
+        turn_ended: Callable[[], Any] | None = None,
+        bot_started_speaking: Callable[[], Any] | None = None,
+        bot_stopped_speaking: Callable[[], Any] | None = None,
+        interruption: Callable[[], Any] | None = None,
+        error: Callable[[BaseException, str], Any] | None = None,
+    ) -> list[tuple[type, EventHandler]]:
+        """Subscribe to common session events with simple callbacks.
+
+        Each callback receives only the most useful fields — no event type
+        imports needed.  Pass only the callbacks you care about::
+
+            session.on(
+                user_transcript=lambda text: print(f"User: {text}"),
+                agent_response=lambda text: print(f"Bot: {text}"),
+                interruption=lambda: print("Interrupted!"),
+            )
+
+        Returns registrations that can be passed to :meth:`unsubscribe_handlers`.
+        """
+        # Map: (event_type, user_callback, wrapper_factory)
+        # Wrappers unwrap the event into the callback's expected arguments.
+        _mappings: list[tuple[type, Any, Callable[..., EventHandler]]] = [
+            (VADStartSpeaking, user_started_speaking, lambda cb: lambda _e: cb()),
+            (VADStopSpeaking, user_stopped_speaking, lambda cb: lambda _e: cb()),
+            (STTFinal, user_transcript, lambda cb: lambda e: cb(e.text)),
+            (AgentDelta, agent_delta, lambda cb: lambda e: cb(e.text)),
+            (AgentFinal, agent_response, lambda cb: lambda e: cb(e.text)),
+            (ToolCallStarted, tool_started, lambda cb: lambda e: cb(e.tool_name, e.call_id)),
+            (ToolCallResult, tool_result, lambda cb: lambda e: cb(e.call_id, e.result)),
+            (TurnStarted, turn_started, lambda cb: lambda _e: cb()),
+            (TurnEnded, turn_ended, lambda cb: lambda _e: cb()),
+            (BotStartedSpeaking, bot_started_speaking, lambda cb: lambda _e: cb()),
+            (BotStoppedSpeaking, bot_stopped_speaking, lambda cb: lambda _e: cb()),
+            (Interruption, interruption, lambda cb: lambda _e: cb()),
+            (Error, error, lambda cb: lambda e: cb(e.exception, e.context)),
+        ]
+
+        registrations: list[tuple[type, EventHandler]] = []
+        for event_type, cb, wrap in _mappings:
+            if cb is None:
+                continue
+            handler = wrap(cb)
+            self.event_bus.subscribe(event_type, handler)
+            registrations.append((event_type, handler))
         return registrations
 
     def unsubscribe_handlers(self, registrations: list[tuple[type, EventHandler]]) -> None:
