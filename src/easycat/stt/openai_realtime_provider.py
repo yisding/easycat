@@ -71,6 +71,7 @@ class OpenAIRealtimeSTT(STTBase):
         self._ws: ReconnectingWebSocket | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._partial_text: str = ""
+        self._final_received: asyncio.Event | None = None
 
     async def _on_start(self) -> None:
         url = f"{self._config.ws_url}?model={self._config.model}"
@@ -90,6 +91,7 @@ class OpenAIRealtimeSTT(STTBase):
         await self._ws.connect()
         await self._send_session_update()
         self._partial_text = ""
+        self._final_received = asyncio.Event()
         self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def _send_session_update(self) -> None:
@@ -135,10 +137,15 @@ class OpenAIRealtimeSTT(STTBase):
             except Exception:
                 logger.debug("Error sending input_audio_buffer.commit", exc_info=True)
 
-            # Close the websocket first so recv_iter() terminates, then
-            # await the receive task.  Previously the order was reversed,
-            # causing a ~5 s stall per utterance because recv_iter() only
-            # ends when the underlying socket closes.
+            # Wait for the final transcript before closing the socket.
+            # The server sends the completed event after processing the
+            # committed audio buffer; closing too early would drop it.
+            if self._final_received is not None:
+                try:
+                    await asyncio.wait_for(self._final_received.wait(), timeout=5.0)
+                except TimeoutError:
+                    logger.warning("Timed out waiting for final transcript from OpenAI Realtime")
+
             await self._ws.close()
 
             if self._receive_task is not None:
@@ -151,6 +158,7 @@ class OpenAIRealtimeSTT(STTBase):
         self._ws = None
         self._receive_task = None
         self._partial_text = ""
+        self._final_received = None
 
     async def _receive_loop(self) -> None:
         assert self._ws is not None
@@ -183,6 +191,8 @@ class OpenAIRealtimeSTT(STTBase):
                 self._emit_event(STTEvent(type=STTEventType.FINAL, text=transcript))
             elif self._partial_text:
                 self._emit_event(STTEvent(type=STTEventType.FINAL, text=self._partial_text))
+            if self._final_received is not None:
+                self._final_received.set()
 
         elif msg_type == "error":
             error = msg.get("error", {})
