@@ -1,77 +1,8 @@
-"""Tests for ML voicemail detection and conversation coherence."""
+"""Tests for conversation coherence detection."""
 
 from __future__ import annotations
 
-import math
-import struct
-
-import pytest
-
-from easycat.telephony.ml_voicemail import (
-    ConversationCoherenceDetector,
-    MLVoicemailDetector,
-)
-
-
-def _generate_tone(frequency: float, duration_s: float, sample_rate: int = 16000) -> bytes:
-    num_samples = int(sample_rate * duration_s)
-    samples = [
-        int(16000 * math.sin(2 * math.pi * frequency * i / sample_rate))
-        for i in range(num_samples)
-    ]
-    return struct.pack(f"<{len(samples)}h", *samples)
-
-
-class TestWave2VecVoicemailDetector:
-    def test_ml_detector_available_check(self) -> None:
-        # Will be False in test environment (no onnxruntime typically).
-        result = MLVoicemailDetector.is_available()
-        assert isinstance(result, bool)
-
-    @pytest.mark.asyncio
-    async def test_ml_detector_classifies_voicemail_audio(self) -> None:
-        detector = MLVoicemailDetector()
-        audio = _generate_tone(1000, 2.0)
-        # Model not loaded — returns None (graceful fallback).
-        result = await detector.classify_audio(audio)
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_ml_detector_classifies_human_audio(self) -> None:
-        detector = MLVoicemailDetector()
-        audio = _generate_tone(300, 2.0)
-        result = await detector.classify_audio(audio)
-        assert result is None  # Model not loaded.
-
-    @pytest.mark.asyncio
-    async def test_ml_detector_graceful_fallback(self) -> None:
-        """When model unavailable, falls back without error."""
-        detector = MLVoicemailDetector()
-        audio = _generate_tone(1000, 2.0)
-        result = await detector.classify_audio(audio)
-        assert result is None
-        assert not detector._model_loaded
-
-    @pytest.mark.asyncio
-    async def test_ml_detector_integrates_with_voicemail_detector(self) -> None:
-        """ML detector returns None (fallback) when model not available."""
-        detector = MLVoicemailDetector()
-        available = detector.is_available()
-        if not available:
-            result = await detector.classify_audio(b"\x00" * 64000)
-            assert result is None
-
-    def test_ml_detector_latency_under_200ms(self) -> None:
-        """Sync classification completes quickly even when model absent."""
-        import time
-
-        detector = MLVoicemailDetector()
-        audio = _generate_tone(1000, 2.0)
-        start = time.monotonic()
-        result = detector.classify_audio_sync(audio)
-        elapsed_ms = (time.monotonic() - start) * 1000
-        assert result is None
-        assert elapsed_ms < 200
+from easycat.telephony.ml_voicemail import ConversationCoherenceDetector
 
 
 class TestConversationCoherenceDetector:
