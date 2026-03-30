@@ -118,10 +118,6 @@ class OutboundCallConfig:
             raise ValueError("classification_gate_timeout_s must be positive")
         if self.max_call_duration_s <= 0:
             raise ValueError("max_call_duration_s must be positive")
-        if self.screening_use_agent and self.ivr_agent_callback is None:
-            raise ValueError(
-                "screening_use_agent requires ivr_agent_callback to be set"
-            )
 
 
 @dataclass
