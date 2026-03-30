@@ -106,7 +106,8 @@ class ClassificationGate:
         self._on_flush = on_flush
 
         self._closed = False
-        self._buffer: deque[TTSAudio] = deque(maxlen=500)
+        self._buffer: deque[TTSAudio] = deque(maxlen=1000)
+        self._buffer_warned = False
         self._timeout_task: asyncio.Task[None] | None = None
         self._started = False
         self._hold_audio_playing = False
@@ -152,6 +153,7 @@ class ClassificationGate:
             return
         self._closed = True
         self._buffer.clear()
+        self._buffer_warned = False
         self._start_timeout()
         if self._hold_audio:
             self._hold_audio_playing = True
@@ -205,6 +207,13 @@ class ClassificationGate:
 
     async def _on_tts_audio(self, event: TTSAudio) -> None:
         if self._closed and not event.bypass_gate:
+            if len(self._buffer) == self._buffer.maxlen and not self._buffer_warned:
+                self._buffer_warned = True
+                logger.error(
+                    "Classification gate buffer full (%d frames) — "
+                    "oldest TTS frames will be dropped",
+                    self._buffer.maxlen,
+                )
             self._buffer.append(event)
 
     def _start_timeout(self) -> None:
@@ -452,8 +461,10 @@ class OutboundCallStateMachine:
         if self._state in {OutboundCallState.INITIATING, OutboundCallState.RINGING}:
             if event.call_sid:
                 self._call_sid = event.call_sid
-            await self._transition(OutboundCallState.CLASSIFYING)
+            # Close the gate before transitioning so that any TTS emitted by
+            # CallStateChanged subscribers is captured by the buffer.
             self._gate.close()
+            await self._transition(OutboundCallState.CLASSIFYING)
             self._start_classification_timeout()
             self._start_max_duration_timer()
 

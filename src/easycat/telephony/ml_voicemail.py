@@ -85,6 +85,7 @@ class MLVoicemailDetector:
             Classification result, or None if the model is not available.
         """
         if not self._model_loaded:
+            logger.debug("ML voicemail model not loaded — returning None (graceful fallback)")
             return None
 
         # Placeholder for actual model inference.
@@ -102,6 +103,7 @@ class MLVoicemailDetector:
     ) -> MLClassificationResult | None:
         """Synchronous version for use in thread executor."""
         if not self._model_loaded:
+            logger.debug("ML voicemail model not loaded — returning None (graceful fallback)")
             return None
         return None
 

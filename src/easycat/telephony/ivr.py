@@ -126,7 +126,6 @@ class DTMFDelivery:
         self._call_sid = call_sid
         self._inter_digit_delay = inter_digit_delay
         self._verify = verify
-        self._delivery_attempts = 0
 
     @property
     def call_sid(self) -> str:
@@ -172,7 +171,6 @@ class DTMFDelivery:
 
         try:
             await asyncio.to_thread(self._client.calls(self._call_sid).update, twiml=twiml)
-            self._delivery_attempts += 1
             return True
         except Exception:
             logger.exception("DTMF delivery failed for call %s", self._call_sid)
@@ -221,7 +219,6 @@ class IVRNavigator:
         self._menu_depth = 0
         self._history: list[tuple[str, dict[str, str]]] = []
         self._prompt_timeout_task: asyncio.Task[None] | None = None
-        self._silence_start: float | None = None
         self._in_hold = False
 
     @property

@@ -201,16 +201,25 @@ class NumberHealthMonitor:
                         0, self._concurrent.get(evicted_number, 0) - 1
                     )
 
+    def _decrement_concurrent(self, number: str) -> None:
+        prev = self._concurrent.get(number, 0)
+        if prev <= 0:
+            logger.debug(
+                "Concurrent count already 0 for %s — possible unbalanced init/end events",
+                number,
+            )
+        self._concurrent[number] = max(0, prev - 1)
+
     async def _on_call_failed(self, event: CallFailed) -> None:
         number = self._resolve_number(event.call_sid, event.number)
-        self._concurrent[number] = max(0, self._concurrent.get(number, 0) - 1)
+        self._decrement_concurrent(number)
         is_blocked = event.reason in ("blocked_unwanted", "blocked_rejected")
         self.record_call(number, answered=False, blocked=is_blocked)
         self._call_sid_to_number.pop(event.call_sid, None)
 
     async def _on_call_ended(self, event: CallEnded) -> None:
         number = self._resolve_number(event.call_sid, event.number)
-        self._concurrent[number] = max(0, self._concurrent.get(number, 0) - 1)
+        self._decrement_concurrent(number)
         duration = event.duration_s or 0.0
         self.record_call(
             number,

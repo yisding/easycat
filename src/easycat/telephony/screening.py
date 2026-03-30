@@ -22,6 +22,7 @@ from enum import Enum
 from easycat.events import (
     CallAnswered,
     CallEnded,
+    CallInitiated,
     CallScreening,
     EventBus,
     ScreeningTimedOut,
@@ -566,6 +567,7 @@ class CallScreeningDetector:
     def start(self) -> None:
         if not self._enabled:
             return
+        self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
         self._event_bus.subscribe(CallAnswered, self._on_call_answered)
         self._event_bus.subscribe(STTPartial, self._on_stt_partial)
         self._event_bus.subscribe(STTFinal, self._on_stt_final)
@@ -575,6 +577,7 @@ class CallScreeningDetector:
 
     def stop(self) -> None:
         if self._started:
+            self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
             self._event_bus.unsubscribe(CallAnswered, self._on_call_answered)
             self._event_bus.unsubscribe(STTPartial, self._on_stt_partial)
             self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
@@ -582,6 +585,11 @@ class CallScreeningDetector:
             self._event_bus.unsubscribe(CallEnded, self._on_call_ended)
         self._cancel_agent_timeout()
         self._started = False
+        self._reset_internal()
+
+    async def _on_call_initiated(self, event: CallInitiated) -> None:
+        """Reset screening state for a new outbound call."""
+        self._cancel_agent_timeout()
         self._reset_internal()
 
     def reset(self) -> None:
@@ -651,12 +659,11 @@ class CallScreeningDetector:
             return
 
         # Track filtering: only analyze inbound (callee) audio.
-        # If track_filter is set, skip events that either lack a track
-        # attribute or carry a different track — prevents bot-side
-        # transcripts from triggering false screening matches.
-        if self._track_filter:
-            if getattr(event, "track", None) != self._track_filter:
-                return
+        # If track_filter is set, skip events that carry a different
+        # track — prevents bot-side transcripts from triggering false
+        # screening matches.
+        if self._track_filter and event.track != self._track_filter:
+            return
 
         # Always use the latest partial — STT providers may revise/correct earlier text.
         text = event.text
@@ -724,9 +731,8 @@ class CallScreeningDetector:
             return
 
         # Track filtering for multi-turn.
-        if self._track_filter and hasattr(event, "track"):
-            if getattr(event, "track", None) != self._track_filter:
-                return
+        if self._track_filter and event.track != self._track_filter:
+            return
 
         # Check if this looks like a human answering (conversational speech)
         # *before* enforcing the turn limit, so a human picking up on the
