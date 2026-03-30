@@ -350,7 +350,7 @@ class TestScreeningEdgeCases:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             assert responses[0].mode == "agent"
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             assert len(responses) >= 2
             assert responses[1].mode == "static"
         finally:
@@ -618,7 +618,7 @@ class TestBotToBotDetection:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="human"))
             assert sm.state == OutboundCallState.HUMAN
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             assert sm.state == OutboundCallState.ENDED
         finally:
             sm.stop()

@@ -351,9 +351,7 @@ class ScreeningResponse:
     mode: str  # "static" | "agent"
 
 
-def is_conversational(
-    text: str, patterns: ScreeningPatternSet | None = None
-) -> bool:
+def is_conversational(text: str, patterns: ScreeningPatternSet | None = None) -> bool:
     """Return True if *text* looks like a human conversational utterance.
 
     Uses structural heuristics rather than hardcoded phrase lists so that
@@ -521,6 +519,16 @@ class CallScreeningDetector:
     @property
     def screening_turns(self) -> int:
         return self._screening_turns
+
+    @property
+    def accumulated_text(self) -> str:
+        """The most recent accumulated STT partial text from screening."""
+        return self._accumulated_text
+
+    @property
+    def screening_response(self) -> str:
+        """The configured static screening response text."""
+        return self._screening_response
 
     def start(self) -> None:
         if not self._enabled:

@@ -152,6 +152,11 @@ class OutboundCallManager:
                 "Install it with: pip install easycat[twilio]"
             ) from None
 
+        if not twilio_account_sid or not twilio_auth_token:
+            raise ValueError(
+                "twilio_account_sid and twilio_auth_token are required for OutboundCallManager"
+            )
+
         self._event_bus = event_bus
         self._from_number = from_number
         self._amd_mode = amd_mode

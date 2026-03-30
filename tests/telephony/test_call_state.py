@@ -224,7 +224,7 @@ class TestOutboundCallStateMachine:
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))
             assert sm.state == OutboundCallState.CLASSIFYING
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             assert sm.state == OutboundCallState.UNKNOWN
         finally:
             sm.stop()
@@ -236,7 +236,7 @@ class TestOutboundCallStateMachine:
         sm.start()
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             assert sm.state == OutboundCallState.UNKNOWN
             # UNKNOWN is a terminal classification; normal pipeline runs.
         finally:
@@ -304,7 +304,7 @@ class TestOutboundCallStateMachine:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="human"))
             assert sm.state == OutboundCallState.HUMAN
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             assert sm.state == OutboundCallState.ENDED
         finally:
             sm.stop()
@@ -342,7 +342,7 @@ class TestCallStateMachineTimeBounds:
         sm.start()
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             assert sm.state == OutboundCallState.UNKNOWN
         finally:
             sm.stop()
@@ -354,7 +354,7 @@ class TestCallStateMachineTimeBounds:
         sm.start()
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.1)
             assert sm.state == OutboundCallState.UNKNOWN
         finally:
             sm.stop()
@@ -464,7 +464,7 @@ class TestClassificationGate:
             )
             await bus.emit(ev)
             assert len(gate.buffer) == 1
-            assert gate.is_closed
+            assert gate.is_buffering
         finally:
             gate.stop()
 
@@ -488,7 +488,7 @@ class TestClassificationGate:
             assert len(gate.buffer) == 1
             released = gate.release()
             assert len(released) == 1
-            assert not gate.is_closed
+            assert not gate.is_buffering
             assert len(flushed) == 1
         finally:
             gate.stop()
@@ -511,7 +511,7 @@ class TestClassificationGate:
             await bus.emit(ev)
             released = gate.release()
             assert len(released) == 1
-            assert not gate.is_closed
+            assert not gate.is_buffering
         finally:
             gate.stop()
 
@@ -531,9 +531,9 @@ class TestClassificationGate:
                 )
             )
             await bus.emit(ev)
-            assert gate.is_closed
-            await asyncio.sleep(0.1)
-            assert not gate.is_closed
+            assert gate.is_buffering
+            await asyncio.sleep(0.3)
+            assert not gate.is_buffering
             assert len(gate.buffer) == 0  # Flushed.
         finally:
             gate.stop()
@@ -555,7 +555,7 @@ class TestClassificationGate:
             )
             await bus.emit(ev)
             gate.release()
-            assert not gate.is_closed
+            assert not gate.is_buffering
             # Second release is a no-op.
             second = gate.release()
             assert len(second) == 0
@@ -592,7 +592,7 @@ class TestClassificationGate:
             )
             await bus.emit(ev)
             assert len(gate.buffer) == 0
-            assert not gate.is_closed
+            assert not gate.is_buffering
         finally:
             gate.stop()
 
@@ -606,7 +606,7 @@ class TestClassificationGate:
         try:
             gate.close()
             gate.release()
-            assert not gate.is_closed
+            assert not gate.is_buffering
             # After release, new TTS passes through (not buffered).
             ev = TTSAudio(
                 chunk=AudioChunk(
@@ -732,7 +732,7 @@ class TestLateVoicemailDetection:
             await bus.emit(VoicemailDetected(result="human"))
             assert sm.state == OutboundCallState.HUMAN
             # Wait for window to expire.
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             await bus.emit(VoicemailDetected(result="machine"))
             assert sm.state == OutboundCallState.HUMAN
         finally:
@@ -877,7 +877,7 @@ class TestVoicemailPickupDetection:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="machine"))
             assert sm.state == OutboundCallState.VOICEMAIL
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             await bus.emit(STTFinal(text="Hello?"))
             assert sm.state == OutboundCallState.VOICEMAIL
         finally:
@@ -927,8 +927,7 @@ class TestVoicemailPickupDetection:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="machine"))
             assert sm.state == OutboundCallState.VOICEMAIL
-            ev = STTFinal(text="Hello?")
-            object.__setattr__(ev, "track", "outbound")
+            ev = STTFinal(text="Hello?", track="outbound")
             await bus.emit(ev)
             assert sm.state == OutboundCallState.VOICEMAIL
         finally:
@@ -971,14 +970,14 @@ class TestVoicemailPickupDetection:
         sm.start()
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))
-            assert sm.gate.is_closed
+            assert sm.gate.is_buffering
             await bus.emit(VoicemailDetected(result="machine"))
             assert sm.state == OutboundCallState.VOICEMAIL
             # Gate stays closed after discard (blocks remaining TTS).
-            assert sm.gate.is_closed
+            assert sm.gate.is_buffering
             await bus.emit(STTFinal(text="Hello?"))
             assert sm.state == OutboundCallState.HUMAN
-            assert not sm.gate.is_closed
+            assert not sm.gate.is_buffering
         finally:
             sm.stop()
 

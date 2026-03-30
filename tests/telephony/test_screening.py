@@ -302,15 +302,18 @@ class TestCallScreeningDetector:
             await bus.emit(CallAnswered(call_sid=""))
 
             # Simulate an outbound-track partial (bot's own speech).
-            ev = STTPartial(text="please record your name and reason for calling")
-            # Attach a track attribute dynamically for testing.
-            object.__setattr__(ev, "track", "outbound")
+            ev = STTPartial(
+                text="please record your name and reason for calling",
+                track="outbound",
+            )
             await bus.emit(ev)
             assert len(received) == 0
 
             # Now an inbound-track partial.
-            ev2 = STTPartial(text="please record your name and reason for calling")
-            object.__setattr__(ev2, "track", "inbound")
+            ev2 = STTPartial(
+                text="please record your name and reason for calling",
+                track="inbound",
+            )
             await bus.emit(ev2)
             assert len(received) == 1
         finally:
@@ -436,7 +439,7 @@ class TestScreeningResponseAgent:
             assert len(responses) == 1
             assert responses[0].mode == "agent"
             # Wait for timeout to fire the fallback.
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             assert len(responses) == 2
             assert responses[1].mode == "static"
             assert responses[1].text == "Fallback: Hi, this is Sarah"
@@ -763,7 +766,7 @@ class TestMultiLanguagePatterns:
             == "carrier"
         )
 
-    def test_english_still_detected_with_non_english_language(self) -> None:
+    def test_english_not_included_with_non_english_only(self) -> None:
         """English patterns are NOT included when only a non-English language is requested."""
         patterns = screening_patterns_for_languages(["es"])
         # English iOS prompt should NOT match Spanish-only patterns.

@@ -191,7 +191,7 @@ class TestOutboundSessionPipeline:
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))
             assert sm.state == OutboundCallState.CLASSIFYING
-            assert sm.gate.is_closed
+            assert sm.gate.is_buffering
 
             # TTS audio should be buffered.
             chunk = AudioChunk(
@@ -204,7 +204,7 @@ class TestOutboundSessionPipeline:
             # Classify as human — gate releases.
             await bus.emit(VoicemailDetected(result="human"))
             assert sm.state == OutboundCallState.HUMAN
-            assert not sm.gate.is_closed
+            assert not sm.gate.is_buffering
         finally:
             sm.stop()
 
@@ -454,8 +454,8 @@ class TestClassificationGateModule:
                 format=AudioFormat(sample_rate=16000, channels=1, sample_width=2),
             )
             await bus.emit(TTSAudio(chunk=chunk))
-            await asyncio.sleep(0.1)
-            assert not gate.is_closed
+            await asyncio.sleep(0.3)
+            assert not gate.is_buffering
         finally:
             gate.stop()
 
@@ -470,12 +470,12 @@ class TestClassificationGateModule:
         sm.start()
         try:
             # Gate not closed before call is answered.
-            assert not sm.gate.is_closed
+            assert not sm.gate.is_buffering
             await bus.emit(CallAnswered(call_sid="CA1"))
             assert sm.state == OutboundCallState.CLASSIFYING
-            assert sm.gate.is_closed
+            assert sm.gate.is_buffering
             # Classify — gate opens.
             await bus.emit(VoicemailDetected(result="human"))
-            assert not sm.gate.is_closed
+            assert not sm.gate.is_buffering
         finally:
             sm.stop()

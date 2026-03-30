@@ -554,14 +554,17 @@ class PostScreeningVoicemailDetector:
     classifier to determine whether it went to voicemail or a human picked up.
 
     Subscribes to ``STTFinal`` events. After activation (by screening),
-    classifies the next greeting-length utterance.
+    classifies the next greeting-length utterance. Falls back to ``"unknown"``
+    if no decisive classification is made within ``timeout_s``.
     """
 
-    def __init__(self, event_bus: EventBus) -> None:
+    def __init__(self, event_bus: EventBus, *, timeout_s: float = 15.0) -> None:
         self._event_bus = event_bus
+        self._timeout_s = timeout_s
         self._active = False
         self._started = False
         self._classified = False
+        self._timeout_task: asyncio.Task[None] | None = None
 
     @property
     def active(self) -> bool:
@@ -576,14 +579,40 @@ class PostScreeningVoicemailDetector:
     def stop(self) -> None:
         if self._started:
             self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
+        self._cancel_timeout()
         self._started = False
         self._active = False
         self._classified = False
+
+    def _cancel_timeout(self) -> None:
+        if self._timeout_task and not self._timeout_task.done():
+            self._timeout_task.cancel()
+        self._timeout_task = None
 
     def activate(self) -> None:
         """Start watching for post-screening greeting."""
         self._active = True
         self._classified = False
+        self._start_timeout()
+
+    def _start_timeout(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._timeout_task = loop.create_task(self._timeout_coro())
+
+    async def _timeout_coro(self) -> None:
+        """Fall back to 'unknown' if no decisive classification within timeout."""
+        try:
+            await asyncio.sleep(self._timeout_s)
+            if self._active and not self._classified:
+                self._classified = True
+                self._active = False
+                logger.info("PostScreeningVoicemailDetector timed out — emitting unknown")
+                await self._event_bus.emit(VoicemailDetected(result="unknown", source="fusion"))
+        except asyncio.CancelledError:
+            pass
 
     async def _on_stt_final(self, event: STTFinal) -> None:
         if not self._active or self._classified:
@@ -599,6 +628,7 @@ class PostScreeningVoicemailDetector:
 
         self._classified = True
         self._active = False
+        self._cancel_timeout()
         # Emit with source="fusion" so downstream consumers that filter on
         # expect_fused (e.g. OutboundCallStateMachine, VoicemailPolicyHandler)
         # accept the event without waiting for the AMD fallback timer.

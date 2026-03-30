@@ -263,7 +263,7 @@ def create_session(config: EasyCatConfig) -> Session:
     if _outbound_sm is not None:
 
         def audio_gate() -> bool:
-            return _outbound_sm.gate.is_closed
+            return _outbound_sm.gate.is_buffering
 
     session = Session(
         SessionConfig(
@@ -290,7 +290,11 @@ def create_session(config: EasyCatConfig) -> Session:
 
     if _outbound_sm is not None:
         _wire_outbound_pipeline(
-            session, _outbound_sm, telephony_helpers, event_bus, agent,
+            session,
+            _outbound_sm,
+            telephony_helpers,
+            event_bus,
+            agent,
         )
 
     return session
@@ -343,14 +347,14 @@ def _wire_outbound_pipeline(
     async def _on_screening_response(event: ScreeningResponse) -> None:
         if event.mode == "agent" and _screening_detector is not None:
             try:
-                prompt = _screening_detector._accumulated_text
+                prompt = _screening_detector.accumulated_text
                 response_text = await agent.run(
                     f"The callee's phone is screening this call. "
                     f'Their screening prompt says: "{prompt}". '
                     f"Identify yourself briefly."
                 )
                 in_time = _screening_detector.notify_agent_responded()
-                fallback_spoken = not in_time and _screening_detector._screening_response
+                fallback_spoken = not in_time and _screening_detector.screening_response
                 if response_text and not fallback_spoken:
                     await session.synthesize_bypass(response_text)
             except Exception:
