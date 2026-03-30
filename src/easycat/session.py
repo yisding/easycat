@@ -834,6 +834,11 @@ class Session:
         self._auto_turn_speech_frames = 0
         self._turn_manager.reset()
 
+    @property
+    def _is_gated(self) -> bool:
+        """Whether the classification gate is currently buffering TTS audio."""
+        return self._audio_gate is not None and self._audio_gate()
+
     # ── Properties ─────────────────────────────────────────────
 
     def subscribe_event(self, event_type: type, handler: EventHandler) -> None:
@@ -1617,7 +1622,7 @@ class Session:
                         # When the classification gate is closed, audio is
                         # buffered.  Don't enter BOT_SPEAKING so callee
                         # speech during CLASSIFYING isn't treated as barge-in.
-                        gated = self._audio_gate is not None and self._audio_gate()
+                        gated = self._is_gated
                         if not gated:
                             await self._turn_manager.bot_started_speaking()
                             tts_playback_started = True
@@ -1633,7 +1638,7 @@ class Session:
                         # None so the synth loop buffers all audio.
                         is_active=(
                             None
-                            if self._audio_gate is not None and self._audio_gate()
+                            if self._is_gated
                             else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
                         ),
                         record_latency=self._first_tts_audio_time is None,
@@ -1781,7 +1786,7 @@ class Session:
         # to the transport).  Don't transition the turn manager through
         # BOT_SPEAKING so that the replayed audio triggers the correct state
         # transitions later via the gate-flush callback.
-        gated = self._audio_gate is not None and self._audio_gate()
+        gated = self._is_gated
         if not gated:
             await self._turn_manager.bot_started_speaking()
         try:
@@ -1789,10 +1794,6 @@ class Session:
                 payload,
                 token,
                 turn_end_time=self._turn_end_time,
-                # When gated, the turn manager stays in PROCESSING (we skipped
-                # bot_started_speaking), so the BOT_SPEAKING check would exit
-                # immediately. Pass None so the synth loop runs to completion
-                # and all audio gets buffered for replay when the gate opens.
                 is_active=(
                     None
                     if gated

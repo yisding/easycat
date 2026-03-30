@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from easycat.events import CallEnded, CallFailed, CallInitiated, EventBus
 from easycat.telephony.call_state import CallStateChanged, OutboundCallState
+from easycat.telephony.outbound import BLOCK_REASONS
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +222,7 @@ class NumberHealthMonitor:
     async def _on_call_failed(self, event: CallFailed) -> None:
         number = self._resolve_number(event.call_sid, event.number)
         self._decrement_concurrent(number)
-        is_blocked = event.reason in ("blocked_unwanted", "blocked_rejected")
+        is_blocked = event.reason in BLOCK_REASONS
         self.record_call(number, answered=False, blocked=is_blocked)
         self._call_sid_to_number.pop(event.call_sid, None)
 
@@ -255,7 +256,6 @@ class CallDispositionTracker:
     def __init__(self, event_bus: EventBus) -> None:
         self._event_bus = event_bus
         self._dispositions: list[tuple[float, str, str]] = []  # (timestamp, disposition, call_sid)
-        self._disposed_calls: dict[str, None] = {}
         self._call_dispositions: dict[str, str] = {}
         self._failure_reasons: dict[str, str] = {}
         self._started = False
@@ -330,21 +330,19 @@ class CallDispositionTracker:
 
             # Allow reclassification: late voicemail (HUMAN→VOICEMAIL) and
             # voicemail pickup (VOICEMAIL→HUMAN) overwrite the earlier disposition.
-            if call_sid in self._disposed_calls:
+            if call_sid in self._call_dispositions:
                 if event.new in {OutboundCallState.VOICEMAIL, OutboundCallState.HUMAN}:
                     self._replace_disposition(call_sid, disposition)
                 return
 
-            self._disposed_calls[call_sid] = None
             self._call_dispositions[call_sid] = disposition
             self.record_disposition(disposition, call_sid=call_sid)
 
             # Evict oldest entries when tracking dicts grow too large.
-            if len(self._disposed_calls) > self._MAX_CALL_TRACKING:
+            if len(self._call_dispositions) > self._MAX_CALL_TRACKING:
                 from itertools import islice
 
-                oldest_sids = list(islice(self._disposed_calls, self._MAX_CALL_TRACKING // 2))
+                oldest_sids = list(islice(self._call_dispositions, self._MAX_CALL_TRACKING // 2))
                 for sid in oldest_sids:
-                    self._disposed_calls.pop(sid, None)
                     self._call_dispositions.pop(sid, None)
                     self._failure_reasons.pop(sid, None)

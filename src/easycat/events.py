@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from easycat.audio_format import AudioChunk
 
@@ -271,8 +271,8 @@ class DTMFAggregated:
 class VoicemailDetected:
     """Voicemail / answering machine detection result."""
 
-    result: str  # "human" | "machine" | "unknown"
-    source: str = ""  # "" = raw AMD, "fusion" = fused AMD+STT
+    result: Literal["human", "machine", "unknown"]
+    source: Literal["", "fusion", "detector"] = ""
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)
@@ -317,7 +317,7 @@ class CallScreening:
     """Call screening detected."""
 
     call_sid: str
-    platform: str  # "ios" | "android" | "carrier" | "unknown"
+    platform: Literal["ios", "android", "carrier", "third_party", "unknown"]
     session_id: str | None = field(default=None, kw_only=True)
     turn_id: str | None = field(default=None, kw_only=True)
     timestamp: float = field(default_factory=time.monotonic)

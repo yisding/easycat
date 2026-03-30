@@ -174,7 +174,7 @@ class DTMFDelivery:
         """Send DTMF with retry and fallback to speech."""
         success = await self.send_dtmf(digits)
         if not success:
-            # Retry once.
+            await asyncio.sleep(0.5)
             success = await self.send_dtmf(digits)
         return success
 

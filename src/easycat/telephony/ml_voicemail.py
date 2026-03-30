@@ -77,18 +77,16 @@ class EarlyMediaDetector:
     """
 
     def __init__(self) -> None:
-        self._in_early_media = True
         self._call_answered = False
         self._early_media_texts: list[str] = []
 
     @property
     def in_early_media(self) -> bool:
-        return self._in_early_media and not self._call_answered
+        return not self._call_answered
 
     def on_call_answered(self) -> None:
         """Mark that the call has been answered — end early media phase."""
         self._call_answered = True
-        self._in_early_media = False
 
     def record_early_text(self, text: str) -> None:
         """Record text received during early media phase."""
@@ -101,6 +99,5 @@ class EarlyMediaDetector:
         return any(p in lower for p in EARLY_MEDIA_PHRASES)
 
     def reset(self) -> None:
-        self._in_early_media = True
         self._call_answered = False
         self._early_media_texts.clear()

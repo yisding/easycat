@@ -373,7 +373,7 @@ class VoicemailPolicyHandler:
         logger.info("Voicemail policy: transferring to %s", self._config.transfer_number)
 
 
-# ── Enhanced voicemail: STT-based greeting classification ──────────
+# ── STT-based greeting classification ──────────────────────────────
 
 _VOICEMAIL_PHRASES: list[str] = [
     "leave a message",
@@ -440,7 +440,7 @@ def classify_greeting(text: str) -> str:
     return "unknown"
 
 
-# ── Enhanced voicemail: SIT tone detection ─────────────────────────
+# ── SIT tone detection ─────────────────────────────────────────────
 
 # Special Information Tones (SIT) are three tones in sequence:
 # 950 Hz, 1400 Hz, 1800 Hz — used to signal "number not in service".

@@ -71,6 +71,14 @@ SMART_TURN_SUPPRESS_STATES = frozenset(
     }
 )
 
+# States that accept voicemail detection signals (CLASSIFYING or SCREENING).
+_VOICEMAIL_ACCEPT_STATES = frozenset(
+    {
+        OutboundCallState.CLASSIFYING,
+        OutboundCallState.SCREENING,
+    }
+)
+
 
 @dataclass(frozen=True)
 class CallStateChanged:
@@ -478,14 +486,14 @@ class OutboundCallStateMachine:
             self._start_max_duration_timer()
 
     async def _on_failed(self, event: CallFailed) -> None:
-        if event.call_sid:
-            self._call_sid = event.call_sid
-        self._cancel_timers()
-        await self._transition(OutboundCallState.ENDED)
+        await self._terminate_call(event.call_sid)
 
     async def _on_ended(self, event: CallEnded) -> None:
-        if event.call_sid:
-            self._call_sid = event.call_sid
+        await self._terminate_call(event.call_sid)
+
+    async def _terminate_call(self, call_sid: str) -> None:
+        if call_sid:
+            self._call_sid = call_sid
         self._cancel_timers()
         await self._transition(OutboundCallState.ENDED)
 
@@ -494,16 +502,10 @@ class OutboundCallStateMachine:
         # but accept both fused and detector-sourced events.
         if self._expect_fused_voicemail and not event.source:
             return
-        if event.result == "human" and self._state in {
-            OutboundCallState.CLASSIFYING,
-            OutboundCallState.SCREENING,
-        }:
+        if event.result == "human" and self._state in _VOICEMAIL_ACCEPT_STATES:
             self._cancel_classification_timeout()
             await self._transition(OutboundCallState.HUMAN)
-        elif event.result == "machine" and self._state in {
-            OutboundCallState.CLASSIFYING,
-            OutboundCallState.SCREENING,
-        }:
+        elif event.result == "machine" and self._state in _VOICEMAIL_ACCEPT_STATES:
             self._cancel_classification_timeout()
             await self._transition(OutboundCallState.VOICEMAIL)
         elif (
