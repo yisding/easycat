@@ -49,6 +49,8 @@ class NumberHealthMonitor:
     call pacing limits.
     """
 
+    _MAX_RECORDS_PER_NUMBER = 500
+
     def __init__(
         self,
         event_bus: EventBus,
@@ -100,7 +102,8 @@ class NumberHealthMonitor:
     ) -> None:
         """Record a call outcome for a number."""
         now = time.monotonic()
-        self._records[number].append(
+        records = self._records[number]
+        records.append(
             _CallRecord(
                 timestamp=now,
                 answered=answered,
@@ -109,6 +112,9 @@ class NumberHealthMonitor:
                 disposition=disposition,
             )
         )
+        # Cap per-number records to prevent unbounded growth.
+        if len(records) > self._MAX_RECORDS_PER_NUMBER:
+            self._records[number] = records[-self._MAX_RECORDS_PER_NUMBER :]
         self._last_call_time[number] = now
 
     def answer_rate(self, number: str) -> float:
@@ -279,12 +285,12 @@ class CallDispositionTracker:
         return {k: v / total for k, v in counts.items()}
 
     def disposition_by_hour(self) -> dict[int, dict[str, int]]:
-        """Return disposition breakdown by hour of day."""
-        from datetime import datetime
+        """Return disposition breakdown by hour of day (UTC)."""
+        from datetime import UTC, datetime
 
         by_hour: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         for ts, disp, _ in self._dispositions:
-            hour = datetime.fromtimestamp(ts).hour
+            hour = datetime.fromtimestamp(ts, tz=UTC).hour
             by_hour[hour][disp] += 1
         return dict(by_hour)
 
