@@ -210,12 +210,14 @@ class EasyCatConfig:
         # Set the easycat logger to DEBUG regardless of the root level.
         logging.getLogger("easycat").setLevel(logging.DEBUG)
 
-        # Enable event trace logging with partials so STT progress is visible.
-        self.event_logging = EventLoggingConfig(
-            enabled=True,
-            include_partials=True,
-            level=logging.DEBUG,
-        )
+        # Enable event trace logging with partials so STT progress is visible,
+        # but only if the caller didn't supply an explicit config.
+        if self.event_logging == EventLoggingConfig():
+            self.event_logging = EventLoggingConfig(
+                enabled=True,
+                include_partials=True,
+                level=logging.DEBUG,
+            )
 
         # Enable in-memory metrics so latency data is always collected.
         if self.metrics is None:

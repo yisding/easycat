@@ -153,6 +153,8 @@ class ReconnectingWebSocket:
         ``close()``), the iterator ends.
         """
         if self._ws is None:
+            if self._closed:
+                return
             raise RuntimeError("WebSocket is not connected")
 
         while True:
