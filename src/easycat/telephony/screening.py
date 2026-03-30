@@ -2,6 +2,17 @@
 
 from __future__ import annotations
 
+__all__ = [
+    "CallScreeningDetector",
+    "ScreeningPatternSet",
+    "ScreeningResponse",
+    "ScreeningState",
+    "check_coherence",
+    "is_conversational",
+    "match_screening_platform",
+    "screening_patterns_for_languages",
+]
+
 import asyncio
 import logging
 from collections.abc import Sequence
@@ -233,6 +244,17 @@ COHERENCE_STOPWORDS: frozenset[str] = frozenset(
         "um",
         "uh",
         "oh",
+        "just",
+        "like",
+        "well",
+        "okay",
+        "ok",
+        "yeah",
+        "yes",
+        "no",
+        "not",
+        "actually",
+        "basically",
     }
 )
 
@@ -351,11 +373,22 @@ class ScreeningResponse:
     mode: str  # "static" | "agent"
 
 
-def is_conversational(text: str, patterns: ScreeningPatternSet | None = None) -> bool:
+def is_conversational(
+    text: str,
+    patterns: ScreeningPatternSet | None = None,
+    *,
+    max_words: int = 8,
+) -> bool:
     """Return True if *text* looks like a human conversational utterance.
 
     Uses structural heuristics rather than hardcoded phrase lists so that
     novel phrasing and non-English greetings are handled correctly.
+
+    Args:
+        text: Transcript text to classify.
+        patterns: Screening pattern set for exclusion checks.
+        max_words: Maximum word count to accept as conversational (default 8).
+            Utterances with more words are rejected as likely voicemail/IVR.
 
     The core insight (backed by Twilio AMD research and Bland AI's findings):
     humans answer with **short utterances** (1-6 words) then pause; screening
@@ -365,7 +398,7 @@ def is_conversational(text: str, patterns: ScreeningPatternSet | None = None) ->
     Decision order:
       1. Reject known screening platform prompts (iOS/Android/carrier).
       2. Reject long interrogative sentences (screening AI follow-ups).
-      3. Accept short utterances (≤6 content words) that aren't screening.
+      3. Accept short utterances (≤ *max_words*) that aren't screening.
       4. Reject everything else (long non-question = voicemail greeting, etc.).
     """
     lower = text.strip().lower()
@@ -417,16 +450,16 @@ def is_conversational(text: str, patterns: ScreeningPatternSet | None = None) ->
     # ── Step 3: Accept short utterances ──────────────────────────
     # Humans typically answer with 1-8 words: "Hello?", "Yeah",
     # "Go ahead", "This is John speaking", "Hi how can I help you".
-    # Threshold of 8 words covers natural greetings (including
+    # Default threshold of 8 words covers natural greetings (including
     # receptionist pickups like "Hello how can I help you today")
     # while excluding voicemail greetings and IVR announcements which
     # are almost always 9+ words.  Screening follow-ups in the 6-8
     # word range are caught by the interrogative-starter check above.
-    if word_count <= 8:
+    if word_count <= max_words:
         return True
 
     # ── Step 4: Reject longer utterances ─────────────────────────
-    # 9+ word non-interrogative utterances that don't match screening
+    # Utterances exceeding max_words that don't match screening
     # are likely voicemail greetings, carrier announcements, or other
     # non-conversational speech.
     return False

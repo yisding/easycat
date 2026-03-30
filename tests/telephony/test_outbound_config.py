@@ -28,6 +28,9 @@ class TestOutboundCallConfig:
         assert cfg.voicemail_pickup_window_s == 60.0
 
     def test_all_fields_configurable(self) -> None:
+        async def _dummy_agent(ctx: dict) -> dict:
+            return {"action": "wait"}
+
         cfg = OutboundCallConfig(
             from_number="+1999",
             amd_mode="Enable",
@@ -39,6 +42,7 @@ class TestOutboundCallConfig:
             enable_screening_detection=False,
             screening_response="Hi I'm Sarah",
             screening_use_agent=True,
+            ivr_agent_callback=_dummy_agent,
             max_screening_turns=5,
             enable_realtime_transcription=False,
             classification_gate=False,

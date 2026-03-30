@@ -34,6 +34,10 @@ class TestCallingHoursEnforcement:
             "+12125551234", current_hour=10, timezone_override="America/Chicago"
         )
 
+    def test_unknown_timezone_blocks_call(self) -> None:
+        # Area code 999 is not in the mapping — should block conservatively.
+        assert not check_calling_hours("+19995551234")
+
 
 class TestAIDisclosure:
     def test_disclosure_text_configurable(self) -> None:

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass
 
 from easycat.events import CallEnded, CallFailed, CallInitiated, EventBus
 from easycat.telephony.call_state import CallStateChanged, OutboundCallState
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -178,9 +181,21 @@ class NumberHealthMonitor:
 
         # Evict stale SID mappings (zombie calls that never ended).
         if len(self._call_sid_to_number) > self._max_sid_tracking:
-            oldest = list(self._call_sid_to_number.keys())[: self._max_sid_tracking // 2]
+            evict_count = self._max_sid_tracking // 2
+            logger.warning(
+                "SID tracking limit exceeded (%d > %d), evicting %d oldest entries",
+                len(self._call_sid_to_number),
+                self._max_sid_tracking,
+                evict_count,
+            )
+            oldest = list(self._call_sid_to_number.keys())[:evict_count]
             for sid in oldest:
-                self._call_sid_to_number.pop(sid, None)
+                # Decrement concurrent count for evicted calls.
+                evicted_number = self._call_sid_to_number.pop(sid, None)
+                if evicted_number:
+                    self._concurrent[evicted_number] = max(
+                        0, self._concurrent.get(evicted_number, 0) - 1
+                    )
 
     async def _on_call_failed(self, event: CallFailed) -> None:
         number = self._resolve_number(event.call_sid, event.number)
