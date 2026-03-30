@@ -150,6 +150,8 @@ class OpenAIRealtimeSTT(STTBase):
             logger.debug("OpenAI Realtime WebSocket closed")
         except Exception:
             logger.exception("Error in OpenAI Realtime receive loop")
+        finally:
+            self._event_queue.put_nowait(None)
 
     def _handle_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type", "")
