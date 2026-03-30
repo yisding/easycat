@@ -25,6 +25,9 @@ from easycat.events import EventBus, STTFinal
 
 logger = logging.getLogger(__name__)
 
+# Valid DTMF characters (digits, *, #, and W/w for pauses).
+_VALID_DTMF = frozenset("0123456789*#wW")
+
 # Heuristic patterns that indicate IVR prompts.
 _IVR_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"press\s+\d", re.IGNORECASE),
@@ -140,7 +143,7 @@ class DTMFDelivery:
 
         from xml.sax.saxutils import escape
 
-        safe_text = escape(text)
+        safe_text = escape(text, {'"': "&quot;", "'": "&apos;"})
         twiml = f'<Response><Say>{safe_text}</Say><Pause length="30"/></Response>'
 
         try:
@@ -157,7 +160,6 @@ class DTMFDelivery:
 
         # Validate that digits contains only valid DTMF characters to
         # prevent TwiML injection via the agent callback.
-        _VALID_DTMF = set("0123456789*#wW")
         if not digits or not all(c in _VALID_DTMF for c in digits):
             logger.warning("Invalid DTMF digits rejected: %r", digits)
             return False

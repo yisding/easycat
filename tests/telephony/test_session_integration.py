@@ -39,10 +39,16 @@ class TestOutboundSessionCreation:
         """create_telephony_helpers with outbound config creates all helpers."""
         from easycat.config import _create_telephony_helpers
 
+        async def _dummy_agent(ctx: dict) -> dict:
+            return {"action": "wait"}
+
         bus = EventBus()
         config = TelephonyConfig(
             enable_outbound_call_manager=True,
-            outbound=OutboundCallConfig(from_number="+15551234567"),
+            outbound=OutboundCallConfig(
+                from_number="+15551234567",
+                ivr_agent_callback=_dummy_agent,
+            ),
         )
         helpers = _create_telephony_helpers(bus, config)
         types = [type(h).__name__ for h in helpers]
@@ -50,6 +56,19 @@ class TestOutboundSessionCreation:
         assert "CallScreeningDetector" in types
         assert "IVRNavigator" in types
         assert "VoicemailPolicyHandler" in types
+
+    def test_create_session_without_ivr_agent_skips_navigator(self) -> None:
+        """Without ivr_agent_callback, IVRNavigator is not created."""
+        from easycat.config import _create_telephony_helpers
+
+        bus = EventBus()
+        config = TelephonyConfig(
+            enable_outbound_call_manager=True,
+            outbound=OutboundCallConfig(from_number="+15551234567"),
+        )
+        helpers = _create_telephony_helpers(bus, config)
+        types = [type(h).__name__ for h in helpers]
+        assert "IVRNavigator" not in types
 
     def test_create_session_without_outbound(self) -> None:
         """Without outbound config, no outbound helpers created."""
@@ -149,10 +168,19 @@ class TestOutboundSessionPipeline:
         """STTFinal events reach IVRNavigator when activated."""
         from easycat.config import _create_telephony_helpers
 
+        received_prompts: list[str] = []
+
+        async def _mock_agent(ctx: dict) -> dict:
+            received_prompts.append(ctx["prompt"])
+            return {"action": "wait"}
+
         bus = EventBus()
         config = TelephonyConfig(
             enable_outbound_call_manager=True,
-            outbound=OutboundCallConfig(from_number="+1555"),
+            outbound=OutboundCallConfig(
+                from_number="+1555",
+                ivr_agent_callback=_mock_agent,
+            ),
         )
         helpers = _create_telephony_helpers(bus, config)
         for h in helpers:
@@ -166,10 +194,9 @@ class TestOutboundSessionPipeline:
         bus.subscribe(IVRAction, actions.append)
 
         try:
-            # Without agent callback, no action emitted, but event is received.
             await bus.emit(STTFinal(text="Press 1 for sales"))
-            # Navigator received the event (was active), but no agent callback.
             assert nav._active is True
+            assert received_prompts == ["Press 1 for sales"]
         finally:
             for h in helpers:
                 h.stop()

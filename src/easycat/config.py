@@ -310,6 +310,41 @@ def create_session(config: EasyCatConfig) -> Session:
     return session
 
 
+class _OutboundPipelineWiring:
+    """Encapsulates mutable state for the outbound pipeline callbacks.
+
+    Replaces bare closures with ``nonlocal`` to avoid unsynchronized
+    access to ``_hold_audio_task`` from concurrent async callbacks.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+        self._lock = asyncio.Lock()
+        self._hold_audio_task: asyncio.Task[None] | None = None
+
+    async def flush_gated_audio(self, events: list[TTSAudio]) -> None:
+        async with self._lock:
+            if self._hold_audio_task is not None and not self._hold_audio_task.done():
+                self._hold_audio_task.cancel()
+                self._hold_audio_task = None
+        await self._session.replay_gated_audio(events)
+
+    def play_hold_audio(self, text: str) -> None:
+        async def _synthesize_hold() -> None:
+            await self._session.synthesize_bypass(text)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("No running event loop — hold audio skipped")
+            return
+
+        # The lock is async-only; since this is a sync callback we just
+        # do a best-effort swap — the flush side holds the lock and will
+        # cancel whatever task reference it sees.
+        self._hold_audio_task = loop.create_task(_synthesize_hold())
+
+
 def _wire_outbound_pipeline(
     session: Session,
     sm: OutboundCallStateMachine,
@@ -323,30 +358,10 @@ def _wire_outbound_pipeline(
     response handler so that TTS audio is buffered, replayed, and the bot
     responds to screening prompts.
     """
-    _hold_audio_task: asyncio.Task[None] | None = None
+    wiring = _OutboundPipelineWiring(session)
 
-    async def _flush_gated_audio(events: list[TTSAudio]) -> None:
-        nonlocal _hold_audio_task
-        if _hold_audio_task is not None and not _hold_audio_task.done():
-            _hold_audio_task.cancel()
-            _hold_audio_task = None
-        await session.replay_gated_audio(events)
-
-    sm.set_gate_flush_callback(_flush_gated_audio)
-
-    def _play_hold_audio(text: str) -> None:
-        nonlocal _hold_audio_task
-
-        async def _synthesize_hold() -> None:
-            await session.synthesize_bypass(text)
-
-        try:
-            loop = asyncio.get_running_loop()
-            _hold_audio_task = loop.create_task(_synthesize_hold())
-        except RuntimeError:
-            logger.warning("No running event loop — hold audio skipped")
-
-    sm.gate.set_hold_audio_callback(_play_hold_audio)
+    sm.set_gate_flush_callback(wiring.flush_gated_audio)
+    sm.gate.set_hold_audio_callback(wiring.play_hold_audio)
 
     _screening_detector: CallScreeningDetector | None = None
     for _h in helpers:
@@ -460,44 +475,45 @@ def _create_outbound_helpers(
         )
         helpers.append(screening)
 
-    # IVR navigator — activated/deactivated by state machine transitions.
-    ivr_delivery = oc.ivr_dtmf_delivery
-    ivr = IVRNavigator(
-        event_bus,
-        agent_callback=oc.ivr_agent_callback,
-        dtmf_delivery=ivr_delivery,
-    )
-    helpers.append(ivr)
+    # IVR navigator — only created when an agent callback is configured.
+    if oc.ivr_agent_callback is not None:
+        ivr_delivery = oc.ivr_dtmf_delivery
+        ivr = IVRNavigator(
+            event_bus,
+            agent_callback=oc.ivr_agent_callback,
+            dtmf_delivery=ivr_delivery,
+        )
+        helpers.append(ivr)
 
-    # Propagate the live call SID so DTMFDelivery can send digits/speech.
-    if ivr_delivery is not None:
+        # Propagate the live call SID so DTMFDelivery can send digits/speech.
+        if ivr_delivery is not None:
 
-        async def _on_call_initiated_for_ivr(event: CallInitiated) -> None:
-            ivr_delivery.call_sid = event.call_sid
+            async def _on_call_initiated_for_ivr(event: CallInitiated) -> None:
+                ivr_delivery.call_sid = event.call_sid
 
-        event_bus.subscribe(CallInitiated, _on_call_initiated_for_ivr)
+            event_bus.subscribe(CallInitiated, _on_call_initiated_for_ivr)
 
-    def _on_state_changed_for_ivr(event: CallStateChanged) -> None:
-        if event.new == OutboundCallState.IVR:
-            ivr.activate()
-        elif event.new in {OutboundCallState.HUMAN, OutboundCallState.ENDED}:
-            ivr.deactivate()
+        def _on_state_changed_for_ivr(event: CallStateChanged) -> None:
+            if event.new == OutboundCallState.IVR:
+                ivr.activate()
+            elif event.new in {OutboundCallState.HUMAN, OutboundCallState.ENDED}:
+                ivr.deactivate()
 
-    event_bus.subscribe(CallStateChanged, _on_state_changed_for_ivr)
+        event_bus.subscribe(CallStateChanged, _on_state_changed_for_ivr)
 
-    # React to IVR navigator actions: human pickup, speech, and hangup.
-    async def _on_ivr_action(event: IVRAction) -> None:
-        if event.type == IVRActionType.HUMAN_DETECTED:
-            if sm.state == OutboundCallState.IVR:
-                await sm.transition(OutboundCallState.HUMAN)
-        elif event.type == IVRActionType.HANGUP:
-            if sm.state == OutboundCallState.IVR:
-                await sm.transition(OutboundCallState.ENDED)
-        elif event.type == IVRActionType.SPEAK:
-            if ivr_delivery is not None:
-                await ivr_delivery.send_speech(event.text)
+        # React to IVR navigator actions: human pickup, speech, and hangup.
+        async def _on_ivr_action(event: IVRAction) -> None:
+            if event.type == IVRActionType.HUMAN_DETECTED:
+                if sm.state == OutboundCallState.IVR:
+                    await sm.transition(OutboundCallState.HUMAN)
+            elif event.type == IVRActionType.HANGUP:
+                if sm.state == OutboundCallState.IVR:
+                    await sm.transition(OutboundCallState.ENDED)
+            elif event.type == IVRActionType.SPEAK:
+                if ivr_delivery is not None:
+                    await ivr_delivery.send_speech(event.text)
 
-    event_bus.subscribe(IVRAction, _on_ivr_action)
+        event_bus.subscribe(IVRAction, _on_ivr_action)
 
     # Voicemail policy handler.
     helpers.append(VoicemailPolicyHandler(event_bus, expect_fused=True))
