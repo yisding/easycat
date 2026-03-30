@@ -51,8 +51,7 @@ def lookup_timezone(phone: str) -> str | None:
         tz = _AREA_CODE_TZ.get(area_code)
         if tz is None:
             logger.warning(
-                "Area code %s not in timezone mapping for %s — "
-                "consider using a complete database",
+                "Area code %s not in timezone mapping for %s — consider using a complete database",
                 area_code,
                 phone,
             )

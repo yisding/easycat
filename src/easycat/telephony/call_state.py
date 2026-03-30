@@ -104,7 +104,8 @@ class ClassificationGate:
         self._on_hold_audio: Callable[[str], Any] | None = None
 
     @property
-    def is_closed(self) -> bool:
+    def is_buffering(self) -> bool:
+        """Whether the gate is currently buffering (blocking) TTS audio."""
         return self._closed
 
     @property
@@ -389,7 +390,7 @@ class OutboundCallStateMachine:
         # Only re-enqueue buffered opener audio for HUMAN/UNKNOWN — for
         # VOICEMAIL, SCREENING, and IVR the opener should not be played
         # and the gate stays closed to block any remaining TTS chunks.
-        if old == OutboundCallState.CLASSIFYING and self._gate.is_closed:
+        if old == OutboundCallState.CLASSIFYING and self._gate.is_buffering:
             if new_state in {OutboundCallState.HUMAN, OutboundCallState.UNKNOWN}:
                 await self._gate.flush_and_release()
             else:
@@ -403,7 +404,7 @@ class OutboundCallStateMachine:
             old
             in {OutboundCallState.SCREENING, OutboundCallState.IVR, OutboundCallState.VOICEMAIL}
             and new_state == OutboundCallState.HUMAN
-            and self._gate.is_closed
+            and self._gate.is_buffering
         ):
             self._gate.release()
 
@@ -545,9 +546,7 @@ class OutboundCallStateMachine:
                 return
             if is_conversational(text, self._screening_patterns):
                 self._cancel_voicemail_pickup_window()
-                logger.info(
-                    "Conversational speech during VOICEMAIL — transitioning to HUMAN"
-                )
+                logger.info("Conversational speech during VOICEMAIL — transitioning to HUMAN")
                 await self._transition(OutboundCallState.HUMAN)
 
     # ── Timers ────────────────────────────────────────────────────

@@ -1634,9 +1634,7 @@ class Session:
                         is_active=(
                             None
                             if self._audio_gate is not None and self._audio_gate()
-                            else lambda: (
-                                self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                            )
+                            else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
                         ),
                         record_latency=self._first_tts_audio_time is None,
                     )

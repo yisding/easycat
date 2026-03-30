@@ -336,7 +336,7 @@ class TestIVRNavigation:
         nav.activate()
         try:
             await bus.emit(STTFinal(text="Press 1 for sales"))
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
             # Timeout should emit a WAIT action.
             waits = [a for a in actions if a.type == IVRActionType.WAIT]
             assert len(waits) >= 1

@@ -69,6 +69,7 @@ class NumberHealthMonitor:
         self._concurrent: dict[str, int] = defaultdict(int)
         self._last_call_time: dict[str, float] = {}
         self._call_sid_to_number: dict[str, str] = {}
+        self._max_sid_tracking = 10_000
         self._started = False
 
     def start(self) -> None:
@@ -175,6 +176,12 @@ class NumberHealthMonitor:
         self._concurrent[number] = self._concurrent.get(number, 0) + 1
         self._last_call_time[number] = time.monotonic()
 
+        # Evict stale SID mappings (zombie calls that never ended).
+        if len(self._call_sid_to_number) > self._max_sid_tracking:
+            oldest = list(self._call_sid_to_number.keys())[: self._max_sid_tracking // 2]
+            for sid in oldest:
+                self._call_sid_to_number.pop(sid, None)
+
     async def _on_call_failed(self, event: CallFailed) -> None:
         number = self._resolve_number(event.call_sid, event.number)
         self._concurrent[number] = max(0, self._concurrent.get(number, 0) - 1)
@@ -200,9 +207,14 @@ class CallDispositionTracker:
 
     Records the final disposition of each call (human, voicemail, screening,
     IVR, busy, failed) and provides breakdown statistics.
+
+    Note: Uses ``time.time()`` (wall-clock) for disposition timestamps because
+    :meth:`disposition_by_hour` needs real calendar hours. This differs from
+    :class:`NumberHealthMonitor` which uses ``time.monotonic()`` for TTL.
     """
 
     _MAX_DISPOSITIONS = 10_000
+    _MAX_CALL_TRACKING = 50_000
 
     def __init__(self, event_bus: EventBus) -> None:
         self._event_bus = event_bus
@@ -297,3 +309,11 @@ class CallDispositionTracker:
             self._disposed_calls.add(call_sid)
             self._call_dispositions[call_sid] = disposition
             self.record_disposition(disposition, call_sid=call_sid)
+
+            # Evict oldest entries when tracking dicts grow too large.
+            if len(self._disposed_calls) > self._MAX_CALL_TRACKING:
+                oldest_sids = list(self._disposed_calls)[: self._MAX_CALL_TRACKING // 2]
+                for sid in oldest_sids:
+                    self._disposed_calls.discard(sid)
+                    self._call_dispositions.pop(sid, None)
+                    self._failure_reasons.pop(sid, None)

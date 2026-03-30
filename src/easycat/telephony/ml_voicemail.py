@@ -1,8 +1,12 @@
-"""ML-based voicemail detection interface.
+"""ML-based voicemail detection interface (STUB — no real model included).
 
 Provides a pluggable interface for ML-powered voicemail classification
 (e.g., Bland AI's Wave2Vec model). Falls back gracefully to heuristic
 detection when the model is not available.
+
+**Current status:** All classification methods return ``None`` (graceful
+fallback). To use a real model, subclass :class:`MLVoicemailDetector` and
+override :meth:`classify_audio`.
 """
 
 from __future__ import annotations
