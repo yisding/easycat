@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+__all__ = [
+    "OutboundCallManager",
+    "OutboundCallManagerState",
+    "emit_call_status",
+    "parse_call_status_callback",
+]
+
 import asyncio
 import logging
 from dataclasses import dataclass
@@ -17,19 +24,12 @@ from easycat.events import (
     EventBus,
     VoicemailDetected,
 )
+from easycat.telephony.voicemail import _TWILIO_AMD_MAP
 
 logger = logging.getLogger(__name__)
 
-# Twilio AnsweredBy → VoicemailDetected result mapping (mirrors voicemail._TWILIO_AMD_MAP).
-_ANSWERED_BY_MAP: dict[str, str] = {
-    "human": "human",
-    "machine_start": "machine",
-    "machine_end_beep": "machine",
-    "machine_end_silence": "machine",
-    "machine_end_other": "machine",
-    "fax": "machine",
-    "unknown": "unknown",
-}
+# Re-use the canonical AMD mapping from voicemail.py.
+_ANSWERED_BY_MAP = _TWILIO_AMD_MAP
 
 # SIP response codes indicating call blocking (FCC March 2026 mandate).
 _SIP_BLOCK_REASONS: dict[int, str] = {
@@ -72,7 +72,7 @@ def parse_call_status_callback(
             call_sid=call_sid,
             duration_s=duration_s,
             disposition="completed",
-            number=params.get("From", ""),
+            number=params.get("To", ""),
         )
 
     if status in {"busy", "no-answer", "failed", "canceled"}:
@@ -83,7 +83,7 @@ def parse_call_status_callback(
             call_sid=call_sid,
             reason=reason,
             sip_code=sip_code,
-            number=params.get("From", ""),
+            number=params.get("To", ""),
         )
 
     return None

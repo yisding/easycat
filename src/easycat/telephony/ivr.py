@@ -2,6 +2,17 @@
 
 from __future__ import annotations
 
+__all__ = [
+    "AgentCallback",
+    "DTMFDelivery",
+    "IVRAction",
+    "IVRActionType",
+    "IVRNavigator",
+    "IVRNavigatorConfig",
+    "classify_ivr_prompt",
+    "detect_human_after_ivr",
+]
+
 import asyncio
 import logging
 import re
@@ -87,6 +98,7 @@ class IVRNavigatorConfig:
     max_depth: int = 10
     prompt_timeout_s: float = 15.0
     agent_timeout_s: float = 10.0
+    agent_retry_delay_s: float = 2.0
     dtmf_inter_digit_delay: bool = True
     ivr_dtmf_verify: bool = False
     hold_silence_threshold_s: float = 10.0
@@ -141,6 +153,13 @@ class DTMFDelivery:
     async def send_dtmf(self, digits: str) -> bool:
         """Send DTMF digits via REST API. Returns True on success."""
         if not self._client or not self._call_sid:
+            return False
+
+        # Validate that digits contains only valid DTMF characters to
+        # prevent TwiML injection via the agent callback.
+        _VALID_DTMF = set("0123456789*#wW")
+        if not digits or not all(c in _VALID_DTMF for c in digits):
+            logger.warning("Invalid DTMF digits rejected: %r", digits)
             return False
 
         # Insert W (1-second delay) between digits if inter-digit delay is enabled.
@@ -271,8 +290,8 @@ class IVRNavigator:
                 timeout=self._config.agent_timeout_s,
             )
         except TimeoutError:
-            logger.warning("IVR agent timed out, retrying prompt")
-            # Re-send the same prompt to the agent.
+            logger.warning("IVR agent timed out, retrying after delay")
+            await asyncio.sleep(self._config.agent_retry_delay_s)
             try:
                 result = await asyncio.wait_for(
                     self._agent_callback(context),
@@ -291,20 +310,21 @@ class IVRNavigator:
 
         if action_str == "dtmf":
             digits = result.get("digits", "")
-            action = IVRAction(
-                type=IVRActionType.DTMF,
-                digits=digits,
-                menu_depth=self._menu_depth,
-            )
             self._history.append((event.text, {"action": "dtmf", "digits": digits}))
             self._menu_depth += 1
 
             if self._menu_depth > self._config.max_depth:
+                self._active = False
                 await self._event_bus.emit(
                     IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
                 )
                 return
 
+            action = IVRAction(
+                type=IVRActionType.DTMF,
+                digits=digits,
+                menu_depth=self._menu_depth,
+            )
             await self._event_bus.emit(action)
             self._start_prompt_timeout()
 
@@ -323,24 +343,26 @@ class IVRNavigator:
 
         elif action_str == "speak":
             text = result.get("text", "")
-            action = IVRAction(
-                type=IVRActionType.SPEAK,
-                text=text,
-                menu_depth=self._menu_depth,
-            )
             self._history.append((event.text, {"action": "speak", "text": text}))
             self._menu_depth += 1
 
             if self._menu_depth > self._config.max_depth:
+                self._active = False
                 await self._event_bus.emit(
                     IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
                 )
                 return
 
+            action = IVRAction(
+                type=IVRActionType.SPEAK,
+                text=text,
+                menu_depth=self._menu_depth,
+            )
             await self._event_bus.emit(action)
             self._start_prompt_timeout()
 
         elif action_str == "hangup":
+            self._active = False
             await self._event_bus.emit(
                 IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
             )

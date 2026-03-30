@@ -85,10 +85,10 @@ def check_calling_hours(
 
     tz_name = timezone_override or lookup_timezone(phone)
     if tz_name is None:
-        # Conservative: if we can't determine timezone, allow the call
-        # but log a warning.
-        logger.warning("Cannot determine timezone for %s, allowing call", phone)
-        return True
+        # Conservative: deny the call when we can't determine timezone.
+        # TCPA requires knowledge of the recipient's local time.
+        logger.warning("Cannot determine timezone for %s, blocking call", phone)
+        return False
 
     try:
         from datetime import datetime
@@ -98,8 +98,8 @@ def check_calling_hours(
         now = datetime.now(tz)
         return start_hour <= now.hour < end_hour
     except Exception:
-        logger.warning("Timezone lookup failed for %s (%s)", phone, tz_name)
-        return True
+        logger.warning("Timezone lookup failed for %s (%s), blocking call", phone, tz_name)
+        return False
 
 
 @dataclass(frozen=True)
