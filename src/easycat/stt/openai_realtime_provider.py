@@ -26,9 +26,13 @@ from typing import Any
 import websockets
 
 from easycat.audio_format import AudioChunk
+from easycat.audio_utils import resample_chunk
 from easycat.events import STTEvent, STTEventType
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase
+
+# OpenAI Realtime API expects 24 kHz PCM16 mono input by default.
+_REALTIME_SAMPLE_RATE = 24000
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +85,20 @@ class OpenAIRealtimeSTT(STTBase):
             event_bus=self._config.event_bus,
             provider_name="openai_realtime_stt",
             connect_fn=self._config.ws_connect,
+            on_reconnect=self._send_session_update,
         )
         await self._ws.connect()
+        await self._send_session_update()
+        self._partial_text = ""
+        self._receive_task = asyncio.create_task(self._receive_loop())
 
-        # Configure the session for STT-only operation.
+    async def _send_session_update(self) -> None:
+        """Send session.update to configure STT-only operation.
+
+        Called on initial connect and after every transparent reconnect
+        so the new server-side session has the correct configuration.
+        """
+        assert self._ws is not None
         session_update: dict[str, Any] = {
             "type": "session.update",
             "session": {
@@ -99,13 +113,12 @@ class OpenAIRealtimeSTT(STTBase):
             session_update["session"]["input_audio_transcription"]["language"] = (
                 self._config.language
             )
-
         await self._ws.send(json.dumps(session_update))
-        self._partial_text = ""
-        self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
         if self._ws is not None:
+            if chunk.format.sample_rate != _REALTIME_SAMPLE_RATE:
+                chunk = resample_chunk(chunk, _REALTIME_SAMPLE_RATE)
             audio_b64 = base64.b64encode(chunk.data).decode("ascii")
             msg = json.dumps(
                 {
@@ -122,14 +135,18 @@ class OpenAIRealtimeSTT(STTBase):
             except Exception:
                 logger.debug("Error sending input_audio_buffer.commit", exc_info=True)
 
+            # Close the websocket first so recv_iter() terminates, then
+            # await the receive task.  Previously the order was reversed,
+            # causing a ~5 s stall per utterance because recv_iter() only
+            # ends when the underlying socket closes.
+            await self._ws.close()
+
             if self._receive_task is not None:
                 try:
                     await asyncio.wait_for(self._receive_task, timeout=5.0)
                 except TimeoutError:
                     self._receive_task.cancel()
                     logger.warning("OpenAI Realtime receive loop timed out on close")
-
-            await self._ws.close()
 
         self._ws = None
         self._receive_task = None
