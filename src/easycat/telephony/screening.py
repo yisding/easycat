@@ -182,7 +182,9 @@ _CARRIER_PATTERNS_BY_LANG: dict[str, list[str]] = {
 # Patterns that should NOT match screening (early media, voicemail, etc.)
 EARLY_MEDIA_PHRASES: list[str] = [
     "this call may be monitored",
+    "call may be recorded",
     "please hold while we connect",
+    "your call is important",
 ]
 
 # Known screening-related phrases from the callee side (not conversational).
@@ -196,6 +198,25 @@ _SCREENING_FOLLOW_UP_PATTERNS: list[str] = [
     "please elaborate",
     "tell me more",
 ]
+
+# Interrogative starters used by screening bots.  Recognised structurally
+# ("can you ...", "could you ...") so this generalises across phrasings.
+_INTERROGATIVE_STARTERS: tuple[str, ...] = (
+    "can you",
+    "could you",
+    "would you",
+    "will you",
+    "what is",
+    "what's",
+    "what are",
+    "why are",
+    "why do",
+    "why is",
+    "who is",
+    "who are",
+    "who's",
+    "please ",
+)
 
 # Shared stopwords for coherence/overlap scoring across telephony modules.
 COHERENCE_STOPWORDS: frozenset[str] = frozenset(
@@ -325,6 +346,8 @@ def screening_patterns_for_languages(
 def match_screening_platform(
     text: str,
     patterns: ScreeningPatternSet | None = None,
+    *,
+    _pre_lowered: bool = False,
 ) -> str | None:
     """Match transcript text against screening patterns.
 
@@ -334,7 +357,7 @@ def match_screening_platform(
     if patterns is None:
         patterns = ScreeningPatternSet()
 
-    lower = text.lower()
+    lower = text if _pre_lowered else text.lower()
 
     # Check exclusions first.
     for phrase in patterns.exclusions:
@@ -407,7 +430,7 @@ def is_conversational(
         return False
 
     # ── Step 1: Reject known screening / IVR prompts ─────────────
-    if match_screening_platform(lower, patterns) is not None:
+    if match_screening_platform(lower, patterns, _pre_lowered=True) is not None:
         return False
 
     # ── Step 2: Reject long interrogative / instructional sentences ──
@@ -417,26 +440,6 @@ def is_conversational(
     words = lower.split()
     word_count = len(words)
 
-    # Interrogative starters used by screening bots.  We only need to
-    # recognise the *structure* ("can you ...", "could you ...") — not
-    # specific questions — so this generalises across phrasings and
-    # languages that borrow English question words.
-    _INTERROGATIVE_STARTERS = (
-        "can you",
-        "could you",
-        "would you",
-        "will you",
-        "what is",
-        "what's",
-        "what are",
-        "why are",
-        "why do",
-        "why is",
-        "who is",
-        "who are",
-        "who's",
-        "please ",
-    )
     if word_count >= 6 and any(lower.startswith(q) for q in _INTERROGATIVE_STARTERS):
         return False
 
@@ -534,7 +537,6 @@ class CallScreeningDetector:
         self._track_filter = track_filter
 
         self._state = ScreeningState.WAITING
-        self._detected = False
         self._call_answered = False
         self._pending_screening: tuple[str, str] | None = None  # (call_sid, platform)
         self._accumulated_text = ""
@@ -598,7 +600,6 @@ class CallScreeningDetector:
 
     def _reset_internal(self) -> None:
         self._state = ScreeningState.WAITING
-        self._detected = False
         self._call_answered = False
         self._pending_screening = None
         self._accumulated_text = ""
@@ -655,7 +656,7 @@ class CallScreeningDetector:
             await self._emit_screening(self._call_sid, platform)
 
     async def _on_stt_partial(self, event: STTPartial) -> None:
-        if self._detected:
+        if self._state != ScreeningState.WAITING:
             return
 
         # Track filtering: only analyze inbound (callee) audio.
@@ -675,7 +676,6 @@ class CallScreeningDetector:
         if platform is None:
             return
 
-        self._detected = True
         self._state = ScreeningState.SCREENING_DETECTED
 
         if self._call_answered:
@@ -716,7 +716,7 @@ class CallScreeningDetector:
 
     async def _on_stt_final(self, event: STTFinal) -> None:
         """Handle final transcript after screening detected."""
-        if not self._detected:
+        if self._state == ScreeningState.WAITING:
             return
         if self._state in (
             ScreeningState.HUMAN_ANSWERED,
@@ -754,7 +754,7 @@ class CallScreeningDetector:
 
     async def _on_voicemail(self, event: VoicemailDetected) -> None:
         """Handle voicemail detection after screening."""
-        if not self._detected:
+        if self._state == ScreeningState.WAITING:
             return
         if self._state in (
             ScreeningState.HUMAN_ANSWERED,
@@ -769,7 +769,7 @@ class CallScreeningDetector:
 
     async def _on_call_ended(self, event: CallEnded) -> None:
         """Handle call ended during screening — callee declined."""
-        if not self._detected:
+        if self._state == ScreeningState.WAITING:
             return
         if self._state in (
             ScreeningState.HUMAN_ANSWERED,

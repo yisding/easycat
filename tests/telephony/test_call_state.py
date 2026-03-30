@@ -32,7 +32,6 @@ class TestOutboundCallStates:
         expected = {
             "INITIATING",
             "RINGING",
-            "ANSWERED",
             "CLASSIFYING",
             "HUMAN",
             "SCREENING",

@@ -12,6 +12,14 @@ from easycat.telephony.call_state import CallStateChanged, OutboundCallState
 
 logger = logging.getLogger(__name__)
 
+_TERMINAL_DISPOSITIONS: dict[OutboundCallState, str] = {
+    OutboundCallState.HUMAN: "human",
+    OutboundCallState.VOICEMAIL: "voicemail",
+    OutboundCallState.IVR: "ivr",
+    OutboundCallState.ENDED: "ended",
+    OutboundCallState.UNKNOWN: "unknown",
+}
+
 
 @dataclass(frozen=True)
 class NumberHealthWarning:
@@ -247,7 +255,7 @@ class CallDispositionTracker:
     def __init__(self, event_bus: EventBus) -> None:
         self._event_bus = event_bus
         self._dispositions: list[tuple[float, str, str]] = []  # (timestamp, disposition, call_sid)
-        self._disposed_calls: set[str] = set()
+        self._disposed_calls: dict[str, None] = {}
         self._call_dispositions: dict[str, str] = {}
         self._failure_reasons: dict[str, str] = {}
         self._started = False
@@ -312,16 +320,9 @@ class CallDispositionTracker:
         Late voicemail reclassification (HUMAN → VOICEMAIL) overwrites the
         earlier disposition so analytics reflect the corrected outcome.
         """
-        terminal = {
-            OutboundCallState.HUMAN: "human",
-            OutboundCallState.VOICEMAIL: "voicemail",
-            OutboundCallState.IVR: "ivr",
-            OutboundCallState.ENDED: "ended",
-            OutboundCallState.UNKNOWN: "unknown",
-        }
-        if event.new in terminal:
+        if event.new in _TERMINAL_DISPOSITIONS:
             call_sid = event.call_sid
-            disposition = terminal[event.new]
+            disposition = _TERMINAL_DISPOSITIONS[event.new]
             # Preserve the specific failure reason (busy, no-answer, etc.)
             # instead of collapsing everything to generic "ended".
             if event.new == OutboundCallState.ENDED and call_sid in self._failure_reasons:
@@ -334,14 +335,16 @@ class CallDispositionTracker:
                     self._replace_disposition(call_sid, disposition)
                 return
 
-            self._disposed_calls.add(call_sid)
+            self._disposed_calls[call_sid] = None
             self._call_dispositions[call_sid] = disposition
             self.record_disposition(disposition, call_sid=call_sid)
 
             # Evict oldest entries when tracking dicts grow too large.
             if len(self._disposed_calls) > self._MAX_CALL_TRACKING:
-                oldest_sids = list(self._disposed_calls)[: self._MAX_CALL_TRACKING // 2]
+                from itertools import islice
+
+                oldest_sids = list(islice(self._disposed_calls, self._MAX_CALL_TRACKING // 2))
                 for sid in oldest_sids:
-                    self._disposed_calls.discard(sid)
+                    self._disposed_calls.pop(sid, None)
                     self._call_dispositions.pop(sid, None)
                     self._failure_reasons.pop(sid, None)

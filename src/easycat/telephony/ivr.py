@@ -22,6 +22,7 @@ from enum import Enum
 from typing import Any
 
 from easycat.events import EventBus, STTFinal
+from easycat.telephony.screening import EARLY_MEDIA_PHRASES as _EARLY_MEDIA_PATTERNS
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +39,6 @@ _IVR_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"press\s+(one|1)\s+to\s+accept", re.IGNORECASE),
     re.compile(r"you have a call", re.IGNORECASE),
     re.compile(r"extension.{0,10}dial", re.IGNORECASE),
-]
-
-# Early-media phrases that should NOT be classified as IVR.
-_EARLY_MEDIA_PATTERNS: list[str] = [
-    "this call may be monitored",
-    "please hold while we connect",
-    "call may be recorded",
 ]
 
 # Patterns that indicate a human receptionist answered after IVR navigation.
@@ -307,9 +301,17 @@ class IVRNavigator:
 
         action_str = result.get("action", "wait")
 
-        if action_str == "dtmf":
-            digits = result.get("digits", "")
-            self._history.append((event.text, {"action": "dtmf", "digits": digits}))
+        if action_str in ("dtmf", "speak"):
+            if action_str == "dtmf":
+                payload = result.get("digits", "")
+                action_type = IVRActionType.DTMF
+                history_entry = {"action": "dtmf", "digits": payload}
+            else:
+                payload = result.get("text", "")
+                action_type = IVRActionType.SPEAK
+                history_entry = {"action": "speak", "text": payload}
+
+            self._history.append((event.text, history_entry))
             self._menu_depth += 1
 
             if self._menu_depth > self._config.max_depth:
@@ -320,45 +322,25 @@ class IVRNavigator:
                 return
 
             action = IVRAction(
-                type=IVRActionType.DTMF,
-                digits=digits,
+                type=action_type,
+                digits=payload if action_str == "dtmf" else "",
+                text=payload if action_str == "speak" else "",
                 menu_depth=self._menu_depth,
             )
             await self._event_bus.emit(action)
             self._start_prompt_timeout()
 
             # Deliver DTMF via REST API if available.
-            if self._dtmf_delivery:
-                success = await self._dtmf_delivery.send_dtmf_with_retry(digits)
+            if action_str == "dtmf" and self._dtmf_delivery:
+                success = await self._dtmf_delivery.send_dtmf_with_retry(payload)
                 if not success:
-                    # Fall back to speech-based input.
                     await self._event_bus.emit(
                         IVRAction(
                             type=IVRActionType.SPEAK,
-                            text=digits,
+                            text=payload,
                             menu_depth=self._menu_depth,
                         )
                     )
-
-        elif action_str == "speak":
-            text = result.get("text", "")
-            self._history.append((event.text, {"action": "speak", "text": text}))
-            self._menu_depth += 1
-
-            if self._menu_depth > self._config.max_depth:
-                self._active = False
-                await self._event_bus.emit(
-                    IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
-                )
-                return
-
-            action = IVRAction(
-                type=IVRActionType.SPEAK,
-                text=text,
-                menu_depth=self._menu_depth,
-            )
-            await self._event_bus.emit(action)
-            self._start_prompt_timeout()
 
         elif action_str == "hangup":
             self._active = False

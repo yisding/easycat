@@ -42,7 +42,6 @@ logger = logging.getLogger(__name__)
 class OutboundCallState(Enum):
     INITIATING = "initiating"
     RINGING = "ringing"
-    ANSWERED = "answered"
     CLASSIFYING = "classifying"
     HUMAN = "human"
     SCREENING = "screening"
@@ -335,6 +334,16 @@ class OutboundCallStateMachine:
     def start(self) -> None:
         if self._started:
             return
+
+        # Cache cross-module helpers at start() to avoid per-event import overhead.
+        from easycat.telephony.ivr import classify_ivr_prompt
+        from easycat.telephony.screening import is_conversational
+        from easycat.telephony.voicemail import classify_greeting
+
+        self._classify_ivr_prompt = classify_ivr_prompt
+        self._is_conversational = is_conversational
+        self._classify_greeting = classify_greeting
+
         self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
         self._event_bus.subscribe(CallRinging, self._on_ringing)
         self._event_bus.subscribe(CallAnswered, self._on_answered)
@@ -529,45 +538,32 @@ class OutboundCallStateMachine:
 
     async def _on_stt_final(self, event: STTFinal) -> None:
         """Handle STTFinal for IVR detection (CLASSIFYING) and SCREENING → HUMAN."""
-        from easycat.telephony.ivr import classify_ivr_prompt
-        from easycat.telephony.screening import is_conversational
-        from easycat.telephony.voicemail import classify_greeting
-
         text = event.text.strip()
         if not text:
             return
 
+        # Skip non-inbound transcripts (bot's own speech fed back when
+        # transcription_track="both").  Applies to all classification states.
+        if event.track is not None and event.track != "inbound":
+            return
+
         if self._state == OutboundCallState.CLASSIFYING:
-            # Skip non-inbound transcripts (bot's own opener fed back when
-            # transcription_track="both") to avoid the assistant's greeting
-            # satisfying is_conversational() and short-circuiting
-            # classification before AMD/screening/voicemail has resolved.
-            # Check for any explicitly non-inbound track (including unknown
-            # tracks), not just "outbound", so the guard works even when the
-            # transport tags frames with variant names.
-            if event.track is not None and event.track != "inbound":
-                return
-            if classify_ivr_prompt(text):
+            if self._classify_ivr_prompt(text):
                 self._cancel_classification_timeout()
                 await self._transition(OutboundCallState.IVR)
-            elif classify_greeting(text) == "machine":
+            elif self._classify_greeting(text) == "machine":
                 # Short voicemail greetings (e.g. "Please leave a message")
                 # pass is_conversational's word-count check but contain known
                 # voicemail phrases — let the fusion classifier handle them
                 # instead of misrouting to HUMAN.
                 pass
-            elif is_conversational(text, self._screening_patterns):
+            elif self._is_conversational(text, self._screening_patterns):
                 self._cancel_classification_timeout()
                 await self._transition(OutboundCallState.HUMAN)
             return
 
         if self._state == OutboundCallState.SCREENING:
-            # Skip non-inbound transcripts (bot's own speech fed back when
-            # transcription_track="both") to avoid misclassifying the bot's
-            # screening reply as the callee picking up.
-            if event.track is not None and event.track != "inbound":
-                return
-            if is_conversational(text, self._screening_patterns):
+            if self._is_conversational(text, self._screening_patterns):
                 await self._transition(OutboundCallState.HUMAN)
 
         if (
@@ -575,13 +571,10 @@ class OutboundCallStateMachine:
             and self._voicemail_pickup_task is not None
             and not self._voicemail_pickup_task.done()
         ):
-            # Skip non-inbound transcripts (bot's own voicemail message).
-            if event.track is not None and event.track != "inbound":
-                return
             # Exclude voicemail system prompts from triggering false human detection.
-            if classify_greeting(text) == "machine":
+            if self._classify_greeting(text) == "machine":
                 return
-            if is_conversational(text, self._screening_patterns):
+            if self._is_conversational(text, self._screening_patterns):
                 self._cancel_voicemail_pickup_window()
                 logger.info("Conversational speech during VOICEMAIL — transitioning to HUMAN")
                 await self._transition(OutboundCallState.HUMAN)
