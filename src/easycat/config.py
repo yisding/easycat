@@ -169,6 +169,7 @@ class EasyCatConfig:
     tracing: TracingConfig | None = None
     agent: Any = None
     agent_runner: AgentRunnerConfig | None = None
+    wrap_agent: bool = True
     strip_markdown: bool = False
     output_processors: Sequence[LLMOutputProcessor] = ()
     debug: bool = False
@@ -266,8 +267,9 @@ def create_session(config: EasyCatConfig) -> Session:
 
     if config.agent is not None:
         agent = auto_adapt_agent(config.agent)
-        runner_cfg = config.agent_runner or AgentRunnerConfig()
-        agent = AgentRunner(agent, runner_cfg)
+        if config.wrap_agent:
+            runner_cfg = config.agent_runner or AgentRunnerConfig()
+            agent = AgentRunner(agent, runner_cfg)
     else:
         agent = NoopAgent()
 
