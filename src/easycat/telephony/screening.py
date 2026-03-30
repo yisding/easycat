@@ -8,6 +8,7 @@ __all__ = [
     "ScreeningResponse",
     "ScreeningState",
     "check_coherence",
+    "coherence_score",
     "is_conversational",
     "match_screening_platform",
     "screening_patterns_for_languages",
@@ -349,7 +350,7 @@ def match_screening_platform(
     patterns: ScreeningPatternSet | None = None,
     *,
     _pre_lowered: bool = False,
-) -> str | None:
+) -> Literal["ios", "android", "carrier", "third_party"] | None:
     """Match transcript text against screening patterns.
 
     Returns the platform string (``"ios"``, ``"android"``, ``"carrier"``,
@@ -478,6 +479,36 @@ def is_conversational(
     # are likely voicemail greetings, carrier announcements, or other
     # non-conversational speech.
     return False
+
+
+def coherence_score(callee_texts: list[str], bot_texts: list[str]) -> float:
+    """Compute keyword-overlap coherence score between callee and bot utterances.
+
+    Returns a float in [0.0, 1.0] where 1.0 = fully coherent.
+    """
+    if len(callee_texts) < 2:
+        return 1.0
+
+    total_overlap = 0.0
+    comparisons = 0
+
+    for i, callee_text in enumerate(callee_texts):
+        callee_words = set(callee_text.lower().split()) - COHERENCE_STOPWORDS
+        context_words: set[str] = set()
+        if i < len(bot_texts):
+            context_words |= set(bot_texts[i].lower().split()) - COHERENCE_STOPWORDS
+        if i > 0:
+            context_words |= set(callee_texts[i - 1].lower().split()) - COHERENCE_STOPWORDS
+
+        if not callee_words or not context_words:
+            continue
+
+        overlap = len(callee_words & context_words)
+        max_possible = min(len(callee_words), len(context_words))
+        total_overlap += overlap / max_possible if max_possible > 0 else 0
+        comparisons += 1
+
+    return total_overlap / comparisons if comparisons > 0 else 1.0
 
 
 def check_coherence(callee_texts: list[str], bot_texts: list[str]) -> bool:

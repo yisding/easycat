@@ -22,12 +22,13 @@ from enum import Enum
 from typing import Any
 
 from easycat.events import EventBus, STTFinal
+from easycat.telephony.dtmf import VALID_DTMF_DIGITS
 from easycat.telephony.screening import EARLY_MEDIA_PHRASES as _EARLY_MEDIA_PATTERNS
 
 logger = logging.getLogger(__name__)
 
-# Valid DTMF characters (digits, *, #, and W/w for pauses).
-_VALID_DTMF = frozenset("0123456789*#wW")
+# Valid DTMF characters: standard digits + W/w pauses for inter-digit delays.
+_VALID_DTMF = VALID_DTMF_DIGITS | frozenset("wW")
 
 # Heuristic patterns that indicate IVR prompts.
 _IVR_PATTERNS: list[re.Pattern[str]] = [

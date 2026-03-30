@@ -172,6 +172,9 @@ class ClassificationGate:
         self._cancel_timeout()
         self._closed = False
         self._hold_audio_playing = False
+        if self._started:
+            self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
+            self._started = False
         buffered = list(self._buffer)
         self._buffer.clear()
         if self._on_flush and buffered:
@@ -195,6 +198,9 @@ class ClassificationGate:
             await self._on_flush_async(buffered)
         # Now open the gate for future TTS chunks.
         self._closed = False
+        if self._started:
+            self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
+            self._started = False
         return buffered
 
     async def discard(self) -> None:
@@ -255,6 +261,9 @@ class ClassificationGate:
                 # slip past the buffer during the async replay — matching
                 # the ordering in flush_and_release().
                 self._closed = False
+                if self._started:
+                    self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
+                    self._started = False
         except asyncio.CancelledError:
             pass
 

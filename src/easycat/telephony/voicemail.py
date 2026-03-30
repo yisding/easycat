@@ -9,7 +9,7 @@ import math
 import struct
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from easycat.events import (
     CallAnswered,
@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 # ── Shared audio analysis helpers ────────────────────────────────
 
 
+def _unpack_pcm16(data: bytes) -> tuple[int, ...]:
+    """Decode raw PCM16 (signed 16-bit LE) bytes into a tuple of samples."""
+    n = len(data) // 2
+    return struct.unpack(f"<{n}h", data[: n * 2])
+
+
 def _pcm16_rms(samples: Sequence[int]) -> float:
     """Compute RMS energy from raw PCM16 samples, normalized to [0, 1]."""
     return math.sqrt(sum(s * s for s in samples) / len(samples)) / 32768.0
@@ -43,7 +49,7 @@ def _zero_crossing_freq(samples: Sequence[int], sample_rate: int) -> float:
 
 
 # Twilio AnsweredBy values -> EasyCat result mapping
-_TWILIO_AMD_MAP: dict[str, str] = {
+TWILIO_AMD_MAP: dict[str, str] = {
     "human": "human",
     "machine_start": "machine",
     "machine_end_beep": "machine",
@@ -71,7 +77,7 @@ def parse_twilio_amd_webhook(params: dict[str, Any]) -> VoicemailDetected | None
     if not isinstance(answered_by, str) or not answered_by:
         return None
 
-    result = _TWILIO_AMD_MAP.get(answered_by.lower(), "unknown")
+    result = TWILIO_AMD_MAP.get(answered_by.lower(), "unknown")
     return VoicemailDetected(result=result)
 
 
@@ -205,13 +211,12 @@ class VoicemailDetector:
         sr = sample_rate or self._config.beep.sample_rate
         cfg = self._config.beep
 
-        num_samples = len(pcm16_data) // 2
-        if num_samples == 0:
+        samples = _unpack_pcm16(pcm16_data)
+        if not samples:
             return False
-        samples = struct.unpack(f"<{num_samples}h", pcm16_data[: num_samples * 2])
 
         rms = _pcm16_rms(samples)
-        chunk_duration_s = num_samples / sr
+        chunk_duration_s = len(samples) / sr
 
         if rms < cfg.energy_threshold:
             self._tone_duration_s = 0.0
@@ -410,7 +415,7 @@ _HUMAN_PHRASES: list[str] = [
 ]
 
 
-def classify_greeting(text: str) -> str:
+def classify_greeting(text: str) -> Literal["human", "machine", "unknown"]:
     """Classify a greeting transcript as ``"human"``, ``"machine"``, or ``"unknown"``.
 
     Uses phrase-matching heuristics on the transcribed greeting text.
@@ -467,8 +472,7 @@ def detect_sit_tones(
     if len(pcm16_data) < 4:
         return False
 
-    num_samples = len(pcm16_data) // 2
-    samples = struct.unpack(f"<{num_samples}h", pcm16_data[: num_samples * 2])
+    samples = _unpack_pcm16(pcm16_data)
 
     # Divide audio into 50ms windows and analyze each.
     window_size = sample_rate // 20  # 50ms
@@ -481,7 +485,7 @@ def detect_sit_tones(
     current_tone_idx: int | None = None
     current_tone_windows = 0
 
-    for start in range(0, num_samples - window_size, window_size):
+    for start in range(0, len(samples) - window_size, window_size):
         window = samples[start : start + window_size]
 
         rms = _pcm16_rms(window)
@@ -544,8 +548,9 @@ def is_comfort_noise(
     if len(pcm16_data) < 4:
         return False
 
-    num_samples = len(pcm16_data) // 2
-    samples = struct.unpack(f"<{num_samples}h", pcm16_data[: num_samples * 2])
+    samples = _unpack_pcm16(pcm16_data)
+    if not samples:
+        return False
 
     return _pcm16_rms(samples) < max_rms
 

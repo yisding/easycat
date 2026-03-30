@@ -23,12 +23,9 @@ from easycat.events import (
     EventBus,
     VoicemailDetected,
 )
-from easycat.telephony.voicemail import _TWILIO_AMD_MAP
+from easycat.telephony.voicemail import TWILIO_AMD_MAP
 
 logger = logging.getLogger(__name__)
-
-# Re-use the canonical AMD mapping from voicemail.py.
-_ANSWERED_BY_MAP = _TWILIO_AMD_MAP
 
 # SIP response codes indicating call blocking (FCC March 2026 mandate).
 _SIP_BLOCK_REASONS: dict[int, str] = {
@@ -106,7 +103,7 @@ async def emit_call_status(
         await event_bus.emit(event)
         # Emit AMD classification when AnsweredBy is present on the answered callback.
         if isinstance(event, CallAnswered) and event.answered_by:
-            amd_result = _ANSWERED_BY_MAP.get(event.answered_by.lower())
+            amd_result = TWILIO_AMD_MAP.get(event.answered_by.lower())
             if amd_result is not None:
                 await event_bus.emit(VoicemailDetected(result=amd_result))
     return event

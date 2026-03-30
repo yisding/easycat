@@ -38,29 +38,9 @@ class ConversationCoherenceDetector:
         if len(self._callee_turns) < self._min_turns:
             return 1.0
 
-        from easycat.telephony.screening import COHERENCE_STOPWORDS
+        from easycat.telephony.screening import coherence_score
 
-        total_overlap = 0
-        comparisons = 0
-
-        sw = COHERENCE_STOPWORDS
-        for i, callee_text in enumerate(self._callee_turns):
-            callee_words = set(callee_text.lower().split()) - sw
-            context_words: set[str] = set()
-            if i < len(self._bot_turns):
-                context_words |= set(self._bot_turns[i].lower().split()) - sw
-            if i > 0:
-                context_words |= set(self._callee_turns[i - 1].lower().split()) - sw
-
-            if not callee_words or not context_words:
-                continue
-
-            overlap = len(callee_words & context_words)
-            max_possible = min(len(callee_words), len(context_words))
-            total_overlap += overlap / max_possible if max_possible > 0 else 0
-            comparisons += 1
-
-        return total_overlap / comparisons if comparisons > 0 else 1.0
+        return coherence_score(self._callee_turns, self._bot_turns)
 
     def reset(self) -> None:
         self._callee_turns.clear()
