@@ -69,6 +69,7 @@ class OpenAIRealtimeSTT(STTBase):
         self._receive_task: asyncio.Task[None] | None = None
         self._partial_text: str = ""
         self._transcription_done: asyncio.Event = asyncio.Event()
+        self._audio_sent: bool = False
 
     def _build_session_update(self) -> str:
         """Build the session.update JSON message for STT-only operation."""
@@ -115,6 +116,7 @@ class OpenAIRealtimeSTT(STTBase):
         await self._send_session_config()
         self._partial_text = ""
         self._transcription_done = asyncio.Event()
+        self._audio_sent = False
         self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
@@ -130,21 +132,23 @@ class OpenAIRealtimeSTT(STTBase):
                 }
             )
             await self._ws.send(msg)
+            self._audio_sent = True
 
     async def _on_end(self) -> None:
         if self._ws is not None:
-            try:
-                await self._ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-            except Exception:
-                logger.debug("Error sending input_audio_buffer.commit", exc_info=True)
+            if self._audio_sent:
+                try:
+                    await self._ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                except Exception:
+                    logger.debug("Error sending input_audio_buffer.commit", exc_info=True)
 
-            # Wait for the server to send the completed transcription
-            # (set by _handle_message), then close the socket so that the
-            # receive loop (blocked on recv_iter) can exit promptly.
-            try:
-                await asyncio.wait_for(self._transcription_done.wait(), timeout=5.0)
-            except TimeoutError:
-                logger.warning("Timed out waiting for final transcription")
+                # Wait for the server to send the completed transcription
+                # (set by _handle_message), then close the socket so that the
+                # receive loop (blocked on recv_iter) can exit promptly.
+                try:
+                    await asyncio.wait_for(self._transcription_done.wait(), timeout=5.0)
+                except TimeoutError:
+                    logger.warning("Timed out waiting for final transcription")
 
             await self._ws.close()
 

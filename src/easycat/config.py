@@ -268,8 +268,9 @@ def create_session(config: EasyCatConfig) -> Session:
 
     if config.agent is not None:
         agent = auto_adapt_agent(config.agent)
-        runner_cfg = config.agent_runner or AgentRunnerConfig()
-        agent = AgentRunner(agent, runner_cfg)
+        if not isinstance(agent, AgentRunner):
+            runner_cfg = config.agent_runner or AgentRunnerConfig()
+            agent = AgentRunner(agent, runner_cfg)
     else:
         agent = NoopAgent()
 
