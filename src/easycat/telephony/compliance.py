@@ -102,8 +102,8 @@ def check_calling_hours(
         tz = ZoneInfo(tz_name)
         now = datetime.now(tz)
         return start_hour <= now.hour < end_hour
-    except Exception:
-        logger.warning("Timezone lookup failed for %s (%s), blocking call", phone, tz_name)
+    except KeyError:
+        logger.warning("Unknown timezone %r for %s, blocking call", tz_name, phone)
         return False
 
 

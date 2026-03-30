@@ -13,6 +13,7 @@ from typing import Any
 
 from easycat.events import (
     CallAnswered,
+    CallInitiated,
     CallScreening,
     EventBus,
     STTFinal,
@@ -294,14 +295,21 @@ class VoicemailPolicyHandler:
     def start(self) -> None:
         """Subscribe to VoicemailDetected events."""
         if not self._started:
+            self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
             self._event_bus.subscribe(VoicemailDetected, self._on_voicemail_detected)
             self._started = True
 
     def stop(self) -> None:
         """Unsubscribe and reset state."""
         if self._started:
+            self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
             self._event_bus.unsubscribe(VoicemailDetected, self._on_voicemail_detected)
             self._started = False
+        self._action_taken = False
+        self._last_action = None
+
+    async def _on_call_initiated(self, event: CallInitiated) -> None:
+        """Reset policy state for a new outbound call."""
         self._action_taken = False
         self._last_action = None
 
@@ -677,6 +685,7 @@ class STTAMDFusionClassifier:
     def start(self) -> None:
         if self._started:
             return
+        self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
         self._event_bus.subscribe(CallAnswered, self._on_call_answered)
         self._event_bus.subscribe(VoicemailDetected, self._on_voicemail_detected)
         self._event_bus.subscribe(STTFinal, self._on_stt_final)
@@ -685,12 +694,22 @@ class STTAMDFusionClassifier:
 
     def stop(self) -> None:
         if self._started:
+            self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
             self._event_bus.unsubscribe(CallAnswered, self._on_call_answered)
             self._event_bus.unsubscribe(VoicemailDetected, self._on_voicemail_detected)
             self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
             self._event_bus.unsubscribe(CallScreening, self._on_screening)
         self._cancel_timeout()
         self._started = False
+        self._amd_result = None
+        self._stt_result = None
+        self._emitted = False
+        self._call_answered = False
+        self._screening_active = False
+
+    async def _on_call_initiated(self, event: CallInitiated) -> None:
+        """Reset classification state for a new outbound call."""
+        self._cancel_timeout()
         self._amd_result = None
         self._stt_result = None
         self._emitted = False
