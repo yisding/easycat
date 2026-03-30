@@ -23,6 +23,7 @@ from easycat.events import (
     CallAnswered,
     CallEnded,
     CallFailed,
+    CallInitiated,
     CallRinging,
     CallScreening,
     EventBus,
@@ -325,6 +326,7 @@ class OutboundCallStateMachine:
     def start(self) -> None:
         if self._started:
             return
+        self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
         self._event_bus.subscribe(CallRinging, self._on_ringing)
         self._event_bus.subscribe(CallAnswered, self._on_answered)
         self._event_bus.subscribe(CallFailed, self._on_failed)
@@ -339,6 +341,7 @@ class OutboundCallStateMachine:
     def stop(self) -> None:
         if not self._started:
             return
+        self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
         self._event_bus.unsubscribe(CallRinging, self._on_ringing)
         self._event_bus.unsubscribe(CallAnswered, self._on_answered)
         self._event_bus.unsubscribe(CallFailed, self._on_failed)
@@ -360,6 +363,21 @@ class OutboundCallStateMachine:
             self._max_duration_task = None
         self._cancel_late_voicemail_window()
         self._cancel_voicemail_pickup_window()
+
+    # ── New-call reset ─────────────────────────────────────────────
+
+    async def _on_call_initiated(self, event: CallInitiated) -> None:
+        """Reset the state machine when a new outbound call is placed.
+
+        This allows a single session to handle sequential outbound calls
+        without getting stuck in the ENDED state from a previous call.
+        """
+        self._cancel_timers()
+        self._gate.stop()
+        self._gate.start()
+        self._call_sid = event.call_sid
+        self._smart_turn_suppressed = False
+        self._state = OutboundCallState.INITIATING
 
     # ── SmartTurn suppression ─────────────────────────────────────
 
