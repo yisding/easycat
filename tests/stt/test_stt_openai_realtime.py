@@ -69,17 +69,21 @@ class _MockWSFactory:
 
 
 def _make_transcription_completed(transcript: str) -> str:
-    return json.dumps({
-        "type": "conversation.item.input_audio_transcription.completed",
-        "transcript": transcript,
-    })
+    return json.dumps(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": transcript,
+        }
+    )
 
 
 def _make_transcription_delta(delta: str) -> str:
-    return json.dumps({
-        "type": "conversation.item.input_audio_transcription.delta",
-        "delta": delta,
-    })
+    return json.dumps(
+        {
+            "type": "conversation.item.input_audio_transcription.delta",
+            "delta": delta,
+        }
+    )
 
 
 def _make_session_created() -> str:
@@ -103,11 +107,13 @@ def test_openai_realtime_stt_conforms_to_protocol():
 
 @pytest.mark.asyncio
 async def test_openai_realtime_sends_session_update_on_start():
-    factory = _MockWSFactory([
-        _make_session_created(),
-        _make_session_updated(),
-        _make_transcription_completed("hello"),
-    ])
+    factory = _MockWSFactory(
+        [
+            _make_session_created(),
+            _make_session_updated(),
+            _make_transcription_completed("hello"),
+        ]
+    )
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
 
@@ -124,9 +130,11 @@ async def test_openai_realtime_sends_session_update_on_start():
 
 @pytest.mark.asyncio
 async def test_openai_realtime_sends_language_in_session_update():
-    factory = _MockWSFactory([
-        _make_transcription_completed("hola"),
-    ])
+    factory = _MockWSFactory(
+        [
+            _make_transcription_completed("hola"),
+        ]
+    )
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", language="es", ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
 
@@ -228,11 +236,13 @@ async def test_openai_realtime_emits_final_transcript():
 
 @pytest.mark.asyncio
 async def test_openai_realtime_emits_partial_then_final():
-    factory = _MockWSFactory([
-        _make_transcription_delta("hel"),
-        _make_transcription_delta("lo wor"),
-        _make_transcription_completed("hello world"),
-    ])
+    factory = _MockWSFactory(
+        [
+            _make_transcription_delta("hel"),
+            _make_transcription_delta("lo wor"),
+            _make_transcription_completed("hello world"),
+        ]
+    )
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
 
@@ -254,13 +264,17 @@ async def test_openai_realtime_emits_partial_then_final():
 @pytest.mark.asyncio
 async def test_openai_realtime_final_from_partials_when_no_transcript():
     """If completed has no transcript, fall back to accumulated partial text."""
-    factory = _MockWSFactory([
-        _make_transcription_delta("hello"),
-        json.dumps({
-            "type": "conversation.item.input_audio_transcription.completed",
-            "transcript": "",
-        }),
-    ])
+    factory = _MockWSFactory(
+        [
+            _make_transcription_delta("hello"),
+            json.dumps(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "transcript": "",
+                }
+            ),
+        ]
+    )
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
 

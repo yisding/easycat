@@ -517,9 +517,7 @@ class OutboundCallStateMachine:
                 return
             if is_conversational(text):
                 self._cancel_voicemail_pickup_window()
-                logger.info(
-                    "Conversational speech during VOICEMAIL — transitioning to HUMAN"
-                )
+                logger.info("Conversational speech during VOICEMAIL — transitioning to HUMAN")
                 await self._transition(OutboundCallState.HUMAN)
 
     # ── Timers ────────────────────────────────────────────────────
