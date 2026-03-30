@@ -11,7 +11,6 @@ __all__ = [
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -113,11 +112,6 @@ async def emit_call_status(
 class OutboundCallManagerState(Enum):
     IDLE = "idle"
     ACTIVE = "active"
-
-
-@dataclass
-class _PlaceCallResult:
-    call_sid: str
 
 
 class OutboundCallManager:

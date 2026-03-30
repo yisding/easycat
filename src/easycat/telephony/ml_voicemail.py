@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from easycat.telephony.screening import EARLY_MEDIA_PHRASES
+
 
 class ConversationCoherenceDetector:
     """Detects incoherent callee responses that suggest an answer bot.
@@ -96,13 +98,7 @@ class EarlyMediaDetector:
     def is_early_media_text(self, text: str) -> bool:
         """Check if text matches common early media announcements."""
         lower = text.lower()
-        early_patterns = [
-            "this call may be monitored",
-            "call may be recorded",
-            "please hold while we connect",
-            "your call is important",
-        ]
-        return any(p in lower for p in early_patterns)
+        return any(p in lower for p in EARLY_MEDIA_PHRASES)
 
     def reset(self) -> None:
         self._in_early_media = True
