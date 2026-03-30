@@ -1019,35 +1019,65 @@ class Session:
         """Initialize providers and begin the audio receive loop."""
         if self._is_running:
             return
-        self._is_running = True
-
-        await self.transport.connect()
-        if not self._outbound_queue_external:
-            self._outbound_queue = BoundedAudioQueue(
-                max_size=self._outbound_queue_max_size,
-                policy=self._outbound_queue_policy,
-                name=self._outbound_queue_name,
-            )
-            self._tts_synth._outbound_queue = self._outbound_queue
-        # Start periodic health checks for providers that support it
+        transport_connected = False
         self._health_checkers = []
-        for name, provider in (
-            ("stt", self.stt),
-            ("tts", self.tts),
-            ("transport", self.transport),
-        ):
-            if hasattr(provider, "health_check"):
-                checker = PeriodicHealthChecker(
-                    provider,
-                    provider_name=name,
-                    event_bus=self.event_bus,
+
+        try:
+            await self.transport.connect()
+            transport_connected = True
+
+            if not self._outbound_queue_external:
+                self._outbound_queue = BoundedAudioQueue(
+                    max_size=self._outbound_queue_max_size,
+                    policy=self._outbound_queue_policy,
+                    name=self._outbound_queue_name,
                 )
-                checker.start()
-                self._health_checkers.append(checker)
-        for helper in self._telephony_helpers:
-            helper.start()
-        self._outbound_task = asyncio.create_task(self._drain_outbound_audio())
-        self._pipeline_task = asyncio.create_task(self._run_pipeline())
+                self._tts_synth._outbound_queue = self._outbound_queue
+
+            # Start periodic health checks for providers that support it
+            for name, provider in (
+                ("stt", self.stt),
+                ("tts", self.tts),
+                ("transport", self.transport),
+            ):
+                if hasattr(provider, "health_check"):
+                    checker = PeriodicHealthChecker(
+                        provider,
+                        provider_name=name,
+                        event_bus=self.event_bus,
+                    )
+                    checker.start()
+                    self._health_checkers.append(checker)
+
+            for helper in self._telephony_helpers:
+                helper.start()
+
+            self._is_running = True
+            self._outbound_task = asyncio.create_task(self._drain_outbound_audio())
+            self._pipeline_task = asyncio.create_task(self._run_pipeline())
+        except Exception:
+            self._is_running = False
+
+            for task_name in ("_pipeline_task", "_outbound_task"):
+                task = getattr(self, task_name)
+                if task is not None and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                setattr(self, task_name, None)
+
+            for checker in self._health_checkers:
+                await checker.stop()
+            self._health_checkers = []
+
+            self._stop_helpers()
+            self._reset_turn_state()
+
+            if transport_connected:
+                await self.transport.disconnect()
+            raise
 
     async def stop(self) -> None:
         """Gracefully stop the session: finish current turn, close providers."""
