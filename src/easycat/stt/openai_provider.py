@@ -74,9 +74,9 @@ class OpenAISTT(STTBase):
         data["stream"] = "true"
 
         last_exc: Exception | None = None
-        full_text = ""
-        emitted_final = False
         for attempt in range(self._config.max_retries):
+            full_text = ""
+            emitted_final = False
             try:
                 client = self._config.http_client or httpx.AsyncClient(
                     timeout=self._config.timeout
