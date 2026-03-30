@@ -268,6 +268,26 @@ async def test_session_shutdown():
 
 
 @pytest.mark.asyncio
+async def test_replay_gated_audio_stays_bot_speaking_until_outbound_drain():
+    transport = FakeTransport()
+    session = Session(_full_config(transport=transport))
+    events = [
+        TTSAudio(chunk=_make_chunk()),
+        TTSAudio(chunk=_make_chunk()),
+    ]
+
+    await session.replay_gated_audio(events)
+
+    assert session._turn_manager.state == TurnManagerState.BOT_SPEAKING
+    assert session._outbound_queue.qsize() == 2
+
+    await session._drain_outbound_audio()
+
+    assert session._turn_manager.state == TurnManagerState.IDLE
+    assert len(transport.sent) == 2
+
+
+@pytest.mark.asyncio
 async def test_session_start_idempotent():
     session = Session(_full_config())
     await session.start()
