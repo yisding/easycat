@@ -1,9 +1,4 @@
-"""TwiML generation and parsing helpers for EasyCat telephony.
-
-Task 6.2: TwiML ``<Gather>`` fallback — parse Gather webhook callbacks.
-Task 6.4: DTMF tone output via ``<Play digits>`` and ``<Dial sendDigits>``.
-Task 6.7 (partial): ``<Hangup>`` TwiML for voicemail policy.
-"""
+"""TwiML generation and parsing helpers for EasyCat telephony."""
 
 from __future__ import annotations
 
@@ -16,7 +11,7 @@ from easycat.events import DTMF, EventBus
 logger = logging.getLogger(__name__)
 
 
-# ── Task 6.2: TwiML Gather fallback ──────────────────────────────
+# ── TwiML Gather fallback ────────────────────────────────────────
 
 
 def parse_gather_webhook(params: dict[str, Any]) -> list[DTMF]:
@@ -60,7 +55,7 @@ async def emit_gather_digits(
     return events
 
 
-# ── Task 6.4: DTMF output via TwiML ──────────────────────────────
+# ── DTMF output via TwiML ────────────────────────────────────────
 
 
 def twiml_play_digits(digits: str) -> str:

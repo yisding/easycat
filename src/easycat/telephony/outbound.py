@@ -37,6 +37,9 @@ _SIP_BLOCK_REASONS: dict[int, str] = {
     608: "blocked_rejected",
 }
 
+# Reason strings that indicate carrier/callee blocking (for number_health).
+BLOCK_REASONS: frozenset[str] = frozenset({"blocked_unwanted", "blocked_rejected"})
+
 
 def parse_call_status_callback(
     params: dict[str, Any],

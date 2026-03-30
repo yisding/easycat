@@ -18,6 +18,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Literal
 
 from easycat.events import (
     CallAnswered,
@@ -389,12 +390,22 @@ class ScreeningState(Enum):
     SCREENING_TIMEOUT = "screening_timeout"
 
 
+_TERMINAL_SCREENING_STATES = frozenset(
+    {
+        ScreeningState.HUMAN_ANSWERED,
+        ScreeningState.VOICEMAIL,
+        ScreeningState.DECLINED,
+        ScreeningState.SCREENING_TIMEOUT,
+    }
+)
+
+
 @dataclass(frozen=True)
 class ScreeningResponse:
     """Emitted when the detector decides to respond to screening."""
 
     text: str
-    mode: str  # "static" | "agent"
+    mode: Literal["static", "agent"]
 
 
 def is_conversational(
@@ -718,12 +729,7 @@ class CallScreeningDetector:
         """Handle final transcript after screening detected."""
         if self._state == ScreeningState.WAITING:
             return
-        if self._state in (
-            ScreeningState.HUMAN_ANSWERED,
-            ScreeningState.VOICEMAIL,
-            ScreeningState.DECLINED,
-            ScreeningState.SCREENING_TIMEOUT,
-        ):
+        if self._state in _TERMINAL_SCREENING_STATES:
             return
 
         text = event.text.strip()
@@ -756,12 +762,7 @@ class CallScreeningDetector:
         """Handle voicemail detection after screening."""
         if self._state == ScreeningState.WAITING:
             return
-        if self._state in (
-            ScreeningState.HUMAN_ANSWERED,
-            ScreeningState.VOICEMAIL,
-            ScreeningState.DECLINED,
-            ScreeningState.SCREENING_TIMEOUT,
-        ):
+        if self._state in _TERMINAL_SCREENING_STATES:
             return
         if event.result == "machine":
             self._state = ScreeningState.VOICEMAIL
@@ -771,12 +772,7 @@ class CallScreeningDetector:
         """Handle call ended during screening — callee declined."""
         if self._state == ScreeningState.WAITING:
             return
-        if self._state in (
-            ScreeningState.HUMAN_ANSWERED,
-            ScreeningState.VOICEMAIL,
-            ScreeningState.DECLINED,
-            ScreeningState.SCREENING_TIMEOUT,
-        ):
+        if self._state in _TERMINAL_SCREENING_STATES:
             return
         self._state = ScreeningState.DECLINED
         self._cancel_agent_timeout()
