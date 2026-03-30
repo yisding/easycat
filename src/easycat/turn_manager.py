@@ -380,6 +380,12 @@ class TurnManager:
 
     async def bot_started_speaking(self) -> None:
         """Called when TTS playback begins."""
+        if self._state in (TurnManagerState.USER_SPEAKING, TurnManagerState.USER_PAUSED):
+            logger.warning(
+                "bot_started_speaking called in unexpected state %s, ignoring",
+                self._state.value,
+            )
+            return
         # Defensive cleanup: there should be no pending silence timer once a
         # turn is complete, but cancel any stale timer to avoid cross-turn
         # races in non-standard/manual integrations.
