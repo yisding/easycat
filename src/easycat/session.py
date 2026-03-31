@@ -1289,7 +1289,7 @@ class Session:
 
     async def _on_turn_ended(self, event: TurnEnded) -> None:
         """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
-        if not self._is_running:
+        if self._cancel_token and self._cancel_token.is_cancelled:
             return
         if self._turn_manager.state != TurnManagerState.PROCESSING:
             return
@@ -1430,6 +1430,17 @@ class Session:
         except Exception as exc:
             logger.exception("Pipeline error")
             await self._emit(Error(exception=exc, context="pipeline"))
+        finally:
+            # When the pipeline exits (transport disconnect, cancellation, or
+            # error), mark the session as no longer running so callers polling
+            # ``is_running`` can detect the transport is gone.
+            #
+            # We do NOT close the outbound queue here — an in-flight turn
+            # (agent + TTS) may still be producing audio that needs to drain.
+            # Instead we just flip the flag; ``stop()`` handles full cleanup.
+            if self._is_running:
+                logger.debug("Pipeline exited while session was running; marking session stopped")
+                self._is_running = False
 
     async def _handle_end_of_speech(self) -> None:
         """Called when VAD signals end of speech: finalize STT, run agent, synthesize TTS."""
