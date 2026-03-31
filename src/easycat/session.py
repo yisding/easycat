@@ -1171,6 +1171,7 @@ class Session:
 
         await self._cancel_stt()
         await self._cancel_tts()
+        await self.transport.clear_audio()
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
 
@@ -1187,6 +1188,7 @@ class Session:
         producing text (which will simply not be synthesized).
         """
         await self._cancel_tts()
+        await self.transport.clear_audio()
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
@@ -1202,6 +1204,7 @@ class Session:
 
         await self._cancel_stt()
         await self._cancel_tts()
+        await self.transport.clear_audio()
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
 
