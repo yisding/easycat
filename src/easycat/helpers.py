@@ -9,7 +9,7 @@ import signal
 
 from easycat.event_logging import EventLoggingConfig
 from easycat.events import AgentFinal, BotStoppedSpeaking, Interruption, STTFinal, TurnStarted
-from easycat.session import Session
+from easycat.session._session import Session
 
 logger = logging.getLogger(__name__)
 

@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 - `src/easycat/`: core library code.
 - Key subpackages: `stt/`, `tts/`, `agents/`, `transports/`, `telephony/`.
-- Core orchestrators/utilities live in top-level modules such as `session.py`, `config.py`, `events.py`, `turn_manager.py`, `smart_turn.py`, `agent_runner.py`, `metrics.py`, `tracing.py`, and `timeouts.py`.
+- Core orchestrators/utilities live in top-level modules such as `session/` (package), `config.py`, `events.py`, `turn_manager.py`, `smart_turn.py`, `agent_runner.py`, `metrics.py`, `tracing.py`, and `timeouts.py`.
 - Provider interfaces are centralized in `providers.py`; STT/TTS provider factory registries are in `stt/factory.py` and `tts/factory.py`.
 - `src/easycat/models/`: runtime model assets (for example ONNX smart-turn model).
 - `tests/`: pytest suite mirroring domains (for example `tests/stt/`, `tests/tts/`, `tests/session/`, `tests/turns/`, `tests/transports/`, `tests/websocket/`, `tests/agents/`).
