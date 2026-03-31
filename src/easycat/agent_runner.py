@@ -333,6 +333,7 @@ class AgentRunner:
 
         accumulated = ""
         stream: AsyncIterator[AgentStreamEvent] | None = None
+        history_recorded = False
 
         try:
             if self._is_streaming:
@@ -350,10 +351,13 @@ class AgentRunner:
                     )
 
                 async def _iter_stream() -> AsyncIterator[AgentStreamEvent]:
-                    nonlocal accumulated
+                    nonlocal accumulated, history_recorded
                     pending_tool_calls = 0
                     interrupted = False
+                    done_received = False
                     async for event in stream:
+                        if done_received:
+                            continue
                         if cancel_token and cancel_token.is_cancelled:
                             if not interrupted:
                                 interrupted = True
@@ -382,11 +386,20 @@ class AgentRunner:
                             accumulated += event.text
                         elif event.type == AgentStreamEventType.DONE and event.text:
                             accumulated = event.text
+                        if (
+                            event.type == AgentStreamEventType.DONE
+                            and not self._delegates_history
+                            and not history_recorded
+                        ):
+                            self._history.append({"role": "assistant", "content": accumulated})
+                            history_recorded = True
                         if event.type == AgentStreamEventType.TOOL_STARTED:
                             pending_tool_calls += 1
                         elif event.type == AgentStreamEventType.TOOL_RESULT:
                             pending_tool_calls = max(0, pending_tool_calls - 1)
                         yield event
+                        if event.type == AgentStreamEventType.DONE:
+                            done_received = True
 
                 if self._config.timeout is not None:
                     async with asyncio.timeout(self._config.timeout):
@@ -422,7 +435,7 @@ class AgentRunner:
             if exec_span:
                 exec_span.set_error(AgentTimeoutError(self._config.timeout or 0))
                 exec_span.finish(SpanStatus.ERROR)
-            if not self._delegates_history:
+            if not self._delegates_history and not history_recorded:
                 self._history.pop()
             raise AgentTimeoutError(self._config.timeout or 0)
         except GeneratorExit:
@@ -431,14 +444,14 @@ class AgentRunner:
             # record the interruption in history.
             if exec_span:
                 exec_span.finish(SpanStatus.CANCELLED)
-            if not self._delegates_history:
+            if not self._delegates_history and not history_recorded:
                 self._history.append({"role": "assistant", "content": accumulated})
             return
         except Exception as exc:
             if exec_span:
                 exec_span.set_error(exc)
                 exec_span.finish(SpanStatus.ERROR)
-            if not self._delegates_history:
+            if not self._delegates_history and not history_recorded:
                 self._history.pop()
             raise
 
@@ -448,5 +461,5 @@ class AgentRunner:
         if self._config.enable_tracing and not interrupted:
             agent_to_tts = self._record_span("agent_to_tts")
             agent_to_tts.finish(SpanStatus.OK)
-        if not self._delegates_history:
+        if not self._delegates_history and not history_recorded:
             self._history.append({"role": "assistant", "content": accumulated})
