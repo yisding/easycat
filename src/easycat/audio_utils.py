@@ -63,12 +63,12 @@ def resample(data: bytes, from_rate: int, to_rate: int) -> bytes:
         import numpy as np  # type: ignore[import-untyped]
         from scipy.signal import resample_poly  # type: ignore[import-not-found]
 
-        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         g = math.gcd(from_rate, to_rate)
         up = to_rate // g
         down = from_rate // g
         resampled = resample_poly(samples, up, down)
-        out = np.clip(resampled, -32768, 32767).astype(np.int16)
+        out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
         return out.tobytes()
     except Exception:
         pass

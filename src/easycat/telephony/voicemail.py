@@ -36,6 +36,8 @@ def _unpack_pcm16(data: bytes) -> tuple[int, ...]:
 
 def _pcm16_rms(samples: Sequence[int]) -> float:
     """Compute RMS energy from raw PCM16 samples, normalized to [0, 1]."""
+    if not samples:
+        return 0.0
     return math.sqrt(sum(s * s for s in samples) / len(samples)) / 32768.0
 
 

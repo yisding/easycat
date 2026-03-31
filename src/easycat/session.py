@@ -1114,7 +1114,8 @@ class Session:
             except asyncio.CancelledError:
                 pass
         await self.transport.disconnect()
-        self._reset_turn_state()
+        await self._turn_manager.shutdown()
+        self._current_turn_id = None
 
     async def shutdown(self) -> None:
         """Force-close everything and release resources."""
@@ -1151,7 +1152,8 @@ class Session:
         if not self._outbound_queue_external:
             self._outbound_queue.close()
         await self.transport.disconnect()
-        self._reset_turn_state()
+        await self._turn_manager.shutdown()
+        self._current_turn_id = None
 
     # ── Cancellation ───────────────────────────────────────────
 

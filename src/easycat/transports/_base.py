@@ -92,7 +92,7 @@ class _AudioQueueMixin:
 
     async def receive_audio(self) -> AsyncIterator[AudioChunk]:
         """Yield audio chunks until a ``None`` sentinel is received."""
-        while self._connected or not self._in_queue.empty():
+        while True:
             chunk = await self._in_queue.get()
             if chunk is None:
                 break
