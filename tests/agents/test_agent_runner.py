@@ -138,6 +138,24 @@ class FailingStreamingAgent:
         raise RuntimeError("stream broke")
 
 
+class PostDoneStreamingAgent:
+    """Streaming agent that incorrectly emits more events after DONE."""
+
+    async def run(self, text: str) -> str:
+        return "alpha"
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="alpha")
+        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="alpha")
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=" beta")
+
+
 class ContextAwareAgent:
     """Agent that records the context it receives."""
 
@@ -346,6 +364,25 @@ async def test_run_streaming_accumulates_history():
     assert len(runner.history) == 2
     assert runner.history[0] == {"role": "user", "content": "hello world"}
     assert runner.history[1] == {"role": "assistant", "content": "hello world"}
+
+
+@pytest.mark.asyncio
+async def test_run_streaming_ignores_events_after_done_and_records_history():
+    runner = AgentRunner(PostDoneStreamingAgent())
+
+    events = []
+    async for event in runner.run_streaming("hello"):
+        events.append(event)
+
+    assert [event.type for event in events] == [
+        AgentStreamEventType.TEXT_DELTA,
+        AgentStreamEventType.DONE,
+    ]
+    assert [event.text for event in events] == ["alpha", "alpha"]
+    assert runner.history == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "alpha"},
+    ]
 
 
 @pytest.mark.asyncio
