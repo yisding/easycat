@@ -166,7 +166,6 @@ class TTSSynthesizer:
 
         except asyncio.CancelledError:
             result.completed = False
-            raise
         except Exception as exc:
             if tts_span:
                 tts_span.set_error(exc)

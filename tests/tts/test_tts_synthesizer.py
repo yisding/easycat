@@ -214,8 +214,9 @@ async def test_synthesize_stops_on_is_active_false():
 async def test_synthesize_marks_incomplete_on_cancelled_error():
     synth, _, _ = _make_synth(tts=CancelledTTS())
 
-    with pytest.raises(asyncio.CancelledError):
-        await synth.synthesize(TTSInput("hello"), None)
+    result = await synth.synthesize(TTSInput("hello"), None)
+    assert result.completed is False
+    assert result.audio_bytes > 0
 
 
 # ── Metrics tests ─────────────────────────────────────────────────

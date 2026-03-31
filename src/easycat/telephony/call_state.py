@@ -196,12 +196,20 @@ class ClassificationGate:
         # Replay while gate is still closed.
         if self._on_flush_async and buffered:
             await self._on_flush_async(buffered)
+        # Drain frames that arrived during the async flush (e.g. TTS
+        # produced by CallStateChanged subscribers while the gate was
+        # still closed).
+        late = list(self._buffer)
+        self._buffer.clear()
         # Now open the gate for future TTS chunks.
         self._closed = False
         if self._started:
             self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
             self._started = False
-        return buffered
+        # Replay late arrivals now that the gate is open.
+        if self._on_flush_async and late:
+            await self._on_flush_async(late)
+        return buffered + late
 
     async def discard(self) -> None:
         """Cancel timeout and discard buffered audio, keeping the gate closed.
