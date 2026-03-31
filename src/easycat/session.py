@@ -1529,6 +1529,7 @@ class Session:
             nonlocal accumulated_text, structured_output, agent_error, interrupted
             text_buffer = ""
             pending_tool_calls = 0
+            done_received = False
 
             async def _flush_pending_tts_buffer() -> None:
                 nonlocal text_buffer
@@ -1549,6 +1550,8 @@ class Session:
 
             try:
                 async for event in self.agent.run_streaming(transcript, cancel_token=token):
+                    if done_received:
+                        continue
                     if token and token.is_cancelled:
                         if not interrupted:
                             interrupted = True
@@ -1654,6 +1657,7 @@ class Session:
                         # Flush any tail immediately so TTS can start before
                         # stream teardown/adapter cleanup completes.
                         await _flush_pending_tts_buffer()
+                        done_received = True
             except Exception as exc:
                 agent_error = exc
                 logger.exception("Agent streaming error")
@@ -1770,7 +1774,7 @@ class Session:
                 _replace_last_assistant_text(self.agent, stripped)
 
         # Emit AgentFinal after agent stream is fully consumed
-        if accumulated_text and stream_succeeded:
+        if (accumulated_text or structured_output is not None) and stream_succeeded:
             await self._emit(
                 AgentFinal(text=accumulated_text, structured_output=structured_output)
             )
