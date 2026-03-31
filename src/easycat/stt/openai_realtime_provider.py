@@ -25,11 +25,14 @@ from typing import Any
 
 import websockets
 
-from easycat.audio_format import PCM16_MONO_24K, AudioChunk
+from easycat.audio_format import AudioChunk
 from easycat.audio_utils import resample_chunk
 from easycat.events import STTEvent, STTEventType
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase
+
+# OpenAI Realtime API expects 24 kHz PCM16 mono input by default.
+_REALTIME_SAMPLE_RATE = 24000
 
 logger = logging.getLogger(__name__)
 
@@ -68,33 +71,8 @@ class OpenAIRealtimeSTT(STTBase):
         self._ws: ReconnectingWebSocket | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._partial_text: str = ""
-        self._transcription_done: asyncio.Event = asyncio.Event()
+        self._final_received: asyncio.Event | None = None
         self._audio_sent: bool = False
-
-    def _build_session_update(self) -> str:
-        """Build the session.update JSON message for STT-only operation."""
-        session_update: dict[str, Any] = {
-            "type": "session.update",
-            "session": {
-                "input_audio_transcription": {
-                    "model": self._config.model,
-                },
-                # Accept 24 kHz PCM16 mono — matches the resampled audio we send.
-                "input_audio_format": "pcm16",
-                # Disable server-side turn detection — EasyCat's VAD handles this.
-                "turn_detection": None,
-            },
-        }
-        if self._config.language:
-            session_update["session"]["input_audio_transcription"]["language"] = (
-                self._config.language
-            )
-        return json.dumps(session_update)
-
-    async def _send_session_config(self) -> None:
-        """Send session configuration over the current WebSocket."""
-        if self._ws is not None:
-            await self._ws.send(self._build_session_update())
 
     async def _on_start(self) -> None:
         url = f"{self._config.ws_url}?model={self._config.model}"
@@ -109,21 +87,41 @@ class OpenAIRealtimeSTT(STTBase):
             event_bus=self._config.event_bus,
             provider_name="openai_realtime_stt",
             connect_fn=self._config.ws_connect,
-            on_reconnect=self._send_session_config,
+            on_reconnect=self._send_session_update,
         )
         await self._ws.connect()
-
-        await self._send_session_config()
+        await self._send_session_update()
         self._partial_text = ""
-        self._transcription_done = asyncio.Event()
-        self._audio_sent = False
+        self._final_received = asyncio.Event()
         self._receive_task = asyncio.create_task(self._receive_loop())
+
+    async def _send_session_update(self) -> None:
+        """Send session.update to configure STT-only operation.
+
+        Called on initial connect and after every transparent reconnect
+        so the new server-side session has the correct configuration.
+        """
+        assert self._ws is not None
+        session_update: dict[str, Any] = {
+            "type": "session.update",
+            "session": {
+                "input_audio_transcription": {
+                    "model": self._config.model,
+                },
+                # Disable server-side turn detection — EasyCat's VAD handles this.
+                "turn_detection": None,
+            },
+        }
+        if self._config.language:
+            session_update["session"]["input_audio_transcription"]["language"] = (
+                self._config.language
+            )
+        await self._ws.send(json.dumps(session_update))
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
         if self._ws is not None:
-            # The Realtime API expects 24 kHz PCM16 by default.
-            if chunk.format.sample_rate != PCM16_MONO_24K.sample_rate:
-                chunk = resample_chunk(chunk, PCM16_MONO_24K.sample_rate)
+            if chunk.format.sample_rate != _REALTIME_SAMPLE_RATE:
+                chunk = resample_chunk(chunk, _REALTIME_SAMPLE_RATE)
             audio_b64 = base64.b64encode(chunk.data).decode("ascii")
             msg = json.dumps(
                 {
@@ -145,10 +143,13 @@ class OpenAIRealtimeSTT(STTBase):
                 # Wait for the server to send the completed transcription
                 # (set by _handle_message), then close the socket so that the
                 # receive loop (blocked on recv_iter) can exit promptly.
-                try:
-                    await asyncio.wait_for(self._transcription_done.wait(), timeout=5.0)
-                except TimeoutError:
-                    logger.warning("Timed out waiting for final transcription")
+                if self._final_received is not None:
+                    try:
+                        await asyncio.wait_for(self._final_received.wait(), timeout=5.0)
+                    except TimeoutError:
+                        logger.warning(
+                            "Timed out waiting for final transcript from OpenAI Realtime"
+                        )
 
             await self._ws.close()
 
@@ -157,10 +158,12 @@ class OpenAIRealtimeSTT(STTBase):
                     await asyncio.wait_for(self._receive_task, timeout=2.0)
                 except TimeoutError:
                     self._receive_task.cancel()
+                    logger.warning("OpenAI Realtime receive loop timed out on close")
 
         self._ws = None
         self._receive_task = None
         self._partial_text = ""
+        self._final_received = None
 
     async def _receive_loop(self) -> None:
         assert self._ws is not None
@@ -195,7 +198,8 @@ class OpenAIRealtimeSTT(STTBase):
                 self._emit_event(STTEvent(type=STTEventType.FINAL, text=transcript))
             elif self._partial_text:
                 self._emit_event(STTEvent(type=STTEventType.FINAL, text=self._partial_text))
-            self._transcription_done.set()
+            if self._final_received is not None:
+                self._final_received.set()
 
         elif msg_type == "error":
             error = msg.get("error", {})
