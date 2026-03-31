@@ -100,6 +100,8 @@ class ReconnectingWebSocket:
         attempt = 0
 
         while True:
+            if self._closed:
+                raise ConnectionError("WebSocket closed during reconnect")
             try:
                 await self._emit_reconnect_attempt(attempt + 1)
                 connect_fn = self._connect_fn or websockets.connect
@@ -187,9 +189,14 @@ class ReconnectingWebSocket:
                     return
 
     async def close(self) -> None:
-        """Close the WebSocket connection permanently."""
+        """Close the WebSocket connection permanently.
+
+        Sets ``_closed`` *before* acquiring the lock so that any in-progress
+        ``_connect_with_retry`` loop sees the flag and exits promptly,
+        releasing the lock without completing the full backoff sequence.
+        """
+        self._closed = True
         async with self._connect_lock:
-            self._closed = True
             if self._ws is not None:
                 try:
                     await self._ws.close()

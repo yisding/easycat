@@ -92,6 +92,7 @@ class OpenAIRealtimeSTT(STTBase):
         await self._ws.connect()
         await self._send_session_update()
         self._partial_text = ""
+        self._audio_sent = False
         self._final_received = asyncio.Event()
         self._receive_task = asyncio.create_task(self._receive_loop())
 
