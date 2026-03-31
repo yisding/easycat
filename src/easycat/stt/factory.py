@@ -10,12 +10,19 @@ from easycat.stt.base import STTBase
 from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
+from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 
-STTConfig = OpenAISTTConfig | DeepgramSTTConfig | ElevenLabsSTTConfig
-STTConfigType = type[OpenAISTTConfig] | type[DeepgramSTTConfig] | type[ElevenLabsSTTConfig]
+STTConfig = OpenAISTTConfig | OpenAIRealtimeSTTConfig | DeepgramSTTConfig | ElevenLabsSTTConfig
+STTConfigType = (
+    type[OpenAISTTConfig]
+    | type[OpenAIRealtimeSTTConfig]
+    | type[DeepgramSTTConfig]
+    | type[ElevenLabsSTTConfig]
+)
 
 _PROVIDER_TO_CONFIG: dict[str, tuple[type[STTBase], STTConfigType]] = {
     "openai": (OpenAISTT, OpenAISTTConfig),
+    "openai-realtime": (OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig),
     "deepgram": (DeepgramSTT, DeepgramSTTConfig),
     "elevenlabs": (ElevenLabsSTT, ElevenLabsSTTConfig),
 }
@@ -69,7 +76,10 @@ def create_stt_provider_from_config(config: STTConfig, event_bus: EventBus) -> S
     """
     provider_cls = _provider_for_config(type(config))
     provider_config = config
-    if isinstance(config, (DeepgramSTTConfig, ElevenLabsSTTConfig)) and config.event_bus is None:
+    needs_event_bus = isinstance(
+        config, (DeepgramSTTConfig, ElevenLabsSTTConfig, OpenAIRealtimeSTTConfig)
+    )
+    if needs_event_bus and config.event_bus is None:
         provider_config = replace(config, event_bus=event_bus)
     return provider_cls(provider_config)
 

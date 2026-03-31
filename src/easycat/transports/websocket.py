@@ -17,6 +17,7 @@ import websockets
 from websockets.asyncio.server import ServerConnection
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.audio_utils import resample_chunk
 from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
 
 logger = logging.getLogger(__name__)
@@ -61,15 +62,25 @@ class WebSocketTransport(_ServerTransportBase):
             max_pending_chunks=self._config.max_pending_chunks,
         )
         self._audio_format = self._config.audio_format
+        self._outbound_rate: int | None = None
 
     # ── Transport protocol ────────────────────────────────────────
 
     async def send_audio(self, chunk: AudioChunk) -> None:
-        """Send an audio chunk to the connected WebSocket client as a binary frame."""
+        """Send an audio chunk to the connected WebSocket client as a binary frame.
+
+        When the outbound sample rate changes (e.g. TTS provider switch), an
+        ``audio_format`` JSON control message is sent first so the client can
+        create playback buffers at the correct rate.
+        """
         ws = self._ws
         if ws is None:
             return
         try:
+            rate = chunk.format.sample_rate
+            if rate != self._outbound_rate:
+                await ws.send(json.dumps({"type": "audio_format", "sample_rate": rate}))
+                self._outbound_rate = rate
             await ws.send(chunk.data)
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot send audio: client disconnected")
@@ -88,6 +99,7 @@ class WebSocketTransport(_ServerTransportBase):
 
         self._ws = ws
         self._client_connected.set()
+        self._outbound_rate = None
         logger.info("WebSocket client connected")
 
         try:
@@ -100,13 +112,22 @@ class WebSocketTransport(_ServerTransportBase):
             self._client_connected.clear()
             # Reset negotiated format so the next client starts fresh.
             self._audio_format = self._config.audio_format
+            self._outbound_rate = None
             self._enqueue_sentinel()
 
     async def _receive_loop(self, ws: ServerConnection) -> None:
-        """Read messages from the client connection."""
+        """Read messages from the client connection.
+
+        If the client negotiated a sample rate different from the configured
+        pipeline rate (e.g. browser at 48 kHz vs. pipeline at 16 kHz), inbound
+        audio is automatically resampled before being enqueued.
+        """
+        target_rate = self._config.audio_format.sample_rate
         async for message in ws:
             if isinstance(message, bytes):
                 chunk = AudioChunk(data=message, format=self._audio_format)
+                if chunk.format.sample_rate != target_rate:
+                    chunk = resample_chunk(chunk, target_rate)
                 self._enqueue_chunk(chunk, context="WebSocket")
             elif isinstance(message, str):
                 self._handle_control_message(message)
@@ -153,6 +174,7 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
         self._ws = ws
         self._config = config or WebSocketTransportConfig()
         self._audio_format = self._config.audio_format
+        self._outbound_rate: int | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._init_audio_queue(self._config.max_pending_chunks)
 
@@ -167,6 +189,7 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
         self._reset_audio_queue()
         self._connected = True
         self._client_connected.set()
+        self._outbound_rate = None
         await self._ws.send(json.dumps({"type": "ready"}))
         self._receive_task = asyncio.create_task(self._receive_loop())
 
@@ -190,6 +213,10 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         try:
+            rate = chunk.format.sample_rate
+            if rate != self._outbound_rate:
+                await self._ws.send(json.dumps({"type": "audio_format", "sample_rate": rate}))
+                self._outbound_rate = rate
             await self._ws.send(chunk.data)
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot send audio: client disconnected")
@@ -198,10 +225,13 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
         """No-op — WebSocket sends frames immediately without buffering."""
 
     async def _receive_loop(self) -> None:
+        target_rate = self._config.audio_format.sample_rate
         try:
             async for message in self._ws:
                 if isinstance(message, bytes):
                     chunk = AudioChunk(data=message, format=self._audio_format)
+                    if chunk.format.sample_rate != target_rate:
+                        chunk = resample_chunk(chunk, target_rate)
                     self._enqueue_chunk(chunk, context="WebSocket")
                 elif isinstance(message, str):
                     self._handle_control_message(message)

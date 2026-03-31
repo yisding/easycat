@@ -10,10 +10,8 @@ Setup:
 from __future__ import annotations
 
 import os
-import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import websockets
 from websockets.asyncio.server import ServerConnection
@@ -23,14 +21,12 @@ from easycat import (
     SessionManager,
     TelephonyConfig,
     TwilioConnectionTransport,
+    attach_runtime_feedback,
+    build_openai_agents_adapter,
     create_session,
+    default_event_logging,
 )
 from easycat.transports.twilio_media import twiml_connect_stream
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from common import build_openai_agents_adapter, default_event_logging  # noqa: E402
-from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 
 def create_app(*, api_key: str | None = None, stream_url: str | None = None):
@@ -53,7 +49,6 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
                     enable_voicemail_detector=True,
                 ),
                 agent=adapter,
-                wrap_agent=False,
                 event_logging=default_event_logging(),
             )
         )

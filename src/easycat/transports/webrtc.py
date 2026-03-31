@@ -24,7 +24,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.extras import require_module
@@ -78,10 +78,16 @@ class WebRTCTransportConfig:
     max_pending_chunks:
         Maximum number of inbound audio chunks to buffer before dropping.
     static_dir:
-        Optional directory to serve static files from (e.g. the HTML client).
-        When set, static files are served from the same HTTP server as the
-        signaling endpoint, eliminating the need for a separate file server.
+        Directory to serve static files from (e.g. the HTML client).  When set,
+        static files are served from the same HTTP server as the signaling
+        endpoint, eliminating the need for a separate file server.
+
+        Defaults to a bundled demo client shipped with the package.  Set to
+        ``None`` to disable static file serving entirely.
     """
+
+    _BUNDLED_STATIC_DIR: ClassVar[str] = str(Path(__file__).parent / "static")
+    _USE_BUNDLED: ClassVar[str] = "__USE_BUNDLED__"
 
     host: str = "0.0.0.0"
     port: int = 8080
@@ -90,7 +96,7 @@ class WebRTCTransportConfig:
     )
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
-    static_dir: str | None = None
+    static_dir: str | None = _USE_BUNDLED
 
 
 # ── Outbound audio track ─────────────────────────────────────────
@@ -281,9 +287,12 @@ class WebRTCTransport(_AudioQueueMixin):
         app.router.add_get("/", self._handle_root)
         app.router.add_options("/offer", self._handle_cors_preflight)
 
-        # Serve static files if a directory was configured.
-        if self._config.static_dir is not None:
-            static_path = Path(self._config.static_dir)
+        # Serve static files — resolve the bundled-client sentinel first.
+        static_dir = self._config.static_dir
+        if static_dir == WebRTCTransportConfig._USE_BUNDLED:
+            static_dir = WebRTCTransportConfig._BUNDLED_STATIC_DIR
+        if static_dir is not None:
+            static_path = Path(static_dir)
             if static_path.is_dir():
                 default_client = static_path / "webrtc_client.html"
                 if default_client.is_file():

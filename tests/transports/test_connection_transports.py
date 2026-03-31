@@ -135,6 +135,8 @@ class TestWebSocketConnectionTransport:
 
         async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
             await ws.recv()  # ready
+            fmt_msg = await asyncio.wait_for(ws.recv(), timeout=2.0)  # audio_format
+            assert json.loads(fmt_msg)["type"] == "audio_format"
             data = await asyncio.wait_for(ws.recv(), timeout=2.0)
             assert isinstance(data, bytes)
             assert len(data) == 640

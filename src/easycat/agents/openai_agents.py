@@ -49,6 +49,58 @@ except ImportError:
     Runner = None  # type: ignore[assignment,misc]
 
 
+def build_openai_agents_adapter(
+    *,
+    name: str = "VoiceAssistant",
+    instructions: str,
+    tools: list[Any] | None = None,
+) -> OpenAIAgentsAdapter:
+    """Create an OpenAI Agents SDK adapter configured for the Responses WebSocket API.
+
+    Handles version detection and graceful fallback for ``RunConfig``,
+    ``OpenAIProvider``, and ``ModelSettings``.  Raises ``SystemExit`` with a
+    clear install hint if the ``agents`` package is not available.
+    """
+    try:
+        from agents import Agent  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise SystemExit(
+            "OpenAI Agents SDK is required. Install with: uv sync --extra openai-agents"
+        ) from exc
+
+    run_config = None
+    try:
+        from agents import ModelSettings, OpenAIProvider, RunConfig  # type: ignore[import-untyped]
+
+        reasoning = None
+        try:
+            from openai.types.shared import Reasoning  # type: ignore[import-untyped]
+
+            reasoning = Reasoning(effort="none")
+        except (ImportError, TypeError):
+            reasoning = {"effort": "none"}
+
+        provider = OpenAIProvider(use_responses=True, use_responses_websocket=True)
+        run_config = RunConfig(
+            model_provider=provider,
+            model_settings=ModelSettings(reasoning=reasoning, verbosity="low"),
+        )
+    except (ImportError, TypeError) as exc:
+        logger.debug("RunConfig/OpenAIProvider setup failed, falling back: %s", exc)
+        try:
+            from agents import set_default_openai_api  # type: ignore[import-untyped]
+
+            set_default_openai_api("responses")
+        except (ImportError, AttributeError) as exc:
+            logger.debug("set_default_openai_api unavailable: %s", exc)
+
+    agent_kwargs: dict[str, Any] = {"name": name, "instructions": instructions}
+    if tools is not None:
+        agent_kwargs["tools"] = tools
+    voice_agent = Agent(**agent_kwargs)
+    return OpenAIAgentsAdapter(voice_agent, run_config=run_config)
+
+
 class OpenAIAgentsAdapter(BaseAgentAdapter):
     """Wraps an OpenAI Agents SDK ``Agent`` for use with EasyCat's ``Session``.
 

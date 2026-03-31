@@ -45,7 +45,7 @@ def test_webrtc_observability_example_imports():
 
 
 def test_build_openai_agents_adapter_prefers_responses_websocket(monkeypatch: pytest.MonkeyPatch):
-    from examples.common import build_openai_agents_adapter
+    from easycat import build_openai_agents_adapter
 
     class DummyAgent:
         def __init__(self, name: str, instructions: str) -> None:
@@ -91,7 +91,7 @@ def test_build_openai_agents_adapter_prefers_responses_websocket(monkeypatch: py
 def test_build_openai_agents_adapter_falls_back_to_responses_api_toggle(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from examples.common import build_openai_agents_adapter
+    from easycat import build_openai_agents_adapter
 
     class DummyAgent:
         def __init__(self, name: str, instructions: str) -> None:
