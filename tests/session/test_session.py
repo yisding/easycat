@@ -625,8 +625,8 @@ async def test_run_basic_agent_tts_error_cleans_turn_state_and_turn_id():
     with pytest.raises(RuntimeError, match="tts boom"):
         await session._run_basic_agent("call me at 415-555-2671", token=None)
 
-    # TTS errors propagate; the turn context persists (pipeline caller handles cleanup).
-    assert session._turn is not None
+    # _synthesize_tts's finally block cleans up the turn when playback was started.
+    assert session._turn is None
 
 
 @pytest.mark.asyncio
