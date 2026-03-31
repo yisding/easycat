@@ -183,7 +183,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
                             text,
                         )
                         for part, replacement_segment in zip(
-                            output_text_parts, replacement_segments, strict=False
+                            output_text_parts, replacement_segments
                         ):
                             part["text"] = replacement_segment
                         return

@@ -102,7 +102,10 @@ class DeepgramSTT(STTBase):
             async for raw_message in self._ws.recv_iter():
                 if isinstance(raw_message, bytes):
                     continue
-                msg = json.loads(raw_message)
+                try:
+                    msg = json.loads(raw_message)
+                except json.JSONDecodeError:
+                    continue
                 self._handle_message(msg)
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Deepgram WebSocket closed")
