@@ -49,6 +49,7 @@ from easycat.session import (
     _text_for_estimation_timeline,
     _text_for_spoken_estimation,
 )
+from easycat.timeouts import AgentTimeoutError, TimeoutConfig, TTSTimeoutError
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
 
@@ -265,6 +266,89 @@ class FailingStreamingAgent:
     ) -> AsyncIterator[AgentStreamEvent]:
         yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="start ")
         raise RuntimeError("agent failed mid-stream")
+
+
+class PostDoneStreamingAgent:
+    """Agent that incorrectly keeps emitting events after DONE."""
+
+    async def run(self, text: str) -> str:
+        return "Alpha."
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Alpha.")
+        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Alpha.")
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.TOOL_STARTED,
+            tool_name="late_tool",
+            call_id="call_late",
+        )
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=" Beta.")
+
+
+class StructuredOnlyStreamingAgent:
+    """Agent that completes with structured output and no text."""
+
+    async def run(self, text: str) -> str:
+        return ""
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.DONE,
+            text="",
+            structured_output={"answer": 42},
+        )
+
+
+class TimeoutThenRecoverStreamingAgent:
+    """Agent that times out once, then succeeds on the next turn."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run(self, text: str) -> str:
+        return "Recovered."
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        self.calls += 1
+        if self.calls == 1:
+            await asyncio.sleep(0.05)
+            return
+
+        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Recovered.")
+        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Recovered.")
+
+
+class TimeoutThenRecoverTTS(FakeTTS):
+    """TTS that times out once before producing any audio, then recovers."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+        self.calls += 1
+        self.synthesized_texts.append(payload.text)
+        if self.calls == 1:
+            await asyncio.sleep(0.05)
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
 
 
 # ── Sentence boundary helper tests ────────────────────────────────
@@ -788,6 +872,138 @@ async def test_session_streaming_agent_error_emits_event():
     assert len(errors) >= 1
     assert errors[0].context == "agent"
     assert isinstance(errors[0].exception, RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_streaming_done_terminates_session_consumption() -> None:
+    """Late events after DONE should not leak into the session pipeline."""
+
+    runner = AgentRunner(PostDoneStreamingAgent())
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="ignored"),
+            agent=runner,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    deltas: list[AgentDelta] = []
+    finals: list[AgentFinal] = []
+    tool_started: list[ToolCallStarted] = []
+    session.event_bus.subscribe(AgentDelta, lambda e: deltas.append(e))
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+    session.event_bus.subscribe(ToolCallStarted, lambda e: tool_started.append(e))
+
+    await session._run_streaming_agent("hello", token=None)
+
+    assert [event.text for event in deltas] == ["Alpha."]
+    assert len(finals) == 1
+    assert finals[0].text == "Alpha."
+    assert tool_started == []
+    assert tts.synthesized_texts == ["Alpha."]
+    assert runner.history[-1]["role"] == "assistant"
+    assert runner.history[-1]["content"] == "Alpha."
+
+
+@pytest.mark.asyncio
+async def test_streaming_structured_only_done_emits_final_without_tts() -> None:
+    """Structured-only DONE events should still surface AgentFinal."""
+
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="ignored"),
+            agent=StructuredOnlyStreamingAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session._run_streaming_agent("hello", token=None)
+
+    assert len(finals) == 1
+    assert finals[0].text == ""
+    assert finals[0].structured_output == {"answer": 42}
+    assert tts.synthesized_texts == []
+
+
+@pytest.mark.asyncio
+async def test_streaming_agent_timeout_does_not_poison_next_turn() -> None:
+    """A timed-out streaming turn should not prevent the next turn from succeeding."""
+
+    agent = TimeoutThenRecoverStreamingAgent()
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="ignored"),
+            agent=agent,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            timeout_config=TimeoutConfig(agent_timeout=0.01),
+        )
+    )
+
+    errors: list[Error] = []
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(Error, lambda e: errors.append(e))
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session._run_streaming_agent("first", token=None)
+    await session._run_streaming_agent("second", token=None)
+
+    assert len(errors) == 1
+    assert errors[0].context == "agent_timeout"
+    assert isinstance(errors[0].exception, AgentTimeoutError)
+    assert len(finals) == 1
+    assert finals[0].text == "Recovered."
+    assert tts.synthesized_texts == ["Recovered."]
+
+
+@pytest.mark.asyncio
+async def test_streaming_tts_timeout_does_not_poison_next_turn() -> None:
+    """A first-byte TTS timeout should still allow a later turn to synthesize."""
+
+    tts = TimeoutThenRecoverTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="ignored"),
+            agent=FastDoneAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            timeout_config=TimeoutConfig(tts_first_byte_timeout=0.01),
+        )
+    )
+
+    errors: list[Error] = []
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(Error, lambda e: errors.append(e))
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    await session._run_streaming_agent("first", token=None)
+    await session._run_streaming_agent("second", token=None)
+
+    assert len(errors) == 1
+    assert errors[0].context == "tts_timeout:tts"
+    assert isinstance(errors[0].exception, TTSTimeoutError)
+    assert [event.text for event in finals] == ["Quick reply.", "Quick reply."]
+    assert tts.synthesized_texts == ["Quick reply.", "Quick reply."]
 
 
 @pytest.mark.asyncio

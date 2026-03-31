@@ -20,20 +20,9 @@ import asyncio
 import json
 import logging
 import os
-import sys
 import time
 from pathlib import Path
 from typing import Any
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from common import (  # noqa: E402
-    build_openai_agents_adapter,
-    default_event_logging,
-    require_env,
-    wait_for_shutdown_signal,
-)
-from runtime_feedback import attach_runtime_feedback  # noqa: E402
 
 from easycat import (
     ALL_EVENTS,
@@ -60,7 +49,12 @@ from easycat import (
     VADStartSpeaking,
     VADStopSpeaking,
     WebRTCTransportConfig,
+    attach_runtime_feedback,
+    build_openai_agents_adapter,
     create_session,
+    default_event_logging,
+    require_env,
+    wait_for_shutdown_signal,
 )
 
 logger = logging.getLogger(__name__)
@@ -243,7 +237,6 @@ async def main() -> None:
             static_dir=_STATIC_DIR,
         ),
         agent=adapter,
-        wrap_agent=False,
         event_logging=default_event_logging(),
     )
     session = create_session(config)

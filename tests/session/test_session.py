@@ -14,6 +14,7 @@ from easycat.events import (
     AudioIn,
     BotStartedSpeaking,
     BotStoppedSpeaking,
+    Error,
     Event,
     Interruption,
     PlaybackMarkAck,
@@ -694,6 +695,68 @@ async def test_session_subscribe_agent_events_helper():
     await session.event_bus.emit(AgentFinal(text="done again"))
     assert deltas == ["chunk"]
     assert finals == ["done"]
+
+
+@pytest.mark.asyncio
+async def test_session_on_convenience_method():
+    """session.on() subscribes with unwrapped callback arguments."""
+    session = Session(_full_config())
+
+    transcripts: list[str] = []
+    responses: list[str] = []
+    deltas: list[str] = []
+    tools: list[tuple[str, str]] = []
+    tool_results: list[tuple[str, str]] = []
+    lifecycle: list[str] = []
+    errors: list[tuple[BaseException, str]] = []
+
+    registrations = session.on(
+        user_transcript=lambda text: transcripts.append(text),
+        agent_response=lambda text: responses.append(text),
+        agent_delta=lambda text: deltas.append(text),
+        tool_started=lambda name, cid: tools.append((name, cid)),
+        tool_result=lambda cid, result: tool_results.append((cid, result)),
+        turn_started=lambda: lifecycle.append("turn_started"),
+        turn_ended=lambda: lifecycle.append("turn_ended"),
+        bot_started_speaking=lambda: lifecycle.append("bot_started"),
+        bot_stopped_speaking=lambda: lifecycle.append("bot_stopped"),
+        interruption=lambda: lifecycle.append("interruption"),
+        error=lambda exc, ctx: errors.append((exc, ctx)),
+    )
+
+    # Emit events and verify callbacks receive unwrapped args.
+    await session.event_bus.emit(STTFinal(text="hello"))
+    await session.event_bus.emit(AgentDelta(text="hi "))
+    await session.event_bus.emit(AgentFinal(text="hi there"))
+    await session.event_bus.emit(ToolCallStarted(tool_name="search", call_id="c1"))
+    await session.event_bus.emit(ToolCallResult(call_id="c1", result="found"))
+    await session.event_bus.emit(TurnStarted())
+    await session.event_bus.emit(TurnEnded())
+    await session.event_bus.emit(BotStartedSpeaking())
+    await session.event_bus.emit(BotStoppedSpeaking())
+    await session.event_bus.emit(Interruption())
+    await session.event_bus.emit(Error(exception=ValueError("boom"), context="test"))
+
+    assert transcripts == ["hello"]
+    assert responses == ["hi there"]
+    assert deltas == ["hi "]
+    assert tools == [("search", "c1")]
+    assert tool_results == [("c1", "found")]
+    assert lifecycle == [
+        "turn_started",
+        "turn_ended",
+        "bot_started",
+        "bot_stopped",
+        "interruption",
+    ]
+    assert len(errors) == 1
+    assert str(errors[0][0]) == "boom"
+    assert errors[0][1] == "test"
+
+    # Unsubscribe and verify no further callbacks.
+    session.unsubscribe_handlers(registrations)
+    await session.event_bus.emit(STTFinal(text="ignored"))
+    assert transcripts == ["hello"]
 
 
 @pytest.mark.asyncio

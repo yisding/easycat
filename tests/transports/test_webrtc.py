@@ -42,7 +42,7 @@ class TestWebRTCTransportConfig:
         assert config.port == 8080
         assert config.audio_format == PCM16_MONO_16K
         assert config.max_pending_chunks == 200
-        assert config.static_dir is None
+        assert config.static_dir == WebRTCTransportConfig._USE_BUNDLED
         assert len(config.ice_servers) == 1
         assert "stun:" in config.ice_servers[0].urls[0]
 

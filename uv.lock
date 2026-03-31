@@ -936,6 +936,15 @@ openai-agents = [
 pydantic-ai = [
     { name = "pydantic-ai" },
 ]
+quickstart = [
+    { name = "numpy" },
+    { name = "openai" },
+    { name = "openai-agents" },
+    { name = "pyrnnoise" },
+    { name = "requests" },
+    { name = "sounddevice" },
+    { name = "ten-vad" },
+]
 rnnoise = [
     { name = "pyrnnoise" },
     { name = "requests" },
@@ -983,24 +992,31 @@ requires-dist = [
     { name = "livekit", marker = "extra == 'aec'", specifier = ">=1.0.0" },
     { name = "livekit", marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "numpy", marker = "extra == 'all'", specifier = ">=1.24.0" },
+    { name = "numpy", marker = "extra == 'quickstart'", specifier = ">=1.24.0" },
     { name = "numpy", marker = "extra == 'smart-turn'", specifier = ">=1.24.0" },
     { name = "numpy", marker = "extra == 'ten-vad'", specifier = ">=1.24.0" },
     { name = "onnxruntime", marker = "extra == 'all'", specifier = ">=1.16.0" },
     { name = "onnxruntime", marker = "extra == 'smart-turn'", specifier = ">=1.16.0" },
     { name = "openai", marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0.0" },
+    { name = "openai", marker = "extra == 'quickstart'", specifier = ">=1.0.0" },
     { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.0.7" },
+    { name = "openai-agents", marker = "extra == 'quickstart'", specifier = ">=0.0.7" },
     { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=0.1" },
     { name = "pyrnnoise", marker = "extra == 'all'", specifier = ">=0.3.0" },
+    { name = "pyrnnoise", marker = "extra == 'quickstart'", specifier = ">=0.3.0" },
     { name = "pyrnnoise", marker = "extra == 'rnnoise'", specifier = ">=0.3.0" },
     { name = "pysbd", specifier = ">=0.3.4" },
     { name = "python-multipart", marker = "extra == 'all'", specifier = ">=0.0.9" },
     { name = "python-multipart", marker = "extra == 'telephony'", specifier = ">=0.0.9" },
     { name = "requests", marker = "extra == 'all'", specifier = ">=2.31.0" },
+    { name = "requests", marker = "extra == 'quickstart'", specifier = ">=2.31.0" },
     { name = "requests", marker = "extra == 'rnnoise'", specifier = ">=2.31.0" },
     { name = "sounddevice", marker = "extra == 'all'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'local'", specifier = ">=0.4.6" },
+    { name = "sounddevice", marker = "extra == 'quickstart'", specifier = ">=0.4.6" },
     { name = "ten-vad", marker = "extra == 'all'", specifier = ">=1.0.6.8" },
+    { name = "ten-vad", marker = "extra == 'quickstart'", specifier = ">=1.0.6.8" },
     { name = "ten-vad", marker = "extra == 'ten-vad'", specifier = ">=1.0.6.8" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.2.0" },
     { name = "torchaudio", marker = "extra == 'all'", specifier = ">=2.2.0" },
@@ -1012,7 +1028,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'telephony'", specifier = ">=0.29.0" },
     { name = "websockets", specifier = ">=16.0" },
 ]
-provides-extras = ["openai-agents", "pydantic-ai", "openai", "deepgram", "elevenlabs", "telephony", "aec", "local", "rnnoise", "ten-vad", "smart-turn", "webrtc", "all"]
+provides-extras = ["openai-agents", "pydantic-ai", "openai", "deepgram", "elevenlabs", "telephony", "aec", "local", "rnnoise", "ten-vad", "smart-turn", "webrtc", "quickstart", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1460,6 +1476,7 @@ wheels = [
 name = "griffelib"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/06/eccbd311c9e2b3ca45dbc063b93134c57a1ccc7607c5e545264ad092c4a9/griffelib-2.0.0.tar.gz", hash = "sha256:e504d637a089f5cab9b5daf18f7645970509bf4f53eda8d79ed71cce8bd97934", size = 166312, upload-time = "2026-03-23T21:06:55.954Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4d/51/c936033e16d12b627ea334aaaaf42229c37620d0f15593456ab69ab48161/griffelib-2.0.0-py3-none-any.whl", hash = "sha256:01284878c966508b6d6f1dbff9b6fa607bc062d8261c5c7253cb285b06422a7f", size = 142004, upload-time = "2026-02-09T19:09:40.561Z" },
 ]
