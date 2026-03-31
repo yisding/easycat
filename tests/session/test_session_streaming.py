@@ -49,7 +49,7 @@ from easycat.session import (
     _text_for_estimation_timeline,
     _text_for_spoken_estimation,
 )
-from easycat.timeouts import AgentTimeoutError, TTSTimeoutError, TimeoutConfig
+from easycat.timeouts import AgentTimeoutError, TimeoutConfig, TTSTimeoutError
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
 
