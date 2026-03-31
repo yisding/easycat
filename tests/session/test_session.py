@@ -75,6 +75,9 @@ class FakeTransport:
     async def send_audio(self, chunk: AudioChunk) -> None:
         self.sent.append(chunk)
 
+    async def clear_audio(self) -> None:
+        pass
+
 
 class FakePlaybackAckTransport(FakeTransport):
     def __init__(self, chunks: list[AudioChunk] | None = None) -> None:
