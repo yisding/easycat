@@ -168,8 +168,6 @@ class ReconnectingWebSocket:
             except websockets.exceptions.ConnectionClosed as exc:
                 if self._closed:
                     return
-                if self._on_reconnect is None:
-                    raise
                 rcvd = getattr(exc, "rcvd", None)
                 close_code = rcvd.code if rcvd is not None else getattr(exc, "close_code", None)
                 logger.warning(

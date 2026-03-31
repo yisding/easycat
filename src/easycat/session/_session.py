@@ -604,8 +604,12 @@ class Session:
         Unlike :meth:`cancel_turn`, this does NOT cancel the shared
         ``cancel_token`` so any in-flight agent stream can continue
         producing text (which will simply not be synthesized).
+
+        Importantly, this does NOT cancel ``_current_tts_task`` — that
+        task is the entire ``_on_turn_ended`` coroutine which includes
+        the agent consumer.  Cancelling it would abort the agent stream.
         """
-        await self._cancel_tts()
+        await self._tts_synth.cancel()
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
@@ -853,7 +857,8 @@ class Session:
                 err = STTTimeoutError("stt", self._timeout_config.stt_timeout)
                 await self._emit(Error(exception=err, context="stt_timeout"))
                 self._spans.finish_with_error(Tracer.STT, err)
-                self._reset_turn_state()
+                if self._turn is turn:
+                    self._reset_turn_state()
                 return
             except Exception:
                 transcript = ""
@@ -862,7 +867,8 @@ class Session:
 
         if not transcript or (token and token.is_cancelled):
             self._spans.finish("turn", SpanStatus.CANCELLED)
-            self._reset_turn_state()
+            if self._turn is turn:
+                self._reset_turn_state()
             return
 
         # Route to streaming or basic agent path
@@ -898,14 +904,16 @@ class Session:
         except AgentTimeoutError:
             self._spans.finish(Tracer.AGENT, SpanStatus.ERROR)
             self._spans.finish("turn", SpanStatus.ERROR)
-            self._reset_turn_state()
+            if self._turn is turn:
+                self._reset_turn_state()
             return
         except Exception as exc:
             logger.exception("Agent error")
             await self._emit(Error(exception=exc, context="agent"))
             self._spans.finish_with_error(Tracer.AGENT, exc)
             self._spans.finish_with_error("turn", exc)
-            self._reset_turn_state()
+            if self._turn is turn:
+                self._reset_turn_state()
             return
         finally:
             if self._spans.has(Tracer.AGENT):
@@ -913,7 +921,8 @@ class Session:
 
         if token and token.is_cancelled:
             self._spans.finish("turn", SpanStatus.CANCELLED)
-            self._reset_turn_state()
+            if self._turn is turn:
+                self._reset_turn_state()
             return
 
         if self._strip_markdown:
