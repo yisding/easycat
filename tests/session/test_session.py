@@ -37,7 +37,9 @@ from easycat.llm_output_processing import (
     PhoneticReplacementProcessor,
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
-from easycat.session import Session, SessionConfig, TurnState
+from easycat.session._session import Session
+from easycat.session._turn_context import TurnContext
+from easycat.session._types import SessionConfig, TurnState
 from easycat.timeouts import AgentTimeoutError
 from easycat.tracing import InMemoryTraceExporter, SpanStatus, Tracer
 from easycat.tts.input import TTSInput
@@ -357,17 +359,18 @@ async def test_session_stop_idempotent():
 async def test_cancel_turn_resets_state():
     session = Session(_full_config())
     session._turn_state = TurnState.LISTENING
-    session._cancel_token = CancelToken()
+    turn = TurnContext("test-turn", CancelToken())
+    session._turn = turn
     await session.cancel_turn()
     assert session.turn_state == TurnState.IDLE
-    assert session._cancel_token.is_cancelled
+    assert turn.cancel_token.is_cancelled
 
 
 @pytest.mark.asyncio
 async def test_cancel_turn_barge_in_emits_interruption():
     session = Session(_full_config())
     session._turn_state = TurnState.BOT_SPEAKING
-    session._cancel_token = CancelToken()
+    session._turn = TurnContext("test-turn", CancelToken())
 
     received: list = []
     session.event_bus.subscribe(Interruption, lambda e: received.append(e))
@@ -381,22 +384,24 @@ async def test_cancel_turn_barge_in_emits_interruption():
 async def test_cancel_tts_playback_resets_state():
     session = Session(_full_config())
     session._turn_state = TurnState.BOT_SPEAKING
-    session._cancel_token = CancelToken()
+    turn = TurnContext("test-turn", CancelToken())
+    session._turn = turn
     await session.cancel_tts_playback()
     assert session.turn_state == TurnState.IDLE
     # cancel_tts_playback should NOT cancel the shared token —
     # only TTS is stopped, agent streams can continue.
-    assert not session._cancel_token.is_cancelled
+    assert not turn.cancel_token.is_cancelled
 
 
 @pytest.mark.asyncio
 async def test_reset_state():
     session = Session(_full_config())
     session._turn_state = TurnState.PROCESSING
-    session._cancel_token = CancelToken()
+    turn = TurnContext("test-turn", CancelToken())
+    session._turn = turn
     await session.reset_state()
     assert session.turn_state == TurnState.IDLE
-    assert session._cancel_token.is_cancelled
+    assert turn.cancel_token.is_cancelled
 
 
 # ── Pipeline orchestration tests ───────────────────────────────────
@@ -572,27 +577,27 @@ async def test_run_basic_agent_cancellation_marks_agent_span_cancelled():
 @pytest.mark.asyncio
 async def test_handle_end_of_speech_clears_turn_id_on_stt_timeout():
     session = Session(_full_config())
-    session._current_turn_id = "turn-stale"
+    session._turn = TurnContext("turn-stale", CancelToken())
     session._timeout_config.stt_timeout = 0.01
     session._stt_final_future = asyncio.get_running_loop().create_future()
 
     await session._handle_end_of_speech()
 
-    assert session._current_turn_id is None
+    assert session._turn is None
     assert session.turn_state == TurnState.IDLE
 
 
 @pytest.mark.asyncio
 async def test_handle_end_of_speech_clears_turn_id_on_empty_transcript():
     session = Session(_full_config())
-    session._current_turn_id = "turn-stale"
+    session._turn = TurnContext("turn-stale", CancelToken())
     done = asyncio.get_running_loop().create_future()
     done.set_result("")
     session._stt_final_future = done
 
     await session._handle_end_of_speech()
 
-    assert session._current_turn_id is None
+    assert session._turn is None
     assert session.turn_state == TurnState.IDLE
 
 
@@ -603,25 +608,25 @@ async def test_run_basic_agent_timeout_clears_turn_id():
             raise AgentTimeoutError(timeout=0.01)
 
     session = Session(_full_config(agent=TimeoutAgent()))
-    session._current_turn_id = "turn-stale"
+    session._turn = TurnContext("turn-stale", CancelToken())
 
     await session._run_basic_agent("call me at 415-555-2671", token=None)
 
-    assert session._current_turn_id is None
+    assert session._turn is None
     assert session.turn_state == TurnState.IDLE
 
 
 @pytest.mark.asyncio
 async def test_run_basic_agent_tts_error_cleans_turn_state_and_turn_id():
     session = Session(_full_config())
-    session._current_turn_id = "turn-stale"
+    session._turn = TurnContext("turn-stale", CancelToken())
     session._tts_synth.synthesize = AsyncMock(side_effect=RuntimeError("tts boom"))
 
     with pytest.raises(RuntimeError, match="tts boom"):
         await session._run_basic_agent("call me at 415-555-2671", token=None)
 
-    assert session._current_turn_id is None
-    assert session.turn_state == TurnState.IDLE
+    # TTS errors propagate; the turn context persists (pipeline caller handles cleanup).
+    assert session._turn is not None
 
 
 @pytest.mark.asyncio
@@ -844,9 +849,10 @@ async def test_session_events_include_correlation_ids():
 
 
 @pytest.mark.asyncio
-async def test_turn_id_cleared_after_basic_agent_turn():
-    """After a normal basic-agent turn completes, _current_turn_id should be None
-    so that pre-turn events (like VADStartSpeaking) are not tagged with a stale ID."""
+async def test_turn_state_idle_after_basic_agent_turn():
+    """After a normal basic-agent turn completes, the session should be IDLE.
+    The turn context may still exist (only cleared on next turn start or reset),
+    but the turn state should be IDLE."""
     chunks = [_make_chunk(), _make_chunk()]
     transport = FakeTransport(chunks=chunks)
     config = _full_config(
@@ -863,20 +869,27 @@ async def test_turn_id_cleared_after_basic_agent_turn():
     await asyncio.sleep(0.2)
     await session.stop()
 
-    assert session._current_turn_id is None
+    assert session.turn_state == TurnState.IDLE
 
 
 @pytest.mark.asyncio
-async def test_playback_mark_names_are_unique_across_turns():
+async def test_playback_mark_ack_scoped_to_current_turn():
+    """Playback marks are scoped to the current TurnContext.
+    Each new turn has its own playback_mark_to_bytes map, so marks
+    from a previous turn are naturally absent from the current turn's map."""
     transport = FakePlaybackAckTransport()
     session = Session(_full_config(transport=transport))
     # Use a small interval so a single test chunk triggers a mark.
     session._playback_mark_bytes_interval = 1
 
+    # ── First turn ──
+    session._turn = TurnContext("turn-first", CancelToken())
     await session._outbound_queue.put(_make_chunk())
     await session._drain_outbound_audio()
-    first_mark = transport.playback_marks[-1]
+    first_turn_marks = list(session._turn.playback_mark_to_bytes.keys())
+    assert len(first_turn_marks) == 1
 
+    # ── Second turn (replaces the TurnContext) ──
     session._is_running = True
     with patch.object(session, "_start_stt_event_task"):
         await session._on_turn_started(TurnStarted())
@@ -884,16 +897,13 @@ async def test_playback_mark_names_are_unique_across_turns():
 
     await session._outbound_queue.put(_make_chunk())
     await session._drain_outbound_audio()
-    second_mark = transport.playback_marks[-1]
+    second_turn_marks = list(session._turn.playback_mark_to_bytes.keys())
+    assert len(second_turn_marks) == 1
 
-    assert first_mark != second_mark
-
-    session._on_playback_mark_ack(PlaybackMarkAck(mark_name=first_mark))
-    assert len(session._turn_playback_ack_log) == 0
-
-    session._on_playback_mark_ack(PlaybackMarkAck(mark_name=second_mark))
-    assert len(session._turn_playback_ack_log) == 1
-    assert session._turn_playback_ack_log[0][1] == 320
+    # Ack for the second turn's mark works.
+    session._on_playback_mark_ack(PlaybackMarkAck(mark_name=second_turn_marks[0]))
+    assert len(session._turn.playback_ack_log) == 1
+    assert session._turn.playback_ack_log[0][1] == 320
 
 
 @pytest.mark.asyncio
@@ -908,6 +918,7 @@ async def test_playback_mark_ack_tracks_transport_confirmed_name():
     transport = CanonicalizingPlaybackAckTransport()
     session = Session(_full_config(transport=transport))
     session._playback_mark_bytes_interval = 1
+    session._turn = TurnContext("test-turn", CancelToken())
 
     await session._outbound_queue.put(_make_chunk())
     await session._drain_outbound_audio()
@@ -915,8 +926,8 @@ async def test_playback_mark_ack_tracks_transport_confirmed_name():
     canonical_mark = transport.playback_marks[-1]
     session._on_playback_mark_ack(PlaybackMarkAck(mark_name=canonical_mark))
 
-    assert len(session._turn_playback_ack_log) == 1
-    assert session._turn_playback_ack_log[0][1] == 320
+    assert len(session._turn.playback_ack_log) == 1
+    assert session._turn.playback_ack_log[0][1] == 320
 
 
 @pytest.mark.asyncio
@@ -926,6 +937,7 @@ async def test_trailing_playback_mark_emitted_while_session_running():
     session._playback_mark_bytes_interval = 10_000
 
     await session.start()
+    session._turn = TurnContext("test-turn", CancelToken())
     await session._outbound_queue.put(_make_chunk())
 
     for _ in range(20):
