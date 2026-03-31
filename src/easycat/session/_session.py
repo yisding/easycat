@@ -1037,6 +1037,7 @@ class Session:
         agent_task = asyncio.create_task(_run_agent_consumer())
         tts_task = asyncio.create_task(_process_tts())
 
+        caught_exc: Exception | None = None
         try:
             if self._timeout_config and self._timeout_config.agent_timeout:
                 await with_agent_timeout(
@@ -1057,19 +1058,20 @@ class Session:
                 except (asyncio.CancelledError, Exception):
                     pass
             raise
-        except Exception:
+        except Exception as exc:
+            caught_exc = exc
             if not agent_task.done():
                 agent_task.cancel()
             if not tts_task.done():
                 tts_task.cancel()
         finally:
-            agent_error = agent_result.error if agent_result else None
+            agent_error = agent_result.error if agent_result else caught_exc
             if agent_error:
                 self._spans.finish_with_error(Tracer.AGENT, agent_error)
             else:
                 self._spans.finish(Tracer.AGENT)
 
-        agent_error = agent_result.error if agent_result else None
+        agent_error = agent_result.error if agent_result else caught_exc
         interrupted = agent_result.interrupted if agent_result else False
         accumulated_text = agent_result.text if agent_result else ""
         structured_output = agent_result.structured_output if agent_result else None
