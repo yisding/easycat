@@ -1011,6 +1011,7 @@ class Session:
 
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 await self._turn_manager.bot_stopped_speaking()
+                self._spans.finish("turn")
                 self._turn = None
             elif started and not tts_playback_started:
                 self._reset_turn_state()
@@ -1133,7 +1134,6 @@ class Session:
         gated = self._is_gated
         if not gated:
             await self._turn_manager.bot_started_speaking()
-        tts_succeeded = False
         try:
             result = await self._tts_synth.synthesize(
                 payload,
@@ -1147,9 +1147,8 @@ class Session:
             )
             if result.first_audio_time is not None and turn:
                 turn.first_tts_audio_time = result.first_audio_time
-            tts_succeeded = True
         except (asyncio.CancelledError, TTSTimeoutError):
-            tts_succeeded = True
+            pass
         finally:
             if (
                 not gated
@@ -1159,8 +1158,7 @@ class Session:
             ):
                 await self._turn_manager.bot_stopped_speaking()
                 self._spans.finish("turn")
-                if tts_succeeded:
-                    self._turn = None
+                self._turn = None
             elif gated and self._turn is turn and turn is not None:
                 self._reset_turn_state()
 
