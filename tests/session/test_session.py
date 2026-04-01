@@ -16,6 +16,7 @@ from easycat.events import (
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
+    ErrorStage,
     Event,
     Interruption,
     PlaybackMarkAck,
@@ -782,7 +783,7 @@ async def test_session_on_convenience_method():
     tools: list[tuple[str, str]] = []
     tool_results: list[tuple[str, str]] = []
     lifecycle: list[str] = []
-    errors: list[tuple[BaseException, str]] = []
+    errors: list[Error] = []
 
     registrations = session.on(
         user_transcript=lambda text: transcripts.append(text),
@@ -795,7 +796,7 @@ async def test_session_on_convenience_method():
         bot_started_speaking=lambda: lifecycle.append("bot_started"),
         bot_stopped_speaking=lambda: lifecycle.append("bot_stopped"),
         interruption=lambda: lifecycle.append("interruption"),
-        error=lambda exc, ctx: errors.append((exc, ctx)),
+        error=lambda e: errors.append(e),
     )
 
     # Emit events and verify callbacks receive unwrapped args.
@@ -809,7 +810,7 @@ async def test_session_on_convenience_method():
     await session.event_bus.emit(BotStartedSpeaking())
     await session.event_bus.emit(BotStoppedSpeaking())
     await session.event_bus.emit(Interruption())
-    await session.event_bus.emit(Error(exception=ValueError("boom"), context="test"))
+    await session.event_bus.emit(Error(exception=ValueError("boom"), stage=ErrorStage.AGENT))
 
     assert transcripts == ["hello"]
     assert responses == ["hi there"]
@@ -824,8 +825,8 @@ async def test_session_on_convenience_method():
         "interruption",
     ]
     assert len(errors) == 1
-    assert str(errors[0][0]) == "boom"
-    assert errors[0][1] == "test"
+    assert str(errors[0].exception) == "boom"
+    assert errors[0].stage == ErrorStage.AGENT
 
     # Unsubscribe and verify no further callbacks.
     session.unsubscribe_handlers(registrations)

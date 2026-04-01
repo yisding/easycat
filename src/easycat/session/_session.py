@@ -26,6 +26,7 @@ from easycat.events import (
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
+    ErrorStage,
     EventBus,
     EventHandler,
     Interruption,
@@ -338,7 +339,7 @@ class Session:
         bot_started_speaking: Callable[[], Any] | None = None,
         bot_stopped_speaking: Callable[[], Any] | None = None,
         interruption: Callable[[], Any] | None = None,
-        error: Callable[[BaseException, str], Any] | None = None,
+        error: Callable[[Error], Any] | None = None,
     ) -> list[tuple[type, EventHandler]]:
         """Subscribe to common session events with simple callbacks.
 
@@ -366,7 +367,7 @@ class Session:
             (BotStartedSpeaking, bot_started_speaking, lambda cb: lambda _e: cb()),
             (BotStoppedSpeaking, bot_stopped_speaking, lambda cb: lambda _e: cb()),
             (Interruption, interruption, lambda cb: lambda _e: cb()),
-            (Error, error, lambda cb: lambda e: cb(e.exception, e.context)),
+            (Error, error, lambda cb: lambda e: cb(e)),
         ]
 
         registrations: list[tuple[type, EventHandler]] = []
@@ -667,7 +668,7 @@ class Session:
             self._start_stt_event_task()
         except Exception as exc:
             logger.exception("Failed to start STT stream")
-            await self._emit(Error(exception=exc, context="stt_start"))
+            await self._emit(Error(exception=exc, stage=ErrorStage.STT))
             self._stt_active = False
             return
 
@@ -745,7 +746,7 @@ class Session:
                         break
             except Exception as exc:
                 logger.exception("STT event loop error")
-                await self._emit(Error(exception=exc, context="stt_events"))
+                await self._emit(Error(exception=exc, stage=ErrorStage.STT))
                 if self._stt_final_future and not self._stt_final_future.done():
                     self._stt_final_future.set_result("")
             finally:
@@ -832,7 +833,7 @@ class Session:
             pass
         except Exception as exc:
             logger.exception("Pipeline error")
-            await self._emit(Error(exception=exc, context="pipeline"))
+            await self._emit(Error(exception=exc, stage=ErrorStage.PIPELINE))
 
     async def _handle_end_of_speech(self) -> None:
         """Called when VAD signals end of speech: finalize STT, run agent, synthesize TTS."""
@@ -855,7 +856,7 @@ class Session:
                     transcript = await self._stt_final_future
             except TimeoutError:
                 err = STTTimeoutError("stt", self._timeout_config.stt_timeout)
-                await self._emit(Error(exception=err, context="stt_timeout"))
+                await self._emit(Error(exception=err, stage=ErrorStage.STT))
                 self._spans.finish_with_error(Tracer.STT, err)
                 if self._turn is turn:
                     self._reset_turn_state()
@@ -909,7 +910,7 @@ class Session:
             return
         except Exception as exc:
             logger.exception("Agent error")
-            await self._emit(Error(exception=exc, context="agent"))
+            await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
             self._spans.finish_with_error(Tracer.AGENT, exc)
             self._spans.finish_with_error("turn", exc)
             if self._turn is turn:

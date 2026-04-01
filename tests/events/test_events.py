@@ -14,6 +14,7 @@ from easycat.events import (
     BotStoppedSpeaking,
     DTMFAggregated,
     Error,
+    ErrorStage,
     EventBus,
     Interruption,
     PlaybackMarkAck,
@@ -133,19 +134,19 @@ def test_voicemail_detected():
 
 def test_error_event():
     exc = RuntimeError("boom")
-    event = Error(exception=exc, context="stt")
+    event = Error(exception=exc, stage=ErrorStage.STT)
     assert event.exception is exc
-    assert event.context == "stt"
+    assert event.stage == ErrorStage.STT
 
 
-def test_event_timestamp_positional_args_remain_compatible():
+def test_event_base_fields_are_keyword_only():
     ts = 123.456
     exc = RuntimeError("boom")
 
-    stt_final = STTFinal("hello", ts)
-    agent_final = AgentFinal("hello", None, ts)
-    tool_started = ToolCallStarted("search", "c1", ts)
-    error = Error(exc, "ctx", ts)
+    stt_final = STTFinal("hello", timestamp=ts)
+    agent_final = AgentFinal("hello", None, timestamp=ts)
+    tool_started = ToolCallStarted("search", "c1", timestamp=ts)
+    error = Error(exc, timestamp=ts)
 
     assert stt_final.timestamp == ts
     assert stt_final.session_id is None
