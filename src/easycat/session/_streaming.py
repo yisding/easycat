@@ -20,6 +20,7 @@ from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
     Error,
+    ErrorStage,
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
@@ -170,7 +171,7 @@ async def consume_agent_stream(
     except Exception as exc:
         result.error = exc
         logger.exception("Agent streaming error")
-        await emit(Error(exception=exc, context="agent"))
+        await emit(Error(exception=exc, stage=ErrorStage.AGENT))
     finally:
         stream_succeeded = result.error is None and (not token or not token.is_cancelled)
         if stream_succeeded:

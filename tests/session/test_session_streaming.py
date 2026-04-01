@@ -20,6 +20,7 @@ from easycat.events import (
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
+    ErrorStage,
     Event,
     STTEvent,
     STTEventType,
@@ -720,7 +721,7 @@ async def test_session_basic_agent_error_emits_event():
     await session.stop()
 
     assert len(errors) >= 1
-    assert errors[0].context == "agent"
+    assert errors[0].stage == ErrorStage.AGENT
     assert isinstance(errors[0].exception, ValueError)
 
 
@@ -875,7 +876,7 @@ async def test_session_streaming_agent_error_emits_event():
     await session.stop()
 
     assert len(errors) >= 1
-    assert errors[0].context == "agent"
+    assert errors[0].stage == ErrorStage.AGENT
     assert isinstance(errors[0].exception, RuntimeError)
 
 
@@ -975,7 +976,7 @@ async def test_streaming_agent_timeout_does_not_poison_next_turn() -> None:
     await session._run_streaming_agent("second", token=None)
 
     assert len(errors) == 1
-    assert errors[0].context == "agent_timeout"
+    assert errors[0].stage == ErrorStage.AGENT
     assert isinstance(errors[0].exception, AgentTimeoutError)
     assert len(finals) == 1
     assert finals[0].text == "Recovered."
@@ -1011,7 +1012,7 @@ async def test_streaming_tts_timeout_does_not_poison_next_turn() -> None:
     await session._run_streaming_agent("second", token=None)
 
     assert len(errors) == 1
-    assert errors[0].context == "tts_timeout:tts"
+    assert errors[0].stage == ErrorStage.TTS
     assert isinstance(errors[0].exception, TTSTimeoutError)
     assert [event.text for event in finals] == ["Quick reply.", "Quick reply."]
     assert tts.synthesized_texts == ["Quick reply.", "Quick reply."]
