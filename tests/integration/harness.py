@@ -82,12 +82,20 @@ class EventCollector:
 
 
 class QueueTransport:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        fail_on_send: Exception | None = None,
+        fail_after_n_sends: int | None = None,
+    ) -> None:
         self._incoming: asyncio.Queue[AudioChunk | None] = asyncio.Queue()
         self.sent: list[AudioChunk] = []
         self.clear_calls = 0
         self.connected = False
         self.disconnected = False
+        self._fail_on_send = fail_on_send
+        self._fail_after_n_sends = fail_after_n_sends
+        self._send_count = 0
 
     async def connect(self) -> None:
         self.connected = True
@@ -106,6 +114,11 @@ class QueueTransport:
             yield chunk
 
     async def send_audio(self, chunk: AudioChunk) -> None:
+        if self._fail_on_send is not None:
+            if self._fail_after_n_sends is None or self._send_count >= self._fail_after_n_sends:
+                self._send_count += 1
+                raise self._fail_on_send
+        self._send_count += 1
         self.sent.append(chunk)
 
     async def clear_audio(self) -> None:
@@ -120,11 +133,26 @@ class QueueTransport:
 
 
 class ScriptedVAD:
-    def __init__(self, script: Sequence[str | Sequence[str]]) -> None:
+    def __init__(
+        self,
+        script: Sequence[str | Sequence[str]],
+        *,
+        fail_on_chunk: int | None = None,
+        fail_with: Exception | None = None,
+    ) -> None:
         self._script = list(script)
         self._index = 0
+        self._chunk_count = 0
+        self._fail_on_chunk = fail_on_chunk
+        self._fail_with = fail_with or RuntimeError("scripted VAD failure")
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Any]:
+        current_chunk = self._chunk_count
+        self._chunk_count += 1
+
+        if self._fail_on_chunk is not None and current_chunk == self._fail_on_chunk:
+            raise self._fail_with
+
         if self._index >= len(self._script):
             return
 
@@ -147,15 +175,25 @@ class ScriptedVAD:
 
 
 class ScriptedSTT:
-    def __init__(self, transcripts: Iterable[str]) -> None:
+    def __init__(
+        self,
+        transcripts: Iterable[str],
+        *,
+        fail_on_start: Exception | None = None,
+        partials: Sequence[Sequence[str]] | None = None,
+    ) -> None:
         self._transcripts = list(transcripts)
         self._events: asyncio.Queue[STTEvent | None] = asyncio.Queue()
         self.sent_audio: list[AudioChunk] = []
         self.start_calls = 0
         self.end_calls = 0
+        self._fail_on_start = fail_on_start
+        self._partials = list(partials) if partials else None
 
     async def start_stream(self) -> None:
         self.start_calls += 1
+        if self._fail_on_start is not None:
+            raise self._fail_on_start
         self._events = asyncio.Queue()
 
     async def send_audio(self, chunk: AudioChunk) -> None:
@@ -163,6 +201,10 @@ class ScriptedSTT:
 
     async def end_stream(self) -> None:
         self.end_calls += 1
+        turn_idx = self.end_calls - 1
+        if self._partials and turn_idx < len(self._partials):
+            for partial_text in self._partials[turn_idx]:
+                await self._events.put(STTEvent(type=STTEventType.PARTIAL, text=partial_text))
         transcript = self._transcripts.pop(0) if self._transcripts else ""
         if transcript:
             await self._events.put(STTEvent(type=STTEventType.FINAL, text=transcript))
@@ -179,14 +221,25 @@ class ScriptedSTT:
 class RecordingTTS:
     supports_ssml = False
 
-    def __init__(self, *, chunk_sizes: Sequence[int] = (640,), chunk_delay_s: float = 0.0) -> None:
+    def __init__(
+        self,
+        *,
+        chunk_sizes: Sequence[int] = (640,),
+        chunk_delay_s: float = 0.0,
+        fail_on_synthesize: Exception | None = None,
+        fail_on_cancel: Exception | None = None,
+    ) -> None:
         self.chunk_sizes = tuple(chunk_sizes)
         self.chunk_delay_s = chunk_delay_s
         self.payloads: list[TTSInput] = []
+        self._fail_on_synthesize = fail_on_synthesize
+        self._fail_on_cancel = fail_on_cancel
 
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         coerced = coerce_tts_input(payload)
         self.payloads.append(coerced)
+        if self._fail_on_synthesize is not None:
+            raise self._fail_on_synthesize
         for size in self.chunk_sizes:
             if self.chunk_delay_s > 0:
                 await asyncio.sleep(self.chunk_delay_s)
@@ -196,12 +249,39 @@ class RecordingTTS:
         return None
 
     async def cancel(self) -> None:
-        return None
+        if self._fail_on_cancel is not None:
+            raise self._fail_on_cancel
 
 
 class IdentityNoiseReducer:
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         return chunk
+
+
+class FailingNoiseReducer:
+    def __init__(self, fail_on_chunk: int = 0) -> None:
+        self._fail_on_chunk = fail_on_chunk
+        self._call_count = 0
+
+    async def process(self, chunk: AudioChunk) -> AudioChunk:
+        if self._call_count == self._fail_on_chunk:
+            self._call_count += 1
+            raise RuntimeError("noise reduction failed")
+        self._call_count += 1
+        return chunk
+
+
+class QueuePlaybackTransport(QueueTransport):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.playback_marks: list[str] = []
+        self._mark_seq = 0
+
+    async def send_playback_mark(self, name: str | None = None) -> str:
+        self._mark_seq += 1
+        mark_name = name or f"mark_{self._mark_seq}"
+        self.playback_marks.append(mark_name)
+        return mark_name
 
 
 def patch_provider_factories(
