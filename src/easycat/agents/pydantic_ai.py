@@ -140,9 +140,7 @@ class PydanticAIAdapter(BaseAgentAdapter):
                         original_segments,
                         text,
                     )
-                    for part, replacement_segment in zip(
-                        text_parts, replacement_segments
-                    ):
+                    for part, replacement_segment in zip(text_parts, replacement_segments):
                         # Pydantic v2 models — use object.__setattr__ to bypass
                         # frozen-model restrictions when present.
                         try:
