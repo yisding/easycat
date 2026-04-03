@@ -190,6 +190,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
     ) -> None:
         super().__init__()
         self._agent = agent
+        self._original_agent = agent
         self._run_config = run_config
         self._context = context
         self._use_previous_response_id = use_previous_response_id
@@ -201,8 +202,9 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
     # ── History management ────────────────────────────────────
 
     def clear_history(self) -> None:
-        """Clear conversation history and server-side state tracking."""
+        """Clear conversation history, server-side state, and restore the original agent."""
         super().clear_history()
+        self._agent = self._original_agent
         self._previous_response_id = None
         self._pending_interruption = None
 
@@ -240,6 +242,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         """Append an interruption note in developer-role format."""
         if self._use_previous_response_id and self._previous_response_id is not None:
             self._pending_interruption = INTERRUPTION_NOTE
+            return
         self._message_history.append({"role": "developer", "content": INTERRUPTION_NOTE})
 
     # ── History patching ─────────────────────────────────────
