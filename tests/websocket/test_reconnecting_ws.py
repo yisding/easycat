@@ -248,11 +248,12 @@ class TestReconnectingWebSocket:
         ws._ws = DroppingConnection()
 
         messages = []
-        async for msg in ws.recv_iter():
-            messages.append(msg)
+        with pytest.raises(ConnectionError):
+            async for msg in ws.recv_iter():
+                messages.append(msg)
 
         # Should have received the first message, then reconnection was
-        # attempted (and failed), ending the iterator gracefully.
+        # attempted (and failed), raising ConnectionError.
         assert messages == ["msg1"]
 
     async def test_recv_iter_gives_up_when_reconnect_fails(self):
@@ -285,8 +286,9 @@ class TestReconnectingWebSocket:
             side_effect=ConnectionError("down"),
         ):
             messages = []
-            async for msg in ws.recv_iter():
-                messages.append(msg)
+            with pytest.raises(ConnectionError):
+                async for msg in ws.recv_iter():
+                    messages.append(msg)
 
         assert messages == ["msg1"]
 
