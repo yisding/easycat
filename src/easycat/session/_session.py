@@ -1072,9 +1072,7 @@ class Session:
                 # Wait for queued audio to drain so _drain_outbound_audio
                 # can still call turn.record_audio_sent() and emit playback
                 # marks for the tail of this turn's audio.
-                if self._outbound_task and not self._outbound_task.done():
-                    while not self._outbound_queue.empty():
-                        await asyncio.sleep(0)
+                await self._wait_outbound_drain()
                 self._spans.finish("turn")
                 # Only clear if a new turn hasn't started during the drain.
                 if self._turn is turn:
@@ -1230,9 +1228,7 @@ class Session:
                 and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
             ):
                 await self._turn_manager.bot_stopped_speaking()
-                if self._outbound_task and not self._outbound_task.done():
-                    while not self._outbound_queue.empty():
-                        await asyncio.sleep(0)
+                await self._wait_outbound_drain()
                 self._spans.finish("turn")
                 # Only clear if a new turn hasn't started during the drain.
                 if self._turn is turn:
@@ -1248,6 +1244,23 @@ class Session:
                 self._turn_manager.reset()
 
     # ── Internal helpers ───────────────────────────────────────
+
+    async def _wait_outbound_drain(self, timeout: float = 2.0) -> None:
+        """Wait for the outbound queue to empty, with a timeout.
+
+        If the transport's ``send_audio`` is blocked (network backpressure,
+        stalled connection), the outbound worker cannot make progress and the
+        queue never empties.  A bounded wait prevents turn cleanup from
+        hanging indefinitely in that scenario.
+        """
+        if not self._outbound_task or self._outbound_task.done():
+            return
+        deadline = time.monotonic() + timeout
+        while not self._outbound_queue.empty():
+            if time.monotonic() >= deadline:
+                logger.warning("Outbound queue drain timed out after %.1fs", timeout)
+                break
+            await asyncio.sleep(0)
 
     async def _drain_outbound_audio(self) -> None:
         """Send queued outbound audio to the transport with backpressure."""
