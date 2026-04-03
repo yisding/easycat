@@ -166,18 +166,27 @@ async def test_playback_mark_ack_event_received(monkeypatch: pytest.MonkeyPatch)
 
     await session.start()
     try:
-        # Simulate a mark being tracked in the session's internal state.
-        session._turn_playback_mark_to_bytes["test_mark"] = 1000
+        # Push audio to trigger a turn (VAD will fire "start").
+        await transport.push_audio(make_chunk())
+        # Give the pipeline a moment to process the audio and create the turn.
+        for _ in range(20):
+            if session._turn is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert session._turn is not None, "Expected an active turn"
+
+        # Simulate a mark being tracked in the turn context's internal state.
+        session._turn.playback_mark_to_bytes["test_mark"] = 1000
 
         # Emit a PlaybackMarkAck as if the transport reported playback progress.
         await session.event_bus.emit(PlaybackMarkAck(mark_name="test_mark"))
 
         # The handler should have consumed the mark from the tracking dict.
-        assert "test_mark" not in session._turn_playback_mark_to_bytes
+        assert "test_mark" not in session._turn.playback_mark_to_bytes
 
         # The ack log should have an entry.
-        assert len(session._turn_playback_ack_log) == 1
-        _, acked_bytes = session._turn_playback_ack_log[0]
+        assert len(session._turn.playback_ack_log) == 1
+        _, acked_bytes = session._turn.playback_ack_log[0]
         assert acked_bytes == 1000
     finally:
         await transport.finish_input()

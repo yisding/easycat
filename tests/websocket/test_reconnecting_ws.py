@@ -227,8 +227,13 @@ class TestReconnectingWebSocket:
 
         assert messages == ["msg1", "msg2", "msg3", "msg4"]
 
-    async def test_recv_iter_reconnects_without_on_reconnect(self):
-        """recv_iter should still attempt reconnection even without on_reconnect."""
+    async def test_recv_iter_fails_fast_without_on_reconnect(self):
+        """recv_iter should raise ConnectionClosed immediately when no on_reconnect is set.
+
+        Without a reconnect callback the caller cannot replay protocol
+        setup messages (e.g. ElevenLabs init sequence) on the new socket,
+        so reconnecting would leave an uninitialised connection.
+        """
         ws = self._make_ws(base_delay=0.01, max_retries=1, jitter_factor=0.0)
 
         close_frame = websockets.frames.Close(1006, "abnormal")
@@ -248,11 +253,12 @@ class TestReconnectingWebSocket:
         ws._ws = DroppingConnection()
 
         messages = []
-        async for msg in ws.recv_iter():
-            messages.append(msg)
+        with pytest.raises(websockets.exceptions.ConnectionClosed):
+            async for msg in ws.recv_iter():
+                messages.append(msg)
 
-        # Should have received the first message, then reconnection was
-        # attempted (and failed), ending the iterator gracefully.
+        # Should have received the first message, then immediately raised
+        # ConnectionClosed without attempting reconnection.
         assert messages == ["msg1"]
 
     async def test_recv_iter_gives_up_when_reconnect_fails(self):
@@ -285,8 +291,9 @@ class TestReconnectingWebSocket:
             side_effect=ConnectionError("down"),
         ):
             messages = []
-            async for msg in ws.recv_iter():
-                messages.append(msg)
+            with pytest.raises(ConnectionError):
+                async for msg in ws.recv_iter():
+                    messages.append(msg)
 
         assert messages == ["msg1"]
 
