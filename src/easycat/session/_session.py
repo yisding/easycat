@@ -100,6 +100,9 @@ logger = logging.getLogger(__name__)
 # *after* the full drain loop finishes (avoids teardown mid-iteration).
 _DEFERRED_STOP = object()
 
+# Type alias for session action handlers
+_ActionHandler = Callable[[SessionAction], Awaitable[Any]]
+
 
 class Session:
     """One voice session (per call / per websocket client).
@@ -201,7 +204,9 @@ class Session:
             timeout_config=self._timeout_config,
             correlation_ids=lambda: (
                 self.session_id,
-                self._turn.id if self._turn else None,
+                self._turn.id
+                if self._turn and self._turn_manager.state != TurnManagerState.IDLE
+                else None,
             ),
             audio_gate=cfg.audio_gate,
         )
@@ -211,7 +216,6 @@ class Session:
 
         # Agent-initiated session actions
         self._session_actions = cfg.session_actions
-        _ActionHandler = Callable[[SessionAction], Awaitable[Any]]
         self._action_handlers: dict[SessionActionType, _ActionHandler] = {
             SessionActionType.END_CALL: self._handle_end_call,
             SessionActionType.TRANSFER_CALL: self._handle_transfer_call,
@@ -237,6 +241,7 @@ class Session:
 
         # STT stream started for current turn
         self._stt_active = False
+        self._tts_playback_suppressed = False
         self._auto_turn_speech_frames = 0
 
         # Per-turn state — created fresh at each turn start
@@ -266,7 +271,17 @@ class Session:
         if hasattr(event, "session_id") and getattr(event, "session_id", None) is None:
             kwargs["session_id"] = self.session_id
         if hasattr(event, "turn_id") and getattr(event, "turn_id", None) is None:
-            kwargs["turn_id"] = self._turn.id if self._turn else None
+            # Only stamp a turn_id when the turn manager is actively in a
+            # turn.  In the gated-TTS path self._turn is kept alive after the
+            # turn manager resets to IDLE for playback-mark bookkeeping, but
+            # events emitted during that window (AudioIn, VAD, etc.) should
+            # not carry the old turn's ID.
+            active_turn = (
+                self._turn
+                if self._turn and self._turn_manager.state != TurnManagerState.IDLE
+                else None
+            )
+            kwargs["turn_id"] = active_turn.id if active_turn else None
         return replace(event, **kwargs) if kwargs else event
 
     async def _emit(self, event: Any) -> None:
@@ -356,7 +371,7 @@ class Session:
         bot_started_speaking: Callable[[], Any] | None = None,
         bot_stopped_speaking: Callable[[], Any] | None = None,
         interruption: Callable[[], Any] | None = None,
-        error: Callable[[Error], Any] | None = None,
+        error: Callable[[BaseException, str], Any] | None = None,
     ) -> list[tuple[type, EventHandler]]:
         """Subscribe to common session events with simple callbacks.
 
@@ -384,7 +399,16 @@ class Session:
             (BotStartedSpeaking, bot_started_speaking, lambda cb: lambda _e: cb()),
             (BotStoppedSpeaking, bot_stopped_speaking, lambda cb: lambda _e: cb()),
             (Interruption, interruption, lambda cb: lambda _e: cb()),
-            (Error, error, lambda cb: lambda e: cb(e)),
+            (
+                Error,
+                error,
+                lambda cb: (
+                    lambda e: cb(
+                        e.exception,
+                        f"{e.stage.value}:{e.provider}" if e.provider else e.stage.value,
+                    )
+                ),
+            ),
         ]
 
         registrations: list[tuple[type, EventHandler]] = []
@@ -634,6 +658,7 @@ class Session:
         task is the entire ``_on_turn_ended`` coroutine which includes
         the agent consumer.  Cancelling it would abort the agent stream.
         """
+        self._tts_playback_suppressed = True
         await self._tts_synth.cancel()
         await self.transport.clear_audio()
         self._outbound_queue.flush_for_new_turn()
@@ -781,6 +806,7 @@ class Session:
         self._turn = TurnContext(turn_id=event.turn_id, cancel_token=cancel_token)
         self._spans.begin_turn()
         self._auto_turn_speech_frames = 0
+        self._tts_playback_suppressed = False
 
         # Start STT stream
         try:
@@ -1113,6 +1139,9 @@ class Session:
                     if token and token.is_cancelled:
                         tts_chunks.append((_text_for_estimation_timeline(payload), 0, False))
                         break
+                    if self._tts_playback_suppressed:
+                        tts_chunks.append((_text_for_estimation_timeline(payload), 0, False))
+                        break
 
                     if not started:
                         gated = self._is_gated
@@ -1158,13 +1187,18 @@ class Session:
                 # Wait for queued audio to drain so _drain_outbound_audio
                 # can still call turn.record_audio_sent() and emit playback
                 # marks for the tail of this turn's audio.
-                if self._outbound_task and not self._outbound_task.done():
-                    while not self._outbound_queue.empty():
-                        await asyncio.sleep(0.005)
+                await self._wait_outbound_drain()
                 self._spans.finish("turn")
-                self._turn = None
+                # Only clear if a new turn hasn't started during the drain.
+                if self._turn is turn:
+                    self._turn = None
             elif started and not tts_playback_started:
-                self._reset_turn_state()
+                if gated:
+                    # Keep self._turn alive for gated replay mark accounting
+                    self._auto_turn_speech_frames = 0
+                    self._turn_manager.reset()
+                else:
+                    self._reset_turn_state()
 
         # ── Run agent stream + TTS concurrently ──
 
@@ -1311,15 +1345,39 @@ class Session:
                 and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
             ):
                 await self._turn_manager.bot_stopped_speaking()
-                if self._outbound_task and not self._outbound_task.done():
-                    while not self._outbound_queue.empty():
-                        await asyncio.sleep(0.005)
+                await self._wait_outbound_drain()
                 self._spans.finish("turn")
-                self._turn = None
+                # Only clear if a new turn hasn't started during the drain.
+                if self._turn is turn:
+                    self._turn = None
             elif gated and self._turn is turn and turn is not None:
-                self._reset_turn_state()
+                # Gated opener TTS is buffered — reset to IDLE so the
+                # callee's speech can start new turns while we wait for
+                # classification.  Keep self._turn alive so that when the
+                # gate flushes and replays buffered audio,
+                # _drain_outbound_audio can still call record_audio_sent()
+                # and send playback marks.
+                self._auto_turn_speech_frames = 0
+                self._turn_manager.reset()
 
     # ── Internal helpers ───────────────────────────────────────
+
+    async def _wait_outbound_drain(self, timeout: float = 2.0) -> None:
+        """Wait for the outbound queue to empty, with a timeout.
+
+        If the transport's ``send_audio`` is blocked (network backpressure,
+        stalled connection), the outbound worker cannot make progress and the
+        queue never empties.  A bounded wait prevents turn cleanup from
+        hanging indefinitely in that scenario.
+        """
+        if not self._outbound_task or self._outbound_task.done():
+            return
+        deadline = time.monotonic() + timeout
+        while not self._outbound_queue.empty():
+            if time.monotonic() >= deadline:
+                logger.warning("Outbound queue drain timed out after %.1fs", timeout)
+                break
+            await asyncio.sleep(0)
 
     async def _drain_outbound_audio(self) -> None:
         """Send queued outbound audio to the transport with backpressure."""
