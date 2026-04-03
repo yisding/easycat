@@ -78,6 +78,15 @@ class PydanticAIAdapter(BaseAgentAdapter):
         self._deps = deps
         self._model_settings = model_settings
 
+    @property
+    def deps(self) -> Any:
+        """The dependency value forwarded to PydanticAI on every call."""
+        return self._deps
+
+    @deps.setter
+    def deps(self, value: Any) -> None:
+        self._deps = value
+
     # ── Interruption handling ────────────────────────────────
 
     def _truncate_last_assistant_for_interruption(self, text_spoken: str) -> bool:
