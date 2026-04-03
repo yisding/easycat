@@ -65,6 +65,7 @@ class SessionActions:
 
     def __init__(self) -> None:
         self._queue: deque[SessionAction] = deque()
+        self._no_interrupt = False
 
     # ── Convenience methods for common actions ──────────────
 
@@ -74,6 +75,8 @@ class SessionActions:
         When *no_interrupt* is True (default), barge-in is suppressed for
         the remainder of this turn so the farewell message plays in full.
         """
+        if no_interrupt:
+            self._no_interrupt = True
         self._queue.append(
             SessionAction(
                 type=SessionActionType.END_CALL,
@@ -88,6 +91,8 @@ class SessionActions:
         When *no_interrupt* is True (default), barge-in is suppressed for
         the remainder of this turn so the transfer announcement plays fully.
         """
+        if no_interrupt:
+            self._no_interrupt = True
         self._queue.append(
             SessionAction(
                 type=SessionActionType.TRANSFER_CALL,
@@ -120,6 +125,7 @@ class SessionActions:
         """Remove and return all queued actions.  Called by Session."""
         actions = list(self._queue)
         self._queue.clear()
+        self._no_interrupt = False
         return actions
 
     @property
@@ -129,9 +135,14 @@ class SessionActions:
 
     @property
     def no_interrupt(self) -> bool:
-        """Whether any queued action requests barge-in suppression."""
-        return any(a.no_interrupt for a in self._queue)
+        """Whether any queued action requests barge-in suppression.
+
+        This is a simple flag (not a deque iteration) so it is safe to
+        read from the event loop while tools append from a thread pool.
+        """
+        return self._no_interrupt
 
     def clear(self) -> None:
         """Discard all queued actions without executing them."""
         self._queue.clear()
+        self._no_interrupt = False

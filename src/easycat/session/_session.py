@@ -74,6 +74,7 @@ from easycat.session._types import (
     SessionHelper,
     TurnState,
 )
+from easycat.session.actions import SessionActionType
 from easycat.strip_markdown import strip_markdown
 from easycat.stubs import (
     NoopAgent,
@@ -205,8 +206,6 @@ class Session:
         self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)
 
         # Agent-initiated session actions
-        from easycat.session.actions import SessionActionType
-
         self._session_actions = cfg.session_actions
         self._action_handlers: dict[SessionActionType, Any] = {
             SessionActionType.END_CALL: self._handle_end_call,
@@ -676,10 +675,10 @@ class Session:
         if self._session_actions is None or not self._session_actions.has_pending:
             return
 
-        from easycat.session.actions import SessionActionType
-
         actions = self._session_actions.drain()
         for action in actions:
+            if not self._is_running:
+                break
             await self._emit(
                 SessionActionRequested(
                     action_type=action.type.value,
