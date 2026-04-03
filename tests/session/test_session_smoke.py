@@ -35,7 +35,8 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.session import Session, SessionConfig, TurnState
+from easycat.session._session import Session
+from easycat.session._types import SessionConfig, TurnState
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
 

@@ -203,7 +203,9 @@ class EventTraceLogger:
         elif isinstance(event, VoicemailDetected):
             payload["result"] = event.result
         elif isinstance(event, Error):
-            payload["context"] = event.context
+            payload["stage"] = event.stage.value
+            if event.provider:
+                payload["provider"] = event.provider
             payload["exception"] = repr(event.exception)
         return payload
 
@@ -227,7 +229,7 @@ class EventTraceLogger:
             "audio_bytes",
             "sample_rate",
             "text_chars",
-            "context",
+            "stage",
             "exception",
             "error",
             "result",

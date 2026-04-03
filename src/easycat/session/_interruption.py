@@ -1,0 +1,262 @@
+"""Audio-byte estimation for barge-in / interruption handling.
+
+Pure functions that map TTS audio byte counts back to estimated spoken
+text, used by the Session to tell the agent what the user actually heard
+before interrupting.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any
+
+from easycat.session._text_utils import _truncate_partial_text_to_boundary
+from easycat.session._tts_helpers import _cleanup_estimation_text
+
+if TYPE_CHECKING:
+    from easycat.cancel import CancelToken
+    from easycat.session._turn_context import TurnContext
+
+logger = logging.getLogger(__name__)
+
+
+def _estimate_text_spoken(
+    tts_chunks: list[tuple[str, int]],
+    audio_bytes_sent: int,
+) -> str:
+    """Estimate what text the user heard based on TTS audio delivered.
+
+    Each entry in *tts_chunks* is ``(text, audio_bytes_produced)`` for a
+    sentence-level TTS call.  *audio_bytes_sent* is the total audio bytes
+    that were actually sent to the transport before the barge-in flush.
+
+    Walks through the chunks in order, subtracting each chunk's audio from
+    the bytes-sent budget.  When the budget runs out mid-chunk, the text is
+    proportionally estimated (assumes roughly linear text → audio mapping
+    within a single sentence — not perfect, but a practical heuristic).
+    """
+    if not tts_chunks or audio_bytes_sent <= 0:
+        return ""
+
+    remaining = audio_bytes_sent
+    spoken = ""
+    for chunk_text, chunk_audio in tts_chunks:
+        if chunk_audio <= 0:
+            # No audio produced for this chunk (e.g. cancelled before any
+            # data) — skip.
+            continue
+        if remaining >= chunk_audio:
+            # This entire chunk was delivered.
+            spoken += chunk_text
+            remaining -= chunk_audio
+        else:
+            # Partial chunk — estimate by fraction of audio delivered.
+            fraction = remaining / chunk_audio
+            chars = int(len(chunk_text) * fraction)
+            spoken += _truncate_partial_text_to_boundary(chunk_text, chars)
+            break
+    return spoken
+
+
+def _all_tts_audio_delivered(
+    tts_chunks: list[tuple[str, int, bool]], audio_bytes_delivered: int
+) -> bool:
+    """Whether all synthesized TTS audio has been delivered/heard.
+
+    ``audio_bytes_delivered`` should be the estimated bytes actually
+    delivered/heard/acknowledged, not merely bytes written to the transport.
+    """
+    if not tts_chunks:
+        return False
+    if not all(completed for _, _, completed in tts_chunks):
+        return False
+    total_audio = sum(max(chunk_audio, 0) for _, chunk_audio, _ in tts_chunks)
+    return audio_bytes_delivered >= total_audio
+
+
+def _audio_bytes_likely_heard(
+    send_log: list[tuple[float, int, float]],
+    cutoff_time: float | None,
+) -> int:
+    """Estimate bytes likely heard by ``cutoff_time``.
+
+    ``send_log`` entries are ``(send_time, bytes_sent, chunk_duration_ms)``.
+    Chunks are modeled as serial playback with a virtual playout cursor:
+    each chunk starts at ``max(send_time, previous_chunk_end)`` and then
+    plays linearly over its own duration.
+    """
+    if not send_log:
+        return 0
+    if cutoff_time is None:
+        return sum(max(size, 0) for _, size, _ in send_log)
+
+    heard = 0
+    playout_cursor: float | None = None
+
+    for send_time, size, duration_ms in send_log:
+        size = max(size, 0)
+        if size == 0:
+            continue
+
+        start_time = send_time
+        if playout_cursor is not None and playout_cursor > start_time:
+            start_time = playout_cursor
+
+        if duration_ms <= 0:
+            if start_time <= cutoff_time:
+                heard += size
+            continue
+
+        duration_s = duration_ms / 1000.0
+        end_time = start_time + duration_s
+        playout_cursor = end_time
+
+        elapsed_ms = (cutoff_time - start_time) * 1000.0
+        if elapsed_ms <= 0:
+            continue
+        if elapsed_ms >= duration_ms:
+            heard += size
+            continue
+        heard += int(size * (elapsed_ms / duration_ms))
+    return heard
+
+
+def _audio_bytes_acknowledged(
+    playback_ack_log: list[tuple[float, int]],
+    cutoff_time: float | None,
+) -> int:
+    """Return acknowledged bytes at or before ``cutoff_time``."""
+    if not playback_ack_log:
+        return 0
+    if cutoff_time is None:
+        return max(0, playback_ack_log[-1][1])
+
+    acknowledged = 0
+    for ack_time, acked_bytes in playback_ack_log:
+        if ack_time > cutoff_time:
+            break
+        acknowledged = max(acknowledged, max(acked_bytes, 0))
+    return acknowledged
+
+
+def _audio_bytes_per_second_from_send_log(send_log: list[tuple[float, int, float]]) -> float:
+    """Estimate playout bytes/second from send-log durations."""
+    total_bytes = 0
+    total_duration_ms = 0.0
+    for _, size, duration_ms in send_log:
+        size = max(size, 0)
+        if size <= 0 or duration_ms <= 0:
+            continue
+        total_bytes += size
+        total_duration_ms += duration_ms
+    if total_bytes <= 0 or total_duration_ms <= 0:
+        return 0.0
+    return (total_bytes * 1000.0) / total_duration_ms
+
+
+def _latest_playback_ack_time(
+    playback_ack_log: list[tuple[float, int]],
+    cutoff_time: float | None,
+) -> float | None:
+    """Return the latest ack timestamp at or before ``cutoff_time``."""
+    latest: float | None = None
+    for ack_time, _ in playback_ack_log:
+        if cutoff_time is not None and ack_time > cutoff_time:
+            break
+        latest = ack_time
+    return latest
+
+
+def _audio_bytes_likely_heard_hybrid(
+    send_log: list[tuple[float, int, float]],
+    playback_ack_log: list[tuple[float, int]],
+    cutoff_time: float | None,
+    *,
+    ack_stale_ms: int,
+    ack_tail_cap_ms: int,
+) -> int:
+    """Estimate heard bytes using playback acks with heuristic stale fallback."""
+    heuristic_heard = _audio_bytes_likely_heard(send_log, cutoff_time)
+    if cutoff_time is None or not playback_ack_log:
+        return heuristic_heard
+
+    acked_heard = _audio_bytes_acknowledged(playback_ack_log, cutoff_time)
+    if acked_heard <= 0:
+        return heuristic_heard
+
+    # Fresh-ack path: acknowledgements cap the timing estimate.
+    heard = min(heuristic_heard, acked_heard)
+
+    latest_ack_time = _latest_playback_ack_time(playback_ack_log, cutoff_time)
+    if latest_ack_time is None:
+        return heard
+
+    bytes_per_second = _audio_bytes_per_second_from_send_log(send_log)
+    if bytes_per_second <= 0:
+        return heard
+
+    ack_age_ms = max(0.0, (cutoff_time - latest_ack_time) * 1000.0)
+    unacked_tail_bytes = max(0, heuristic_heard - acked_heard)
+    unacked_tail_ms = (unacked_tail_bytes / bytes_per_second) * 1000.0
+    is_stale = ack_age_ms > ack_stale_ms or unacked_tail_ms > ack_stale_ms
+    if not is_stale:
+        return heard
+
+    if ack_tail_cap_ms <= 0:
+        return heard
+    tail_cap_bytes = int(bytes_per_second * (ack_tail_cap_ms / 1000.0))
+    if tail_cap_bytes <= 0:
+        return heard
+    return min(heuristic_heard, acked_heard + tail_cap_bytes)
+
+
+def estimate_and_notify_interruption(
+    agent: Any,
+    token: CancelToken | None,
+    turn: TurnContext,
+    tts_chunks: list[tuple[str, int, bool]],
+    *,
+    tts_playback_started: bool,
+    interrupted: bool,
+    interruption_mode: str,
+    latency_compensation_ms: int,
+    ack_stale_ms: int,
+    ack_tail_cap_ms: int,
+) -> None:
+    """Estimate what the user heard and notify the agent of the interruption.
+
+    Called after a streaming turn completes when the user barged in.
+    Compares audio bytes sent to the transport against per-chunk TTS
+    production to estimate what text was actually heard.
+    """
+    cancelled_during_playback = bool(token and token.is_cancelled and tts_playback_started)
+    if not (interrupted or cancelled_during_playback):
+        return
+    if not hasattr(agent, "notify_interruption"):
+        return
+
+    cutoff_time = token.cancelled_at if token is not None else None
+    if cutoff_time is None:
+        cutoff_time = turn.last_barge_in_time
+    if cutoff_time is not None and latency_compensation_ms > 0:
+        cutoff_time -= latency_compensation_ms / 1000.0
+
+    heard_bytes = _audio_bytes_likely_heard_hybrid(
+        list(turn.audio_send_log),
+        list(turn.playback_ack_log),
+        cutoff_time,
+        ack_stale_ms=ack_stale_ms,
+        ack_tail_cap_ms=ack_tail_cap_ms,
+    )
+
+    if not _all_tts_audio_delivered(tts_chunks, heard_bytes):
+        text_spoken = _cleanup_estimation_text(
+            _estimate_text_spoken(
+                [(text, audio_bytes) for text, audio_bytes, _ in tts_chunks],
+                heard_bytes,
+            )
+        )
+        try:
+            agent.notify_interruption(text_spoken, mode=interruption_mode)
+        except Exception:
+            logger.debug("Failed to notify agent of interruption", exc_info=True)

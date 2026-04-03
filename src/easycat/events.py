@@ -31,75 +31,71 @@ def _handler_name(handler: EventHandler) -> str:
     return type(handler).__name__
 
 
-# ── EasyCat-level event dataclasses ────────────────────────────────
+# ── Base event class ─────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Event:
+    """Base class for all EasyCat session events.
+
+    Every event carries optional ``session_id`` / ``turn_id`` correlation
+    fields (injected by :class:`Session`) and a monotonic ``timestamp``.
+    """
+
+    session_id: str | None = field(default=None, kw_only=True)
+    turn_id: str | None = field(default=None, kw_only=True)
+    timestamp: float = field(default_factory=time.monotonic, kw_only=True)
+
+
+# ── EasyCat-level event dataclasses ──────────────────────────────
 
 
 # Audio
 @dataclass(frozen=True)
-class AudioIn:
+class AudioIn(Event):
     """Raw audio chunk received from transport."""
 
     chunk: AudioChunk
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 # VAD
 @dataclass(frozen=True)
-class VADStartSpeaking:
+class VADStartSpeaking(Event):
     """VAD detected start of user speech."""
-
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class VADStopSpeaking:
+class VADStopSpeaking(Event):
     """VAD detected end of user speech."""
-
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 # STT
 @dataclass(frozen=True)
-class STTPartial:
+class STTPartial(Event):
     """Partial transcript from STT provider."""
 
     text: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
     track: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class STTFinal:
+class STTFinal(Event):
     """Final transcript from STT provider for a completed turn."""
 
     text: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
     track: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 # Agent
 @dataclass(frozen=True)
-class AgentDelta:
+class AgentDelta(Event):
     """Streaming text delta from the agent."""
 
     text: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class AgentFinal:
+class AgentFinal(Event):
     """Final complete response from the agent.
 
     When the agent uses a structured ``output_type``, ``structured_output``
@@ -109,335 +105,234 @@ class AgentFinal:
 
     text: str
     structured_output: Any = None
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 # TTS
 @dataclass(frozen=True)
-class TTSAudio:
+class TTSAudio(Event):
     """Audio chunk produced by TTS provider."""
 
     chunk: AudioChunk
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
     bypass_gate: bool = field(default=False, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class TTSMarkers:
+class TTSMarkers(Event):
     """Word/viseme alignment markers from TTS."""
 
     markers: list[dict[str, Any]]
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 # Lifecycle
 @dataclass(frozen=True)
-class BotStartedSpeaking:
+class BotStartedSpeaking(Event):
     """Bot began playing TTS audio."""
 
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
-
 
 @dataclass(frozen=True)
-class BotStoppedSpeaking:
+class BotStoppedSpeaking(Event):
     """Bot finished playing TTS audio."""
 
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
-
 
 @dataclass(frozen=True)
-class TurnStarted:
+class TurnStarted(Event):
     """A new user turn has begun (VAD triggered)."""
 
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
-
 
 @dataclass(frozen=True)
-class TurnEnded:
+class TurnEnded(Event):
     """User turn has ended (speech capture complete)."""
-
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 # Interruption
 @dataclass(frozen=True)
-class Interruption:
+class Interruption(Event):
     """User barged in while bot was speaking."""
-
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class PlaybackMarkAck:
+class PlaybackMarkAck(Event):
     """Transport acknowledged playback reaching a previously queued mark."""
 
     mark_name: str
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 # Tools
 @dataclass(frozen=True)
-class ToolCallStarted:
+class ToolCallStarted(Event):
     """An agent tool call has started."""
 
     tool_name: str
     call_id: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class ToolCallDelta:
+class ToolCallDelta(Event):
     """Streaming delta from an in-progress tool call."""
 
     call_id: str
     delta: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class ToolCallResult:
+class ToolCallResult(Event):
     """A tool call has completed with a result."""
 
     call_id: str
     result: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 # Reconnect
 @dataclass(frozen=True)
-class ReconnectAttempt:
+class ReconnectAttempt(Event):
     """A provider reconnection attempt is being made."""
 
     provider: str
     attempt: int
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class ReconnectSuccess:
+class ReconnectSuccess(Event):
     """A provider reconnection succeeded."""
 
     provider: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class ReconnectFailure:
+class ReconnectFailure(Event):
     """A provider reconnection failed."""
 
     provider: str
     error: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 # Telephony
 @dataclass(frozen=True)
-class DTMF:
+class DTMF(Event):
     """Single DTMF digit detected."""
 
     digit: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class DTMFAggregated:
+class DTMFAggregated(Event):
     """Aggregated DTMF digit sequence."""
 
     sequence: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class VoicemailDetected:
+class VoicemailDetected(Event):
     """Voicemail / answering machine detection result."""
 
     result: Literal["human", "machine", "unknown"]
     source: Literal["", "fusion", "detector"] = ""
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 # Outbound call lifecycle
 @dataclass(frozen=True)
-class CallInitiated:
+class CallInitiated(Event):
     """Bot placed an outbound call."""
 
     call_sid: str
     to: str
     from_: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class CallRinging:
+class CallRinging(Event):
     """Remote phone is ringing."""
 
     call_sid: str
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class CallAnswered:
+class CallAnswered(Event):
     """Call was answered (by human, machine, or screener)."""
 
     call_sid: str
     answered_by: str | None = None
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class CallScreening:
+class CallScreening(Event):
     """Call screening detected."""
 
     call_sid: str
     platform: Literal["ios", "android", "carrier", "third_party", "unknown"]
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class ScreeningTimedOut:
+class ScreeningTimedOut(Event):
     """Screening exhausted max turns without resolution."""
 
     call_sid: str = ""
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class CallFailed:
+class CallFailed(Event):
     """Call failed (busy, no answer, rejected, error)."""
 
     call_sid: str
     reason: str
     sip_code: int | None = None
     number: str | None = None
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
-class CallEnded:
+class CallEnded(Event):
     """Call terminated."""
 
     call_sid: str
     duration_s: float | None = None
     disposition: str | None = None
     number: str | None = None
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
 
 
 # Error
+
+
+class ErrorStage(enum.StrEnum):
+    """Pipeline stage where an error occurred."""
+
+    STT = "stt"
+    AGENT = "agent"
+    TTS = "tts"
+    PIPELINE = "pipeline"
+
+
 @dataclass(frozen=True)
-class Error:
-    """Error event wrapping an exception."""
+class Error(Event):
+    """Error event wrapping an exception.
+
+    ``stage`` identifies the pipeline stage (STT, agent, TTS, or general
+    pipeline).  ``provider`` optionally names the provider implementation
+    that raised the error.
+    """
 
     exception: BaseException
-    context: str = ""
-    session_id: str | None = field(default=None, kw_only=True)
-    turn_id: str | None = field(default=None, kw_only=True)
-    timestamp: float = field(default_factory=time.monotonic)
+    stage: ErrorStage = ErrorStage.PIPELINE
+    provider: str | None = None
 
 
-# Union of all EasyCat-level event types
-Event = (
-    AudioIn
-    | VADStartSpeaking
-    | VADStopSpeaking
-    | STTPartial
-    | STTFinal
-    | AgentDelta
-    | AgentFinal
-    | TTSAudio
-    | TTSMarkers
-    | BotStartedSpeaking
-    | BotStoppedSpeaking
-    | TurnStarted
-    | TurnEnded
-    | Interruption
-    | PlaybackMarkAck
-    | ToolCallStarted
-    | ToolCallDelta
-    | ToolCallResult
-    | ReconnectAttempt
-    | ReconnectSuccess
-    | ReconnectFailure
-    | DTMF
-    | DTMFAggregated
-    | VoicemailDetected
-    | CallInitiated
-    | CallRinging
-    | CallAnswered
-    | CallScreening
-    | ScreeningTimedOut
-    | CallFailed
-    | CallEnded
-    | Error
-)
-
-
-# ── Event groups ──────────────────────────────────────────────────
+# ── Event groups ─────────────────────────────────────────────────
 # Semantic groupings of EasyCat-level events for bulk subscription.
 
-AUDIO_EVENTS: tuple[type, ...] = (AudioIn,)
-VAD_EVENTS: tuple[type, ...] = (VADStartSpeaking, VADStopSpeaking)
-STT_EVENTS: tuple[type, ...] = (STTPartial, STTFinal)
-AGENT_EVENTS: tuple[type, ...] = (AgentDelta, AgentFinal)
-TTS_EVENTS: tuple[type, ...] = (TTSAudio, TTSMarkers)
-TOOL_EVENTS: tuple[type, ...] = (ToolCallStarted, ToolCallDelta, ToolCallResult)
-LIFECYCLE_EVENTS: tuple[type, ...] = (
+AUDIO_EVENTS: tuple[type[Event], ...] = (AudioIn,)
+VAD_EVENTS: tuple[type[Event], ...] = (VADStartSpeaking, VADStopSpeaking)
+STT_EVENTS: tuple[type[Event], ...] = (STTPartial, STTFinal)
+AGENT_EVENTS: tuple[type[Event], ...] = (AgentDelta, AgentFinal)
+TTS_EVENTS: tuple[type[Event], ...] = (TTSAudio, TTSMarkers)
+TOOL_EVENTS: tuple[type[Event], ...] = (ToolCallStarted, ToolCallDelta, ToolCallResult)
+LIFECYCLE_EVENTS: tuple[type[Event], ...] = (
     TurnStarted,
     TurnEnded,
     BotStartedSpeaking,
     BotStoppedSpeaking,
 )
-INTERRUPTION_EVENTS: tuple[type, ...] = (Interruption, PlaybackMarkAck)
-RECONNECT_EVENTS: tuple[type, ...] = (ReconnectAttempt, ReconnectSuccess, ReconnectFailure)
-TELEPHONY_EVENTS: tuple[type, ...] = (
+INTERRUPTION_EVENTS: tuple[type[Event], ...] = (Interruption, PlaybackMarkAck)
+RECONNECT_EVENTS: tuple[type[Event], ...] = (ReconnectAttempt, ReconnectSuccess, ReconnectFailure)
+TELEPHONY_EVENTS: tuple[type[Event], ...] = (
     DTMF,
     DTMFAggregated,
     VoicemailDetected,
@@ -449,9 +344,9 @@ TELEPHONY_EVENTS: tuple[type, ...] = (
     CallFailed,
     CallEnded,
 )
-ERROR_EVENTS: tuple[type, ...] = (Error,)
+ERROR_EVENTS: tuple[type[Event], ...] = (Error,)
 
-ALL_EVENTS: tuple[type, ...] = (
+ALL_EVENTS: tuple[type[Event], ...] = (
     AUDIO_EVENTS
     + VAD_EVENTS
     + STT_EVENTS
@@ -466,7 +361,7 @@ ALL_EVENTS: tuple[type, ...] = (
 )
 
 
-# ── Provider-scoped event types ────────────────────────────────────
+# ── Provider-scoped event types ──────────────────────────────────
 # Internal to provider implementations. Session maps these to EasyCat events.
 
 
@@ -512,7 +407,7 @@ class TTSEvent:
     timestamp: float = field(default_factory=time.monotonic)
 
 
-# ── EventBus ───────────────────────────────────────────────────────
+# ── EventBus ─────────────────────────────────────────────────────
 
 
 class EventBus:
@@ -548,12 +443,17 @@ class EventBus:
     async def emit(self, event: Event) -> None:
         """Emit an event to matching and global handlers.
 
+        Handlers registered for the exact event type **and** any of its
+        parent classes (up to and including :class:`Event`) are invoked.
         Sync handlers are called directly; async handlers are awaited.
         Exceptions in handlers are logged but do not prevent other handlers from running.
         """
         event_type = type(event)
         handlers = list(self._all_handlers)
-        handlers.extend(self._handlers[event_type])
+        for cls in event_type.__mro__:
+            handlers.extend(self._handlers[cls])
+            if cls is Event:
+                break
         for handler in handlers:
             try:
                 result = handler(event)

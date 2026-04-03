@@ -91,13 +91,14 @@ class PeriodicHealthChecker:
         """Log and optionally emit an event on health check failure."""
         logger.warning("Health check failed for %s: %s", self._provider_name, reason)
         if self._event_bus is not None:
-            from easycat.events import Error
+            from easycat.events import Error, ErrorStage
 
             await self._event_bus.emit(
                 Error(
                     exception=RuntimeError(
                         f"Health check failed for {self._provider_name}: {reason}"
                     ),
-                    context=f"health_check:{self._provider_name}",
+                    stage=ErrorStage.PIPELINE,
+                    provider=self._provider_name,
                 )
             )

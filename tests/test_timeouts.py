@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from easycat.events import Error, EventBus
+from easycat.events import Error, ErrorStage, EventBus
 from easycat.timeouts import (
     AgentTimeoutError,
     STTTimeoutError,
@@ -97,7 +97,7 @@ class TestSTTTimeout:
             )
 
         assert len(errors) == 1
-        assert "stt_timeout" in errors[0].context
+        assert errors[0].stage == ErrorStage.STT
         assert isinstance(errors[0].exception, STTTimeoutError)
 
     async def test_provider_name_in_error(self):
@@ -149,7 +149,7 @@ class TestAgentTimeout:
             await with_agent_timeout(hanging(), timeout=0.05, event_bus=event_bus)
 
         assert len(errors) == 1
-        assert "agent_timeout" in errors[0].context
+        assert errors[0].stage == ErrorStage.AGENT
 
 
 # ── TTS first-byte timeout (Task 8.5) ─────────────────────────────
@@ -207,4 +207,4 @@ class TestTTSTimeout:
             )
 
         assert len(errors) == 1
-        assert "tts_timeout" in errors[0].context
+        assert errors[0].stage == ErrorStage.TTS

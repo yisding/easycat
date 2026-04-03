@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import get_args
-
 import pytest
 
 from easycat.events import (
@@ -59,8 +57,7 @@ class TestCallLifecycleEvents:
         assert ev.duration_s == 45.2
         assert ev.disposition == "completed"
 
-    def test_events_in_event_union(self) -> None:
-        union_members = set(get_args(Event))
+    def test_events_are_event_subclasses(self) -> None:
         for cls in (
             CallInitiated,
             CallRinging,
@@ -69,7 +66,7 @@ class TestCallLifecycleEvents:
             CallFailed,
             CallEnded,
         ):
-            assert cls in union_members, f"{cls.__name__} not in Event union"
+            assert issubclass(cls, Event), f"{cls.__name__} not a subclass of Event"
 
     @pytest.mark.asyncio
     async def test_events_emittable_on_bus(self) -> None:

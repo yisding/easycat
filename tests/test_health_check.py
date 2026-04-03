@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from easycat.events import Error, EventBus
+from easycat.events import Error, ErrorStage, EventBus
 from easycat.health_check import HealthCheckable, PeriodicHealthChecker
 
 
@@ -64,8 +64,8 @@ class TestPeriodicHealthChecker:
         await checker.check_once()
 
         assert len(errors) == 1
-        assert "stale_ws" in errors[0].context
-        assert "health_check" in errors[0].context
+        assert errors[0].stage == ErrorStage.PIPELINE
+        assert errors[0].provider == "stale_ws"
 
     async def test_exception_emits_error_event(self):
         event_bus = EventBus()
@@ -84,7 +84,8 @@ class TestPeriodicHealthChecker:
         await checker.check_once()
 
         assert len(errors) == 1
-        assert "broken_ws" in errors[0].context
+        assert errors[0].stage == ErrorStage.PIPELINE
+        assert errors[0].provider == "broken_ws"
 
     async def test_start_stop(self):
         checker = PeriodicHealthChecker(

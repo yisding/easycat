@@ -227,9 +227,15 @@ class TestReconnectingWebSocket:
 
         assert messages == ["msg1", "msg2", "msg3", "msg4"]
 
-    async def test_recv_iter_raises_when_no_on_reconnect(self):
-        """recv_iter should re-raise ConnectionClosed when on_reconnect is not set."""
-        ws = self._make_ws(base_delay=0.01, max_retries=2, jitter_factor=0.0)
+    async def test_recv_iter_raises_without_on_reconnect(self):
+        """recv_iter should propagate ConnectionClosed when no on_reconnect is set.
+
+        Stateful providers (e.g. ElevenLabs STT/TTS, Deepgram TTS) send init
+        messages once; reconnecting without replaying those stalls the stream.
+        Without an on_reconnect callback the provider cannot reinitialize, so
+        the error should surface for a clean restart.
+        """
+        ws = self._make_ws(base_delay=0.01, max_retries=1, jitter_factor=0.0)
 
         close_frame = websockets.frames.Close(1006, "abnormal")
 
@@ -252,6 +258,7 @@ class TestReconnectingWebSocket:
             async for msg in ws.recv_iter():
                 messages.append(msg)
 
+        # Should have received the message before the disconnect.
         assert messages == ["msg1"]
 
     async def test_recv_iter_gives_up_when_reconnect_fails(self):
@@ -287,6 +294,8 @@ class TestReconnectingWebSocket:
             async for msg in ws.recv_iter():
                 messages.append(msg)
 
+        # Iterator ends cleanly instead of raising — downstream TTS
+        # consumers see a normal end-of-stream, not an unhandled exception.
         assert messages == ["msg1"]
 
     async def test_recv_iter_no_reconnect_after_explicit_close(self):

@@ -44,7 +44,8 @@ from easycat.smart_turn import (
     SmartTurnResult,
     create_smart_turn,
 )
-from easycat.session import Session, SessionConfig, TurnState
+from easycat.session._session import Session
+from easycat.session._types import SessionConfig, TurnState
 from easycat.session_manager import SessionManager
 from easycat.turn_manager import TurnMode
 from easycat.llm_output_processing import (
@@ -92,6 +93,7 @@ from easycat.events import (
     DTMF,
     DTMFAggregated,
     Error,
+    ErrorStage,
     Event,
     EventBus,
     Interruption,
@@ -249,6 +251,7 @@ __all__ = [
     "DTMF",
     "DTMFAggregated",
     "Error",
+    "ErrorStage",
     "Event",
     "EventBus",
     "Interruption",

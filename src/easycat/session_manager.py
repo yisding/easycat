@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Generic, TypeVar
 
-from easycat.session import Session
+from easycat.session._session import Session
 
 logger = logging.getLogger(__name__)
 

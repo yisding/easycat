@@ -20,6 +20,7 @@ from easycat.events import (
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
+    ErrorStage,
     Event,
     STTEvent,
     STTEventType,
@@ -35,20 +36,25 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.session import (
-    Session,
-    SessionConfig,
+from easycat.session._interruption import (
     _all_tts_audio_delivered,
     _audio_bytes_acknowledged,
     _audio_bytes_likely_heard,
     _audio_bytes_likely_heard_hybrid,
-    _cleanup_estimation_text,
     _estimate_text_spoken,
+)
+from easycat.session._session import Session
+from easycat.session._text_utils import (
     _has_unclosed_markdown_delimiters,
     _split_at_sentence_boundaries,
+)
+from easycat.session._tts_helpers import (
+    _cleanup_estimation_text,
     _text_for_estimation_timeline,
     _text_for_spoken_estimation,
 )
+from easycat.session._turn_context import TurnContext
+from easycat.session._types import SessionConfig
 from easycat.timeouts import AgentTimeoutError, TimeoutConfig, TTSTimeoutError
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
@@ -718,7 +724,7 @@ async def test_session_basic_agent_error_emits_event():
     await session.stop()
 
     assert len(errors) >= 1
-    assert errors[0].context == "agent"
+    assert errors[0].stage == ErrorStage.AGENT
     assert isinstance(errors[0].exception, ValueError)
 
 
@@ -873,7 +879,7 @@ async def test_session_streaming_agent_error_emits_event():
     await session.stop()
 
     assert len(errors) >= 1
-    assert errors[0].context == "agent"
+    assert errors[0].stage == ErrorStage.AGENT
     assert isinstance(errors[0].exception, RuntimeError)
 
 
@@ -902,6 +908,7 @@ async def test_streaming_done_terminates_session_consumption() -> None:
     session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
     session.event_bus.subscribe(ToolCallStarted, lambda e: tool_started.append(e))
 
+    session._turn = TurnContext("test-turn", CancelToken())
     await session._run_streaming_agent("hello", token=None)
 
     assert [event.text for event in deltas] == ["Alpha."]
@@ -933,6 +940,7 @@ async def test_streaming_structured_only_done_emits_final_without_tts() -> None:
     finals: list[AgentFinal] = []
     session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
 
+    session._turn = TurnContext("test-turn", CancelToken())
     await session._run_streaming_agent("hello", token=None)
 
     assert len(finals) == 1
@@ -965,11 +973,13 @@ async def test_streaming_agent_timeout_does_not_poison_next_turn() -> None:
     session.event_bus.subscribe(Error, lambda e: errors.append(e))
     session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
 
+    session._turn = TurnContext("turn-1", CancelToken())
     await session._run_streaming_agent("first", token=None)
+    session._turn = TurnContext("turn-2", CancelToken())
     await session._run_streaming_agent("second", token=None)
 
     assert len(errors) == 1
-    assert errors[0].context == "agent_timeout"
+    assert errors[0].stage == ErrorStage.AGENT
     assert isinstance(errors[0].exception, AgentTimeoutError)
     assert len(finals) == 1
     assert finals[0].text == "Recovered."
@@ -999,11 +1009,13 @@ async def test_streaming_tts_timeout_does_not_poison_next_turn() -> None:
     session.event_bus.subscribe(Error, lambda e: errors.append(e))
     session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
 
+    session._turn = TurnContext("turn-1", CancelToken())
     await session._run_streaming_agent("first", token=None)
+    session._turn = TurnContext("turn-2", CancelToken())
     await session._run_streaming_agent("second", token=None)
 
     assert len(errors) == 1
-    assert errors[0].context == "tts_timeout:tts"
+    assert errors[0].stage == ErrorStage.TTS
     assert isinstance(errors[0].exception, TTSTimeoutError)
     assert [event.text for event in finals] == ["Quick reply.", "Quick reply."]
     assert tts.synthesized_texts == ["Quick reply.", "Quick reply."]
@@ -1070,8 +1082,8 @@ async def test_session_streaming_barge_in_cancellation():
     await asyncio.sleep(0.1)
 
     # Simulate barge-in by cancelling the token
-    if session._cancel_token:
-        session._cancel_token.cancel()
+    if session.cancel_token:
+        session.cancel_token.cancel()
 
     await asyncio.sleep(0.2)
     await session.stop()
@@ -1291,6 +1303,7 @@ async def test_streaming_done_flushes_tts_before_stream_cleanup_finishes():
         )
     )
 
+    session._turn = TurnContext("test-turn", CancelToken())
     task = asyncio.create_task(session._run_streaming_agent("hello", token=None))
     await asyncio.wait_for(tts.started.wait(), timeout=0.2)
     await task
@@ -1474,8 +1487,8 @@ async def test_session_barge_in_completes_tool_calls():
     await asyncio.sleep(0.1)
 
     # Simulate barge-in while tool call is in-flight
-    if session._cancel_token:
-        session._cancel_token.cancel()
+    if session.cancel_token:
+        session.cancel_token.cancel()
 
     await asyncio.sleep(0.3)
     await session.stop()
@@ -1512,8 +1525,8 @@ async def test_session_barge_in_calls_notify_interruption():
     await session.start()
     await asyncio.sleep(0.1)
 
-    if session._cancel_token:
-        session._cancel_token.cancel()
+    if session.cancel_token:
+        session.cancel_token.cancel()
 
     await asyncio.sleep(0.3)
     await session.stop()
@@ -1543,6 +1556,7 @@ async def test_session_barge_in_after_agent_done_calls_notify_interruption():
         )
     )
     token = CancelToken()
+    session._turn = TurnContext("test-turn", token)
 
     async def _cancel_during_tts_playback() -> None:
         await agent.finished.wait()
@@ -1578,8 +1592,8 @@ async def test_session_barge_in_message_mode():
     await session.start()
     await asyncio.sleep(0.1)
 
-    if session._cancel_token:
-        session._cancel_token.cancel()
+    if session.cancel_token:
+        session.cancel_token.cancel()
 
     await asyncio.sleep(0.3)
     await session.stop()
@@ -1608,8 +1622,8 @@ async def test_session_barge_in_with_agent_runner_adds_single_interruption_note(
     await session.start()
     await asyncio.sleep(0.1)
 
-    if session._cancel_token:
-        session._cancel_token.cancel()
+    if session.cancel_token:
+        session.cancel_token.cancel()
 
     await asyncio.sleep(0.3)
     await session.stop()
@@ -1643,8 +1657,8 @@ async def test_session_barge_in_without_tool_calls_stops_immediately():
     await session.start()
     await asyncio.sleep(0.1)
 
-    if session._cancel_token:
-        session._cancel_token.cancel()
+    if session.cancel_token:
+        session.cancel_token.cancel()
 
     await asyncio.sleep(0.2)
     await session.stop()
@@ -1724,8 +1738,8 @@ async def test_session_barge_in_during_tts_playback():
     await asyncio.sleep(0.15)
 
     # Cancel during TTS playback (agent stream already done)
-    if session._cancel_token:
-        session._cancel_token.cancel()
+    if session.cancel_token:
+        session.cancel_token.cancel()
 
     await asyncio.sleep(0.3)
     await session.stop()
@@ -1798,6 +1812,7 @@ async def test_session_barge_in_records_dequeued_unsynthesized_text_as_incomplet
 
     await session.start()
     try:
+        session._turn = TurnContext("test-turn", token)
         await session._run_streaming_agent("hello", token=token)
     finally:
         await session.stop()
@@ -1870,6 +1885,7 @@ async def test_session_barge_in_records_queued_unsynthesized_text_as_incomplete(
 
     await session.start()
     try:
+        session._turn = TurnContext("test-turn", token)
         await session._run_streaming_agent("hello", token=token)
     finally:
         await session.stop()
@@ -1929,8 +1945,12 @@ async def test_session_barge_in_drain_records_timeline_strings(monkeypatch: pyte
         assert all(isinstance(text, str) for text, _ in chunks)
         return ""
 
-    monkeypatch.setattr("easycat.session._audio_bytes_likely_heard_hybrid", _fake_heard_bytes)
-    monkeypatch.setattr("easycat.session._estimate_text_spoken", _assert_string_chunks)
+    monkeypatch.setattr(
+        "easycat.session._interruption._audio_bytes_likely_heard_hybrid", _fake_heard_bytes
+    )
+    monkeypatch.setattr(
+        "easycat.session._interruption._estimate_text_spoken", _assert_string_chunks
+    )
 
     session = Session(
         SessionConfig(
@@ -1946,6 +1966,7 @@ async def test_session_barge_in_drain_records_timeline_strings(monkeypatch: pyte
 
     await session.start()
     try:
+        session._turn = TurnContext("test-turn", token)
         await session._run_streaming_agent("hello", token=token)
     finally:
         await session.stop()
@@ -2004,8 +2025,8 @@ async def test_session_barge_in_after_full_playback_does_not_notify_interruption
 
     # Cancel after playback has already completed; this should not be treated
     # as an interruption that mutates agent history.
-    if session._cancel_token:
-        session._cancel_token.cancel()
+    if session.cancel_token:
+        session.cancel_token.cancel()
 
     await asyncio.sleep(0.1)
     await session.stop()
@@ -2057,8 +2078,8 @@ async def test_session_barge_in_after_full_playback_keeps_agent_runner_history()
     await session.start()
     await asyncio.sleep(0.25)
 
-    if session._cancel_token:
-        session._cancel_token.cancel()
+    if session.cancel_token:
+        session.cancel_token.cancel()
 
     await asyncio.sleep(0.1)
     await session.stop()
@@ -2105,8 +2126,8 @@ async def test_session_barge_in_after_full_multichunk_playback_keeps_history():
     await session.start()
     await asyncio.sleep(0.3)
 
-    if session._cancel_token:
-        session._cancel_token.cancel()
+    if session.cancel_token:
+        session.cancel_token.cancel()
 
     await asyncio.sleep(0.1)
     await session.stop()
@@ -2578,11 +2599,13 @@ async def test_streaming_strip_markdown_failed_turn_does_not_rewrite_prior_histo
         )
     )
 
+    session._turn = TurnContext("turn-1", CancelToken())
     await session._run_streaming_agent("first", token=None)
     assert runner.history[-1]["role"] == "assistant"
     assert runner.history[-1]["content"] == "First answer."
     history_after_success = [entry.copy() for entry in runner.history]
 
+    session._turn = TurnContext("turn-2", CancelToken())
     await session._run_streaming_agent("second", token=None)
     assert runner.history == history_after_success
 
@@ -2609,7 +2632,9 @@ async def test_streaming_interruption_prefers_cancel_token_timestamp(
         captured["cutoff"] = cutoff_time
         return 0
 
-    monkeypatch.setattr("easycat.session._audio_bytes_likely_heard_hybrid", _capture_cutoff)
+    monkeypatch.setattr(
+        "easycat.session._interruption._audio_bytes_likely_heard_hybrid", _capture_cutoff
+    )
 
     agent = CapturingAgent()
     tts = SlowStartTTS()
@@ -2627,7 +2652,8 @@ async def test_streaming_interruption_prefers_cancel_token_timestamp(
 
     token = CancelToken()
     token._cancelled_at = 10.0
-    session._last_barge_in_time = 20.0
+    session._turn = TurnContext("test-turn", token)
+    session._turn.last_barge_in_time = 20.0
 
     async def _cancel_during_tts_playback() -> None:
         await agent.finished.wait()
@@ -2663,11 +2689,11 @@ async def test_synthesize_tts_does_not_clear_newer_turn_id() -> None:
         )
     )
 
-    session._current_turn_id = "turn-old"
+    session._turn = TurnContext("turn-old", CancelToken())
     task = asyncio.create_task(session._synthesize_tts("hello", token=CancelToken()))
     await asyncio.sleep(0.01)
-    session._current_turn_id = "turn-new"
+    session._turn = TurnContext("turn-new", CancelToken())
 
     await task
 
-    assert session._current_turn_id == "turn-new"
+    assert session._turn.id == "turn-new"

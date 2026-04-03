@@ -124,7 +124,9 @@ def _serialize_event(event: Any) -> dict[str, Any]:
     elif isinstance(event, Error):
         payload["track"] = "errors"
         payload["message"] = str(event.exception)
-        payload["context"] = event.context
+        payload["stage"] = event.stage.value
+        if event.provider:
+            payload["provider"] = event.provider
     elif isinstance(event, ReconnectAttempt | ReconnectSuccess | ReconnectFailure):
         payload["track"] = "reconnect"
         payload["provider"] = event.provider
