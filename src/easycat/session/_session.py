@@ -1051,7 +1051,12 @@ class Session:
                 self._spans.finish("turn")
                 self._turn = None
             elif started and not tts_playback_started:
-                self._reset_turn_state()
+                if gated:
+                    # Keep self._turn alive for gated replay mark accounting
+                    self._auto_turn_speech_frames = 0
+                    self._turn_manager.reset()
+                else:
+                    self._reset_turn_state()
 
         # ── Run agent stream + TTS concurrently ──
 
@@ -1202,7 +1207,14 @@ class Session:
                 self._spans.finish("turn")
                 self._turn = None
             elif gated and self._turn is turn and turn is not None:
-                self._reset_turn_state()
+                # Gated opener TTS is buffered — reset to IDLE so the
+                # callee's speech can start new turns while we wait for
+                # classification.  Keep self._turn alive so that when the
+                # gate flushes and replays buffered audio,
+                # _drain_outbound_audio can still call record_audio_sent()
+                # and send playback marks.
+                self._auto_turn_speech_frames = 0
+                self._turn_manager.reset()
 
     # ── Internal helpers ───────────────────────────────────────
 
