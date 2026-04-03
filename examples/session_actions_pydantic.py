@@ -13,7 +13,6 @@ Setup:
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 
 from easycat import (
@@ -57,7 +56,7 @@ async def main() -> None:
         ) from exc
 
     voice_agent = Agent(
-        os.getenv("PYDANTIC_AI_MODEL", "openai:gpt-4o"),
+        "openai:gpt-5.4",
         deps_type=Deps,
         system_prompt=(
             "You are a helpful voice assistant. "
