@@ -786,7 +786,7 @@ async def test_session_on_convenience_method():
     tools: list[tuple[str, str]] = []
     tool_results: list[tuple[str, str]] = []
     lifecycle: list[str] = []
-    errors: list[Error] = []
+    errors: list[tuple[BaseException, str]] = []
 
     registrations = session.on(
         user_transcript=lambda text: transcripts.append(text),
@@ -799,7 +799,7 @@ async def test_session_on_convenience_method():
         bot_started_speaking=lambda: lifecycle.append("bot_started"),
         bot_stopped_speaking=lambda: lifecycle.append("bot_stopped"),
         interruption=lambda: lifecycle.append("interruption"),
-        error=lambda e: errors.append(e),
+        error=lambda exc, ctx: errors.append((exc, ctx)),
     )
 
     # Emit events and verify callbacks receive unwrapped args.
@@ -828,8 +828,8 @@ async def test_session_on_convenience_method():
         "interruption",
     ]
     assert len(errors) == 1
-    assert str(errors[0].exception) == "boom"
-    assert errors[0].stage == ErrorStage.AGENT
+    assert str(errors[0][0]) == "boom"
+    assert errors[0][1] == "agent"
 
     # Unsubscribe and verify no further callbacks.
     session.unsubscribe_handlers(registrations)
