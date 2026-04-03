@@ -221,6 +221,7 @@ class Session:
 
         # STT stream started for current turn
         self._stt_active = False
+        self._tts_playback_suppressed = False
         self._auto_turn_speech_frames = 0
 
         # Per-turn state — created fresh at each turn start
@@ -629,6 +630,7 @@ class Session:
         task is the entire ``_on_turn_ended`` coroutine which includes
         the agent consumer.  Cancelling it would abort the agent stream.
         """
+        self._tts_playback_suppressed = True
         await self._tts_synth.cancel()
         await self.transport.clear_audio()
         self._outbound_queue.flush_for_new_turn()
@@ -681,6 +683,7 @@ class Session:
         self._turn = TurnContext(turn_id=event.turn_id, cancel_token=cancel_token)
         self._spans.begin_turn()
         self._auto_turn_speech_frames = 0
+        self._tts_playback_suppressed = False
 
         # Start STT stream
         try:
@@ -1009,6 +1012,9 @@ class Session:
                     if payload is None:
                         break
                     if token and token.is_cancelled:
+                        tts_chunks.append((_text_for_estimation_timeline(payload), 0, False))
+                        break
+                    if self._tts_playback_suppressed:
                         tts_chunks.append((_text_for_estimation_timeline(payload), 0, False))
                         break
 
