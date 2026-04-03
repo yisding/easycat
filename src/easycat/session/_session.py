@@ -250,7 +250,18 @@ class Session:
         if hasattr(event, "session_id") and getattr(event, "session_id", None) is None:
             kwargs["session_id"] = self.session_id
         if hasattr(event, "turn_id") and getattr(event, "turn_id", None) is None:
-            kwargs["turn_id"] = self._turn.id if self._turn else None
+            # Only stamp a turn_id when the turn manager is actively in a
+            # turn.  In the gated-TTS path self._turn is kept alive after the
+            # turn manager resets to IDLE for playback-mark bookkeeping, but
+            # events emitted during that window (AudioIn, VAD, etc.) should
+            # not carry the old turn's ID.
+            active_turn = (
+                self._turn
+                if self._turn
+                and self._turn_manager.state != TurnManagerState.IDLE
+                else None
+            )
+            kwargs["turn_id"] = active_turn.id if active_turn else None
         return replace(event, **kwargs) if kwargs else event
 
     async def _emit(self, event: Any) -> None:
@@ -340,7 +351,7 @@ class Session:
         bot_started_speaking: Callable[[], Any] | None = None,
         bot_stopped_speaking: Callable[[], Any] | None = None,
         interruption: Callable[[], Any] | None = None,
-        error: Callable[[Error], Any] | None = None,
+        error: Callable[[BaseException, str], Any] | None = None,
     ) -> list[tuple[type, EventHandler]]:
         """Subscribe to common session events with simple callbacks.
 
@@ -368,7 +379,7 @@ class Session:
             (BotStartedSpeaking, bot_started_speaking, lambda cb: lambda _e: cb()),
             (BotStoppedSpeaking, bot_stopped_speaking, lambda cb: lambda _e: cb()),
             (Interruption, interruption, lambda cb: lambda _e: cb()),
-            (Error, error, lambda cb: lambda e: cb(e)),
+            (Error, error, lambda cb: lambda e: cb(e.exception, e.stage.value)),
         ]
 
         registrations: list[tuple[type, EventHandler]] = []
