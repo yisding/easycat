@@ -315,7 +315,27 @@ class Error(Event):
     provider: str | None = None
 
 
-# ── Event groups ─────────────────────────────────────────────────
+# Session actions (agent-requested)
+
+
+@dataclass(frozen=True)
+class SessionActionRequested(Event):
+    """An agent tool requested a session-level action (end_call, transfer, etc.)."""
+
+    action_type: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SessionActionCompleted(Event):
+    """A session-level action has been executed."""
+
+    action_type: str
+    success: bool = True
+    error: str | None = None
+
+
+# ── Event groups ─────────────────────────────────────────────────────
 # Semantic groupings of EasyCat-level events for bulk subscription.
 
 AUDIO_EVENTS: tuple[type[Event], ...] = (AudioIn,)
@@ -345,6 +365,7 @@ TELEPHONY_EVENTS: tuple[type[Event], ...] = (
     CallEnded,
 )
 ERROR_EVENTS: tuple[type[Event], ...] = (Error,)
+ACTION_EVENTS: tuple[type[Event], ...] = (SessionActionRequested, SessionActionCompleted)
 
 ALL_EVENTS: tuple[type[Event], ...] = (
     AUDIO_EVENTS
@@ -358,6 +379,7 @@ ALL_EVENTS: tuple[type[Event], ...] = (
     + RECONNECT_EVENTS
     + TELEPHONY_EVENTS
     + ERROR_EVENTS
+    + ACTION_EVENTS
 )
 
 

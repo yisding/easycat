@@ -32,6 +32,8 @@ from easycat.events import (
     Interruption,
     PlaybackMarkAck,
     ReconnectSuccess,
+    SessionActionCompleted,
+    SessionActionRequested,
     STTEventType,
     STTFinal,
     STTPartial,
@@ -201,6 +203,16 @@ class Session:
         self._audio_gate = cfg.audio_gate
         self._health_checkers: list[PeriodicHealthChecker] = []
         self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)
+
+        # Agent-initiated session actions
+        from easycat.session.actions import SessionActionType
+
+        self._session_actions = cfg.session_actions
+        self._action_handlers: dict[SessionActionType, Any] = {
+            SessionActionType.END_CALL: self._handle_end_call,
+            SessionActionType.TRANSFER_CALL: self._handle_transfer_call,
+            SessionActionType.SEND_DTMF: self._handle_send_dtmf,
+        }
 
         # Metrics counters
         if self._metrics:
@@ -645,6 +657,82 @@ class Session:
         self._reset_turn_state()
         self._spans.finish_all(SpanStatus.CANCELLED)
 
+    # ── Session actions ───────────────────────────────────────
+
+    def register_action_handler(
+        self,
+        action_type: Any,
+        handler: Any,
+    ) -> None:
+        """Register a handler for a session action type.
+
+        Handlers are ``async def handler(action: SessionAction) -> None``
+        callables.  Replaces any existing handler for the given type.
+        """
+        self._action_handlers[action_type] = handler
+
+    async def _drain_session_actions(self) -> None:
+        """Execute any session actions queued by agent tools during this turn."""
+        if self._session_actions is None or not self._session_actions.has_pending:
+            return
+
+        from easycat.session.actions import SessionActionType
+
+        actions = self._session_actions.drain()
+        for action in actions:
+            await self._emit(
+                SessionActionRequested(
+                    action_type=action.type.value,
+                    data=dict(action.data),
+                )
+            )
+            handler = self._action_handlers.get(action.type)
+            if handler is not None:
+                try:
+                    await handler(action)
+                    await self._emit(SessionActionCompleted(action_type=action.type.value))
+                except Exception as exc:
+                    logger.exception("Session action handler failed: %s", action.type)
+                    await self._emit(
+                        SessionActionCompleted(
+                            action_type=action.type.value,
+                            success=False,
+                            error=str(exc),
+                        )
+                    )
+            elif action.type == SessionActionType.CUSTOM:
+                logger.warning(
+                    "No handler for custom action: %s",
+                    action.data.get("action_type"),
+                )
+
+    async def _handle_end_call(self, action: Any) -> None:
+        """Built-in handler: gracefully stop the session."""
+        logger.info("Agent requested end_call: %s", action.data.get("reason", ""))
+        await self.stop()
+
+    async def _handle_transfer_call(self, action: Any) -> None:
+        """Built-in handler: transfer the call.
+
+        The ``SessionActionRequested`` event has already been emitted by
+        :meth:`_drain_session_actions`.  Platform-specific transfer logic
+        (e.g. Twilio REST API update with TwiML ``<Dial>``) should be
+        implemented by subscribing to ``SessionActionRequested`` events.
+        After emitting the event, stops the session.
+        """
+        logger.info("Agent requested transfer_call to %s", action.data.get("target"))
+        await self.stop()
+
+    async def _handle_send_dtmf(self, action: Any) -> None:
+        """Built-in handler: send DTMF tones.
+
+        The ``SessionActionRequested`` event has already been emitted by
+        :meth:`_drain_session_actions`.  Platform-specific DTMF delivery
+        (e.g. Twilio REST API or ``DTMFDelivery``) should be implemented
+        by subscribing to ``SessionActionRequested`` events.
+        """
+        logger.info("Agent requested send_dtmf: %s", action.data.get("digits", ""))
+
     # ── Push-to-talk helpers ───────────────────────────────────
 
     async def start_turn(self) -> None:
@@ -658,7 +746,15 @@ class Session:
     # ── TurnManager callbacks ──────────────────────────────────
 
     async def _cancel_for_barge_in(self) -> None:
-        """Cancel current turn due to barge-in (called by TurnManager)."""
+        """Cancel current turn due to barge-in (called by TurnManager).
+
+        When a queued session action has ``no_interrupt=True`` (e.g. an
+        end-call or transfer with a farewell message), barge-in is
+        suppressed so the critical speech plays in full.
+        """
+        if self._session_actions is not None and self._session_actions.no_interrupt:
+            logger.debug("Barge-in suppressed: queued action has no_interrupt=True")
+            return
         await self.cancel_turn(barge_in=True)
 
     async def _on_turn_started(self, event: TurnStarted) -> None:
@@ -971,6 +1067,8 @@ class Session:
             self._prepare_tts_payload(agent_response, is_streaming=False, is_final=True), token
         )
 
+        await self._drain_session_actions()
+
     # ── Streaming agent path ───────────────────────────────────
 
     async def _run_streaming_agent(self, transcript: str, token: CancelToken | None) -> None:
@@ -1143,6 +1241,8 @@ class Session:
             ack_stale_ms=self._interruption_ack_stale_ms,
             ack_tail_cap_ms=self._interruption_ack_tail_cap_ms,
         )
+
+        await self._drain_session_actions()
 
         # If a newer turn started (e.g. barge-in), avoid clobbering its state.
         if self._turn is turn:
