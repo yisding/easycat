@@ -469,7 +469,7 @@ class OutboundCallStateMachine:
             and new_state == OutboundCallState.HUMAN
             and self._gate.is_buffering
         ):
-            self._gate.release()
+            await self._gate.flush_and_release()
 
         if new_state == OutboundCallState.HUMAN and self._late_voicemail_window_s > 0:
             self._start_late_voicemail_window()

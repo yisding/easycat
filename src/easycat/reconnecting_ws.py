@@ -153,6 +153,8 @@ class ReconnectingWebSocket:
         ``close()``), the iterator ends.
         """
         if self._ws is None:
+            if self._closed:
+                return
             raise RuntimeError("WebSocket is not connected")
 
         while True:
@@ -166,26 +168,35 @@ class ReconnectingWebSocket:
                     return
                 rcvd = getattr(exc, "rcvd", None)
                 close_code = rcvd.code if rcvd is not None else getattr(exc, "close_code", None)
+                if self._on_reconnect is None:
+                    logger.warning(
+                        "WebSocket connection lost (code=%s). No on_reconnect callback "
+                        "configured; ending recv_iter to allow clean restart.",
+                        close_code,
+                    )
+                    raise
                 logger.warning(
                     "WebSocket connection lost (code=%s). Attempting reconnect…",
                     close_code,
                 )
                 try:
-                    await self._connect_with_retry()
+                    async with self._connect_lock:
+                        await self._connect_with_retry()
                 except ConnectionError:
                     logger.error("Reconnection failed; ending recv_iter")
                     return
 
     async def close(self) -> None:
         """Close the WebSocket connection permanently."""
-        self._closed = True
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception:
-                logger.debug("Error closing WebSocket", exc_info=True)
-            finally:
-                self._ws = None
+        async with self._connect_lock:
+            self._closed = True
+            if self._ws is not None:
+                try:
+                    await self._ws.close()
+                except Exception:
+                    logger.debug("Error closing WebSocket", exc_info=True)
+                finally:
+                    self._ws = None
 
     # ── Event emission helpers ────────────────────────────────────
 

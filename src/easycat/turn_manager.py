@@ -196,6 +196,12 @@ class TurnManager:
             await self._handle_barge_in()
             return
 
+        if self._state == TurnManagerState.PROCESSING:
+            # User spoke again while agent is processing — treat as barge-in
+            # to cancel the stale response and start a fresh turn.
+            await self._handle_barge_in()
+            return
+
         if self._state == TurnManagerState.USER_PAUSED:
             # Speech resumed before timeout — cancel silence timer
             self._cancel_silence_timer()
@@ -241,9 +247,12 @@ class TurnManager:
         "incomplete" (or raises an error), falls back to the normal sleep.
         """
         try:
+            detector_elapsed = 0.0
             if self._endpoint_detector is not None and self._turn_audio:
                 try:
+                    t0 = time.monotonic()
                     result = await self._endpoint_detector.detect(list(self._turn_audio))
+                    detector_elapsed = time.monotonic() - t0
                     logger.debug(
                         "Smart-turn prediction=%d probability=%.3f",
                         result.prediction,
@@ -269,7 +278,8 @@ class TurnManager:
                 except Exception:
                     logger.exception("Endpoint detection failed, falling back to silence timeout")
 
-            await asyncio.sleep(self._config.end_of_turn_silence_ms / 1000.0)
+            remaining = max(0, self._config.end_of_turn_silence_ms / 1000.0 - detector_elapsed)
+            await asyncio.sleep(remaining)
 
             if self._state == TurnManagerState.USER_PAUSED:
                 self._state = TurnManagerState.PROCESSING
@@ -370,6 +380,12 @@ class TurnManager:
 
     async def bot_started_speaking(self) -> None:
         """Called when TTS playback begins."""
+        if self._state == TurnManagerState.USER_SPEAKING:
+            logger.warning(
+                "bot_started_speaking called in unexpected state %s, ignoring",
+                self._state.value,
+            )
+            return
         # Defensive cleanup: there should be no pending silence timer once a
         # turn is complete, but cancel any stale timer to avoid cross-turn
         # races in non-standard/manual integrations.
@@ -409,5 +425,11 @@ class TurnManager:
 
     async def shutdown(self) -> None:
         """Clean up any pending tasks."""
-        self._cancel_silence_timer()
+        if self._silence_timer_task and not self._silence_timer_task.done():
+            self._silence_timer_task.cancel()
+            try:
+                await self._silence_timer_task
+            except asyncio.CancelledError:
+                pass
+        self._silence_timer_task = None
         self.reset()

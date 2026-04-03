@@ -91,7 +91,8 @@ async def with_stt_timeout(
                 from easycat.events import Error
 
                 await event_bus.emit(Error(exception=err, context=f"stt_timeout:{provider_name}"))
-            raise err
+    if timed_out:
+        raise STTTimeoutError(provider_name, timeout)
 
 
 async def with_agent_timeout(
@@ -154,4 +155,5 @@ async def with_tts_timeout(
                 from easycat.events import Error
 
                 await event_bus.emit(Error(exception=err, context=f"tts_timeout:{provider_name}"))
-            raise err
+    if timed_out:
+        raise TTSTimeoutError(provider_name, timeout)

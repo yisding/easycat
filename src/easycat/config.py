@@ -211,12 +211,14 @@ class EasyCatConfig:
         # Set the easycat logger to DEBUG regardless of the root level.
         logging.getLogger("easycat").setLevel(logging.DEBUG)
 
-        # Enable event trace logging with partials so STT progress is visible.
-        self.event_logging = EventLoggingConfig(
-            enabled=True,
-            include_partials=True,
-            level=logging.DEBUG,
-        )
+        # Enable event trace logging with partials so STT progress is visible,
+        # but only if the caller didn't supply an explicit config.
+        if self.event_logging == EventLoggingConfig():
+            self.event_logging = EventLoggingConfig(
+                enabled=True,
+                include_partials=True,
+                level=logging.DEBUG,
+            )
 
         # Enable in-memory metrics so latency data is always collected.
         if self.metrics is None:
@@ -267,7 +269,7 @@ def create_session(config: EasyCatConfig) -> Session:
 
     if config.agent is not None:
         agent = auto_adapt_agent(config.agent)
-        if config.wrap_agent:
+        if config.wrap_agent and not isinstance(agent, AgentRunner):
             runner_cfg = config.agent_runner or AgentRunnerConfig()
             agent = AgentRunner(agent, runner_cfg)
     else:
@@ -349,12 +351,21 @@ class _OutboundPipelineWiring:
         async with self._lock:
             if self._hold_audio_task is not None and not self._hold_audio_task.done():
                 self._hold_audio_task.cancel()
+                try:
+                    await self._hold_audio_task
+                except (asyncio.CancelledError, Exception):
+                    pass
                 self._hold_audio_task = None
         await self._session.replay_gated_audio(events)
 
     def play_hold_audio(self, text: str) -> None:
         async def _synthesize_hold() -> None:
-            await self._session.synthesize_bypass(text)
+            try:
+                await self._session.synthesize_bypass(text)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Hold audio synthesis failed")
 
         try:
             loop = asyncio.get_running_loop()

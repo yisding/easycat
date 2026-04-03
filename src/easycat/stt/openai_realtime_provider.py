@@ -72,6 +72,7 @@ class OpenAIRealtimeSTT(STTBase):
         self._receive_task: asyncio.Task[None] | None = None
         self._partial_text: str = ""
         self._final_received: asyncio.Event | None = None
+        self._audio_sent: bool = False
 
     async def _on_start(self) -> None:
         url = f"{self._config.ws_url}?model={self._config.model}"
@@ -129,28 +130,32 @@ class OpenAIRealtimeSTT(STTBase):
                 }
             )
             await self._ws.send(msg)
+            self._audio_sent = True
 
     async def _on_end(self) -> None:
         if self._ws is not None:
-            try:
-                await self._ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-            except Exception:
-                logger.debug("Error sending input_audio_buffer.commit", exc_info=True)
-
-            # Wait for the final transcript before closing the socket.
-            # The server sends the completed event after processing the
-            # committed audio buffer; closing too early would drop it.
-            if self._final_received is not None:
+            if self._audio_sent:
                 try:
-                    await asyncio.wait_for(self._final_received.wait(), timeout=5.0)
-                except TimeoutError:
-                    logger.warning("Timed out waiting for final transcript from OpenAI Realtime")
+                    await self._ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                except Exception:
+                    logger.debug("Error sending input_audio_buffer.commit", exc_info=True)
+
+                # Wait for the server to send the completed transcription
+                # (set by _handle_message), then close the socket so that the
+                # receive loop (blocked on recv_iter) can exit promptly.
+                if self._final_received is not None:
+                    try:
+                        await asyncio.wait_for(self._final_received.wait(), timeout=5.0)
+                    except TimeoutError:
+                        logger.warning(
+                            "Timed out waiting for final transcript from OpenAI Realtime"
+                        )
 
             await self._ws.close()
 
             if self._receive_task is not None:
                 try:
-                    await asyncio.wait_for(self._receive_task, timeout=5.0)
+                    await asyncio.wait_for(self._receive_task, timeout=2.0)
                 except TimeoutError:
                     self._receive_task.cancel()
                     logger.warning("OpenAI Realtime receive loop timed out on close")
@@ -175,6 +180,8 @@ class OpenAIRealtimeSTT(STTBase):
             logger.debug("OpenAI Realtime WebSocket closed")
         except Exception:
             logger.exception("Error in OpenAI Realtime receive loop")
+        finally:
+            self._event_queue.put_nowait(None)
 
     def _handle_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type", "")

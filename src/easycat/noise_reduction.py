@@ -87,7 +87,9 @@ class RNNoiseReducer:
 
             processed, _ = self._rnnoise.process_mono_frame(self._state, frame.copy())
             remaining = min(self._frame_samples, len(samples) - i)
-            output_samples.extend(int(v) for v in processed[:remaining])
+            output_samples.extend(
+                max(-32768, min(32767, int(round(v)))) for v in processed[:remaining]
+            )
             i += self._frame_samples
 
         # Step 4: Convert back to PCM16

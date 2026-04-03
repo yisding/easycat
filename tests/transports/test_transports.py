@@ -148,6 +148,7 @@ class TestLocalTransport:
 # ── WebSocketTransport tests ─────────────────────────────────────
 
 
+@pytest.mark.integration_socket
 class TestWebSocketTransport:
     """Tests for WebSocketTransport with a real test client."""
 
@@ -391,6 +392,7 @@ def _twilio_mark_msg(name: str, stream_sid: str = "MZ123") -> str:
     return json.dumps({"event": "mark", "streamSid": stream_sid, "mark": {"name": name}})
 
 
+@pytest.mark.integration_socket
 class TestTwilioTransport:
     """Tests for TwilioTransport with mocked Twilio messages."""
 

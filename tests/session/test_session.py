@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.bounded_queue import BoundedAudioQueue
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
@@ -73,6 +74,9 @@ class FakeTransport:
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         self.sent.append(chunk)
+
+    async def clear_audio(self) -> None:
+        pass
 
 
 class FakePlaybackAckTransport(FakeTransport):
@@ -268,11 +272,77 @@ async def test_session_shutdown():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
+async def test_external_outbound_queue_survives_session_teardown(method_name: str):
+    transport = FakeTransport()
+    queue = BoundedAudioQueue()
+    session = Session(_full_config(transport=transport, outbound_queue=queue))
+
+    await session.start()
+    await getattr(session, method_name)()
+
+    assert await queue.put(_make_chunk())
+    assert queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_replay_gated_audio_stays_bot_speaking_until_outbound_drain():
+    transport = FakeTransport()
+    session = Session(_full_config(transport=transport))
+    events = [
+        TTSAudio(chunk=_make_chunk()),
+        TTSAudio(chunk=_make_chunk()),
+    ]
+
+    await session.replay_gated_audio(events)
+
+    assert session._turn_manager.state == TurnManagerState.BOT_SPEAKING
+    assert session._outbound_queue.qsize() == 2
+
+    await session._drain_outbound_audio()
+
+    assert session._turn_manager.state == TurnManagerState.IDLE
+    assert len(transport.sent) == 2
+
+
+@pytest.mark.asyncio
 async def test_session_start_idempotent():
     session = Session(_full_config())
     await session.start()
     await session.start()
     assert session.is_running
+    await session.stop()
+
+
+@pytest.mark.asyncio
+async def test_session_start_rolls_back_after_connect_failure():
+    class FlakyTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connect_calls = 0
+
+        async def connect(self) -> None:
+            self.connect_calls += 1
+            if self.connect_calls == 1:
+                raise RuntimeError("boom")
+            await super().connect()
+
+    transport = FlakyTransport()
+    session = Session(_full_config(transport=transport))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await session.start()
+
+    assert not session.is_running
+    assert session._pipeline_task is None
+    assert session._outbound_task is None
+
+    await session.start()
+
+    assert session.is_running
+    assert transport.connect_calls == 2
+    assert transport.connected
+
     await session.stop()
 
 
@@ -317,7 +387,9 @@ async def test_cancel_tts_playback_resets_state():
     session._cancel_token = CancelToken()
     await session.cancel_tts_playback()
     assert session.turn_state == TurnState.IDLE
-    assert session._cancel_token.is_cancelled
+    # cancel_tts_playback should NOT cancel the shared token —
+    # only TTS is stopped, agent streams can continue.
+    assert not session._cancel_token.is_cancelled
 
 
 @pytest.mark.asyncio

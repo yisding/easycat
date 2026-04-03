@@ -19,6 +19,18 @@ logger = logging.getLogger(__name__)
 EventHandler = Callable[..., None] | Callable[..., Coroutine[Any, Any, None]]
 
 
+def _handler_name(handler: EventHandler) -> str:
+    """Return a log-friendly name for a handler callable."""
+    name = getattr(handler, "__name__", None)
+    if name:
+        return str(name)
+    func = getattr(handler, "func", None)
+    name = getattr(func, "__name__", None)
+    if name:
+        return str(name)
+    return type(handler).__name__
+
+
 # ── EasyCat-level event dataclasses ────────────────────────────────
 
 
@@ -550,6 +562,6 @@ class EventBus:
             except Exception:
                 logger.exception(
                     "Error in handler %s for event %s",
-                    handler.__name__,
+                    _handler_name(handler),
                     event_type.__name__,
                 )

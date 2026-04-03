@@ -163,7 +163,7 @@ class TestOpenAITTS:
             await provider.close()
             mock_close.assert_called_once()
 
-    @pytest.mark.integration
+    @pytest.mark.integration_live
     async def test_live_openai_tts(self):
         """Integration test requiring OPENAI_API_KEY env var."""
         import os
