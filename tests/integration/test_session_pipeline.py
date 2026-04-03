@@ -21,6 +21,7 @@ from easycat.events import (
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
+    ErrorStage,
     Interruption,
     STTEvent,
     STTEventType,
@@ -404,7 +405,7 @@ async def test_agent_error_emits_error_event_and_resets(monkeypatch: pytest.Monk
     try:
         await transport.push_audio(make_chunk(), make_chunk())
         error_event = await collector.wait_for(Error, timeout=3.0)
-        assert "agent" in error_event.context
+        assert error_event.stage == ErrorStage.AGENT
         assert isinstance(error_event.exception, RuntimeError)
 
         # Wait a bit to ensure no AgentFinal was emitted

@@ -696,7 +696,7 @@ class Session:
 
     async def _on_turn_ended(self, event: TurnEnded) -> None:
         """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
-        if self._cancel_token and self._cancel_token.is_cancelled:
+        if self._turn and self._turn.cancel_token.is_cancelled:
             return
         if self._turn_manager.state != TurnManagerState.PROCESSING:
             return
