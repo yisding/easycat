@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 from uuid import uuid4
@@ -74,7 +74,7 @@ from easycat.session._types import (
     SessionHelper,
     TurnState,
 )
-from easycat.session.actions import SessionActionType
+from easycat.session.actions import SessionAction, SessionActionType
 from easycat.strip_markdown import strip_markdown
 from easycat.stubs import (
     NoopAgent,
@@ -95,6 +95,10 @@ from easycat.tts_synthesizer import TTSSynthesizer
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
+
+# Sentinel returned by action handlers that want the session to stop
+# *after* the full drain loop finishes (avoids teardown mid-iteration).
+_DEFERRED_STOP = object()
 
 
 class Session:
@@ -207,7 +211,8 @@ class Session:
 
         # Agent-initiated session actions
         self._session_actions = cfg.session_actions
-        self._action_handlers: dict[SessionActionType, Any] = {
+        _ActionHandler = Callable[[SessionAction], Awaitable[Any]]
+        self._action_handlers: dict[SessionActionType, _ActionHandler] = {
             SessionActionType.END_CALL: self._handle_end_call,
             SessionActionType.TRANSFER_CALL: self._handle_transfer_call,
             SessionActionType.SEND_DTMF: self._handle_send_dtmf,
@@ -660,8 +665,8 @@ class Session:
 
     def register_action_handler(
         self,
-        action_type: Any,
-        handler: Any,
+        action_type: SessionActionType,
+        handler: Callable[[SessionAction], Awaitable[Any]],
     ) -> None:
         """Register a handler for a session action type.
 
@@ -671,14 +676,18 @@ class Session:
         self._action_handlers[action_type] = handler
 
     async def _drain_session_actions(self) -> None:
-        """Execute any session actions queued by agent tools during this turn."""
+        """Execute any session actions queued by agent tools during this turn.
+
+        Handlers that require stopping the session (end_call, transfer)
+        return a ``_deferred_stop`` flag rather than calling ``stop()``
+        inline, so the full drain loop completes before teardown begins.
+        """
         if self._session_actions is None or not self._session_actions.has_pending:
             return
 
         actions = self._session_actions.drain()
+        should_stop = False
         for action in actions:
-            if not self._is_running:
-                break
             await self._emit(
                 SessionActionRequested(
                     action_type=action.type.value,
@@ -688,7 +697,9 @@ class Session:
             handler = self._action_handlers.get(action.type)
             if handler is not None:
                 try:
-                    await handler(action)
+                    result = await handler(action)
+                    if result is _DEFERRED_STOP:
+                        should_stop = True
                     await self._emit(SessionActionCompleted(action_type=action.type.value))
                 except Exception as exc:
                     logger.exception("Session action handler failed: %s", action.type)
@@ -704,14 +715,19 @@ class Session:
                     "No handler for custom action: %s",
                     action.data.get("action_type"),
                 )
+            else:
+                logger.warning("No handler for session action: %s", action.type)
 
-    async def _handle_end_call(self, action: Any) -> None:
-        """Built-in handler: gracefully stop the session."""
+        if should_stop:
+            await self.stop()
+
+    async def _handle_end_call(self, action: SessionAction) -> object:
+        """Built-in handler: gracefully stop the session (deferred)."""
         logger.info("Agent requested end_call: %s", action.data.get("reason", ""))
-        await self.stop()
+        return _DEFERRED_STOP
 
-    async def _handle_transfer_call(self, action: Any) -> None:
-        """Built-in handler: transfer the call.
+    async def _handle_transfer_call(self, action: SessionAction) -> object:
+        """Built-in handler: transfer the call (deferred stop).
 
         The ``SessionActionRequested`` event has already been emitted by
         :meth:`_drain_session_actions`.  Platform-specific transfer logic
@@ -720,9 +736,9 @@ class Session:
         After emitting the event, stops the session.
         """
         logger.info("Agent requested transfer_call to %s", action.data.get("target"))
-        await self.stop()
+        return _DEFERRED_STOP
 
-    async def _handle_send_dtmf(self, action: Any) -> None:
+    async def _handle_send_dtmf(self, action: SessionAction) -> None:
         """Built-in handler: send DTMF tones.
 
         The ``SessionActionRequested`` event has already been emitted by
@@ -1144,7 +1160,7 @@ class Session:
                 # marks for the tail of this turn's audio.
                 if self._outbound_task and not self._outbound_task.done():
                     while not self._outbound_queue.empty():
-                        await asyncio.sleep(0)
+                        await asyncio.sleep(0.005)
                 self._spans.finish("turn")
                 self._turn = None
             elif started and not tts_playback_started:
@@ -1297,7 +1313,7 @@ class Session:
                 await self._turn_manager.bot_stopped_speaking()
                 if self._outbound_task and not self._outbound_task.done():
                     while not self._outbound_queue.empty():
-                        await asyncio.sleep(0)
+                        await asyncio.sleep(0.005)
                 self._spans.finish("turn")
                 self._turn = None
             elif gated and self._turn is turn and turn is not None:

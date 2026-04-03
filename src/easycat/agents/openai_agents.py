@@ -292,6 +292,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
             parts: list[dict[str, str]] = []
             if self._pending_interruption is not None:
                 parts.append({"role": "developer", "content": self._pending_interruption})
+                self._pending_interruption = None
             parts.append({"role": "user", "content": text})
             return parts
         if self._message_history:

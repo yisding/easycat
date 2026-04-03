@@ -56,7 +56,7 @@ async def main() -> None:
         ) from exc
 
     voice_agent = Agent(
-        "openai:gpt-5.2",
+        "openai:gpt-5.4",
         deps_type=Deps,
         system_prompt=(
             "You are a helpful voice assistant. "
