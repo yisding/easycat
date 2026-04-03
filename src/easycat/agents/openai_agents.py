@@ -292,7 +292,6 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
             parts: list[dict[str, str]] = []
             if self._pending_interruption is not None:
                 parts.append({"role": "developer", "content": self._pending_interruption})
-                self._pending_interruption = None
             parts.append({"role": "user", "content": text})
             return parts
         if self._message_history:
@@ -329,6 +328,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         kwargs = self._build_kwargs()
 
         result = await Runner.run(self._agent, input_data, **kwargs)
+        self._pending_interruption = None
         self._message_history = result.to_input_list()
 
         if self._use_previous_response_id:
@@ -424,6 +424,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
                             pending_tool_calls.discard(agent_event.call_id)
                         yield agent_event
         finally:
+            self._pending_interruption = None
             self._message_history = result.to_input_list()
             if self._use_previous_response_id:
                 self._previous_response_id = getattr(result, "last_response_id", None)
