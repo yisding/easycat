@@ -102,12 +102,17 @@ class DeepgramSTT(STTBase):
             async for raw_message in self._ws.recv_iter():
                 if isinstance(raw_message, bytes):
                     continue
-                msg = json.loads(raw_message)
+                try:
+                    msg = json.loads(raw_message)
+                except json.JSONDecodeError:
+                    continue
                 self._handle_message(msg)
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Deepgram WebSocket closed")
         except Exception:
             logger.exception("Error in Deepgram receive loop")
+        finally:
+            self._event_queue.put_nowait(None)
 
     def _handle_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type", "")

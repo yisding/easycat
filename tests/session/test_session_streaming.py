@@ -80,6 +80,9 @@ class FakeTransport:
     async def send_audio(self, chunk: AudioChunk) -> None:
         self.sent.append(chunk)
 
+    async def clear_audio(self) -> None:
+        pass
+
 
 class FakeVAD:
     """Emits start on chunk 1, stop on chunk 2."""

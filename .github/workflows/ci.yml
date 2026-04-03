@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -17,6 +18,7 @@ jobs:
       - run: uv run ruff format --check .
 
   test:
+    name: Tests (Unit + Local Integration)
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -27,4 +29,30 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev --python ${{ matrix.python-version }}
-      - run: uv run --python ${{ matrix.python-version }} pytest -x -q
+      - run: uv run --python ${{ matrix.python-version }} pytest -x -q -m "not integration_socket and not integration_live"
+
+  integration-socket:
+    name: Tests (Socket Integration)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --group dev --python ${{ matrix.python-version }}
+      - run: uv run --python ${{ matrix.python-version }} pytest -x -q -m "integration_socket"
+
+  integration-live:
+    name: Tests (Live Providers)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev --extra openai --extra deepgram --extra elevenlabs --python 3.12
+      - run: uv run --python 3.12 pytest -x -q -m "integration_live"

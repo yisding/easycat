@@ -809,6 +809,7 @@ class Session:
         self._playback_mark_bytes_interval: int = 4_000  # throttle: ~125ms at 16kHz/16-bit
         self._bytes_since_last_mark: int = 0
         self._last_barge_in_time: float | None = None
+        self._replay_chunks_pending: int = 0
 
         self._playback_ack_transport: PlaybackAckTransport | None = None
         if isinstance(self.transport, PlaybackAckTransport):
@@ -836,6 +837,7 @@ class Session:
         """Clear turn correlation state and reset the turn manager."""
         self._current_turn_id = None
         self._auto_turn_speech_frames = 0
+        self._replay_chunks_pending = 0
         self._turn_manager.reset()
 
     @property
@@ -998,10 +1000,10 @@ class Session:
         self._outbound_queue.flush()
         chunks = [ev.chunk for ev in events if isinstance(ev, TTSAudio)]
         if chunks:
+            self._replay_chunks_pending = len(chunks)
             await self._turn_manager.bot_started_speaking()
             for chunk in chunks:
                 await self._outbound_queue.put(chunk)
-            await self._turn_manager.bot_stopped_speaking()
 
     async def synthesize_bypass(self, text: str) -> None:
         """Synthesize text via TTS, bypassing the classification gate.
@@ -1017,35 +1019,65 @@ class Session:
         """Initialize providers and begin the audio receive loop."""
         if self._is_running:
             return
-        self._is_running = True
-
-        await self.transport.connect()
-        if not self._outbound_queue_external:
-            self._outbound_queue = BoundedAudioQueue(
-                max_size=self._outbound_queue_max_size,
-                policy=self._outbound_queue_policy,
-                name=self._outbound_queue_name,
-            )
-            self._tts_synth._outbound_queue = self._outbound_queue
-        # Start periodic health checks for providers that support it
+        transport_connected = False
         self._health_checkers = []
-        for name, provider in (
-            ("stt", self.stt),
-            ("tts", self.tts),
-            ("transport", self.transport),
-        ):
-            if hasattr(provider, "health_check"):
-                checker = PeriodicHealthChecker(
-                    provider,
-                    provider_name=name,
-                    event_bus=self.event_bus,
+
+        try:
+            await self.transport.connect()
+            transport_connected = True
+
+            if not self._outbound_queue_external:
+                self._outbound_queue = BoundedAudioQueue(
+                    max_size=self._outbound_queue_max_size,
+                    policy=self._outbound_queue_policy,
+                    name=self._outbound_queue_name,
                 )
-                checker.start()
-                self._health_checkers.append(checker)
-        for helper in self._telephony_helpers:
-            helper.start()
-        self._outbound_task = asyncio.create_task(self._drain_outbound_audio())
-        self._pipeline_task = asyncio.create_task(self._run_pipeline())
+                self._tts_synth._outbound_queue = self._outbound_queue
+
+            # Start periodic health checks for providers that support it
+            for name, provider in (
+                ("stt", self.stt),
+                ("tts", self.tts),
+                ("transport", self.transport),
+            ):
+                if hasattr(provider, "health_check"):
+                    checker = PeriodicHealthChecker(
+                        provider,
+                        provider_name=name,
+                        event_bus=self.event_bus,
+                    )
+                    checker.start()
+                    self._health_checkers.append(checker)
+
+            for helper in self._telephony_helpers:
+                helper.start()
+
+            self._is_running = True
+            self._outbound_task = asyncio.create_task(self._drain_outbound_audio())
+            self._pipeline_task = asyncio.create_task(self._run_pipeline())
+        except Exception:
+            self._is_running = False
+
+            for task_name in ("_pipeline_task", "_outbound_task"):
+                task = getattr(self, task_name)
+                if task is not None and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                setattr(self, task_name, None)
+
+            for checker in self._health_checkers:
+                await checker.stop()
+            self._health_checkers = []
+
+            self._stop_helpers()
+            self._reset_turn_state()
+
+            if transport_connected:
+                await self.transport.disconnect()
+            raise
 
     async def stop(self) -> None:
         """Gracefully stop the session: finish current turn, close providers."""
@@ -1073,7 +1105,8 @@ class Session:
         self._health_checkers = []
         self._stop_helpers()
         self._spans.finish_all(SpanStatus.CANCELLED)
-        self._outbound_queue.close()
+        if not self._outbound_queue_external:
+            self._outbound_queue.close()
         if self._outbound_task and not self._outbound_task.done():
             self._outbound_task.cancel()
             try:
@@ -1081,7 +1114,8 @@ class Session:
             except asyncio.CancelledError:
                 pass
         await self.transport.disconnect()
-        self._reset_turn_state()
+        await self._turn_manager.shutdown()
+        self._current_turn_id = None
 
     async def shutdown(self) -> None:
         """Force-close everything and release resources."""
@@ -1115,9 +1149,11 @@ class Session:
         self._health_checkers = []
         self._stop_helpers()
         self._spans.finish_all(SpanStatus.CANCELLED)
-        self._outbound_queue.close()
+        if not self._outbound_queue_external:
+            self._outbound_queue.close()
         await self.transport.disconnect()
-        self._reset_turn_state()
+        await self._turn_manager.shutdown()
+        self._current_turn_id = None
 
     # ── Cancellation ───────────────────────────────────────────
 
@@ -1135,7 +1171,9 @@ class Session:
 
         await self._cancel_stt()
         await self._cancel_tts()
+        await self.transport.clear_audio()
         self._outbound_queue.flush_for_new_turn()
+        self._replay_chunks_pending = 0
 
         if not barge_in:
             self._reset_turn_state()
@@ -1143,12 +1181,16 @@ class Session:
         self._spans.finish_all(SpanStatus.CANCELLED)
 
     async def cancel_tts_playback(self) -> None:
-        """Stop TTS provider and flush outbound audio."""
-        if self._cancel_token:
-            self._cancel_token.cancel()
+        """Stop TTS provider and flush outbound audio.
 
+        Unlike :meth:`cancel_turn`, this does NOT cancel the shared
+        ``_cancel_token`` so any in-flight agent stream can continue
+        producing text (which will simply not be synthesized).
+        """
         await self._cancel_tts()
+        await self.transport.clear_audio()
         self._outbound_queue.flush_for_new_turn()
+        self._replay_chunks_pending = 0
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             self._reset_turn_state()
 
@@ -1162,7 +1204,9 @@ class Session:
 
         await self._cancel_stt()
         await self._cancel_tts()
+        await self.transport.clear_audio()
         self._outbound_queue.flush_for_new_turn()
+        self._replay_chunks_pending = 0
 
         # Clear agent history if supported (e.g., AgentRunner)
         if hasattr(self.agent, "clear_history"):
@@ -1248,7 +1292,7 @@ class Session:
 
     async def _on_turn_ended(self, event: TurnEnded) -> None:
         """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
-        if not self._is_running:
+        if self._cancel_token and self._cancel_token.is_cancelled:
             return
         if self._turn_manager.state != TurnManagerState.PROCESSING:
             return
@@ -1389,6 +1433,17 @@ class Session:
         except Exception as exc:
             logger.exception("Pipeline error")
             await self._emit(Error(exception=exc, context="pipeline"))
+        finally:
+            # When the pipeline exits (transport disconnect, cancellation, or
+            # error), mark the session as no longer running so callers polling
+            # ``is_running`` can detect the transport is gone.
+            #
+            # We do NOT close the outbound queue here — an in-flight turn
+            # (agent + TTS) may still be producing audio that needs to drain.
+            # Instead we just flip the flag; ``stop()`` handles full cleanup.
+            if self._is_running:
+                logger.debug("Pipeline exited while session was running; marking session stopped")
+                self._is_running = False
 
     async def _handle_end_of_speech(self) -> None:
         """Called when VAD signals end of speech: finalize STT, run agent, synthesize TTS."""
@@ -1734,7 +1789,6 @@ class Session:
 
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 await self._turn_manager.bot_stopped_speaking()
-                self._spans.finish("turn")
             elif started and not tts_playback_started:
                 # Gated: TTS was buffered, reset to IDLE so callee speech
                 # can start new turns while waiting for classification.
@@ -1753,6 +1807,19 @@ class Session:
                 )
             else:
                 await agent_task
+        except asyncio.CancelledError:
+            # Task was cancelled (e.g. barge-in via _schedule_turn_ended).
+            # Clean up inner tasks to prevent orphans.
+            if not agent_task.done():
+                agent_task.cancel()
+            if not tts_task.done():
+                tts_task.cancel()
+            for t in (agent_task, tts_task):
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            raise
         except Exception as exc:
             agent_error = exc
             if not agent_task.done():
@@ -1899,6 +1966,7 @@ class Session:
                 chunk = await self._outbound_queue.get()
             except asyncio.QueueEmpty:
                 break
+            replayed_chunk = self._replay_chunks_pending > 0
             try:
                 await self.transport.send_audio(chunk)
                 if self._enable_aec:
@@ -1929,6 +1997,14 @@ class Session:
                     await self._send_playback_mark()
             except Exception:
                 logger.exception("Failed to send audio to transport")
+            finally:
+                if replayed_chunk:
+                    self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
+                    if (
+                        self._replay_chunks_pending == 0
+                        and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                    ):
+                        await self._turn_manager.bot_stopped_speaking()
 
         # Send a final mark for any trailing bytes that didn't reach the
         # throttle threshold, so the last playback position gets acked.

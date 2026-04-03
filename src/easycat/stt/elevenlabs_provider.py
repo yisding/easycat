@@ -138,12 +138,17 @@ class ElevenLabsSTT(STTBase):
             async for raw_message in self._ws.recv_iter():
                 if isinstance(raw_message, bytes):
                     continue
-                msg = json.loads(raw_message)
+                try:
+                    msg = json.loads(raw_message)
+                except json.JSONDecodeError:
+                    continue
                 self._handle_ws_message(msg)
         except websockets.exceptions.ConnectionClosed:
             logger.debug("ElevenLabs WebSocket closed")
         except Exception:
             logger.exception("Error in ElevenLabs receive loop")
+        finally:
+            self._event_queue.put_nowait(None)
 
     def _handle_ws_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type", "")
@@ -159,9 +164,14 @@ class ElevenLabsSTT(STTBase):
             word_timestamps = None
             words = msg.get("words")
             if words:
-                word_timestamps = [
-                    WordTimestamp(word=w["word"], start=w["start"], end=w["end"]) for w in words
-                ]
+                parsed = []
+                for w in words:
+                    word = w.get("word") if isinstance(w, dict) else None
+                    start = w.get("start") if isinstance(w, dict) else None
+                    end = w.get("end") if isinstance(w, dict) else None
+                    if word is not None and start is not None and end is not None:
+                        parsed.append(WordTimestamp(word=word, start=float(start), end=float(end)))
+                word_timestamps = parsed or None
 
             event_type = STTEventType.FINAL if is_final else STTEventType.PARTIAL
             self._emit_event(
