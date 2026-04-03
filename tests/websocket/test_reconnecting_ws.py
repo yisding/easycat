@@ -291,10 +291,11 @@ class TestReconnectingWebSocket:
             side_effect=ConnectionError("down"),
         ):
             messages = []
-            with pytest.raises(ConnectionError):
-                async for msg in ws.recv_iter():
-                    messages.append(msg)
+            async for msg in ws.recv_iter():
+                messages.append(msg)
 
+        # Iterator ends cleanly instead of raising — downstream TTS
+        # consumers see a normal end-of-stream, not an unhandled exception.
         assert messages == ["msg1"]
 
     async def test_recv_iter_no_reconnect_after_explicit_close(self):

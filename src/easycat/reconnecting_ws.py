@@ -186,7 +186,7 @@ class ReconnectingWebSocket:
                         await self._connect_with_retry()
                 except ConnectionError:
                     logger.error("Reconnection failed; ending recv_iter")
-                    raise
+                    return
 
     async def close(self) -> None:
         """Close the WebSocket connection permanently.
