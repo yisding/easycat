@@ -443,12 +443,17 @@ class EventBus:
     async def emit(self, event: Event) -> None:
         """Emit an event to matching and global handlers.
 
+        Handlers registered for the exact event type **and** any of its
+        parent classes (up to and including :class:`Event`) are invoked.
         Sync handlers are called directly; async handlers are awaited.
         Exceptions in handlers are logged but do not prevent other handlers from running.
         """
         event_type = type(event)
         handlers = list(self._all_handlers)
-        handlers.extend(self._handlers[event_type])
+        for cls in event_type.__mro__:
+            handlers.extend(self._handlers[cls])
+            if cls is Event:
+                break
         for handler in handlers:
             try:
                 result = handler(event)
