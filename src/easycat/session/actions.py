@@ -31,6 +31,7 @@ Usage (PydanticAI)::
 from __future__ import annotations
 
 import enum
+import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -61,9 +62,13 @@ class SessionActions:
     (PydanticAI).  Tools call methods like :meth:`end_call` or
     :meth:`transfer_call` which enqueue actions.  The Session drains
     the queue after each agent turn completes.
+
+    Thread-safe: agent tools may run in a thread-pool executor while
+    the Session drains from the event loop.
     """
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._queue: deque[SessionAction] = deque()
         self._no_interrupt = False
 
@@ -75,15 +80,16 @@ class SessionActions:
         When *no_interrupt* is True (default), barge-in is suppressed for
         the remainder of this turn so the farewell message plays in full.
         """
-        if no_interrupt:
-            self._no_interrupt = True
-        self._queue.append(
-            SessionAction(
-                type=SessionActionType.END_CALL,
-                data={"reason": reason},
-                no_interrupt=no_interrupt,
+        with self._lock:
+            if no_interrupt:
+                self._no_interrupt = True
+            self._queue.append(
+                SessionAction(
+                    type=SessionActionType.END_CALL,
+                    data={"reason": reason},
+                    no_interrupt=no_interrupt,
+                )
             )
-        )
 
     def transfer_call(self, target: str, *, no_interrupt: bool = True, **kwargs: Any) -> None:
         """Request a call transfer after the current turn finishes.
@@ -91,42 +97,46 @@ class SessionActions:
         When *no_interrupt* is True (default), barge-in is suppressed for
         the remainder of this turn so the transfer announcement plays fully.
         """
-        if no_interrupt:
-            self._no_interrupt = True
-        self._queue.append(
-            SessionAction(
-                type=SessionActionType.TRANSFER_CALL,
-                data={"target": target, **kwargs},
-                no_interrupt=no_interrupt,
+        with self._lock:
+            if no_interrupt:
+                self._no_interrupt = True
+            self._queue.append(
+                SessionAction(
+                    type=SessionActionType.TRANSFER_CALL,
+                    data={"target": target, **kwargs},
+                    no_interrupt=no_interrupt,
+                )
             )
-        )
 
     def send_dtmf(self, digits: str) -> None:
         """Request DTMF tones to be sent after the current turn finishes."""
-        self._queue.append(
-            SessionAction(
-                type=SessionActionType.SEND_DTMF,
-                data={"digits": digits},
+        with self._lock:
+            self._queue.append(
+                SessionAction(
+                    type=SessionActionType.SEND_DTMF,
+                    data={"digits": digits},
+                )
             )
-        )
 
     def request(self, action_type: str, **data: Any) -> None:
         """Enqueue a custom action (for user-defined action handlers)."""
-        self._queue.append(
-            SessionAction(
-                type=SessionActionType.CUSTOM,
-                data={"action_type": action_type, **data},
+        with self._lock:
+            self._queue.append(
+                SessionAction(
+                    type=SessionActionType.CUSTOM,
+                    data={"action_type": action_type, **data},
+                )
             )
-        )
 
     # ── Queue access (for Session) ─────────────────────────
 
     def drain(self) -> list[SessionAction]:
         """Remove and return all queued actions.  Called by Session."""
-        actions = list(self._queue)
-        self._queue.clear()
-        self._no_interrupt = False
-        return actions
+        with self._lock:
+            actions = list(self._queue)
+            self._queue.clear()
+            self._no_interrupt = False
+            return actions
 
     @property
     def has_pending(self) -> bool:
@@ -135,14 +145,11 @@ class SessionActions:
 
     @property
     def no_interrupt(self) -> bool:
-        """Whether any queued action requests barge-in suppression.
-
-        This is a simple flag (not a deque iteration) so it is safe to
-        read from the event loop while tools append from a thread pool.
-        """
+        """Whether any queued action requests barge-in suppression."""
         return self._no_interrupt
 
     def clear(self) -> None:
         """Discard all queued actions without executing them."""
-        self._queue.clear()
-        self._no_interrupt = False
+        with self._lock:
+            self._queue.clear()
+            self._no_interrupt = False
