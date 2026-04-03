@@ -194,7 +194,10 @@ class Session:
             timeout_config=self._timeout_config,
             correlation_ids=lambda: (
                 self.session_id,
-                self._turn.id if self._turn else None,
+                self._turn.id
+                if self._turn
+                and self._turn_manager.state != TurnManagerState.IDLE
+                else None,
             ),
             audio_gate=cfg.audio_gate,
         )
