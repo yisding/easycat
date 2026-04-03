@@ -12,6 +12,7 @@ from easycat.events import (
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
+    ErrorStage,
     Interruption,
 )
 from easycat.turn_manager import TurnManagerConfig
@@ -82,7 +83,7 @@ async def test_stt_start_failure_emits_error(monkeypatch: pytest.MonkeyPatch) ->
     try:
         await transport.push_audio(make_chunk(), make_chunk())
         error_event = await collector.wait_for(Error, timeout=3.0)
-        assert "stt" in error_event.context
+        assert error_event.stage == ErrorStage.STT
         assert isinstance(error_event.exception, RuntimeError)
         assert session.is_running
 
@@ -117,7 +118,7 @@ async def test_stt_start_failure_allows_next_turn(monkeypatch: pytest.MonkeyPatc
         # First turn: STT fails on start
         await transport.push_audio(make_chunk(), make_chunk())
         error_event = await collector.wait_for(Error, timeout=3.0)
-        assert "stt" in error_event.context
+        assert error_event.stage == ErrorStage.STT
 
         # Wait for first turn to settle
         await asyncio.sleep(0.2)
@@ -217,7 +218,7 @@ async def test_noise_reducer_failure_stops_pipeline(monkeypatch: pytest.MonkeyPa
     try:
         await transport.push_audio(make_chunk())
         error_event = await collector.wait_for(Error, timeout=3.0)
-        assert "pipeline" in error_event.context
+        assert error_event.stage == ErrorStage.PIPELINE
         assert isinstance(error_event.exception, RuntimeError)
     finally:
         await transport.finish_input()
@@ -250,7 +251,7 @@ async def test_vad_failure_stops_pipeline(monkeypatch: pytest.MonkeyPatch) -> No
     try:
         await transport.push_audio(make_chunk(), make_chunk())
         error_event = await collector.wait_for(Error, timeout=3.0)
-        assert "pipeline" in error_event.context
+        assert error_event.stage == ErrorStage.PIPELINE
         assert isinstance(error_event.exception, RuntimeError)
         assert "vad crash" in str(error_event.exception)
     finally:
@@ -424,11 +425,11 @@ async def test_multiple_error_types_session_survives(monkeypatch: pytest.MonkeyP
 
         error_event = await collector.wait_for(
             Error,
-            predicate=lambda e: "agent" in e.context,
+            predicate=lambda e: e.stage == ErrorStage.AGENT,
             timeout=3.0,
         )
         assert isinstance(error_event.exception, RuntimeError)
-        assert "agent" in error_event.context
+        assert error_event.stage == ErrorStage.AGENT
         assert session.is_running
     finally:
         await transport.finish_input()
