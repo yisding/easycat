@@ -195,8 +195,7 @@ class Session:
             correlation_ids=lambda: (
                 self.session_id,
                 self._turn.id
-                if self._turn
-                and self._turn_manager.state != TurnManagerState.IDLE
+                if self._turn and self._turn_manager.state != TurnManagerState.IDLE
                 else None,
             ),
             audio_gate=cfg.audio_gate,
@@ -261,8 +260,7 @@ class Session:
             # not carry the old turn's ID.
             active_turn = (
                 self._turn
-                if self._turn
-                and self._turn_manager.state != TurnManagerState.IDLE
+                if self._turn and self._turn_manager.state != TurnManagerState.IDLE
                 else None
             )
             kwargs["turn_id"] = active_turn.id if active_turn else None
@@ -386,9 +384,11 @@ class Session:
             (
                 Error,
                 error,
-                lambda cb: lambda e: cb(
-                    e.exception,
-                    f"{e.stage.value}:{e.provider}" if e.provider else e.stage.value,
+                lambda cb: (
+                    lambda e: cb(
+                        e.exception,
+                        f"{e.stage.value}:{e.provider}" if e.provider else e.stage.value,
+                    )
                 ),
             ),
         ]
