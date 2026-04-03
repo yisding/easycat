@@ -6,8 +6,8 @@ and _has_unclosed_markdown_delimiters.
 
 from __future__ import annotations
 
-from easycat.session import (
-    _estimate_text_spoken,
+from easycat.session._interruption import _estimate_text_spoken
+from easycat.session._text_utils import (
     _has_unclosed_markdown_delimiters,
     _split_at_sentence_boundaries,
 )
