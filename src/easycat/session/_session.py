@@ -380,7 +380,14 @@ class Session:
             (BotStartedSpeaking, bot_started_speaking, lambda cb: lambda _e: cb()),
             (BotStoppedSpeaking, bot_stopped_speaking, lambda cb: lambda _e: cb()),
             (Interruption, interruption, lambda cb: lambda _e: cb()),
-            (Error, error, lambda cb: lambda e: cb(e.exception, e.stage.value)),
+            (
+                Error,
+                error,
+                lambda cb: lambda e: cb(
+                    e.exception,
+                    f"{e.stage.value}:{e.provider}" if e.provider else e.stage.value,
+                ),
+            ),
         ]
 
         registrations: list[tuple[type, EventHandler]] = []
