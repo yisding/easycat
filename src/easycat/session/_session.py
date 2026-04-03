@@ -227,6 +227,7 @@ class Session:
         self._turn: TurnContext | None = None
         self._replay_chunks_pending: int = 0
         self._playback_mark_bytes_interval: int = 4_000  # throttle: ~125ms at 16kHz/16-bit
+        self._playback_mark_seq: int = 0  # session-scoped so mark names never collide across turns
 
         self._playback_ack_transport: PlaybackAckTransport | None = None
         if isinstance(self.transport, PlaybackAckTransport):
@@ -417,11 +418,17 @@ class Session:
         """
         from easycat.events import TTSAudio
 
-        self._outbound_queue.flush()
+        already_replaying = self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+        # Only flush the outbound queue on the first replay call.
+        # A second call (for late gate frames) must not drop audio
+        # that the first replay enqueued.
+        if not already_replaying:
+            self._outbound_queue.flush()
         chunks = [ev.chunk for ev in events if isinstance(ev, TTSAudio)]
         if chunks:
-            self._replay_chunks_pending = len(chunks)
-            await self._turn_manager.bot_started_speaking()
+            self._replay_chunks_pending += len(chunks)
+            if not already_replaying:
+                await self._turn_manager.bot_started_speaking()
             for chunk in chunks:
                 await self._outbound_queue.put(chunk)
 
@@ -1035,6 +1042,12 @@ class Session:
 
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 await self._turn_manager.bot_stopped_speaking()
+                # Wait for queued audio to drain so _drain_outbound_audio
+                # can still call turn.record_audio_sent() and emit playback
+                # marks for the tail of this turn's audio.
+                if self._outbound_task and not self._outbound_task.done():
+                    while not self._outbound_queue.empty():
+                        await asyncio.sleep(0)
                 self._spans.finish("turn")
                 self._turn = None
             elif started and not tts_playback_started:
@@ -1183,6 +1196,9 @@ class Session:
                 and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
             ):
                 await self._turn_manager.bot_stopped_speaking()
+                if self._outbound_task and not self._outbound_task.done():
+                    while not self._outbound_queue.empty():
+                        await asyncio.sleep(0)
                 self._spans.finish("turn")
                 self._turn = None
             elif gated and self._turn is turn and turn is not None:
@@ -1245,8 +1261,8 @@ class Session:
         if self._playback_ack_transport is None:
             return
 
-        turn.playback_mark_seq += 1
-        requested_mark_name = f"ec_playback_{turn.playback_mark_seq}"
+        self._playback_mark_seq += 1
+        requested_mark_name = f"ec_playback_{self._playback_mark_seq}"
         turn.playback_mark_to_bytes[requested_mark_name] = turn.audio_bytes_sent
         try:
             mark_name = await self._playback_ack_transport.send_playback_mark(

@@ -168,6 +168,13 @@ class ReconnectingWebSocket:
             except websockets.exceptions.ConnectionClosed as exc:
                 if self._closed:
                     return
+                # When no on_reconnect callback is registered, the caller
+                # cannot replay protocol setup messages (e.g. ElevenLabs
+                # init/text/EOS sequence) after reconnecting, so the new
+                # socket would be uninitialised.  Fail fast so the caller
+                # can restart the stream cleanly.
+                if self._on_reconnect is None:
+                    raise
                 rcvd = getattr(exc, "rcvd", None)
                 close_code = rcvd.code if rcvd is not None else getattr(exc, "close_code", None)
                 logger.warning(
