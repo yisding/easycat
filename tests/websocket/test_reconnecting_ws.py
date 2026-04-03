@@ -227,48 +227,39 @@ class TestReconnectingWebSocket:
 
         assert messages == ["msg1", "msg2", "msg3", "msg4"]
 
-    async def test_recv_iter_reconnects_without_on_reconnect(self):
-        """recv_iter should still attempt reconnection even without on_reconnect.
+    async def test_recv_iter_raises_without_on_reconnect(self):
+        """recv_iter should propagate ConnectionClosed when no on_reconnect is set.
 
-        Stateless providers (e.g. DeepgramSTT) encode session state in
-        URL/headers, so they can reconnect transparently without replaying
-        protocol setup messages.
+        Stateful providers (e.g. ElevenLabs STT/TTS, Deepgram TTS) send init
+        messages once; reconnecting without replaying those stalls the stream.
+        Without an on_reconnect callback the provider cannot reinitialize, so
+        the error should surface for a clean restart.
         """
         ws = self._make_ws(base_delay=0.01, max_retries=1, jitter_factor=0.0)
 
         close_frame = websockets.frames.Close(1006, "abnormal")
 
-        class DroppingThenRecoveringConnection:
+        class DroppingConnection:
             def __init__(self):
                 self.close_code = None
                 self.close = AsyncMock()
-                self._first = True
 
             def __aiter__(self):
                 return self._iter()
 
             async def _iter(self):
-                if self._first:
-                    self._first = False
-                    yield "msg1"
-                    raise websockets.exceptions.ConnectionClosed(close_frame, None)
-                else:
-                    yield "msg2"
+                yield "msg1"
+                raise websockets.exceptions.ConnectionClosed(close_frame, None)
 
-        first_conn = DroppingThenRecoveringConnection()
-        second_conn = DroppingThenRecoveringConnection()
-        second_conn._first = False
-
-        ws._ws = first_conn
+        ws._ws = DroppingConnection()
 
         messages = []
-        with patch("easycat.reconnecting_ws.websockets.connect", new_callable=AsyncMock) as mock:
-            mock.return_value = second_conn
+        with pytest.raises(websockets.exceptions.ConnectionClosed):
             async for msg in ws.recv_iter():
                 messages.append(msg)
 
-        # Should have reconnected and received messages from both connections.
-        assert messages == ["msg1", "msg2"]
+        # Should have received the message before the disconnect.
+        assert messages == ["msg1"]
 
     async def test_recv_iter_gives_up_when_reconnect_fails(self):
         config = ReconnectConfig(base_delay=0.01, max_retries=1, jitter_factor=0.0)

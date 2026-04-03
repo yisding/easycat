@@ -170,6 +170,13 @@ class ReconnectingWebSocket:
                     return
                 rcvd = getattr(exc, "rcvd", None)
                 close_code = rcvd.code if rcvd is not None else getattr(exc, "close_code", None)
+                if self._on_reconnect is None:
+                    logger.warning(
+                        "WebSocket connection lost (code=%s). No on_reconnect callback "
+                        "configured; ending recv_iter to allow clean restart.",
+                        close_code,
+                    )
+                    raise
                 logger.warning(
                     "WebSocket connection lost (code=%s). Attempting reconnect…",
                     close_code,
