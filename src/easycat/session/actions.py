@@ -141,7 +141,7 @@ class SessionActions:
     @property
     def has_pending(self) -> bool:
         """Whether there are queued actions waiting to be drained."""
-        return len(self._queue) > 0
+        return bool(self._queue)
 
     @property
     def no_interrupt(self) -> bool:
