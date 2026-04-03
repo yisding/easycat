@@ -88,9 +88,11 @@ async def with_stt_timeout(
             err = STTTimeoutError(provider_name, timeout)
             logger.warning(str(err))
             if event_bus is not None:
-                from easycat.events import Error
+                from easycat.events import Error, ErrorStage
 
-                await event_bus.emit(Error(exception=err, context=f"stt_timeout:{provider_name}"))
+                await event_bus.emit(
+                    Error(exception=err, stage=ErrorStage.STT, provider=provider_name)
+                )
     if timed_out:
         raise STTTimeoutError(provider_name, timeout)
 
@@ -112,9 +114,9 @@ async def with_agent_timeout(
         err = AgentTimeoutError(timeout)
         logger.warning(str(err))
         if event_bus is not None:
-            from easycat.events import Error
+            from easycat.events import Error, ErrorStage
 
-            await event_bus.emit(Error(exception=err, context="agent_timeout"))
+            await event_bus.emit(Error(exception=err, stage=ErrorStage.AGENT))
         raise err from None
 
 
@@ -152,8 +154,10 @@ async def with_tts_timeout(
             err = TTSTimeoutError(provider_name, timeout)
             logger.warning(str(err))
             if event_bus is not None:
-                from easycat.events import Error
+                from easycat.events import Error, ErrorStage
 
-                await event_bus.emit(Error(exception=err, context=f"tts_timeout:{provider_name}"))
+                await event_bus.emit(
+                    Error(exception=err, stage=ErrorStage.TTS, provider=provider_name)
+                )
     if timed_out:
         raise TTSTimeoutError(provider_name, timeout)

@@ -23,7 +23,14 @@ uv run python examples/ws_server.py  # Run an example
 **Pipeline flow:** Transport (audio in) → NoiseReducer → VAD → STT → [SmartTurn] → Agent → TTS → Transport (audio out)
 
 **Key modules:**
-- `session.py` — Core orchestrator (~1000 LOC). Wires all pipeline stages, manages turn lifecycle and interruption.
+- `session/` — Package containing the core orchestrator. Key files:
+  - `_session.py` — `Session` class. Wires pipeline stages, manages turn lifecycle, coordinates agent/TTS.
+  - `_turn_context.py` — `TurnContext` per-turn state (timing, playback tracking, cancel token). Created fresh each turn.
+  - `_streaming.py` — `consume_agent_stream()` translates agent stream events into TTS payloads on sentence boundaries.
+  - `_interruption.py` — Audio-byte estimation for barge-in: maps TTS output back to what the user heard.
+  - `_text_utils.py` — Sentence splitting, markdown checking, speech energy detection.
+  - `_tts_helpers.py` — TTS payload text normalization for interruption estimation.
+  - `_types.py` — `SessionConfig`, `TurnState`, `Agent` protocol.
 - `config.py` — `EasyCatConfig` (simplified, auto-wires OpenAI providers) and `SessionConfig` (advanced, explicit providers). `create_session()` factory builds a wired Session.
 - `events.py` — `EventBus` pub/sub with sync/async handlers. Two event layers: provider-scoped (`STTEvent`, `TTSEvent`) emitted by providers, mapped to EasyCat-level events (`STTFinal`, `TTSAudio`, `TurnStarted`, etc.) by Session.
 - `providers.py` — `@runtime_checkable` Protocol definitions for all provider interfaces (`STTProvider`, `TTSProvider`, `VADProvider`, `Transport`, `NoiseReducer`). Providers use duck typing, not inheritance.
