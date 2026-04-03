@@ -28,7 +28,6 @@ class TurnContext:
         "audio_send_log",
         "playback_mark_to_bytes",
         "playback_ack_log",
-        "playback_mark_seq",
         "bytes_since_last_mark",
         "last_barge_in_time",
     )
@@ -51,7 +50,6 @@ class TurnContext:
         # Playback mark tracking (maps mark names to cumulative byte positions)
         self.playback_mark_to_bytes: dict[str, int] = {}
         self.playback_ack_log: deque[tuple[float, int]] = deque(maxlen=10_000)
-        self.playback_mark_seq: int = 0
         self.bytes_since_last_mark: int = 0
 
         self.last_barge_in_time: float | None = None
