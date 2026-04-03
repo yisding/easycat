@@ -19,6 +19,7 @@ from easycat.providers import (
     TTSProvider,
     VADProvider,
 )
+from easycat.session.actions import SessionActions
 from easycat.timeouts import TimeoutConfig
 from easycat.tracing import Tracer
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
@@ -111,3 +112,6 @@ class SessionConfig:
     # Maximum extra playout budget (beyond acked bytes) to allow via timing
     # heuristic when playback acks are stale.
     interruption_ack_tail_cap_ms: int = 500
+
+    # Agent-initiated session actions.
+    session_actions: SessionActions | None = None

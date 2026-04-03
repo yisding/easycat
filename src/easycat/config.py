@@ -19,6 +19,7 @@ from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.providers import Transport
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
+from easycat.session.actions import SessionActions
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.factory import STTConfig, create_stt_provider_from_config
@@ -173,6 +174,7 @@ class EasyCatConfig:
     wrap_agent: bool = True
     strip_markdown: bool = False
     output_processors: Sequence[LLMOutputProcessor] = ()
+    session_actions: SessionActions | None = None
     debug: bool = False
 
     def __post_init__(self) -> None:
@@ -320,6 +322,7 @@ def create_session(config: EasyCatConfig) -> Session:
             auto_turn_from_stt_final=auto_turn_from_stt_final,
             strip_markdown=config.strip_markdown,
             output_processors=config.output_processors,
+            session_actions=config.session_actions,
             audio_gate=audio_gate,
         )
     )

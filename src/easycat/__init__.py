@@ -46,6 +46,7 @@ from easycat.smart_turn import (
 )
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig, TurnState
+from easycat.session.actions import SessionAction, SessionActions, SessionActionType
 from easycat.session_manager import SessionManager
 from easycat.turn_manager import TurnMode
 from easycat.llm_output_processing import (
@@ -73,6 +74,7 @@ from easycat.helpers import (
 # ── EasyCat-level events ─────────────────────────────────────────
 
 from easycat.events import (
+    ACTION_EVENTS,
     AGENT_EVENTS,
     ALL_EVENTS,
     AUDIO_EVENTS,
@@ -102,6 +104,8 @@ from easycat.events import (
     ReconnectSuccess,
     STTFinal,
     STTPartial,
+    SessionActionCompleted,
+    SessionActionRequested,
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
@@ -196,6 +200,9 @@ from easycat.tracing import Tracer, TraceExporter
 __all__ = [
     # Core session & agent
     "Session",
+    "SessionAction",
+    "SessionActionType",
+    "SessionActions",
     "SessionConfig",
     "TurnState",
     "TurnMode",
@@ -230,6 +237,7 @@ __all__ = [
     "SmartTurnResult",
     "create_smart_turn",
     # Event groups
+    "ACTION_EVENTS",
     "AUDIO_EVENTS",
     "VAD_EVENTS",
     "STT_EVENTS",
@@ -260,6 +268,8 @@ __all__ = [
     "ReconnectSuccess",
     "STTFinal",
     "STTPartial",
+    "SessionActionCompleted",
+    "SessionActionRequested",
     "ToolCallDelta",
     "ToolCallResult",
     "ToolCallStarted",
