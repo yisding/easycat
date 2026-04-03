@@ -1066,7 +1066,9 @@ class Session:
                     while not self._outbound_queue.empty():
                         await asyncio.sleep(0)
                 self._spans.finish("turn")
-                self._turn = None
+                # Only clear if a new turn hasn't started during the drain.
+                if self._turn is turn:
+                    self._turn = None
             elif started and not tts_playback_started:
                 if gated:
                     # Keep self._turn alive for gated replay mark accounting
@@ -1222,7 +1224,9 @@ class Session:
                     while not self._outbound_queue.empty():
                         await asyncio.sleep(0)
                 self._spans.finish("turn")
-                self._turn = None
+                # Only clear if a new turn hasn't started during the drain.
+                if self._turn is turn:
+                    self._turn = None
             elif gated and self._turn is turn and turn is not None:
                 # Gated opener TTS is buffered — reset to IDLE so the
                 # callee's speech can start new turns while we wait for
