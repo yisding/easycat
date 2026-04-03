@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from easycat.audio_format import AudioChunk
+from easycat.session.actions import SessionActionType
 
 logger = logging.getLogger(__name__)
 
@@ -322,7 +323,7 @@ class Error(Event):
 class SessionActionRequested(Event):
     """An agent tool requested a session-level action (end_call, transfer, etc.)."""
 
-    action_type: str
+    action_type: SessionActionType
     data: dict[str, Any] = field(default_factory=dict)
 
 
@@ -330,7 +331,7 @@ class SessionActionRequested(Event):
 class SessionActionCompleted(Event):
     """A session-level action has been executed."""
 
-    action_type: str
+    action_type: SessionActionType
     success: bool = True
     error: str | None = None
 

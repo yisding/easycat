@@ -690,7 +690,7 @@ class Session:
         for action in actions:
             await self._emit(
                 SessionActionRequested(
-                    action_type=action.type.value,
+                    action_type=action.type,
                     data=dict(action.data),
                 )
             )
@@ -700,12 +700,12 @@ class Session:
                     result = await handler(action)
                     if result is _DEFERRED_STOP:
                         should_stop = True
-                    await self._emit(SessionActionCompleted(action_type=action.type.value))
+                    await self._emit(SessionActionCompleted(action_type=action.type))
                 except Exception as exc:
                     logger.exception("Session action handler failed: %s", action.type)
                     await self._emit(
                         SessionActionCompleted(
-                            action_type=action.type.value,
+                            action_type=action.type,
                             success=False,
                             error=str(exc),
                         )
