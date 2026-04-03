@@ -141,12 +141,14 @@ class SessionActions:
     @property
     def has_pending(self) -> bool:
         """Whether there are queued actions waiting to be drained."""
-        return bool(self._queue)
+        with self._lock:
+            return bool(self._queue)
 
     @property
     def no_interrupt(self) -> bool:
         """Whether any queued action requests barge-in suppression."""
-        return self._no_interrupt
+        with self._lock:
+            return self._no_interrupt
 
     def clear(self) -> None:
         """Discard all queued actions without executing them."""

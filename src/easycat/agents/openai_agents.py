@@ -114,6 +114,10 @@ def build_openai_agents_adapter(
             model_settings = ModelSettings(**model_settings_kwargs)
         except TypeError:
             # Older SDK version without store/include fields
+            logger.warning(
+                "ModelSettings does not support store/include — upgrade openai-agents "
+                "to >=0.6.2 for zero-data-retention support"
+            )
             model_settings = ModelSettings(reasoning=reasoning, verbosity="low")
 
         run_config = RunConfig(
@@ -329,7 +333,6 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         kwargs = self._build_kwargs()
 
         result = await Runner.run(self._agent, input_data, **kwargs)
-        self._pending_interruption = None
         self._message_history = result.to_input_list()
 
         if self._use_previous_response_id:
@@ -425,7 +428,6 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
                             pending_tool_calls.discard(agent_event.call_id)
                         yield agent_event
         finally:
-            self._pending_interruption = None
             self._message_history = result.to_input_list()
             if self._use_previous_response_id:
                 self._previous_response_id = getattr(result, "last_response_id", None)

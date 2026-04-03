@@ -227,12 +227,13 @@ class TestReconnectingWebSocket:
 
         assert messages == ["msg1", "msg2", "msg3", "msg4"]
 
-    async def test_recv_iter_fails_fast_without_on_reconnect(self):
-        """recv_iter should raise ConnectionClosed immediately when no on_reconnect is set.
+    async def test_recv_iter_raises_without_on_reconnect(self):
+        """recv_iter should propagate ConnectionClosed when no on_reconnect is set.
 
-        Without a reconnect callback the caller cannot replay protocol
-        setup messages (e.g. ElevenLabs init sequence) on the new socket,
-        so reconnecting would leave an uninitialised connection.
+        Stateful providers (e.g. ElevenLabs STT/TTS, Deepgram TTS) send init
+        messages once; reconnecting without replaying those stalls the stream.
+        Without an on_reconnect callback the provider cannot reinitialize, so
+        the error should surface for a clean restart.
         """
         ws = self._make_ws(base_delay=0.01, max_retries=1, jitter_factor=0.0)
 
@@ -257,8 +258,7 @@ class TestReconnectingWebSocket:
             async for msg in ws.recv_iter():
                 messages.append(msg)
 
-        # Should have received the first message, then immediately raised
-        # ConnectionClosed without attempting reconnection.
+        # Should have received the message before the disconnect.
         assert messages == ["msg1"]
 
     async def test_recv_iter_gives_up_when_reconnect_fails(self):
@@ -291,10 +291,11 @@ class TestReconnectingWebSocket:
             side_effect=ConnectionError("down"),
         ):
             messages = []
-            with pytest.raises(ConnectionError):
-                async for msg in ws.recv_iter():
-                    messages.append(msg)
+            async for msg in ws.recv_iter():
+                messages.append(msg)
 
+        # Iterator ends cleanly instead of raising — downstream TTS
+        # consumers see a normal end-of-stream, not an unhandled exception.
         assert messages == ["msg1"]
 
     async def test_recv_iter_no_reconnect_after_explicit_close(self):
