@@ -24,6 +24,7 @@ class CoreSessionActionExecutor(SessionActionExecutor):
         return isinstance(action, EndCallAction)
 
     async def execute(self, session: Any, action: SessionAction) -> SessionActionResult:
-        assert isinstance(action, EndCallAction)
+        if not isinstance(action, EndCallAction):
+            raise TypeError(f"Expected EndCallAction, got {type(action).__name__}")
         logger.info("Agent requested end_call: reason=%s", action.reason)
         return SessionActionResult(stop_session=True, metadata={"reason": action.reason})
