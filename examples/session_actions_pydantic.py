@@ -1,7 +1,10 @@
 """Session actions demo — PydanticAI.
 
-Shows how agent tools can trigger session-level actions (end call,
-transfer, send DTMF) using the SessionActions queue with PydanticAI deps.
+Shows the simplest session action that works on every transport: ending
+the session after the current reply finishes.
+
+For telephony-specific actions such as transfer, DTMF, and SMS, use the
+Twilio example instead: ``examples/twilio_app.py``.
 
 Setup:
   export OPENAI_API_KEY="..."
@@ -61,7 +64,6 @@ async def main() -> None:
         system_prompt=(
             "You are a helpful voice assistant. "
             "When the user says goodbye, use the end_call tool. "
-            "If they ask to speak to a human, use transfer_to_human. "
             "Be concise — you are speaking, not writing."
         ),
     )
@@ -71,18 +73,6 @@ async def main() -> None:
         """End the call gracefully. Use when the user says goodbye."""
         ctx.deps.actions.end_call(reason=reason)
         return "Ending the call now."
-
-    @voice_agent.tool
-    def transfer_to_human(ctx: RunContext[Deps], department: str) -> str:  # type: ignore[type-arg]
-        """Transfer the caller to a human agent in the specified department."""
-        ctx.deps.actions.transfer_call(department)
-        return f"Transferring you to {department}. Please hold."
-
-    @voice_agent.tool
-    def send_dtmf_tones(ctx: RunContext[Deps], digits: str) -> str:  # type: ignore[type-arg]
-        """Send DTMF tones (for navigating phone menus)."""
-        ctx.deps.actions.send_dtmf(digits)
-        return f"Sending tones: {digits}"
 
     adapter = PydanticAIAdapter(voice_agent, deps=deps)
 

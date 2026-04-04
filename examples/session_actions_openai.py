@@ -1,7 +1,10 @@
 """Session actions demo — OpenAI Agents SDK.
 
-Shows how agent tools can trigger session-level actions (end call,
-transfer, send DTMF) using the SessionActions queue.
+Shows the simplest session action that works on every transport: ending
+the session after the current reply finishes.
+
+For telephony-specific actions such as transfer, DTMF, and SMS, use the
+Twilio example instead: ``examples/twilio_app.py``.
 
 Setup:
   export OPENAI_API_KEY="..."
@@ -45,20 +48,6 @@ def end_call(ctx: RunContextWrapper[SessionActions], reason: str = "") -> str:
     return "Ending the call now."
 
 
-@function_tool
-def transfer_to_human(ctx: RunContextWrapper[SessionActions], department: str) -> str:
-    """Transfer the caller to a human agent in the specified department."""
-    ctx.context.transfer_call(department)
-    return f"Transferring you to {department}. Please hold."
-
-
-@function_tool
-def send_dtmf_tones(ctx: RunContextWrapper[SessionActions], digits: str) -> str:
-    """Send DTMF tones (for navigating phone menus)."""
-    ctx.context.send_dtmf(digits)
-    return f"Sending tones: {digits}"
-
-
 # ── Agent setup ──────────────────────────────────────────────────
 
 agent = Agent(
@@ -66,10 +55,9 @@ agent = Agent(
     instructions=(
         "You are a helpful voice assistant. "
         "When the user says goodbye, use the end_call tool. "
-        "If they ask to speak to a human, use transfer_to_human. "
         "Be concise — you are speaking, not writing."
     ),
-    tools=[end_call, transfer_to_human, send_dtmf_tones],
+    tools=[end_call],
 )
 
 

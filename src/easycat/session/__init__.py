@@ -6,12 +6,8 @@ from easycat.session._turn_context import TurnContext
 from easycat.session._types import Agent, SessionConfig, SessionHelper, TurnState
 from easycat.session.action_executors import CoreSessionActionExecutor
 from easycat.session.actions import (
-    ConferenceAction,
     CustomAction,
-    DTMFTarget,
     EndCallAction,
-    HoldAction,
-    ResumeAction,
     SendDTMFAction,
     SendSMSAction,
     SessionAction,
@@ -20,20 +16,15 @@ from easycat.session.actions import (
     SessionActions,
     SessionActionType,
     TransferCallAction,
-    TransferMode,
     TransferPlan,
 )
 
 __all__ = [
     "Agent",
     "AgentStreamResult",
-    "ConferenceAction",
     "CoreSessionActionExecutor",
     "CustomAction",
-    "DTMFTarget",
     "EndCallAction",
-    "HoldAction",
-    "ResumeAction",
     "SendDTMFAction",
     "SendSMSAction",
     "Session",
@@ -45,7 +36,6 @@ __all__ = [
     "SessionConfig",
     "SessionHelper",
     "TransferCallAction",
-    "TransferMode",
     "TransferPlan",
     "TurnContext",
     "TurnState",

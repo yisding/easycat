@@ -768,7 +768,7 @@ class Session:
         skips starting a new user turn.
 
         When a queued session action has ``no_interrupt=True`` (e.g. an
-        end-call or transfer with a farewell message), barge-in is
+        end-call or transfer announcement), barge-in is
         suppressed so the critical speech plays in full.
         """
         if self._session_actions is not None and self._session_actions.no_interrupt:

@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from easycat.session.actions import (
-    DTMFTarget,
     EndCallAction,
     SendDTMFAction,
     SendSMSAction,
@@ -16,13 +15,8 @@ from easycat.session.actions import (
     SessionActionExecutor,
     SessionActionResult,
     TransferCallAction,
-    TransferMode,
 )
-from easycat.telephony.twiml import (
-    twiml_dial_number,
-    twiml_play_digits,
-    twiml_say_and_hangup,
-)
+from easycat.telephony.twiml import twiml_dial_number, twiml_play_digits
 
 logger = logging.getLogger(__name__)
 
@@ -57,18 +51,10 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
 
         client = self._get_client()
         if isinstance(action, EndCallAction):
-            if action.farewell:
-                await self._update_call(
-                    client,
-                    call_sid,
-                    twiml=twiml_say_and_hangup(action.farewell),
-                )
-            else:
-                await self._update_call(client, call_sid, status="completed")
+            await self._update_call(client, call_sid, status="completed")
             return SessionActionResult(stop_session=True, metadata={"call_sid": call_sid})
 
         if isinstance(action, TransferCallAction):
-            self._validate_transfer_plan(action)
             twiml = twiml_dial_number(
                 action.target,
                 caller_id=action.plan.caller_id,
@@ -82,10 +68,6 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
             )
 
         if isinstance(action, SendDTMFAction):
-            if action.target_leg is not DTMFTarget.REMOTE:
-                raise RuntimeError(
-                    f"Twilio DTMF only supports target_leg={DTMFTarget.REMOTE.value}"
-                )
             digits = _apply_inter_digit_delay(action.digits, action.inter_digit_delay_ms)
             await self._update_call(client, call_sid, twiml=twiml_play_digits(digits))
             return SessionActionResult(metadata={"call_sid": call_sid, "digits": digits})
@@ -133,23 +115,6 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
         if status is not None:
             kwargs["status"] = status
         await asyncio.to_thread(client.calls(call_sid).update, **kwargs)
-
-    def _validate_transfer_plan(self, action: TransferCallAction) -> None:
-        supported_modes = {TransferMode.BLIND, TransferMode.WARM_MESSAGE}
-        if action.plan.mode not in supported_modes:
-            raise RuntimeError(
-                f"Twilio executor does not support transfer mode {action.plan.mode}"
-            )
-        if action.plan.operator_message:
-            raise RuntimeError("Twilio executor does not support operator_message yet")
-        if action.plan.summary_prompt:
-            raise RuntimeError("Twilio executor does not support summary_prompt yet")
-        if action.plan.hold_audio_url:
-            raise RuntimeError("Twilio executor does not support hold_audio_url yet")
-        if action.plan.fallback_message:
-            raise RuntimeError("Twilio executor does not support fallback_message yet")
-        if action.plan.sip_headers:
-            raise RuntimeError("Twilio executor does not support sip_headers yet")
 
 
 def _apply_inter_digit_delay(digits: str, inter_digit_delay_ms: int) -> str:

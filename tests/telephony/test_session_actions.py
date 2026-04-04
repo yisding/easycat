@@ -5,11 +5,9 @@ from __future__ import annotations
 import pytest
 
 from easycat.session.actions import (
-    DTMFTarget,
     SendDTMFAction,
     SendSMSAction,
     TransferCallAction,
-    TransferMode,
     TransferPlan,
 )
 from easycat.telephony.session_actions import (
@@ -66,7 +64,6 @@ async def test_twilio_transfer_action_updates_call_with_twiml() -> None:
     action = TransferCallAction(
         target="+15551234567",
         plan=TransferPlan(
-            mode=TransferMode.WARM_MESSAGE,
             client_message="Connecting you now.",
             post_dial_digits="ww1234",
         ),
@@ -86,7 +83,7 @@ async def test_twilio_transfer_action_updates_call_with_twiml() -> None:
 async def test_twilio_dtmf_action_inserts_delays() -> None:
     client = _FakeTwilioClient()
     executor = TwilioSessionActionExecutor(TwilioSessionActionConfig(client=client))
-    action = SendDTMFAction(digits="123", inter_digit_delay_ms=1000, target_leg=DTMFTarget.REMOTE)
+    action = SendDTMFAction(digits="123", inter_digit_delay_ms=1000)
 
     result = await executor.execute(_FakeSession(), action)
 
@@ -110,16 +107,3 @@ async def test_twilio_sms_action_uses_configured_from_number() -> None:
     assert client.messages.requests == [
         {"to": "+15551112222", "from_": "+15550001111", "body": "Here is your link."}
     ]
-
-
-@pytest.mark.asyncio
-async def test_twilio_transfer_rejects_unsupported_modes() -> None:
-    client = _FakeTwilioClient()
-    executor = TwilioSessionActionExecutor(TwilioSessionActionConfig(client=client))
-    action = TransferCallAction(
-        target="+15551234567",
-        plan=TransferPlan(mode=TransferMode.WARM_SUMMARY),
-    )
-
-    with pytest.raises(RuntimeError, match="does not support transfer mode"):
-        await executor.execute(_FakeSession(), action)
