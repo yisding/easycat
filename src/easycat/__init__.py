@@ -36,6 +36,7 @@ from easycat.agent_runner import (  # noqa: I001
 from easycat.agents.base import BaseAgentAdapter, serialize_output
 from easycat.agents.openai_agents import OpenAIAgentsAdapter, build_openai_agents_adapter
 from easycat.agents.pydantic_ai import PydanticAIAdapter
+from easycat.agents.pydantic_ai_workflow import PydanticAIWorkflowAdapter, WorkflowTurnResult
 from easycat.cancel import CancelToken
 from easycat.smart_turn import (
     SmartTurnConfig,
@@ -44,9 +45,27 @@ from easycat.smart_turn import (
     SmartTurnResult,
     create_smart_turn,
 )
+from easycat.session.action_executors import CoreSessionActionExecutor
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig, TurnState
-from easycat.session.actions import SessionAction, SessionActions, SessionActionType
+from easycat.session.actions import (
+    ConferenceAction,
+    CustomAction,
+    DTMFTarget,
+    EndCallAction,
+    HoldAction,
+    ResumeAction,
+    SendDTMFAction,
+    SendSMSAction,
+    SessionAction,
+    SessionActionExecutor,
+    SessionActionResult,
+    SessionActions,
+    SessionActionType,
+    TransferCallAction,
+    TransferMode,
+    TransferPlan,
+)
 from easycat.session_manager import SessionManager
 from easycat.turn_manager import TurnMode
 from easycat.llm_output_processing import (
@@ -105,7 +124,9 @@ from easycat.events import (
     STTFinal,
     STTPartial,
     SessionActionCompleted,
+    SessionActionFailed,
     SessionActionRequested,
+    SessionActionStarted,
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
@@ -179,6 +200,10 @@ from easycat.transports.twilio_media import (
     TwilioTransport,
     TwilioTransportConfig,
 )
+from easycat.telephony.session_actions import (
+    TwilioSessionActionConfig,
+    TwilioSessionActionExecutor,
+)
 from easycat.transports.webrtc import ICEServer, WebRTCTransport, WebRTCTransportConfig
 from easycat.transports.websocket import (
     WebSocketConnectionTransport,
@@ -199,12 +224,26 @@ from easycat.tracing import Tracer, TraceExporter
 
 __all__ = [
     # Core session & agent
+    "ConferenceAction",
+    "CoreSessionActionExecutor",
+    "CustomAction",
+    "DTMFTarget",
+    "EndCallAction",
+    "HoldAction",
+    "ResumeAction",
+    "SendDTMFAction",
+    "SendSMSAction",
     "Session",
     "SessionAction",
+    "SessionActionExecutor",
+    "SessionActionResult",
     "SessionActionType",
     "SessionActions",
     "SessionConfig",
     "TurnState",
+    "TransferCallAction",
+    "TransferMode",
+    "TransferPlan",
     "TurnMode",
     "SessionManager",
     "EasyCatConfig",
@@ -222,6 +261,8 @@ __all__ = [
     "BaseAgentAdapter",
     "OpenAIAgentsAdapter",
     "PydanticAIAdapter",
+    "PydanticAIWorkflowAdapter",
+    "WorkflowTurnResult",
     "build_openai_agents_adapter",
     "serialize_output",
     "CancelToken",
@@ -269,7 +310,9 @@ __all__ = [
     "STTFinal",
     "STTPartial",
     "SessionActionCompleted",
+    "SessionActionFailed",
     "SessionActionRequested",
+    "SessionActionStarted",
     "ToolCallDelta",
     "ToolCallResult",
     "ToolCallStarted",
@@ -340,6 +383,8 @@ __all__ = [
     "WebSocketConnectionTransport",
     "TwilioTransport",
     "TwilioTransportConfig",
+    "TwilioSessionActionConfig",
+    "TwilioSessionActionExecutor",
     "TwilioConnectionTransport",
     # Configuration & errors
     "TimeoutConfig",

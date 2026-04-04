@@ -1,7 +1,7 @@
 # EasyCat
 
 Slim, batteries-included voice bot framework that plugs into idiomatic
-OpenAI Agents SDK or PydanticAI agents.
+OpenAI Agents SDK, PydanticAI agents, or PydanticAI workflows.
 
 ## Current capabilities
 - Session runtime that wires the audio pipeline (noise reduction -> VAD -> STT -> agent -> TTS)
@@ -14,10 +14,11 @@ OpenAI Agents SDK or PydanticAI agents.
 - Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers
 - Reliability/observability: reconnecting WebSocket, timeouts, bounded queues, metrics/tracing
 - Agent adapters: use OpenAI Agents SDK or PydanticAI directly and wrap with EasyCat
+- Workflow adapter: use a stateful PydanticAI workflow as the session boundary
 
 ## Bring your own agent
-EasyCat does not replace your agent framework. Build your agent with your SDK of
-choice, then wrap it with an EasyCat adapter when creating a session.
+EasyCat does not replace your agent framework. Build your agent or workflow with
+your SDK of choice, then wrap it with an EasyCat adapter when creating a session.
 
 ### Quickstart (EasyCatConfig)
 ```python
@@ -237,6 +238,58 @@ adapter = PydanticAIAdapter(pydantic_agent)
 session = Session(SessionConfig(agent=adapter, ...))
 ```
 
+### PydanticAI workflows (recommended for voice apps)
+
+For many voice apps, the best PydanticAI integration point is not a single
+agent but a workflow object that owns the current specialist/step and decides
+which PydanticAI agent handles each user turn.
+
+This maps well to PydanticAI's programmatic hand-off style:
+- the caller can stay pinned to one specialist across turns
+- you do not pay an extra router-model call on every turn
+- the workflow can keep private per-agent histories while EasyCat only sees the
+  spoken response for the current turn
+
+```python
+from easycat import EasyCatConfig, create_session
+from easycat.agents import WorkflowTurnResult
+
+
+class BookingWorkflow:
+    def __init__(self) -> None:
+        self.active_agent_id = "flight_search"
+        self.flight = None
+
+    async def on_user_turn(self, text: str) -> str | WorkflowTurnResult:
+        if self.flight is None:
+            self.flight = {"flight_number": "AK456"}
+            self.active_agent_id = "seat_selection"
+            return WorkflowTurnResult(
+                text="I found flight AK456. What seat would you like?",
+                structured_output=self.flight,
+                active_agent_id=self.active_agent_id,
+            )
+
+        return WorkflowTurnResult(
+            text="Got it. I saved seat 1A for you.",
+            structured_output={"row": 1, "seat": "A"},
+            active_agent_id=self.active_agent_id,
+        )
+
+
+workflow = BookingWorkflow()
+
+config = EasyCatConfig(
+    openai_api_key="your-api-key",
+    agent=workflow,  # auto-adapted to PydanticAIWorkflowAdapter
+)
+session = create_session(config)
+```
+
+Use `PydanticAIAdapter` for simple single-agent assistants. Use
+`PydanticAIWorkflowAdapter` when your voice app has step-based control flow,
+specialist pinning, or programmatic hand-offs between turns.
+
 ## Examples
 Runnable examples live in the `examples/` directory:
 - `local_chat.py`: local microphone/speaker loop
@@ -244,7 +297,9 @@ Runnable examples live in the `examples/` directory:
 - `ws_browser_example.py`: browser mic/speaker over WebSocket + static web client
 - `webrtc_server.py`: WebRTC voice chat with browser client
 - `twilio_app.py`: Twilio Media Streams example
-- `pydantic_ai_voice.py`: PydanticAI adapter example
+- `pydantic_ai_voice.py`: single-agent PydanticAI example
+- `pydantic_ai_workflow_voice.py`: workflow-level PydanticAI example
+- `pydantic_ai_support_workflow.py`: pinned-specialist support workflow example
 
 ### Quickstart: WebRTC in browser (fast path)
 1. Install extras:

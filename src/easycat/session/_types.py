@@ -19,7 +19,7 @@ from easycat.providers import (
     TTSProvider,
     VADProvider,
 )
-from easycat.session.actions import SessionActions
+from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.timeouts import TimeoutConfig
 from easycat.tracing import Tracer
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
@@ -115,3 +115,4 @@ class SessionConfig:
 
     # Agent-initiated session actions.
     session_actions: SessionActions | None = None
+    action_executors: Sequence[SessionActionExecutor] = ()

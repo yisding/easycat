@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from easycat.audio_format import AudioChunk
-from easycat.session.actions import SessionActionType
+from easycat.session.actions import SessionAction, SessionActionResult
 
 logger = logging.getLogger(__name__)
 
@@ -321,19 +321,35 @@ class Error(Event):
 
 @dataclass(frozen=True)
 class SessionActionRequested(Event):
-    """An agent tool requested a session-level action (end_call, transfer, etc.)."""
+    """A session action has been dequeued and is about to run."""
 
-    action_type: SessionActionType
-    data: dict[str, Any] = field(default_factory=dict)
+    action: SessionAction
+
+
+@dataclass(frozen=True)
+class SessionActionStarted(Event):
+    """A session action has started executing."""
+
+    action: SessionAction
+    executor: str
 
 
 @dataclass(frozen=True)
 class SessionActionCompleted(Event):
-    """A session-level action has been executed."""
+    """A session action completed successfully."""
 
-    action_type: SessionActionType
-    success: bool = True
-    error: str | None = None
+    action: SessionAction
+    executor: str
+    result: SessionActionResult = field(default_factory=SessionActionResult)
+
+
+@dataclass(frozen=True)
+class SessionActionFailed(Event):
+    """A session action failed or had no supporting executor."""
+
+    action: SessionAction
+    error: str
+    executor: str | None = None
 
 
 # ── Event groups ─────────────────────────────────────────────────────
@@ -366,7 +382,12 @@ TELEPHONY_EVENTS: tuple[type[Event], ...] = (
     CallEnded,
 )
 ERROR_EVENTS: tuple[type[Event], ...] = (Error,)
-ACTION_EVENTS: tuple[type[Event], ...] = (SessionActionRequested, SessionActionCompleted)
+ACTION_EVENTS: tuple[type[Event], ...] = (
+    SessionActionRequested,
+    SessionActionStarted,
+    SessionActionCompleted,
+    SessionActionFailed,
+)
 
 ALL_EVENTS: tuple[type[Event], ...] = (
     AUDIO_EVENTS

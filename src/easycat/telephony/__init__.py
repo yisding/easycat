@@ -35,12 +35,18 @@ from easycat.telephony.screening import (
     is_conversational,
     match_screening_platform,
 )
+from easycat.telephony.session_actions import (
+    TwilioSessionActionConfig,
+    TwilioSessionActionExecutor,
+)
 from easycat.telephony.twiml import (
     parse_gather_webhook,
+    twiml_dial_number,
     twiml_dial_send_digits,
     twiml_gather,
     twiml_hangup,
     twiml_play_digits,
+    twiml_say_and_hangup,
 )
 from easycat.telephony.voicemail import (
     TWILIO_AMD_MAP,
@@ -65,10 +71,12 @@ __all__ = [
     "parse_twilio_dtmf_message",
     # TwiML helpers
     "parse_gather_webhook",
+    "twiml_dial_number",
     "twiml_dial_send_digits",
     "twiml_gather",
     "twiml_hangup",
     "twiml_play_digits",
+    "twiml_say_and_hangup",
     # Voicemail
     "BeepDetectorConfig",
     "VoicemailDetector",
@@ -86,6 +94,9 @@ __all__ = [
     "OutboundCallManagerState",
     "emit_call_status",
     "parse_call_status_callback",
+    # Session actions
+    "TwilioSessionActionConfig",
+    "TwilioSessionActionExecutor",
     # Call screening
     "CallScreeningDetector",
     "ScreeningPatternSet",
