@@ -26,8 +26,23 @@ def auto_adapt_agent(agent: Any) -> Any:
     if isinstance(agent, BaseAgentAdapter):
         return agent
 
-    if callable(getattr(agent, "on_user_turn", None)):
-        return PydanticAIWorkflowAdapter(agent)
+    on_user_turn = getattr(agent, "on_user_turn", None)
+    if callable(on_user_turn) and not isinstance(agent, type):
+        import inspect as _inspect
+
+        try:
+            sig = _inspect.signature(on_user_turn)
+            # Must accept at least one positional argument (text)
+            positional = [
+                p
+                for p in sig.parameters.values()
+                if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+                and p.default is p.empty
+            ]
+            if len(positional) >= 1:
+                return PydanticAIWorkflowAdapter(agent)
+        except (ValueError, TypeError):
+            return PydanticAIWorkflowAdapter(agent)
 
     try:
         from pydantic_ai import Agent as PydanticAgent
