@@ -14,6 +14,10 @@ from easycat.smart_turn import SmartTurnConfig
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.telephony.dtmf import emit_twilio_dtmf
+from easycat.telephony.session_actions import (
+    TwilioSessionActionConfig,
+    TwilioSessionActionExecutor,
+)
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransportConfig
@@ -180,6 +184,30 @@ def test_create_session_adds_event_trace_logger_when_enabled():
 
     assert any(
         type(helper).__name__ == "EventTraceLogger" for helper in session._telephony_helpers
+    )
+
+
+def test_create_session_adds_twilio_action_executor_when_configured():
+    config = EasyCatConfig(
+        openai_api_key="test-key",
+        agent=_DummyAgent(),
+        telephony=TelephonyConfig(
+            twilio_actions=TwilioSessionActionConfig(
+                account_sid="AC123",
+                auth_token="secret",
+            )
+        ),
+    )
+
+    try:
+        session = create_session(config)
+    except RuntimeError as exc:
+        if "No VAD backend available" in str(exc):
+            pytest.skip("No VAD backend available")
+        raise
+
+    assert any(
+        isinstance(executor, TwilioSessionActionExecutor) for executor in session._action_executors
     )
 
 

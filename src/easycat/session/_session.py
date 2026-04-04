@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
@@ -33,7 +33,9 @@ from easycat.events import (
     PlaybackMarkAck,
     ReconnectSuccess,
     SessionActionCompleted,
+    SessionActionFailed,
     SessionActionRequested,
+    SessionActionStarted,
     STTEventType,
     STTFinal,
     STTPartial,
@@ -74,7 +76,8 @@ from easycat.session._types import (
     SessionHelper,
     TurnState,
 )
-from easycat.session.actions import SessionAction, SessionActionType
+from easycat.session.action_executors import CoreSessionActionExecutor
+from easycat.session.actions import SessionAction, SessionActionExecutor
 from easycat.strip_markdown import strip_markdown
 from easycat.stubs import (
     NoopAgent,
@@ -96,12 +99,10 @@ from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
 
-# Sentinel returned by action handlers that want the session to stop
-# *after* the full drain loop finishes (avoids teardown mid-iteration).
-_DEFERRED_STOP = object()
 
-# Type alias for session action handlers
-_ActionHandler = Callable[[SessionAction], Awaitable[Any]]
+@dataclass(slots=True)
+class _ActionDrainOutcome:
+    stop_session: bool = False
 
 
 class Session:
@@ -216,11 +217,10 @@ class Session:
 
         # Agent-initiated session actions
         self._session_actions = cfg.session_actions
-        self._action_handlers: dict[SessionActionType, _ActionHandler] = {
-            SessionActionType.END_CALL: self._handle_end_call,
-            SessionActionType.TRANSFER_CALL: self._handle_transfer_call,
-            SessionActionType.SEND_DTMF: self._handle_send_dtmf,
-        }
+        self._action_executors: list[SessionActionExecutor] = [
+            *cfg.action_executors,
+            CoreSessionActionExecutor(),
+        ]
 
         # Metrics counters
         if self._metrics:
@@ -550,11 +550,16 @@ class Session:
         if not self._is_running:
             return
         self._is_running = False
+        current_task = asyncio.current_task()
 
         if self._turn:
             self._turn.cancel_token.cancel()
 
-        if self._pipeline_task and not self._pipeline_task.done():
+        if (
+            self._pipeline_task
+            and self._pipeline_task is not current_task
+            and not self._pipeline_task.done()
+        ):
             self._pipeline_task.cancel()
             try:
                 await self._pipeline_task
@@ -688,105 +693,61 @@ class Session:
 
     # ── Session actions ───────────────────────────────────────
 
-    def register_action_handler(
-        self,
-        action_type: SessionActionType,
-        handler: Callable[[SessionAction], Awaitable[Any]],
-    ) -> None:
-        """Register a handler for a session action type.
+    def register_action_executor(self, executor: SessionActionExecutor) -> None:
+        """Register a session action executor.
 
-        Handlers are ``async def handler(action: SessionAction) -> None``
-        callables.  Replaces any existing handler for the given type.
+        Executors are tried in the order they were registered. The first
+        executor whose ``supports(...)`` method returns true handles the action.
         """
-        self._action_handlers[action_type] = handler
+        self._action_executors.insert(0, executor)
 
-    async def _drain_session_actions(self) -> None:
-        """Execute any session actions queued by agent tools during this turn.
-
-        Handlers that require stopping the session (end_call, transfer)
-        return a ``_deferred_stop`` flag rather than calling ``stop()``
-        inline, so the full drain loop completes before teardown begins.
-        """
+    async def _drain_session_actions(self) -> _ActionDrainOutcome:
+        """Execute any session actions queued by agent tools during this turn."""
+        outcome = _ActionDrainOutcome()
         if self._session_actions is None or not self._session_actions.has_pending:
-            return
+            return outcome
 
         actions = self._session_actions.drain()
-        should_stop = False
-        deferred_action_types: list[str] = []
         for action in actions:
+            await self._emit(SessionActionRequested(action=action))
+            executor = self._find_action_executor(action)
+            if executor is None:
+                error = f"No session action executor for {action.type}"
+                logger.warning(error)
+                await self._emit(SessionActionFailed(action=action, error=error))
+                continue
+
+            executor_name = type(executor).__name__
+            await self._emit(SessionActionStarted(action=action, executor=executor_name))
+            try:
+                result = await executor.execute(self, action)
+            except Exception as exc:
+                logger.exception("Session action executor failed: %s", action.type)
+                await self._emit(
+                    SessionActionFailed(
+                        action=action,
+                        executor=executor_name,
+                        error=str(exc),
+                    )
+                )
+                continue
+
+            outcome.stop_session = outcome.stop_session or result.stop_session
             await self._emit(
-                SessionActionRequested(
-                    action_type=action.type,
-                    data=dict(action.data),
+                SessionActionCompleted(
+                    action=action,
+                    executor=executor_name,
+                    result=result,
                 )
             )
-            handler = self._action_handlers.get(action.type)
-            if handler is not None:
-                try:
-                    result = await handler(action)
-                    if result is _DEFERRED_STOP:
-                        should_stop = True
-                        deferred_action_types.append(action.type)
-                    else:
-                        await self._emit(SessionActionCompleted(action_type=action.type))
-                except Exception as exc:
-                    logger.exception("Session action handler failed: %s", action.type)
-                    await self._emit(
-                        SessionActionCompleted(
-                            action_type=action.type,
-                            success=False,
-                            error=str(exc),
-                        )
-                    )
-            elif action.type == SessionActionType.CUSTOM:
-                logger.warning(
-                    "No handler for custom action: %s",
-                    action.data.get("action_type"),
-                )
-            else:
-                logger.warning("No handler for session action: %s", action.type)
 
-        if should_stop:
-            try:
-                await self.stop()
-                for action_type in deferred_action_types:
-                    await self._emit(SessionActionCompleted(action_type=action_type))
-            except Exception as exc:
-                for action_type in deferred_action_types:
-                    await self._emit(
-                        SessionActionCompleted(
-                            action_type=action_type,
-                            success=False,
-                            error=str(exc),
-                        )
-                    )
+        return outcome
 
-    async def _handle_end_call(self, action: SessionAction) -> object:
-        """Built-in handler: gracefully stop the session (deferred)."""
-        logger.info("Agent requested end_call: %s", action.data.get("reason", ""))
-        return _DEFERRED_STOP
-
-    async def _handle_transfer_call(self, action: SessionAction) -> object:
-        """Built-in handler: transfer the call (deferred stop).
-
-        The ``SessionActionRequested`` event has already been emitted by
-        :meth:`_drain_session_actions`.  Platform-specific transfer logic
-        (e.g. Twilio REST API update with TwiML ``<Dial>``) should be
-        implemented by subscribing to ``SessionActionRequested`` events.
-        After emitting the event, stops the session.
-        """
-        logger.info("Agent requested transfer_call to %s", action.data.get("target"))
-        return _DEFERRED_STOP
-
-    async def _handle_send_dtmf(self, action: SessionAction) -> None:
-        """Built-in handler: send DTMF tones.
-
-        The ``SessionActionRequested`` event has already been emitted by
-        :meth:`_drain_session_actions`.  Platform-specific DTMF delivery
-        (e.g. Twilio REST API or ``DTMFDelivery``) should be implemented
-        by subscribing to ``SessionActionRequested`` events.
-        """
-        logger.info("Agent requested send_dtmf: %s", action.data.get("digits", ""))
+    def _find_action_executor(self, action: SessionAction) -> SessionActionExecutor | None:
+        for executor in self._action_executors:
+            if executor.supports(action):
+                return executor
+        return None
 
     # ── Push-to-talk helpers ───────────────────────────────────
 
@@ -1123,9 +1084,11 @@ class Session:
                 (time.monotonic() - turn.stt_final_time) * 1000,
             )
 
-        await self._synthesize_tts(
+        action_outcome = await self._synthesize_tts(
             self._prepare_tts_payload(agent_response, is_streaming=False, is_final=True), token
         )
+        if action_outcome.stop_session:
+            await self.stop()
 
     # ── Streaming agent path ───────────────────────────────────
 
@@ -1140,12 +1103,14 @@ class Session:
         tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
         tts_playback_started = False
         tts_chunks: list[tuple[str, int, bool]] = []
+        tts_action_outcome = _ActionDrainOutcome()
 
         self._spans.start(Tracer.AGENT)
 
         # ── TTS consumer task ──
 
         async def _process_tts() -> None:
+            nonlocal tts_action_outcome
             nonlocal tts_playback_started
             started = False
             try:
@@ -1202,12 +1167,16 @@ class Session:
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 # Drain session actions (end_call, transfer) BEFORE
                 # transitioning to IDLE so no new turn can sneak in.
-                await self._drain_session_actions()
-                await self._turn_manager.bot_stopped_speaking()
-                # Wait for queued audio to drain so _drain_outbound_audio
-                # can still call turn.record_audio_sent() and emit playback
-                # marks for the tail of this turn's audio.
-                await self._wait_outbound_drain()
+                tts_action_outcome = await self._drain_session_actions()
+                if tts_action_outcome.stop_session:
+                    await self._wait_outbound_drain()
+                    await self._turn_manager.bot_stopped_speaking()
+                else:
+                    await self._turn_manager.bot_stopped_speaking()
+                    # Wait for queued audio to drain so _drain_outbound_audio
+                    # can still call turn.record_audio_sent() and emit playback
+                    # marks for the tail of this turn's audio.
+                    await self._wait_outbound_drain()
                 self._spans.finish("turn")
                 # Only clear if a new turn hasn't started during the drain.
                 if self._turn is turn:
@@ -1311,6 +1280,10 @@ class Session:
             ack_tail_cap_ms=self._interruption_ack_tail_cap_ms,
         )
 
+        if tts_action_outcome.stop_session:
+            await self.stop()
+            return
+
         # If a newer turn started (e.g. barge-in), avoid clobbering its state.
         if self._turn is turn:
             if self._turn_manager.state != TurnManagerState.IDLE:
@@ -1332,8 +1305,11 @@ class Session:
 
     # ── TTS synthesis helper ───────────────────────────────────
 
-    async def _synthesize_tts(self, payload: TTSInput | str, token: CancelToken | None) -> None:
+    async def _synthesize_tts(
+        self, payload: TTSInput | str, token: CancelToken | None
+    ) -> _ActionDrainOutcome:
         """Synthesize TTS for a complete payload and emit audio events."""
+        action_outcome = _ActionDrainOutcome()
         if isinstance(payload, str):
             payload = self._prepare_tts_payload(payload, is_streaming=False, is_final=True)
         turn = self._turn
@@ -1364,9 +1340,13 @@ class Session:
             ):
                 # Drain session actions (end_call, transfer) BEFORE
                 # transitioning to IDLE so no new turn can sneak in.
-                await self._drain_session_actions()
-                await self._turn_manager.bot_stopped_speaking()
-                await self._wait_outbound_drain()
+                action_outcome = await self._drain_session_actions()
+                if action_outcome.stop_session:
+                    await self._wait_outbound_drain()
+                    await self._turn_manager.bot_stopped_speaking()
+                else:
+                    await self._turn_manager.bot_stopped_speaking()
+                    await self._wait_outbound_drain()
                 self._spans.finish("turn")
                 # Only clear if a new turn hasn't started during the drain.
                 if self._turn is turn:
@@ -1380,6 +1360,7 @@ class Session:
                 # and send playback marks.
                 self._auto_turn_speech_frames = 0
                 self._turn_manager.reset()
+        return action_outcome
 
     # ── Internal helpers ───────────────────────────────────────
 
@@ -1518,7 +1499,12 @@ class Session:
 
     async def _cancel_tts(self) -> None:
         await self._tts_synth.cancel()
-        if self._current_tts_task and not self._current_tts_task.done():
+        current_task = asyncio.current_task()
+        if (
+            self._current_tts_task
+            and self._current_tts_task is not current_task
+            and not self._current_tts_task.done()
+        ):
             self._current_tts_task.cancel()
             try:
                 await self._current_tts_task

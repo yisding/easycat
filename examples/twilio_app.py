@@ -3,6 +3,9 @@
 Setup:
   export OPENAI_API_KEY="..."
   export TWILIO_STREAM_URL="wss://your-public-host:8766"
+  export TWILIO_ACCOUNT_SID="AC..."
+  export TWILIO_AUTH_TOKEN="..."
+  export TWILIO_SMS_FROM="+15551234567"  # optional, enables send_sms actions
   uv sync --extra telephony --extra openai-agents
   uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0 --port 8000
 """
@@ -21,6 +24,7 @@ from easycat import (
     SessionManager,
     TelephonyConfig,
     TwilioConnectionTransport,
+    TwilioSessionActionConfig,
     attach_runtime_feedback,
     build_openai_agents_adapter,
     create_session,
@@ -34,20 +38,30 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
     stream_url = stream_url or os.getenv("TWILIO_STREAM_URL")
     if not api_key or not stream_url:
         raise RuntimeError("OPENAI_API_KEY and TWILIO_STREAM_URL are required.")
+    twilio_account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    twilio_auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    twilio_sms_from = os.getenv("TWILIO_SMS_FROM", "")
 
     manager: SessionManager[int] = SessionManager()
 
     async def handle_twilio_connection(ws: ServerConnection) -> None:
         adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
         transport = TwilioConnectionTransport(ws)
+        telephony = TelephonyConfig(
+            enable_dtmf_aggregator=True,
+            enable_voicemail_detector=True,
+        )
+        if twilio_account_sid and twilio_auth_token:
+            telephony.twilio_actions = TwilioSessionActionConfig(
+                account_sid=twilio_account_sid,
+                auth_token=twilio_auth_token,
+                sms_from_number=twilio_sms_from,
+            )
         session = create_session(
             EasyCatConfig(
                 openai_api_key=api_key,
                 transport=transport,
-                telephony=TelephonyConfig(
-                    enable_dtmf_aggregator=True,
-                    enable_voicemail_detector=True,
-                ),
+                telephony=telephony,
                 agent=adapter,
                 event_logging=default_event_logging(),
             )

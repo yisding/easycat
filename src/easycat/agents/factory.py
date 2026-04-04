@@ -7,6 +7,7 @@ from typing import Any
 from easycat.agents.base import BaseAgentAdapter
 from easycat.agents.openai_agents import OpenAIAgentsAdapter
 from easycat.agents.pydantic_ai import PydanticAIAdapter
+from easycat.agents.pydantic_ai_workflow import PydanticAIWorkflowAdapter
 
 
 def auto_adapt_agent(agent: Any) -> Any:
@@ -16,6 +17,7 @@ def auto_adapt_agent(agent: Any) -> Any:
     instance to :func:`easycat.create_session`.
 
     Supported auto-detected frameworks:
+    - workflow objects with ``on_user_turn(...)`` -> :class:`PydanticAIWorkflowAdapter`
     - ``pydantic_ai.Agent`` -> :class:`PydanticAIAdapter`
     - ``agents.Agent`` (OpenAI Agents SDK) -> :class:`OpenAIAgentsAdapter`
 
@@ -23,6 +25,9 @@ def auto_adapt_agent(agent: Any) -> Any:
     """
     if isinstance(agent, BaseAgentAdapter):
         return agent
+
+    if callable(getattr(agent, "on_user_turn", None)):
+        return PydanticAIWorkflowAdapter(agent)
 
     try:
         from pydantic_ai import Agent as PydanticAgent
