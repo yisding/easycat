@@ -712,6 +712,7 @@ class Session:
 
         actions = self._session_actions.drain()
         should_stop = False
+        deferred_action_types: list[str] = []
         for action in actions:
             await self._emit(
                 SessionActionRequested(
@@ -725,7 +726,9 @@ class Session:
                     result = await handler(action)
                     if result is _DEFERRED_STOP:
                         should_stop = True
-                    await self._emit(SessionActionCompleted(action_type=action.type))
+                        deferred_action_types.append(action.type)
+                    else:
+                        await self._emit(SessionActionCompleted(action_type=action.type))
                 except Exception as exc:
                     logger.exception("Session action handler failed: %s", action.type)
                     await self._emit(
@@ -744,7 +747,19 @@ class Session:
                 logger.warning("No handler for session action: %s", action.type)
 
         if should_stop:
-            await self.stop()
+            try:
+                await self.stop()
+                for action_type in deferred_action_types:
+                    await self._emit(SessionActionCompleted(action_type=action_type))
+            except Exception as exc:
+                for action_type in deferred_action_types:
+                    await self._emit(
+                        SessionActionCompleted(
+                            action_type=action_type,
+                            success=False,
+                            error=str(exc),
+                        )
+                    )
 
     async def _handle_end_call(self, action: SessionAction) -> object:
         """Built-in handler: gracefully stop the session (deferred)."""
