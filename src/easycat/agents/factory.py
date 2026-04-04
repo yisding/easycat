@@ -36,8 +36,7 @@ def auto_adapt_agent(agent: Any) -> Any:
             positional = [
                 p
                 for p in sig.parameters.values()
-                if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
-                and p.default is p.empty
+                if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
             ]
             if len(positional) >= 1:
                 return PydanticAIWorkflowAdapter(agent)
