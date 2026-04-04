@@ -281,11 +281,28 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
                             output_text_parts, replacement_segments
                         ):
                             part["text"] = replacement_segment
+                        self._queue_history_patch_note(text)
                         return
                 elif isinstance(content, str):
                     item["content"] = text
+                    self._queue_history_patch_note(text)
                     return
                 break
+
+    def _queue_history_patch_note(self, spoken_text: str) -> None:
+        """Queue a developer note when server-managed history diverges from spoken text.
+
+        When ``previous_response_id`` is active, local history patches (e.g.
+        markdown stripping) are invisible to the server.  This queues a note
+        so the next turn informs the model what was actually spoken.
+        """
+        if self._use_previous_response_id and self._previous_response_id is not None:
+            # Don't overwrite a pending interruption — it already conveys partial delivery
+            if self._pending_interruption is None:
+                self._pending_interruption = (
+                    "[Note: the assistant's last response was spoken to the user as: "
+                    f'"{spoken_text}"]'
+                )
 
     # ── Helpers ────────────────────────────────────────────────
 
