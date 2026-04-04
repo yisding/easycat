@@ -49,12 +49,8 @@ from easycat.session.action_executors import CoreSessionActionExecutor
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig, TurnState
 from easycat.session.actions import (
-    ConferenceAction,
     CustomAction,
-    DTMFTarget,
     EndCallAction,
-    HoldAction,
-    ResumeAction,
     SendDTMFAction,
     SendSMSAction,
     SessionAction,
@@ -63,7 +59,6 @@ from easycat.session.actions import (
     SessionActions,
     SessionActionType,
     TransferCallAction,
-    TransferMode,
     TransferPlan,
 )
 from easycat.session_manager import SessionManager
@@ -224,13 +219,9 @@ from easycat.tracing import Tracer, TraceExporter
 
 __all__ = [
     # Core session & agent
-    "ConferenceAction",
     "CoreSessionActionExecutor",
     "CustomAction",
-    "DTMFTarget",
     "EndCallAction",
-    "HoldAction",
-    "ResumeAction",
     "SendDTMFAction",
     "SendSMSAction",
     "Session",
@@ -242,7 +233,6 @@ __all__ = [
     "SessionConfig",
     "TurnState",
     "TransferCallAction",
-    "TransferMode",
     "TransferPlan",
     "TurnMode",
     "SessionManager",

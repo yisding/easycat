@@ -23,16 +23,13 @@ from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig
 from easycat.session.actions import (
     CustomAction,
-    DTMFTarget,
     EndCallAction,
-    HoldAction,
     SendDTMFAction,
     SessionAction,
     SessionActionExecutor,
     SessionActionResult,
     SessionActions,
     TransferCallAction,
-    TransferMode,
     TransferPlan,
 )
 from easycat.tts.input import TTSInput
@@ -131,20 +128,18 @@ class RecordingExecutor(SessionActionExecutor):
 class TestSessionActionsQueue:
     def test_end_call_enqueues_typed_action(self) -> None:
         actions = SessionActions()
-        actions.end_call(reason="goodbye", farewell="Talk soon.")
+        actions.end_call(reason="goodbye")
 
         drained = actions.drain()
 
         assert len(drained) == 1
         assert isinstance(drained[0], EndCallAction)
         assert drained[0].reason == "goodbye"
-        assert drained[0].farewell == "Talk soon."
         assert drained[0].no_interrupt is True
 
     def test_transfer_call_enqueues_plan(self) -> None:
         actions = SessionActions()
         plan = TransferPlan(
-            mode=TransferMode.WARM_MESSAGE,
             client_message="Connecting you now.",
             post_dial_digits="ww1234",
         )
@@ -160,7 +155,7 @@ class TestSessionActionsQueue:
 
     def test_send_dtmf_enqueues_typed_action(self) -> None:
         actions = SessionActions()
-        actions.send_dtmf("1234#", inter_digit_delay_ms=250, target_leg=DTMFTarget.REMOTE)
+        actions.send_dtmf("1234#", inter_digit_delay_ms=250)
 
         drained = actions.drain()
 
@@ -222,7 +217,7 @@ async def test_drain_session_actions_uses_executor_and_emits_lifecycle_events() 
 @pytest.mark.asyncio
 async def test_drain_session_actions_emits_failure_when_unsupported() -> None:
     actions = SessionActions()
-    actions.hold(message="Please hold.")
+    actions.request("unsupported")
     session = Session(_config(session_actions=actions))
 
     failures: list[SessionActionFailed] = []
@@ -232,7 +227,7 @@ async def test_drain_session_actions_emits_failure_when_unsupported() -> None:
 
     assert outcome.stop_session is False
     assert len(failures) == 1
-    assert isinstance(failures[0].action, HoldAction)
+    assert isinstance(failures[0].action, CustomAction)
     assert "No session action executor" in failures[0].error
 
 
