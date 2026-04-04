@@ -112,6 +112,7 @@ class PydanticAIWorkflowAdapter(BaseAgentAdapter):
                 continue
             result = fn()
             if inspect.isawaitable(result):
+                result.close()
                 logger.warning(
                     "Ignoring awaitable returned by workflow.%s(); clear_history() must be sync",
                     method_name,
