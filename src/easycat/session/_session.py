@@ -11,7 +11,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
@@ -32,6 +32,10 @@ from easycat.events import (
     Interruption,
     PlaybackMarkAck,
     ReconnectSuccess,
+    SessionActionCompleted,
+    SessionActionFailed,
+    SessionActionRequested,
+    SessionActionStarted,
     STTEventType,
     STTFinal,
     STTPartial,
@@ -72,6 +76,8 @@ from easycat.session._types import (
     SessionHelper,
     TurnState,
 )
+from easycat.session.action_executors import CoreSessionActionExecutor
+from easycat.session.actions import SessionAction, SessionActionExecutor
 from easycat.strip_markdown import strip_markdown
 from easycat.stubs import (
     NoopAgent,
@@ -92,6 +98,11 @@ from easycat.tts_synthesizer import TTSSynthesizer
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _ActionDrainOutcome:
+    stop_session: bool = False
 
 
 class Session:
@@ -203,6 +214,13 @@ class Session:
         self._audio_gate = cfg.audio_gate
         self._health_checkers: list[PeriodicHealthChecker] = []
         self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)
+
+        # Agent-initiated session actions
+        self._session_actions = cfg.session_actions
+        self._action_executors: list[SessionActionExecutor] = [
+            *cfg.action_executors,
+            CoreSessionActionExecutor(),
+        ]
 
         # Metrics counters
         if self._metrics:
@@ -532,11 +550,16 @@ class Session:
         if not self._is_running:
             return
         self._is_running = False
+        current_task = asyncio.current_task()
 
         if self._turn:
             self._turn.cancel_token.cancel()
 
-        if self._pipeline_task and not self._pipeline_task.done():
+        if (
+            self._pipeline_task
+            and self._pipeline_task is not current_task
+            and not self._pipeline_task.done()
+        ):
             self._pipeline_task.cancel()
             try:
                 await self._pipeline_task
@@ -668,6 +691,64 @@ class Session:
         self._reset_turn_state()
         self._spans.finish_all(SpanStatus.CANCELLED)
 
+    # ── Session actions ───────────────────────────────────────
+
+    def register_action_executor(self, executor: SessionActionExecutor) -> None:
+        """Register a session action executor.
+
+        Executors are tried in the order they were registered. The first
+        executor whose ``supports(...)`` method returns true handles the action.
+        """
+        self._action_executors.insert(0, executor)
+
+    async def _drain_session_actions(self) -> _ActionDrainOutcome:
+        """Execute any session actions queued by agent tools during this turn."""
+        outcome = _ActionDrainOutcome()
+        if self._session_actions is None or not self._session_actions.has_pending:
+            return outcome
+
+        actions = self._session_actions.drain()
+        for action in actions:
+            await self._emit(SessionActionRequested(action=action))
+            executor = self._find_action_executor(action)
+            if executor is None:
+                error = f"No session action executor for {action.type}"
+                logger.warning(error)
+                await self._emit(SessionActionFailed(action=action, error=error))
+                continue
+
+            executor_name = type(executor).__name__
+            await self._emit(SessionActionStarted(action=action, executor=executor_name))
+            try:
+                result = await executor.execute(self, action)
+            except Exception as exc:
+                logger.exception("Session action executor failed: %s", action.type)
+                await self._emit(
+                    SessionActionFailed(
+                        action=action,
+                        executor=executor_name,
+                        error=str(exc),
+                    )
+                )
+                continue
+
+            outcome.stop_session = outcome.stop_session or result.stop_session
+            await self._emit(
+                SessionActionCompleted(
+                    action=action,
+                    executor=executor_name,
+                    result=result,
+                )
+            )
+
+        return outcome
+
+    def _find_action_executor(self, action: SessionAction) -> SessionActionExecutor | None:
+        for executor in self._action_executors:
+            if executor.supports(action):
+                return executor
+        return None
+
     # ── Push-to-talk helpers ───────────────────────────────────
 
     async def start_turn(self) -> None:
@@ -680,9 +761,21 @@ class Session:
 
     # ── TurnManager callbacks ──────────────────────────────────
 
-    async def _cancel_for_barge_in(self) -> None:
-        """Cancel current turn due to barge-in (called by TurnManager)."""
+    async def _cancel_for_barge_in(self) -> bool:
+        """Cancel current turn due to barge-in (called by TurnManager).
+
+        Returns ``False`` when barge-in is suppressed so the TurnManager
+        skips starting a new user turn.
+
+        When a queued session action has ``no_interrupt=True`` (e.g. an
+        end-call or transfer announcement), barge-in is
+        suppressed so the critical speech plays in full.
+        """
+        if self._session_actions is not None and self._session_actions.no_interrupt:
+            logger.debug("Barge-in suppressed: queued action has no_interrupt=True")
+            return False
         await self.cancel_turn(barge_in=True)
+        return True
 
     async def _on_turn_started(self, event: TurnStarted) -> None:
         """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
@@ -991,9 +1084,11 @@ class Session:
                 (time.monotonic() - turn.stt_final_time) * 1000,
             )
 
-        await self._synthesize_tts(
+        action_outcome = await self._synthesize_tts(
             self._prepare_tts_payload(agent_response, is_streaming=False, is_final=True), token
         )
+        if action_outcome.stop_session:
+            await self.stop()
 
     # ── Streaming agent path ───────────────────────────────────
 
@@ -1008,12 +1103,14 @@ class Session:
         tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
         tts_playback_started = False
         tts_chunks: list[tuple[str, int, bool]] = []
+        tts_action_outcome = _ActionDrainOutcome()
 
         self._spans.start(Tracer.AGENT)
 
         # ── TTS consumer task ──
 
         async def _process_tts() -> None:
+            nonlocal tts_action_outcome
             nonlocal tts_playback_started
             started = False
             try:
@@ -1068,11 +1165,18 @@ class Session:
                     tts_chunks.append((_text_for_estimation_timeline(remaining), 0, False))
 
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
-                await self._turn_manager.bot_stopped_speaking()
-                # Wait for queued audio to drain so _drain_outbound_audio
-                # can still call turn.record_audio_sent() and emit playback
-                # marks for the tail of this turn's audio.
-                await self._wait_outbound_drain()
+                # Drain session actions (end_call, transfer) BEFORE
+                # transitioning to IDLE so no new turn can sneak in.
+                tts_action_outcome = await self._drain_session_actions()
+                if tts_action_outcome.stop_session:
+                    await self._wait_outbound_drain()
+                    await self._turn_manager.bot_stopped_speaking()
+                else:
+                    await self._turn_manager.bot_stopped_speaking()
+                    # Wait for queued audio to drain so _drain_outbound_audio
+                    # can still call turn.record_audio_sent() and emit playback
+                    # marks for the tail of this turn's audio.
+                    await self._wait_outbound_drain()
                 self._spans.finish("turn")
                 # Only clear if a new turn hasn't started during the drain.
                 if self._turn is turn:
@@ -1176,6 +1280,10 @@ class Session:
             ack_tail_cap_ms=self._interruption_ack_tail_cap_ms,
         )
 
+        if tts_action_outcome.stop_session:
+            await self.stop()
+            return
+
         # If a newer turn started (e.g. barge-in), avoid clobbering its state.
         if self._turn is turn:
             if self._turn_manager.state != TurnManagerState.IDLE:
@@ -1197,8 +1305,11 @@ class Session:
 
     # ── TTS synthesis helper ───────────────────────────────────
 
-    async def _synthesize_tts(self, payload: TTSInput | str, token: CancelToken | None) -> None:
+    async def _synthesize_tts(
+        self, payload: TTSInput | str, token: CancelToken | None
+    ) -> _ActionDrainOutcome:
         """Synthesize TTS for a complete payload and emit audio events."""
+        action_outcome = _ActionDrainOutcome()
         if isinstance(payload, str):
             payload = self._prepare_tts_payload(payload, is_streaming=False, is_final=True)
         turn = self._turn
@@ -1227,8 +1338,15 @@ class Session:
                 and turn is not None
                 and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
             ):
-                await self._turn_manager.bot_stopped_speaking()
-                await self._wait_outbound_drain()
+                # Drain session actions (end_call, transfer) BEFORE
+                # transitioning to IDLE so no new turn can sneak in.
+                action_outcome = await self._drain_session_actions()
+                if action_outcome.stop_session:
+                    await self._wait_outbound_drain()
+                    await self._turn_manager.bot_stopped_speaking()
+                else:
+                    await self._turn_manager.bot_stopped_speaking()
+                    await self._wait_outbound_drain()
                 self._spans.finish("turn")
                 # Only clear if a new turn hasn't started during the drain.
                 if self._turn is turn:
@@ -1242,6 +1360,7 @@ class Session:
                 # and send playback marks.
                 self._auto_turn_speech_frames = 0
                 self._turn_manager.reset()
+        return action_outcome
 
     # ── Internal helpers ───────────────────────────────────────
 
@@ -1380,7 +1499,12 @@ class Session:
 
     async def _cancel_tts(self) -> None:
         await self._tts_synth.cancel()
-        if self._current_tts_task and not self._current_tts_task.done():
+        current_task = asyncio.current_task()
+        if (
+            self._current_tts_task
+            and self._current_tts_task is not current_task
+            and not self._current_tts_task.done()
+        ):
             self._current_tts_task.cancel()
             try:
                 await self._current_tts_task

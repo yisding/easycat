@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import pytest
 
-from easycat.agents import PydanticAIAdapter
+from easycat.agents import PydanticAIAdapter, PydanticAIWorkflowAdapter
 from easycat.agents.factory import auto_adapt_agent
 
 
 class _CustomAgent:
     async def run(self, text: str) -> str:
+        return text
+
+
+class _Workflow:
+    async def on_user_turn(self, text: str) -> str:
         return text
 
 
@@ -19,6 +24,11 @@ def test_auto_adapt_agent_passthrough_for_unknown_agents():
 def test_auto_adapt_agent_keeps_existing_adapter():
     adapter = PydanticAIAdapter(_CustomAgent())
     assert auto_adapt_agent(adapter) is adapter
+
+
+def test_auto_adapt_agent_wraps_workflow_objects():
+    adapted = auto_adapt_agent(_Workflow())
+    assert isinstance(adapted, PydanticAIWorkflowAdapter)
 
 
 def test_auto_adapt_agent_wraps_openai_agents():

@@ -1485,3 +1485,29 @@ async def test_notify_interruption_message_mode():
         assert any("interrupted" in getattr(p, "content", "").lower() for p in last.parts)
     else:
         assert len(adapter.message_history) == initial_len
+
+
+# ── deps property ─────────────────────────────────────────────────
+
+
+def test_deps_getter():
+    """deps property returns the initial dependency value."""
+    agent = MockIterPydanticAgent(responses=["ok"])
+    adapter = PydanticAIAdapter(agent, deps={"user_id": "123"})
+    assert adapter.deps == {"user_id": "123"}
+
+
+def test_deps_setter():
+    """deps setter updates the dependency value for subsequent calls."""
+    agent = MockIterPydanticAgent(responses=["ok"])
+    adapter = PydanticAIAdapter(agent, deps={"user_id": "123"})
+    adapter.deps = {"user_id": "456", "session": "abc"}
+    assert adapter.deps == {"user_id": "456", "session": "abc"}
+    assert adapter._deps == {"user_id": "456", "session": "abc"}
+
+
+def test_deps_default_none():
+    """deps defaults to None when not provided."""
+    agent = MockIterPydanticAgent(responses=["ok"])
+    adapter = PydanticAIAdapter(agent)
+    assert adapter.deps is None

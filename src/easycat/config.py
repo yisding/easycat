@@ -19,6 +19,7 @@ from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.providers import Transport
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
+from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.factory import STTConfig, create_stt_provider_from_config
@@ -42,6 +43,10 @@ from easycat.telephony.screening import (
     CallScreeningDetector,
     ScreeningResponse,
     screening_patterns_for_languages,
+)
+from easycat.telephony.session_actions import (
+    TwilioSessionActionConfig,
+    TwilioSessionActionExecutor,
 )
 from easycat.telephony.voicemail import (
     PostScreeningVoicemailDetector,
@@ -131,6 +136,7 @@ class TelephonyConfig:
     dtmf_aggregator: DTMFAggregatorConfig = field(default_factory=DTMFAggregatorConfig)
     voicemail_detector: VoicemailDetectorConfig = field(default_factory=VoicemailDetectorConfig)
     outbound: OutboundCallConfig | None = None
+    twilio_actions: TwilioSessionActionConfig | None = None
 
 
 TransportConfig = (
@@ -173,6 +179,8 @@ class EasyCatConfig:
     wrap_agent: bool = True
     strip_markdown: bool = False
     output_processors: Sequence[LLMOutputProcessor] = ()
+    session_actions: SessionActions | None = None
+    action_executors: Sequence[SessionActionExecutor] = ()
     debug: bool = False
 
     def __post_init__(self) -> None:
@@ -285,6 +293,7 @@ def create_session(config: EasyCatConfig) -> Session:
         turn_config = replace(turn_config, endpoint_detector=smart_turn)
 
     telephony_helpers = _create_telephony_helpers(event_bus, config.telephony)
+    action_executors = [*config.action_executors, *_create_action_executors(config.telephony)]
     if config.event_logging.enabled:
         telephony_helpers.append(EventTraceLogger(event_bus, config.event_logging))
 
@@ -320,6 +329,8 @@ def create_session(config: EasyCatConfig) -> Session:
             auto_turn_from_stt_final=auto_turn_from_stt_final,
             strip_markdown=config.strip_markdown,
             output_processors=config.output_processors,
+            session_actions=config.session_actions,
+            action_executors=action_executors,
             audio_gate=audio_gate,
         )
     )
@@ -455,6 +466,15 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
         _create_outbound_helpers(event_bus, config.outbound, helpers)
 
     return helpers
+
+
+def _create_action_executors(config: TelephonyConfig | None) -> list[SessionActionExecutor]:
+    executors: list[SessionActionExecutor] = []
+    if config is None:
+        return executors
+    if config.twilio_actions is not None:
+        executors.append(TwilioSessionActionExecutor(config.twilio_actions))
+    return executors
 
 
 def _create_outbound_helpers(

@@ -306,13 +306,19 @@ class TurnManager:
         user turn.  The callback (typically ``session.cancel_turn(barge_in=True)``)
         is responsible for emitting the ``Interruption`` event so that it is
         emitted exactly once per barge-in.
-        """
-        logger.debug("Turn: BotSpeaking -> UserSpeaking (barge-in)")
 
+        If the callback returns ``False``, barge-in is suppressed (e.g. a
+        queued session action has ``no_interrupt=True``).  In that case we
+        do **not** start a new turn — the current bot playback continues.
+        """
         # Cancel current bot output via the session callback.
         # The callback is responsible for emitting the Interruption event.
         if self._cancel_turn_callback:
-            await self._cancel_turn_callback()
+            result = await self._cancel_turn_callback()
+            if result is False:
+                return
+
+        logger.debug("Turn: BotSpeaking -> UserSpeaking (barge-in)")
 
         # Start new turn
         self._cancel_token = CancelToken()
