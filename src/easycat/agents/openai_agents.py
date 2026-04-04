@@ -69,7 +69,7 @@ def build_openai_agents_adapter(
     store:
         Controls ``ModelSettings.store``.  Set to ``False`` for zero-data-
         retention deployments — this also disables ``previous_response_id``
-        chaining and enables ``include=["reasoning.encrypted_content"]`` so
+        chaining and enables ``response_include=["reasoning.encrypted_content"]`` so
         that reasoning tokens are round-tripped via client-managed history.
     max_turns:
         Maximum number of LLM turns (including tool calls) per
@@ -109,13 +109,13 @@ def build_openai_agents_adapter(
             model_settings_kwargs["store"] = store
         if not use_previous_response_id:
             # Round-trip reasoning tokens via client-managed history
-            model_settings_kwargs["include"] = ["reasoning.encrypted_content"]
+            model_settings_kwargs["response_include"] = ["reasoning.encrypted_content"]
         try:
             model_settings = ModelSettings(**model_settings_kwargs)
         except TypeError:
-            # Older SDK version without store/include fields
+            # Older SDK version without store/response_include fields
             logger.warning(
-                "ModelSettings does not support store/include — upgrade openai-agents "
+                "ModelSettings does not support store/response_include — upgrade openai-agents "
                 "to >=0.6.2 for zero-data-retention support"
             )
             model_settings = ModelSettings(reasoning=reasoning, verbosity="low")

@@ -800,8 +800,11 @@ class Session:
 
     # ── TurnManager callbacks ──────────────────────────────────
 
-    async def _cancel_for_barge_in(self) -> None:
+    async def _cancel_for_barge_in(self) -> bool:
         """Cancel current turn due to barge-in (called by TurnManager).
+
+        Returns ``False`` when barge-in is suppressed so the TurnManager
+        skips starting a new user turn.
 
         When a queued session action has ``no_interrupt=True`` (e.g. an
         end-call or transfer with a farewell message), barge-in is
@@ -809,8 +812,9 @@ class Session:
         """
         if self._session_actions is not None and self._session_actions.no_interrupt:
             logger.debug("Barge-in suppressed: queued action has no_interrupt=True")
-            return
+            return False
         await self.cancel_turn(barge_in=True)
+        return True
 
     async def _on_turn_started(self, event: TurnStarted) -> None:
         """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
@@ -1123,8 +1127,6 @@ class Session:
             self._prepare_tts_payload(agent_response, is_streaming=False, is_final=True), token
         )
 
-        await self._drain_session_actions()
-
     # ── Streaming agent path ───────────────────────────────────
 
     async def _run_streaming_agent(self, transcript: str, token: CancelToken | None) -> None:
@@ -1198,6 +1200,9 @@ class Session:
                     tts_chunks.append((_text_for_estimation_timeline(remaining), 0, False))
 
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
+                # Drain session actions (end_call, transfer) BEFORE
+                # transitioning to IDLE so no new turn can sneak in.
+                await self._drain_session_actions()
                 await self._turn_manager.bot_stopped_speaking()
                 # Wait for queued audio to drain so _drain_outbound_audio
                 # can still call turn.record_audio_sent() and emit playback
@@ -1306,8 +1311,6 @@ class Session:
             ack_tail_cap_ms=self._interruption_ack_tail_cap_ms,
         )
 
-        await self._drain_session_actions()
-
         # If a newer turn started (e.g. barge-in), avoid clobbering its state.
         if self._turn is turn:
             if self._turn_manager.state != TurnManagerState.IDLE:
@@ -1359,6 +1362,9 @@ class Session:
                 and turn is not None
                 and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
             ):
+                # Drain session actions (end_call, transfer) BEFORE
+                # transitioning to IDLE so no new turn can sneak in.
+                await self._drain_session_actions()
                 await self._turn_manager.bot_stopped_speaking()
                 await self._wait_outbound_drain()
                 self._spans.finish("turn")
