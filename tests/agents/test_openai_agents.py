@@ -89,9 +89,17 @@ class MockStreamEvent:
 class MockRunResult:
     """Mimics agents.RunResult."""
 
-    def __init__(self, final_output: str, input_list: list[Any] | None = None) -> None:
+    def __init__(
+        self,
+        final_output: str,
+        input_list: list[Any] | None = None,
+        last_response_id: str | None = None,
+        last_agent: Any = None,
+    ) -> None:
         self.final_output = final_output
         self._input_list = input_list or []
+        self.last_response_id = last_response_id
+        self.last_agent = last_agent
 
     def to_input_list(self) -> list[Any]:
         return list(self._input_list)
@@ -104,9 +112,13 @@ class MockRunResultStreaming:
         self,
         events: list[MockStreamEvent],
         input_list: list[Any] | None = None,
+        last_response_id: str | None = None,
+        last_agent: Any = None,
     ) -> None:
         self._events = events
         self._input_list = input_list or []
+        self.last_response_id = last_response_id
+        self.last_agent = last_agent
 
     async def stream_events(self) -> AsyncIterator[MockStreamEvent]:
         for event in self._events:
@@ -1041,3 +1053,293 @@ async def test_notify_interruption_message_mode(monkeypatch):
     assert len(adapter.message_history) == 3
     assert adapter.message_history[2]["role"] == "developer"
     assert "interrupted" in adapter.message_history[2]["content"].lower()
+
+
+# ── previous_response_id tests ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_tracked(monkeypatch):
+    """After run(), the adapter stores last_response_id and passes it next call."""
+    history1 = _input_list_for("t1", "r1")
+    runner = MockRunner(
+        run_results=[
+            MockRunResult("r1", history1, last_response_id="resp_001"),
+            MockRunResult(
+                "r2", history1 + _input_list_for("t2", "r2"), last_response_id="resp_002"
+            ),
+        ]
+    )
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("t1")
+    assert adapter._previous_response_id == "resp_001"
+
+    await adapter.run("t2")
+    # Second call should pass previous_response_id and auto flag
+    call = runner.run_calls[1]
+    assert call["previous_response_id"] == "resp_001"
+    assert call["auto_previous_response_id"] is True
+    assert adapter._previous_response_id == "resp_002"
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_minimal_input(monkeypatch):
+    """With server-managed state, only new user message is sent as input."""
+    history1 = _input_list_for("t1", "r1")
+    runner = MockRunner(
+        run_results=[
+            MockRunResult("r1", history1, last_response_id="resp_001"),
+            MockRunResult("r2"),
+        ]
+    )
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("t1")
+    await adapter.run("t2")
+    # Input should be just [user message], not full history
+    second_input = runner.run_calls[1]["input"]
+    assert isinstance(second_input, list)
+    assert len(second_input) == 1
+    assert second_input[0] == {"role": "user", "content": "t2"}
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_disabled(monkeypatch):
+    """With use_previous_response_id=False, full history is sent as before."""
+    history1 = _input_list_for("t1", "r1")
+    runner = MockRunner(
+        run_results=[
+            MockRunResult("r1", history1, last_response_id="resp_001"),
+            MockRunResult("r2"),
+        ]
+    )
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent(), use_previous_response_id=False)
+    await adapter.run("t1")
+    assert adapter._previous_response_id is None  # Not tracked
+
+    await adapter.run("t2")
+    call = runner.run_calls[1]
+    # Should NOT have previous_response_id kwargs
+    assert "previous_response_id" not in call
+    assert "auto_previous_response_id" not in call
+    # Should send full history + new message
+    assert isinstance(call["input"], list)
+    assert len(call["input"]) == 3  # 2 history + 1 new
+
+
+@pytest.mark.asyncio
+async def test_first_call_auto_previous_response_id(monkeypatch):
+    """First call sends auto_previous_response_id=True but no previous_response_id."""
+    runner = MockRunner(run_results=[MockRunResult("ok", last_response_id="resp_001")])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("hello")
+    call = runner.run_calls[0]
+    assert call["auto_previous_response_id"] is True
+    assert "previous_response_id" not in call
+    assert call["input"] == "hello"
+
+
+# ── Handoff persistence tests ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_handoff_updates_agent(monkeypatch):
+    """After run(), if last_agent differs, the adapter switches to the new agent."""
+    original_agent = MockAgent(name="Triage")
+    handoff_agent = MockAgent(name="Billing")
+    runner = MockRunner(
+        run_results=[
+            MockRunResult("transferred", last_agent=handoff_agent),
+            MockRunResult("billing reply"),
+        ]
+    )
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(original_agent)
+    await adapter.run("billing question")
+    assert adapter._agent is handoff_agent
+
+    await adapter.run("follow up")
+    # Second call should use the handoff agent
+    assert runner.run_calls[1]["agent"] is handoff_agent
+
+
+@pytest.mark.asyncio
+async def test_handoff_same_agent_no_change(monkeypatch):
+    """When last_agent is the same agent, _agent stays unchanged."""
+    agent = MockAgent(name="Main")
+    runner = MockRunner(run_results=[MockRunResult("ok", last_agent=agent)])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(agent)
+    await adapter.run("hi")
+    assert adapter._agent is agent
+
+
+# ── Interruption with previous_response_id ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_interruption_with_previous_response_id(monkeypatch):
+    """With server-managed state, interruption queues a pending note sent next turn."""
+    history1 = _input_list_for("t1", "Hello, how can I help you today?")
+    runner = MockRunner(
+        run_results=[
+            MockRunResult(
+                "Hello, how can I help you today?", history1, last_response_id="resp_001"
+            ),
+            MockRunResult("Sure thing"),
+        ]
+    )
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("t1")
+
+    # Simulate interruption
+    adapter.notify_interruption("Hello, how can I", mode="truncate")
+    assert adapter._pending_interruption is not None
+    assert "Hello, how can I..." in adapter._pending_interruption
+
+    # Next run should include the interruption note as developer message
+    await adapter.run("t2")
+    second_input = runner.run_calls[1]["input"]
+    assert isinstance(second_input, list)
+    assert len(second_input) == 2  # developer note + user message
+    assert second_input[0]["role"] == "developer"
+    assert "interrupted" in second_input[0]["content"].lower()
+    assert second_input[1] == {"role": "user", "content": "t2"}
+    # Pending interruption should be cleared after use
+    assert adapter._pending_interruption is None
+
+
+# ── clear_history resets state ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_clear_history_resets_response_id(monkeypatch):
+    """clear_history() resets previous_response_id and pending_interruption."""
+    history1 = _input_list_for("t1", "r1")
+    runner = MockRunner(
+        run_results=[
+            MockRunResult("r1", history1, last_response_id="resp_001"),
+            MockRunResult("r2"),
+        ]
+    )
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    await adapter.run("t1")
+    assert adapter._previous_response_id == "resp_001"
+
+    adapter.notify_interruption("r", mode="truncate")
+    assert adapter._pending_interruption is not None
+
+    adapter.clear_history()
+    assert adapter._previous_response_id is None
+    assert adapter._pending_interruption is None
+    assert adapter.message_history == []
+
+    # Next call should be a fresh start (plain string input, no previous_response_id)
+    await adapter.run("fresh")
+    call = runner.run_calls[1]
+    assert call["input"] == "fresh"
+    assert "previous_response_id" not in call
+
+
+# ── max_turns / hooks forwarding ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_max_turns_forwarded(monkeypatch):
+    runner = MockRunner(run_results=[MockRunResult("ok")])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent(), max_turns=5)
+    await adapter.run("test")
+    assert runner.run_calls[0]["max_turns"] == 5
+
+
+@pytest.mark.asyncio
+async def test_hooks_forwarded(monkeypatch):
+    runner = MockRunner(run_results=[MockRunResult("ok")])
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    hooks = object()  # stand-in for RunHooks
+    adapter = OpenAIAgentsAdapter(MockAgent(), hooks=hooks)
+    await adapter.run("test")
+    assert runner.run_calls[0]["hooks"] is hooks
+
+
+# ── Streaming state tracking ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_streaming_tracks_response_id(monkeypatch):
+    """run_streaming() stores last_response_id in the finally block."""
+    events = _make_text_events(["Hi"])
+    runner = MockRunner(
+        stream_results=[
+            MockRunResultStreaming(events, last_response_id="resp_stream_001"),
+        ]
+    )
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent())
+    async for _ in adapter.run_streaming("greet"):
+        pass
+    assert adapter._previous_response_id == "resp_stream_001"
+
+
+@pytest.mark.asyncio
+async def test_streaming_tracks_handoff(monkeypatch):
+    """run_streaming() updates _agent when last_agent differs."""
+    events = _make_text_events(["transferred"])
+    handoff_agent = MockAgent(name="Specialist")
+    runner = MockRunner(
+        stream_results=[
+            MockRunResultStreaming(events, last_agent=handoff_agent),
+        ]
+    )
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    original = MockAgent(name="Main")
+    adapter = OpenAIAgentsAdapter(original)
+    async for _ in adapter.run_streaming("help"):
+        pass
+    assert adapter._agent is handoff_agent
+
+
+@pytest.mark.asyncio
+async def test_streaming_passes_kwargs(monkeypatch):
+    """run_streaming() forwards max_turns, hooks, and previous_response_id."""
+    events = _make_text_events(["ok"])
+    hooks = object()
+    runner = MockRunner(
+        stream_results=[
+            MockRunResultStreaming(events, last_response_id="resp_s1"),
+            MockRunResultStreaming(_make_text_events(["ok2"])),
+        ]
+    )
+    monkeypatch.setattr("easycat.agents.openai_agents.Runner", runner, raising=False)
+
+    adapter = OpenAIAgentsAdapter(MockAgent(), max_turns=3, hooks=hooks)
+    async for _ in adapter.run_streaming("first"):
+        pass
+    call = runner.stream_calls[0]
+    assert call["max_turns"] == 3
+    assert call["hooks"] is hooks
+    assert call["auto_previous_response_id"] is True
+
+    # Second streaming call should pass previous_response_id
+    async for _ in adapter.run_streaming("second"):
+        pass
+    call2 = runner.stream_calls[1]
+    assert call2["previous_response_id"] == "resp_s1"

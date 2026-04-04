@@ -106,6 +106,30 @@ def twiml_dial_send_digits(
     )
 
 
+def twiml_dial_number(
+    phone_number: str,
+    *,
+    caller_id: str | None = None,
+    send_digits: str = "",
+    preamble: str | None = None,
+) -> str:
+    """Generate TwiML to optionally speak a message and then dial a number."""
+    safe_number = escape(phone_number)
+    dial_attrs = ""
+    if caller_id:
+        dial_attrs = f" callerId={quoteattr(caller_id)}"
+    number_attrs = ""
+    if send_digits:
+        number_attrs = f" sendDigits={quoteattr(send_digits)}"
+    say = f"<Say>{escape(preamble)}</Say>" if preamble else ""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response>{say}<Dial{dial_attrs}>"
+        f"<Number{number_attrs}>{safe_number}</Number>"
+        "</Dial></Response>"
+    )
+
+
 def twiml_gather(
     *,
     action_url: str,
@@ -155,3 +179,11 @@ def twiml_hangup() -> str:
         Complete TwiML ``<Response>`` document as a string.
     """
     return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
+
+
+def twiml_say_and_hangup(text: str) -> str:
+    """Generate TwiML to say text and then hang up the call."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response><Say>{escape(text)}</Say><Hangup/></Response>"
+    )

@@ -54,12 +54,29 @@ def build_openai_agents_adapter(
     name: str = "VoiceAssistant",
     instructions: str,
     tools: list[Any] | None = None,
+    store: bool | None = None,
+    max_turns: int | None = None,
+    hooks: Any = None,
 ) -> OpenAIAgentsAdapter:
     """Create an OpenAI Agents SDK adapter configured for the Responses WebSocket API.
 
     Handles version detection and graceful fallback for ``RunConfig``,
     ``OpenAIProvider``, and ``ModelSettings``.  Raises ``SystemExit`` with a
     clear install hint if the ``agents`` package is not available.
+
+    Parameters
+    ----------
+    store:
+        Controls ``ModelSettings.store``.  Set to ``False`` for zero-data-
+        retention deployments — this also disables ``previous_response_id``
+        chaining and enables ``response_include=["reasoning.encrypted_content"]`` so
+        that reasoning tokens are round-tripped via client-managed history.
+    max_turns:
+        Maximum number of LLM turns (including tool calls) per
+        ``Runner.run`` invocation.
+    hooks:
+        ``RunHooks`` instance forwarded to every ``Runner.run`` /
+        ``Runner.run_streamed`` call for lifecycle callbacks.
     """
     try:
         from agents import Agent  # type: ignore[import-untyped]
@@ -67,6 +84,8 @@ def build_openai_agents_adapter(
         raise SystemExit(
             "OpenAI Agents SDK is required. Install with: uv sync --extra openai-agents"
         ) from exc
+
+    use_previous_response_id = store is not False
 
     run_config = None
     try:
@@ -81,9 +100,29 @@ def build_openai_agents_adapter(
             reasoning = {"effort": "none"}
 
         provider = OpenAIProvider(use_responses=True, use_responses_websocket=True)
+
+        model_settings_kwargs: dict[str, Any] = {
+            "reasoning": reasoning,
+            "verbosity": "low",
+        }
+        if store is not None:
+            model_settings_kwargs["store"] = store
+        if not use_previous_response_id:
+            # Round-trip reasoning tokens via client-managed history
+            model_settings_kwargs["response_include"] = ["reasoning.encrypted_content"]
+        try:
+            model_settings = ModelSettings(**model_settings_kwargs)
+        except TypeError:
+            # Older SDK version without store/response_include fields
+            logger.warning(
+                "ModelSettings does not support store/response_include — upgrade openai-agents "
+                "to >=0.6.2 for zero-data-retention support"
+            )
+            model_settings = ModelSettings(reasoning=reasoning, verbosity="low")
+
         run_config = RunConfig(
             model_provider=provider,
-            model_settings=ModelSettings(reasoning=reasoning, verbosity="low"),
+            model_settings=model_settings,
         )
     except (ImportError, TypeError) as exc:
         logger.debug("RunConfig/OpenAIProvider setup failed, falling back: %s", exc)
@@ -98,7 +137,13 @@ def build_openai_agents_adapter(
     if tools is not None:
         agent_kwargs["tools"] = tools
     voice_agent = Agent(**agent_kwargs)
-    return OpenAIAgentsAdapter(voice_agent, run_config=run_config)
+    return OpenAIAgentsAdapter(
+        voice_agent,
+        run_config=run_config,
+        use_previous_response_id=use_previous_response_id,
+        max_turns=max_turns,
+        hooks=hooks,
+    )
 
 
 class OpenAIAgentsAdapter(BaseAgentAdapter):
@@ -115,9 +160,26 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         An ``agents.Agent`` instance.
     run_config:
         Optional ``RunConfig`` forwarded to every ``Runner.run`` /
-        ``Runner.run_streamed`` call.
+        ``Runner.run_streamed`` call.  When ``store=False`` (zero-data-
+        retention), configure
+        ``ModelSettings(include=["reasoning.encrypted_content"])``
+        so that reasoning tokens are round-tripped via client-managed
+        history.
     context:
         Optional run context (``RunContextWrapper``) forwarded to every call.
+    use_previous_response_id:
+        Enable server-managed conversation state via OpenAI's
+        ``previous_response_id`` response chaining.  Reduces latency and
+        cost by avoiding full history resend.  Disable for zero-data-
+        retention deployments where responses are not stored server-side.
+        Defaults to ``True``.
+    max_turns:
+        Maximum number of LLM turns (including tool calls) per
+        ``Runner.run`` invocation.  ``None`` uses the SDK default.
+    hooks:
+        ``RunHooks`` instance forwarded to every ``Runner.run`` /
+        ``Runner.run_streamed`` call for lifecycle callbacks (e.g. handoff
+        events, filler audio triggers).
     """
 
     def __init__(
@@ -126,32 +188,65 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
         *,
         run_config: Any = None,
         context: Any = None,
+        use_previous_response_id: bool = True,
+        max_turns: int | None = None,
+        hooks: Any = None,
     ) -> None:
         super().__init__()
         self._agent = agent
+        self._original_agent = agent
         self._run_config = run_config
         self._context = context
+        self._use_previous_response_id = use_previous_response_id
+        self._max_turns = max_turns
+        self._hooks = hooks
+        self._previous_response_id: str | None = None
+        self._pending_interruption: str | None = None
+
+    # ── History management ────────────────────────────────────
+
+    def clear_history(self) -> None:
+        """Clear conversation history, server-side state, and restore the original agent."""
+        super().clear_history()
+        self._agent = self._original_agent
+        self._previous_response_id = None
+        self._pending_interruption = None
 
     # ── Interruption handling ────────────────────────────────
 
     def _truncate_last_assistant_for_interruption(self, text_spoken: str) -> bool:
         """Try truncating the latest assistant entry in OpenAI history format."""
         replacement = self.interruption_replacement_text(text_spoken)
+
+        # Always update local history for consistency / fallback
+        local_truncated = False
         for i in range(len(self._message_history) - 1, -1, -1):
             item = self._message_history[i]
             role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
             if role == "assistant":
                 if isinstance(item, dict) and "content" in item:
                     item["content"] = replacement
-                    return True
-                if not isinstance(item, dict) and hasattr(item, "content"):
+                    local_truncated = True
+                elif not isinstance(item, dict) and hasattr(item, "content"):
                     item.content = replacement
-                    return True
+                    local_truncated = True
                 break  # Always stop at the newest assistant entry
-        return False
+
+        # With server-managed state, queue an interruption note for the next turn
+        if self._use_previous_response_id and self._previous_response_id is not None:
+            self._pending_interruption = (
+                "[The user interrupted the assistant's response. "
+                f'They approximately heard: "{replacement}"]'
+            )
+            return True
+
+        return local_truncated
 
     def _append_interruption_note(self) -> None:
         """Append an interruption note in developer-role format."""
+        if self._use_previous_response_id and self._previous_response_id is not None:
+            self._pending_interruption = INTERRUPTION_NOTE
+            return
         self._message_history.append({"role": "developer", "content": INTERRUPTION_NOTE})
 
     # ── History patching ─────────────────────────────────────
@@ -186,19 +281,61 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
                             output_text_parts, replacement_segments
                         ):
                             part["text"] = replacement_segment
+                        self._queue_history_patch_note(text)
                         return
                 elif isinstance(content, str):
                     item["content"] = text
+                    self._queue_history_patch_note(text)
                     return
                 break
+
+    def _queue_history_patch_note(self, spoken_text: str) -> None:
+        """Queue a developer note when server-managed history diverges from spoken text.
+
+        When ``previous_response_id`` is active, local history patches (e.g.
+        markdown stripping) are invisible to the server.  This queues a note
+        so the next turn informs the model what was actually spoken.
+        """
+        if self._use_previous_response_id and self._previous_response_id is not None:
+            # Don't overwrite a pending interruption — it already conveys partial delivery
+            if self._pending_interruption is None:
+                self._pending_interruption = (
+                    "[Note: the assistant's last response was spoken to the user as: "
+                    f'"{spoken_text}"]'
+                )
 
     # ── Helpers ────────────────────────────────────────────────
 
     def _build_input(self, text: str) -> Any:
         """Build the ``input`` parameter for Runner, appending to history."""
+        if self._use_previous_response_id and self._previous_response_id is not None:
+            # Server has conversation state — only send new input
+            parts: list[dict[str, str]] = []
+            if self._pending_interruption is not None:
+                parts.append({"role": "developer", "content": self._pending_interruption})
+                self._pending_interruption = None
+            parts.append({"role": "user", "content": text})
+            return parts
         if self._message_history:
             return self._message_history + [{"role": "user", "content": text}]
         return text
+
+    def _build_kwargs(self) -> dict[str, Any]:
+        """Build shared keyword arguments for ``Runner.run`` / ``run_streamed``."""
+        kwargs: dict[str, Any] = {}
+        if self._run_config is not None:
+            kwargs["run_config"] = self._run_config
+        if self._context is not None:
+            kwargs["context"] = self._context
+        if self._use_previous_response_id:
+            if self._previous_response_id is not None:
+                kwargs["previous_response_id"] = self._previous_response_id
+            kwargs["auto_previous_response_id"] = True
+        if self._max_turns is not None:
+            kwargs["max_turns"] = self._max_turns
+        if self._hooks is not None:
+            kwargs["hooks"] = self._hooks
+        return kwargs
 
     # ── Basic Agent protocol ──────────────────────────────────
 
@@ -210,14 +347,18 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
             )
 
         input_data = self._build_input(text)
-        kwargs: dict[str, Any] = {}
-        if self._run_config is not None:
-            kwargs["run_config"] = self._run_config
-        if self._context is not None:
-            kwargs["context"] = self._context
+        kwargs = self._build_kwargs()
 
         result = await Runner.run(self._agent, input_data, **kwargs)
         self._message_history = result.to_input_list()
+
+        if self._use_previous_response_id:
+            self._previous_response_id = getattr(result, "last_response_id", None)
+
+        last_agent = getattr(result, "last_agent", None)
+        if last_agent is not None and last_agent is not self._agent:
+            self._agent = last_agent
+
         return self.serialize_and_store_output(result.final_output)
 
     # ── StreamingAgent protocol ───────────────────────────────
@@ -247,11 +388,7 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
             )
 
         input_data = self._build_input(text)
-        kwargs: dict[str, Any] = {}
-        if self._run_config is not None:
-            kwargs["run_config"] = self._run_config
-        if self._context is not None:
-            kwargs["context"] = self._context
+        kwargs = self._build_kwargs()
 
         result = Runner.run_streamed(self._agent, input_data, **kwargs)
 
@@ -309,6 +446,11 @@ class OpenAIAgentsAdapter(BaseAgentAdapter):
                         yield agent_event
         finally:
             self._message_history = result.to_input_list()
+            if self._use_previous_response_id:
+                self._previous_response_id = getattr(result, "last_response_id", None)
+            last_agent = getattr(result, "last_agent", None)
+            if last_agent is not None and last_agent is not self._agent:
+                self._agent = last_agent
 
         # Capture structured output when available
         raw_output = getattr(result, "final_output", None)

@@ -1,4 +1,8 @@
-"""Local voice bot demo using PydanticAI.
+"""Local voice bot demo using a single PydanticAI agent.
+
+If your app needs multiple specialists or step-based control flow, prefer:
+  - examples/pydantic_ai_workflow_voice.py
+  - examples/pydantic_ai_support_workflow.py
 
 Setup:
   export OPENAI_API_KEY="..."
