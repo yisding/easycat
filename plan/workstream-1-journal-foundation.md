@@ -50,8 +50,10 @@ full `RedactionPolicy` write filter lands later in
   `EasyCatConfig.__dict__` or `os.environ` in the journal or artifact
   store
 - Monotonic sequence numbers per session
-- Synchronous write guarantee
-- Crash-durability verified against simulated process death
+- Append visibility guarantee (write() to kernel page cache, no fsync
+  on hot path)
+- Application-crash durability (inherent to write path, zero committed
+  record loss) verified against simulated process death
 - Strangler-fig adapters so existing `EventTraceLogger`, `Tracer`, and
   `InMemoryMetrics` write through the journal without breaking tests
 
@@ -90,10 +92,10 @@ full `RedactionPolicy` write filter lands later in
     before/after examples and `debug=True` mapping to `debug="full"`)
   - `.easycat/` journal file-system layout (journals, artifacts,
     crash-dumps, recordings, archive subdirectories)
-  - append visibility contract vs durable-append contract
-    (`append` is always immediately readable; `debug="full"` with
-    default fsync cadence is durable before return; higher cadence
-    values relax durability by a bounded trailing-record window)
+  - append visibility contract (`append` is always immediately
+    readable; application-crash durability is inherent under
+    `synchronous=NORMAL` via kernel page cache ownership;
+    checkpoint-on-close strategy means no fsync during the session)
   - record/artifact atomicity contract (no durable record may
     reference an artifact that has not been committed; no dangling
     refs in any loadable journal or bundle)
@@ -240,11 +242,11 @@ full `RedactionPolicy` write filter lands later in
   - status flags (`enabled`, `degraded`)
 - [ ] Implement monotonic per-session sequence counter
 - [ ] Implement append visibility guarantee — `append` must not return
-  until the record is visible to `read` on the same session
-- [ ] Implement durable-append contract for durable backends:
-  with `EASYCAT_JOURNAL_FSYNC_EVERY=1` the record is also committed
-  before `append` returns; higher values relax only crash
-  durability, never read-after-write visibility
+  until the record is visible to `read` on the same session. Under the
+  SQLite backend this means the `write()` to the WAL has completed and
+  the record is in the kernel page cache. No `fsync()` is required on
+  the hot path — application-crash durability is inherent (the kernel
+  owns the pages and flushes them regardless of Python process state)
 
 ### T1.4: Backends
 
@@ -255,18 +257,33 @@ full `RedactionPolicy` write filter lands later in
   - WAL mode for concurrent readers during live debug
   - single-writer discipline
   - schema versioning table for forward compatibility
-  - `PRAGMA synchronous=NORMAL` + periodic `wal_checkpoint`
-  - fsync cadence configurable via `EASYCAT_JOURNAL_FSYNC_EVERY`
-    (default 1; see AC1.5b)
-  - **per-record commit by default.** With
-    `EASYCAT_JOURNAL_FSYNC_EVERY=1`, each `append` writes the row
-    and commits it before returning. This is the default and the
-    contract the essential plan assumes.
-  - **bounded durability window when cadence > 1.** If
-    `EASYCAT_JOURNAL_FSYNC_EVERY=N>1`, SQLite may group durability
-    work across at most `N` records. Immediate read-after-write
-    still holds, but crash recovery may lose up to `N-1` trailing
-    records. The selected window is logged once at startup.
+  - `PRAGMA synchronous=NORMAL` — commits are `write()` to the
+    kernel page cache, not `fsync()` to disk. This is what makes
+    the hot path storage-independent (same cost on NVMe, EBS, or
+    network-attached volumes) while still giving application-crash
+    durability for free (the kernel flushes pages regardless of
+    Python process state).
+  - `PRAGMA wal_autocheckpoint=0` — inline autocheckpoint is
+    **disabled**. This prevents the default SQLite behavior of
+    running a PASSIVE checkpoint on a random writer when the WAL
+    grows past ~4MB, which on high-tail-latency storage (EBS,
+    network-attached volumes) would cause sporadic multi-ms stalls
+    on the hot path.
+  - **checkpoint-on-close.** No checkpointing occurs during the
+    session. The WAL grows for the duration of the call (bounded
+    by session length — ~30MB for a 10-minute call) and is
+    checkpointed once at clean session close via
+    `PRAGMA wal_checkpoint(TRUNCATE)`, when latency is no longer
+    a concern. On unclean shutdown (crash, SIGKILL), the
+    uncheckpointed WAL is readable via SQLite's native WAL
+    recovery — no special handling needed.
+  - **batched per-turn commits.** The journal accumulates records
+    inside a transaction and commits once at turn boundary. The
+    commit is a WAL `write()` (no fsync), so per-turn cost is
+    bounded by memcpy + B-tree insert regardless of storage.
+    Read-after-write visibility still holds within a turn: readers
+    see queued records via the in-memory read path before the
+    transaction commits.
   - **Startup file-open warmup.** The backend opens the SQLite
     file eagerly during session construction so the first
     turn does not pay the ~50ms cold `PRAGMA` roundtrip.
@@ -390,7 +407,6 @@ full `RedactionPolicy` write filter lands later in
   SAFE_ENV_VARS: frozenset[str] = frozenset({
       # EasyCat runtime control
       "EASYCAT_DATA_DIR",
-      "EASYCAT_JOURNAL_FSYNC_EVERY",
       "EASYCAT_LEGACY_OBS_DUAL_WRITE",
       # Standard runtime identification (non-secret)
       "PYTHONVERSION",  # captured as sys.version, not os.environ
@@ -427,24 +443,42 @@ full `RedactionPolicy` write filter lands later in
 
 ### T1.6: Crash Durability
 
-- [ ] SQLite backend survives `SIGKILL` mid-write with trailing loss
-  bounded by the configured durability window. With the default
-  `EASYCAT_JOURNAL_FSYNC_EVERY=1`, at most one in-flight record is
-  lost.
+- [ ] **Application-crash durability (inherent, zero additional
+  work).** SQLite backend survives `SIGKILL`, OOM kills, segfaults,
+  and unhandled exceptions with **zero committed records lost**. This
+  falls out of the write path: commits go through `write()` into the
+  kernel page cache, which the kernel flushes to disk regardless of
+  Python process state. No `fsync()` is required for this guarantee
+  — it is inherent to `synchronous=NORMAL` and any `synchronous`
+  level. This is the guarantee that covers the voice failure modes
+  we care about (telephony disconnects, mic drivers, audio buffer
+  underruns, provider exceptions).
+- [ ] **Kernel-crash durability (best-effort, bounded by OS
+  writeback).** A kernel panic, hypervisor failure, or power loss
+  can lose WAL pages not yet written back to the block device. Under
+  the checkpoint-on-close strategy, no `fsync()` happens during the
+  session, so the window is bounded by the OS dirty-page writeback
+  schedule (typically 5–30s on Linux). This is acceptable because
+  kernel-level crashes are overwhelmingly ops failures, not
+  application bugs.
 - [ ] On session open, detect an unclean shutdown marker and emit a
   `RecoveredSessionMarker` record (defined in T1.1) in the reserved
   `sequence=0` slot of the recovered journal. The post-open
-  monotonic counter still starts at `sequence=1`.
+  monotonic counter still starts at `sequence=1`. The uncheckpointed
+  WAL is read natively by SQLite's WAL recovery — no special
+  handling needed.
 - [ ] Recovered partial journals are loadable offline (foundation for
   Workstream 4 `bundles list`). On recovery, the SQLite file is
   moved from `.easycat/journals/` to `.easycat/crash-dumps/` per
   the T1.2.5 layout.
-- [ ] In-memory backend documents that it waives crash-durability with
-  a single startup log line
-- [ ] Document the filesystem assumption: crash durability relies on
-  ext4/xfs fsync semantics. tmpfs-backed test environments waive
-  durability; tests that rely on T1.6 behavior must skip on tmpfs
-  with a clear marker.
+- [ ] In-memory backend documents that it waives both crash-durability
+  guarantees with a single startup log line.
+- [ ] Document the filesystem assumption: application-crash durability
+  relies on the kernel page cache surviving process death, which is
+  true on all standard Linux/macOS filesystems. tmpfs-backed test
+  environments still have this property (tmpfs uses the page cache).
+  Kernel-crash durability requires a real block device — tmpfs data
+  is lost on reboot.
 
 ### T1.7: Strangler Fig Adapters
 
@@ -511,9 +545,9 @@ full `RedactionPolicy` write filter lands later in
   attempts continue but failures are silently dropped beyond the
   first marker. The degraded flag surfaces on `JournalView`.
 - [ ] **Voice turns never block on journal writes**, even in
-  degraded mode. This is the invariant that justifies the
-  synchronous-write guarantee: correctness without a liveness
-  hazard.
+  degraded mode. This is the invariant that makes the debug-first
+  guarantee compatible with real-time audio: correctness without a
+  liveness hazard.
 - [ ] Recovery: a new session starts clean. A degraded session's
   partial data is still exportable as a crash-dump bundle via
   Workstream 4's partial-journal loader.
@@ -545,10 +579,13 @@ Workstream 2A starts.
   monotonic rule.
 - [ ] **AC1.5a** (read-after-write) `append` returns only after the
   record is visible to `read` on the same session, in both backends.
-- [ ] **AC1.5b** (crash durability) SQLite backend fsyncs within
-  `EASYCAT_JOURNAL_FSYNC_EVERY` records (default 1). Higher values
-  explicitly relax only the trailing-loss window; AC1.5a
-  read-after-write visibility remains unchanged.
+- [ ] **AC1.5b** (application-crash durability) SQLite backend
+  survives `SIGKILL` with zero committed records lost. This is
+  inherent to the write path (`write()` into kernel page cache
+  under `synchronous=NORMAL`) and requires no `fsync()` on the
+  hot path. Kernel-crash durability is best-effort, bounded by
+  OS writeback schedule — acceptable because kernel crashes are
+  ops failures, not application bugs.
 - [ ] **AC1.6** Large payloads are stored via `input_ref`/`output_ref`
   pointing into `ArtifactStore`; inline record size stays bounded
   regardless of artifact size. Any retained record that carries an
@@ -564,9 +601,8 @@ Workstream 2A starts.
   environment snapshot. Full per-field `RedactionPolicy` coverage is
   out of scope here and lives in `peripheral-redaction.md`.
 - [ ] **AC1.8** SQLite backend survives simulated `SIGKILL` mid-write
-  and is loadable afterwards with trailing loss bounded by the
-  configured durability window; at the default cadence, at most one
-  in-flight record is lost.
+  and is loadable afterwards with zero committed records lost. The
+  uncheckpointed WAL is readable via SQLite's native WAL recovery.
 - [ ] **AC1.9** Strangler-fig adapters are in place for
   `EventTraceLogger`, `Tracer`/`SpanManager`, and `InMemoryMetrics`.
   Dual-write is enabled by default.
@@ -595,15 +631,15 @@ Workstream 2A starts.
   tests pass zero-diff for every event type in the pre-workstream
   test suite, modulo a small explicit timestamp allowlist.
 - [ ] **AC1.17** Journal backend adapters. Four sub-tests:
-  - `test_sqlite_journal_fsync_window_default` — writes 100
-    records with `EASYCAT_JOURNAL_FSYNC_EVERY=1`, measures
-    `fsync` count via `strace` (or equivalent), asserts the
-    durable backend commits on every record (not merely at turn
-    boundary).
-  - `test_sqlite_journal_fsync_window_relaxed` — repeats with
-    `EASYCAT_JOURNAL_FSYNC_EVERY=10`, asserts the trailing-loss
-    window is bounded and startup logging names the relaxed
-    durability contract.
+  - `test_sqlite_journal_no_hot_path_fsync` — writes 100
+    records during a session, measures `fsync`/`fdatasync` count
+    via `strace` (or equivalent), asserts **zero fsyncs** during
+    the session. Fsync only occurs at session close (checkpoint-
+    on-close).
+  - `test_sqlite_journal_checkpoint_on_close` — writes records,
+    closes the session, asserts that the WAL is checkpointed
+    (WAL file size returns to near-zero after close) and the
+    main DB file contains all records.
   - `test_litestream_sqlite_adapter_round_trip` — runs a
     session against a local file-backed Litestream replica
     (`file://./test-replica/`), kills the process, restores
@@ -637,10 +673,10 @@ Each acceptance criterion maps to a concrete test or procedure.
 | AC1.3 | New test `test_journal_backend_selection` — instantiates with `debug="off"`, `debug="light"`, and `debug="full"`, asserts the correct backend class (or `None` for `"off"`) is used. Companion test `test_debug_capability_matrix` asserts the frozen mode semantics: `"off"` exposes a disabled `Session.journal` and bundle export is rejected, `"light"` uses in-memory capture, `"full"` uses durable capture. Separate test `test_debug_bool_compat_shim` asserts `debug=True` emits `DeprecationWarning` and routes to `"full"`. |
 | AC1.4 | New test `test_journal_monotonic_sequence` — writes 1,000 records to a single session from a single writer task, asserts strictly increasing from 1 with no gaps; asserts `sequence=0` is reserved and only populated by `RecoveredSessionMarker`. |
 | AC1.5a | New test `test_journal_synchronous_append_readback` — after every `append`, immediate `read` returns the record. Applies to both backends. |
-| AC1.5b | New test `test_journal_fsync_cadence` — writes N records to SQLite, asserts the WAL file has been fsynced at least `N / EASYCAT_JOURNAL_FSYNC_EVERY` times via `strace` or `fdatasync` counter. |
+| AC1.5b | New test `test_journal_app_crash_durability` — subprocess writes records to SQLite, parent sends `SIGKILL`, reopens the journal file, asserts all committed records are intact (zero loss). Separately, `test_sqlite_journal_no_hot_path_fsync` (AC1.17) confirms no fsync occurs during the session. |
 | AC1.6 | New test `test_artifact_store_indirection_and_atomicity` — writes a 1MB synthetic audio blob as an artifact, inspects the journal record and asserts its serialized inline size is < 4KB. Second assertion: two writes of identical bytes return the same SHA-256 ref. Third assertion: if capture policy truncates or drops an oversized `debug_verbose` payload, the record exposes explicit capture-status metadata and no unresolved ref. |
 | AC1.7 | Two new tests. `test_safe_config_default_drops_api_keys` — constructs a config with a synthetic API key, runs one turn, greps the SQLite file and artifact directory for the key, asserts zero hits. `test_safe_env_default_drops_non_easycat_vars` — sets a sensitive env var outside the `EASYCAT_*` allowlist, runs one turn, asserts it does not appear in any journal record or artifact. |
-| AC1.8 | New test `test_journal_crash_durability` — subprocess writes records to SQLite, parent sends `SIGKILL`, reopens the journal file, asserts records prior to the configured durability window are intact and a `RecoveredSessionMarker` in `sequence=0` is present; asserts the file was moved to `.easycat/crash-dumps/`. Skipped on tmpfs. |
+| AC1.8 | New test `test_journal_crash_durability` — subprocess writes records to SQLite, parent sends `SIGKILL`, reopens the journal file, asserts all committed records are intact (zero loss — the uncheckpointed WAL is readable via SQLite's native recovery) and a `RecoveredSessionMarker` in `sequence=0` is present; asserts the file was moved to `.easycat/crash-dumps/`. |
 | AC1.9 | Grep `src/easycat/event_logging.py`, `tracing.py`, `metrics.py` for journal write calls — each must have one; run with `EASYCAT_LEGACY_OBS_DUAL_WRITE=0` and verify journal-only path produces all previously logged events. |
 | AC1.10 | `uv run pytest` exits 0 with no `xfail` or skip additions attributable to this workstream. |
 | AC1.11 | Smoke test script runs `examples/local_chat.py` end-to-end for one turn, iterates the resulting journal, asserts records exist for each stage present in the current pipeline. |
@@ -649,19 +685,20 @@ Each acceptance criterion maps to a concrete test or procedure.
 | AC1.14 | New test `test_journal_degraded_mode` — patches the backend to raise on `append`, runs a turn, asserts exactly one `JournalDegraded` marker on stderr, session degraded flag set, turn completes without raising, subsequent appends silently drop. |
 | AC1.15 | New test `test_all_providers_expose_version_info` — uses the STT/TTS/transport/telephony factory registries to instantiate each provider with stub credentials and asserts `version_info()` returns a dict with the stable key set. |
 | AC1.16 | CI job `parity-strangler-fig` runs the T1.8.5 harness on every PR and blocks merge on any diff outside the timestamp allowlist. |
-| AC1.17 | Four new tests: `test_sqlite_journal_fsync_window_default` (asserts per-record durability at the default cadence), `test_sqlite_journal_fsync_window_relaxed` (asserts the bounded-loss window when cadence > 1), `test_litestream_sqlite_adapter_round_trip` (gated on Litestream binary), `test_libsql_adapter_round_trip` (gated on `sqld`). Missing binaries skip with a log line. |
+| AC1.17 | Four new tests: `test_sqlite_journal_no_hot_path_fsync` (asserts zero fsyncs during session via strace), `test_sqlite_journal_checkpoint_on_close` (asserts WAL is checkpointed at session close), `test_litestream_sqlite_adapter_round_trip` (gated on Litestream binary), `test_libsql_adapter_round_trip` (gated on `sqld`). Missing binaries skip with a log line. |
 | AC1.18 | New test `test_journal_adapter_credentials_redacted` — sets synthetic credentials for Litestream and libSQL, runs a turn, greps SQLite and artifact dir for the synthetic values, asserts zero hits. |
 
 ## Risks and Mitigations
 
 - **Performance overhead of synchronous writes**: append visibility
-  plus per-record durability at the default cadence could throttle the
-  hot path. Mitigation: benchmark on the STT partial-transcript path
+  requires that `write()` to the WAL completes before returning.
+  Under `synchronous=NORMAL` with `wal_autocheckpoint=0`, this is a
+  kernel page cache write (no fsync on the hot path), so overhead is
+  storage-independent and bounded by memcpy + B-tree insert cost.
+  Mitigation: benchmark on the STT partial-transcript path
   (highest-frequency events) before and after, keep verbose artifact
-  capture bounded, and use the explicitly supported
-  `EASYCAT_JOURNAL_FSYNC_EVERY>1` durability window only when the
-  operator accepts bounded trailing-record loss. Do not reintroduce a
-  hidden async queue that would violate the frozen contract.
+  capture bounded. The checkpoint-on-close strategy means no fsync
+  contention during the session.
 - **SQLite lock contention under high turn rate**: WAL mode and
   single-writer discipline should handle it; benchmark at 50 turns/sec
   sustained; fall back to file-per-session if contention shows up.
