@@ -11,8 +11,10 @@
 >
 > - `peripheral-dx-onboarding.md` — line budgets, CLI, templates,
 >   helpers, error diagnostics
-> - `peripheral-provider-ecosystem.md` — Deepgram Flux, Gemini Live,
->   Smart Turn promotion, backchannel filter, realtime cache defaults
+> - `peripheral-redaction.md` — `RedactionPolicy` write filter, safe
+>   snapshots, export-time redaction pass, ready-to-use policies
+> - `peripheral-provider-ecosystem.md` — Deepgram Flux, Smart Turn
+>   promotion, backchannel filter
 > - `peripheral-observability-and-cost.md` — OTel export, cost modeling,
 >   latency budgets, warmup stage
 >
@@ -254,18 +256,6 @@ Critical details:
 
 The waterfall is derived entirely from the journal — same records as
 the web debugger, rendered for the terminal.
-
-### Realtime-Mode Cost Line
-
-The waterfall cost line renders differently per mode:
-
-- Chained: `$0.0042 (142 in / 88 out, stt 1.4s, tts 52ch)`
-- Realtime: `$0.0180 (310 audio-in / 95 audio-out, cached 180, hit 58%)`
-
-Conflating them in one row would hide a real surprise in production
-use: realtime audio tokens can cost more per turn than chained GPT-4
-text tokens, and users deserve to see that clearly before the bill
-shows up.
 
 ## `easycat dev` Runtime Options
 

@@ -11,7 +11,8 @@
 > **Sibling workstreams:**
 >
 > - `workstream-1-journal-foundation.md`
-> - `workstream-2-agent-bridge.md`
+> - `workstream-2a-agent-bridges.md`
+> - `workstream-2b-interruption-and-mcp.md`
 > - `workstream-3-stage-refactor.md`
 > - `workstream-4-replay-and-bundle.md`
 
@@ -60,27 +61,87 @@ a codebase with one debugging model: the journal.
 - [ ] Write Phase 5 RFC covering:
   - deprecation timeline (one prior release with
     `DeprecationWarning` before deletion)
+  - explicit shim-survival window. During WS2A the new bridge
+    files land under `src/easycat/integrations/agents/` as
+    net-new modules; the original `src/easycat/agents/*.py`
+    files are **not** moved or touched in WS2A. During WS3 and
+    WS4 the legacy files continue to exist and can still be
+    imported — the WS3 `AgentStage` wraps the new
+    `src/easycat/integrations/agents/` bridges, while legacy
+    user code importing from `src/easycat/agents/*.py` still
+    works via the original adapter-based path. **WS5 is
+    responsible for converting the legacy files to thin shims
+    and then deleting them.** Concretely, T5.1 replaces each of
+    the five `src/easycat/agents/*.py` files with a single-line
+    shim re-exporting the equivalent symbol from
+    `src/easycat/integrations/agents/` plus a
+    `DeprecationWarning`, then T5.6.5 deletes the shim files
+    once the deprecation release has shipped. The same pattern
+    applies to `src/easycat/agent_runner.py`: the original
+    file remains operational through WS4, WS5 T5.1 converts it
+    to a shim delegating to the WS3 `AgentStage`, and WS5 T5.6
+    deletes it. Without this shim conversion WS5 T5.1's
+    deprecation release has nothing to attach warnings to, and
+    without the WS5-owned file moves the "WS2 ports the files"
+    assumption in earlier WS5 drafts has no one to execute it.
   - removal order (safest first: strangler-fig shims → legacy
-    modules → feature flag)
+    modules → feature flag → dual-path cancel token)
+  - `easycat.__all__` contract post-cleanup: the exact list of
+    top-level symbols allowed after removal
+  - list of test files currently using `EventTraceLogger`
+    subscriptions or `InMemoryMetrics` snapshots for behavior
+    assertions (compiled during RFC, consumed by T5.3.5)
   - external migration paths (for anyone consuming
     `EventTraceLogger`, `Tracer`, `InMemoryMetrics`, `AgentRunner`,
     adapter helpers, top-level imports, or legacy config fields from
     user code)
-  - rollback plan if a post-removal regression surfaces
+  - dual-path cancel token removal plan (T5.2.5) — the shared
+    cancel token retained alongside upstream signals in WS3 T3.8
+    and WS4 is removed here
+  - rollback plan if a post-removal regression surfaces, with
+    named integration tests to run between each deletion commit
 - [ ] Review and merge before any deletions.
 
 ### T5.1: Deprecation Release (Prior to Deletion)
 
+- [ ] **Convert the following files to thin shims.** They still
+  exist on disk at the start of WS5 in their pre-redesign form.
+  WS5 T5.1 replaces each with a shim that re-exports the
+  equivalent symbol from its new location and emits a
+  `DeprecationWarning` on import:
+  - `src/easycat/agent_runner.py` — shim delegates the public
+    `AgentRunner` class to the equivalent path through the WS3
+    `AgentStage` wrapping the WS2A bridge. The shim is one file
+    containing a compatibility class that forwards
+    `run()`/`cancel()`/etc. to the stage. Full behavior is
+    preserved; only the internal wiring changes.
+  - `src/easycat/agents/base.py`, `openai_agents.py`,
+    `pydantic_ai.py`, `pydantic_ai_workflow.py`, `factory.py`
+    — each becomes a single-file shim re-exporting the
+    equivalent bridge class or helper from
+    `src/easycat/integrations/agents/` and emitting a
+    `DeprecationWarning` at import time.
+  - `src/easycat/agents/__init__.py` — shim re-exports
+    everything from `src/easycat/integrations/agents/` plus a
+    module-level `DeprecationWarning`.
+- [ ] Verify the shims behave identically to the pre-conversion
+  files by running the pre-existing `tests/agents/` suite
+  unmodified against them. Any test failure blocks the
+  conversion and points at a missing re-export.
 - [ ] Add `DeprecationWarning` to every public symbol in
   `event_logging.py`, `tracing.py`, `metrics.py`, `_span_manager.py`,
-  `agent_runner.py`
+  and the converted shim files
 - [ ] Add `DeprecationWarning` or release-note coverage for top-level
-  re-exports and `EasyCatConfig` fields slated for removal or rename
+  re-exports and `EasyCatConfig` fields slated for removal or rename,
+  including the `debug: bool` → `debug: Literal[...]` migration
+  from WS1 AC1.3
 - [ ] Warning message names the replacement
   (`session.journal`, `ExecutionJournal`, `Stage`,
-  `ExternalAgentBridge`, new debug/runtime config fields, etc.)
-- [ ] Publish a release containing only these deprecation warnings
-  so external users see them before deletion
+  `ExternalAgentBridge`, new debug/runtime config fields,
+  `easycat.integrations.agents.*`, etc.)
+- [ ] Publish a release containing the shim conversions and
+  deprecation warnings so external users see them before
+  deletion
 - [ ] Ship migration guide in the same release
 
 ### T5.2: Remove Strangler-Fig Adapters
@@ -89,6 +150,16 @@ a codebase with one debugging model: the journal.
 - [ ] Run full test suite with flag off; fix any regressions
 - [ ] Delete the dual-write code paths entirely
 - [ ] Remove the feature flag
+
+### T5.2.5: Remove Dual-Path Cancel Token
+
+- [ ] The shared cancel token retained in WS3 T3.8 alongside the
+  signal-based upstream flow is removed here. All cancellation now
+  flows through `Stage.handle_upstream(ControlSignal.Cancel)`.
+- [ ] Verify the full barge-in test suite still passes with only
+  the signal path live
+- [ ] Remove any remaining cancel-token imports from `Session` and
+  the stages
 
 ### T5.3: Remove EventTraceLogger
 
@@ -100,6 +171,24 @@ a codebase with one debugging model: the journal.
 - [ ] Verify no references remain:
   `grep -rn 'EventTraceLogger\|event_logging' src/ tests/` returns
   zero
+
+### T5.3.5: Migrate Behavior-Assertion Tests
+
+- [ ] Some existing tests subscribe to `EventTraceLogger` (or
+  snapshot `InMemoryMetrics`) to assert *pipeline behavior*, not
+  logger internals. These are behavior tests using the only
+  observability surface that existed pre-redesign, and they must
+  be preserved — not deleted.
+- [ ] The list of such files is compiled during the T5.0 RFC.
+  Each test is rewritten to read `session.journal` directly, or
+  via WS4's `load_bundle()` pytest fixture helper when a
+  bundle-based fixture is cleaner.
+- [ ] This task runs BEFORE T5.3's deletion step — behavior
+  coverage migrates first, then the legacy module is deleted.
+- [ ] No behavior coverage gaps: every assertion previously made
+  against legacy observability output has an equivalent
+  assertion against the journal before `event_logging.py` is
+  removed.
 
 ### T5.4: Remove Tracer / Span / SpanManager
 
@@ -133,6 +222,22 @@ a codebase with one debugging model: the journal.
   `src/easycat/integrations/agents/base.py`
 - [ ] Verify no references remain:
   `grep -rn 'agent_runner\|AgentRunner' src/ tests/` returns zero
+
+### T5.6.5: Remove src/easycat/agents/
+
+- [ ] Delete the five legacy adapter files (all consumers use
+  `src/easycat/integrations/agents/` by this point):
+  - `src/easycat/agents/base.py`
+  - `src/easycat/agents/openai_agents.py`
+  - `src/easycat/agents/pydantic_ai.py`
+  - `src/easycat/agents/pydantic_ai_workflow.py`
+  - `src/easycat/agents/factory.py`
+  - `src/easycat/agents/__init__.py`
+- [ ] Remove the empty `src/easycat/agents/` directory
+- [ ] Update any import statements that still reference the old
+  path; the compatibility shims from the deprecation release
+  (T5.1) are the last consumers and are removed alongside the
+  files
 
 ### T5.7: Collapse Duplicate Session State Paths
 
@@ -191,9 +296,31 @@ a codebase with one debugging model: the journal.
   - `src/easycat/_span_manager.py`
   - `src/easycat/metrics.py`
   - `src/easycat/agent_runner.py`
-- [ ] **AC5.5** Zero grep hits for the removed class names in
-  `src/easycat/` and `tests/` (comments and docstrings explicitly
-  describing the removal are allowed but must be rare and justified).
+  - `src/easycat/agents/base.py`
+  - `src/easycat/agents/openai_agents.py`
+  - `src/easycat/agents/pydantic_ai.py`
+  - `src/easycat/agents/pydantic_ai_workflow.py`
+  - `src/easycat/agents/factory.py`
+  - `src/easycat/agents/__init__.py`
+  - the empty `src/easycat/agents/` directory
+- [ ] **AC5.5** Zero grep hits for the removed symbols in
+  `src/easycat/` and `tests/`, using patterns tightened to avoid
+  false positives from downstream work (peripheral OTel exporter,
+  journal-derived metrics with "metrics" in their names):
+  - `EventTraceLogger` — exact token
+  - `InMemoryMetrics` — exact token
+  - `SpanManager` — exact token
+  - `class Tracer\b|from easycat\.tracing` — narrow pattern so
+    a future OTel exporter's `Tracer` symbols don't trip the
+    guard
+  - `from easycat\.metrics\b|InMemoryMetrics` — narrow pattern
+    so journal-derived metrics naming isn't flagged
+  - `class AgentRunner\b|from easycat\.agent_runner` — narrow
+    pattern on the class/module only
+  - `from easycat\.agents\.` — catches any stale imports from
+    the deleted adapter directory
+  Comments and docstrings explicitly describing the removal are
+  allowed but must be rare and justified.
 - [ ] **AC5.6** Full test suite passes: `uv run pytest` exits 0.
 - [ ] **AC5.7** `uv run ruff check .` exits 0.
 - [ ] **AC5.8** `uv run ruff format .` produces no diff.
@@ -212,6 +339,18 @@ a codebase with one debugging model: the journal.
 - [ ] **AC5.14** `easycat.__all__`, remaining top-level imports, and
   `EasyCatConfig` no longer expose legacy exports/fields that this
   redesign intentionally removed or renamed.
+- [ ] **AC5.15** `easycat.__all__` contract: a single test asserts
+  the exact allowlist of top-level symbols post-cleanup. The list
+  is frozen in the T5.0 RFC and includes at minimum: `Session`,
+  `EasyCatConfig`, `create_session`, `ExecutionJournal`,
+  `JournalView`, `Stage`, `ExternalAgentBridge`, `auto_adapt_agent`,
+  `RunBundle`, `load_bundle`, and any intentionally-kept
+  convenience exports. New additions require an RFC amendment;
+  unintended drift fails the test.
+- [ ] **AC5.16** All shim files removed per T5.6 and T5.6.5 are
+  absent from disk. A CI test asserts `agent_runner.py` and every
+  file under `src/easycat/agents/` no longer exists, and no stale
+  imports reference them.
 
 ## Verification
 
@@ -231,6 +370,8 @@ a codebase with one debugging model: the journal.
 | AC5.12 | Grep `CLAUDE.md` for removed symbol names; must return zero. |
 | AC5.13 | Behavioral regression suite passes for supported runtime behavior, and the migration guide covers the intended public removals/renames with concrete before/after examples. |
 | AC5.14 | CI test `test_public_surface_cleanup` imports `easycat`, inspects `easycat.__all__` and `EasyCatConfig`, and asserts removed legacy exports/config fields are gone or intentionally renamed per the migration guide. |
+| AC5.15 | New test `test_easycat_all_allowlist` — imports `easycat`, asserts `easycat.__all__` exactly matches the RFC-frozen allowlist (set equality, not subset). Any drift fails the test and points the reviewer at the RFC amendment process. |
+| AC5.16 | New test `test_shim_files_removed` — asserts `src/easycat/agent_runner.py`, every file under `src/easycat/agents/`, and the empty `src/easycat/agents/` directory do not exist; grep confirms no stale imports. |
 
 ## Risks and Mitigations
 

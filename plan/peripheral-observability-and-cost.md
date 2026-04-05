@@ -12,8 +12,10 @@
 >
 > - `peripheral-dx-onboarding.md` — line budgets, CLI, templates,
 >   helpers, error diagnostics
-> - `peripheral-provider-ecosystem.md` — Deepgram Flux, Gemini Live,
->   Smart Turn promotion, backchannel filter, realtime cache defaults
+> - `peripheral-redaction.md` — `RedactionPolicy` write filter, safe
+>   snapshots, export-time redaction pass, ready-to-use policies
+> - `peripheral-provider-ecosystem.md` — Deepgram Flux, Smart Turn
+>   promotion, backchannel filter
 > - `peripheral-eval-and-debugger-ui.md` — `easycat.testing`, Simulator
 >   + Judge, forked replay, interactive debugger UI, dev waterfall
 >
@@ -33,9 +35,9 @@ required to debug a failure locally, but all three are required to use
 EasyCat in production:
 
 - **Cost** is a first-class per-turn fact that belongs in the same record
-  store as timing. Voice apps have three cost centers (STT seconds, LLM
-  tokens, TTS characters) — four in realtime mode, where audio tokens
-  dominate.
+  store as timing. Chained voice apps have three cost centers (STT
+  seconds, LLM tokens, TTS characters), and each one needs to be
+  visible per turn.
 - **OTel** is how PydanticAI (via Logfire), LiveKit, Langfuse, Datadog,
   and Honeycomb already integrate. A 2026 voice framework that can't
   speak OTel is dead on arrival. But OTel is not a debugging system —
@@ -52,16 +54,12 @@ warmup stage that makes cold-start latency measurable.
 ### `CostRecord` Shape
 
 Attach a `CostRecord` to every `TurnCompleted` journal record. The
-record models both chained and realtime cost centers — in realtime mode,
-STT seconds and TTS characters do not exist as billable units; audio
-input and output tokens do, and they are 10–30× more expensive per
-"word" than text tokens at current OpenAI Realtime and Gemini Live
-pricing:
+record models the three chained-pipeline cost centers (STT seconds,
+LLM text tokens, TTS characters):
 
 ```python
 @dataclass(frozen=True)
 class CostRecord:
-    # chained-pipeline fields (zero in realtime mode)
     stt_seconds: float
     stt_cost_usd: float
     llm_input_text_tokens: int
@@ -70,22 +68,13 @@ class CostRecord:
     tts_characters: int
     tts_cost_usd: float
 
-    # realtime-session fields (zero in chained mode)
-    audio_input_tokens: int
-    audio_output_tokens: int
-    audio_cost_usd: float
-    cached_input_tokens: int          # prompt caching applies to realtime too
-    cached_input_cost_usd: float
-    cache_hit_ratio: float            # cached / (cached + uncached) input tokens
-
-    # always populated
     total_usd: float
     provider_breakdown: dict[str, float]  # per-provider line items
-    mode: str                         # "chained" | "realtime"
 ```
 
-Realtime audio tokens can cost more per turn than chained GPT-4 text
-tokens. Users deserve to see that before the bill shows up.
+Voice-to-voice / realtime audio-token cost modeling is out of scope —
+EasyCat is a chained voice runtime, see the "Chained Only" rationale
+and Explicit Guardrails in `essential-debug-first-runtime.md`.
 
 ### Pricing Source
 
@@ -106,16 +95,6 @@ provider version strings so replays compute costs at historical rates.
 optionally kills the session at 100%. Kill-switch pattern from Langfuse,
 Helicone, Langsmith. Voice apps burn money faster than chat apps
 because audio tokens are expensive.
-
-### Cache Hit Ratio
-
-`cache_hit_ratio` on the `CostRecord` is the coordinated observability
-piece for the `retention_ratio=0.8` default in
-`peripheral-provider-ecosystem.md`. The runtime default is calibrated to
-hit 80×-discount cached audio input without any user config.
-`easycat doctor` and the debugger waterfall surface the ratio per
-session so regressions (e.g., a prompt edit that busts the cache by
-rewriting turn 1) show up loudly.
 
 ## OTel Export
 
@@ -148,8 +127,7 @@ state and no separate mental model.
 - Single adapter `JournalToOTelExporter` projects journal records to
   OTel spans using the standardized `gen_ai.*` semantic conventions
   (stabilized March 2026) plus an `io.easycat.*` namespace for voice
-  extensions (`io.easycat.stt.ttft_ms`, `io.easycat.tts.ttfb_ms`,
-  `io.easycat.cache_hit_ratio`).
+  extensions (`io.easycat.stt.ttft_ms`, `io.easycat.tts.ttfb_ms`).
 - Auto-detect: if `OTEL_EXPORTER_OTLP_ENDPOINT` is set at startup, the
   projector auto-enables and prints a single line confirming the
   endpoint.
@@ -198,8 +176,7 @@ Verified in journal records and asserted in CI via the eval module in
 | Endpointing | < 30ms | < 80ms | Smart Turn v3.1 (12ms CPU) or Flux native endpointing |
 | LLM TTFT | < 250ms | < 400ms | Framework call → first token |
 | TTS TTFB | < 60ms | < 120ms | Cartesia Sonic 3 (~90ms TTFA) default; `sonic-turbo` hits ~40ms |
-| **E2E (chained)** | **< 1.0s** | **< 1.6s** | user stop → bot start, chained pipeline |
-| **E2E (realtime)** | **< 300ms** | **< 500ms** | OpenAI gpt-realtime / Gemini 3.1 Flash Live |
+| **E2E (chained)** | **< 1.0s** | **< 1.6s** | user stop → bot start |
 
 Numbers come from 2026 benchmarks published by Inworld, Cartesia,
 Speechmatics, Hamming AI, and Daily.co, normalized to the provider
@@ -212,13 +189,6 @@ stage budgets. When a turn misses a budget, the waterfall highlights the
 offending stage in red and the journal record is tagged with
 `budget_exceeded=True` so CI assertions and production alerts fire on
 the same signal.
-
-### Realtime-Mode Addition
-
-`cache_hit_ratio ≥ 0.6` on any session lasting more than five turns.
-Not a wall-clock number but it is the single biggest cost axis in
-realtime mode, and the runtime's default `retention_ratio=0.8` (see
-`peripheral-provider-ecosystem.md`) is calibrated to hit it.
 
 ### Cold-Start Caveat
 
@@ -276,7 +246,6 @@ that forgets to pre-handshake) fail CI.
 |---|---|
 | `CostRecord` attached to `TurnCompleted` | essential Phase 1 (journal records stable) |
 | `PricingSource` protocol, budget alerts, cost rollups | essential Phase 1 |
-| `cache_hit_ratio` field on `CostRecord` | bridge (Phase 2) emits the signal |
 | `JournalToOTelExporter` | essential Phase 1 (journal records stable) |
 | Phoenix CI acceptance test | journal + `CostRecord` shape locked |
 | Latency Budget targets, `budget_exceeded=True` tagging | essential Phase 3 (stage records) |
@@ -290,14 +259,10 @@ that forgets to pre-handshake) fail CI.
    `TurnCompleted`, `PricingSource` protocol, `JournalToOTelExporter`
    with Phoenix CI. All three are additive to the journal and pay zero
    integration debt.
-2. **After essential Phase 2**: coordinate with
-   `peripheral-provider-ecosystem.md` on `cache_hit_ratio` — the
-   bridge-side `retention_ratio=0.8` logic lands and `CostRecord`
-   starts populating the realtime fields.
-3. **During essential Phase 3**: Latency Budget targets wired to stage
+2. **During essential Phase 3**: Latency Budget targets wired to stage
    records, `budget_exceeded=True` tagging, `WarmupStage`. CI latency
    assertions land alongside the eval module.
-4. **After essential Phase 3**: `warmup within 20% of steady state` CI
+3. **After essential Phase 3**: `warmup within 20% of steady state` CI
    guardrail enforced against fixture runs.
 
 ## Competitive Context
@@ -308,12 +273,10 @@ that forgets to pre-handshake) fail CI.
   Phoenix, Arize, Datadog, and Langfuse all consume standardized
   `gen_ai.*` attribute names. Diverging forces users to write a
   translation layer.
-- **OpenAI gpt-realtime GA pricing**: $32/1M audio-in vs $0.40/1M cached
-  — the 80× discount is the single biggest voice AI cost lever in 2026.
 - **Langfuse / Helicone / LangSmith**: all ship budget kill-switches as
   standard. The pattern is settled.
 - **Hamming AI / Cartesia / Inworld / Speechmatics / Daily.co**: 2026
   latency benchmarks that define the target budgets. Human conversation
   runs on a 200–300ms response window; sub-1.5s P50 E2E is the
-  competitive bar for chained pipelines and 160–400ms for realtime.
+  competitive bar for chained pipelines.
 - **Phoenix**: local, free OTLP backend ideal for CI acceptance tests.

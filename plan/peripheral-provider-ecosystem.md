@@ -2,39 +2,43 @@
 
 > **This is a peripheral initiative.** It is not essential to the
 > debug-first thesis in `essential-debug-first-runtime.md`. It is what
-> keeps EasyCat's provider story competitive in 2026 and what makes the
-> realtime mode usable in practice.
+> keeps EasyCat's chained-pipeline provider story competitive in 2026.
 >
 > **Sibling peripheral docs:**
 >
 > - `peripheral-dx-onboarding.md` — line budgets, CLI, templates,
 >   helpers, error diagnostics
+> - `peripheral-redaction.md` — `RedactionPolicy` write filter, safe
+>   snapshots, export-time redaction pass, ready-to-use policies
 > - `peripheral-observability-and-cost.md` — OTel export, cost modeling,
 >   latency budgets, warmup stage
 > - `peripheral-eval-and-debugger-ui.md` — `easycat.testing`, Simulator +
 >   Judge, forked replay, interactive debugger UI, dev waterfall
 >
 > **In scope (this file):** Deepgram Flux STT adapter (conversational
-> STT that collapses VAD + STT + endpointing), Gemini 3.1 Flash Live
-> bridge (second one-API-key realtime path alongside OpenAI Realtime),
-> Smart Turn v3.1 promotion wrapping Pipecat's
-> `LocalSmartTurnAnalyzerV3`, backchannel filter (ML-based
-> false-interruption detection), cache-friendly realtime defaults
-> (`retention_ratio=0.8`, `CacheBust` detection, never-rewrite-prefix
-> invariant).
+> STT that collapses VAD + STT + endpointing), Smart Turn v3.1 promotion
+> wrapping Pipecat's `LocalSmartTurnAnalyzerV3`, backchannel filter
+> (ML-based false-interruption detection).
+>
+> **Permanently out of scope (guardrail, see essential plan):**
+> voice-to-voice / realtime speech-to-speech providers (OpenAI
+> Realtime, Gemini Live, Kyutai, etc.). EasyCat is a chained voice
+> runtime. Users who want voice-to-voice should use the provider SDK
+> directly.
 
 ## Context
 
 The open-source voice peer set (Pipecat, LiveKit Agents, Vocode) and the
-provider landscape (Deepgram Flux, Gemini Live, OpenAI Realtime GA)
+chained-pipeline provider landscape (Deepgram Flux, Cartesia Sonic 3)
 shifted materially in 2026. Several features went from differentiators
 to table stakes. None of these are required to answer the five
 debug-first questions, but the debug-first thesis doesn't win on its own
-if the provider and realtime story falls behind.
+if the chained-pipeline provider story falls behind.
 
-This file owns the provider-side additions plus the realtime
-history-management defaults that only make sense once a realtime
-provider is in play.
+This file owns the provider-side additions for the chained pipeline.
+Voice-to-voice and realtime speech-to-speech are not part of EasyCat's
+scope (see the "Chained Only" rationale and Explicit Guardrails in
+`essential-debug-first-runtime.md`).
 
 ## Provider Additions
 
@@ -49,7 +53,7 @@ my turn-detection config?" disappears entirely.
 When selected, VAD and Smart Turn become passthrough; the user never
 configures them. Auto-selected when `DEEPGRAM_API_KEY` is present and
 `stt=` is omitted. Biggest one-shot simplification available in the 2026
-provider landscape.
+chained-pipeline provider landscape.
 
 Integration notes:
 
@@ -62,23 +66,13 @@ Integration notes:
   mechanism.
 - `easycat doctor` should confirm Flux reachability specifically (its
   WebSocket handshake differs from non-Flux Deepgram endpoints).
-
-### Gemini 3.1 Flash Live Bridge
-
-Second viable one-API-key realtime path alongside OpenAI Realtime. 70
-languages, native barge-in, proactive audio, affective dialog, tool use
-plus Google Search. Zero-friction for users with existing Google Cloud
-credentials.
-
-Integration notes:
-
-- Implemented as an `ExternalAgentBridge` variant (`GeminiLiveAgentBridge`),
-  reusing the realtime mode plumbing from the essential plan.
-- Swapping between OpenAI Realtime and Gemini 3.1 Flash Live should be a
-  one-string config change (`realtime_provider="openai"` vs
-  `"gemini"`).
-- Tool calls bridge through the existing tool-call journal records; no
-  new record type.
+- Flux's native endpointing events flow through the same
+  `TurnStage.snapshot_state()` reproducibility contract as Silero VAD
+  and Smart Turn (see essential-plan "Voice Stage Decisions Must Be
+  Reconstructable" principle). The snapshot records the Flux event
+  stream by artifact ref plus the decision the stage emitted, so a
+  captured session replays deterministically even though the decision
+  itself came from the provider.
 
 ### Smart Turn v3.1 Promotion
 
@@ -124,78 +118,24 @@ comparison goes to LiveKit.
 - Default on behind a single `backchannel_filter=False` escape hatch.
 - No user-facing configuration beyond the on/off toggle.
 
-## Cache-Friendly Realtime Defaults
-
-OpenAI gpt-realtime's GA pricing: $32/1M audio-in, $0.40/1M *cached*
-audio-in — an 80× discount and the single biggest cost lever in voice AI
-2026. Almost nobody gets this right without help: any edit to the
-message prefix busts the cache, and naive history truncation busts it
-every turn.
-
-Runtime defaults must hit the discount without user intervention:
-
-- **`retention_ratio=0.8`** — truncate framework-owned message history
-  in 20% chunks rather than one turn at a time, so the cached prefix
-  stays stable for runs of turns before a bust. Default 0.8 means the
-  runtime truncates in 20% chunks and never edits the cached prefix,
-  which hits the cache discount without the user learning anything. Set
-  to `1.0` to disable truncation; lower for shorter effective context.
-- **Never rewrite the cached prefix** — interruption patches that would
-  edit an already-delivered assistant turn instead append a correction
-  as a new turn. The original turn stays byte-identical to what was
-  cached. This is a hard invariant the bridge must enforce.
-- **`CacheBust` journal record** on the first turn after a bust is
-  detected, with the reason (truncation, prefix edit, tool-call
-  injection). Users can find and fix whatever is causing the
-  regression.
-- **`easycat doctor` reports** `cache_hit_ratio` averaged over recent
-  sessions and warns if it drops below 50% with specific fix
-  suggestions tied to the most recent `CacheBust` reasons.
-
-**Success criterion**: any realtime session lasting more than five
-turns hits `cache_hit_ratio ≥ 0.6` without user config.
-
-Dependencies:
-
-- The `retention_ratio` policy lives in the bridge execution cursor path
-  (essential Phase 2).
-- `CacheBust` is a journal record type that piggybacks on the essential
-  Phase 1 schema, but the detection logic lives in the bridge.
-- `CostRecord.cache_hit_ratio` is the observability piece and lives in
-  `peripheral-observability-and-cost.md`. The two are a coordinated
-  pair.
-
 ## Dependencies on the Essential Plan
 
 | Item | Depends on |
 |---|---|
 | Deepgram Flux STT adapter | stage model (essential Phase 3) for clean integration |
-| Gemini 3.1 Flash Live bridge | bridge (Phase 2), realtime mode support (Phase 3) |
 | Smart Turn v3.1 promotion (Pipecat wrapper) | stage model (Phase 3) |
 | Backchannel filter | `InterruptionController` (Phase 3) |
-| `retention_ratio=0.8`, never-rewrite-prefix invariant | bridge (Phase 2) |
-| `CacheBust` journal record emission | journal records stable (Phase 1), bridge detection logic (Phase 2) |
 
 ## Suggested Sequencing
 
-1. **After essential Phase 2**: `retention_ratio=0.8` and the
-   never-rewrite-prefix invariant land with the bridge, because they
-   are bridge-side behavior. `CacheBust` records start emitting.
-2. **In parallel with essential Phase 3**: Deepgram Flux adapter, Smart
+1. **In parallel with essential Phase 3**: Deepgram Flux adapter, Smart
    Turn v3.1 promotion, backchannel filter. All three exercise the new
    stage model; landing them together stress-tests it.
-3. **After essential Phase 3**: Gemini 3.1 Flash Live bridge, once the
-   realtime session mode is known to work with OpenAI Realtime.
 
 ## Competitive Context
 
 - **Deepgram Flux** (Q1 2026): conversational STT that fuses VAD + STT +
   endpointing into a single streaming API. ~260ms p50 end-of-turn.
-- **Gemini 3.1 Flash Live** (March 2026): 70 languages, native barge-in,
-  proactive audio, affective dialog, tool use + Google Search — second
-  viable one-API-key speech-to-speech runtime alongside OpenAI Realtime.
-- **OpenAI gpt-realtime GA pricing**: $32/1M audio-in, $0.40/1M cached
-  audio-in. 80× discount is the single biggest realtime cost lever.
 - **Pipecat Smart Turn v3.1** (Apache 2.0): industry-standard endpoint
   detector in 2026. Whisper Tiny + linear classifier, ~8M params, 8MB
   int8, 12ms CPU inference, 23 languages. Pipecat ships the wrapper as
@@ -210,3 +150,8 @@ Dependencies:
   signal than silence duration. Smart Turn v3.1 already combines
   prosodic and semantic features, which is why it has displaced older
   alternatives.
+- **OpenAI Realtime and Gemini Live** (2026): voice-to-voice /
+  speech-to-speech realtime APIs. Out of EasyCat's scope by design —
+  see the "Chained Only" rationale in
+  `essential-debug-first-runtime.md`. Users who need realtime use the
+  provider SDK directly.

@@ -7,9 +7,10 @@
 >
 > **Sibling peripheral docs:**
 >
-> - `peripheral-provider-ecosystem.md` — Deepgram Flux, Gemini Live,
->   Smart Turn v3.1 promotion, backchannel filter, realtime cache-friendly
->   defaults
+> - `peripheral-redaction.md` — `RedactionPolicy` write filter, safe
+>   snapshots, export-time redaction pass, ready-to-use policies
+> - `peripheral-provider-ecosystem.md` — Deepgram Flux, Smart Turn v3.1
+>   promotion, backchannel filter
 > - `peripheral-observability-and-cost.md` — OTel export, cost modeling
 >   with pricing source, latency budgets, warmup stage
 > - `peripheral-eval-and-debugger-ui.md` — `easycat.testing`, Simulator +
@@ -185,11 +186,10 @@ Three commands deserve special callouts:
   uv, and Pydantic user now expects. It verifies `OPENAI_API_KEY` /
   `DEEPGRAM_API_KEY` / etc. are present, hits provider endpoints with a
   200ms HEAD request, checks that `onnxruntime` is importable when Smart
-  Turn is requested, probes the default microphone device when transport
-  is `local`, and (in realtime mode) inspects observed `cache_hit_ratio`
-  on recent turns and warns below 50%. It prints a color-coded report
-  with specific fix suggestions tied to `EASYCAT_Exxx` codes. This is the
-  single most effective drop-off killer for voice-agent onboarding.
+  Turn is requested, and probes the default microphone device when
+  transport is `local`. It prints a color-coded report with specific
+  fix suggestions tied to `EASYCAT_Exxx` codes. This is the single most
+  effective drop-off killer for voice-agent onboarding.
 
 - **`easycat dev --reload`** runs the agent under a file watcher and
   reloads the agent module on change. LiveKit Agents 1.5 ships
@@ -217,8 +217,12 @@ Three commands deserve special callouts:
 - `pydantic-ai-workflow`
 - `twilio-phone`
 - `webrtc-browser`
-- `realtime-openai` (OpenAI Realtime speech-to-speech)
-- `realtime-gemini` (Gemini 3.1 Flash Live)
+- `text-chat` (text-mode session for REPL-style testing of agent
+  changes without audio infrastructure)
+
+Voice-to-voice / realtime speech-to-speech templates are explicitly
+out of scope — EasyCat is a chained voice runtime, see the "Chained
+Only" rationale in `essential-debug-first-runtime.md`.
 
 Every template ≤ 15 lines, ships with one MCP server wired up (the
 official `filesystem` server), runs with a single API key. CI regression-
@@ -231,8 +235,8 @@ under 60 seconds in CI.
 - `EasyCatConfig.phone(...)`
 - `EasyCatConfig.browser(...)`
 - `EasyCatConfig.mic(...)`
-- `EasyCatConfig.realtime_openai(...)`
-- `EasyCatConfig.realtime_gemini(...)`
+- `EasyCatConfig.text(...)` — text-mode session, no audio provider
+  wiring
 - `EasyCatConfig.offline(...)`
 
 Match the `easycat init` template set so users can graduate from
@@ -342,14 +346,13 @@ Advanced toggles remain available through config, not low-level internals:
 - `export_debug_bundle=True`
 - `redaction_policy=...`
 - `mode="local" | "webrtc" | "telephony"`
-- `runtime_mode="chained" | "realtime"`
+- `runtime_mode="chained_pipeline" | "text_session"`
 - `smart_turn=True` with `smart_turn_sensitivity=0.5`
 - `backchannel_filter=True`
 - `latency_budget=LatencyBudget(...)`
 - `warmup=True`
 - `mcp_servers=[...]`
 - `max_session_cost_usd=0.50`
-- `retention_ratio=0.8`
 
 ## Quickstart Guardrails
 
