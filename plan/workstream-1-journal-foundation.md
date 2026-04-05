@@ -117,7 +117,11 @@ full `RedactionPolicy` write filter lands later in
 - [ ] Measure STT partial-transcript write rate, P50 turn latency,
   and P90 turn latency on the pre-workstream main branch
 - [ ] Commit results as `perf/baseline.json` with git SHA, hardware
-  notes, and timestamp
+  notes, runner spec, and timestamp
+- [ ] Each measurement is the median of 5 consecutive harness runs
+  to dampen single-run noise. Run on a fixed-spec CI runner (or
+  document the runner spec so the baseline can be re-captured if
+  the runner changes).
 - [ ] This baseline is a prerequisite for any AC that references a
   5% regression threshold (AC1.5a, WS3 AC3.15)
 
@@ -169,6 +173,16 @@ full `RedactionPolicy` write filter lands later in
 - [ ] Implement `ErrorInfo` (exception class, message, notes, traceback
   summary, collapsed third-party frames)
 - [ ] Expose a `JournalRecordKind` enum to make filtering explicit
+- [ ] **Record schema backward compatibility rule.** All record
+  dataclass fields added after the initial WS1 release must have
+  defaults (typically `None`, `""`, `0`, or `{}`). This ensures
+  that bundles exported by an older version can be loaded by a
+  newer version without deserialization failures. The bundle
+  `format_version` (WS4 T4.4) gates format-level changes; record
+  field defaults gate field-level evolution. A CI lint rule
+  asserts every `JournalRecord` subclass field has a default
+  value, with the exception of `sequence` and `session_id` which
+  are always present.
 
 ### T1.2: Artifact Store
 
@@ -635,7 +649,11 @@ Workstream 2A starts.
     records during a session, measures `fsync`/`fdatasync` count
     via `strace` (or equivalent), asserts **zero fsyncs** during
     the session. Fsync only occurs at session close (checkpoint-
-    on-close).
+    on-close). **Platform note:** `strace`-based measurement
+    requires Linux. On macOS, the test uses
+    `DTrace`/`fs_usage` if available with sufficient privileges,
+    otherwise skips with a log line naming the platform
+    limitation. CI runs this test on a Linux runner.
   - `test_sqlite_journal_checkpoint_on_close` — writes records,
     closes the session, asserts that the WAL is checkpointed
     (WAL file size returns to near-zero after close) and the
@@ -685,7 +703,7 @@ Each acceptance criterion maps to a concrete test or procedure.
 | AC1.14 | New test `test_journal_degraded_mode` — patches the backend to raise on `append`, runs a turn, asserts exactly one `JournalDegraded` marker on stderr, session degraded flag set, turn completes without raising, subsequent appends silently drop. |
 | AC1.15 | New test `test_all_providers_expose_version_info` — uses the STT/TTS/transport/telephony factory registries to instantiate each provider with stub credentials and asserts `version_info()` returns a dict with the stable key set. |
 | AC1.16 | CI job `parity-strangler-fig` runs the T1.8.5 harness on every PR and blocks merge on any diff outside the timestamp allowlist. |
-| AC1.17 | Four new tests: `test_sqlite_journal_no_hot_path_fsync` (asserts zero fsyncs during session via strace), `test_sqlite_journal_checkpoint_on_close` (asserts WAL is checkpointed at session close), `test_litestream_sqlite_adapter_round_trip` (gated on Litestream binary), `test_libsql_adapter_round_trip` (gated on `sqld`). Missing binaries skip with a log line. |
+| AC1.17 | Four new tests: `test_sqlite_journal_no_hot_path_fsync` (asserts zero fsyncs during session via strace on Linux; skipped on other platforms with a log line), `test_sqlite_journal_checkpoint_on_close` (asserts WAL is checkpointed at session close), `test_litestream_sqlite_adapter_round_trip` (gated on Litestream binary), `test_libsql_adapter_round_trip` (gated on `sqld`). Missing binaries or unsupported platforms skip with a log line. |
 | AC1.18 | New test `test_journal_adapter_credentials_redacted` — sets synthetic credentials for Litestream and libSQL, runs a turn, greps SQLite and artifact dir for the synthetic values, asserts zero hits. |
 
 ## Risks and Mitigations

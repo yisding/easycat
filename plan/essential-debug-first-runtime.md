@@ -345,9 +345,11 @@ fails one of the non-negotiable constraints above.
 
 ### Journal backend implications
 
-The tier assignments above imply that WS1 ships **two storage
-adapters from day one**, both implementing the `ExecutionJournal`
-protocol:
+The tier assignments above imply that WS1 ships **four journal
+backends from day one**, all implementing the `ExecutionJournal`
+protocol. Two are non-durable (in-memory ring buffer for
+`debug="light"`, plain `SqliteJournal` for local-only
+`debug="full"`); two are durable with replication:
 
 1. **`sqlite+litestream`** — local SQLite at
    `.easycat/journals/<session_id>.sqlite` with WAL mode,

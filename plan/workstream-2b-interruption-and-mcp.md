@@ -10,6 +10,14 @@
 > full per-bridge cancellation-mode tests in this workstream require
 > the controller to exist, so WS2B and WS3 land together rather than
 > sequentially.
+>
+> **Merge ordering**: WS3 merges first (the real
+> `InterruptionController` exists and the barge-in tests pass with
+> it). WS2B merges second and replaces the stub controller with
+> references to the real one. WS2B's CI runs against the WS3
+> branch during development; the final merge is sequenced WS3 →
+> WS2B within the same release. If WS2B is ready before WS3, it
+> gates on WS3's controller extraction (T3.2) landing first.
 > **Successors**: Workstream 4 (Replay and Bundle) consumes the
 > committable-boundary semantics validated here.
 >

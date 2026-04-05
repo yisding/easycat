@@ -157,7 +157,21 @@ surprised by non-determinism.
   replay — use ARTIFACT for deterministic downstream stages or
   LIVE for end-to-end reproduction of framework state."
 - [ ] Implement `replay()` for remaining stages at `ARTIFACT` level
-  where possible (`Transport`, `Audio`, `Telephony`)
+  where possible (`Transport`, `Audio`, `Telephony`):
+  - `AudioStage` (noise reduction / echo cancellation):
+    `ARTIFACT` replay feeds the captured raw input audio through
+    the same NR/EC backend at the same version (version-matched
+    per the provider version check). Deterministic when backend
+    and version match; version mismatch follows the standard
+    provider-version-mismatch policy above.
+  - `TransportStage`: `ARTIFACT` replay feeds captured inbound
+    audio frames into the downstream pipeline and captures
+    outbound frames, bypassing the real transport (no WebSocket,
+    no microphone). This is effectively a passthrough cassette.
+  - `TelephonyStage`: `ARTIFACT` replay feeds captured telephony
+    events (call setup, DTMF, `mark` acknowledgements) from the
+    journal, bypassing the live telephony provider. Useful for
+    replaying call flows without a live SIP/Twilio connection.
 - [ ] Implement `LIVE` replay for all stages by reusing the current
   `execute()` path with captured inputs
 - [ ] **Replay side-effect policy is explicit and fail-closed.**

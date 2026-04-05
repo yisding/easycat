@@ -10,6 +10,13 @@
 > (`InterruptionController` extraction) is the runtime-side consumer
 > of WS2B's bridge-side interruption contract, so the two workstreams
 > land together rather than sequentially.
+>
+> **Merge ordering**: WS3 merges first (controller extraction,
+> stage ports, text mode). WS2B merges second (exercises the
+> controller through the bridges with the full cancellation-mode
+> matrix). WS2B's CI runs against the WS3 branch during
+> development; the final merge is sequenced WS3 → WS2B within
+> the same release.
 > **Successors**: Workstream 4 (Replay and Bundle) depends on the
 > `Stage.replay()` hook introduced here.
 >
@@ -302,6 +309,15 @@ main orchestration model, each stage boundary is journaled with
     path)
   - all audio stages (`Transport`, `Audio`, `VAD`, `STT`, `TTS`,
     `Telephony`) are inactive
+- [ ] In `text_session` mode, `VoiceDeliveryLedger` operates in
+  **text-delivery mode**: every text delta yielded to the caller's
+  `send_text` iterator is immediately marked as delivered (no
+  playback acknowledgement needed, no estimator fallback). The
+  `InterruptionController` reads delivered text from the ledger
+  the same way it does in voice mode — the only difference is
+  that delivery is instantaneous rather than bounded by TTS
+  playback latency. This means interruption cut-point computation
+  in text mode is exact (delivered = yielded), not estimated.
 - [ ] Voice-to-voice / realtime speech-to-speech is not a supported
   runtime mode. `RunContext.runtime_mode` only accepts
   `chained_pipeline` or `text_session`; any other value raises a
@@ -332,9 +348,22 @@ main orchestration model, each stage boundary is journaled with
   if a concurrent `send_text` call races with an in-flight agent
   turn, the `InterruptionController` observes the new text input
   as an interrupt signal and applies the configured cancellation
-  mode to the bridge. This keeps interruption semantics uniform
-  across all three runtime modes and makes text mode a valid
-  repro path for interruption bugs.
+  mode to the bridge. **Detection mechanism:** `send_text`
+  checks `session._current_turn` before opening a new turn. If a
+  turn is already active (the previous `send_text`'s agent stage
+  is still streaming), `send_text` calls
+  `InterruptionController.signal_text_interrupt(new_text)` which
+  emits a `ControlSignalRecord(signal_kind="interrupt",
+  cause="concurrent_send_text")` and applies the configured
+  cancellation mode to the bridge — the same path voice mode's
+  barge-in takes after VAD detection, minus the delivered-text
+  estimation (in text mode, delivered text = all text yielded to
+  the caller's iterator so far, since there is no audio playback
+  latency). The controller then waits for the in-flight turn to
+  drain or stop per the cancellation mode before the new turn
+  proceeds. This keeps interruption semantics uniform across
+  runtime modes and makes text mode a valid repro path for
+  interruption bugs.
 - [ ] Text mode journal records use `stage="turn"` and
   `stage="agent"` with a `runtime_mode="text_session"` field on
   `RunContext` so the debugger UI, replay, and bundle export can
@@ -350,6 +379,15 @@ main orchestration model, each stage boundary is journaled with
   before continuing
 - [ ] Capture post-workstream results in `perf/ws3-final.json` for
   future comparison
+- [ ] **CI variance mitigation.** The perf gate runs on a
+  fixed-spec CI runner (dedicated or tagged instance type, not a
+  shared pool). Each measurement is the median of 5 consecutive
+  harness runs within the same CI job to dampen single-run noise.
+  The baseline (`perf/baseline.json`) records the runner spec; if
+  the runner spec changes, re-capture the baseline before
+  comparing. If a fixed runner is unavailable, widen the gate
+  thresholds to P50 >10% / P90 >15% and document the wider
+  margin in the RFC.
 
 ## Acceptance Criteria
 
