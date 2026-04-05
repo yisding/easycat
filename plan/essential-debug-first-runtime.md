@@ -378,7 +378,7 @@ Out of scope for this plan (and some also out of scope for EasyCat entirely):
   Both frameworks fit cleanly onto the existing
   `ExternalAgentBridge` protocol and would ship as additional
   bridge classes alongside `PydanticAIBridge` and
-  `OpenAIAgentsBridge`. See `deferred-langchain-langgraph-bridge.md`
+  `OpenAIAgentsBridge`. See `peripheral-langchain-langgraph-bridge.md`
   for the protocol-fit analysis, implementation sketch, and
   examples. Adding these later is purely additive — no changes
   to the bridge protocol, journal schema, or workstream plans

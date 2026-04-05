@@ -464,7 +464,7 @@ event stream.
   translators are named `_<framework>_events.py` and live
   alongside their bridges. Any future framework bridge
   (LangChain, LangGraph, etc. — see
-  `deferred-langchain-langgraph-bridge.md`) follows the same
+  `peripheral-langchain-langgraph-bridge.md`) follows the same
   convention: one translator module per framework, sibling to
   the bridge file, with a single `translate_event(event,
   recorder)` entry point. This keeps event-mapping churn from
