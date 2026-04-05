@@ -101,15 +101,33 @@ Workstream 3 (T3.12 post-port gate).
 Both inherit the conversational targets from the "Chained Only" table
 above; the debug-first work must not regress them.
 
+**The hot path is write(), not fsync().** The SQLite adapter runs in
+WAL mode with `PRAGMA synchronous=NORMAL` and batched per-turn
+commits. Under this configuration, committing a transaction is a
+`write()` syscall into the kernel page cache — **not** an `fsync()`
+to the underlying block device. That means per-record latency is
+bounded by memcpy + B-tree insert cost, and is **independent of the
+underlying storage substrate**: a journal append costs the same on
+NVMe, EBS gp3, or a network-attached volume, because none of them
+are touched on the commit path. `fsync()` happens only at WAL
+checkpoint boundaries, which under the plan's configuration run on
+a background thread and never block a turn (see "Journal backend
+implications" below for the checkpoint strategy and the EBS-specific
+example).
+
 **Per-boundary instrumentation overhead (debug-on-by-default mode):**
 
 - Journal `append` (in-memory ring buffer, `debug="light"`):
   **≤ 50µs P50, ≤ 200µs P99**. This is the hot-path default for
   dev and test runs.
-- Journal `append` (SQLite WAL, `debug="full"`): **≤ 500µs P50,
-  ≤ 3ms P99** per record with `EASYCAT_JOURNAL_FSYNC_EVERY=1`. Higher
-  fsync cadence is allowed to trade durability for latency, but the
-  default must meet this ceiling.
+- Journal `append` (SQLite WAL, `debug="full"`): **≤ 100µs P50,
+  ≤ 500µs P99** per record. Measured end-to-end from the append
+  call including the turn-boundary commit (WAL `write()`, no
+  fsync). Because fsync is off the hot path under the plan's
+  configuration, this ceiling is storage-independent — an EBS-
+  backed volume meets the same budget as local NVMe. Checkpoint
+  fsyncs run on the background checkpoint thread and are budgeted
+  separately below.
 - Stage-boundary snapshot (`state_before` + `state_after`,
   serialized through `apply_write_filter`): **≤ 1ms P99** per
   boundary for snapshots under 4KB inline. Snapshots above that
@@ -122,18 +140,41 @@ above; the debug-first work must not regress them.
   **≤ 100µs P99**. Bridges must not perform synchronous framework
   calls inside recorder invocations.
 
-**Cumulative per-turn ceiling.** Across a full turn the sum of all
-instrumentation overhead (journal writes + snapshots + artifact
-writes + recorder calls) must stay under **50ms P99**. A turn that
-spends more than 50ms on debug instrumentation counts as a latency
-regression and fails AC3.15.
+**Background checkpoint budget (off critical path).** The WAL
+checkpoint thread runs `PRAGMA wal_checkpoint(PASSIVE)` on a
+cadence tuned to keep WAL growth bounded. PASSIVE checkpoints never
+block writers — they copy whatever pages they can acquire without
+contention and return. The fsyncs inside a checkpoint eat storage
+tail latency (on EBS, 10–20ms P99 per checkpoint is normal and
+acceptable). The checkpoint thread is allowed to take as long as it
+needs per cycle; the only budget is that it must keep up with WAL
+growth in aggregate. If it cannot, the degraded-mode trigger below
+fires on WAL depth rather than per-write latency.
 
-**Degraded-mode liveness guarantee.** If any single journal write
-takes longer than **10ms** the session enters degraded mode (WS1
-T1.9), surfaces the degraded flag on `JournalView`, and subsequent
-writes become best-effort. Voice turns never block on journal
-writes. This is the invariant that justifies the synchronous-write
-guarantee: correctness without a liveness hazard.
+**Cumulative per-turn ceiling.** Across a full turn the sum of all
+hot-path instrumentation overhead (journal writes + snapshots +
+artifact writes + recorder calls) must stay under **50ms P99**. A
+turn that spends more than 50ms on debug instrumentation counts as
+a latency regression and fails AC3.15. Background checkpoint work
+does not count against this budget; it runs on its own thread and
+affects throughput, not per-turn latency.
+
+**Degraded-mode liveness guarantee.** The session enters degraded
+mode (WS1 T1.9), surfaces the degraded flag on `JournalView`, and
+flips subsequent writes to best-effort when any of the following
+happens:
+
+- A single hot-path journal write takes longer than **2ms** (ten
+  times the P99 ceiling — a clear signal that something is wrong
+  with the process, not the storage).
+- WAL growth exceeds a bounded threshold (default **64MB**) because
+  the background checkpoint thread has fallen behind.
+- The background checkpoint thread has not completed a checkpoint
+  in the last **30 seconds** under active write load.
+
+Voice turns never block on journal writes or checkpoints. This is
+the invariant that makes the debug-first guarantee compatible with
+real-time audio: correctness without a liveness hazard.
 
 **Measurement.** The WS1 T1.0.5 perf baseline captures end-to-end
 turn latency under a known workload (50 partial transcripts/sec for
@@ -352,6 +393,68 @@ users choose via `EasyCatConfig.journal_backend` without changing
 any other code. `peripheral-deployment.md` covers the tuning
 details (Litestream `db`/`replica` config, libSQL `sync_interval`,
 startup-hook file-open warmup).
+
+#### Checkpoint strategy
+
+The SQLite adapter runs with `PRAGMA wal_autocheckpoint=0` — i.e.,
+inline autocheckpoint is **disabled**. This is the single most
+important tuning decision for meeting the latency budget: default
+autocheckpoint fires a PASSIVE checkpoint on a random unlucky
+writer when the WAL grows past ~4MB, which on storage with
+variable fsync tail latency (EBS, network-attached volumes) turns
+into a sporadic multi-ms stall on the hot path. Disabling inline
+autocheckpoint removes that risk entirely.
+
+In its place, the adapter runs a **background checkpoint thread**
+that issues `PRAGMA wal_checkpoint(PASSIVE)` on a cadence tuned to
+keep WAL growth bounded. PASSIVE mode never blocks writers, so the
+worst case is that the checkpoint thread falls behind under load
+and the WAL grows — which the degraded-mode WAL-depth trigger in
+the Latency Budget section catches explicitly.
+
+**This background checkpoint only matters for EBS-class storage**
+(and similar network-attached or high-tail-latency block devices).
+On local NVMe or instance-store SSDs, even the default inline
+autocheckpoint would comfortably meet the per-record ceiling,
+because fsync on local NVMe is sub-ms P99. The background
+checkpoint loop exists specifically so that EBS-backed deployments
+get the same P99 as NVMe-backed deployments without the journal
+adapter having to know which substrate it's running on. Users who
+only ever deploy on local NVMe pay nothing for the background
+thread's existence beyond a negligible idle loop.
+
+**Application crashes do not depend on the checkpoint.** The
+background checkpoint only affects the kernel-crash / power-loss
+durability window (see the `ExecutionJournal` responsibilities
+section). Python-level crashes — unhandled exceptions, OOM kills,
+segfaults in C extensions, audio driver blow-ups, telephony
+disconnects — are fully covered by the kernel page cache
+regardless of when the next checkpoint runs. The voice failure
+modes we actually care about for debugging are all in the
+application-crash category, so the checkpoint cadence is a
+deployment tuning knob, not a correctness requirement.
+
+#### Example: background checkpoint loop for EBS deployments
+
+WS1 ships an example at `examples/journal_ebs_checkpoint.py` that
+demonstrates:
+
+- Configuring `EasyCatConfig.journal_backend` for SQLite with
+  autocheckpoint disabled.
+- Running a PASSIVE checkpoint loop on a dedicated background
+  thread with a configurable cadence (default: every 5 stages or
+  every 2 seconds, whichever comes first).
+- Observing the degraded-mode flag on `JournalView` and reacting
+  to it (log, alert, back off).
+- A comment block explaining why the loop only matters for EBS /
+  network-attached storage and is unnecessary on local NVMe.
+
+The example is **opt-in**. The default SQLite adapter ships with
+the background checkpoint loop built in at a conservative cadence
+that works for all targets; the example shows how to tune it for
+an EBS-heavy deployment or swap in a custom policy. Everyday users
+on Fly volumes, EC2 instance store, or local development never
+need to think about it.
 
 ## Non-Goals
 
@@ -660,25 +763,45 @@ Responsibilities:
   into `ArtifactStore`, not inline blobs)
 - visibility guarantee: `append` returns only after the record is readable
   through the session's `JournalView`, so stage output is never forwarded
-  before the runtime can answer "what just happened?"
-- durable-append guarantee for durable backends: with `debug="full"` and
-  the default `EASYCAT_JOURNAL_FSYNC_EVERY=1`, the appended record is
-  committed before stage output is forwarded. If an operator raises the
-  cadence above `1`, EasyCat logs the relaxed durability window at startup
-  and may lose up to `N-1` trailing records on crash; in-process visibility
-  still remains immediate.
+  before the runtime can answer "what just happened?" Under the SQLite +
+  `synchronous=NORMAL` configuration, this means the record has been
+  handed to the kernel via `write()` — the data lives in the kernel page
+  cache and is owned by the OS from that point on, which is what makes
+  the guarantee cheap enough to honor synchronously on every storage
+  substrate.
 - record/artifact atomicity guarantee: a record may set `input_ref`,
   `output_ref`, or `state_snapshot_ref` only after the referenced artifact
   is fully committed in the selected artifact store. If capture is
   truncated, omitted, or rejected by policy, the ref stays `None` and the
   record carries explicit capture metadata instead. A loadable journal or
   bundle never contains dangling artifact refs.
-- crash-durability with a durable backend: if the Python process segfaults
-  or is OOM-killed mid-turn, the partial journal must be loadable
-  afterward and exportable as a bundle. Voice sessions crash in the field
-  (telephony disconnects, mic drivers, audio buffer underruns) and the
-  crash itself is often the bug worth debugging. In-memory backends waive
-  this and must log a single startup line making the tradeoff explicit.
+- **application-crash durability (always on, inherent to the write path).**
+  If the Python process segfaults, is OOM-killed, hits an unhandled
+  exception, or exits for any reason short of a kernel crash, the
+  committed journal is fully loadable afterward. This is not something the
+  plan has to engineer — it falls out of SQLite's commit protocol. Commits
+  go through `write()` into the kernel page cache, which means the pages
+  are owned by the kernel, not the Python process. When Python dies the
+  kernel's writeback thread still flushes those pages to disk on its
+  normal schedule, regardless of whether the process that wrote them is
+  still alive. The voice failure modes we care about — telephony
+  disconnects, mic drivers, audio buffer underruns, provider exceptions,
+  OOM kills — are all in this category, and are all covered by default
+  under `debug="full"` with zero additional configuration.
+- **kernel-crash / power-loss durability (bounded by checkpoint cadence).**
+  A true kernel panic, hypervisor failure, or power loss can lose any WAL
+  pages not yet fsynced to the underlying block device. Under
+  `synchronous=NORMAL`, fsyncs happen at WAL checkpoint boundaries, so
+  the durability window is "everything since the last completed
+  checkpoint." The background checkpoint strategy defined in the
+  "Journal backend implications" section above bounds this window to a
+  handful of stages in practice. This is a strictly weaker guarantee than
+  application-crash durability, but kernel-level crashes are overwhelmingly
+  ops failures (spot reclaim, hypervisor issues, noisy neighbors) rather
+  than application bugs, and the last few stages of a terminated instance
+  are rarely the most valuable debug artifact. In-memory backends waive
+  both guarantees and must log a single startup line making the tradeoff
+  explicit.
 - configurable backend, with explicit per-mode defaults:
   - `debug="off"` → no backend, zero writes, zero overhead. For
     throughput-bound production where debugging is handled
