@@ -334,13 +334,15 @@ protocol:
 
 1. **`sqlite+litestream`** — local SQLite at
    `.easycat/journals/<session_id>.sqlite` with WAL mode,
-   `PRAGMA synchronous=NORMAL`, batched per-turn commits, and
-   Litestream shipping WAL segments to S3-compatible object
+   `PRAGMA synchronous=NORMAL`, per-record durable appends at the
+   default fsync cadence, and Litestream shipping WAL segments to
+   S3-compatible object
    storage on a sub-second RPO. This is the default for Tier 1
    Fly/EC2/Fargate and Tier 2 Railway with a volume.
 2. **`libsql`** (Turso embedded replica) — in-process libSQL
-   replica with background sync to a remote primary. Reads are
-   local µs, writes sync asynchronously every N seconds. This is
+   replica with local commits on append and background sync to a
+   remote primary. Reads are local µs; remote durability syncs
+   asynchronously every N seconds. This is
    the default for Tier 1 Modal, Tier 2 Cloud Run, and any
    ephemeral-FS host where `sqlite+litestream` would lose WAL
    segments on container exit.
@@ -656,8 +658,21 @@ Responsibilities:
   for deterministic ordering during replay
 - store large payloads via indirection (`input_ref`, `output_ref` pointing
   into `ArtifactStore`, not inline blobs)
-- synchronous write guarantee: journal writes complete before stage output
-  is forwarded, so the journal is never behind reality (Restate principle)
+- visibility guarantee: `append` returns only after the record is readable
+  through the session's `JournalView`, so stage output is never forwarded
+  before the runtime can answer "what just happened?"
+- durable-append guarantee for durable backends: with `debug="full"` and
+  the default `EASYCAT_JOURNAL_FSYNC_EVERY=1`, the appended record is
+  committed before stage output is forwarded. If an operator raises the
+  cadence above `1`, EasyCat logs the relaxed durability window at startup
+  and may lose up to `N-1` trailing records on crash; in-process visibility
+  still remains immediate.
+- record/artifact atomicity guarantee: a record may set `input_ref`,
+  `output_ref`, or `state_snapshot_ref` only after the referenced artifact
+  is fully committed in the selected artifact store. If capture is
+  truncated, omitted, or rejected by policy, the ref stays `None` and the
+  record carries explicit capture metadata instead. A loadable journal or
+  bundle never contains dangling artifact refs.
 - crash-durability with a durable backend: if the Python process segfaults
   or is OOM-killed mid-turn, the partial journal must be loadable
   afterward and exportable as a bundle. Voice sessions crash in the field
@@ -671,13 +686,14 @@ Responsibilities:
   - `debug="light"` (default) → in-memory ring buffer, capacity
     bound. Crash-durability is waived with a startup log line.
     Intended default for quickstart and local development.
-  - `debug="full"` → SQLite WAL backend at
-    `.easycat/journals/<session_id>.sqlite` per the WS1 T1.2.5
-    storage layout. Crash-durable per AC1.8. This is the mode
-    production voice deployments should run in when they want the
-    full debug story; see the "Deployment Targets" section below
-    for how this interacts with serverless vs long-lived VM
-    deployments.
+  - `debug="full"` → durable backend. The default is a SQLite WAL
+    backend at `.easycat/journals/<session_id>.sqlite` per the
+    WS1 T1.2.5 storage layout, but replicated backends such as
+    `sqlite+litestream` and `libsql` plug into the same protocol.
+    This is the mode production voice deployments should run in
+    when they want the full debug story; see the "Deployment
+    Targets" section below for how this interacts with serverless
+    vs long-lived VM deployments.
   - Any other durable backend (Postgres, libSQL/Turso, object
     storage with WAL shipping) plugs into the same
     `ExecutionJournal` protocol as an additional backend. The
@@ -692,9 +708,13 @@ Read-only public journal surface exposed on `Session` as `session.journal`.
 Responsibilities:
 
 - iterate or slice records without exposing append/mutation methods
+- tail live records via `follow(from_sequence: int | None = None) ->
+  AsyncIterator[JournalRecord]` so existing subscriber-style debug flows
+  have a direct migration path
 - resolve artifact references through the artifact store
+- surface `enabled` / `degraded` state without exposing backend internals
 - support the migration path from `EventTraceLogger` subscriptions to
-  journal reads
+  journal reads or `follow()`
 - remain stable enough to support bundle export and offline regression
   tests
 
@@ -718,6 +738,30 @@ tool args, provider bodies) is stored verbatim until the peripheral
 at which point those fields flow through the per-field policy.
 Large snapshots are stored by reference; small inline fields remain
 JSON-safe.
+
+Artifacts are split into two capture classes:
+
+- `replay_critical`: payloads required for deterministic replay or
+  committable-boundary restore (for example STT cassettes, TTS chunks,
+  VAD/Smart Turn artifacts, framework state snapshots). These must be
+  written successfully before the record that references them is published.
+  If they would exceed the hot-path size budget, the stage must segment or
+  encode them into bounded chunks rather than emit one giant payload.
+- `debug_verbose`: payloads useful for diagnosis but not required for
+  replay correctness (for example provider request bodies, large tool
+  results, verbose metadata dumps). These are subject to mode-specific size
+  caps. If capturing them would violate the write-time budget, EasyCat
+  stores a truncated excerpt or drops them and records
+  `metadata.artifact_capture = {"class": "debug_verbose", "status":
+  "truncated" | "dropped", "original_bytes": ...}` on the corresponding
+  journal record instead of emitting a dangling ref.
+
+Retention follows the same contract. In `debug="light"` the in-memory
+artifact store is bounded and evicts records and their now-unreachable
+artifacts together; `JournalView` never exposes a retained record whose ref
+cannot be resolved. In `debug="full"` artifacts are persisted under
+`.easycat/artifacts/<session_id>/` (or the backend-native equivalent) and
+form part of the crash-recovery story.
 
 ### Config and Environment Safety Default
 
@@ -1257,11 +1301,29 @@ data-plane surface they all build on.
 
 ### Default Behavior
 
-Debugging is on by default in a lightweight mode:
+Debugging defaults to `debug="light"`. `debug="off"` is an explicit opt-out
+of capture, not the default.
 
-- IDs and journal records always exist
-- small ring buffers are always available
-- full artifact capture is opt-in or environment-dependent
+### Debug Capability Matrix
+
+`Session.journal` exists in every mode, but its capabilities differ
+explicitly by `EasyCatConfig.debug`:
+
+| `debug` value | Journal backend | Artifact capture | `session.journal` surface | `export_debug_bundle(...)` | Crash recovery | Replay |
+|---|---|---|---|---|---|---|
+| `"off"` | none | none | disabled view (`enabled=False`, zero records, `follow()` yields nothing) | unsupported; raises `DebugCaptureDisabledError` | unavailable | unavailable |
+| `"light"` (default) | in-memory ring buffer | bounded in-memory artifact store; `replay_critical` preserved within the retention window, `debug_verbose` truncated/dropped by policy | read/slice/resolve/`follow()` available for retained records | best-effort from a live or just-finished session while required artifacts are still retained; clear failure if data has been evicted | unavailable | available only from retained in-memory capture; not crash-safe |
+| `"full"` | durable backend (`sqlite`, `sqlite+litestream`, or `libsql`) | persistent artifact store with the same truncation/drop policy for `debug_verbose` payloads and durable retention for `replay_critical` payloads | read/slice/resolve/`follow()` available | supported | supported, subject to the backend's documented replication window | full essential replay surface |
+
+Two clarifications are load-bearing:
+
+- `debug="light"` is intentionally a live-debug mode, not a durability mode.
+  If the process crashes or retention evicts required artifacts, export and
+  replay may become unavailable for older records.
+- `debug="full"` is the only mode that promises crash-recoverable bundles.
+  Backends with remote replication (for example libSQL embedded replicas)
+  may still have a documented trailing-loss window between local commit and
+  remote sync; the backend must surface that window explicitly.
 
 ### Text Mode Entry Point
 
@@ -1284,6 +1346,10 @@ The core public debug surface shipped by this plan is:
   bridge (text_session mode only)
 - `session.export_debug_bundle(...)` for portable capture
 - `RunBundle.load(path)` / `load_bundle(path)` for offline analysis
+
+`session.journal` is always present. In `debug="off"` it is a disabled
+view; in `debug="light"` and `debug="full"` it supports both point-in-time
+reads and `follow()` for live tailing.
 
 This is the supported migration path for users who currently depend on
 event logging, tracing, or in-memory metrics exports.
@@ -1317,6 +1383,27 @@ Each `ReplaySpec` carries its fidelity class explicitly.
 
 Forked replay (time-travel from a chosen checkpoint) is a follow-up once
 the three base classes are stable.
+
+### Replay Safety for Side Effects
+
+Replay must fail closed around tools and MCP. `ReplaySpec` therefore carries
+an explicit `tool_policy`:
+
+- `deny` (default): any tool or MCP invocation attempted during replay
+  raises `ReplaySideEffectBlocked`. This is the default for both
+  `SIMULATED` and `LIVE`.
+- `stub`: the replay may satisfy a tool call only from captured tool
+  results or explicit stub overrides supplied in the replay spec. No
+  network, filesystem, or external side effect is allowed.
+- `allow`: explicit opt-in for reproduction attempts that intentionally
+  re-run real tool side effects. Replay logs a prominent warning and marks
+  the resulting output as side-effecting/unsafe.
+
+For simplicity and safety, the essential plan treats *all* tool and MCP
+calls as side-effecting during replay unless they are satisfied by captured
+results or explicit stubs. `artifact_replay` never re-enters a live
+agent/tool path, and the agent stage's replay story remains
+`simulated_replay` over captured bridge events.
 
 ### Redaction (Deferred)
 
@@ -1586,8 +1673,12 @@ surface shipped.
   explicitly unsupported — see Explicit Guardrails.
 - Replay semantics are explicit about what is deterministic versus
   re-executed.
+- No loadable journal or exported bundle contains dangling artifact refs;
+  truncation/drop decisions are explicit in record metadata.
 - Production failures can be exported and replayed locally, including from
   crashed sessions (journal is crash-durable with SQLite backend).
+- Replay never executes side-effecting tools or MCP calls unless the caller
+  explicitly opts into that behavior.
 - The same underlying records power logs, metrics, and (eventually) the
   debugger UI.
 - EasyCat still clearly presents itself as a runtime around external
@@ -1637,7 +1728,9 @@ Concrete record types for Phase 0 agreement. All records share a base:
 @dataclass(frozen=True)
 class JournalRecord:
     sequence: int              # monotonic within session
-    timestamp: float           # time.monotonic_ns()
+    op_id: str                 # stable across records in one logical op
+    recorded_at_monotonic_ns: int
+    recorded_at_utc: str       # RFC3339 UTC timestamp
     session_id: str
     run_id: str
     turn_id: str | None
@@ -1651,7 +1744,7 @@ class JournalRecord:
     metrics: dict[str, float]  # stage-specific counters
     status: str                # "ok", "error", "cancelled", "timeout"
     error: ErrorInfo | None
-    metadata: dict[str, Any]   # stage-specific, framework-specific extras
+    metadata: dict[str, Any]   # stage-specific extras, including capture status
 ```
 
 Framework transition records extend the base with typed fields:

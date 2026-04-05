@@ -79,6 +79,9 @@ full `RedactionPolicy` write filter lands later in
   - `ArtifactStore` interface
   - backend selection policy (in-memory default, SQLite for
     `debug="full"`)
+  - explicit capability matrix for `debug="off" | "light" | "full"`
+    (journal backend, artifact retention, `Session.journal`
+    behavior, export support, replay support, crash recovery)
   - public debug surface frozen for this phase (`Session.journal`,
     `EasyCatConfig.debug` semantics)
   - `EasyCatConfig.debug` bool→enum migration plan (current
@@ -87,10 +90,19 @@ full `RedactionPolicy` write filter lands later in
     before/after examples and `debug=True` mapping to `debug="full"`)
   - `.easycat/` journal file-system layout (journals, artifacts,
     crash-dumps, recordings, archive subdirectories)
+  - append visibility contract vs durable-append contract
+    (`append` is always immediately readable; `debug="full"` with
+    default fsync cadence is durable before return; higher cadence
+    values relax durability by a bounded trailing-record window)
+  - record/artifact atomicity contract (no durable record may
+    reference an artifact that has not been committed; no dangling
+    refs in any loadable journal or bundle)
   - journal retention policy (session count cap, size cap,
     archive vs delete)
   - journal degraded-mode contract (what happens when a write fails)
   - crash-durability contract (what survives process death mid-turn)
+  - `JournalView.follow()` live-tail API as the migration seam for
+    subscriber-based debug flows
   - strangler-fig wiring plan for the three legacy systems
   - test strategy for incremental migration
 - [ ] Review with stakeholders; merge RFC before implementation begins.
@@ -112,6 +124,8 @@ full `RedactionPolicy` write filter lands later in
 - [ ] Create `src/easycat/runtime/records.py`
 - [ ] Implement `JournalRecord` as a frozen dataclass per the schema in
   `essential-debug-first-runtime.md` appendix
+  - includes explicit `op_id` plus dual time fields
+    (`recorded_at_monotonic_ns`, `recorded_at_utc`)
 - [ ] Implement `FrameworkTransitionRecord` extending `JournalRecord`
 - [ ] Implement `ControlSignalRecord` extending `JournalRecord` with
   the following explicit fields:
@@ -170,6 +184,23 @@ full `RedactionPolicy` write filter lands later in
   re-reading every artifact.
 - [ ] Reads are idempotent; duplicate writes of the same content
   return the same ref without re-hashing
+- [ ] Artifact capture is classed explicitly as
+  `replay_critical` or `debug_verbose`
+  - `replay_critical` artifacts must be committed before the
+    journal record that references them is published
+  - `debug_verbose` artifacts may be truncated or dropped under
+    the write-time budget, but the enclosing record must carry
+    explicit capture-status metadata and leave the ref field
+    unset rather than emit a dangling ref
+- [ ] Artifact backend selection follows `EasyCatConfig.debug`
+  - `debug="off"` → no artifact capture
+  - `debug="light"` → bounded in-memory artifact store
+  - `debug="full"` → persistent artifact store under
+    `.easycat/artifacts/<session_id>/` (or backend-native
+    equivalent for replicated backends)
+- [ ] Retained records must always resolve their artifact refs. If
+  in-memory retention evicts a record, it also evicts artifacts
+  that are now unreachable from the retained journal window.
 
 ### T1.2.5: Storage Layout Contract
 
@@ -204,9 +235,16 @@ full `RedactionPolicy` write filter lands later in
 - [ ] Define `ExecutionJournal` protocol: `append`, `read`, `slice`,
   `close`, `flush`
 - [ ] Define read-only `JournalView` surface used by `Session.journal`
+  - point-in-time reads (`read`, `slice`)
+  - live tailing via `follow(from_sequence: int | None = None)`
+  - status flags (`enabled`, `degraded`)
 - [ ] Implement monotonic per-session sequence counter
-- [ ] Implement synchronous write guarantee — `append` must not return
-  until the record is durable in the selected backend
+- [ ] Implement append visibility guarantee — `append` must not return
+  until the record is visible to `read` on the same session
+- [ ] Implement durable-append contract for durable backends:
+  with `EASYCAT_JOURNAL_FSYNC_EVERY=1` the record is also committed
+  before `append` returns; higher values relax only crash
+  durability, never read-after-write visibility
 
 ### T1.4: Backends
 
@@ -220,15 +258,15 @@ full `RedactionPolicy` write filter lands later in
   - `PRAGMA synchronous=NORMAL` + periodic `wal_checkpoint`
   - fsync cadence configurable via `EASYCAT_JOURNAL_FSYNC_EVERY`
     (default 1; see AC1.5b)
-  - **batched per-turn commits.** The journal accumulates
-    records from a single turn in an `asyncio.Queue` and
-    flushes them in one transaction at turn boundary. Per-
-    record commits blow the latency budget (~1s per turn from
-    `fsync` alone); per-turn commits are ~1ms on NVMe. The
-    read-after-write guarantee (AC1.5a) still holds: within a
-    turn, readers see queued records via the in-memory read
-    path; at turn boundary the queue flushes to SQLite
-    atomically.
+  - **per-record commit by default.** With
+    `EASYCAT_JOURNAL_FSYNC_EVERY=1`, each `append` writes the row
+    and commits it before returning. This is the default and the
+    contract the essential plan assumes.
+  - **bounded durability window when cadence > 1.** If
+    `EASYCAT_JOURNAL_FSYNC_EVERY=N>1`, SQLite may group durability
+    work across at most `N` records. Immediate read-after-write
+    still holds, but crash recovery may lose up to `N-1` trailing
+    records. The selected window is logged once at startup.
   - **Startup file-open warmup.** The backend opens the SQLite
     file eagerly during session construction so the first
     turn does not pay the ~50ms cold `PRAGMA` roundtrip.
@@ -249,15 +287,19 @@ full `RedactionPolicy` write filter lands later in
 - [ ] Implement **`LibsqlJournal`** adapter. Uses the `libsql`
   Python SDK to open an embedded libSQL replica with a remote
   primary URL (Turso or self-hosted libSQL server). Reads are
-  local µs; writes sync asynchronously every
+  local µs; local appends commit before return and remote sync runs
+  asynchronously every
   `EASYCAT_JOURNAL_LIBSQL_SYNC_INTERVAL_S` seconds (default 10)
-  or on explicit `conn.sync()` calls at turn boundary. This is
+  or on explicit `conn.sync()` calls. This is
   the Tier 1 adapter for Modal and the Tier 2 adapter for Cloud
   Run — any ephemeral-FS host where Litestream's WAL shipping
   would race with container exit. Credentials come from
   `EASYCAT_LIBSQL_URL` and `EASYCAT_LIBSQL_AUTH_TOKEN` and are
   both in the WS1 T1.5 safe-default env var allowlist
-  (values are dropped, only presence is recorded).
+  (values are dropped, only presence is recorded). The startup log
+  names the remote-sync interval because crash recovery on an
+  ephemeral host is bounded by the last successful sync, not just
+  the local append.
 - [ ] Backend is selected from `EasyCatConfig.debug` and
   `EasyCatConfig.journal_backend`:
   - `debug="off"` → no backend, zero writes.
@@ -385,8 +427,10 @@ full `RedactionPolicy` write filter lands later in
 
 ### T1.6: Crash Durability
 
-- [ ] SQLite backend survives `SIGKILL` mid-write with at most one
-  in-flight record lost (bounded by `EASYCAT_JOURNAL_FSYNC_EVERY`)
+- [ ] SQLite backend survives `SIGKILL` mid-write with trailing loss
+  bounded by the configured durability window. With the default
+  `EASYCAT_JOURNAL_FSYNC_EVERY=1`, at most one in-flight record is
+  lost.
 - [ ] On session open, detect an unclean shutdown marker and emit a
   `RecoveredSessionMarker` record (defined in T1.1) in the reserved
   `sequence=0` slot of the recovered journal. The post-open
@@ -436,7 +480,7 @@ full `RedactionPolicy` write filter lands later in
 - [ ] Add parity tests comparing legacy output to journal-derived views
   for the same inputs
 - [ ] Add migration note showing `EventTraceLogger` subscriber →
-  `session.journal` read path
+  `session.journal.follow()` live-tail path
 - [ ] Add new journal-specific tests (see Verification)
 
 ### T1.8.5: Strangler-Fig Parity Harness
@@ -490,7 +534,9 @@ Workstream 2A starts.
   note: the current `debug: bool = False` becomes
   `debug: Literal["off","light","full"] = "light"`; callers passing
   `debug=True` get `debug="full"` behavior via a one-release
-  compatibility shim plus `DeprecationWarning`.
+  compatibility shim plus `DeprecationWarning`. The RFC freezes the
+  mode capability matrix for journal access, artifact capture,
+  export, replay, and crash recovery.
 - [ ] **AC1.4** Every post-open record has a monotonic `sequence`
   within its session, strictly increasing from `1`, with no gaps
   under single-writer discipline. The reserved `sequence=0` slot
@@ -500,13 +546,15 @@ Workstream 2A starts.
 - [ ] **AC1.5a** (read-after-write) `append` returns only after the
   record is visible to `read` on the same session, in both backends.
 - [ ] **AC1.5b** (crash durability) SQLite backend fsyncs within
-  `EASYCAT_JOURNAL_FSYNC_EVERY` records (default 1). The risks-
-  section async-queue relaxation, if ever needed, applies only to
-  AC1.5a visibility latency under load — AC1.5b is non-negotiable
-  and independent of any async buffering.
+  `EASYCAT_JOURNAL_FSYNC_EVERY` records (default 1). Higher values
+  explicitly relax only the trailing-loss window; AC1.5a
+  read-after-write visibility remains unchanged.
 - [ ] **AC1.6** Large payloads are stored via `input_ref`/`output_ref`
   pointing into `ArtifactStore`; inline record size stays bounded
-  regardless of artifact size.
+  regardless of artifact size. Any retained record that carries an
+  artifact ref must resolve it successfully; oversized
+  `debug_verbose` payloads are truncated/dropped explicitly rather
+  than leaving dangling refs.
 - [ ] **AC1.7** Config and Environment Safety Default is enforced.
   A test constructs a session with an `EasyCatConfig` containing a
   synthetic API key and exports the journal: the raw key must not
@@ -516,7 +564,9 @@ Workstream 2A starts.
   environment snapshot. Full per-field `RedactionPolicy` coverage is
   out of scope here and lives in `peripheral-redaction.md`.
 - [ ] **AC1.8** SQLite backend survives simulated `SIGKILL` mid-write
-  and is loadable afterwards with at most one in-flight record lost.
+  and is loadable afterwards with trailing loss bounded by the
+  configured durability window; at the default cadence, at most one
+  in-flight record is lost.
 - [ ] **AC1.9** Strangler-fig adapters are in place for
   `EventTraceLogger`, `Tracer`/`SpanManager`, and `InMemoryMetrics`.
   Dual-write is enabled by default.
@@ -526,7 +576,9 @@ Workstream 2A starts.
   a journal whose records can be iterated and show every existing
   observability event.
 - [ ] **AC1.12** `Session.journal` exposes a read-only journal surface
-  suitable for migrating off `EventTraceLogger`.
+  suitable for migrating off `EventTraceLogger`, including
+  `follow()` for live tailing and status flags for `enabled` /
+  `degraded`.
 - [ ] **AC1.13** Any public surface changes introduced here (for example
   `EasyCatConfig.debug` semantics) are frozen in the RFC and covered by
   migration notes with before/after examples.
@@ -542,11 +594,16 @@ Workstream 2A starts.
 - [ ] **AC1.16** Strangler-fig parity (T1.8.5): dual-write parity
   tests pass zero-diff for every event type in the pre-workstream
   test suite, modulo a small explicit timestamp allowlist.
-- [ ] **AC1.17** Journal backend adapters. Three sub-tests:
-  - `test_sqlite_journal_batched_per_turn_commit` — writes 100
-    records during a single turn, measures `fsync` count via
-    `strace` (or equivalent), asserts one `fsync` per turn
-    boundary (not per record).
+- [ ] **AC1.17** Journal backend adapters. Four sub-tests:
+  - `test_sqlite_journal_fsync_window_default` — writes 100
+    records with `EASYCAT_JOURNAL_FSYNC_EVERY=1`, measures
+    `fsync` count via `strace` (or equivalent), asserts the
+    durable backend commits on every record (not merely at turn
+    boundary).
+  - `test_sqlite_journal_fsync_window_relaxed` — repeats with
+    `EASYCAT_JOURNAL_FSYNC_EVERY=10`, asserts the trailing-loss
+    window is bounded and startup logging names the relaxed
+    durability contract.
   - `test_litestream_sqlite_adapter_round_trip` — runs a
     session against a local file-backed Litestream replica
     (`file://./test-replica/`), kills the process, restores
@@ -577,33 +634,34 @@ Each acceptance criterion maps to a concrete test or procedure.
 |---|---|
 | AC1.1 | Git log shows the RFC merge commit on the workstream branch. |
 | AC1.2 | `python -c "from easycat.runtime import journal, records, artifacts, safe_defaults"` exits 0. |
-| AC1.3 | New test `test_journal_backend_selection` — instantiates with `debug="off"`, `debug="light"`, and `debug="full"`, asserts the correct backend class (or `None` for `"off"`) is used. Separate test `test_debug_bool_compat_shim` asserts `debug=True` emits `DeprecationWarning` and routes to `"full"`. |
+| AC1.3 | New test `test_journal_backend_selection` — instantiates with `debug="off"`, `debug="light"`, and `debug="full"`, asserts the correct backend class (or `None` for `"off"`) is used. Companion test `test_debug_capability_matrix` asserts the frozen mode semantics: `"off"` exposes a disabled `Session.journal` and bundle export is rejected, `"light"` uses in-memory capture, `"full"` uses durable capture. Separate test `test_debug_bool_compat_shim` asserts `debug=True` emits `DeprecationWarning` and routes to `"full"`. |
 | AC1.4 | New test `test_journal_monotonic_sequence` — writes 1,000 records to a single session from a single writer task, asserts strictly increasing from 1 with no gaps; asserts `sequence=0` is reserved and only populated by `RecoveredSessionMarker`. |
 | AC1.5a | New test `test_journal_synchronous_append_readback` — after every `append`, immediate `read` returns the record. Applies to both backends. |
 | AC1.5b | New test `test_journal_fsync_cadence` — writes N records to SQLite, asserts the WAL file has been fsynced at least `N / EASYCAT_JOURNAL_FSYNC_EVERY` times via `strace` or `fdatasync` counter. |
-| AC1.6 | New test `test_artifact_store_indirection` — writes a 1MB synthetic audio blob as an artifact, inspects the journal record and asserts its serialized inline size is < 4KB. Second assertion: two writes of identical bytes return the same SHA-256 ref. |
+| AC1.6 | New test `test_artifact_store_indirection_and_atomicity` — writes a 1MB synthetic audio blob as an artifact, inspects the journal record and asserts its serialized inline size is < 4KB. Second assertion: two writes of identical bytes return the same SHA-256 ref. Third assertion: if capture policy truncates or drops an oversized `debug_verbose` payload, the record exposes explicit capture-status metadata and no unresolved ref. |
 | AC1.7 | Two new tests. `test_safe_config_default_drops_api_keys` — constructs a config with a synthetic API key, runs one turn, greps the SQLite file and artifact directory for the key, asserts zero hits. `test_safe_env_default_drops_non_easycat_vars` — sets a sensitive env var outside the `EASYCAT_*` allowlist, runs one turn, asserts it does not appear in any journal record or artifact. |
-| AC1.8 | New test `test_journal_crash_durability` — subprocess writes records to SQLite, parent sends `SIGKILL`, reopens the journal file, asserts records prior to the last flush are intact and a `RecoveredSessionMarker` in `sequence=0` is present; asserts the file was moved to `.easycat/crash-dumps/`. Skipped on tmpfs. |
+| AC1.8 | New test `test_journal_crash_durability` — subprocess writes records to SQLite, parent sends `SIGKILL`, reopens the journal file, asserts records prior to the configured durability window are intact and a `RecoveredSessionMarker` in `sequence=0` is present; asserts the file was moved to `.easycat/crash-dumps/`. Skipped on tmpfs. |
 | AC1.9 | Grep `src/easycat/event_logging.py`, `tracing.py`, `metrics.py` for journal write calls — each must have one; run with `EASYCAT_LEGACY_OBS_DUAL_WRITE=0` and verify journal-only path produces all previously logged events. |
 | AC1.10 | `uv run pytest` exits 0 with no `xfail` or skip additions attributable to this workstream. |
 | AC1.11 | Smoke test script runs `examples/local_chat.py` end-to-end for one turn, iterates the resulting journal, asserts records exist for each stage present in the current pipeline. |
-| AC1.12 | New test `test_session_exposes_read_only_journal` — obtains `session.journal`, verifies records are readable and append/mutation methods are not exposed. |
+| AC1.12 | New test `test_session_exposes_read_only_journal` — obtains `session.journal`, verifies records are readable, `follow()` yields live records in `"light"` / `"full"` mode, append/mutation methods are not exposed, and `"off"` mode surfaces `enabled=False`. |
 | AC1.13 | RFC + migration note include concrete before/after examples for the chosen debug config surface and the new live journal access path. |
 | AC1.14 | New test `test_journal_degraded_mode` — patches the backend to raise on `append`, runs a turn, asserts exactly one `JournalDegraded` marker on stderr, session degraded flag set, turn completes without raising, subsequent appends silently drop. |
 | AC1.15 | New test `test_all_providers_expose_version_info` — uses the STT/TTS/transport/telephony factory registries to instantiate each provider with stub credentials and asserts `version_info()` returns a dict with the stable key set. |
 | AC1.16 | CI job `parity-strangler-fig` runs the T1.8.5 harness on every PR and blocks merge on any diff outside the timestamp allowlist. |
-| AC1.17 | Three new tests: `test_sqlite_journal_batched_per_turn_commit` (asserts one `fsync` per turn via `strace`/`fdatasync` counter), `test_litestream_sqlite_adapter_round_trip` (gated on Litestream binary), `test_libsql_adapter_round_trip` (gated on `sqld`). Missing binaries skip with a log line. |
+| AC1.17 | Four new tests: `test_sqlite_journal_fsync_window_default` (asserts per-record durability at the default cadence), `test_sqlite_journal_fsync_window_relaxed` (asserts the bounded-loss window when cadence > 1), `test_litestream_sqlite_adapter_round_trip` (gated on Litestream binary), `test_libsql_adapter_round_trip` (gated on `sqld`). Missing binaries skip with a log line. |
 | AC1.18 | New test `test_journal_adapter_credentials_redacted` — sets synthetic credentials for Litestream and libSQL, runs a turn, greps SQLite and artifact dir for the synthetic values, asserts zero hits. |
 
 ## Risks and Mitigations
 
-- **Performance overhead of synchronous writes**: synchronous
-  guarantee could throttle the hot path. Mitigation: benchmark on the
-  STT partial-transcript path (highest-frequency events) before and
-  after. If overhead > 5% on P50 turn latency, introduce a per-stage
-  async queue that preserves ordering via sequence numbers while
-  relaxing wall-clock synchrony — but the read-after-write invariant
-  stays.
+- **Performance overhead of synchronous writes**: append visibility
+  plus per-record durability at the default cadence could throttle the
+  hot path. Mitigation: benchmark on the STT partial-transcript path
+  (highest-frequency events) before and after, keep verbose artifact
+  capture bounded, and use the explicitly supported
+  `EASYCAT_JOURNAL_FSYNC_EVERY>1` durability window only when the
+  operator accepts bounded trailing-record loss. Do not reintroduce a
+  hidden async queue that would violate the frozen contract.
 - **SQLite lock contention under high turn rate**: WAL mode and
   single-writer discipline should handle it; benchmark at 50 turns/sec
   sustained; fall back to file-per-session if contention shows up.

@@ -262,7 +262,7 @@ a codebase with one debugging model: the journal.
 
 - [ ] Write `docs/migration-debug-first-runtime.md` (or similar
   location) with before/after snippets:
-  - `EventTraceLogger` subscriber → `session.journal`
+  - `EventTraceLogger` subscriber → `session.journal.follow()`
   - `Tracer.span(...)` context manager → journal stage operations
   - `InMemoryMetrics.record(...)` → derived query over journal
   - `AgentRunner` / `wrap_agent=True` → bridge/stage-native session setup

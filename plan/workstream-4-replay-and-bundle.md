@@ -34,6 +34,7 @@ surprised by non-determinism.
 **In scope:**
 
 - `ReplaySpec` with explicit `fidelity` field
+- explicit replay tool-safety policy (`deny` / `stub` / `allow`)
 - Three replay classes: `artifact_replay`, `simulated_replay`,
   `live_reexecution`
 - Per-stage `replay()` implementation (hook defined in Workstream 3)
@@ -93,6 +94,9 @@ surprised by non-determinism.
   - Bundle loader security model (T4.7.5): path-traversal
     prevention, artifact size caps, JSON-safe metadata size caps,
     SHA-256 ref format validation
+  - replay side-effect policy for tools and MCP (`ToolReplayPolicy`,
+    default-deny behavior, stub override path, explicit unsafe-allow
+    path)
   - ARTIFACT replay nondeterministic-field stripping policy
     (`REPLAY_IGNORE_FIELDS` allowlist covering `timing.wall_ms`,
     `timing.cpu_ms`, any `monotonic_ns` fields)
@@ -104,9 +108,12 @@ surprised by non-determinism.
 
 - [ ] Create `src/easycat/runtime/replay.py`
 - [ ] Define `ReplayFidelity` enum: `ARTIFACT`, `SIMULATED`, `LIVE`
+- [ ] Define `ToolReplayPolicy` enum: `DENY`, `STUB`, `ALLOW`
 - [ ] Define `ReplaySpec` dataclass: `fidelity`, `from_sequence`,
-  `to_sequence`, `stage_filter`, `overrides`
+  `to_sequence`, `stage_filter`, `overrides`, `timing`, `force`,
+  `tool_policy`
 - [ ] Every `ReplaySpec` must have a fidelity value — no default
+- [ ] `tool_policy` defaults to `DENY`
 
 ### T4.2: Stage Replay Implementations
 
@@ -153,6 +160,21 @@ surprised by non-determinism.
   where possible (`Transport`, `Audio`, `Telephony`)
 - [ ] Implement `LIVE` replay for all stages by reusing the current
   `execute()` path with captured inputs
+- [ ] **Replay side-effect policy is explicit and fail-closed.**
+  - `ARTIFACT` replay never re-enters a live agent/tool path.
+  - `SIMULATED` replay also never executes live tools; tool phases
+    for the agent stage are satisfied only from captured events.
+  - `LIVE` replay obeys `ReplaySpec.tool_policy`:
+    - `DENY` (default) — any attempted tool or MCP invocation raises
+      `ReplaySideEffectBlocked`
+    - `STUB` — the invocation may proceed only from captured tool
+      results or explicit replay overrides; no live side effects
+    - `ALLOW` — explicit unsafe opt-in, logs a prominent warning,
+      marks the replay result as side-effecting, and then reuses the
+      real execution path
+  - The essential plan treats *all* tool and MCP calls as
+    side-effecting during replay unless they are satisfied by the
+    `STUB` path. There is no "best effort maybe safe" fallback.
 - [ ] **Nondeterministic-field stripping for ARTIFACT replay.**
   Define a `REPLAY_IGNORE_FIELDS` allowlist in `stages/base.py`
   containing the complete set of clock-derived fields masked
@@ -165,7 +187,8 @@ surprised by non-determinism.
       "timing.cpu_ms",
       "timing.queue_ms",
       "timing.wall_deadline_ns",
-      "timestamp",              # JournalRecord.timestamp (monotonic_ns)
+      "recorded_at_monotonic_ns",
+      "recorded_at_utc",
       # Cursor and stage timing
       "cursor.entered_at",
       "cursor.exited_at",
@@ -287,6 +310,10 @@ surprised by non-determinism.
 - [ ] `path` handling: if `path` exists and `overwrite=False`
   (default), raise `BundleExists`. With `overwrite=True` the
   existing file is replaced atomically (write to temp, rename).
+- [ ] Export from `debug="off"` raises `DebugCaptureDisabledError`.
+  Export from `debug="light"` is supported only while the required
+  in-memory artifacts are still retained; if they have been evicted,
+  raise `DebugCaptureUnavailableError` naming the missing refs.
 - [ ] Export is valid even on a partially-complete journal (e.g.,
   from a crashed session opened via the SQLite recovery path in
   Workstream 1). The partial-journal path uses T4.5.5 rather than
@@ -342,6 +369,8 @@ surprised by non-determinism.
   `BundleValidationError` with a specific reason code):
   - every artifact ref matches `^[a-f0-9]{64}$` (SHA-256 hex
     only, no path components, no `..`, no absolute paths)
+  - every artifact ref referenced by any journal record exists in
+    the bundle's artifact index (no dangling refs)
   - total artifact size does not exceed a configurable cap
     (default 500 MB)
   - per-record `metadata` and `framework_metadata` dicts are
@@ -416,7 +445,10 @@ surprised by non-determinism.
 - [ ] **AC4.6** `src/easycat/debug/bundle.py` and
   `src/easycat/debug/export.py` exist and export a valid bundle.
 - [ ] **AC4.7** `Session.export_debug_bundle(path)` produces a
-  loadable bundle from a running session.
+  loadable bundle from a running session when capture is available,
+  raises `DebugCaptureDisabledError` in `debug="off"`, and raises
+  `DebugCaptureUnavailableError` when required light-mode artifacts
+  have already been evicted.
 - [ ] **AC4.8** Bundle manifest includes SHA-256 per artifact.
 - [ ] **AC4.9** Bundle manifest includes provider version strings for
   every provider touched during the session.
@@ -447,8 +479,9 @@ surprised by non-determinism.
 - [ ] **AC4.19** Bundle loader input validation (T4.7.5) is
   covered by a malformed-bundle test corpus containing path-
   traversal attempts, oversized artifacts, non-JSON metadata,
-  malformed SHA-256 refs, and a `format_version` newer than the
-  loader. Each case raises `BundleValidationError` (or
+  malformed SHA-256 refs, dangling artifact refs, and a
+  `format_version` newer than the loader. Each case raises
+  `BundleValidationError` (or
   `BundleVersionError` for version mismatch) with the expected
   reason code.
 - [ ] **AC4.20** `RunBundle.from_partial_journal()` loads a
@@ -504,6 +537,15 @@ surprised by non-determinism.
   This is the load-bearing test that the five workstreams hold
   together. If it fails, a workstream boundary is broken and the
   failing workstream owns the fix.
+- [ ] **AC4.24** Replay tool safety. Three sub-tests:
+  1. `ReplaySpec(tool_policy=DENY)` blocks the first tool or MCP
+     invocation with `ReplaySideEffectBlocked`.
+  2. `ReplaySpec(tool_policy=STUB)` satisfies the same invocation
+     from a captured tool result or explicit stub override and
+     produces no live side effect.
+  3. `ReplaySpec(tool_policy=ALLOW)` logs a warning, marks the
+     replay result as unsafe/side-effecting, and then permits the
+     live tool path.
 
 ## Verification
 
@@ -517,7 +559,7 @@ surprised by non-determinism.
 | AC4.5a | New test `test_vad_artifact_replay_bit_deterministic` — captures a VAD cassette (audio artifact + `VADStage` snapshot) from a live session, replays against a fresh stage instance via `VADStage.replay(ReplaySpec(fidelity=ARTIFACT))`, asserts byte-identical frame events and `speech_start`/`speech_end` transitions. Parametrized over Silero (mandatory) and Krisp (integration-gated). Cross-references WS3 AC3.16. |
 | AC4.5b | New test `test_smart_turn_artifact_replay_bit_deterministic` — captures a Smart Turn cassette (audio window + `TurnStage` snapshot), replays via `TurnStage.replay(ReplaySpec(fidelity=ARTIFACT))`, asserts byte-identical classification (logits within float tolerance) and endpoint decision. Cross-references WS3 AC3.17. |
 | AC4.6 | `python -c "from easycat.debug.bundle import RunBundle; from easycat.debug.export import export_debug_bundle"` exits 0. |
-| AC4.7 | New test `test_export_and_load_roundtrip` — runs a one-turn session, exports to a temp file, loads, asserts journal records round-trip. |
+| AC4.7 | New test `test_export_and_load_roundtrip` — runs a one-turn session, exports to a temp file, loads, asserts journal records round-trip. Sub-tests cover `debug="off"` raising `DebugCaptureDisabledError` and a light-mode retention-expiry case raising `DebugCaptureUnavailableError`. |
 | AC4.8 | New test `test_bundle_manifest_sha256` — exports a bundle, parses `manifest.json`, asserts every artifact entry has a `sha256` field that matches the file content hash. |
 | AC4.9 | New test `test_bundle_provider_versions` — runs with Deepgram + ElevenLabs, exports, asserts manifest contains version info for both. |
 | AC4.10 | Same test as AC4.9 asserts `format_version` is present and > 0. |
@@ -529,11 +571,12 @@ surprised by non-determinism.
 | AC4.16 | New test `test_bundles_list_discovery` — writes two bundles to a temp directory, calls the discovery function, asserts both are found. |
 | AC4.17 | RFC + migration note include the frozen export/load/replay surface and before/after examples for any config or debug-surface changes introduced here. |
 | AC4.18 | New test `test_replay_nondeterministic_field_stripping` — captures a session, runs ARTIFACT replay twice, diffs outputs with `REPLAY_IGNORE_FIELDS` masked, asserts empty diff. |
-| AC4.19 | New test `test_bundle_loader_validation_corpus` — a fixture directory of malformed bundles (path-traversal, oversized artifact, non-JSON metadata, bad SHA-256 ref, newer format_version). Loader raises `BundleValidationError` or `BundleVersionError` with the expected reason code for each. |
+| AC4.19 | New test `test_bundle_loader_validation_corpus` — a fixture directory of malformed bundles (path-traversal, oversized artifact, non-JSON metadata, bad SHA-256 ref, dangling artifact ref, newer format_version). Loader raises `BundleValidationError` or `BundleVersionError` with the expected reason code for each. |
 | AC4.20 | New test `test_partial_journal_loader_after_sigkill` — reuses the WS1 T1.6 SIGKILL harness, promotes the SQLite file to `.easycat/crash-dumps/`, calls `RunBundle.from_partial_journal()`, asserts the bundle round-trips through `RunBundle.load()` and contains records prior to the crash. |
 | AC4.21 | Parametrized test `test_provider_version_match` over four cases: match (passes), mismatch-no-force (raises `ProviderVersionMismatchError`), mismatch-force (warns, downgrades to `LIVE`), unknown-version (raises with `PROVIDER_VERSION_UNKNOWN`). Each case patches `provider.version_info()` to return controlled values. |
 | AC4.22 | Two new tests: `test_replay_fast_timing_deterministic` asserts byte-identical output with `REPLAY_IGNORE_FIELDS` masked; `test_replay_wall_timing_real_time` records start/stop wall-clock, asserts total replay duration is within 20ms of the sum of original inter-event deltas. |
 | AC4.23 | New integration test `test_cross_workstream_round_trip` in `tests/integration/` — constructs a real session, runs a turn with a committed STT cassette fixture, exports a bundle, loads it in a fresh subprocess, replays with `ARTIFACT` fidelity and `fast` timing, diffs against the original journal. Diff must be empty modulo `REPLAY_IGNORE_FIELDS`. Gated on the fixture cassette existing; first run generates it and subsequent runs replay. |
+| AC4.24 | New test `test_replay_tool_policy_deny_stub_allow` — captures a turn with a tool call, replays it three times: `DENY` raises `ReplaySideEffectBlocked`, `STUB` uses captured result or explicit override without touching the live tool, `ALLOW` logs a warning and marks the replay output as unsafe/side-effecting. |
 
 ## Risks and Mitigations
 
@@ -559,6 +602,10 @@ surprised by non-determinism.
   determinism**: mitigation — `SIMULATED` fidelity includes a
   docstring and a runtime warning on first use in a process:
   `"SIMULATED replay is non-deterministic for LLM calls. Use ARTIFACT for STT/TTS stages or LIVE for end-to-end reproduction."`
+- **Users accidentally replay live side effects**: mitigation —
+  `ToolReplayPolicy.DENY` is the default, `STUB` is the recommended
+  override, and `ALLOW` requires an explicit opt-in that emits a
+  warning and marks the replay result as unsafe/side-effecting.
 - **Committable boundary checks may reject valid replay points** the
   bridge authors didn't anticipate: mitigation — the
   `ExecutionCursor.committable` flag is the single source of truth;
