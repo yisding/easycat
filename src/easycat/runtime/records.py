@@ -127,6 +127,100 @@ class ControlSignalRecord(JournalRecord):
     cause: str | None = None  # e.g. "barge_in", "timeout", "user_cancel"
 
 
+# ── WS2A: Framework transition record subtypes ──────────────────
+
+
+@dataclass(frozen=True)
+class FrameworkUnitEntered(FrameworkTransitionRecord):
+    """A bridge execution unit (agent, tool, node) was entered."""
+
+    direction: Literal["enter", "exit"] = "enter"
+    unit_id: str = ""
+    unit_kind: str = ""  # matches UnitKind values
+    display_name: str = ""
+    parent_unit_id: str | None = None
+    committable: bool = False
+
+
+@dataclass(frozen=True)
+class FrameworkUnitExited(FrameworkTransitionRecord):
+    """A bridge execution unit was exited."""
+
+    direction: Literal["enter", "exit"] = "exit"
+    unit_id: str = ""
+    unit_kind: str = ""
+    display_name: str = ""
+    parent_unit_id: str | None = None
+    committable: bool = False
+    exit_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class FrameworkStateCommitted(FrameworkTransitionRecord):
+    """Emitted *before* mutating framework state in ``apply_interruption``.
+
+    WS2B wraps this in the four-step atomic write ordering.
+    """
+
+    mutation_kind: str = ""  # e.g. "interrupt_truncate", "interrupt_drain"
+    pre_state_ref: str | None = None
+    post_state_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class FrameworkHandoff(FrameworkTransitionRecord):
+    """Records a handoff between two execution units.
+
+    Always part of an atomic triple: ``FrameworkUnitExited`` →
+    ``FrameworkHandoff`` → ``FrameworkUnitEntered``.
+    """
+
+    from_unit: str = ""
+    to_unit: str = ""
+    transition_kind: str = ""  # e.g. "agent_handoff", "graph_transition"
+    handoff_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class FrameworkToolPhaseChanged(FrameworkTransitionRecord):
+    """Records a tool call phase change (start, delta, result, error)."""
+
+    phase: str = ""  # "start", "delta", "result", "error"
+    tool_name: str = ""
+    tool_call_id: str = ""
+    args_ref: str | None = None
+    result_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class FrameworkCancellationBoundaryReached(FrameworkTransitionRecord):
+    """Records that a cancellation boundary was reached.
+
+    ``caused_by_signal_id`` links back to the WS1 ``ControlSignalRecord``
+    that triggered this boundary (see WS1 T1.1 composition note).
+    """
+
+    cancellation_mode: str = ""
+    boundary_reason: str | None = None
+    caused_by_signal_id: str | None = None
+
+
+@dataclass(frozen=True)
+class InterruptionApplyFailed(FrameworkTransitionRecord):
+    """Emitted when ``apply_interruption`` fails after state was committed.
+
+    Paired with a preceding ``FrameworkStateCommitted`` record.
+    """
+
+    mutation_kind: str = ""
+    pre_state_ref: str | None = None
+    post_state_ref: str | None = None
+    failure_error: ErrorInfo | None = None
+
+
+# ── WS1: Recovery and health markers ────────────────────────────
+
+
 @dataclass(frozen=True)
 class RecoveredSessionMarker(JournalRecord):
     """Emitted at sequence=0 when a journal is opened from a prior unclean shutdown.

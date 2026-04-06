@@ -131,7 +131,7 @@ which builds on the bridges shipped here.
 
 ### T2A.0: Architecture Freeze (RFC)
 
-- [ ] Write Phase 2A RFC covering:
+- [x] Write Phase 2A RFC covering:
   - `ExternalAgentBridge` protocol signature
   - `AgentRecorder` protocol: exact method list, forwarding
     semantics through the WS1 `apply_write_filter` hook, lifetime
@@ -196,15 +196,15 @@ which builds on the bridges shipped here.
     orchestration patterns: programmatic hand-off app loop,
     output-type hand-off functions, custom inference backend
     with tool dispatch
-- [ ] Review and merge RFC before implementation.
+- [x] Review and merge RFC before implementation.
 
 ### T2.1: Bridge Protocol, AgentRecorder, and Shared Types
 
-- [ ] Create `src/easycat/integrations/agents/base.py`
-- [ ] Define `ExternalAgentBridge` Protocol with
+- [x] Create `src/easycat/integrations/agents/base.py`
+- [x] Define `ExternalAgentBridge` Protocol with
   `invoke`, `snapshot_state`, `apply_interruption`, `reset`
-- [ ] Define `AgentTurnInput`, `AgentBridgeEvent`
-- [ ] `AgentTurnInput` must be constructible from a raw text string
+- [x] Define `AgentTurnInput`, `AgentBridgeEvent`
+- [x] `AgentTurnInput` must be constructible from a raw text string
   plus optional context, independent of any surrounding voice
   pipeline. This is the seam that the WS3 `text_session` runtime
   mode and `Session.send_text()` rely on: call
@@ -212,7 +212,7 @@ which builds on the bridges shipped here.
   `bridge.invoke()` without needing STT output or a voice turn.
   The existing voice path continues to construct `AgentTurnInput`
   from STT output as it does today.
-- [ ] Define `FrameworkStateSnapshot` dataclass with explicit field
+- [x] Define `FrameworkStateSnapshot` dataclass with explicit field
   shape:
 
   ```python
@@ -241,7 +241,7 @@ which builds on the bridges shipped here.
       kind: str = ""
   ```
 
-- [ ] `FrameworkStateSnapshot` must be JSON-safe, honor the WS1
+- [x] `FrameworkStateSnapshot` must be JSON-safe, honor the WS1
   Config and Environment Safety Default (no raw API keys, auth
   headers, or env dumps), and use artifact refs for large payloads
   rather than raw framework objects. The rule is: any snapshot
@@ -253,16 +253,16 @@ which builds on the bridges shipped here.
   The hook is a no-op in WS1 beyond the hard-coded allowlist;
   `peripheral-redaction.md` later layers a full `RedactionPolicy`
   on top without changing bridge code.
-- [ ] Define `ExecutionCursor` dataclass: `unit_id`, `unit_kind` (enum:
+- [x] Define `ExecutionCursor` dataclass: `unit_id`, `unit_kind` (enum:
   `agent`, `specialist`, `workflow_node`, `model_node`, `tool_call`),
   `display_name`, `parent_unit_id`, `sequence`, `entered_at`,
   `committable`
-- [ ] Define `CancellationMode` enum: `immediate_stop`,
+- [x] Define `CancellationMode` enum: `immediate_stop`,
   `drain_current_unit`, `drain_to_commit_point`
 
 ### T2.1.5: AgentRecorder Protocol
 
-- [ ] Define `AgentRecorder` Protocol in
+- [x] Define `AgentRecorder` Protocol in
   `src/easycat/integrations/agents/base.py` with explicit methods
   and a typed `context` attribute:
 
@@ -348,24 +348,24 @@ which builds on the bridges shipped here.
       def record_framework_error(self, error: ErrorInfo) -> None: ...
   ```
 
-- [ ] Implementations forward each call into the WS1 journal via
+- [x] Implementations forward each call into the WS1 journal via
   `journal.append`, passing through the T1.5 `apply_write_filter`
   hook and the hard-coded safe-default allowlist
-- [ ] `record_cancellation_boundary` forwards `caused_by_signal_id`
+- [x] `record_cancellation_boundary` forwards `caused_by_signal_id`
   onto `FrameworkCancellationBoundaryReached` so WS1
   `ControlSignalRecord`s compose with WS2 framework cancellation
   records (see WS1 T1.1 composition note)
-- [ ] Lifetime contract: bridges receive a fresh `AgentRecorder`
+- [x] Lifetime contract: bridges receive a fresh `AgentRecorder`
   per `invoke()` call, bound to the current `run_id`/`session_id`/
   `turn_id`; stages hold one for their lifetime bound to
   `run_id`/`session_id`
-- [ ] `AgentRecorder.context.mcp_servers` is populated by the
+- [x] `AgentRecorder.context.mcp_servers` is populated by the
   runtime when constructing the recorder, reading from
   `EasyCatConfig.mcp_servers`. Bridges read it but never write
   to it — the context is frozen.
-- [ ] `AgentRecorder` is an internal type (not in `easycat.__all__`);
+- [x] `AgentRecorder` is an internal type (not in `easycat.__all__`);
   only bridges, stages, and the journal touch it
-- [ ] **Invariant enforcement at the recorder boundary.** The
+- [x] **Invariant enforcement at the recorder boundary.** The
   recorder implementation tracks open cursors per turn; calling
   `record_unit_exited` without a matching `record_unit_entered`,
   or exiting cursors in a different order than entered, raises
@@ -376,7 +376,7 @@ which builds on the bridges shipped here.
 
 ### T2.2: Transition Records
 
-- [ ] Add transition record types to
+- [x] Add transition record types to
   `src/easycat/runtime/records.py`. The **complete** list for WS2
   is these seven records; any additional record type requires a
   WS2 RFC amendment, not a silent extension:
@@ -396,8 +396,8 @@ which builds on the bridges shipped here.
     `ErrorInfo`. The runtime treats this as a hard failure and
     falls back to `CancellationMode.immediate_stop` on the
     corresponding turn.
-- [ ] Each extends `FrameworkTransitionRecord` from Workstream 1
-- [ ] Include `from_unit`, `to_unit`, `transition_kind`, `reason`,
+- [x] Each extends `FrameworkTransitionRecord` from Workstream 1
+- [x] Include `from_unit`, `to_unit`, `transition_kind`, `reason`,
   `framework_metadata`, `state_snapshot_ref` fields. Additionally:
   - `FrameworkCancellationBoundaryReached` includes
     `caused_by_signal_id: str | None` linking back to the WS1
@@ -407,7 +407,7 @@ which builds on the bridges shipped here.
     include `mutation_kind: str` naming the kind of mutation
     (`interrupt_truncate`, `interrupt_drain`, etc.) and
     `pre_state_ref` / `post_state_ref` artifact references.
-- [ ] **Handoff record convention.** A handoff emits a triple on
+- [x] **Handoff record convention.** A handoff emits a triple on
   the journal timeline in strictly increasing sequence: one
   `FrameworkUnitExited(unit=from_unit)` record, one
   `FrameworkHandoff(from_unit, to_unit, reason)` record, and one
@@ -418,10 +418,10 @@ which builds on the bridges shipped here.
 
 ### T2.3: OpenAI Agents Bridge
 
-- [ ] Create `src/easycat/integrations/agents/openai_agents.py`
-- [ ] Port `src/easycat/agents/openai_agents.py` contents to a
+- [x] Create `src/easycat/integrations/agents/openai_agents.py`
+- [x] Port `src/easycat/agents/openai_agents.py` contents to a
   bridge-shaped class that implements `ExternalAgentBridge`
-- [ ] Capture and record via the `AgentRecorder`:
+- [x] Capture and record via the `AgentRecorder`:
   - rendered instructions
   - model settings and run config
   - response IDs and `previous_response_id`
@@ -430,14 +430,14 @@ which builds on the bridges shipped here.
     handoffs)
   - framework-managed history snapshots
   - provider request IDs and error payloads
-- [ ] Distinguish text streaming cancellation from tool-call drain
-- [ ] Support server-managed history cases where spoken-text patches
+- [x] Distinguish text streaming cancellation from tool-call drain
+- [x] Support server-managed history cases where spoken-text patches
   are represented as deferred notes (not direct mutation)
-- [ ] Record response-chain continuity separately from agent
+- [x] Record response-chain continuity separately from agent
   transitions
-- [ ] `snapshot_state()` returns current agent, response IDs, local
+- [x] `snapshot_state()` returns current agent, response IDs, local
   history mirror
-- [ ] `apply_interruption(delivered_text, mode)` mutates framework
+- [x] `apply_interruption(delivered_text, mode)` mutates framework
   state appropriately for each mode
 
 ### T2.4: PydanticAI Bridge (Agent and pydantic_graph)
@@ -451,8 +451,8 @@ use the same bridge class; the Graph path additionally emits
 `workflow_node` cursor entries layered on top of the same inner
 event stream.
 
-- [ ] Create `src/easycat/integrations/agents/pydantic_ai.py`
-- [ ] Create shared event-translator module
+- [x] Create `src/easycat/integrations/agents/pydantic_ai.py`
+- [x] Create shared event-translator module
   `src/easycat/integrations/agents/_pydantic_ai_events.py`
   containing one canonical `translate_event(event, recorder)`
   helper that maps every PydanticAI `AgentStreamEvent` subtype
@@ -473,7 +473,7 @@ event stream.
   that wrap multiple constructs in the same framework (e.g.
   `PydanticAIBridge` Agent+Graph modes) share translation code
   cleanly.
-- [ ] `PydanticAIBridge.__init__` accepts **one** of:
+- [x] `PydanticAIBridge.__init__` accepts **one** of:
   - `agent: pydantic_ai.Agent` — single-agent mode. Optional
     `deps`, `model_settings`.
   - `graph: pydantic_graph.Graph` plus
@@ -487,7 +487,7 @@ event stream.
 
 #### Agent mode
 
-- [ ] Capture and record via `agent.iter()` (preferred) or
+- [x] Capture and record via `agent.iter()` (preferred) or
   `agent.run_stream_events()`:
   - input text and message history passed to the framework
   - `deps` and `model_settings` (via safe-default allowlist, not
@@ -503,19 +503,19 @@ event stream.
     `committable=True`
   - final output object (including structured `output_type` values)
   - `new_messages()` history updates
-- [ ] Distinguish model-request nodes from tool-call nodes for
+- [x] Distinguish model-request nodes from tool-call nodes for
   cancellation safety (set `committable=False` on model-request
   nodes while streaming).
-- [ ] Interruption patching walks the in-memory PydanticAI message
+- [x] Interruption patching walks the in-memory PydanticAI message
   history and mutates the most recent `ModelResponse` `TextPart`
   via `object.__setattr__` (matching the existing adapter
   behavior).
-- [ ] `snapshot_state()` returns message history, allowlisted
+- [x] `snapshot_state()` returns message history, allowlisted
   deps/model_settings, and current cursor position.
 
 #### Graph mode (pydantic_graph)
 
-- [ ] `invoke()` walks `Graph.iter(initial_node, state=state)`
+- [x] `invoke()` walks `Graph.iter(initial_node, state=state)`
   asynchronously:
   - For each yielded `BaseNode`, emit a cursor with
     `unit_kind="workflow_node"`, `display_name=type(node).__name__`,
@@ -528,7 +528,7 @@ event stream.
     `reason=<previous node's return branch>` when determinable
   - Check `cancel_token` between nodes; mid-node cancellation is
     cooperative via the event-handler path below
-- [ ] Per-agent event capture inside graph nodes via the
+- [x] Per-agent event capture inside graph nodes via the
   PydanticAI `event_stream_handler` protocol:
   - The bridge constructs a `_GraphEventHandler` instance per
     `invoke()` call that wraps the `recorder` and the shared
@@ -542,7 +542,7 @@ event stream.
     the shared translator, emitting nested cursor entries with
     `parent_unit_id=<current workflow_node id>` and
     `unit_kind="agent"` / `model_node` / `tool_call`
-- [ ] **Convention validation at construction, not runtime.** The
+- [x] **Convention validation at construction, not runtime.** The
   old "emit a warning journal record per turn if the convention
   is not honored" policy is replaced with a construction-time
   check that runs once and fails loudly:
@@ -565,7 +565,7 @@ event stream.
     whose nodes misspelled `_easycat_event_handler` would log a
     warning from a handler that was never called. Hard error,
     fail-fast, single stack trace.
-- [ ] Graph-mode `snapshot_state()` captures:
+- [x] Graph-mode `snapshot_state()` captures:
   - graph class name
   - current active node class name
   - state object serialized via artifact ref (user-defined
@@ -573,7 +573,7 @@ event stream.
     them in a record)
   - `run.result.history` node sequence as a workflow-level
     artifact after each turn
-- [ ] Graph-mode `apply_interruption(delivered_text, mode)` walks
+- [x] Graph-mode `apply_interruption(delivered_text, mode)` walks
   the graph's state for the most recently active agent's message
   history and truncates the last `ModelResponse` `TextPart` using
   the same mechanism as Agent mode. Workflow authors can opt into
@@ -583,9 +583,9 @@ event stream.
   implements the single-phase mutation path only. WS2B wraps it in
   the four-step atomic write ordering (plan → write
   `FrameworkStateCommitted` → apply → paired record).
-- [ ] Graph-mode `reset()` clears state reference, active node,
+- [x] Graph-mode `reset()` clears state reference, active node,
   and any bridge-owned event-handler state.
-- [ ] **Graph-mode MCP forwarding is deferred to WS2B (T2B.7).**
+- [x] **Graph-mode MCP forwarding is deferred to WS2B (T2B.7).**
   The `agents=` constructor argument is reserved at the protocol
   level here so WS2B can wire it without breaking the
   construction API, but no actual forwarding happens in WS2A.
@@ -633,19 +633,19 @@ Users can migrate from shallow to deep incrementally by adding
 the parameter and calling `recorder.*` methods for whichever
 units they care to expose.
 
-- [ ] Create `src/easycat/integrations/agents/generic_workflow.py`
-- [ ] Define `WorkflowProtocol` (shallow) and `DeepWorkflowProtocol`
+- [x] Create `src/easycat/integrations/agents/generic_workflow.py`
+- [x] Define `WorkflowProtocol` (shallow) and `DeepWorkflowProtocol`
   (with recorder) as `typing.Protocol` classes with
   `runtime_checkable`
-- [ ] `GenericWorkflowBridge.__init__` accepts:
+- [x] `GenericWorkflowBridge.__init__` accepts:
   - `workflow: Any` — any object implementing one of the two
     protocols
   - optional `display_name: str` — human-readable label for the
     outer workflow cursor (defaults to `type(workflow).__name__`)
-- [ ] Signature inspection at construction via
+- [x] Signature inspection at construction via
   `inspect.signature(workflow.on_user_turn)` picks shallow vs
   deep mode and freezes the decision for the bridge's lifetime.
-- [ ] `invoke()` in shallow mode:
+- [x] `invoke()` in shallow mode:
   - Emit a single `workflow` cursor entry with
     `unit_kind="workflow_node"`, `committable=False` during
     execution, `committable=True` after the turn completes
@@ -653,7 +653,7 @@ units they care to expose.
     output as `AgentBridgeEvent.text_delta` chunks
   - Emit the `workflow` cursor exit on completion
   - Check `cancel_token` before each yielded chunk
-- [ ] `invoke()` in deep mode:
+- [x] `invoke()` in deep mode:
   - Emit an outer `workflow` cursor entry (same as shallow)
   - Pass `recorder` and `cancel_token` into the user's
     `on_user_turn(text, recorder=..., cancel_token=...)`
@@ -668,7 +668,7 @@ units they care to expose.
     does not validate or constrain which methods the user calls;
     it trusts the user to model their own orchestration.
   - Emit the outer cursor exit on completion
-- [ ] `snapshot_state()`:
+- [x] `snapshot_state()`:
   - In both modes, returns a small snapshot with the workflow
     display name, current mode (shallow or deep), and any state
     the user's workflow object exposes via an optional
@@ -812,17 +812,17 @@ units they care to expose.
 ## Acceptance Criteria
 
 - [ ] **AC2.1** RFC reviewed and merged.
-- [ ] **AC2.2** `src/easycat/integrations/agents/base.py` defines
+- [x] **AC2.2** `src/easycat/integrations/agents/base.py` defines
   `ExternalAgentBridge` Protocol, `AgentTurnInput`, `AgentRecorder`,
   `AgentBridgeEvent`, `FrameworkStateSnapshot`, `ExecutionCursor`,
   `CancellationMode`.
-- [ ] **AC2.3** Seven transition record types exist in `records.py`:
+- [x] **AC2.3** Seven transition record types exist in `records.py`:
   `FrameworkUnitEntered`, `FrameworkUnitExited`,
   `FrameworkStateCommitted`, `FrameworkHandoff`,
   `FrameworkToolPhaseChanged`,
   `FrameworkCancellationBoundaryReached` (with
   `caused_by_signal_id` field), and `InterruptionApplyFailed`.
-- [ ] **AC2.4** `OpenAIAgentsBridge`, `PydanticAIBridge`, and
+- [x] **AC2.4** `OpenAIAgentsBridge`, `PydanticAIBridge`, and
   `GenericWorkflowBridge` exist and all implement
   `ExternalAgentBridge`. `PydanticAIBridge` successfully
   constructs from both a `pydantic_ai.Agent` and a
@@ -873,14 +873,14 @@ units they care to expose.
     `ConventionViolationError` at end-of-turn with a message
     naming the convention. This is a hard error, not a warning
     record.
-- [ ] **AC2.6e** `GenericWorkflowBridge` shallow mode. A user
+- [x] **AC2.6e** `GenericWorkflowBridge` shallow mode. A user
   workflow implementing only `on_user_turn(text) -> str` (or
   streaming) produces a journal with one `workflow_node` cursor
   entry spanning the turn, text deltas derived from the
   returned text, and zero tool-call records. The turn
   completes successfully and the `workflow_node` cursor is
   marked `committable=True` after the turn ends.
-- [ ] **AC2.6f** `GenericWorkflowBridge` deep mode. A user
+- [x] **AC2.6f** `GenericWorkflowBridge` deep mode. A user
   workflow implementing
   `on_user_turn(text, *, recorder, cancel_token)` that calls
   `recorder.record_unit_entered`, `recorder.record_tool_call`,
@@ -896,7 +896,7 @@ units they care to expose.
   test matrix (that lives in WS2B AC2B.7); it is the guarantee
   that existing end-to-end barge-in behavior does not regress
   during WS2A.
-- [ ] **AC2A.7b** `ShallowModeInterruptionError` is raised and
+- [x] **AC2A.7b** `ShallowModeInterruptionError` is raised and
   surfaced correctly at the bridge boundary. A dedicated test
   constructs a `GenericWorkflowBridge` around a shallow workflow
   without `apply_interruption`, calls
@@ -907,7 +907,7 @@ units they care to expose.
 - [ ] **AC2.8** Model-request nodes in PydanticAI are marked
   `committable=False` while streaming and `committable=True` between
   turns.
-- [ ] **AC2.10** No new tool abstraction, registry, decorator, or
+- [x] **AC2.10** No new tool abstraction, registry, decorator, or
   proxy exists in `src/easycat/` — guardrail test passes. The
   test greps for an expanded pattern set including
   `easycat_tool`, `@register_*`, `class .*Registry`,
@@ -916,13 +916,13 @@ units they care to expose.
   review. This guardrail runs in WS2A because the temptation to
   add tool abstractions can arise in bridge design, not just in
   MCP wiring.
-- [ ] **AC2.11** `auto_adapt_agent()` still constructs the correct
+- [x] **AC2.11** `auto_adapt_agent()` still constructs the correct
   bridge when handed an unknown but duck-typed agent object.
 
 > **MCP pass-through ACs (`EasyCatConfig(mcp_servers=[...])`,
 > per-bridge forwarding, mock + filesystem integration tests)
 > live in Workstream 2B AC2B.9.**
-- [ ] **AC2.12** All existing `tests/agents/` and `tests/session/`
+- [x] **AC2.12** All existing `tests/agents/` and `tests/session/`
   tests pass without modification.
 - [ ] **AC2.13** `FrameworkStateSnapshot` values are JSON-safe,
   secret-safe, and contain no raw framework handles or credentials.
@@ -934,7 +934,7 @@ units they care to expose.
   - `state_ref` format validation: every non-null `state_ref`
     matches `^[a-f0-9]{64}$` (SHA-256 hex).
   - `kind` field is non-empty and routes to a known bridge type.
-- [ ] **AC2.13a** `AgentRecorder.context.mcp_servers` is
+- [x] **AC2.13a** `AgentRecorder.context.mcp_servers` is
   populated at recorder construction time from
   `EasyCatConfig.mcp_servers` and is read-only. A test
   instantiates a recorder with a stub config containing
@@ -943,7 +943,7 @@ units they care to expose.
   matching values on every bridge. A second sub-test asserts
   `context` is frozen (`dataclasses.FrozenInstanceError` on any
   mutation attempt).
-- [ ] **AC2.13b** `AgentRecorder.unit()` context manager
+- [x] **AC2.13b** `AgentRecorder.unit()` context manager
   guarantees paired enter/exit on exception. Test runs a
   deep-mode `GenericWorkflowBridge` workflow that raises
   mid-turn inside a `with recorder.unit(cursor):` block,
@@ -953,7 +953,7 @@ units they care to expose.
   - the exception is re-raised to the caller
   - no orphan `FrameworkUnitEntered` without a matching
     `FrameworkUnitExited` appears in the journal
-- [ ] **AC2.13c** `RecorderInvariantError` catches obvious
+- [x] **AC2.13c** `RecorderInvariantError` catches obvious
   deep-mode bugs. Three sub-tests: (1) calling
   `record_unit_exited(cursor)` without a matching enter raises;
   (2) exiting cursor B when cursor A is still open raises;
@@ -961,7 +961,7 @@ units they care to expose.
 - [ ] **AC2.14** Any public config/construction changes introduced here
   (`mcp_servers`, bridge construction, `AgentRunner` migration path,
   adapter naming) are frozen in the RFC and covered by migration notes.
-- [ ] **AC2.15** Voice-to-voice / realtime guardrail test. A grep-
+- [x] **AC2.15** Voice-to-voice / realtime guardrail test. A grep-
   based test asserts zero matches in `src/easycat/` for
   `RealtimeBridge`, `realtime_session`, `RealtimeStage`, or any
   import of `src/easycat/stt/openai_realtime_provider.py` from
@@ -969,7 +969,7 @@ units they care to expose.
   (it predates the redesign and serves chained STT), but nothing
   in the bridge, stage, or session layers may build a realtime
   mode on top of it.
-- [ ] **AC2.16** Each of the three shipped bridges
+- [x] **AC2.16** Each of the three shipped bridges
   (`OpenAIAgentsBridge`, `PydanticAIBridge`,
   `GenericWorkflowBridge`) publishes a static
   `COMMITTABLE_BOUNDARIES` mapping. A parametrized test over all
@@ -991,7 +991,7 @@ units they care to expose.
   snapshot field and asserts the string does not reach the journal
   backend. Per-field `RedactionPolicy` coverage is out of scope
   here and lives in `peripheral-redaction.md`.
-- [ ] **AC2.19** `AgentTurnInput.from_text(text, context=...)`
+- [x] **AC2.19** `AgentTurnInput.from_text(text, context=...)`
   constructs a valid turn input without requiring STT output or a
   voice pipeline. A test calls it directly, passes the result to
   `bridge.invoke()` on every bridge (`OpenAIAgentsBridge`,

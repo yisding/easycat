@@ -17,12 +17,26 @@ def auto_adapt_agent(agent: Any) -> Any:
     instance to :func:`easycat.create_session`.
 
     Supported auto-detected frameworks:
+    - ``ExternalAgentBridge`` -> :class:`BridgeAdapterShim`
     - workflow objects with ``on_user_turn(...)`` -> :class:`PydanticAIWorkflowAdapter`
     - ``pydantic_ai.Agent`` -> :class:`PydanticAIAdapter`
     - ``agents.Agent`` (OpenAI Agents SDK) -> :class:`OpenAIAgentsAdapter`
 
     Unknown agent types are returned unchanged.
     """
+    # New: wrap bridges in the adapter shim for Session compatibility.
+    try:
+        from easycat.integrations.agents.base import ExternalAgentBridge
+
+        if isinstance(agent, ExternalAgentBridge):
+            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+
+            if isinstance(agent, BridgeAdapterShim):
+                return agent
+            return BridgeAdapterShim(agent)
+    except ImportError:
+        pass
+
     if isinstance(agent, BaseAgentAdapter):
         return agent
 
