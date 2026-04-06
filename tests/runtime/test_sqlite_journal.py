@@ -263,3 +263,99 @@ class TestRetention:
         # Should not crash if the directory doesn't exist.
         removed = run_retention(tmp_path / "nonexistent")
         assert removed == 0
+
+
+class TestSqliteHotPathBehavior:
+    """AC1.17: verify checkpoint-on-close and no-fsync-on-hot-path properties."""
+
+    def test_checkpoint_on_close(self, tmp_path):
+        """After close(), the WAL should be checkpointed (truncated to near-zero)."""
+        j = SqliteJournal("sess-ckpt", data_dir=tmp_path)
+        for i in range(100):
+            j.append(
+                kind=JournalRecordKind.EVENT,
+                name=f"event_{i}",
+                session_id="sess-ckpt",
+                data={"i": i},
+            )
+        # Flush to ensure records are in the WAL.
+        j.flush()
+        wal_path = tmp_path / "journals" / "sess-ckpt.sqlite-wal"
+        # WAL should be non-trivial before close.
+        assert wal_path.exists()
+        wal_size_before = wal_path.stat().st_size
+        assert wal_size_before > 0, "WAL should contain data before close"
+
+        j.close()
+
+        # After close(), PRAGMA wal_checkpoint(TRUNCATE) should shrink the WAL.
+        if wal_path.exists():
+            wal_size_after = wal_path.stat().st_size
+            assert wal_size_after == 0, (
+                f"WAL should be truncated to 0 after close, got {wal_size_after}"
+            )
+
+        # All records should still be readable from the main DB file.
+        conn = sqlite3.connect(str(tmp_path / "journals" / "sess-ckpt.sqlite"))
+        count = conn.execute("SELECT COUNT(*) FROM journal").fetchone()[0]
+        conn.close()
+        assert count == 100
+
+    @pytest.mark.skipif(
+        __import__("sys").platform != "linux" or __import__("shutil").which("strace") is None,
+        reason="strace-based fsync counting requires Linux with strace installed",
+    )
+    def test_no_hot_path_fsync(self, tmp_path):
+        """During normal appends, zero fsync/fdatasync calls should occur.
+
+        Uses strace to count fsync/fdatasync syscalls on the journal fd.
+        Only runs on Linux; skipped on other platforms with a log line.
+        """
+        import subprocess
+        import textwrap
+
+        script = textwrap.dedent(f"""\
+            import sys
+            sys.path.insert(0, "src")
+            from easycat.runtime.journal import SqliteJournal
+            from easycat.runtime.records import JournalRecordKind
+
+            j = SqliteJournal("strace-sess", data_dir="{tmp_path}")
+            for i in range(100):
+                j.append(
+                    kind=JournalRecordKind.EVENT,
+                    name=f"event_{{i}}",
+                    session_id="strace-sess",
+                )
+            j.flush()
+            # Do NOT close — close triggers the checkpoint which may fsync.
+            # We only care about the hot path.
+            print("done")
+        """)
+
+        result = subprocess.run(
+            ["strace", "-e", "trace=fsync,fdatasync", "-f", "-c", "python", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        # strace -c prints a summary table to stderr.  If fsync/fdatasync
+        # appear, the count will be > 0.  On a clean run they should not
+        # appear at all (or appear with 0 calls).
+        stderr = result.stderr
+        fsync_calls = 0
+        for line in stderr.splitlines():
+            # strace -c output lines look like:
+            #   % time     seconds  usecs/call     calls    errors syscall
+            #   ------ ----------- ----------- --------- --------- -------
+            #   100.00    0.000010          10         1           fsync
+            parts = line.split()
+            if parts and parts[-1] in ("fsync", "fdatasync"):
+                try:
+                    fsync_calls += int(parts[-3])
+                except (ValueError, IndexError):
+                    pass
+        assert fsync_calls == 0, (
+            f"Expected zero fsync/fdatasync on hot path, got {fsync_calls}.\n"
+            f"strace output:\n{stderr}"
+        )

@@ -23,6 +23,14 @@ from easycat.tts.input import TTSInput
 # ── Stub implementations ──────────────────────────────────────────
 
 
+_STUB_VERSION = {
+    "provider": "stub",
+    "model": "unknown",
+    "api_version": "unknown",
+    "sdk_version": "unknown",
+}
+
+
 class StubSTT:
     async def start_stream(self) -> None:
         pass
@@ -35,6 +43,9 @@ class StubSTT:
 
     async def events(self) -> AsyncIterator[STTEvent]:
         yield STTEvent(type=STTEventType.FINAL, text="stub")
+
+    def version_info(self) -> dict[str, str]:
+        return _STUB_VERSION
 
 
 class StubTTS:
@@ -54,6 +65,9 @@ class StubTTS:
     async def cancel(self) -> None:
         pass
 
+    def version_info(self) -> dict[str, str]:
+        return _STUB_VERSION
+
 
 class StubVAD:
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
@@ -70,10 +84,16 @@ class StubVAD:
     ) -> None:
         pass
 
+    def version_info(self) -> dict[str, str]:
+        return _STUB_VERSION
+
 
 class StubNoiseReducer:
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         return chunk
+
+    def version_info(self) -> dict[str, str]:
+        return _STUB_VERSION
 
 
 class StubTransport:
@@ -91,6 +111,9 @@ class StubTransport:
 
     async def clear_audio(self) -> None:
         pass
+
+    def version_info(self) -> dict[str, str]:
+        return _STUB_VERSION
 
 
 # ── Protocol conformance tests ────────────────────────────────────

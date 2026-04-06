@@ -124,6 +124,14 @@ class QueueTransport:
     async def clear_audio(self) -> None:
         self.clear_calls += 1
 
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "test",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }
+
     async def push_audio(self, *chunks: AudioChunk) -> None:
         for chunk in chunks:
             await self._incoming.put(chunk)

@@ -45,6 +45,10 @@ class STTProvider(Protocol):
         """Return an async iterator of provider-scoped STT events."""
         ...
 
+    def version_info(self) -> dict[str, str]:
+        """Return stable-shape dict: provider, model, api_version, sdk_version."""
+        ...
+
 
 # ── TTS Provider ───────────────────────────────────────────────────
 
@@ -74,6 +78,10 @@ class TTSProvider(Protocol):
         """Immediately cancel synthesis and discard pending output."""
         ...
 
+    def version_info(self) -> dict[str, str]:
+        """Return stable-shape dict: provider, model, api_version, sdk_version."""
+        ...
+
 
 # ── VAD Provider ───────────────────────────────────────────────────
 
@@ -101,6 +109,10 @@ class VADProvider(Protocol):
         """Configure VAD thresholds and buffering parameters."""
         ...
 
+    def version_info(self) -> dict[str, str]:
+        """Return stable-shape dict: provider, model, api_version, sdk_version."""
+        ...
+
 
 # ── Noise Reducer ──────────────────────────────────────────────────
 
@@ -114,6 +126,10 @@ class NoiseReducer(Protocol):
 
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         """Process an audio chunk and return a noise-reduced version."""
+        ...
+
+    def version_info(self) -> dict[str, str]:
+        """Return stable-shape dict: provider, model, api_version, sdk_version."""
         ...
 
 
@@ -133,6 +149,10 @@ class EchoCanceller(Protocol):
 
     def feed_reference(self, chunk: AudioChunk) -> None:
         """Feed a far-end audio chunk as the AEC reference signal."""
+        ...
+
+    def version_info(self) -> dict[str, str]:
+        """Return stable-shape dict: provider, model, api_version, sdk_version."""
         ...
 
 
@@ -169,6 +189,10 @@ class Transport(Protocol):
         The default implementation is a no-op for transports without
         outbound buffering.
         """
+        ...
+
+    def version_info(self) -> dict[str, str]:
+        """Return stable-shape dict: provider, model, api_version, sdk_version."""
         ...
 
 

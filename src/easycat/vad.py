@@ -111,6 +111,14 @@ class _VADBase:
         self._silence_start_time = None
         self._speech_confirmed = False
 
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "unknown",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }
+
 
 # ── Silero VAD (open-source) ────────────────────────────────────────
 
@@ -201,6 +209,14 @@ class SileroVAD(_VADBase):
             except Exception:
                 pass
 
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "silero",
+            "model": "silero-vad",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }
+
 
 # ── Krisp VAD (commercial) ──────────────────────────────────────────
 
@@ -266,6 +282,21 @@ class KrispVAD(_VADBase):
             except Exception:
                 pass
             self._session = None
+
+    def version_info(self) -> dict[str, str]:
+        sdk_ver = "unknown"
+        try:
+            from importlib.metadata import version
+
+            sdk_ver = version("krisp-audio")
+        except Exception:
+            pass
+        return {
+            "provider": "krisp",
+            "model": "krisp-vad",
+            "api_version": "unknown",
+            "sdk_version": sdk_ver,
+        }
 
     def __del__(self) -> None:
         self.close()
@@ -335,6 +366,14 @@ class TenVAD(_VADBase):
         """Reset VAD internal state."""
         super().reset()
         self._buffer = b""
+
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "ten",
+            "model": "ten-vad",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }
 
 
 # ── Factory ─────────────────────────────────────────────────────────

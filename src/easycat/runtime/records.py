@@ -30,6 +30,8 @@ class TimingInfo:
 
     wall_ns: int = 0  # time.time_ns()
     mono_ns: int = 0  # time.monotonic_ns()
+    cpu_ns: int = 0  # time.process_time_ns() — CPU time spent in process
+    queue_ns: int = 0  # time waiting in a stage queue (filled by WS3 stages)
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,37 @@ class ErrorInfo:
     type: str = ""
     message: str = ""
     traceback: str | None = None
+    notes: str | None = None  # additional context (e.g. retry count, affected stage)
+
+    @staticmethod
+    def from_exception(exc: BaseException, *, notes: str | None = None) -> ErrorInfo:
+        """Capture an ``ErrorInfo`` from a live exception.
+
+        Third-party frames (site-packages) are collapsed to a single
+        ``...N frames...`` line to keep journal records readable.
+        """
+        import traceback as tb_mod
+
+        raw_lines = tb_mod.format_exception(type(exc), exc, exc.__traceback__)
+        collapsed: list[str] = []
+        skip_run = 0
+        for line in "".join(raw_lines).splitlines(keepends=True):
+            if "site-packages" in line:
+                skip_run += 1
+            else:
+                if skip_run:
+                    collapsed.append(f"  ...{skip_run} third-party frame(s)...\n")
+                    skip_run = 0
+                collapsed.append(line)
+        if skip_run:
+            collapsed.append(f"  ...{skip_run} third-party frame(s)...\n")
+
+        return ErrorInfo(
+            type=type(exc).__qualname__,
+            message=str(exc),
+            traceback="".join(collapsed),
+            notes=notes,
+        )
 
 
 @dataclass(frozen=True)

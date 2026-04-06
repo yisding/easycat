@@ -95,6 +95,21 @@ class LiveKitAEC:
         for frame in frames:
             self._apm.process_reverse_stream(frame)
 
+    def version_info(self) -> dict[str, str]:
+        sdk_ver = "unknown"
+        try:
+            from importlib.metadata import version
+
+            sdk_ver = version("livekit")
+        except Exception:
+            pass
+        return {
+            "provider": "livekit",
+            "model": "webrtc-aec3",
+            "api_version": "unknown",
+            "sdk_version": sdk_ver,
+        }
+
 
 # ── Passthrough (no-op) ──────────────────────────────────────────
 
@@ -107,6 +122,14 @@ class PassthroughAEC:
 
     def feed_reference(self, chunk: AudioChunk) -> None:
         pass
+
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "passthrough",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }
 
 
 # ── Config & factory ─────────────────────────────────────────────

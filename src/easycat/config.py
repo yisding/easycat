@@ -186,6 +186,8 @@ class EasyCatConfig:
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
     debug: Literal["off", "light", "full"] | bool = "light"
+    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
+    journal_retention: Literal["archive", "delete"] = "archive"
 
     def __post_init__(self) -> None:
         # ── Bool → enum compat shim (one-release deprecation) ────
@@ -291,7 +293,11 @@ def _create_artifact_store(
 def create_session(config: EasyCatConfig) -> Session:
     """Create a fully wired Session from EasyCatConfig."""
     session_id = f"session-{uuid4().hex[:12]}"
-    journal = create_journal(session_id, debug=config.debug) if config.debug != "off" else None
+    journal = (
+        create_journal(session_id, debug=config.debug, backend=config.journal_backend)
+        if config.debug != "off"
+        else None
+    )
     artifact_store = _create_artifact_store(session_id, config.debug)
 
     event_bus = EventBus()

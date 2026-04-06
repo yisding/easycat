@@ -50,8 +50,15 @@ class ExecutionJournal(Protocol):
         data: dict[str, Any] | None = None,
         error: ErrorInfo | None = None,
         tags: frozenset[str] = frozenset(),
+        input_ref: str | None = None,
+        output_ref: str | None = None,
     ) -> int:
         """Append a record. Returns the assigned sequence number.
+
+        *input_ref* / *output_ref* are stable artifact-store refs (SHA-256
+        hex).  The caller must ensure the referenced artifact has been
+        committed **before** calling ``append`` — this is the atomicity
+        contract that guarantees no durable record carries a dangling ref.
 
         Must never raise — failures trigger degraded mode.
         """
@@ -102,14 +109,24 @@ class JournalView:
         return self._journal.slice(kind=kind, session_id=session_id)
 
     async def follow(
-        self, *, poll_interval: float = 0.05
+        self,
+        *,
+        from_sequence: int | None = None,
+        poll_interval: float = 0.05,
     ) -> collections.abc.AsyncIterator[JournalRecord]:
         """Yield new records as they are appended.
+
+        *from_sequence* sets the starting cursor.  ``None`` (default) means
+        start after the current ``latest_sequence`` — i.e. only future records.
+        Pass ``0`` to replay the full history then live-tail.
 
         Polls ``latest_sequence`` on *poll_interval* seconds.  Designed as
         the migration seam replacing ``EventTraceLogger`` subscriber flows.
         """
-        cursor = self._journal.latest_sequence + 1
+        if from_sequence is not None:
+            cursor = from_sequence
+        else:
+            cursor = self._journal.latest_sequence + 1
         while True:
             records = self._journal.read(start=cursor)
             for rec in records:
@@ -156,11 +173,23 @@ class InMemoryRingBuffer:
         data: dict[str, Any] | None = None,
         error: ErrorInfo | None = None,
         tags: frozenset[str] = frozenset(),
+        input_ref: str | None = None,
+        output_ref: str | None = None,
     ) -> int:
         if self._degraded:
             return -1
         try:
-            return self._do_append(kind, name, session_id, turn_id, data, error, tags)
+            return self._do_append(
+                kind,
+                name,
+                session_id,
+                turn_id,
+                data,
+                error,
+                tags,
+                input_ref,
+                output_ref,
+            )
         except Exception as exc:
             self._enter_degraded(session_id, exc)
             return -1
@@ -212,8 +241,14 @@ class InMemoryRingBuffer:
         data: dict[str, Any] | None,
         error: ErrorInfo | None,
         tags: frozenset[str],
+        input_ref: str | None = None,
+        output_ref: str | None = None,
     ) -> int:
-        now_timing = TimingInfo(wall_ns=time.time_ns(), mono_ns=time.monotonic_ns())
+        now_timing = TimingInfo(
+            wall_ns=time.time_ns(),
+            mono_ns=time.monotonic_ns(),
+            cpu_ns=time.process_time_ns(),
+        )
         with self._lock:
             was_full = len(self._buf) == self._capacity
             self._seq += 1
@@ -227,6 +262,8 @@ class InMemoryRingBuffer:
                 turn_id=turn_id,
                 data=data or {},
                 error=error,
+                input_ref=input_ref,
+                output_ref=output_ref,
                 tags=tags,
             )
             self._buf.append(record)
@@ -248,7 +285,11 @@ class InMemoryRingBuffer:
         marker = JournalDegraded(
             sequence=-1,
             session_id=session_id,
-            timing=TimingInfo(wall_ns=time.time_ns(), mono_ns=time.monotonic_ns()),
+            timing=TimingInfo(
+                wall_ns=time.time_ns(),
+                mono_ns=time.monotonic_ns(),
+                cpu_ns=time.process_time_ns(),
+            ),
             data={
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
@@ -287,11 +328,14 @@ CREATE TABLE IF NOT EXISTS journal (
     name         TEXT    NOT NULL DEFAULT '',
     wall_ns      INTEGER NOT NULL DEFAULT 0,
     mono_ns      INTEGER NOT NULL DEFAULT 0,
+    cpu_ns       INTEGER NOT NULL DEFAULT 0,
+    queue_ns     INTEGER NOT NULL DEFAULT 0,
     turn_id      TEXT,
     data         TEXT    NOT NULL DEFAULT '{}',
     error_type   TEXT,
     error_msg    TEXT,
     error_tb     TEXT,
+    error_notes  TEXT,
     input_ref    TEXT,
     output_ref   TEXT,
     tags         TEXT    NOT NULL DEFAULT ''
@@ -405,7 +449,11 @@ class SqliteJournal:
 
         # Emit recovery marker at sequence=0 if we detected unclean shutdown.
         if self._recovered:
-            now = TimingInfo(wall_ns=time.time_ns(), mono_ns=time.monotonic_ns())
+            now = TimingInfo(
+                wall_ns=time.time_ns(),
+                mono_ns=time.monotonic_ns(),
+                cpu_ns=time.process_time_ns(),
+            )
             self._conn.execute(
                 "INSERT OR REPLACE INTO journal "
                 "(sequence, session_id, kind, name, wall_ns, mono_ns, data, tags) "
@@ -433,11 +481,23 @@ class SqliteJournal:
         data: dict[str, Any] | None = None,
         error: ErrorInfo | None = None,
         tags: frozenset[str] = frozenset(),
+        input_ref: str | None = None,
+        output_ref: str | None = None,
     ) -> int:
         if self._degraded or self._closed:
             return -1
         try:
-            return self._do_append(kind, name, session_id, turn_id, data, error, tags)
+            return self._do_append(
+                kind,
+                name,
+                session_id,
+                turn_id,
+                data,
+                error,
+                tags,
+                input_ref,
+                output_ref,
+            )
         except Exception as exc:
             self._enter_degraded(session_id, exc)
             return -1
@@ -537,17 +597,21 @@ class SqliteJournal:
         data: dict[str, Any] | None,
         error: ErrorInfo | None,
         tags: frozenset[str],
+        input_ref: str | None = None,
+        output_ref: str | None = None,
     ) -> int:
         now_wall = time.time_ns()
         now_mono = time.monotonic_ns()
+        now_cpu = time.process_time_ns()
         with self._lock:
             self._seq += 1
             seq = self._seq
             self._conn.execute(
                 "INSERT INTO journal "
-                "(sequence, session_id, kind, name, wall_ns, mono_ns, "
-                "turn_id, data, error_type, error_msg, error_tb, tags) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(sequence, session_id, kind, name, wall_ns, mono_ns, cpu_ns, "
+                "turn_id, data, error_type, error_msg, error_tb, error_notes, "
+                "input_ref, output_ref, tags) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     seq,
                     session_id,
@@ -555,11 +619,15 @@ class SqliteJournal:
                     name,
                     now_wall,
                     now_mono,
+                    now_cpu,
                     turn_id,
                     json.dumps(data or {}, default=str),
                     error.type if error else None,
                     error.message if error else None,
                     error.traceback if error else None,
+                    error.notes if error else None,
+                    input_ref,
+                    output_ref,
                     ",".join(sorted(tags)) if tags else "",
                 ),
             )
@@ -583,18 +651,26 @@ class SqliteJournal:
             name,
             wall_ns,
             mono_ns,
+            cpu_ns,
+            queue_ns,
             turn_id,
             data_str,
             error_type,
             error_msg,
             error_tb,
+            error_notes,
             input_ref,
             output_ref,
             tags_str,
         ) = row
         error = None
         if error_type:
-            error = ErrorInfo(type=error_type, message=error_msg or "", traceback=error_tb)
+            error = ErrorInfo(
+                type=error_type,
+                message=error_msg or "",
+                traceback=error_tb,
+                notes=error_notes,
+            )
         tag_set = frozenset(tags_str.split(",")) if tags_str else frozenset()
         return JournalRecord(
             sequence=sequence,
@@ -602,7 +678,7 @@ class SqliteJournal:
             kind=JournalRecordKind(kind_str),
             op_id=op_id,
             name=name,
-            timing=TimingInfo(wall_ns=wall_ns, mono_ns=mono_ns),
+            timing=TimingInfo(wall_ns=wall_ns, mono_ns=mono_ns, cpu_ns=cpu_ns, queue_ns=queue_ns),
             turn_id=turn_id,
             data=json.loads(data_str) if data_str else {},
             error=error,
@@ -688,26 +764,36 @@ def create_journal(
     session_id: str,
     *,
     debug: Literal["off", "light", "full"] = "light",
+    backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     capacity: int = 10_000,
     data_dir: str | None = None,
 ) -> InMemoryRingBuffer | SqliteJournal:
-    """Create a journal backend based on the debug level.
+    """Create a journal backend based on the debug level and backend selection.
 
     - ``"off"``   — caller should not call this (returns in-memory as fallback)
-    - ``"light"`` — in-memory ring buffer
-    - ``"full"``  — SQLite WAL-mode journal on disk
+    - ``"light"`` — in-memory ring buffer (ignores *backend*)
+    - ``"full"``  — persistent backend selected by *backend*:
+      - ``"sqlite"`` (default) — local SQLite WAL journal
+      - ``"sqlite+litestream"`` — reserved for LitestreamSqliteJournal (deferred)
+      - ``"libsql"`` — reserved for LibsqlJournal (deferred)
     """
     if debug == "full":
+        if backend in ("sqlite+litestream", "libsql"):
+            logger.warning(
+                "Journal backend %r is not yet implemented; falling back to sqlite",
+                backend,
+            )
         journal = SqliteJournal(session_id, data_dir=data_dir)
-        logger.debug(
-            "Journal created for session %s (sqlite, path=%s)",
+        logger.info(
+            "Journal: session=%s backend=%s path=%s",
             session_id,
+            backend,
             journal._db_path,
         )
         return journal
 
-    logger.debug(
-        "Journal created for session %s (in-memory, capacity=%d)",
+    logger.info(
+        "Journal: session=%s backend=in-memory capacity=%d",
         session_id,
         capacity,
     )

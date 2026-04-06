@@ -36,6 +36,9 @@ SAFE_CONFIG_FIELDS: frozenset[str] = frozenset(
         "auto_turn_from_stt_final",
         "strip_markdown",
         "interruption_mode",
+        # Journal config (safe to report)
+        "journal_backend",
+        "journal_retention",
     }
 )
 
@@ -57,9 +60,14 @@ _SECRET_FRAGMENTS: frozenset[str] = frozenset(
 
 SAFE_ENV_VARS: frozenset[str] = frozenset(
     {
+        # EasyCat runtime control
         "EASYCAT_DEBUG",
         "EASYCAT_DATA_DIR",
         "EASYCAT_LEGACY_OBS_DUAL_WRITE",
+        # Deployment identification (non-secret, useful for bundles)
+        "HOSTNAME",
+        "REGION",
+        "DEPLOY_ENV",
     }
 )
 
