@@ -58,9 +58,9 @@ a codebase with one debugging model: the journal.
 
 ## Tasks
 
-### T5.0: Architecture Freeze (RFC)
+### T5.0: Architecture Freeze
 
-- [ ] Write Phase 5 RFC covering:
+- [ ] Design decisions covering:
   - deprecation timeline (one prior release with
     `DeprecationWarning` before deletion)
   - explicit shim-survival window. During WS2A the new bridge
@@ -92,7 +92,7 @@ a codebase with one debugging model: the journal.
     top-level symbols allowed after removal
   - list of test files currently using `EventTraceLogger`
     subscriptions or `InMemoryMetrics` snapshots for behavior
-    assertions (compiled during RFC, consumed by T5.3.5)
+    assertions (compiled during T5.0, consumed by T5.3.5)
   - external migration paths (for anyone consuming
     `EventTraceLogger`, `Tracer`, `InMemoryMetrics`, `AgentRunner`,
     adapter helpers, top-level imports, or legacy config fields from
@@ -181,7 +181,7 @@ a codebase with one debugging model: the journal.
   logger internals. These are behavior tests using the only
   observability surface that existed pre-redesign, and they must
   be preserved — not deleted.
-- [ ] The list of such files is compiled during the T5.0 RFC.
+- [ ] The list of such files is compiled during T5.0.
   Each test is rewritten to read `session.journal` directly, or
   via WS4's `load_bundle()` pytest fixture helper when a
   bundle-based fixture is cleaner.
@@ -286,7 +286,6 @@ a codebase with one debugging model: the journal.
 
 ## Acceptance Criteria
 
-- [ ] **AC5.1** RFC reviewed and merged.
 - [ ] **AC5.2** A prior release exists with `DeprecationWarning` or
   explicit release-note coverage on every removed public symbol and
   removed/renamed config field (evidenced by git tag and changelog).
@@ -343,11 +342,11 @@ a codebase with one debugging model: the journal.
   redesign intentionally removed or renamed.
 - [ ] **AC5.15** `easycat.__all__` contract: a single test asserts
   the exact allowlist of top-level symbols post-cleanup. The list
-  is frozen in the T5.0 RFC and includes at minimum: `Session`,
+  is documented in T5.0 and includes at minimum: `Session`,
   `EasyCatConfig`, `create_session`, `ExecutionJournal`,
   `JournalView`, `Stage`, `ExternalAgentBridge`, `auto_adapt_agent`,
   `RunBundle`, `load_bundle`, and any intentionally-kept
-  convenience exports. New additions require an RFC amendment;
+  convenience exports. New additions require a plan amendment;
   unintended drift fails the test.
 - [ ] **AC5.16** All shim files removed per T5.6 and T5.6.5 are
   absent from disk. A CI test asserts `agent_runner.py` and every
@@ -358,7 +357,6 @@ a codebase with one debugging model: the journal.
 
 | AC | Verification |
 |---|---|
-| AC5.1 | Git log shows RFC merge commit. |
 | AC5.2 | Release tag on a prior commit with `DeprecationWarning` imports present and/or release notes explicitly covering removed symbols and config fields; changelog entry names the deprecations. |
 | AC5.3 | `grep -rn 'EASYCAT_LEGACY_OBS_DUAL_WRITE\|legacy_obs_dual_write' src/ tests/` returns zero. |
 | AC5.4 | `test -f src/easycat/event_logging.py` and the other four files all return non-zero (files absent). CI test `test_legacy_modules_removed` asserts these paths do not exist. |
@@ -372,7 +370,7 @@ a codebase with one debugging model: the journal.
 | AC5.12 | Grep `CLAUDE.md` for removed symbol names; must return zero. |
 | AC5.13 | Behavioral regression suite passes for supported runtime behavior, and the migration guide covers the intended public removals/renames with concrete before/after examples. |
 | AC5.14 | CI test `test_public_surface_cleanup` imports `easycat`, inspects `easycat.__all__` and `EasyCatConfig`, and asserts removed legacy exports/config fields are gone or intentionally renamed per the migration guide. |
-| AC5.15 | New test `test_easycat_all_allowlist` — imports `easycat`, asserts `easycat.__all__` exactly matches the RFC-frozen allowlist (set equality, not subset). Any drift fails the test and points the reviewer at the RFC amendment process. |
+| AC5.15 | New test `test_easycat_all_allowlist` — imports `easycat`, asserts `easycat.__all__` exactly matches the plan-frozen allowlist (set equality, not subset). Any drift fails the test and points the reviewer at the plan amendment process. |
 | AC5.16 | New test `test_shim_files_removed` — asserts `src/easycat/agent_runner.py`, every file under `src/easycat/agents/`, and the empty `src/easycat/agents/` directory do not exist; grep confirms no stale imports. |
 
 ## Risks and Mitigations
@@ -398,7 +396,7 @@ a codebase with one debugging model: the journal.
   workstream lands the files but the net line count is lower than
   baseline by only 500 lines, that is still a successful workstream.
 - **Post-removal regression is discovered after deletion**:
-  mitigation — the rollback plan in the RFC names which commits to
+  mitigation — the rollback plan names which commits to
   revert. Because the strangler-fig shims are removed before the
   legacy modules, a revert of the deletion commits restores the
   shims too. Keep each deletion in its own commit to make bisect and

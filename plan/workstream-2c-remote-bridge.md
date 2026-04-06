@@ -103,9 +103,9 @@ beyond conversation history.
 
 ## Tasks
 
-### T2C.0: Architecture Freeze (RFC)
+### T2C.0: Architecture Freeze
 
-- [ ] Write Phase 2C RFC covering:
+- [ ] Design decisions covering:
   - `ResponsesAPIBridge` class design and constructor arguments
   - SSE event taxonomy: which Responses API events map to which
     `AgentBridgeEvent` types and `AgentRecorder` calls
@@ -131,7 +131,6 @@ beyond conversation history.
   - Mock Responses API server design for unit tests
   - Reduced debugging depth documentation: what users gain and
     lose compared to in-process bridges
-- [ ] Review and merge RFC before implementation.
 
 ### T2C.1: SSE Stream Parser and Event Translator
 
@@ -366,7 +365,6 @@ beyond conversation history.
 
 ## Acceptance Criteria
 
-- [ ] **AC2C.1** RFC reviewed and merged.
 - [ ] **AC2C.2** `ResponsesAPIBridge` exists in
   `src/easycat/integrations/agents/responses_api.py` and
   implements `ExternalAgentBridge`.
@@ -420,7 +418,6 @@ beyond conversation history.
 
 | AC | Verification |
 |---|---|
-| AC2C.1 | Git log shows RFC merge commit. |
 | AC2C.2 | `python -c "from easycat.integrations.agents.responses_api import ResponsesAPIBridge"` exits 0; new test `test_responses_api_bridge_implements_protocol` asserts `isinstance(ResponsesAPIBridge(...), ExternalAgentBridge)`. |
 | AC2C.3 | New test `test_responses_api_turn_execution` — runs a turn with text + tool calls against the mock server, walks the journal, asserts the expected record sequence and snapshot kind. |
 | AC2C.4 | New test `test_responses_api_n1_chain_interruption` — runs 3 turns, interrupts the 2nd, inspects the 3rd turn's request body for correct `previous_response_id` and input items with truncated assistant text and completed tool calls. |
@@ -445,7 +442,7 @@ beyond conversation history.
 - **SSE event taxonomy changes between Responses API versions**:
   mitigation — unknown event types are logged and skipped
   (forward-compatible). Pin the minimum Responses API version in
-  the RFC. The event translator module
+  the plan. The event translator module
   (`_responses_api_events.py`) centralizes all event mapping so
   upstream changes are fixed in one place.
 - **N-1 chain produces slightly different results than patching

@@ -8,7 +8,7 @@
 > plan or any of the `peripheral-*.md` files. The doc exists so
 > that (a) the current bridge architecture can be verified
 > forward-compatible with LangChain/LangGraph, and (b) when the
-> work is eventually scheduled, the RFC author has a concrete
+> work is eventually scheduled, the author has a concrete
 > starting point instead of a blank page.
 >
 > **Not part of:**
@@ -189,7 +189,7 @@ optional refinement worth noting, but it is not a blocker:
   `checkpoint_id` and LangChain's `run_id` can live in the
   enclosing `FrameworkUnitEntered` record's `framework_metadata`
   field (which the journal schema already defines), so a cursor
-  metadata dict is not required. But if the WS2A RFC reviewers
+  metadata dict is not required. But if the WS2A plan reviewers
   want to forward-proof the cursor for framework-native IDs, an
   optional `metadata: dict[str, Any] = field(default_factory=dict)`
   field on `ExecutionCursor` would be a ~3-line addition. This
@@ -825,7 +825,7 @@ interrupts at all, and if so, how. Two options:
 
 Option 1 is simpler and keeps the bridge protocol stable. Option
 2 is more powerful but leaks LangGraph concepts into the
-application. Defer the decision; flag it in the future RFC.
+application. Defer the decision; flag it in the future plan.
 
 **Per-node tool binding vs graph-wide MCP forwarding.** LangGraph
 nodes can call different models with different tool sets.
@@ -845,7 +845,7 @@ give different levels of detail; the bridge should pick the
 combination that gives full tool call visibility without
 duplicated events. The baseline recommendation is
 `["updates", "messages", "tools"]` plus `subgraphs=True` and
-`version="v2"`, but the future RFC should validate this against a
+`version="v2"`, but the future plan should validate this against a
 real graph with tool calls to confirm no events are dropped and
 no events are emitted twice.
 

@@ -25,7 +25,7 @@
 > **Compatibility policy**: Backwards compatibility is not a goal of the
 > essential redesign. This workstream may add or rename export/replay
 > surfaces if needed, but the public bundle/debug API and migration path
-> must be frozen in the RFC.
+> must be documented in the plan.
 
 ## Goal
 
@@ -73,9 +73,9 @@ surprised by non-determinism.
 
 ## Tasks
 
-### T4.0: Architecture Freeze (RFC)
+### T4.0: Architecture Freeze
 
-- [ ] Write Phase 4 RFC covering:
+- [ ] Design decisions covering:
   - `ReplaySpec` signature and fidelity enum
   - Committable boundary semantics per bridge — consumed from WS2
     T2.7.5's `COMMITTABLE_BOUNDARIES` mappings by reference, not
@@ -434,7 +434,6 @@ surprised by non-determinism.
 
 ## Acceptance Criteria
 
-- [ ] **AC4.1** RFC reviewed and merged.
 - [ ] **AC4.2** `src/easycat/runtime/replay.py` defines `ReplayFidelity`
   and `ReplaySpec`. Every `ReplaySpec` has a non-default fidelity.
 - [ ] **AC4.3** All 8 stages implement `replay(spec)` for at least the
@@ -483,7 +482,7 @@ surprised by non-determinism.
   at least one in-workstream regression test.
 - [ ] **AC4.16** `bundles list` discovers crash-dumped bundles on disk.
 - [ ] **AC4.17** The public export/load/replay surface is frozen in the
-  RFC and covered by migration notes if this workstream changes config or
+  plan and covered by migration notes if this workstream changes config or
   debug APIs.
 - [ ] **AC4.18** ARTIFACT replay of a captured session produces
   byte-identical stage outputs after applying the
@@ -565,7 +564,6 @@ surprised by non-determinism.
 
 | AC | Verification |
 |---|---|
-| AC4.1 | Git log shows RFC merge commit. |
 | AC4.2 | `python -c "from easycat.runtime.replay import ReplayFidelity, ReplaySpec; ReplaySpec()"` fails without explicit fidelity; `ReplaySpec(fidelity=ReplayFidelity.ARTIFACT)` succeeds. |
 | AC4.3 | New test `test_all_stages_support_live_replay` — parametrized over 8 stages, calls `replay(ReplaySpec(fidelity=LIVE))` and asserts no `NotImplementedError`. Sub-tests assert STT and TTS support `ARTIFACT` and Agent supports `SIMULATED`. |
 | AC4.4 | New test `test_stt_artifact_replay_bit_deterministic` — captures STT cassette from a real session, replays against the same stage instance twice, asserts byte-identical transcript output. |
@@ -583,7 +581,7 @@ surprised by non-determinism.
 | AC4.14 | New test `test_replay_refuses_non_committable` — captures a mid-LLM-stream sequence, constructs `ReplaySpec` at that sequence, asserts `ReplayError` with populated `nearest_committable_before`/`after`. |
 | AC4.15 | Demonstration regression test `test_bundle_as_fixture` — loads a committed fixture bundle via `load_bundle()`, asserts a journal property. The test itself is the proof that the fixture helper works. |
 | AC4.16 | New test `test_bundles_list_discovery` — writes two bundles to a temp directory, calls the discovery function, asserts both are found. |
-| AC4.17 | RFC + migration note include the frozen export/load/replay surface and before/after examples for any config or debug-surface changes introduced here. |
+| AC4.17 | Migration note include the frozen export/load/replay surface and before/after examples for any config or debug-surface changes introduced here. |
 | AC4.18 | New test `test_replay_nondeterministic_field_stripping` — captures a session, runs ARTIFACT replay twice, diffs outputs with `REPLAY_IGNORE_FIELDS` masked, asserts empty diff. |
 | AC4.19 | New test `test_bundle_loader_validation_corpus` — a fixture directory of malformed bundles (path-traversal, oversized artifact, non-JSON metadata, bad SHA-256 ref, dangling artifact ref, newer format_version). Loader raises `BundleValidationError` or `BundleVersionError` with the expected reason code for each. |
 | AC4.20 | New test `test_partial_journal_loader_after_sigkill` — reuses the WS1 T1.6 SIGKILL harness, promotes the SQLite file to `.easycat/crash-dumps/`, calls `RunBundle.from_partial_journal()`, asserts the bundle round-trips through `RunBundle.load()` and contains records prior to the crash. |

@@ -24,7 +24,7 @@
 > **Compatibility policy**: Backwards compatibility is not a goal of the
 > essential redesign. This workstream may change the public debug/config
 > surface if that produces a cleaner runtime, but any such change must be
-> frozen in the RFC and covered by migration notes.
+> documented and covered by migration notes.
 
 ## Goal
 
@@ -75,9 +75,9 @@ full `RedactionPolicy` write filter lands later in
 
 ## Tasks
 
-### T1.0: Architecture Freeze (RFC)
+### T1.0: Architecture Freeze
 
-- [ ] Write Phase 1 implementation RFC covering:
+- [ ] Design decisions covering:
   - concrete journal record classes building on the appendix schema
   - `ArtifactStore` interface
   - backend selection policy (in-memory default, SQLite for
@@ -108,7 +108,6 @@ full `RedactionPolicy` write filter lands later in
     subscriber-based debug flows
   - strangler-fig wiring plan for the three legacy systems
   - test strategy for incremental migration
-- [ ] Review with stakeholders; merge RFC before implementation begins.
 
 ### T1.0.5: Perf Baseline Capture
 
@@ -138,7 +137,7 @@ full `RedactionPolicy` write filter lands later in
   the following explicit fields:
   - `signal_kind: Literal["interrupt", "cancel", "pause", "resume",
     "backpressure"]` — frozen enum. These five values are the
-    complete set WS3 stages emit; additions require a WS1 RFC
+    complete set WS3 stages emit; additions require a WS1 plan
     amendment, not a silent extension.
   - `observed_stage: str` — the stage that handled the signal
     (e.g., `"stt"`, `"tts"`, `"agent"`)
@@ -414,7 +413,7 @@ full `RedactionPolicy` write filter lands later in
   contains `key`, `secret`, `token`, `password`, `credential`, or
   `auth` — is dropped. New fields added to `EasyCatConfig` are
   dropped by default; adding one to the allowlist requires an
-  explicit RFC note justifying that it carries no secret material.
+  explicit note justifying that it carries no secret material.
 - [x] Implement a hard-coded allowlist of environment variables safe
   to serialize. The Phase 1 allowlist is:
 
@@ -546,7 +545,7 @@ full `RedactionPolicy` write filter lands later in
   legacy flip
 - [x] Record any legitimate divergences (e.g., timestamps) in an
   explicit allowlist; the allowlist itself is reviewed in the WS5
-  RFC before legacy deletion
+  plan before legacy deletion
 
 ### T1.9: Journal Degraded-Mode Contract
 
@@ -572,7 +571,6 @@ full `RedactionPolicy` write filter lands later in
 A checked item is a testable condition. All must be true before
 Workstream 2A starts.
 
-- [ ] **AC1.1** RFC reviewed and merged.
 - [x] **AC1.2** `src/easycat/runtime/records.py`, `journal.py`,
   `artifacts.py`, `safe_defaults.py` exist and are importable.
 - [x] **AC1.3** `ExecutionJournal` supports in-memory and SQLite
@@ -583,7 +581,7 @@ Workstream 2A starts.
   note: the current `debug: bool = False` becomes
   `debug: Literal["off","light","full"] = "light"`; callers passing
   `debug=True` get `debug="full"` behavior via a one-release
-  compatibility shim plus `DeprecationWarning`. The RFC freezes the
+  compatibility shim plus `DeprecationWarning`. The plan freezes the
   mode capability matrix for journal access, artifact capture,
   export, replay, and crash recovery.
 - [x] **AC1.4** Every post-open record has a monotonic `sequence`
@@ -631,7 +629,7 @@ Workstream 2A starts.
   `follow()` for live tailing and status flags for `enabled` /
   `degraded`.
 - [x] **AC1.13** Any public surface changes introduced here (for example
-  `EasyCatConfig.debug` semantics) are frozen in the RFC and covered by
+  `EasyCatConfig.debug` semantics) are documented in the plan and covered by
   migration notes with before/after examples.
 - [x] **AC1.14** Journal write failures degrade gracefully per T1.9.
   Simulated disk-full or filter-crash scenarios produce a single
@@ -687,7 +685,6 @@ Each acceptance criterion maps to a concrete test or procedure.
 
 | AC | Verification |
 |---|---|
-| AC1.1 | Git log shows the RFC merge commit on the workstream branch. |
 | AC1.2 | `python -c "from easycat.runtime import journal, records, artifacts, safe_defaults"` exits 0. |
 | AC1.3 | New test `test_journal_backend_selection` — instantiates with `debug="off"`, `debug="light"`, and `debug="full"`, asserts the correct backend class (or `None` for `"off"`) is used. Companion test `test_debug_capability_matrix` asserts the frozen mode semantics: `"off"` exposes a disabled `Session.journal` and bundle export is rejected, `"light"` uses in-memory capture, `"full"` uses durable capture. Separate test `test_debug_bool_compat_shim` asserts `debug=True` emits `DeprecationWarning` and routes to `"full"`. |
 | AC1.4 | New test `test_journal_monotonic_sequence` — writes 1,000 records to a single session from a single writer task, asserts strictly increasing from 1 with no gaps; asserts `sequence=0` is reserved and only populated by `RecoveredSessionMarker`. |
@@ -700,7 +697,7 @@ Each acceptance criterion maps to a concrete test or procedure.
 | AC1.10 | `uv run pytest` exits 0 with no `xfail` or skip additions attributable to this workstream. |
 | AC1.11 | Smoke test script runs `examples/local_chat.py` end-to-end for one turn, iterates the resulting journal, asserts records exist for each stage present in the current pipeline. |
 | AC1.12 | New test `test_session_exposes_read_only_journal` — obtains `session.journal`, verifies records are readable, `follow()` yields live records in `"light"` / `"full"` mode, append/mutation methods are not exposed, and `"off"` mode surfaces `enabled=False`. |
-| AC1.13 | RFC + migration note include concrete before/after examples for the chosen debug config surface and the new live journal access path. |
+| AC1.13 | Migration note include concrete before/after examples for the chosen debug config surface and the new live journal access path. |
 | AC1.14 | New test `test_journal_degraded_mode` — patches the backend to raise on `append`, runs a turn, asserts exactly one `JournalDegraded` marker on stderr, session degraded flag set, turn completes without raising, subsequent appends silently drop. |
 | AC1.15 | New test `test_all_providers_expose_version_info` — uses the STT/TTS/transport/telephony factory registries to instantiate each provider with stub credentials and asserts `version_info()` returns a dict with the stable key set. |
 | AC1.16 | CI job `parity-strangler-fig` runs the T1.8.5 harness on every PR and blocks merge on any diff outside the timestamp allowlist. |
@@ -727,8 +724,7 @@ Each acceptance criterion maps to a concrete test or procedure.
 - **Safe default allowlist gaps**: the hard-coded config/env allowlist
   must stay narrow enough that a new `EasyCatConfig` field does not
   accidentally leak. Mitigation — a lint rule forbids adding a new
-  config field to the allowlist without explicit justification in the
-  RFC, and the default when a new field is introduced is "dropped".
+  config field to the allowlist without explicit justification, and the default when a new field is introduced is "dropped".
   A richer per-field `RedactionPolicy` lands in
   `peripheral-redaction.md`; WS1's guardrail is intentionally
   minimal.

@@ -356,6 +356,7 @@ class PydanticAIBridge:
             # Close the last cursor.
             if prev_cursor is not None:
                 recorder.record_unit_exited(prev_cursor.with_committable(True), reason=None)
+                prev_cursor = None
 
             # Collect any text from the handler.
             accumulated = _handler.accumulated_text

@@ -160,9 +160,9 @@ critical path carries a perf regression AC against these ceilings.
 
 Numbers above are initial targets based on the "Chained Only"
 latency table and realistic real-time audio processing overhead on
-an EC2-class CPU. They will be refined during the WS1 RFC once the
+an EC2-class CPU. They will be refined during the WS1 plan once the
 baseline harness lands; refinements tighter than the targets here
-require an RFC amendment.
+require a plan amendment.
 
 ## Why Debug-First Is the Bet
 
@@ -1813,7 +1813,7 @@ refactoring step keeps integration tests green:
 
 Breaking changes to config, imports, and adapter/debug surfaces are allowed
 inside this plan. The requirement is that each workstream explicitly freeze
-its public surface in the RFC, document before/after usage, and update the
+its public surface in the plan, document before/after usage, and update the
 migration guide and release notes before legacy paths are removed.
 
 ### Release and Rollout
@@ -1836,7 +1836,7 @@ list, acceptance criteria, and verification procedure in a dedicated
 file. This file contains the design rationale and target architecture;
 the workstream files contain the operational plans.
 
-Every workstream starts with an RFC review of its Phase N design before
+Every workstream starts with an design review of its Phase N design before
 implementation begins, keeps existing tests green throughout, and ends
 with a completeness gate that must be closed before the next workstream
 starts.
@@ -2086,11 +2086,11 @@ class FrameworkTransitionRecord(JournalRecord):
 
 Start Workstream 1 by executing task T1.0 in
 `workstream-1-journal-foundation.md`: write and merge the Phase 1
-implementation RFC covering journal record classes, artifact store
+design covering journal record classes, artifact store
 interface, backend selection, crash-durability contract, strangler-fig
 wiring, and incremental test migration.
 
-Each subsequent workstream opens with its own RFC task (T2.0, T3.0,
+Each subsequent workstream opens with its own design-freeze task (T2.0, T3.0,
 T4.0, T5.0), which must be reviewed and merged before implementation in
-that workstream begins. Workstream RFCs gate workstream execution; the
-essential plan in this file gates the RFCs.
+that workstream begins. Workstream plans gate workstream execution; the
+essential plan in this file gates the workstream plans.

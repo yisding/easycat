@@ -33,7 +33,7 @@
 > **Compatibility policy**: Backwards compatibility is not a goal of the
 > essential redesign. This workstream may add or rename interruption and
 > MCP-facing config fields and method signatures if needed. Every such
-> change must be frozen in the RFC and included in the migration guide.
+> change must be documented in the plan and included in the migration guide.
 
 ## Goal
 
@@ -96,9 +96,9 @@ bridge design is wrong and must be fixed before moving on.
 
 ## Tasks
 
-### T2B.0: Architecture Freeze (RFC)
+### T2B.0: Architecture Freeze
 
-- [ ] Write Phase 2B RFC covering:
+- [ ] Design decisions covering:
   - Seven-step interruption turn flow (runtime → controller →
     bridge → journal). The complete sequence:
     1. **Detect** — VAD barge-in, concurrent `send_text`, or
@@ -167,7 +167,6 @@ bridge design is wrong and must be fixed before moving on.
     the planned-mutation apply step to raise a controlled
     `MutationInjectedError` between `FrameworkStateCommitted`
     write and the paired-record write
-- [ ] Review and merge RFC before implementation.
 
 ### T2B.1: Atomic `apply_interruption` Implementation
 
@@ -376,7 +375,6 @@ bridge design is wrong and must be fixed before moving on.
 
 ## Acceptance Criteria
 
-- [ ] **AC2B.1** RFC reviewed and merged.
 - [ ] **AC2B.2** Every bridge's `apply_interruption` implements
   the four-step atomic write ordering. A code inspection test
   (AST-level) asserts each bridge's `apply_interruption` body
@@ -468,7 +466,6 @@ bridge design is wrong and must be fixed before moving on.
 
 | AC | Verification |
 |---|---|
-| AC2B.1 | Git log shows RFC merge commit. |
 | AC2B.2 | New AST-level test `test_apply_interruption_four_step_order` walks each bridge's `apply_interruption` method, asserts calls to `_plan_interruption`, a journal write for `FrameworkStateCommitted`, `_apply_planned_mutation`, and a journal write for either `InterruptionApplyFailed` (failure path) or `FrameworkCancellationBoundaryReached` (success path), in that order, with no direct framework mutation outside `_apply_planned_mutation`. |
 | AC2B.3 | Parametrized test `test_interruption_apply_failed_emitted` — monkeypatches `_apply_planned_mutation` to raise `MutationInjectedError`, runs a barge-in turn on each bridge, asserts an `InterruptionApplyFailed` record is present in the journal with the expected `mutation_kind` and paired cursor. |
 | AC2B.4 | Parametrized test matrix `test_cancellation_mode_matrix` over bridge/mode × cancellation mode. Asserts the expected journal record sequence per cell. |

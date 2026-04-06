@@ -32,7 +32,7 @@
 > **Compatibility policy**: Backwards compatibility is not a goal of the
 > essential redesign. This workstream may change agent-facing config and
 > construction APIs if needed, but every such change must be frozen in the
-> RFC and included in the migration guide.
+> documented and included in the migration guide.
 
 ## Goal
 
@@ -129,9 +129,9 @@ which builds on the bridges shipped here.
 
 ## Tasks
 
-### T2A.0: Architecture Freeze (RFC)
+### T2A.0: Architecture Freeze
 
-- [x] Write Phase 2A RFC covering:
+- [x] Design decisions covering:
   - `ExternalAgentBridge` protocol signature
   - `AgentRecorder` protocol: exact method list, forwarding
     semantics through the WS1 `apply_write_filter` hook, lifetime
@@ -159,7 +159,7 @@ which builds on the bridges shipped here.
     framework mutation only. The four-step atomic write ordering
     (plan → write `FrameworkStateCommitted` → apply → paired
     record) is owned by WS2B and is explicitly out of scope for
-    the WS2A RFC.
+    the WS2A plan.
   - PydanticAI Graph mode convention validation at construction
     time (no silent runtime fallback)
   - `ShallowModeInterruptionError` as a WS2A-raised exception;
@@ -196,7 +196,6 @@ which builds on the bridges shipped here.
     orchestration patterns: programmatic hand-off app loop,
     output-type hand-off functions, custom inference backend
     with tool dispatch
-- [x] Review and merge RFC before implementation.
 
 ### T2.1: Bridge Protocol, AgentRecorder, and Shared Types
 
@@ -379,7 +378,7 @@ which builds on the bridges shipped here.
 - [x] Add transition record types to
   `src/easycat/runtime/records.py`. The **complete** list for WS2
   is these seven records; any additional record type requires a
-  WS2 RFC amendment, not a silent extension:
+  WS2 plan amendment, not a silent extension:
   - `FrameworkUnitEntered`
   - `FrameworkUnitExited`
   - `FrameworkStateCommitted` — bridge emits this *before*
@@ -811,7 +810,6 @@ units they care to expose.
 
 ## Acceptance Criteria
 
-- [ ] **AC2.1** RFC reviewed and merged.
 - [x] **AC2.2** `src/easycat/integrations/agents/base.py` defines
   `ExternalAgentBridge` Protocol, `AgentTurnInput`, `AgentRecorder`,
   `AgentBridgeEvent`, `FrameworkStateSnapshot`, `ExecutionCursor`,
@@ -960,7 +958,7 @@ units they care to expose.
   (3) two cursors with the same `unit_id` within a turn raise.
 - [ ] **AC2.14** Any public config/construction changes introduced here
   (`mcp_servers`, bridge construction, `AgentRunner` migration path,
-  adapter naming) are frozen in the RFC and covered by migration notes.
+  adapter naming) are documented in the plan and covered by migration notes.
 - [x] **AC2.15** Voice-to-voice / realtime guardrail test. A grep-
   based test asserts zero matches in `src/easycat/` for
   `RealtimeBridge`, `realtime_session`, `RealtimeStage`, or any
@@ -1004,7 +1002,6 @@ units they care to expose.
 
 | AC | Verification |
 |---|---|
-| AC2.1 | Git log shows RFC merge commit. |
 | AC2.2 | `python -c "from easycat.integrations.agents.base import ExternalAgentBridge, AgentTurnInput, ExecutionCursor, CancellationMode"` exits 0. |
 | AC2.3 | New test `test_transition_record_types_exist` — instantiates each of the seven record types with minimal fields. |
 | AC2.4 | New test `test_all_bridges_implement_protocol` — asserts each of the three bridge classes (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`) passes `isinstance(..., ExternalAgentBridge)`. Additional sub-tests: `PydanticAIBridge(agent=...)` and `PydanticAIBridge(graph=..., state_factory=..., initial_node_factory=...)` both construct successfully; `PydanticAIBridge(agent=..., graph=...)` and `PydanticAIBridge()` both raise `BridgeInputError`. |
@@ -1023,7 +1020,7 @@ units they care to expose.
 | AC2.11 | New test `test_auto_adapt_agent_bridge_selection` — passes in synthetic duck-typed objects and asserts the correct bridge is constructed: `openai_agents.Agent` → `OpenAIAgentsBridge`; `pydantic_ai.Agent` → `PydanticAIBridge` Agent mode; object with `on_user_turn(text)` → `GenericWorkflowBridge`; object with `on_user_turn(text, *, recorder)` → `GenericWorkflowBridge` (signature inspection routes to deep mode internally). Separate sub-tests: `pydantic_graph.Graph` raises `BridgeInputError` naming the explicit `PydanticAIBridge(graph=..., state_factory=..., initial_node_factory=...)` constructor; realtime-API-shaped object raises `BridgeInputError` pointing the user at the provider SDK. |
 | AC2.12 | `uv run pytest tests/agents/ tests/session/` exits 0. |
 | AC2.13 | New test `test_framework_state_snapshot_is_safe_and_serializable` — exports a snapshot from each bridge, asserts JSON serialization succeeds and no banned secret-bearing fields or raw framework objects are present. |
-| AC2.14 | RFC + migration note include before/after examples covering bridge construction, `auto_adapt_agent()`, and any config-field changes introduced by this workstream. |
+| AC2.14 | Migration note include before/after examples covering bridge construction, `auto_adapt_agent()`, and any config-field changes introduced by this workstream. |
 | AC2.15 | Grep-based test `test_no_realtime_bridge_surface` — asserts zero matches in `src/easycat/integrations/`, `src/easycat/stages/`, `src/easycat/session/`, and `src/easycat/runtime/` for `RealtimeBridge`, `realtime_session`, or `RealtimeStage`. The existing `src/easycat/stt/openai_realtime_provider.py` is allowed (it is a chained STT provider that happens to use the Realtime API's websocket transport) but must not be imported from outside the STT layer. |
 | AC2.16 | New test `test_committable_boundaries_published` — parametrized over all three bridges. For `PydanticAIBridge` the test covers both Agent-mode and Graph-mode unit kinds. Asserts `COMMITTABLE_BOUNDARIES` is present, non-empty, and covers every `unit_kind` the bridge's cursor model emits. |
 | AC2.17 | New test `test_handoff_record_triple` — runs a two-agent OpenAI Agents handoff, filters journal records for the turn, asserts the exit → handoff → enter triple is present in sequence with matching `unit_id` values and no interleaved records from the same turn. |

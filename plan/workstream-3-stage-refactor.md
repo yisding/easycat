@@ -77,9 +77,9 @@ main orchestration model, each stage boundary is journaled with
 
 ## Tasks
 
-### T3.0: Architecture Freeze (RFC)
+### T3.0: Architecture Freeze
 
-- [ ] Write Phase 3 RFC covering:
+- [ ] Design decisions covering:
   - extraction order: `TurnContext` (as three atomic groupings,
     see T3.1) → `InterruptionController` → `VoiceDeliveryLedger`
     → stages
@@ -403,11 +403,10 @@ main orchestration model, each stage boundary is journaled with
   the runner spec changes, re-capture the baseline before
   comparing. If a fixed runner is unavailable, widen the gate
   thresholds to P50 >10% / P90 >15% and document the wider
-  margin in the RFC.
+  margin in the plan.
 
 ## Acceptance Criteria
 
-- [ ] **AC3.1** RFC reviewed and merged.
 - [ ] **AC3.2** `TurnContext` holds all per-turn state. Behavior
   check: after a completed turn, `session._current_turn is None`,
   and any attempt to read turn-specific payloads off `Session`
@@ -471,7 +470,7 @@ main orchestration model, each stage boundary is journaled with
   most 30 statements long (configurable via a lint rule). This
   structural gate prevents a mega-method from defeating the line
   budget. Exceptions must be explicitly marked and justified in
-  the RFC.
+  the plan.
 - [ ] **AC3.11** `chained_pipeline` mode works end-to-end with OpenAI
   Agents + Deepgram STT + ElevenLabs TTS.
 - [ ] **AC3.12** Voice-to-voice / realtime guardrail. A test
@@ -481,7 +480,7 @@ main orchestration model, each stage boundary is journaled with
   for `RealtimeStage` or `realtime_session`.
 - [ ] **AC3.13** All existing tests pass.
 - [ ] **AC3.14** Any public runtime-mode/config changes introduced here
-  are frozen in the RFC and covered by migration notes with before/after
+  are documented in the plan and covered by migration notes with before/after
   examples.
 - [ ] **AC3.15** Perf regression gate (T3.12) passes: P50 turn
   latency stays within 5% and P90 within 10% of the T1.0.5
@@ -532,7 +531,6 @@ main orchestration model, each stage boundary is journaled with
 
 | AC | Verification |
 |---|---|
-| AC3.1 | Git log shows RFC merge commit. |
 | AC3.2 | New test `test_no_per_turn_state_on_session` — after completing a turn, asserts `session._current_turn is None` and walks `session.__dict__` values by type, asserting none are turn-specific payload types (`list[AgentResponsePart]`, `dict[PlaybackMark, int]`, etc.). |
 | AC3.3 | `python -c "from easycat.session._interruption_controller import InterruptionController"` exits 0; `grep -rn 'InterruptionController(' src/easycat/session/_session.py` shows delegation. |
 | AC3.4 | Same as AC3.3 for `VoiceDeliveryLedger`. |
@@ -546,7 +544,7 @@ main orchestration model, each stage boundary is journaled with
 | AC3.11 | New integration test `test_chained_pipeline_end_to_end` — runs one turn with the full chained stack, asserts the expected journal record sequence for all 8 stages. |
 | AC3.12 | New test `test_realtime_mode_rejected` — asserts `RunContext(runtime_mode="realtime_session")` raises `ValueError`; second grep-based sub-test asserts zero matches for `RealtimeStage` or `realtime_session` in `src/easycat/stages/` and `src/easycat/session/`. |
 | AC3.13 | `uv run pytest` exits 0. |
-| AC3.14 | RFC + migration note include the frozen runtime-mode/config surface and before/after usage examples. |
+| AC3.14 | Migration note include the frozen runtime-mode/config surface and before/after usage examples. |
 | AC3.15 | CI job `perf-ws3-regression` runs the T1.0.5 harness on every PR touching `src/easycat/stages/` or `src/easycat/session/`, compares against `perf/baseline.json`, fails on P50 > +5% or P90 > +10%. |
 | AC3.16 | New test `test_vad_decision_reproducibility` — drives `VADStage` with a committed audio fixture, captures `snapshot_state()` for every decision, calls `VADStage.replay_decision(snapshot)` on a fresh stage instance loading only the snapshot + captured audio artifact, asserts byte-identical decision outputs. Parametrized over the Silero backend (always runs) and Krisp backend (integration, gated on Krisp credentials). |
 | AC3.17 | New test `test_smart_turn_decision_reproducibility` — drives `TurnStage` with a committed audio window fixture, captures `snapshot_state()` for the endpointing decision, calls `TurnStage.replay_decision(snapshot)` on a fresh stage instance, asserts the replayed classification (logits within float tolerance) and the final `complete` / `not_complete` output match the live decision exactly. |

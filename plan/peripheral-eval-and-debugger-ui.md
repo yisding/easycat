@@ -150,7 +150,7 @@ A checkpoint is a committable boundary in the bridge execution cursor
 
 ### What Counts as a Fork Boundary
 
-The fork-replay RFC (implementation proposal) must specify what counts
+The fork-replay plan (implementation proposal) must specify what counts
 as a committable fork boundary in each bridge:
 
 - **OpenAI Agents**: committed handoffs, between-turn boundaries, the
