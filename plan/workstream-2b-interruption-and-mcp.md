@@ -99,8 +99,32 @@ bridge design is wrong and must be fixed before moving on.
 ### T2B.0: Architecture Freeze (RFC)
 
 - [ ] Write Phase 2B RFC covering:
-  - Seven-step interruption turn flow (runtime → bridge →
-    journal)
+  - Seven-step interruption turn flow (runtime → controller →
+    bridge → journal). The complete sequence:
+    1. **Detect** — VAD barge-in, concurrent `send_text`, or
+       external cancel signal is observed by the runtime.
+    2. **Signal** — `InterruptionController` emits a
+       `ControlSignalRecord(signal_kind="interrupt")` to the
+       journal with the originating `cause`.
+    3. **Measure** — Controller reads delivered text from
+       `VoiceDeliveryLedger` (exact in text mode, estimated
+       in voice mode).
+    4. **Select** — Controller selects a `CancellationMode`
+       per the configured interruption policy.
+    5. **Mutate** — Controller calls
+       `bridge.apply_interruption(delivered_text, mode)`. The
+       bridge runs the four-step atomic write ordering
+       internally (see below).
+    6. **Observe** — Controller reads the outcome: success
+       (`FrameworkCancellationBoundaryReached` written),
+       failure (`InterruptionApplyFailed` written → fall back
+       to `immediate_stop`), or
+       `ShallowModeInterruptionError` raised (downgrade to
+       end-of-turn interruption per T2B.2).
+    7. **Transition** — Controller cancels TTS playback,
+       updates turn state, and either starts a new turn
+       immediately or waits for end-of-turn depending on the
+       outcome and cancellation mode.
   - Four-step atomic write ordering: plan mutation → write
     `FrameworkStateCommitted` → apply mutation → emit paired
     `InterruptionApplyFailed` or
@@ -233,6 +257,12 @@ bridge design is wrong and must be fixed before moving on.
   | `GenericWorkflowBridge` | Deep | `immediate_stop`, `drain_current_unit`, `drain_to_commit_point` |
   | `GenericWorkflowBridge` | Shallow (no workflow override) | downgrade path only |
   | `GenericWorkflowBridge` | Shallow (with workflow override) | `immediate_stop`, `drain_current_unit`, `drain_to_commit_point` |
+
+  > **Note:** `ResponsesAPIBridge` (WS2C) is not in this matrix
+  > because its interruption is local (N-1 response chain, no
+  > framework state mutation) and does not use the four-step
+  > atomic write ordering. WS2C owns its own drain tests
+  > (T2C.2, T2C.7).
 
 - [ ] Each test asserts:
   - bridge received the correct `CancellationMode`
@@ -494,22 +524,32 @@ bridge design is wrong and must be fixed before moving on.
 
 ## Handoff to Next Workstream
 
-When this workstream is complete, **Workstream 3 (Stage Refactor)**
-inherits:
+**Merge ordering note:** WS3 merges first (with the real
+`InterruptionController`), then WS2B merges second (exercising
+the controller through the bridges with the full
+cancellation-mode matrix). The handoff below describes what
+downstream workstreams inherit once **both** WS2B and WS3 have
+landed.
 
-- fully atomic `apply_interruption` on every bridge, so the
-  `InterruptionController` extraction in T3.2 is a pure
-  refactor against a stable contract
+When this workstream is complete, **Workstream 4 (Replay and
+Bundle)** inherits:
+
+- fully atomic `apply_interruption` on every bridge, so replay
+  entry-point enforcement and forked replay can rely on the
+  atomicity invariant without secondary validation
 - `InterruptionApplyFailed` handling wired through the journal,
-  so WS3 can rely on the atomicity invariant without
-  re-validating it
-- MCP pass-through proven on all bridges, so stage refactor
-  does not accidentally reintroduce tool coupling
-- shallow-mode downgrade path (stub controller in WS2B,
-  replaced with real controller in WS3 T3.2)
+  so bundle export captures the full failure path
+- validated committable boundary semantics — the
+  drain-to-commit-point tests prove the bridges and their
+  `COMMITTABLE_BOUNDARIES` mappings align, so replay
+  entry-point enforcement can rely on the mappings without
+  secondary validation
+- MCP pass-through proven on all bridges, so replay does not
+  accidentally reintroduce tool coupling
+- shallow-mode downgrade path fully wired (stub controller in
+  WS2B replaced with real controller from WS3 T3.2)
 
-**Workstream 4 (Replay)** inherits validated committable
-boundary semantics — the drain-to-commit-point tests prove the
-bridges and their `COMMITTABLE_BOUNDARIES` mappings align, so
-replay entry-point enforcement can rely on the mappings without
-secondary validation.
+**Workstream 5 (Legacy Removal)** inherits the confirmation
+that the bridge interruption contract is stable and exercises
+all three cancellation modes — no legacy interruption code
+paths remain to clean up beyond the WS5-scoped deletions.

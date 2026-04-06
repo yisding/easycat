@@ -4,7 +4,8 @@
 > lives in `essential-debug-first-runtime.md`. This file is the
 > operational plan.
 >
-> **Predecessors**: Workstreams 1, 2, 3, and 4 must all be complete.
+> **Predecessors**: Workstreams 1, 2A, 2B, 2C, 3, and 4 must all be
+> complete.
 > **Successors**: None. This workstream is the final deliverable of the
 > essential plan.
 >
@@ -424,7 +425,7 @@ starts with its own essential plan.
 
 Workstream 5 is done when:
 
-1. All 14 acceptance criteria above are ticked.
+1. All 16 acceptance criteria above are ticked.
 2. The five listed files are gone.
 3. CI is green.
 4. A reviewer has walked through the CLAUDE.md architecture section

@@ -1058,11 +1058,15 @@ units they care to expose.
   deliberate: they share inner event handling, so upstream churn
   that affects the event taxonomy fixes both modes at once.
 - **Graph authors may skip the event-handler convention**:
-  mitigation — AC2.6d requires a warning journal record on any
-  turn where no per-agent events are captured, with a message
-  naming the convention. `easycat doctor` surfaces the same
-  warning on startup if it detects a graph whose state class
-  lacks the expected convention hook.
+  mitigation — AC2.6d enforces the convention with hard errors
+  at two levels: construction-time `BridgeConfigurationError` if
+  the state factory's probe instance lacks the
+  `_easycat_event_handler` slot, and end-of-first-turn
+  `ConventionViolationError` if the slot exists but no agent
+  call passed the handler through. Both are hard errors, not
+  warning records — fail-fast, single stack trace. `easycat
+  doctor` surfaces a startup warning if it detects a graph whose
+  state class lacks the expected convention hook.
 - **`pydantic_graph` state objects can be arbitrarily large or
   contain non-serializable fields**: mitigation — always store
   state snapshots via artifact ref (never inline), walk the

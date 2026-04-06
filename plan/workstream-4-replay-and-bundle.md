@@ -4,7 +4,11 @@
 > lives in `essential-debug-first-runtime.md`. This file is the
 > operational plan.
 >
-> **Predecessors**: Workstreams 1, 2A, 2B, and 3 must all be complete.
+> **Predecessors**: Workstreams 1, 2A, 2B, 2C, and 3 must all be
+> complete. WS2C (Remote Agent Bridge) is required because this
+> workstream implements SIMULATED and LIVE replay for
+> `ResponsesAPIBridge` — without it, the remote bridge replay paths
+> cannot be built or tested.
 > **Successors**: Workstream 5 (Legacy Removal) is gated on this
 > workstream demonstrating that journal-based debugging fully replaces
 > the legacy systems.
@@ -191,27 +195,22 @@ surprised by non-determinism.
     side-effecting during replay unless they are satisfied by the
     `STUB` path. There is no "best effort maybe safe" fallback.
 - [ ] **Nondeterministic-field stripping for ARTIFACT replay.**
-  Define a `REPLAY_IGNORE_FIELDS` allowlist in `stages/base.py`
-  containing the complete set of clock-derived fields masked
-  during `fast`-mode byte-determinism comparisons:
+  Extend WS3's `NONDETERMINISTIC_FIELDS` (defined in
+  `stages/base.py` T3.5) with replay-specific fields and
+  re-export as `REPLAY_IGNORE_FIELDS` in the same module:
 
   ```python
-  REPLAY_IGNORE_FIELDS: frozenset[str] = frozenset({
-      # Per-record wall-clock fields
-      "timing.wall_ms",
-      "timing.cpu_ms",
-      "timing.queue_ms",
+  # Base set defined in WS3 T3.5 (used by signal-vs-token parity)
+  # NONDETERMINISTIC_FIELDS includes: timing.wall_ms, timing.cpu_ms,
+  # timing.queue_ms, recorded_at_monotonic_ns, recorded_at_utc,
+  # cursor.entered_at, cursor.exited_at, *_at_ns, *_monotonic_ns
+
+  # Replay extends with artifact-specific and deadline fields
+  REPLAY_IGNORE_FIELDS: frozenset[str] = NONDETERMINISTIC_FIELDS | frozenset({
       "timing.wall_deadline_ns",
-      "recorded_at_monotonic_ns",
-      "recorded_at_utc",
-      # Cursor and stage timing
-      "cursor.entered_at",
-      "cursor.exited_at",
       # Artifact-specific monotonic derivations
       "artifact_written_at",
       "artifact_hashed_at",
-      # Any field whose name ends with `_at_ns` or `_monotonic_ns`
-      # (enforced by a compile-time AST check in CI)
   })
   ```
 

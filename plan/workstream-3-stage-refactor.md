@@ -190,6 +190,16 @@ main orchestration model, each stage boundary is journaled with
   NOT invent a new record shape — the cross-framework shape lives
   in WS1's records module.
 - [ ] Stub `ReplaySpec` (filled out in Workstream 4)
+- [ ] Define `NONDETERMINISTIC_FIELDS: frozenset[str]` in `base.py` —
+  the canonical set of clock-derived fields masked when comparing
+  journal records across runs (`timing.wall_ms`, `timing.cpu_ms`,
+  `timing.queue_ms`, `recorded_at_monotonic_ns`, `recorded_at_utc`,
+  `cursor.entered_at`, `cursor.exited_at`, and any field ending
+  `_at_ns` or `_monotonic_ns`). Used by the AC3.9a signal-vs-token
+  parity harness in this workstream; WS4 re-exports it as
+  `REPLAY_IGNORE_FIELDS` and extends it with replay-specific fields
+  (`timing.wall_deadline_ns`, `artifact_written_at`,
+  `artifact_hashed_at`).
 - [ ] Helpers in `base.py` for journal record emission from stage
   operations
 
@@ -199,7 +209,12 @@ main orchestration model, each stage boundary is journaled with
   calls, emit `state_before`/`state_after` via `snapshot_state()`,
   write journal records
 - [ ] Create `src/easycat/stages/agent.py` — wrap the
-  `ExternalAgentBridge` from Workstream 2A
+  `ExternalAgentBridge` protocol from Workstream 2A. The stage
+  works with any bridge implementing the protocol, including the
+  three in-process bridges from WS2A and the
+  `ResponsesAPIBridge` from WS2C (which may land in parallel).
+  No bridge-specific logic in the stage — the protocol is the
+  abstraction boundary.
 - [ ] Create `src/easycat/stages/tts.py` — wrap existing TTS provider
   calls
 - [ ] Verify `tests/stt/`, `tests/session/` agent tests, and
@@ -440,7 +455,9 @@ main orchestration model, each stage boundary is journaled with
   `tests/session/` barge-in scenario twice — once with
   `EASYCAT_SIGNAL_CANCEL_MODE=shared_token_only` and once with
   `EASYCAT_SIGNAL_CANCEL_MODE=signal_only` — and diffs the
-  journal records (modulo `REPLAY_IGNORE_FIELDS` from WS4) to
+  journal records (modulo `NONDETERMINISTIC_FIELDS` defined in
+  `stages/base.py` — the canonical set of clock-derived fields
+  that WS4 later re-exports as `REPLAY_IGNORE_FIELDS`) to
   assert identical behavior. Any divergence blocks the
   workstream and must be fixed before WS5 T5.2.5 can remove
   the shared token. The dual-mode harness ships in this
@@ -540,10 +557,11 @@ main orchestration model, each stage boundary is journaled with
 
 - **Extraction breaks subtle timing in interruption**: this is the
   single biggest risk in the workstream. Mitigation: extract
-  incrementally — one field at a time for `TurnContext`, then the
-  `InterruptionController` as a single atomic step, then
+  `TurnContext` in three atomic groupings per T3.1 (Group A playback
+  tracking, Group B turn timing/cancellation, Group C telephony hooks),
+  then the `InterruptionController` as a single atomic step, then
   `VoiceDeliveryLedger`. Run the full `tests/session/` suite after
-  each extraction and commit in small increments so bisect is useful.
+  each grouping and commit each separately so bisect is useful.
   Do not modify any existing barge-in test to make it pass; if a test
   fails, stop and debug.
 - **Stage port regresses hot-path performance**: mitigation —
