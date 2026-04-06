@@ -14,6 +14,7 @@
 > - `workstream-1-journal-foundation.md`
 > - `workstream-2a-agent-bridges.md`
 > - `workstream-2b-interruption-and-mcp.md`
+> - `workstream-2c-remote-bridge.md`
 > - `workstream-3-stage-refactor.md`
 > - `workstream-5-legacy-removal.md`
 

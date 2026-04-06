@@ -409,6 +409,96 @@ uncheckpointed WAL natively on next open. The crash-recovery path
 emit a `RecoveredSessionMarker`, and the uncheckpointed WAL is
 fully readable for bundle export and replay.
 
+## Scaling and Deployment Topology
+
+### The bridge is in-process by design
+
+The three in-process bridges (`OpenAIAgentsBridge`, `PydanticAIBridge`,
+`GenericWorkflowBridge`) are in-process Python Protocol implementations,
+not RPC endpoints. This is deliberate: the expensive remote call is the
+LLM inference (OpenAI API, Anthropic API, etc.), and that is already
+remote — the framework SDK makes the network call. The bridge itself is
+thin state management: message history, cursor tracking, interruption
+patching, tool dispatch coordination. Splitting this across a process
+boundary would add latency to the interruption hot path (where the
+plan budgets 50ms P99 cumulative) with no benefit, because the
+compute-heavy work is already remote.
+
+The bridge boundary is not a network boundary. It is a responsibility
+boundary between the voice runtime (which owns audio, VAD, TTS,
+interruption timing) and the agent framework (which owns reasoning,
+tools, and conversation state).
+
+### Session affinity is a hard requirement
+
+A `Session` object must not move between processes during a call.
+The `VoiceDeliveryLedger`, `InterruptionController`, and bridge all
+hold per-session in-process state that the barge-in path reads
+synchronously. This is already stated in the Deployment Targets
+section (session affinity on all tiers) and is restated here for
+emphasis: horizontal scaling is achieved by routing sessions to
+processes, not by migrating sessions between them.
+
+### Scaling model: two patterns
+
+**Process-per-session (Fly Machines pattern).** One process, one
+call. Perfect isolation. The journal is a single-writer SQLite file.
+No contention. When the call ends, the process can suspend or exit.
+Best for production voice deployments where calls are long enough
+(30s+) that startup cost (~50–200ms for Python + model loading) is
+amortized. Recommended sizing: 2 vCPU / 1 GB for simple pipelines;
+4 vCPU / 4 GB with Silero VAD + SmartTurn ONNX + Krisp.
+
+**N-sessions-per-process with affinity.** One process handles
+multiple concurrent sessions, with a load balancer pinning each
+session to a process. Each `Session` is independent (own
+`TurnContext`, own journal, own bridge instance). Silero and
+SmartTurn models are loaded once and shared read-only across
+sessions. Best for telephony gateways handling many short calls.
+Capacity planning: 4 cores / 8 GB handles 10–25 concurrent sessions
+(matches LiveKit Agents guidance). Use compute-optimized instances,
+not burstable — CPU credit starvation causes inference timeouts.
+
+Both patterns are supported. The plan does not require one or the
+other; the journal, bridge, and stage designs are compatible with
+both because all per-session state lives on the `Session` object.
+
+### Session failover
+
+If a process dies mid-call, the call is lost — the user hears
+silence or a disconnect. The journal survives (crash-durable
+SQLite, see WS1 T1.6) and can be exported as a bundle for
+post-mortem debugging, but the live session does not resume.
+
+Session migration (reconstructing a live Session from a journal
+snapshot on a different process) is Phase 2 complexity that the
+plan explicitly defers. The debug-first thesis is about
+understanding what happened after a failure, not about preventing
+the failure from ending the call. The journal survives; the call
+does not need to.
+
+### Remote agent deployment
+
+Not every deployment runs the agent in the same process as the voice
+runtime. Many companies want the agent to run inside their own
+network — behind their firewall, with access to their tools and
+data — while the voice orchestration runs as a managed service or
+on edge infrastructure. This is the deployment model used by
+Pipecat, Retell, Vapi, and similar platforms.
+
+EasyCat supports this via the `ResponsesAPIBridge`, a fourth bridge
+that speaks the OpenAI Responses API over HTTP to a remote agent
+server. See the "Remote Agent Bridge" section under Agent
+Compatibility Boundary for the protocol design, and
+`workstream-2c-remote-bridge.md` for the operational plan.
+
+The in-process bridges remain the recommended path when the agent
+can run co-located — they provide full debugging depth, all journal
+record types, and the tightest interruption latency. The remote
+bridge is the supported path when deployment separation is required,
+with an explicit trade-off: reduced journal depth in exchange for
+deployment flexibility.
+
 ## Non-Goals
 
 Out of scope for this plan (and some also out of scope for EasyCat entirely):
@@ -1341,6 +1431,136 @@ configured `mcp_servers` list is exposed on the recorder's
 context so the user's workflow code can register it against
 whatever backend it uses.
 
+### Remote Agent Bridge (Responses API)
+
+The three bridges above are in-process: the agent framework runs in
+the same Python process as the voice runtime. The
+`ResponsesAPIBridge` is the fourth bridge — it speaks the OpenAI
+Responses API over HTTP to a remote agent server, enabling
+deployments where the agent runs on separate infrastructure from
+the voice pipeline.
+
+**Why the Responses API.** The wire protocol between the voice
+runtime and a remote agent must handle: streaming text and tool-call
+events during a turn, and interruption patching between turns. The
+OpenAI Chat Completions API is too thin (no server-side tool
+execution, no conversation continuity primitive, no structured
+events beyond deltas). A custom WebSocket protocol would work
+technically but imposes bad DX — every customer would need to
+implement a proprietary message format with no ecosystem tooling.
+
+The Responses API is the right level of richness:
+
+- **Server-side tool execution.** The agent server executes tools
+  internally and streams results back. The voice runtime sees
+  `function_call_output` events but never proxies tool dispatch.
+  The customer's tools run inside the customer's network.
+- **Structured streaming events.** `response.output_item.added`,
+  `response.content_part.delta`,
+  `response.function_call_arguments.delta`,
+  `response.output_item.done` — enough structure to populate
+  journal records for tool calls, text deltas, and completion.
+- **Conversation continuity via `previous_response_id`.** The
+  voice runtime chains turns without sending full history on
+  every request.
+- **Ecosystem support.** The OpenAI Agents SDK speaks it natively.
+  PydanticAI can target it. OpenResponses provides an open-source
+  self-hostable implementation. Users can also point directly at
+  the OpenAI API itself.
+
+**Interruption via N-1 chain and partial replay.** When the user
+barges in mid-response, the voice runtime:
+
+1. Cancels the HTTP stream (standard). For `drain_current_unit`,
+   it keeps reading SSE events until the current tool call's
+   `response.output_item.done` arrives before cancelling.
+2. Records the interrupted response's events (tool calls that
+   completed, partial text delivered) — the voice runtime saw
+   all of these from the SSE stream before cancellation.
+3. On the next turn, chains from `previous_response_id` pointing
+   at the **last fully completed response** (N-1, not the
+   interrupted one), and includes the interrupted exchange as
+   input items with the assistant text truncated to
+   `delivered_text`:
+
+```json
+{
+  "model": "...",
+  "previous_response_id": "resp_N-1",
+  "input": [
+    {"role": "user", "content": "What's the weather?"},
+    {"type": "function_call", "name": "get_weather",
+     "arguments": "{\"city\": \"SF\"}", "call_id": "call_1"},
+    {"type": "function_call_output", "call_id": "call_1",
+     "output": "72°F, sunny"},
+    {"role": "assistant", "content": "The weather is—"},
+    {"role": "user", "content": "Never mind, tell me about stocks"}
+  ]
+}
+```
+
+The agent server sees a standard Responses API request. The
+conversation history is correct: it includes completed tool calls
+from the interrupted turn, the truncated assistant text the user
+actually heard, and the new user input. No custom endpoint, no
+custom protocol extension, no server-side cooperation required.
+
+**Optional metadata convention for stateful agents.** Some agent
+servers maintain state beyond conversation history (multi-agent
+handoff chains, graph node positions, server-side memory). For
+these, the voice runtime can send `easycat.*` metadata keys on the
+next request to signal that the previous response was interrupted:
+
+```json
+{
+  "metadata": {
+    "easycat.interrupted_response_id": "resp_N",
+    "easycat.delivered_text": "The weather is—",
+    "easycat.cancellation_mode": "immediate_stop"
+  }
+}
+```
+
+Servers that understand `easycat.*` keys can patch their internal
+state. Servers that don't understand them ignore the metadata
+(standard Responses API behavior — metadata is opaque) and the
+N-1 chain + partial replay handles the conversation history
+correctly regardless. The voice runtime discovers server
+capabilities from `easycat.supports_interruption` in response
+metadata on the first turn.
+
+**Debugging depth trade-off.** The remote bridge provides reduced
+journal depth compared to the in-process bridges:
+
+| Capability | In-process bridges | Remote bridge |
+|---|---|---|
+| Text deltas | Full | Full (from SSE stream) |
+| Tool calls | Full (start/args/result) | Full (from SSE events) |
+| Internal framework transitions | Full (per-node cursors) | Not visible |
+| Framework state snapshots | Full (artifact-ref'd) | Local history only |
+| Handoffs | Full (triple records) | Visible only if agent uses Responses API handoff conventions |
+| Interruption | Framework state mutation | Local history patch |
+| Committable boundaries | Per-framework mapping | Turn edges only |
+| Replay fidelity | ARTIFACT / SIMULATED / LIVE | SIMULATED / LIVE only |
+
+This is the right trade-off. Users who need full debugging depth
+run in-process. Users who need deployment separation use the remote
+bridge and accept the reduced observability. The three deployment
+tiers:
+
+- **Tier 1 — zero agent-side work.** Deploy any Responses API
+  server (OpenAI API, OpenResponses, vLLM, custom). EasyCat calls
+  it. Interruption uses N-1 chain + partial replay. Conversations
+  work correctly. Journal captures turn-level events and tool
+  calls from the stream.
+- **Tier 2 — read the metadata.** Agent server reads `easycat.*`
+  metadata keys and patches internal state on interruption.
+  ~50 lines of middleware. Contributable as an OpenResponses
+  plugin.
+- **Tier 3 — in-process bridge.** Full `ExternalAgentBridge`
+  implementation. Full debugging depth, all journal records,
+  artifact replay.
+
 ### MCP Pass-Through
 
 MCP pass-through is part of this plan — not because adding an external tool
@@ -1611,10 +1831,10 @@ land in the workstream-5 release.
 
 ## Workstreams
 
-Implementation is split into five sequential workstreams, each with its
-own task list, acceptance criteria, and verification procedure in a
-dedicated file. This file contains the design rationale and target
-architecture; the workstream files contain the operational plans.
+Implementation is split into six workstreams, each with its own task
+list, acceptance criteria, and verification procedure in a dedicated
+file. This file contains the design rationale and target architecture;
+the workstream files contain the operational plans.
 
 Every workstream starts with an RFC review of its Phase N design before
 implementation begins, keeps existing tests green throughout, and ends
@@ -1682,12 +1902,36 @@ on failure paths, three cancellation modes tested end-to-end, MCP
 forwarding proven on OpenAI Agents and PydanticAI (Agent + Graph
 modes) with mock and filesystem-integration tests.
 
+### Workstream 2C: Remote Agent Bridge (Responses API)
+
+See `workstream-2c-remote-bridge.md`.
+
+**Depends on**: Workstream 2A (bridge protocol must be stable).
+**Runs in parallel** with Workstreams 2B and 3. Does not depend on
+the `InterruptionController` or four-step atomic write ordering
+because interruption is handled locally via N-1 chain + partial
+input replay.
+
+**Goal**: ship `ResponsesAPIBridge`, a fourth `ExternalAgentBridge`
+implementation that speaks the OpenAI Responses API over HTTP to a
+remote agent server. Interruption uses the Responses API's native
+`input` field to chain from the last completed response and replay
+the interrupted exchange with truncated assistant text. Optional
+`easycat.*` metadata convention for stateful agent servers.
+
+**Deliverable**: remote agent deployment works end-to-end with any
+Responses API-compatible server, interruption semantics are correct
+via N-1 chain, journal captures turn-level events and tool calls
+from the SSE stream, `EasyCatConfig` accepts a URL string for the
+agent field, and the three deployment tiers (zero work / read
+metadata / in-process) are documented with examples.
+
 ### Workstream 3: Stage Refactor and Session Decomposition
 
 See `workstream-3-stage-refactor.md`.
 
 **Depends on**: Workstream 1 and Workstream 2A. Runs in parallel
-with Workstream 2B.
+with Workstreams 2B and 2C.
 
 **Goal**: decompose the 1,512-line `_session.py` into stage + context +
 controller types. Extract `TurnContext`, `InterruptionController`,
@@ -1705,7 +1949,7 @@ conceptual distortion.
 
 See `workstream-4-replay-and-bundle.md`.
 
-**Depends on**: Workstreams 1, 2, and 3.
+**Depends on**: Workstreams 1, 2A, 2B, 2C, and 3.
 
 **Goal**: make production failures local repro artifacts with honest
 replay semantics. Ship `ReplaySpec` with three explicit fidelity classes
@@ -1724,7 +1968,7 @@ config/environment metadata.
 
 See `workstream-5-legacy-removal.md`.
 
-**Depends on**: Workstreams 1, 2A, 2B, 3, and 4.
+**Depends on**: Workstreams 1, 2A, 2B, 2C, 3, and 4.
 
 **Goal**: delete the three legacy observability systems, the
 `agent_runner.py` module, the strangler-fig adapters and feature flag,
@@ -1759,8 +2003,10 @@ surface shipped.
   debugger UI.
 - EasyCat still clearly presents itself as a runtime around external
   agents, not a new agent framework.
-- MCP server pass-through works on both bridges with zero EasyCat-native
-  tool code.
+- MCP server pass-through works on all MCP-capable bridges with zero
+  EasyCat-native tool code.
+- Remote agent deployment works via the Responses API bridge with correct
+  interruption semantics and no custom wire protocol.
 - Session is no longer a monolith.
 - The three pre-existing observability systems (`EventTraceLogger`,
   `Tracer`, `InMemoryMetrics`) are gone.
