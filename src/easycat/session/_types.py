@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from easycat.bounded_queue import BoundedAudioQueue
 from easycat.events import EventBus
@@ -23,6 +23,10 @@ from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.timeouts import TimeoutConfig
 from easycat.tracing import Tracer
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
+
+if TYPE_CHECKING:
+    from easycat.runtime.artifacts import ArtifactStore
+    from easycat.runtime.journal import ExecutionJournal
 
 # ── Agent protocol (lightweight — agent adapters provide real implementations) ──
 
@@ -83,6 +87,9 @@ class SessionConfig:
     timeout_config: TimeoutConfig | None = None
     metrics: MetricsCollector | None = None
     tracer: Tracer | None = None
+    journal: ExecutionJournal | None = None
+    artifact_store: ArtifactStore | None = None
+    session_id: str | None = None
     outbound_queue: BoundedAudioQueue | None = None
     telephony_helpers: Sequence[SessionHelper] = ()
     audio_gate: Callable[[], bool] | None = None

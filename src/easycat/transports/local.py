@@ -210,6 +210,20 @@ class LocalTransport(_AudioQueueMixin):
             except thread_queue.Empty:
                 break
 
+    def version_info(self) -> dict[str, str]:
+        try:
+            from importlib.metadata import version
+
+            sd_ver = version("sounddevice")
+        except Exception:
+            sd_ver = "unknown"
+        return {
+            "provider": "local",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": sd_ver,
+        }
+
 
 def _np_array(samples: tuple[int, ...], np: object) -> object:
     """Create a numpy array from a tuple — isolated for type-checker friendliness."""

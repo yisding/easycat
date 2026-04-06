@@ -1,0 +1,57 @@
+{
+  "meta": {
+    "git_sha": "253e12945962",
+    "timestamp": "2026-04-06T10:41:48Z",
+    "python": "3.12.13",
+    "platform": "Linux-6.18.8-current-meson64-aarch64-with-glibc2.41",
+    "runs": 5
+  },
+  "in_memory": {
+    "append_latency": {
+      "count": 5000,
+      "p50_us": 13.67,
+      "p90_us": 14.46,
+      "p99_us": 26.17,
+      "mean_us": 15.08,
+      "total_ms": 75.38
+    },
+    "sustained_rate": {
+      "target_rate": 50,
+      "target_duration_s": 10,
+      "total_writes": 500,
+      "dropped": 0,
+      "elapsed_s": 9.98,
+      "actual_rate": 50.1,
+      "sustained": true
+    },
+    "turn_simulation": {
+      "events": 13,
+      "total_us": 181.13,
+      "per_event_us": 13.93
+    }
+  },
+  "sqlite": {
+    "append_latency": {
+      "count": 5000,
+      "p50_us": 26.34,
+      "p90_us": 27.75,
+      "p99_us": 39.13,
+      "mean_us": 26.98,
+      "total_ms": 134.91
+    },
+    "sustained_rate": {
+      "target_rate": 50,
+      "target_duration_s": 10,
+      "total_writes": 500,
+      "dropped": 0,
+      "elapsed_s": 9.98,
+      "actual_rate": 50.1,
+      "sustained": true
+    },
+    "turn_simulation": {
+      "events": 13,
+      "total_us": 470.78,
+      "per_event_us": 36.21
+    }
+  }
+}

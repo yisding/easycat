@@ -1,0 +1,124 @@
+"""Structured record types for the ExecutionJournal.
+
+All record dataclasses are frozen.  Fields added after the initial release
+must have defaults so older bundles remain loadable.
+"""
+
+from __future__ import annotations
+
+import enum
+from dataclasses import dataclass, field
+from typing import Any, Literal
+
+
+class JournalRecordKind(enum.Enum):
+    """Discriminator for journal record filtering."""
+
+    EVENT = "event"  # from EventTraceLogger
+    SPAN_START = "span_start"  # from SpanManager.start()
+    SPAN_END = "span_end"  # from SpanManager.finish()
+    METRIC = "metric"  # from InMemoryMetrics
+    CONTROL = "control"  # control signals (interrupt, cancel, etc.)
+    FRAMEWORK_TRANSITION = "framework_transition"  # agent bridge boundaries
+    DEGRADED = "degraded"  # journal health
+    RECOVERY = "recovery"  # crash recovery markers
+
+
+@dataclass(frozen=True)
+class TimingInfo:
+    """Dual-clock timestamp captured at record creation."""
+
+    wall_ns: int = 0  # time.time_ns()
+    mono_ns: int = 0  # time.monotonic_ns()
+
+
+@dataclass(frozen=True)
+class ErrorInfo:
+    """Structured error snapshot attached to a journal record."""
+
+    type: str = ""
+    message: str = ""
+    traceback: str | None = None
+
+
+@dataclass(frozen=True)
+class JournalRecord:
+    """Base record appended to the ExecutionJournal.
+
+    ``sequence`` and ``session_id`` are always present and have no defaults.
+    Every other field carries a default so record subclasses remain
+    forward-compatible when new fields are introduced.
+    """
+
+    sequence: int
+    session_id: str
+    kind: JournalRecordKind = JournalRecordKind.EVENT
+    op_id: str = ""
+    name: str = ""
+    timing: TimingInfo = field(default_factory=TimingInfo)
+    turn_id: str | None = None
+    data: dict[str, Any] = field(default_factory=dict)
+    error: ErrorInfo | None = None
+    input_ref: str | None = None
+    output_ref: str | None = None
+    tags: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class FrameworkTransitionRecord(JournalRecord):
+    """Records a boundary crossing between EasyCat and an agent framework.
+
+    Emitted by agent bridges (WS2A) when control enters or leaves the
+    framework (e.g., OpenAI Agents SDK, PydanticAI).
+    """
+
+    kind: JournalRecordKind = JournalRecordKind.FRAMEWORK_TRANSITION
+    framework: str = ""  # e.g. "openai_agents", "pydantic_ai"
+    direction: Literal["enter", "exit"] = "enter"
+    bridge_latency_ms: float | None = None
+
+
+@dataclass(frozen=True)
+class ControlSignalRecord(JournalRecord):
+    """Records a control signal propagating through the pipeline.
+
+    These five signal_kind values are the complete set WS3 stages emit;
+    additions require a WS1 RFC amendment.
+    """
+
+    kind: JournalRecordKind = JournalRecordKind.CONTROL
+    signal_kind: Literal["interrupt", "cancel", "pause", "resume", "backpressure"] = "cancel"
+    observed_stage: str = ""  # e.g. "stt", "tts", "agent"
+    direction: Literal["upstream", "downstream"] = "downstream"
+    signal_id: str = ""
+    cause: str | None = None  # e.g. "barge_in", "timeout", "user_cancel"
+
+
+@dataclass(frozen=True)
+class RecoveredSessionMarker(JournalRecord):
+    """Emitted at sequence=0 when a journal is opened from a prior unclean shutdown.
+
+    The post-open journal still starts at sequence=1, so AC1.4's strict
+    monotonicity holds for real records.
+    """
+
+    kind: JournalRecordKind = JournalRecordKind.RECOVERY
+    name: str = "recovered_session"
+    recovered_record_count: int = 0
+    original_session_id: str = ""
+
+
+@dataclass(frozen=True)
+class BufferOverflow(JournalRecord):
+    """Sentinel emitted when the in-memory ring buffer drops records."""
+
+    kind: JournalRecordKind = JournalRecordKind.CONTROL
+    name: str = "buffer_overflow"
+
+
+@dataclass(frozen=True)
+class JournalDegraded(JournalRecord):
+    """Sentinel emitted (once per session) when a backend write fails."""
+
+    kind: JournalRecordKind = JournalRecordKind.DEGRADED
+    name: str = "journal_degraded"

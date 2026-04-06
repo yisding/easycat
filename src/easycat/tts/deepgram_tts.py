@@ -16,6 +16,15 @@ from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
 logger = logging.getLogger(__name__)
 
 
+def _get_package_version(pkg: str) -> str:
+    try:
+        from importlib.metadata import version
+
+        return version(pkg)
+    except Exception:
+        return "unknown"
+
+
 @dataclass
 class DeepgramTTSConfig:
     """Configuration for the Deepgram TTS provider."""
@@ -143,3 +152,11 @@ class DeepgramTTS(TTSBase):
         """Immediately cancel synthesis and close the WebSocket."""
         await super().cancel()
         await self._close_ws()
+
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "deepgram",
+            "model": self._config.model,
+            "api_version": "v1",
+            "sdk_version": _get_package_version("websockets"),
+        }

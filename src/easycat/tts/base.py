@@ -94,3 +94,16 @@ class TTSBase:
         """Immediately cancel synthesis and discard pending output."""
         self._cancelled = True
         self._active = False
+
+    def version_info(self) -> dict[str, str]:
+        """Return stable-shape dict identifying this provider.
+
+        Keys: ``provider``, ``model``, ``api_version``, ``sdk_version``.
+        Unknown fields are ``"unknown"`` rather than omitted.
+        """
+        return {
+            "provider": "unknown",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }

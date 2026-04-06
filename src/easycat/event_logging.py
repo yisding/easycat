@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from easycat.runtime.journal import ExecutionJournal
 
 from easycat.events import (
     AGENT_EVENTS,
@@ -40,6 +44,11 @@ from easycat.events import (
 )
 
 
+def _dual_write_enabled() -> bool:
+    """Check EASYCAT_LEGACY_OBS_DUAL_WRITE (default on)."""
+    return os.environ.get("EASYCAT_LEGACY_OBS_DUAL_WRITE", "1") != "0"
+
+
 @dataclass
 class EventLoggingConfig:
     """Configuration for event-by-event logging from the EventBus."""
@@ -67,7 +76,13 @@ class _TraceState:
 class EventTraceLogger:
     """Subscribe to EventBus events and emit concise log lines for each."""
 
-    def __init__(self, event_bus: EventBus, config: EventLoggingConfig | None = None) -> None:
+    def __init__(
+        self,
+        event_bus: EventBus,
+        config: EventLoggingConfig | None = None,
+        *,
+        journal: ExecutionJournal | None = None,
+    ) -> None:
         self._event_bus = event_bus
         self._config = config or EventLoggingConfig()
         self._logger = logging.getLogger(self._config.logger_name)
@@ -77,6 +92,7 @@ class EventTraceLogger:
         self._last_emit_time: dict[str, float] = {}
         self._seen_counts: dict[str, int] = {}
         self._recent: deque[dict[str, Any]] = deque(maxlen=max(1, self._config.ring_buffer_size))
+        self._journal = journal
 
     def start(self) -> None:
         """Attach logger as a global EventBus subscriber."""
@@ -116,6 +132,16 @@ class EventTraceLogger:
         self._state = _TraceState(self._state.start_time, self._state.event_index + 1)
         payload = self._to_payload(event, self._state.event_index)
         self._recent.append(payload)
+        if self._journal is not None and _dual_write_enabled():
+            from easycat.runtime.records import JournalRecordKind
+
+            self._journal.append(
+                kind=JournalRecordKind.EVENT,
+                name=event_type,
+                session_id=getattr(event, "session_id", "") or "",
+                turn_id=getattr(event, "turn_id", None),
+                data=payload,
+            )
         if self._config.json_mode:
             self._logger.log(
                 self._config.level, json.dumps(payload, ensure_ascii=False, sort_keys=True)

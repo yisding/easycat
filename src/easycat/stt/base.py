@@ -89,3 +89,18 @@ class STTBase:
 
     async def _on_end(self) -> None:
         """Called when the stream ends. Override in subclass."""
+
+    # -- Provider metadata ----------------------------------------------------
+
+    def version_info(self) -> dict[str, str]:
+        """Return stable-shape dict identifying this provider.
+
+        Keys: ``provider``, ``model``, ``api_version``, ``sdk_version``.
+        Unknown fields are ``"unknown"`` rather than omitted.
+        """
+        return {
+            "provider": "unknown",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }

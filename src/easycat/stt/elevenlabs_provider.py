@@ -19,6 +19,15 @@ from easycat.stt.base import STTBase, pcm_to_wav
 logger = logging.getLogger(__name__)
 
 
+def _get_package_version(pkg: str) -> str:
+    try:
+        from importlib.metadata import version
+
+        return version(pkg)
+    except Exception:
+        return "unknown"
+
+
 @dataclass
 class ElevenLabsSTTConfig:
     """Configuration for the ElevenLabs STT provider."""
@@ -226,3 +235,11 @@ class ElevenLabsSTT(STTBase):
         finally:
             if owns_client:
                 await client.aclose()
+
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "elevenlabs",
+            "model": self._config.model,
+            "api_version": "v1",
+            "sdk_version": _get_package_version("httpx"),
+        }

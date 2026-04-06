@@ -61,6 +61,7 @@ from easycat.metrics import (
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.providers import PlaybackAckTransport
+from easycat.runtime.journal import JournalView
 from easycat.session._interruption import estimate_and_notify_interruption
 from easycat.session._streaming import consume_agent_stream
 from easycat.session._text_utils import (
@@ -183,7 +184,9 @@ class Session:
         # Reliability/observability config
         self._timeout_config = cfg.timeout_config or self._default_timeout_config()
         self._metrics = cfg.metrics
-        self._spans = SpanManager(tracer=cfg.tracer)
+        self._journal = cfg.journal
+        self._artifact_store = cfg.artifact_store
+        self._spans = SpanManager(tracer=cfg.tracer, journal=self._journal)
 
         # Backpressure (outbound audio queue)
         self._outbound_queue_external = cfg.outbound_queue is not None
@@ -254,8 +257,11 @@ class Session:
         if isinstance(self.transport, PlaybackAckTransport):
             self._playback_ack_transport = self.transport
 
-        self.session_id = f"session-{uuid4().hex[:12]}"
+        self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._turn_manager.bind_session(self.session_id)
+        self._spans.bind_session(self.session_id)
+        if self._metrics and hasattr(self._metrics, "bind_session"):
+            self._metrics.bind_session(self.session_id)
 
     @staticmethod
     def _default_timeout_config():
@@ -446,6 +452,13 @@ class Session:
         return self._turn_manager.state == TurnManagerState.BOT_SPEAKING
 
     @property
+    def journal(self) -> JournalView | None:
+        """Read-only journal view, or ``None`` when journaling is disabled."""
+        if self._journal is None:
+            return None
+        return JournalView(self._journal)
+
+    @property
     def cancel_token(self) -> CancelToken | None:
         return self._turn.cancel_token if self._turn else None
 
@@ -586,6 +599,10 @@ class Session:
                 pass
         await self.transport.disconnect()
         await self._turn_manager.shutdown()
+        if self._artifact_store:
+            self._artifact_store.close()
+        if self._journal:
+            self._journal.close()
         self._turn = None
 
     async def shutdown(self) -> None:
@@ -624,6 +641,10 @@ class Session:
             self._outbound_queue.close()
         await self.transport.disconnect()
         await self._turn_manager.shutdown()
+        if self._artifact_store:
+            self._artifact_store.close()
+        if self._journal:
+            self._journal.close()
         self._turn = None
 
     # ── Cancellation ───────────────────────────────────────────

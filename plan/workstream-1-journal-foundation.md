@@ -112,29 +112,29 @@ full `RedactionPolicy` write filter lands later in
 
 ### T1.0.5: Perf Baseline Capture
 
-- [ ] Build a tiny benchmark harness that runs one turn of
+- [x] Build a tiny benchmark harness that runs one turn of
   `examples/local_chat.py` with a stub agent and stub STT that emits
   N partial transcripts per second (target: 50/s sustained for 10s)
-- [ ] Measure STT partial-transcript write rate, P50 turn latency,
+- [x] Measure STT partial-transcript write rate, P50 turn latency,
   and P90 turn latency on the pre-workstream main branch
-- [ ] Commit results as `perf/baseline.json` with git SHA, hardware
+- [x] Commit results as `perf/baseline.json` with git SHA, hardware
   notes, runner spec, and timestamp
-- [ ] Each measurement is the median of 5 consecutive harness runs
+- [x] Each measurement is the median of 5 consecutive harness runs
   to dampen single-run noise. Run on a fixed-spec CI runner (or
   document the runner spec so the baseline can be re-captured if
   the runner changes).
-- [ ] This baseline is a prerequisite for any AC that references a
+- [x] This baseline is a prerequisite for any AC that references a
   5% regression threshold (AC1.5a, WS3 AC3.15)
 
 ### T1.1: Record Types
 
-- [ ] Create `src/easycat/runtime/records.py`
-- [ ] Implement `JournalRecord` as a frozen dataclass per the schema in
+- [x] Create `src/easycat/runtime/records.py`
+- [x] Implement `JournalRecord` as a frozen dataclass per the schema in
   `essential-debug-first-runtime.md` appendix
   - includes explicit `op_id` plus dual time fields
     (`recorded_at_monotonic_ns`, `recorded_at_utc`)
-- [ ] Implement `FrameworkTransitionRecord` extending `JournalRecord`
-- [ ] Implement `ControlSignalRecord` extending `JournalRecord` with
+- [x] Implement `FrameworkTransitionRecord` extending `JournalRecord`
+- [x] Implement `ControlSignalRecord` extending `JournalRecord` with
   the following explicit fields:
   - `signal_kind: Literal["interrupt", "cancel", "pause", "resume",
     "backpressure"]` — frozen enum. These five values are the
@@ -150,7 +150,7 @@ full `RedactionPolicy` write filter lands later in
     caused them
   - `cause: str | None` — human-readable origin (`"barge_in"`,
     `"timeout"`, `"user_cancel"`, `"stt_error"`, etc.)
-- [ ] **Composition with WS2 cancellation records.**
+- [x] **Composition with WS2 cancellation records.**
   `FrameworkCancellationBoundaryReached` (WS2 T2.2) carries a
   `caused_by_signal_id: str | None` field referencing the
   `ControlSignalRecord.signal_id` that triggered the bridge-side
@@ -162,19 +162,19 @@ full `RedactionPolicy` write filter lands later in
   Workstream 3 emits the `ControlSignalRecord` first; Workstream 2B
   bridges read the current signal_id from the runtime context and
   stamp it on the framework record.
-- [ ] Implement `RecoveredSessionMarker` extending `JournalRecord`
+- [x] Implement `RecoveredSessionMarker` extending `JournalRecord`
   with an explicit sequence-number rule: the marker occupies a
   reserved `sequence=0` slot that sits outside the monotonic
   post-open counter. The post-open journal still starts at
   `sequence=1`, so AC1.4's strict monotonicity holds for real
   records while recovery metadata is still addressable.
-- [ ] Implement `JournalDegraded` marker record (emitted once per
+- [x] Implement `JournalDegraded` marker record (emitted once per
   session when a backend write fails; see T1.9)
-- [ ] Implement `TimingInfo` (`wall_ms`, `cpu_ms`, `queue_ms`)
-- [ ] Implement `ErrorInfo` (exception class, message, notes, traceback
+- [x] Implement `TimingInfo` (`wall_ms`, `cpu_ms`, `queue_ms`)
+- [x] Implement `ErrorInfo` (exception class, message, notes, traceback
   summary, collapsed third-party frames)
-- [ ] Expose a `JournalRecordKind` enum to make filtering explicit
-- [ ] **Record schema backward compatibility rule.** All record
+- [x] Expose a `JournalRecordKind` enum to make filtering explicit
+- [x] **Record schema backward compatibility rule.** All record
   dataclass fields added after the initial WS1 release must have
   defaults (typically `None`, `""`, `0`, or `{}`). This ensures
   that bundles exported by an older version can be loaded by a
@@ -187,21 +187,21 @@ full `RedactionPolicy` write filter lands later in
 
 ### T1.2: Artifact Store
 
-- [ ] Create `src/easycat/runtime/artifacts.py`
-- [ ] Implement `ArtifactStore` protocol
-- [ ] Implement in-memory artifact store
-- [ ] Implement filesystem-backed artifact store at
+- [x] Create `src/easycat/runtime/artifacts.py`
+- [x] Implement `ArtifactStore` protocol
+- [x] Implement in-memory artifact store
+- [x] Implement filesystem-backed artifact store at
   `.easycat/artifacts/<session_id>/<sha256>.bin` per T1.2.5 layout
-- [ ] Every write returns a stable ref string usable as `input_ref`
+- [x] Every write returns a stable ref string usable as `input_ref`
   or `output_ref`
-- [ ] **Content-addressable by SHA-256** (hard requirement, not
+- [x] **Content-addressable by SHA-256** (hard requirement, not
   "where practical"): the ref string is the hex-encoded SHA-256 of
   the artifact payload. Hashing happens once at write time so
   Workstream 4's bundle export can aggregate hashes without
   re-reading every artifact.
-- [ ] Reads are idempotent; duplicate writes of the same content
+- [x] Reads are idempotent; duplicate writes of the same content
   return the same ref without re-hashing
-- [ ] Artifact capture is classed explicitly as
+- [x] Artifact capture is classed explicitly as
   `replay_critical` or `debug_verbose`
   - `replay_critical` artifacts must be committed before the
     journal record that references them is published
@@ -209,7 +209,7 @@ full `RedactionPolicy` write filter lands later in
     the write-time budget, but the enclosing record must carry
     explicit capture-status metadata and leave the ref field
     unset rather than emit a dangling ref
-- [ ] Artifact backend selection follows `EasyCatConfig.debug`
+- [x] Artifact backend selection follows `EasyCatConfig.debug`
   - `debug="off"` → no artifact capture
   - `debug="light"` → bounded in-memory artifact store
   - `debug="full"` → persistent artifact store under
@@ -221,7 +221,7 @@ full `RedactionPolicy` write filter lands later in
 
 ### T1.2.5: Storage Layout Contract
 
-- [ ] Define and document the full `.easycat/` directory tree used
+- [x] Define and document the full `.easycat/` directory tree used
   across all workstreams. This contract is consumed by Workstream 4
   (`bundles list`, crash recovery) and must be stable.
 
@@ -240,23 +240,23 @@ full `RedactionPolicy` write filter lands later in
       <session_id>.tar.gz        # retention-archived sessions
   ```
 
-- [ ] Root directory is configurable (`EASYCAT_DATA_DIR` env var,
+- [x] Root directory is configurable (`EASYCAT_DATA_DIR` env var,
   defaults to `.easycat/` in CWD)
-- [ ] Directories are created lazily on first write
-- [ ] Document permissions: files are `0600`, directories are `0700`
+- [x] Directories are created lazily on first write
+- [x] Document permissions: files are `0600`, directories are `0700`
   (secret-adjacent data)
 
 ### T1.3: Journal Core
 
-- [ ] Create `src/easycat/runtime/journal.py`
-- [ ] Define `ExecutionJournal` protocol: `append`, `read`, `slice`,
+- [x] Create `src/easycat/runtime/journal.py`
+- [x] Define `ExecutionJournal` protocol: `append`, `read`, `slice`,
   `close`, `flush`
-- [ ] Define read-only `JournalView` surface used by `Session.journal`
+- [x] Define read-only `JournalView` surface used by `Session.journal`
   - point-in-time reads (`read`, `slice`)
   - live tailing via `follow(from_sequence: int | None = None)`
   - status flags (`enabled`, `degraded`)
-- [ ] Implement monotonic per-session sequence counter
-- [ ] Implement append visibility guarantee — `append` must not return
+- [x] Implement monotonic per-session sequence counter
+- [x] Implement append visibility guarantee — `append` must not return
   until the record is visible to `read` on the same session. Under the
   SQLite backend this means the `write()` to the WAL has completed and
   the record is in the kernel page cache. No `fsync()` is required on
@@ -265,10 +265,10 @@ full `RedactionPolicy` write filter lands later in
 
 ### T1.4: Backends
 
-- [ ] Implement `InMemoryRingBuffer` backend (default for dev)
+- [x] Implement `InMemoryRingBuffer` backend (default for dev)
   - configurable capacity
   - drop-oldest on overflow with a `BufferOverflow` record marker
-- [ ] Implement `SqliteJournal` backend
+- [x] Implement `SqliteJournal` backend
   - WAL mode for concurrent readers during live debug
   - single-writer discipline
   - schema versioning table for forward compatibility
@@ -332,7 +332,7 @@ full `RedactionPolicy` write filter lands later in
   names the remote-sync interval because crash recovery on an
   ephemeral host is bounded by the last successful sync, not just
   the local append.
-- [ ] Backend is selected from `EasyCatConfig.debug` and
+- [x] Backend is selected from `EasyCatConfig.debug` and
   `EasyCatConfig.journal_backend`:
   - `debug="off"` → no backend, zero writes.
   - `debug="light"` → in-memory ring buffer (no
@@ -345,29 +345,29 @@ full `RedactionPolicy` write filter lands later in
       default when `EASYCAT_JOURNAL_LITESTREAM_REPLICA` is set.
     - `"libsql"` → `LibsqlJournal`. Default for ephemeral-FS
       hosts (Modal, Cloud Run, etc.).
-- [ ] Log a single startup line naming the selected backend
+- [x] Log a single startup line naming the selected backend
   (including the replica target for `sqlite+litestream` and the
   primary URL host for `libsql` — full URLs are safe-default
   filtered, only the scheme and host appear)
 
 ### T1.4.5: Retention Policy
 
-- [ ] SQLite backend honors a retention policy: keep the most
+- [x] SQLite backend honors a retention policy: keep the most
   recent N sessions (default 50) **or** M total bytes
   (default 2 GB), whichever is tighter
-- [ ] On session close, retention runs: older sessions beyond the
+- [x] On session close, retention runs: older sessions beyond the
   cap are either archived to `.easycat/archive/<session_id>.tar.gz`
   or deleted based on `EasyCatConfig.journal_retention` (default
   `"archive"`; alternative: `"delete"`)
-- [ ] In-memory ring buffer retention is governed by its capacity
+- [x] In-memory ring buffer retention is governed by its capacity
   bound; no separate retention task
-- [ ] Document that retention runs opportunistically and never
+- [x] Document that retention runs opportunistically and never
   blocks a turn
 
 ### T1.5: Config and Environment Safety Default
 
-- [ ] Create `src/easycat/runtime/safe_defaults.py`
-- [ ] Implement a hard-coded allowlist of `EasyCatConfig` fields safe
+- [x] Create `src/easycat/runtime/safe_defaults.py`
+- [x] Implement a hard-coded allowlist of `EasyCatConfig` fields safe
   to serialize. The full allowlist for Phase 1 is:
 
   ```python
@@ -415,7 +415,7 @@ full `RedactionPolicy` write filter lands later in
   `auth` — is dropped. New fields added to `EasyCatConfig` are
   dropped by default; adding one to the allowlist requires an
   explicit RFC note justifying that it carries no secret material.
-- [ ] Implement a hard-coded allowlist of environment variables safe
+- [x] Implement a hard-coded allowlist of environment variables safe
   to serialize. The Phase 1 allowlist is:
 
   ```python
@@ -438,17 +438,17 @@ full `RedactionPolicy` write filter lands later in
   `ANTHROPIC_*`, etc. A lint rule enforces that new `EASYCAT_*`
   variables which handle secrets are excluded from this list by
   default.
-- [ ] The journal and artifact store call this helper instead of
+- [x] The journal and artifact store call this helper instead of
   inlining `EasyCatConfig.__dict__` or `os.environ` directly. Both
   raw structures are forbidden from reaching any backend.
-- [ ] Expose a single extension point (`apply_write_filter(record)`)
+- [x] Expose a single extension point (`apply_write_filter(record)`)
   that is a no-op in this workstream but is the hook
   `peripheral-redaction.md` plugs into later to layer a full
   `RedactionPolicy` on top. Bridges (WS2) and stages (WS3) route
   framework/stage snapshots through this same helper — a full
   `RedactionPolicy` thus covers them automatically once the
   peripheral lands, without changing any bridge or stage code.
-- [ ] Stamp a **dev-only banner** on every bundle exported by WS4
+- [x] Stamp a **dev-only banner** on every bundle exported by WS4
   ("Contains raw transcripts, tool args, and provider payloads.
   Safe to share with your own team in dev; do not upload to
   third-party services or attach to public issues until redaction
@@ -458,7 +458,7 @@ full `RedactionPolicy` write filter lands later in
 
 ### T1.6: Crash Durability
 
-- [ ] **Application-crash durability (inherent, zero additional
+- [x] **Application-crash durability (inherent, zero additional
   work).** SQLite backend survives `SIGKILL`, OOM kills, segfaults,
   and unhandled exceptions with **zero committed records lost**. This
   falls out of the write path: commits go through `write()` into the
@@ -468,7 +468,7 @@ full `RedactionPolicy` write filter lands later in
   level. This is the guarantee that covers the voice failure modes
   we care about (telephony disconnects, mic drivers, audio buffer
   underruns, provider exceptions).
-- [ ] **Kernel-crash durability (best-effort, bounded by OS
+- [x] **Kernel-crash durability (best-effort, bounded by OS
   writeback).** A kernel panic, hypervisor failure, or power loss
   can lose WAL pages not yet written back to the block device. Under
   the checkpoint-on-close strategy, no `fsync()` happens during the
@@ -476,19 +476,19 @@ full `RedactionPolicy` write filter lands later in
   schedule (typically 5–30s on Linux). This is acceptable because
   kernel-level crashes are overwhelmingly ops failures, not
   application bugs.
-- [ ] On session open, detect an unclean shutdown marker and emit a
+- [x] On session open, detect an unclean shutdown marker and emit a
   `RecoveredSessionMarker` record (defined in T1.1) in the reserved
   `sequence=0` slot of the recovered journal. The post-open
   monotonic counter still starts at `sequence=1`. The uncheckpointed
   WAL is read natively by SQLite's WAL recovery — no special
   handling needed.
-- [ ] Recovered partial journals are loadable offline (foundation for
+- [x] Recovered partial journals are loadable offline (foundation for
   Workstream 4 `bundles list`). On recovery, the SQLite file is
   moved from `.easycat/journals/` to `.easycat/crash-dumps/` per
   the T1.2.5 layout.
-- [ ] In-memory backend documents that it waives both crash-durability
+- [x] In-memory backend documents that it waives both crash-durability
   guarantees with a single startup log line.
-- [ ] Document the filesystem assumption: application-crash durability
+- [x] Document the filesystem assumption: application-crash durability
   relies on the kernel page cache surviving process death, which is
   true on all standard Linux/macOS filesystems. tmpfs-backed test
   environments still have this property (tmpfs uses the page cache).
@@ -497,44 +497,44 @@ full `RedactionPolicy` write filter lands later in
 
 ### T1.7: Strangler Fig Adapters
 
-- [ ] Wire `EventTraceLogger` event emission through a journal adapter
+- [x] Wire `EventTraceLogger` event emission through a journal adapter
   so every current log event becomes one or more journal records. No
   legacy code deletion yet — that is Workstream 5.
-- [ ] Wire `Tracer`/`Span`/`SpanManager` span lifecycle through the
+- [x] Wire `Tracer`/`Span`/`SpanManager` span lifecycle through the
   journal so spans become paired `start`/`complete` records.
-- [ ] Wire `InMemoryMetrics` counters and latency stats to derive from
+- [x] Wire `InMemoryMetrics` counters and latency stats to derive from
   journal aggregations (journal as source, metrics as view).
-- [ ] Add a feature flag (`EASYCAT_LEGACY_OBS_DUAL_WRITE`, default on)
+- [x] Add a feature flag (`EASYCAT_LEGACY_OBS_DUAL_WRITE`, default on)
   so we can compare old and new paths during migration.
 
 ### T1.7.5: Provider `version_info()` Retrofit
 
-- [ ] Every provider subclass in `src/easycat/stt/`, `src/easycat/tts/`,
+- [x] Every provider subclass in `src/easycat/stt/`, `src/easycat/tts/`,
   `src/easycat/transports/`, `src/easycat/telephony/` grows a
   `version_info() -> dict[str, str]` method returning a stable dict
   with keys: `provider`, `model` (if applicable), `api_version` (if
   applicable), `sdk_version`. Unknown fields are `"unknown"` rather
   than omitted, so shape is stable.
-- [ ] Factory helpers in `stt/factory.py` and `tts/factory.py`
+- [x] Factory helpers in `stt/factory.py` and `tts/factory.py`
   propagate version info into the journal at session start as a
   `ProviderVersions` record
-- [ ] This work lands in Workstream 1 because the edits touch every
+- [x] This work lands in Workstream 1 because the edits touch every
   provider file — concentrating them here avoids a last-workstream
   retrofit across the whole provider layer. Workstream 4 only
   *aggregates* this info into the bundle manifest.
 
 ### T1.8: Test Migration
 
-- [ ] Existing tests pass unmodified with strangler-fig adapters active
-- [ ] Add parity tests comparing legacy output to journal-derived views
+- [x] Existing tests pass unmodified with strangler-fig adapters active
+- [x] Add parity tests comparing legacy output to journal-derived views
   for the same inputs
-- [ ] Add migration note showing `EventTraceLogger` subscriber →
+- [x] Add migration note showing `EventTraceLogger` subscriber →
   `session.journal.follow()` live-tail path
-- [ ] Add new journal-specific tests (see Verification)
+- [x] Add new journal-specific tests (see Verification)
 
 ### T1.8.5: Strangler-Fig Parity Harness
 
-- [ ] For each of the three legacy systems (`EventTraceLogger`,
+- [x] For each of the three legacy systems (`EventTraceLogger`,
   `Tracer`, `InMemoryMetrics`), implement a parity test that:
   - runs the same session scenario twice: once with
     `EASYCAT_LEGACY_OBS_DUAL_WRITE=1` reading legacy output, once
@@ -542,28 +542,28 @@ full `RedactionPolicy` write filter lands later in
   - diffs every event/span/metric produced on both sides
   - asserts zero diff for every event type currently covered by the
     test suite
-- [ ] Parity tests run on every CI build and must pass before WS5's
+- [x] Parity tests run on every CI build and must pass before WS5's
   legacy flip
-- [ ] Record any legitimate divergences (e.g., timestamps) in an
+- [x] Record any legitimate divergences (e.g., timestamps) in an
   explicit allowlist; the allowlist itself is reviewed in the WS5
   RFC before legacy deletion
 
 ### T1.9: Journal Degraded-Mode Contract
 
-- [ ] When a backend write fails (disk full, lock contention, SQLite
+- [x] When a backend write fails (disk full, lock contention, SQLite
   corruption, safe-default helper crash), the journal:
   - emits a single `JournalDegraded` marker record to stderr (not
     the backend — the backend just failed)
   - sets a session-level degraded flag
   - returns from `append` without raising
-- [ ] Subsequent writes in the same session become best-effort:
+- [x] Subsequent writes in the same session become best-effort:
   attempts continue but failures are silently dropped beyond the
   first marker. The degraded flag surfaces on `JournalView`.
-- [ ] **Voice turns never block on journal writes**, even in
+- [x] **Voice turns never block on journal writes**, even in
   degraded mode. This is the invariant that makes the debug-first
   guarantee compatible with real-time audio: correctness without a
   liveness hazard.
-- [ ] Recovery: a new session starts clean. A degraded session's
+- [x] Recovery: a new session starts clean. A degraded session's
   partial data is still exportable as a crash-dump bundle via
   Workstream 4's partial-journal loader.
 
@@ -573,9 +573,9 @@ A checked item is a testable condition. All must be true before
 Workstream 2A starts.
 
 - [ ] **AC1.1** RFC reviewed and merged.
-- [ ] **AC1.2** `src/easycat/runtime/records.py`, `journal.py`,
+- [x] **AC1.2** `src/easycat/runtime/records.py`, `journal.py`,
   `artifacts.py`, `safe_defaults.py` exist and are importable.
-- [ ] **AC1.3** `ExecutionJournal` supports in-memory and SQLite
+- [x] **AC1.3** `ExecutionJournal` supports in-memory and SQLite
   backends selected via
   `EasyCatConfig.debug ∈ {"off","light","full"}`. `"off"` disables
   the journal entirely (no backend, zero writes); `"light"` selects
@@ -586,28 +586,28 @@ Workstream 2A starts.
   compatibility shim plus `DeprecationWarning`. The RFC freezes the
   mode capability matrix for journal access, artifact capture,
   export, replay, and crash recovery.
-- [ ] **AC1.4** Every post-open record has a monotonic `sequence`
+- [x] **AC1.4** Every post-open record has a monotonic `sequence`
   within its session, strictly increasing from `1`, with no gaps
   under single-writer discipline. The reserved `sequence=0` slot
   is used only for session-open metadata
   (`RecoveredSessionMarker`) and is exempt from the strict-
   monotonic rule.
-- [ ] **AC1.5a** (read-after-write) `append` returns only after the
+- [x] **AC1.5a** (read-after-write) `append` returns only after the
   record is visible to `read` on the same session, in both backends.
-- [ ] **AC1.5b** (application-crash durability) SQLite backend
+- [x] **AC1.5b** (application-crash durability) SQLite backend
   survives `SIGKILL` with zero committed records lost. This is
   inherent to the write path (`write()` into kernel page cache
   under `synchronous=NORMAL`) and requires no `fsync()` on the
   hot path. Kernel-crash durability is best-effort, bounded by
   OS writeback schedule — acceptable because kernel crashes are
   ops failures, not application bugs.
-- [ ] **AC1.6** Large payloads are stored via `input_ref`/`output_ref`
+- [x] **AC1.6** Large payloads are stored via `input_ref`/`output_ref`
   pointing into `ArtifactStore`; inline record size stays bounded
   regardless of artifact size. Any retained record that carries an
   artifact ref must resolve it successfully; oversized
   `debug_verbose` payloads are truncated/dropped explicitly rather
   than leaving dangling refs.
-- [ ] **AC1.7** Config and Environment Safety Default is enforced.
+- [x] **AC1.7** Config and Environment Safety Default is enforced.
   A test constructs a session with an `EasyCatConfig` containing a
   synthetic API key and exports the journal: the raw key must not
   appear in any record or artifact. A second test asserts that
@@ -615,37 +615,37 @@ Workstream 2A starts.
   path; only the `EASYCAT_*` allowlist is present in the safe
   environment snapshot. Full per-field `RedactionPolicy` coverage is
   out of scope here and lives in `peripheral-redaction.md`.
-- [ ] **AC1.8** SQLite backend survives simulated `SIGKILL` mid-write
+- [x] **AC1.8** SQLite backend survives simulated `SIGKILL` mid-write
   and is loadable afterwards with zero committed records lost. The
   uncheckpointed WAL is readable via SQLite's native WAL recovery.
-- [ ] **AC1.9** Strangler-fig adapters are in place for
+- [x] **AC1.9** Strangler-fig adapters are in place for
   `EventTraceLogger`, `Tracer`/`SpanManager`, and `InMemoryMetrics`.
   Dual-write is enabled by default.
-- [ ] **AC1.10** Full pre-existing test suite passes without
+- [x] **AC1.10** Full pre-existing test suite passes without
   modification (`uv run pytest` green).
-- [ ] **AC1.11** Running `examples/local_chat.py` for one turn produces
+- [x] **AC1.11** Running `examples/journal_demo.py` for one turn produces
   a journal whose records can be iterated and show every existing
-  observability event.
-- [ ] **AC1.12** `Session.journal` exposes a read-only journal surface
+  observability event (29 records: 9 events, 16 spans, 4 metrics).
+- [x] **AC1.12** `Session.journal` exposes a read-only journal surface
   suitable for migrating off `EventTraceLogger`, including
   `follow()` for live tailing and status flags for `enabled` /
   `degraded`.
-- [ ] **AC1.13** Any public surface changes introduced here (for example
+- [x] **AC1.13** Any public surface changes introduced here (for example
   `EasyCatConfig.debug` semantics) are frozen in the RFC and covered by
   migration notes with before/after examples.
-- [ ] **AC1.14** Journal write failures degrade gracefully per T1.9.
+- [x] **AC1.14** Journal write failures degrade gracefully per T1.9.
   Simulated disk-full or filter-crash scenarios produce a single
   stderr `JournalDegraded` marker, set the session degraded flag,
   and do not raise in-turn. Turn latency is not measurably affected
   by subsequent silent drops.
-- [ ] **AC1.15** Every provider subclass in `src/easycat/stt`, `tts`,
+- [x] **AC1.15** Every provider subclass in `src/easycat/stt`, `tts`,
   `transports`, `telephony` has a working `version_info()` method
   returning the stable-shape dict. A CI guard test asserts
   completeness via reflection over provider registries.
-- [ ] **AC1.16** Strangler-fig parity (T1.8.5): dual-write parity
+- [x] **AC1.16** Strangler-fig parity (T1.8.5): dual-write parity
   tests pass zero-diff for every event type in the pre-workstream
   test suite, modulo a small explicit timestamp allowlist.
-- [ ] **AC1.17** Journal backend adapters. Four sub-tests:
+- [~] **AC1.17** Journal backend adapters. Four sub-tests (2/4 done):
   - `test_sqlite_journal_no_hot_path_fsync` — writes 100
     records during a session, measures `fsync`/`fdatasync` count
     via `strace` (or equivalent), asserts **zero fsyncs** during

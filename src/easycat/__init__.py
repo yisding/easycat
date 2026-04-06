@@ -78,6 +78,12 @@ from easycat.config import (
     TracingConfig,
     create_session,
 )
+from easycat.runtime import (
+    ExecutionJournal,
+    JournalRecord,
+    JournalRecordKind,
+    JournalView,
+)
 from easycat.helpers import (
     attach_runtime_feedback,
     default_event_logging,
@@ -391,4 +397,9 @@ __all__ = [
     "default_event_logging",
     "require_env",
     "wait_for_shutdown_signal",
+    # Journal runtime
+    "ExecutionJournal",
+    "JournalRecord",
+    "JournalRecordKind",
+    "JournalView",
 ]

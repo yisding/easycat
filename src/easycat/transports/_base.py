@@ -106,6 +106,15 @@ class _AudioQueueMixin:
         """Block until a remote peer / client connects (or *timeout* expires)."""
         await asyncio.wait_for(self._client_connected.wait(), timeout=timeout)
 
+    def version_info(self) -> dict[str, str]:
+        """Return stable-shape dict identifying this transport."""
+        return {
+            "provider": "unknown",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }
+
 
 # ── WebSocket server base ─────────────────────────────────────────
 

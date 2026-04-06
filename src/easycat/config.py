@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Literal
+from uuid import uuid4
 
 from easycat.agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.agents.factory import auto_adapt_agent
@@ -17,6 +19,8 @@ from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.providers import Transport
+from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
+from easycat.runtime.journal import create_journal
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActionExecutor, SessionActions
@@ -181,9 +185,19 @@ class EasyCatConfig:
     output_processors: Sequence[LLMOutputProcessor] = ()
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
-    debug: bool = False
+    debug: Literal["off", "light", "full"] | bool = "light"
 
     def __post_init__(self) -> None:
+        # ── Bool → enum compat shim (one-release deprecation) ────
+        if isinstance(self.debug, bool):
+            warnings.warn(
+                "EasyCatConfig(debug=bool) is deprecated. "
+                'Use debug="off" | "light" | "full" instead.',
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.debug = "full" if self.debug else "off"
+
         if self.openai_api_key:
             if self.stt is None:
                 self.stt = OpenAISTTConfig(api_key=self.openai_api_key)
@@ -198,7 +212,7 @@ class EasyCatConfig:
                 self.tts = OpenAITTSConfig(**tts_kwargs)
         if self.echo_cancellation is None:
             self.echo_cancellation = self._default_echo_cancellation_for_transport()
-        if self.debug:
+        if self.debug in ("light", "full"):
             self._apply_debug_defaults()
         self._validate()
 
@@ -264,8 +278,22 @@ def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
     return config.stt.is_flux
 
 
+def _create_artifact_store(
+    session_id: str, debug: str
+) -> InMemoryArtifactStore | FilesystemArtifactStore | None:
+    if debug == "off":
+        return None
+    if debug == "full":
+        return FilesystemArtifactStore(session_id)
+    return InMemoryArtifactStore()
+
+
 def create_session(config: EasyCatConfig) -> Session:
     """Create a fully wired Session from EasyCatConfig."""
+    session_id = f"session-{uuid4().hex[:12]}"
+    journal = create_journal(session_id, debug=config.debug) if config.debug != "off" else None
+    artifact_store = _create_artifact_store(session_id, config.debug)
+
     event_bus = EventBus()
     stt = create_stt_provider_from_config(config.stt, event_bus)
     tts = create_tts_provider_from_config(config.tts, event_bus)
@@ -284,7 +312,11 @@ def create_session(config: EasyCatConfig) -> Session:
     else:
         agent = NoopAgent()
 
-    metrics = _create_metrics(config.metrics)
+    # Emit provider versions into the journal at session start.
+    if journal is not None:
+        _emit_provider_versions(journal, session_id, stt=stt, tts=tts, transport=transport)
+
+    metrics = _create_metrics(config.metrics, journal=journal)
     tracer = _create_tracer(config.tracing)
 
     turn_config = config.turn_taking
@@ -295,7 +327,9 @@ def create_session(config: EasyCatConfig) -> Session:
     telephony_helpers = _create_telephony_helpers(event_bus, config.telephony)
     action_executors = [*config.action_executors, *_create_action_executors(config.telephony)]
     if config.event_logging.enabled:
-        telephony_helpers.append(EventTraceLogger(event_bus, config.event_logging))
+        telephony_helpers.append(
+            EventTraceLogger(event_bus, config.event_logging, journal=journal)
+        )
 
     # Extract audio gate from the outbound call state machine, if present.
     audio_gate = None
@@ -324,6 +358,9 @@ def create_session(config: EasyCatConfig) -> Session:
             timeout_config=config.timeouts,
             metrics=metrics,
             tracer=tracer,
+            journal=journal,
+            artifact_store=artifact_store,
+            session_id=session_id,
             telephony_helpers=telephony_helpers,
             enable_vad=enable_vad,
             auto_turn_from_stt_final=auto_turn_from_stt_final,
@@ -596,10 +633,35 @@ def _create_outbound_helpers(
             logger.warning("twilio package not installed — OutboundCallManager disabled")
 
 
-def _create_metrics(config: MetricsConfig | None) -> MetricsCollector | None:
+def _emit_provider_versions(
+    journal: Any,
+    session_id: str,
+    *,
+    stt: Any,
+    tts: Any,
+    transport: Any,
+) -> None:
+    """Write a single journal record with version info from all providers."""
+    from easycat.runtime.records import JournalRecordKind
+
+    versions: dict[str, dict[str, str]] = {}
+    for role, provider in [("stt", stt), ("tts", tts), ("transport", transport)]:
+        if hasattr(provider, "version_info"):
+            versions[role] = provider.version_info()
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="provider_versions",
+        session_id=session_id,
+        data=versions,
+    )
+
+
+def _create_metrics(
+    config: MetricsConfig | None, *, journal: Any = None
+) -> MetricsCollector | None:
     if not config or not config.enabled:
         return None
-    return config.collector or InMemoryMetrics()
+    return config.collector or InMemoryMetrics(journal=journal)
 
 
 def _create_tracer(config: TracingConfig | None) -> Tracer | None:

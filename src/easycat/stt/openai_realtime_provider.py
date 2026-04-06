@@ -37,6 +37,15 @@ _REALTIME_SAMPLE_RATE = 24000
 logger = logging.getLogger(__name__)
 
 
+def _get_package_version(pkg: str) -> str:
+    try:
+        from importlib.metadata import version
+
+        return version(pkg)
+    except Exception:
+        return "unknown"
+
+
 @dataclass
 class OpenAIRealtimeSTTConfig:
     """Configuration for the OpenAI Realtime streaming STT provider."""
@@ -209,3 +218,11 @@ class OpenAIRealtimeSTT(STTBase):
 
         elif msg_type in ("session.created", "session.updated"):
             logger.debug("OpenAI Realtime: %s", msg_type)
+
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "openai-realtime",
+            "model": self._config.model,
+            "api_version": "v1",
+            "sdk_version": _get_package_version("websockets"),
+        }

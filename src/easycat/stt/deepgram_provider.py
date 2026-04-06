@@ -19,6 +19,15 @@ from easycat.stt.base import STTBase
 logger = logging.getLogger(__name__)
 
 
+def _get_package_version(pkg: str) -> str:
+    try:
+        from importlib.metadata import version
+
+        return version(pkg)
+    except Exception:
+        return "unknown"
+
+
 @dataclass
 class DeepgramSTTConfig:
     """Configuration for the Deepgram STT provider."""
@@ -192,6 +201,14 @@ class DeepgramSTT(STTBase):
                 }
             )
         return f"{base_url}?{urlencode(params)}"
+
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "deepgram",
+            "model": self._config.model,
+            "api_version": "v1",
+            "sdk_version": _get_package_version("websockets"),
+        }
 
 
 def _flux_base_url(base_url: str) -> str:

@@ -8,12 +8,21 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
 import time
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from easycat.runtime.journal import ExecutionJournal
+
+
+def _dual_write_enabled() -> bool:
+    return os.environ.get("EASYCAT_LEGACY_OBS_DUAL_WRITE", "1") != "0"
+
 
 logger = logging.getLogger(__name__)
 
@@ -81,15 +90,39 @@ class InMemoryMetrics:
     Stores latency distributions and counters in memory.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, journal: ExecutionJournal | None = None) -> None:
         self._latencies: dict[str, LatencyStats] = defaultdict(LatencyStats)
         self._counters: dict[str, int] = defaultdict(int)
+        self._journal = journal
+        self._session_id: str = ""
+
+    def bind_session(self, session_id: str) -> None:
+        """Set the session_id used for journal records."""
+        self._session_id = session_id
 
     def record_latency(self, name: str, value_ms: float) -> None:
         self._latencies[name].record(value_ms)
+        if self._journal is not None and _dual_write_enabled():
+            from easycat.runtime.records import JournalRecordKind
+
+            self._journal.append(
+                kind=JournalRecordKind.METRIC,
+                name=name,
+                session_id=self._session_id,
+                data={"metric_type": "latency", "value_ms": value_ms},
+            )
 
     def increment_counter(self, name: str, amount: int = 1) -> None:
         self._counters[name] += amount
+        if self._journal is not None and _dual_write_enabled():
+            from easycat.runtime.records import JournalRecordKind
+
+            self._journal.append(
+                kind=JournalRecordKind.METRIC,
+                name=name,
+                session_id=self._session_id,
+                data={"metric_type": "counter", "amount": amount},
+            )
 
     def get_metrics(self) -> dict[str, Any]:
         return {

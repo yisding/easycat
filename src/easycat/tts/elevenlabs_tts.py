@@ -19,6 +19,15 @@ from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
 logger = logging.getLogger(__name__)
 
 
+def _get_package_version(pkg: str) -> str:
+    try:
+        from importlib.metadata import version
+
+        return version(pkg)
+    except Exception:
+        return "unknown"
+
+
 class ElevenLabsStreamMode(enum.StrEnum):
     """Streaming mode for ElevenLabs TTS."""
 
@@ -289,3 +298,11 @@ class ElevenLabsTTS(TTSBase):
             await self._client.aclose()
             self._client = None
         await self._close_ws()
+
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "elevenlabs",
+            "model": self._config.model_id,
+            "api_version": "v1",
+            "sdk_version": _get_package_version("httpx"),
+        }
