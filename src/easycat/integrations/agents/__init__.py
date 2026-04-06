@@ -20,6 +20,9 @@ from easycat.integrations.agents.base import (
     ShallowModeInterruptionError,
     UnitKind,
 )
+from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
+from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
+from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
 __all__ = [
     "AgentBridgeEvent",
@@ -33,6 +36,9 @@ __all__ = [
     "ExecutionCursor",
     "ExternalAgentBridge",
     "FrameworkStateSnapshot",
+    "GenericWorkflowBridge",
+    "OpenAIAgentsBridge",
+    "PydanticAIBridge",
     "RecorderContext",
     "RecorderInvariantError",
     "ShallowModeInterruptionError",

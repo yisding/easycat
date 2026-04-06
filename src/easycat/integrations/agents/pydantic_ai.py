@@ -368,11 +368,34 @@ class PydanticAIBridge:
                 if output and isinstance(output, str):
                     accumulated = accumulated or output
 
-            # Capture history from state if agents stored it.
+            # Capture graph run history as a state snapshot record.
             run_history = getattr(graph_run, "history", None)
             if run_history is not None:
-                # Store as artifact ref for WS4.
-                pass
+                try:
+                    json.dumps(
+                        [
+                            {"node": type(n).__name__, "index": i}
+                            for i, n in enumerate(run_history)
+                        ],
+                        default=str,
+                    )
+                    recorder.record_state_snapshot(ref=f"graph-history-{uuid4().hex[:8]}")
+                except (TypeError, ValueError):
+                    logger.debug("Failed to serialize graph run history")
+
+            # Convention enforcement: verify handler was actually used.
+            if not _handler.was_called and prev_node_name is not None:
+                from easycat.integrations.agents.base import (
+                    ConventionViolationError,
+                )
+
+                raise ConventionViolationError(
+                    "PydanticAIBridge Graph mode: the _easycat_event_handler "
+                    "was installed on the state but no agent call passed it "
+                    "through via event_stream_handler=. Ensure every "
+                    "agent.run() / agent.iter() call inside graph nodes "
+                    "passes event_stream_handler=ctx.state._easycat_event_handler."
+                )
 
         except Exception as exc:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
@@ -400,13 +423,19 @@ class _GraphEventHandler:
     def __init__(self, recorder: AgentRecorder) -> None:
         self._recorder = recorder
         self._accumulated_text = ""
+        self._was_called = False
 
     @property
     def accumulated_text(self) -> str:
         return self._accumulated_text
 
+    @property
+    def was_called(self) -> bool:
+        return self._was_called
+
     async def __call__(self, event: Any) -> None:
         """Handle a PydanticAI streaming event from inside a graph node."""
+        self._was_called = True
         mapped = translate_event(event, self._recorder)
         if mapped is not None and mapped.kind == "text_delta":
             self._accumulated_text += mapped.text

@@ -55,4 +55,10 @@ def translate_event(
             recorder.record_tool_call(phase="result", name="")
         return AgentBridgeEvent(kind="tool_result", call_id=call_id, result=result_str)
 
+    # FinalResultEvent → done (structured output capture)
+    if event_cls == "FinalResultEvent":
+        output = getattr(event, "result", None)
+        text = str(output) if output is not None else ""
+        return AgentBridgeEvent(kind="done", text=text, structured_output=output)
+
     return None
