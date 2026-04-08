@@ -23,6 +23,7 @@ from easycat.integrations.agents.base import (
     CommitRule,
     ExecutionCursor,
     FrameworkStateSnapshot,
+    InterruptionPlan,
     ShallowModeInterruptionError,
     UnitKind,
 )
@@ -82,6 +83,7 @@ class GenericWorkflowBridge:
         sig = inspect.signature(fn)
         self._deep_mode = "recorder" in sig.parameters
         self._last_output: Any = None
+        self._mcp_warning_emitted = False
 
     @property
     def deep_mode(self) -> bool:
@@ -103,6 +105,21 @@ class GenericWorkflowBridge:
             committable=False,
         )
         recorder.record_unit_entered(cursor)
+
+        # Emit one-time warning if MCP servers configured on shallow workflow.
+        if not self._mcp_warning_emitted and not self._deep_mode and recorder.context.mcp_servers:
+            self._mcp_warning_emitted = True
+            recorder.record_framework_error(
+                ErrorInfo(
+                    type="MCPShallowModeWarning",
+                    message=(
+                        f"MCP servers {list(recorder.context.mcp_servers)!r} "
+                        "configured but GenericWorkflowBridge is in shallow mode. "
+                        "MCP wiring is not supported in shallow mode — convert "
+                        "to deep mode to use MCP servers."
+                    ),
+                )
+            )
 
         accumulated = ""
         try:
@@ -145,13 +162,15 @@ class GenericWorkflowBridge:
             kind="generic_workflow",
         )
 
-    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
-        # Check for explicit opt-in on the workflow object.
-        if hasattr(self._workflow, "apply_interruption"):
-            self._workflow.apply_interruption(delivered_text, mode)
-            return
-
-        if not self._deep_mode:
+    def apply_interruption(
+        self,
+        delivered_text: str,
+        mode: CancellationMode,
+        recorder: AgentRecorder | None = None,
+        caused_by_signal_id: str | None = None,
+    ) -> None:
+        # Shallow mode without explicit override → raise immediately.
+        if not self._deep_mode and not hasattr(self._workflow, "apply_interruption"):
             raise ShallowModeInterruptionError(
                 "Interruption is not supported in GenericWorkflowBridge "
                 "shallow mode. Convert the workflow to deep mode by adding "
@@ -160,11 +179,69 @@ class GenericWorkflowBridge:
                 "mode)` on the workflow object itself."
             )
 
-        # Deep mode without explicit apply_interruption — best-effort.
-        logger.debug(
-            "Deep-mode workflow %s has no apply_interruption; relying on cancel_token",
-            self._display_name,
+        # Step 1: plan the mutation.
+        plan = self._plan_interruption(delivered_text, mode)
+
+        # Step 2: write FrameworkStateCommitted to the journal.
+        if recorder is not None:
+            try:
+                recorder.record_state_committed(
+                    mutation_kind=plan.mutation_kind,
+                    pre_state_ref=plan.pre_state_ref,
+                    post_state_ref=plan.post_state_ref,
+                )
+            except Exception:
+                return
+
+        # Step 3: apply the planned mutation.
+        try:
+            self._apply_planned_mutation(plan)
+        except Exception as exc:
+            # Step 4a: mutation failed.
+            if recorder is not None:
+                recorder.record_interruption_apply_failed(
+                    mutation_kind=plan.mutation_kind,
+                    pre_state_ref=plan.pre_state_ref,
+                    post_state_ref=plan.post_state_ref,
+                    failure_error=ErrorInfo.from_exception(exc),
+                )
+            raise
+
+        # Step 4b: success.
+        if recorder is not None:
+            recorder.record_cancellation_boundary(
+                mode=mode,
+                reason=plan.mutation_kind,
+                caused_by_signal_id=caused_by_signal_id,
+            )
+
+    def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
+        has_override = hasattr(self._workflow, "apply_interruption")
+        mutation_kind = "interrupt_workflow_override" if has_override else "interrupt_cancel_token"
+        pre_ref = f"workflow-pre-{id(self._workflow):x}"
+        post_ref = f"workflow-post-{id(self._workflow):x}"
+        return InterruptionPlan(
+            mutation_kind=mutation_kind,
+            pre_state_ref=pre_ref,
+            post_state_ref=post_ref,
+            framework_instructions={
+                "has_override": has_override,
+                "delivered_text": delivered_text,
+                "mode": mode.value,
+            },
         )
+
+    def _apply_planned_mutation(self, plan: InterruptionPlan) -> None:
+        instructions = plan.framework_instructions
+        if instructions.get("has_override"):
+            mode = CancellationMode(instructions["mode"])
+            self._workflow.apply_interruption(instructions["delivered_text"], mode)
+        else:
+            # Deep mode without explicit apply_interruption — best-effort.
+            logger.debug(
+                "Deep-mode workflow %s has no apply_interruption; relying on cancel_token",
+                self._display_name,
+            )
 
     def reset(self) -> None:
         if hasattr(self._workflow, "reset"):

@@ -77,12 +77,14 @@ class BridgeAdapterShim(BaseAgentAdapter):
         journal: ExecutionJournal | None = None,
         artifact_store: ArtifactStore | None = None,
         session_id: str = "",
+        mcp_servers: tuple[str, ...] = (),
     ) -> None:
         super().__init__()
         self._bridge = bridge
         self._journal = journal
         self._artifact_store = artifact_store
         self._session_id = session_id
+        self._mcp_servers = mcp_servers
 
     @property
     def bridge(self) -> ExternalAgentBridge:
@@ -126,9 +128,11 @@ class BridgeAdapterShim(BaseAgentAdapter):
         self._message_history.append({"role": "assistant", "content": accumulated})
 
     def _truncate_last_assistant_for_interruption(self, text_spoken: str) -> bool:
+        recorder = self._make_recorder()
         self._bridge.apply_interruption(
             text_spoken,
             CancellationMode.IMMEDIATE_STOP,
+            recorder=recorder,
         )
         # Update shadow history.
         if self._message_history and self._message_history[-1].get("role") == "assistant":
@@ -150,5 +154,6 @@ class BridgeAdapterShim(BaseAgentAdapter):
                 run_id=f"run-{uuid4().hex[:8]}",
                 session_id=self._session_id,
                 turn_id=turn_id,
+                mcp_servers=self._mcp_servers,
             ),
         )

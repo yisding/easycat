@@ -88,7 +88,13 @@ class DirectChatBridge:
             kind="custom_chat",
         )
 
-    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
+    def apply_interruption(
+        self,
+        delivered_text: str,
+        mode: CancellationMode,
+        recorder=None,
+        caused_by_signal_id=None,
+    ) -> None:
         if self._history and self._history[-1]["role"] == "assistant":
             if delivered_text:
                 self._history[-1]["content"] = delivered_text + "..."

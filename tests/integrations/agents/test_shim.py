@@ -74,7 +74,7 @@ class _StubBridge:
     def snapshot_state(self):
         return FrameworkStateSnapshot(fields={"test": True}, kind="stub")
 
-    def apply_interruption(self, delivered_text, mode):
+    def apply_interruption(self, delivered_text, mode, recorder=None, caused_by_signal_id=None):
         self._apply_called = True
 
     def reset(self):

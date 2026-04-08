@@ -98,7 +98,7 @@ bridge design is wrong and must be fixed before moving on.
 
 ### T2B.0: Architecture Freeze
 
-- [ ] Design decisions covering:
+- [x] Design decisions covering:
   - Seven-step interruption turn flow (runtime → controller →
     bridge → journal). The complete sequence:
     1. **Detect** — VAD barge-in, concurrent `send_text`, or
@@ -170,7 +170,7 @@ bridge design is wrong and must be fixed before moving on.
 
 ### T2B.1: Atomic `apply_interruption` Implementation
 
-- [ ] Refactor each bridge's `apply_interruption` to expose a
+- [x] Refactor each bridge's `apply_interruption` to expose a
   `_plan_interruption(delivered_text, mode) -> InterruptionPlan`
   helper that returns a structure describing the intended
   mutation without applying it:
@@ -184,11 +184,11 @@ bridge design is wrong and must be fixed before moving on.
       framework_instructions: dict[str, Any]  # bridge-specific patching payload
   ```
 
-- [ ] Refactor each bridge to expose a
+- [x] Refactor each bridge to expose a
   `_apply_planned_mutation(plan: InterruptionPlan) -> None`
   helper that performs only the framework-state mutation
   described by a plan (no planning, no journal writes)
-- [ ] Public `apply_interruption(delivered_text, mode)` is now a
+- [x] Public `apply_interruption(delivered_text, mode)` is now a
   thin orchestrator that:
   1. calls `_plan_interruption(delivered_text, mode)`
   2. writes `FrameworkStateCommitted` to the journal via
@@ -204,12 +204,12 @@ bridge design is wrong and must be fixed before moving on.
   5. On success, writes `FrameworkCancellationBoundaryReached`
      with `caused_by_signal_id` populated from the runtime's
      current `ControlSignalRecord.signal_id`.
-- [ ] The invariant: **the journal and framework state never
+- [x] The invariant: **the journal and framework state never
   diverge on partial failures.** Either both the
   `FrameworkStateCommitted` record and the live mutation
   succeed, or the mutation is skipped and the runtime knows via
   `InterruptionApplyFailed`.
-- [ ] `OpenAIAgentsBridge`, `PydanticAIBridge` (Agent + Graph),
+- [x] `OpenAIAgentsBridge`, `PydanticAIBridge` (Agent + Graph),
   and `GenericWorkflowBridge` (deep mode) all implement this
   pattern. `PydanticAIBridge` shares the inner interruption
   patching logic (last `ModelResponse` `TextPart` mutation)
@@ -219,7 +219,7 @@ bridge design is wrong and must be fixed before moving on.
 
 ### T2B.2: Shallow-Mode Downgrade Path
 
-- [ ] `GenericWorkflowBridge` shallow mode's `apply_interruption`
+- [x] `GenericWorkflowBridge` shallow mode's `apply_interruption`
   continues to raise `ShallowModeInterruptionError` at the
   bridge boundary (shipped in WS2A T2.5).
 - [ ] `InterruptionController` (WS3 T3.2) catches the exception
@@ -232,7 +232,7 @@ bridge design is wrong and must be fixed before moving on.
   - waits for the current turn to complete normally
   - starts the next turn immediately, without attempting
     mid-turn barge-in
-- [ ] Shallow workflows that implement
+- [x] Shallow workflows that implement
   `workflow.apply_interruption(delivered_text, mode)` directly
   on the workflow object opt out of the downgrade: the bridge
   delegates to the workflow's method via the same four-step
@@ -245,7 +245,7 @@ bridge design is wrong and must be fixed before moving on.
 
 ### T2B.3: Three-Cancellation-Mode Test Matrix
 
-- [ ] Parametrize interruption tests over the Cartesian product of
+- [x] Parametrize interruption tests over the Cartesian product of
   every bridge/mode and every cancellation mode:
 
   | Bridge | Mode | Modes tested |
@@ -263,7 +263,7 @@ bridge design is wrong and must be fixed before moving on.
   > atomic write ordering. WS2C owns its own drain tests
   > (T2C.2, T2C.7).
 
-- [ ] Each test asserts:
+- [x] Each test asserts:
   - bridge received the correct `CancellationMode`
   - journal contains the `FrameworkStateCommitted` record
   - journal contains the matching
@@ -274,14 +274,14 @@ bridge design is wrong and must be fixed before moving on.
   - `drain_to_commit_point` drains until the next cursor marked
     `committable=True` per the bridge's
     `COMMITTABLE_BOUNDARIES` mapping (from WS2A T2.7.5)
-- [ ] `PydanticAIBridge` Graph mode `drain_to_commit_point`
+- [x] `PydanticAIBridge` Graph mode `drain_to_commit_point`
   drains to the next graph node boundary (always committable by
   `pydantic_graph` design), which distinguishes it from Agent
   mode's drain semantics.
 
 ### T2B.4: Atomicity Failure-Injection Tests
 
-- [ ] Monkeypatch `_apply_planned_mutation` on each bridge to
+- [x] Monkeypatch `_apply_planned_mutation` on each bridge to
   raise a controlled `MutationInjectedError` between the
   `FrameworkStateCommitted` write and the paired-record write.
   Assert:
@@ -294,7 +294,7 @@ bridge design is wrong and must be fixed before moving on.
     turn falls back to `CancellationMode.immediate_stop`
   - no `FrameworkCancellationBoundaryReached` record is written
     for the failed mutation
-- [ ] Second injection pattern: make the
+- [x] Second injection pattern: make the
   `FrameworkStateCommitted` write itself fail (journal in
   degraded mode). Assert:
   - the bridge returns from `apply_interruption` immediately
@@ -306,22 +306,22 @@ bridge design is wrong and must be fixed before moving on.
 
 ### T2B.5: `EasyCatConfig.mcp_servers` Field
 
-- [ ] Add `mcp_servers: list[str] | None = None` field to
+- [x] Add `mcp_servers: list[str] | None = None` field to
   `EasyCatConfig` (net-new field — it does not exist today)
-- [ ] Validate entries at construction: each URI must match one
+- [x] Validate entries at construction: each URI must match one
   of `stdio://`, `sse://`, `http://`, `https://`; invalid URIs
   raise `EasyCatConfigError` with a message naming the offending
   entry
-- [ ] Document the field in the config docstring, the
+- [x] Document the field in the config docstring, the
   `EasyCatConfig` dataclass header, and the migration guide
   (net-new; no previous field to migrate from)
-- [ ] Runtime reads the field and freezes it into the
+- [x] Runtime reads the field and freezes it into the
   `RecorderContext.mcp_servers` tuple passed to every
   `invoke()` call
 
 ### T2B.6: Per-Bridge MCP Forwarding
 
-- [ ] `OpenAIAgentsBridge`:
+- [x] `OpenAIAgentsBridge`:
   - At bridge construction, if the runtime passes
     `mcp_servers` via `RecorderContext`, the bridge constructs
     the underlying `Agent(mcp_servers=...)` with that list.
@@ -331,13 +331,13 @@ bridge design is wrong and must be fixed before moving on.
     `invoke()` if it was not pre-configured. Mid-session
     changes are not supported — MCP list is frozen per
     session.
-- [ ] `PydanticAIBridge` Agent mode:
+- [x] `PydanticAIBridge` Agent mode:
   - Forwards `mcp_servers` to the wrapped
     `pydantic_ai.Agent`'s MCP toolset adapter at first
     `invoke()`. PydanticAI's toolset adapter handles
     connection lifecycle, discovery, and tool invocation; the
     bridge does not proxy calls.
-- [ ] `PydanticAIBridge` Graph mode:
+- [x] `PydanticAIBridge` Graph mode:
   - Forwards `mcp_servers` to every `pydantic_ai.Agent`
     instance referenced by the graph. Agents are either
     supplied explicitly via the bridge constructor's
@@ -347,7 +347,7 @@ bridge design is wrong and must be fixed before moving on.
     through the shared event translator's tool-call path —
     same record shape as Agent-mode tool calls, tagged with
     the enclosing `workflow_node` via `parent_unit_id`.
-- [ ] `GenericWorkflowBridge`:
+- [x] `GenericWorkflowBridge`:
   - **Shallow mode**: passing `mcp_servers` emits exactly one
     warning journal record per session naming the limitation;
     the turn completes successfully without MCP wiring. No
@@ -357,45 +357,45 @@ bridge design is wrong and must be fixed before moving on.
     workflow code reads it during `on_user_turn` to register
     MCP servers against its own inference backend. No
     EasyCat-native MCP client is created.
-- [ ] MCP tool invocations flow through existing bridge
+- [x] MCP tool invocations flow through existing bridge
   tool-call events — no new record type
-- [ ] Zero EasyCat-native tool registry, decorator, or proxy
+- [x] Zero EasyCat-native tool registry, decorator, or proxy
   added. The WS2A AC2.10 guardrail test is re-run in WS2B CI
   to catch any drift introduced by MCP wiring code.
 
 ### T2B.7: Test Migration
 
-- [ ] All existing `tests/session/` interruption tests pass with
+- [x] All existing `tests/session/` interruption tests pass with
   the four-step atomic `apply_interruption` in place
-- [ ] Three-cancellation-mode test matrix (T2B.3) passes
-- [ ] Atomicity failure-injection tests (T2B.4) pass
-- [ ] MCP mock and filesystem-integration tests pass
-- [ ] Guardrail test for no EasyCat-native tool code still passes
+- [x] Three-cancellation-mode test matrix (T2B.3) passes
+- [x] Atomicity failure-injection tests (T2B.4) pass
+- [x] MCP mock and filesystem-integration tests pass
+- [x] Guardrail test for no EasyCat-native tool code still passes
   after MCP wiring lands
 
 ## Acceptance Criteria
 
-- [ ] **AC2B.2** Every bridge's `apply_interruption` implements
+- [x] **AC2B.2** Every bridge's `apply_interruption` implements
   the four-step atomic write ordering. A code inspection test
   (AST-level) asserts each bridge's `apply_interruption` body
   consists of `_plan_interruption` → journal write → apply →
   paired write, in that order, with no direct framework-state
   mutation outside `_apply_planned_mutation`.
-- [ ] **AC2B.3** `InterruptionApplyFailed` is defined in
+- [x] **AC2B.3** `InterruptionApplyFailed` is defined in
   `records.py` (from WS2A T2.2) and actually emitted by every
   bridge on controlled mutation failure. Parametrized test over
   all four interruptible bridges.
-- [ ] **AC2B.4** Three cancellation modes work end-to-end on
+- [x] **AC2B.4** Three cancellation modes work end-to-end on
   every bridge/mode combination per the T2B.3 matrix. Test
   asserts the journal record sequence matches the expected
   shape for each combination.
-- [ ] **AC2B.5** `drain_to_commit_point` respects each bridge's
+- [x] **AC2B.5** `drain_to_commit_point` respects each bridge's
   `COMMITTABLE_BOUNDARIES` mapping (from WS2A T2.7.5). A
   parametrized test constructs a turn that reaches a
   non-committable cursor, triggers `drain_to_commit_point`, and
   asserts the drain proceeded to the next committable cursor
   before stopping.
-- [ ] **AC2B.6** Atomicity on mutation failure. A test injects a
+- [x] **AC2B.6** Atomicity on mutation failure. A test injects a
   controlled `MutationInjectedError` into
   `_apply_planned_mutation` after `FrameworkStateCommitted` is
   written; asserts the journal shows
@@ -403,12 +403,12 @@ bridge design is wrong and must be fixed before moving on.
   matching `mutation_kind` and cursor, the framework state is
   unchanged, no `FrameworkCancellationBoundaryReached` record
   is written, and the runtime falls back to `immediate_stop`.
-- [ ] **AC2B.7** Atomicity on journal-write failure. A test
+- [x] **AC2B.7** Atomicity on journal-write failure. A test
   patches the journal backend to raise on `append` of
   `FrameworkStateCommitted`; asserts `_apply_planned_mutation`
   is never called, the framework state is unchanged, and the
   runtime falls back to `immediate_stop`.
-- [ ] **AC2B.8** Shallow-mode downgrade path. A test constructs
+- [x] **AC2B.8** Shallow-mode downgrade path. A test constructs
   `GenericWorkflowBridge` around a shallow workflow without
   `apply_interruption`, triggers mid-turn barge-in via the
   `InterruptionController`, asserts:
@@ -419,7 +419,7 @@ bridge design is wrong and must be fixed before moving on.
     `cause="shallow_mode_downgrade"`
   - the current turn completes normally
   - the next turn starts immediately after
-- [ ] **AC2B.9** `EasyCatConfig(mcp_servers=[...])` passes
+- [x] **AC2B.9** `EasyCatConfig(mcp_servers=[...])` passes
   through to the underlying framework on bridges that support
   MCP. Tests:
   - `test_mcp_wiring_mock_server` (unit CI, always runs): a
@@ -446,15 +446,15 @@ bridge design is wrong and must be fixed before moving on.
     `RecorderContext.mcp_servers` and registers it with its
     own inference backend; the test uses a stub backend that
     records the registration call.
-- [ ] **AC2B.10** `EasyCatConfig` validation: invalid MCP URIs
+- [x] **AC2B.10** `EasyCatConfig` validation: invalid MCP URIs
   raise `EasyCatConfigError` at construction.
-- [ ] **AC2B.11** Zero EasyCat-native tool code. Re-run of the
+- [x] **AC2B.11** Zero EasyCat-native tool code. Re-run of the
   WS2A AC2.10 guardrail grep test after MCP wiring lands;
   still zero matches for `@tool`, `@easycat_tool`,
   `@register_*`, `class .*Registry`, `class .*Router`,
   `class ToolRegistry`, `class MCPClient`, or
   `def register_tool`.
-- [ ] **AC2B.12** Invariant: the signal flow composes with the
+- [x] **AC2B.12** Invariant: the signal flow composes with the
   framework flow. A test runs a barge-in turn on each
   bridge, filters the journal for all records caused by the
   interrupt signal, asserts every

@@ -135,6 +135,21 @@ class AgentBridgeEvent:
     snapshot: FrameworkStateSnapshot | None = None
 
 
+@dataclass(frozen=True)
+class InterruptionPlan:
+    """Describes an intended framework-state mutation without applying it.
+
+    Returned by ``_plan_interruption`` and consumed by
+    ``_apply_planned_mutation``.  The public ``apply_interruption``
+    composes them with journal writes between (four-step atomic ordering).
+    """
+
+    mutation_kind: str  # e.g. "interrupt_truncate", "interrupt_drain"
+    pre_state_ref: str  # artifact ref to current framework state
+    post_state_ref: str  # artifact ref to post-mutation state
+    framework_instructions: dict[str, Any] = field(default_factory=dict)
+
+
 # ── Recorder types ───────────────────────────────────────────────
 
 
@@ -192,6 +207,25 @@ class AgentRecorder(Protocol):
 
     def record_framework_error(self, error: ErrorInfo) -> None: ...
 
+    def record_state_committed(
+        self,
+        mutation_kind: str,
+        pre_state_ref: str | None = None,
+        post_state_ref: str | None = None,
+    ) -> None:
+        """Write a ``FrameworkStateCommitted`` record before applying a mutation."""
+        ...
+
+    def record_interruption_apply_failed(
+        self,
+        mutation_kind: str,
+        pre_state_ref: str | None = None,
+        post_state_ref: str | None = None,
+        failure_error: ErrorInfo | None = None,
+    ) -> None:
+        """Write an ``InterruptionApplyFailed`` record on mutation failure."""
+        ...
+
 
 # ── Bridge protocol ──────────────────────────────────────────────
 
@@ -223,8 +257,14 @@ class ExternalAgentBridge(Protocol):
         self,
         delivered_text: str,
         mode: CancellationMode,
+        recorder: AgentRecorder | None = None,
+        caused_by_signal_id: str | None = None,
     ) -> None:
-        """Mutate framework state to reflect an interruption."""
+        """Mutate framework state to reflect an interruption.
+
+        Uses four-step atomic write ordering when ``recorder`` is provided:
+        plan → ``FrameworkStateCommitted`` → apply → paired success/failure.
+        """
         ...
 
     def reset(self) -> None:
@@ -253,3 +293,7 @@ class ShallowModeInterruptionError(RuntimeError):
 
 class RecorderInvariantError(RuntimeError):
     """Raised when ``AgentRecorder`` invariants are violated."""
+
+
+class MutationInjectedError(RuntimeError):
+    """Test-only: injected into ``_apply_planned_mutation`` for atomicity tests."""

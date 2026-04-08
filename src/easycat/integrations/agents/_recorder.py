@@ -194,6 +194,43 @@ class JournalAgentRecorder:
             error=error,
         )
 
+    # ── Atomic interruption records ─────────────────────────────
+
+    def record_state_committed(
+        self,
+        mutation_kind: str,
+        pre_state_ref: str | None = None,
+        post_state_ref: str | None = None,
+    ) -> None:
+        self._append(
+            kind=JournalRecordKind.FRAMEWORK_TRANSITION,
+            name="state_committed",
+            data={
+                "mutation_kind": mutation_kind,
+                "pre_state_ref": pre_state_ref,
+                "post_state_ref": post_state_ref,
+                "direction": "enter",
+            },
+        )
+
+    def record_interruption_apply_failed(
+        self,
+        mutation_kind: str,
+        pre_state_ref: str | None = None,
+        post_state_ref: str | None = None,
+        failure_error: ErrorInfo | None = None,
+    ) -> None:
+        self._append(
+            kind=JournalRecordKind.FRAMEWORK_TRANSITION,
+            name="interruption_apply_failed",
+            data={
+                "mutation_kind": mutation_kind,
+                "pre_state_ref": pre_state_ref,
+                "post_state_ref": post_state_ref,
+            },
+            error=failure_error,
+        )
+
     # ── Internal journal write ───────────────────────────────────
 
     def _append(

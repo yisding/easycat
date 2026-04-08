@@ -160,9 +160,23 @@ _TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
 }
 
 
+class EasyCatConfigError(ValueError):
+    """Raised when ``EasyCatConfig`` validation fails."""
+
+
+_VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
+
+
 @dataclass
 class EasyCatConfig:
-    """Top-level configuration for EasyCat sessions."""
+    """Top-level configuration for EasyCat sessions.
+
+    Fields:
+        mcp_servers: Optional list of MCP server URIs to pass through to
+            agent bridges.  Accepted schemes: ``stdio://``, ``sse://``,
+            ``http://``, ``https://``.  Frozen per session — mid-session
+            changes are not supported.
+    """
 
     openai_api_key: str | None = None
     stt: STTConfig | None = None
@@ -188,6 +202,7 @@ class EasyCatConfig:
     debug: Literal["off", "light", "full"] | bool = "light"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
+    mcp_servers: list[str] | None = None
 
     def __post_init__(self) -> None:
         # ── Bool → enum compat shim (one-release deprecation) ────
@@ -265,6 +280,13 @@ class EasyCatConfig:
                     .replace("TTS", " TTS")
                 )
                 raise ValueError(f"{name} requires an API key.")
+        if self.mcp_servers is not None:
+            for uri in self.mcp_servers:
+                if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
+                    raise EasyCatConfigError(
+                        f"Invalid MCP server URI: {uri!r}. "
+                        f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
+                    )
 
 
 def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
@@ -310,8 +332,18 @@ def create_session(config: EasyCatConfig) -> Session:
     echo_canceller = create_echo_canceller(config.echo_cancellation or EchoCancellationConfig())
     transport = _create_transport(config.transport, event_bus)
 
+    mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
+
     if config.agent is not None:
         agent = auto_adapt_agent(config.agent)
+        # Inject MCP servers and journal into the shim if it's a bridge adapter.
+        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+
+        if isinstance(agent, BridgeAdapterShim):
+            agent._journal = journal
+            agent._artifact_store = artifact_store
+            agent._session_id = session_id
+            agent._mcp_servers = mcp_servers
         if config.wrap_agent and not isinstance(agent, AgentRunner):
             runner_cfg = config.agent_runner or AgentRunnerConfig()
             agent = AgentRunner(agent, runner_cfg)

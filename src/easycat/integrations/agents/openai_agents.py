@@ -23,6 +23,7 @@ from easycat.integrations.agents.base import (
     CommitRule,
     ExecutionCursor,
     FrameworkStateSnapshot,
+    InterruptionPlan,
     UnitKind,
 )
 from easycat.runtime.records import ErrorInfo
@@ -61,6 +62,7 @@ class OpenAIAgentsBridge:
         use_previous_response_id: bool = True,
         max_turns: int | None = None,
         hooks: Any = None,
+        mcp_servers: list[Any] | None = None,
     ) -> None:
         self._agent = agent
         self._original_agent = agent
@@ -69,6 +71,7 @@ class OpenAIAgentsBridge:
         self._use_previous_response_id = use_previous_response_id
         self._max_turns = max_turns
         self._hooks = hooks
+        self._mcp_servers = mcp_servers
         self._previous_response_id: str | None = None
         self._pending_interruption: str | None = None
         self._message_history: list[Any] = []
@@ -190,8 +193,63 @@ class OpenAIAgentsBridge:
             kind="openai_agents",
         )
 
-    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
+    def apply_interruption(
+        self,
+        delivered_text: str,
+        mode: CancellationMode,
+        recorder: AgentRecorder | None = None,
+        caused_by_signal_id: str | None = None,
+    ) -> None:
+        # Step 1: plan the mutation.
+        plan = self._plan_interruption(delivered_text, mode)
+
+        # Step 2: write FrameworkStateCommitted to the journal.
+        if recorder is not None:
+            try:
+                recorder.record_state_committed(
+                    mutation_kind=plan.mutation_kind,
+                    pre_state_ref=plan.pre_state_ref,
+                    post_state_ref=plan.post_state_ref,
+                )
+            except Exception:
+                # Journal in degraded mode — skip mutation, runtime falls back.
+                return
+
+        # Step 3: apply the planned mutation.
+        try:
+            self._apply_planned_mutation(plan)
+        except Exception as exc:
+            # Step 4a: mutation failed — write InterruptionApplyFailed.
+            if recorder is not None:
+                recorder.record_interruption_apply_failed(
+                    mutation_kind=plan.mutation_kind,
+                    pre_state_ref=plan.pre_state_ref,
+                    post_state_ref=plan.post_state_ref,
+                    failure_error=ErrorInfo.from_exception(exc),
+                )
+            raise
+
+        # Step 4b: success — write FrameworkCancellationBoundaryReached.
+        if recorder is not None:
+            recorder.record_cancellation_boundary(
+                mode=mode,
+                reason=plan.mutation_kind,
+                caused_by_signal_id=caused_by_signal_id,
+            )
+
+    def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
         replacement = delivered_text + "..." if delivered_text else ""
+        pre_ref = f"openai-pre-{id(self._message_history):x}"
+        post_ref = f"openai-post-{id(self._message_history):x}"
+        return InterruptionPlan(
+            mutation_kind="interrupt_truncate",
+            pre_state_ref=pre_ref,
+            post_state_ref=post_ref,
+            framework_instructions={"replacement": replacement},
+        )
+
+    def _apply_planned_mutation(self, plan: InterruptionPlan) -> None:
+        replacement = plan.framework_instructions["replacement"]
         for i in range(len(self._message_history) - 1, -1, -1):
             item = self._message_history[i]
             role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)

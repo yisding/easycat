@@ -25,6 +25,7 @@ from easycat.integrations.agents.base import (
     CommitRule,
     ExecutionCursor,
     FrameworkStateSnapshot,
+    InterruptionPlan,
     UnitKind,
 )
 from easycat.runtime.records import ErrorInfo
@@ -57,6 +58,7 @@ class PydanticAIBridge:
         state_factory: Callable[[], Any] | None = None,
         initial_node_factory: Callable[[str, Any], Any] | None = None,
         agents: list[Any] | None = None,
+        mcp_servers: list[Any] | None = None,
     ) -> None:
         if agent is not None and graph is not None:
             raise BridgeInputError("Cannot pass both agent= and graph= to PydanticAIBridge")
@@ -98,6 +100,7 @@ class PydanticAIBridge:
 
         self._deps = deps
         self._model_settings = model_settings
+        self._mcp_servers = mcp_servers
         self._message_history: list[Any] = []
         self._last_output: Any = None
 
@@ -149,22 +152,86 @@ class PydanticAIBridge:
             kind="pydantic_ai_agent",
         )
 
-    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
+    def apply_interruption(
+        self,
+        delivered_text: str,
+        mode: CancellationMode,
+        recorder: AgentRecorder | None = None,
+        caused_by_signal_id: str | None = None,
+    ) -> None:
+        # Step 1: plan the mutation.
+        plan = self._plan_interruption(delivered_text, mode)
+
+        # Step 2: write FrameworkStateCommitted to the journal.
+        if recorder is not None:
+            try:
+                recorder.record_state_committed(
+                    mutation_kind=plan.mutation_kind,
+                    pre_state_ref=plan.pre_state_ref,
+                    post_state_ref=plan.post_state_ref,
+                )
+            except Exception:
+                return
+
+        # Step 3: apply the planned mutation.
+        try:
+            self._apply_planned_mutation(plan)
+        except Exception as exc:
+            # Step 4a: mutation failed.
+            if recorder is not None:
+                recorder.record_interruption_apply_failed(
+                    mutation_kind=plan.mutation_kind,
+                    pre_state_ref=plan.pre_state_ref,
+                    post_state_ref=plan.post_state_ref,
+                    failure_error=ErrorInfo.from_exception(exc),
+                )
+            raise
+
+        # Step 4b: success.
+        if recorder is not None:
+            recorder.record_cancellation_boundary(
+                mode=mode,
+                reason=plan.mutation_kind,
+                caused_by_signal_id=caused_by_signal_id,
+            )
+
+    def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
         replacement = delivered_text + "..." if delivered_text else ""
+        mutation_kind = "interrupt_truncate"
+        if self._mode == "graph":
+            mutation_kind = "interrupt_truncate_graph"
+        pre_ref = f"pydantic-pre-{id(self._message_history):x}"
+        post_ref = f"pydantic-post-{id(self._message_history):x}"
+        return InterruptionPlan(
+            mutation_kind=mutation_kind,
+            pre_state_ref=pre_ref,
+            post_state_ref=post_ref,
+            framework_instructions={
+                "replacement": replacement,
+                "mode": self._mode,
+                "use_custom_truncation": (
+                    self._mode == "graph"
+                    and self._state is not None
+                    and hasattr(self._state, "truncate_last_assistant")
+                ),
+                "delivered_text": delivered_text,
+            },
+        )
+
+    def _apply_planned_mutation(self, plan: InterruptionPlan) -> None:
+        instructions = plan.framework_instructions
+        replacement = instructions["replacement"]
+
+        if instructions.get("use_custom_truncation"):
+            self._state.truncate_last_assistant(instructions["delivered_text"])
+            return
+
         try:
             from pydantic_ai.messages import ModelResponse
         except ImportError:
             return
 
         history = self._message_history
-        if self._mode == "graph" and self._state is not None:
-            # Try the state's custom truncation method first.
-            if hasattr(self._state, "truncate_last_assistant"):
-                self._state.truncate_last_assistant(delivered_text)
-                return
-            # Fall back to walking the most recent agent's history.
-            history = self._message_history
-
         for i in range(len(history) - 1, -1, -1):
             msg = history[i]
             if isinstance(msg, ModelResponse):
