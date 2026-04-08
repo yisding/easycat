@@ -193,6 +193,8 @@ class EasyCatConfig:
     metrics: MetricsConfig | None = None
     tracing: TracingConfig | None = None
     agent: Any = None
+    agent_model: str | None = None
+    remote_agent_api_key: str | None = None
     agent_runner: AgentRunnerConfig | None = None
     wrap_agent: bool = True
     strip_markdown: bool = False
@@ -280,6 +282,17 @@ class EasyCatConfig:
                     .replace("TTS", " TTS")
                 )
                 raise ValueError(f"{name} requires an API key.")
+        if isinstance(self.agent, str):
+            from urllib.parse import urlparse
+
+            parsed = urlparse(self.agent)
+            if parsed.scheme in ("http", "https") and parsed.netloc:
+                if self.agent_model is None:
+                    raise EasyCatConfigError(
+                        "agent_model is required when agent is a URL string. "
+                        "Set agent_model to the model identifier the remote "
+                        "Responses API server should use."
+                    )
         if self.mcp_servers is not None:
             for uri in self.mcp_servers:
                 if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):

@@ -105,7 +105,7 @@ beyond conversation history.
 
 ### T2C.0: Architecture Freeze
 
-- [ ] Design decisions covering:
+- [x] Design decisions covering:
   - `ResponsesAPIBridge` class design and constructor arguments
   - SSE event taxonomy: which Responses API events map to which
     `AgentBridgeEvent` types and `AgentRecorder` calls
@@ -134,8 +134,8 @@ beyond conversation history.
 
 ### T2C.1: SSE Stream Parser and Event Translator
 
-- [ ] Create `src/easycat/integrations/agents/responses_api.py`
-- [ ] Implement SSE stream parser for the Responses API event
+- [x] Create `src/easycat/integrations/agents/responses_api.py`
+- [x] Implement SSE stream parser for the Responses API event
   taxonomy. Events to handle:
   - `response.created` → record turn start
   - `response.output_item.added` → track new output item (text,
@@ -157,16 +157,16 @@ beyond conversation history.
     raise
   - `response.incomplete` → handle partial completion (content
     filter, token limit, etc.)
-- [ ] Create shared event-translator module
+- [x] Create shared event-translator module
   `src/easycat/integrations/agents/_responses_api_events.py`
   following the `_<framework>_events.py` naming convention from
   WS2A T2.4
-- [ ] Unknown SSE event types are logged at debug level and
+- [x] Unknown SSE event types are logged at debug level and
   skipped — forward-compatible with Responses API additions
 
 ### T2C.2: ResponsesAPIBridge Implementation
 
-- [ ] `ResponsesAPIBridge.__init__` accepts:
+- [x] `ResponsesAPIBridge.__init__` accepts:
   - `base_url: str` — Responses API base URL
     (e.g., `https://api.openai.com` or a self-hosted server)
   - `model: str` — model identifier passed on every request
@@ -176,8 +176,8 @@ beyond conversation history.
   - `metadata: dict[str, str] | None = None` — static metadata
     sent on every request (user-defined, merged with
     `easycat.*` keys)
-- [ ] Uses `httpx.AsyncClient` for HTTP and SSE streaming
-- [ ] `invoke(turn_input, recorder, cancel_token)`:
+- [x] Uses `httpx.AsyncClient` for HTTP and SSE streaming
+- [x] `invoke(turn_input, recorder, cancel_token)`:
   - Constructs the Responses API request body:
     - `model` from constructor
     - `input` from `turn_input.text` (simple case) or from
@@ -203,7 +203,7 @@ beyond conversation history.
     input items on interruption
   - On successful completion (no interruption), updates
     `self._last_completed_response_id`
-- [ ] `apply_interruption(delivered_text, mode)`:
+- [x] `apply_interruption(delivered_text, mode)`:
   - Stashes `InterruptionInfo(response_id, delivered_text,
     mode)` — no RPC
   - If `self._remote_supports_interrupt is True`, sets
@@ -213,7 +213,7 @@ beyond conversation history.
     assistant text truncated to `delivered_text`
   - Does NOT update `self._last_completed_response_id` (the
     interrupted response is skipped in the chain)
-- [ ] `snapshot_state()`:
+- [x] `snapshot_state()`:
   - Returns `FrameworkStateSnapshot` with `kind=
     "remote_responses_api"` and `fields` containing:
     `response_count`, `last_completed_response_id`,
@@ -222,33 +222,33 @@ beyond conversation history.
   - No artifact ref (local history is small enough to inline
     for typical conversation lengths; if it exceeds 4KB, the
     standard overflow policy from WS2A T2.1 applies)
-- [ ] `reset()`:
+- [x] `reset()`:
   - Clears `_last_completed_response_id`, accumulated items,
     interruption state, and capability cache
 
 ### T2C.3: EasyCatConfig URL Detection
 
-- [ ] `EasyCatConfig.agent` accepts a URL string
+- [x] `EasyCatConfig.agent` accepts a URL string
   (e.g., `"https://my-agent.internal:8080"`) in addition to
   bridge instances
-- [ ] `auto_adapt_agent()` detects URL strings via
+- [x] `auto_adapt_agent()` detects URL strings via
   `urllib.parse.urlparse` — if the value has a scheme in
   `{"http", "https"}` and a netloc, route to
   `ResponsesAPIBridge(base_url=url, model=config.agent_model)`
-- [ ] `EasyCatConfig.agent_model: str | None = None` — new
+- [x] `EasyCatConfig.agent_model: str | None = None` — new
   field, required when `agent` is a URL string. Raises
   `EasyCatConfigError` if `agent` is a URL and `agent_model` is
   not set.
-- [ ] `EasyCatConfig.remote_agent_api_key: str | None = None` —
+- [x] `EasyCatConfig.remote_agent_api_key: str | None = None` —
   new field, forwarded to the bridge. Excluded from the WS1
   safe-default config allowlist (the field name contains `key`).
   Falls back to `EASYCAT_REMOTE_AGENT_API_KEY` env var.
-- [ ] Document the URL string path in the config docstring and
+- [x] Document the URL string path in the config docstring and
   migration guide
 
 ### T2C.4: Capability Discovery
 
-- [ ] On the first response received from the remote server, the
+- [x] On the first response received from the remote server, the
   bridge reads the response's `metadata` field for:
   - `easycat.supports_interruption` — if `"true"`, the bridge
     sends `easycat.*` metadata on subsequent interrupted turns
@@ -256,21 +256,21 @@ beyond conversation history.
     `easycat.cancellation_mode` in metadata
   - `easycat.framework` — informational, recorded in the journal
     and bundle manifest as the remote agent's framework identity
-- [ ] Discovery result is cached for the session lifetime (the
+- [x] Discovery result is cached for the session lifetime (the
   remote server's capabilities do not change mid-session)
-- [ ] If the first response has no `easycat.*` metadata, the bridge
+- [x] If the first response has no `easycat.*` metadata, the bridge
   assumes the server is a plain Responses API server and uses the
   N-1 chain + partial replay path exclusively (no `easycat.*`
   metadata sent on subsequent requests)
 
 ### T2C.5: Interrupted Turn Replay Construction
 
-- [ ] During `invoke()`, the bridge accumulates the response's
+- [x] During `invoke()`, the bridge accumulates the response's
   output items as structured data:
   - Text content parts → accumulated text string
   - Function calls → `(name, arguments, call_id)` tuples
   - Function call outputs → `(call_id, output)` tuples
-- [ ] On interruption, `apply_interruption` reconstructs the
+- [x] On interruption, `apply_interruption` reconstructs the
   interrupted turn as a list of Responses API input items:
   1. The user's original input text as a user message
   2. Each completed function call as a `function_call` input item
@@ -280,16 +280,16 @@ beyond conversation history.
      (truncated to `delivered_text`)
   5. The new user input (from the next `invoke()` call's
      `turn_input.text`) appended as a user message
-- [ ] Items 1–4 are computed in `apply_interruption` and stashed.
+- [x] Items 1–4 are computed in `apply_interruption` and stashed.
   Item 5 is appended in the next `invoke()` call.
-- [ ] The next `invoke()` sets `previous_response_id` to
+- [x] The next `invoke()` sets `previous_response_id` to
   `self._last_completed_response_id` (the N-1 response, not the
   interrupted one) and puts items 1–5 in the `input` field
 
 ### T2C.6: Mock Responses API Server
 
-- [ ] Create `tests/integrations/agents/mock_responses_server.py`
-- [ ] Implement a minimal ASGI server (using `starlette` or raw
+- [x] Create `tests/integrations/agents/mock_responses_server.py`
+- [x] Implement a minimal ASGI server (using `starlette` or raw
   ASGI) that:
   - Accepts `POST /v1/responses` with the Responses API request
     schema
@@ -303,28 +303,28 @@ beyond conversation history.
     (simulates capability advertisement)
   - Supports configurable latency per event (for drain timing
     tests)
-- [ ] The mock server runs in-process via `httpx.ASGITransport`
+- [x] The mock server runs in-process via `httpx.ASGITransport`
   — no subprocess, no port binding, no flaky teardown
-- [ ] The mock server is test infrastructure only — it does not
+- [x] The mock server is test infrastructure only — it does not
   ship as part of EasyCat's public surface
 
 ### T2C.7: Tests
 
-- [ ] All tests use the mock Responses API server from T2C.6
+- [x] All tests use the mock Responses API server from T2C.6
   unless gated on `OPENAI_API_KEY` for integration tests
-- [ ] Bridge construction and protocol conformance:
+- [x] Bridge construction and protocol conformance:
   - `ResponsesAPIBridge` implements `ExternalAgentBridge`
   - Constructor validates `base_url` (must have scheme and
     netloc)
   - `api_key` is excluded from snapshots and journal records
-- [ ] Turn execution without interruption:
+- [x] Turn execution without interruption:
   - Simple text turn: user input → text deltas → done
   - Turn with tool calls: user input → function call →
     function call output → text deltas → done
   - Journal contains `record_tool_call` entries for each tool
     call from the stream
   - `snapshot_state()` returns `kind="remote_responses_api"`
-- [ ] Interruption via N-1 chain:
+- [x] Interruption via N-1 chain:
   - Interrupt mid-text: cancel stream, apply interruption,
     next turn chains from N-1 response with truncated text
   - Interrupt mid-tool-call with `drain_current_unit`: stream
@@ -335,83 +335,83 @@ beyond conversation history.
     `previous_response_id`
   - Two consecutive interruptions: each chains from the last
     *completed* response, not from the previous interrupted one
-- [ ] Capability discovery:
+- [x] Capability discovery:
   - Server returns `easycat.supports_interruption: "true"` →
     bridge sends `easycat.*` metadata on next interrupted turn
   - Server returns no `easycat.*` metadata → bridge uses N-1
     chain only, no `easycat.*` metadata sent
   - Discovery is cached: second turn does not re-probe
-- [ ] Metadata-aware server:
+- [x] Metadata-aware server:
   - Server reads `easycat.interrupted_response_id` and patches
     its stored conversation → next turn's
     `previous_response_id` points to the interrupted response
     (not N-1), and the conversation is coherent
-- [ ] `EasyCatConfig` URL detection:
+- [x] `EasyCatConfig` URL detection:
   - `EasyCatConfig(agent="https://example.com", agent_model=
     "gpt-5.2")` constructs a `ResponsesAPIBridge`
   - `EasyCatConfig(agent="https://example.com")` without
     `agent_model` raises `EasyCatConfigError`
   - `auto_adapt_agent("https://example.com")` returns a
     `ResponsesAPIBridge`
-- [ ] Integration test (gated on `OPENAI_API_KEY`):
+- [x] Integration test (gated on `OPENAI_API_KEY`):
   - Runs a full turn against the real OpenAI Responses API
   - Verifies SSE events are parsed correctly
   - Verifies `previous_response_id` chaining works across
     two turns
-- [ ] Guardrail: no custom WebSocket protocol. Grep-based test
+- [x] Guardrail: no custom WebSocket protocol. Grep-based test
   asserts zero matches in `src/easycat/integrations/agents/` for
   `websocket`, `WebSocket`, `ws://`, or `wss://` outside of
   comments.
 
 ## Acceptance Criteria
 
-- [ ] **AC2C.2** `ResponsesAPIBridge` exists in
+- [x] **AC2C.2** `ResponsesAPIBridge` exists in
   `src/easycat/integrations/agents/responses_api.py` and
   implements `ExternalAgentBridge`.
-- [ ] **AC2C.3** A turn against the mock server produces the
+- [x] **AC2C.3** A turn against the mock server produces the
   correct journal record sequence: `agent` cursor entered, tool
   call records (if tools were invoked), text deltas, `agent`
   cursor exited. `FrameworkStateSnapshot.kind` is
   `"remote_responses_api"`.
-- [ ] **AC2C.4** N-1 chain interruption. A test interrupts a
+- [x] **AC2C.4** N-1 chain interruption. A test interrupts a
   multi-turn conversation mid-response, inspects the next
   request's `previous_response_id` (must be the N-1 response,
   not the interrupted one) and `input` items (must contain the
   user's original input, any completed tool calls/outputs, the
   truncated assistant text, and the new user input). The mock
   server validates the reconstructed conversation is coherent.
-- [ ] **AC2C.5** `drain_current_unit` on the SSE stream. A test
+- [x] **AC2C.5** `drain_current_unit` on the SSE stream. A test
   triggers interruption while a tool call is in-flight,
   configures the mock server to emit the tool call's
   `response.output_item.done` after a delay, and asserts the
   bridge waited for that event before closing the stream. The
   next turn's input items include the completed tool call.
-- [ ] **AC2C.6** Capability discovery. Two sub-tests: (1) server
+- [x] **AC2C.6** Capability discovery. Two sub-tests: (1) server
   returns `easycat.supports_interruption: "true"` in response
   metadata → bridge sends `easycat.*` metadata on the next
   interrupted turn; (2) server returns no `easycat.*` metadata →
   bridge sends no `easycat.*` metadata and uses N-1 chain only.
-- [ ] **AC2C.7** Graceful degradation. A test runs two
+- [x] **AC2C.7** Graceful degradation. A test runs two
   consecutive turns against a plain mock server (no `easycat.*`
   support) with an interruption between them. The conversation
   is coherent despite the server not understanding interruption
   metadata.
-- [ ] **AC2C.8** `EasyCatConfig(agent="https://example.com",
+- [x] **AC2C.8** `EasyCatConfig(agent="https://example.com",
   agent_model="gpt-5.2")` constructs a `ResponsesAPIBridge`.
   `auto_adapt_agent("https://example.com")` returns a
   `ResponsesAPIBridge`. Missing `agent_model` raises
   `EasyCatConfigError`.
-- [ ] **AC2C.9** API key is excluded from journal records,
+- [x] **AC2C.9** API key is excluded from journal records,
   snapshots, and bundles. A test constructs a bridge with
   `api_key="sk-synthetic-test-key"`, runs a turn, greps the
   journal backend for the key string, asserts zero hits.
-- [ ] **AC2C.10** `COMMITTABLE_BOUNDARIES` is
+- [x] **AC2C.10** `COMMITTABLE_BOUNDARIES` is
   `{"agent": CommitRule.BETWEEN_TURNS}`. A test asserts the
   mapping is present and correct.
-- [ ] **AC2C.11** No custom WebSocket protocol. Grep-based test
+- [x] **AC2C.11** No custom WebSocket protocol. Grep-based test
   passes.
-- [ ] **AC2C.12** All existing tests pass: `uv run pytest` exits 0.
-- [ ] **AC2C.13** Integration test against the real OpenAI
+- [x] **AC2C.12** All existing tests pass: `uv run pytest` exits 0.
+- [x] **AC2C.13** Integration test against the real OpenAI
   Responses API passes (gated on `OPENAI_API_KEY`).
 
 ## Verification

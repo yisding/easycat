@@ -26,6 +26,17 @@ def auto_adapt_agent(agent: Any) -> Any:
 
     Unknown agent types are returned unchanged.
     """
+    # 0. URL string → ResponsesAPIBridge.
+    if isinstance(agent, str):
+        from urllib.parse import urlparse
+
+        parsed = urlparse(agent)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+            from easycat.integrations.agents.responses_api import ResponsesAPIBridge
+
+            return BridgeAdapterShim(ResponsesAPIBridge(base_url=agent, model="default"))
+
     # 1. Already a bridge — wrap in shim if not already wrapped.
     try:
         from easycat.integrations.agents.base import ExternalAgentBridge
