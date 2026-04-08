@@ -673,7 +673,7 @@ units they care to expose.
     the user's workflow object exposes via an optional
     `snapshot_state()` method (called if present, result stored
     via artifact ref if larger than 1KB)
-- [ ] `apply_interruption(delivered_text, mode)`:
+- [x] `apply_interruption(delivered_text, mode)`:
   - **Shallow mode forbids interruption.** Shallow-mode
     workflows are opaque to the bridge — the bridge has no way
     to compute which text was delivered, no way to truncate the
@@ -710,20 +710,20 @@ units they care to expose.
     observes the user's input but waits for the current turn to
     complete before starting the next one. The user sees
     barge-in behavior that is slightly delayed, never broken.
-- [ ] `reset()`:
+- [x] `reset()`:
   - Delegates to `workflow.reset()` or `workflow.clear_history()`
     when present; otherwise no-op
-- [ ] **MCP forwarding is deferred to WS2B (T2B.7).** No
+- [x] **MCP forwarding is deferred to WS2B (T2B.7).** No
   `mcp_servers` wiring happens in WS2A. The `RecorderContext.
   mcp_servers` field exists on the recorder protocol (T2.1.5)
   and is populated by WS2B; deep-mode workflows reading it
   during WS2A will always see an empty tuple.
-- [ ] The bridge README documents both modes with examples
+- [x] The bridge README documents both modes with examples
   (see appendix at end of this workstream file).
 
 ### T2.7.5: Committable-Boundary Enumeration
 
-- [ ] Each bridge publishes a static
+- [x] Each bridge publishes a static
   `COMMITTABLE_BOUNDARIES: dict[UnitKind, CommitRule]` mapping
   declaring which cursor kinds are committable and in which states.
   Rules:
@@ -751,14 +751,14 @@ units they care to expose.
     Document clearly in the bridge README that deep-mode
     committability is user-determined and forked replay quality
     depends on the user declaring it correctly.
-- [ ] Workstream 4 consumes `COMMITTABLE_BOUNDARIES` by name to
+- [x] Workstream 4 consumes `COMMITTABLE_BOUNDARIES` by name to
   enforce `ReplayError` at non-committable sequences
-- [ ] A bridge that cannot determine committability for a given
+- [x] A bridge that cannot determine committability for a given
   cursor state defaults to `committable=False` (safe default)
 
 ### T2.8: Facade Preservation
 
-- [ ] `auto_adapt_agent()` still works — update it to construct the
+- [x] `auto_adapt_agent()` still works — update it to construct the
   appropriate bridge based on duck-typed detection of the incoming
   object:
   - `openai_agents.Agent` (or subclass) → `OpenAIAgentsBridge`
@@ -783,7 +783,7 @@ units they care to expose.
     plan); if `auto_adapt_agent()` is handed a realtime API
     client object, it raises `BridgeInputError` with a message
     pointing the user at the provider SDK directly.
-- [ ] `auto_adapt_agent()` is documented as best-effort convenience, not
+- [x] `auto_adapt_agent()` is documented as best-effort convenience, not
   a compatibility guarantee for every pre-redesign construction path
 - [ ] `auto_adapt_agent()` survives Workstream 5. It is listed in the
   preserved-public-surface allowlist that WS5 AC5.15 freezes in
@@ -791,14 +791,14 @@ units they care to expose.
 
 ### T2A.9: Test Migration (Bridge-Side)
 
-- [ ] All `tests/agents/` pass unmodified (bridge construction,
+- [x] All `tests/agents/` pass unmodified (bridge construction,
   turn execution without interruption)
-- [ ] Bridge-specific tests added in this workstream (see
+- [x] Bridge-specific tests added in this workstream (see
   Verification) cover: construction, `invoke()` end-to-end
   without interruption, transition records, committable
   boundary publication, `AgentRecorder` invariant enforcement,
   `unit()` context manager, single-phase `apply_interruption`.
-- [ ] **Interruption-contract tests (all three cancellation
+- [x] **Interruption-contract tests (all three cancellation
   modes across all bridges), shallow-mode downgrade tests, and
   MCP pass-through tests are deferred to Workstream 2B.** The
   existing `tests/session/` barge-in tests remain passing with
@@ -826,16 +826,16 @@ units they care to expose.
   constructs from both a `pydantic_ai.Agent` and a
   `pydantic_graph.Graph` (with required factories); passing both
   or neither raises `BridgeInputError` with a clear message.
-- [ ] **AC2.5** Every committed handoff in OpenAI Agents produces a
+- [x] **AC2.5** Every committed handoff in OpenAI Agents produces a
   `FrameworkHandoff` record in the journal with correct `from_unit`
   and `to_unit` values.
-- [ ] **AC2.6** `PydanticAIBridge` Agent mode: every `iter()` node
+- [x] **AC2.6** `PydanticAIBridge` Agent mode: every `iter()` node
   change produces a `FrameworkUnitEntered` / `FrameworkUnitExited`
   pair with correct `unit_kind` (`model_node`, `tool_call`,
   `user_prompt`). Tool calls inside a `CallToolsNode` produce
   matching `record_tool_call` events via the shared event
   translator.
-- [ ] **AC2.6a** `PydanticAIBridge` Graph mode tool-call
+- [x] **AC2.6a** `PydanticAIBridge` Graph mode tool-call
   visibility parity. Given a `pydantic_graph.Graph` with two
   nodes, each of which calls a different agent that invokes a
   tool, the journal for one turn contains: `workflow_node`
@@ -849,17 +849,17 @@ units they care to expose.
   `tool_name`, `args_ref`, `result_ref`, and `tool_call_id`
   fields as AC2.6. Graph mode achieves the same event depth as
   Agent mode, with workflow-node context layered on top.
-- [ ] **AC2.6b** `PydanticAIBridge` Graph mode `run.result.history`
+- [x] **AC2.6b** `PydanticAIBridge` Graph mode `run.result.history`
   serialization. After a Graph-mode turn, the journal contains
   an artifact ref for `run.result.history` (the sequence of
   nodes visited), and the snapshot's `active_node` matches the
   last node class name in that history.
-- [ ] **AC2.6c** `PydanticAIBridge` Graph mode state snapshot
+- [x] **AC2.6c** `PydanticAIBridge` Graph mode state snapshot
   via artifact ref. A graph whose state dataclass contains a
   500KB field produces a journal record whose inline size is
   < 4KB; the large state lives in the artifact store accessed
   via `snapshot_state.state_ref`.
-- [ ] **AC2.6d** `PydanticAIBridge` Graph mode convention is
+- [x] **AC2.6d** `PydanticAIBridge` Graph mode convention is
   enforced at construction time, not runtime. Two sub-tests:
   - Construction with a `state_factory` that returns a state
     object without an `_easycat_event_handler` attribute raises
@@ -887,7 +887,7 @@ units they care to expose.
   produces a journal with all those records nested beneath the
   outer `workflow_node` cursor. Signature inspection correctly
   routes the workflow to deep mode.
-- [ ] **AC2A.7** Coarse interruption parity. The pre-existing
+- [x] **AC2A.7** Coarse interruption parity. The pre-existing
   `tests/session/` barge-in test suite passes unmodified with
   the single-phase `apply_interruption` implementations on all
   three bridges. This is not the full three-cancellation-mode
@@ -902,7 +902,7 @@ units they care to expose.
   exception and its message (which must name the deep-mode
   upgrade path). Controller-side downgrade handling is a WS2B
   concern.
-- [ ] **AC2.8** Model-request nodes in PydanticAI are marked
+- [x] **AC2.8** Model-request nodes in PydanticAI are marked
   `committable=False` while streaming and `committable=True` between
   turns.
 - [x] **AC2.10** No new tool abstraction, registry, decorator, or
@@ -922,7 +922,7 @@ units they care to expose.
 > live in Workstream 2B AC2B.9.**
 - [x] **AC2.12** All existing `tests/agents/` and `tests/session/`
   tests pass without modification.
-- [ ] **AC2.13** `FrameworkStateSnapshot` values are JSON-safe,
+- [x] **AC2.13** `FrameworkStateSnapshot` values are JSON-safe,
   secret-safe, and contain no raw framework handles or credentials.
   Additional sub-tests:
   - Every snapshot whose serialized `fields` dict exceeds 4 KB
@@ -956,7 +956,7 @@ units they care to expose.
   `record_unit_exited(cursor)` without a matching enter raises;
   (2) exiting cursor B when cursor A is still open raises;
   (3) two cursors with the same `unit_id` within a turn raise.
-- [ ] **AC2.14** Any public config/construction changes introduced here
+- [x] **AC2.14** Any public config/construction changes introduced here
   (`mcp_servers`, bridge construction, `AgentRunner` migration path,
   adapter naming) are documented in the plan and covered by migration notes.
 - [x] **AC2.15** Voice-to-voice / realtime guardrail test. A grep-
@@ -976,12 +976,12 @@ units they care to expose.
   mapping includes both Agent-mode and Graph-mode kinds (the
   bridge is one class regardless of input mode). Workstream 4
   imports these mappings by reference, not by re-declaration.
-- [ ] **AC2.17** Every handoff produces the `FrameworkUnitExited`
+- [x] **AC2.17** Every handoff produces the `FrameworkUnitExited`
   → `FrameworkHandoff` → `FrameworkUnitEntered` triple on the
   journal timeline in strictly increasing sequence, with matching
   `from_unit`/`to_unit` across the three records and no
   interleaved records from the same turn between them.
-- [ ] **AC2.18** `FrameworkStateSnapshot` values for every bridge
+- [x] **AC2.18** `FrameworkStateSnapshot` values for every bridge
   are constructed by passing through the WS1 T1.5
   `apply_write_filter` hook and honor the hard-coded safe default
   (no raw API keys, auth headers, or env dumps reach the journal).

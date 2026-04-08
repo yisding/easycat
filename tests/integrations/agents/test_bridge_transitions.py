@@ -771,8 +771,8 @@ class TestPydanticAISnapshotOverflow:
             initial_node_factory=initial_node_factory,
         )
 
-        # Simulate a large state being set during a turn.
-        bridge._state = _LargeGraphState(big_field="x" * 6000)
+        # Simulate a large state (500KB) being set during a turn.
+        bridge._state = _LargeGraphState(big_field="x" * 500_000)
 
         snap = bridge.snapshot_state()
         assert snap.state_ref is not None

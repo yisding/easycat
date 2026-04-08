@@ -210,6 +210,17 @@ class JournalAgentRecorder:
             name=name,
             session_id=self._context.session_id,
             turn_id=self._context.turn_id,
-            data=data,
+            data=_scrub_secrets(data) if data else data,
             error=error,
         )
+
+
+def _scrub_secrets(data: dict[str, Any]) -> dict[str, Any]:
+    """Remove data keys whose names match secret-adjacent fragments.
+
+    Enforces the WS1 safe-default: no raw API keys, auth headers, or
+    credentials reach the journal via bridge records.
+    """
+    from easycat.runtime.safe_defaults import _is_secret_name
+
+    return {k: v for k, v in data.items() if not _is_secret_name(k)}

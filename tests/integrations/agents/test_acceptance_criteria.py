@@ -2,6 +2,7 @@
 
 AC2.13: FrameworkStateSnapshot safety and JSON-safety
 AC2.17: Handoff record triple verification
+AC2.18: FrameworkStateSnapshot safe-default write-filter enforcement
 AC2.19: AgentTurnInput.from_text() direct invoke on bridges
 """
 
@@ -22,6 +23,7 @@ from easycat.integrations.agents.base import (
 )
 from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
 from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime.records import JournalRecordKind
 
 
 def _recorder(journal=None):
@@ -131,6 +133,10 @@ class TestHandoffRecordTriple:
 
         assert exit_idx < handoff_idx < enter_b_idx
 
+        # Verify no interleaving: triple must be consecutive.
+        assert handoff_idx == exit_idx + 1
+        assert enter_b_idx == handoff_idx + 1
+
         # Verify from_unit/to_unit consistency.
         handoff_data = records[handoff_idx].data
         assert handoff_data["from_unit"] == "AgentA"
@@ -223,3 +229,90 @@ class TestPydanticAIBridgeConventionValidation:
                 state_factory=BadState,
                 initial_node_factory=lambda text, state: None,
             )
+
+
+# ── AC2.18: FrameworkStateSnapshot safe-default write-filter ─────
+
+
+class TestFrameworkSnapshotSafeDefaultPath:
+    """AC2.18 — secret-named fields in data dicts are scrubbed before journal write."""
+
+    def test_api_key_field_scrubbed_from_journal(self):
+        """Inject an API-key-shaped field name and assert it doesn't reach the journal."""
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+
+        # Record a unit entry whose data we control, then manually
+        # write a record with a secret-bearing field name via the
+        # recorder's internal path.
+        cursor = ExecutionCursor(
+            unit_id="test-scrub",
+            unit_kind=UnitKind.AGENT,
+            display_name="TestAgent",
+        )
+        rec.record_unit_entered(cursor)
+        rec.record_unit_exited(cursor, reason=None)
+
+        # Now write a record with secret-shaped keys through _append.
+        rec._append(
+            kind=JournalRecordKind.FRAMEWORK_TRANSITION,
+            name="state_snapshot",
+            data={
+                "agent_name": "TestAgent",
+                "api_key": "sk-secret-12345",
+                "auth_header": "Bearer abc",
+                "safe_field": "visible",
+            },
+        )
+
+        records = journal.read()
+        snapshot_records = [r for r in records if r.name == "state_snapshot"]
+        assert len(snapshot_records) == 1
+
+        data = snapshot_records[0].data
+        assert "safe_field" in data
+        assert "agent_name" in data
+        assert "api_key" not in data
+        assert "auth_header" not in data
+
+    def test_secret_fragments_all_scrubbed(self):
+        """All secret-adjacent fragment patterns are caught."""
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+
+        rec._append(
+            kind=JournalRecordKind.FRAMEWORK_TRANSITION,
+            name="test_scrub",
+            data={
+                "my_secret": "hidden",
+                "access_token": "hidden",
+                "db_password": "hidden",
+                "credential_file": "hidden",
+                "display_name": "visible",
+            },
+        )
+
+        records = journal.read()
+        data = records[0].data
+        assert "display_name" in data
+        assert "my_secret" not in data
+        assert "access_token" not in data
+        assert "db_password" not in data
+        assert "credential_file" not in data
+
+    def test_clean_data_passes_through(self):
+        """Data with no secret-shaped keys is unmodified."""
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+
+        rec._append(
+            kind=JournalRecordKind.FRAMEWORK_TRANSITION,
+            name="clean_record",
+            data={"unit_id": "u1", "display_name": "Agent", "committable": True},
+        )
+
+        records = journal.read()
+        data = records[0].data
+        assert data["unit_id"] == "u1"
+        assert data["display_name"] == "Agent"
+        assert data["committable"] is True
