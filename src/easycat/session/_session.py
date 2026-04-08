@@ -129,23 +129,27 @@ class Session:
         self.transport = cfg.transport or NoopTransport()
         self.agent: Agent = cfg.agent or NoopAgent()
 
-        noops = []
-        if isinstance(self.stt, NoopSTT):
-            noops.append("stt")
-        if isinstance(self.tts, NoopTTS):
-            noops.append("tts")
-        if cfg.enable_vad and isinstance(self.vad, NoopVAD):
-            noops.append("vad")
-        if isinstance(self.noise_reducer, PassthroughNoiseReducer) and cfg.enable_noise_reduction:
-            noops.append("noise_reducer")
-        if isinstance(self.transport, NoopTransport):
-            noops.append("transport")
-        if isinstance(self.agent, NoopAgent):
-            noops.append("agent")
-        if noops:
-            raise ValueError(
-                "SessionConfig must provide non-noop implementations for: " + ", ".join(noops)
-            )
+        # Skip noop validation in text_session mode — audio providers
+        # are intentionally noop.
+        if cfg.runtime_mode != "text_session":
+            noops = []
+            if isinstance(self.stt, NoopSTT):
+                noops.append("stt")
+            if isinstance(self.tts, NoopTTS):
+                noops.append("tts")
+            if cfg.enable_vad and isinstance(self.vad, NoopVAD):
+                noops.append("vad")
+            is_passthrough_nr = isinstance(self.noise_reducer, PassthroughNoiseReducer)
+            if is_passthrough_nr and cfg.enable_noise_reduction:
+                noops.append("noise_reducer")
+            if isinstance(self.transport, NoopTransport):
+                noops.append("transport")
+            if isinstance(self.agent, NoopAgent):
+                noops.append("agent")
+            if noops:
+                raise ValueError(
+                    "SessionConfig must provide non-noop implementations for: " + ", ".join(noops)
+                )
 
         # Event system
         self.event_bus = cfg.event_bus or EventBus()
@@ -258,6 +262,7 @@ class Session:
             self._playback_ack_transport = self.transport
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
+        self._runtime_mode = cfg.runtime_mode
         self._turn_manager.bind_session(self.session_id)
         self._spans.bind_session(self.session_id)
         if self._metrics and hasattr(self._metrics, "bind_session"):
@@ -1500,6 +1505,36 @@ class Session:
                 setattr(provider, "_event_bus", self.event_bus)
             except Exception:
                 pass
+
+    # ── Text mode ──────────────────────────────────────────────
+
+    async def send_text(self, text: str, *, context: dict[str, Any] | None = None) -> str:
+        """Send text input and return the agent response.
+
+        Only available when the session was created with
+        ``runtime_mode="text_session"`` (via :func:`create_text_session`).
+        Audio pipeline stages are bypassed — this calls the agent directly.
+
+        Parameters
+        ----------
+        text:
+            User message to send to the agent.
+        context:
+            Optional context dict forwarded to the agent.
+
+        Returns
+        -------
+        str
+            The agent's response text.
+        """
+        if self._runtime_mode != "text_session":
+            raise RuntimeError("send_text() is only available in text_session mode")
+        try:
+            response = await self.agent.run(text)
+        except Exception:
+            logger.exception("Agent error in text_session send_text")
+            raise
+        return response
 
     async def _cancel_stt(self) -> None:
         try:

@@ -79,7 +79,7 @@ main orchestration model, each stage boundary is journaled with
 
 ### T3.0: Architecture Freeze
 
-- [ ] Design decisions covering:
+- [x] Design decisions covering:
   - extraction order: `TurnContext` (as three atomic groupings,
     see T3.1) → `InterruptionController` → `VoiceDeliveryLedger`
     → stages
@@ -97,18 +97,18 @@ main orchestration model, each stage boundary is journaled with
     and upstream signal flow run side-by-side through WS3 and WS4;
     the token is removed in WS5 T5.2.5 after parity is proven
   - rollback strategy if a stage port regresses behavior
-- [ ] Review and merge before any Session changes.
+- [x] Review and merge before any Session changes.
 
 ### Step 1 — Extract from Session
 
 ### T3.1: Extend TurnContext
 
-- [ ] Current `src/easycat/session/_turn_context.py` is 64 lines —
+- [x] Current `src/easycat/session/_turn_context.py` is 64 lines —
   extend it to hold per-turn state currently scattered across
   `_session.py` instance variables
-- [ ] Session delegates to `TurnContext` via a single
+- [x] Session delegates to `TurnContext` via a single
   `self._current_turn: TurnContext` attribute
-- [ ] **Extract in three atomic groupings, not one field at a
+- [x] **Extract in three atomic groupings, not one field at a
   time.** Several fields are entangled via the interruption
   estimator in `_interruption.py` / `_tts_helpers.py` and must
   move together or tests break mid-sequence. The three groupings:
@@ -121,24 +121,24 @@ main orchestration model, each stage boundary is journaled with
     metadata, cancel token. Extract as one commit.
   - **Group C — telephony hooks:** telephony state hooks and
     playback state not already in Group A. Extract as one commit.
-- [ ] Verify the full `tests/session/` suite passes after each
+- [x] Verify the full `tests/session/` suite passes after each
   grouping is extracted. Commit each grouping separately so bisect
   remains useful within the workstream.
 
 ### T3.2: Extract InterruptionController
 
-- [ ] Create `src/easycat/session/_interruption_controller.py`
-- [ ] Move interruption detection, delivered-text computation, policy
+- [x] Create `src/easycat/session/_interruption_controller.py`
+- [x] Move interruption detection, delivered-text computation, policy
   selection, and bridge interaction out of `_session.py`
-- [ ] The controller owns the seven-step interruption flow defined in
+- [x] The controller owns the seven-step interruption flow defined in
   Workstream 2B (`workstream-2b-interruption-and-mcp.md` T2B.1)
-- [ ] The controller handles the `ShallowModeInterruptionError`
+- [x] The controller handles the `ShallowModeInterruptionError`
   downgrade path (WS2B T2B.2): when a shallow-mode
   `GenericWorkflowBridge` raises the exception, the controller
   emits a `ControlSignalRecord(cause="shallow_mode_downgrade")`
   and downgrades the turn to end-of-turn interruption.
-- [ ] Session delegates to the controller
-- [ ] All barge-in tests in `tests/session/` pass unmodified. The
+- [x] Session delegates to the controller
+- [x] All barge-in tests in `tests/session/` pass unmodified. The
   WS2B three-cancellation-mode test matrix exercises this
   controller through the bridges in parallel — if WS3 lands
   before WS2B the full matrix lives under a WS2B feature flag
@@ -146,34 +146,34 @@ main orchestration model, each stage boundary is journaled with
 
 ### T3.3: Extract VoiceDeliveryLedger
 
-- [ ] Create `src/easycat/session/_voice_delivery_ledger.py`
-- [ ] Move user transcript tracking, raw agent text, post-processed
+- [x] Create `src/easycat/session/_voice_delivery_ledger.py`
+- [x] Move user transcript tracking, raw agent text, post-processed
   spoken text, playback acknowledgements, estimated delivered text at
   interruption, interruption cut points and confidence
-- [ ] Ledger writes through the journal via `AgentRecorder`
-- [ ] Verify voice delivery tests pass
+- [x] Ledger writes through the journal via `AgentRecorder`
+- [x] Verify voice delivery tests pass
 
 ### T3.4: Define RunContext
 
-- [ ] Create `src/easycat/runtime/context.py`
-- [ ] Define `RunContext` dataclass: `run_id`, `session_id`, config
+- [x] Create `src/easycat/runtime/context.py`
+- [x] Define `RunContext` dataclass: `run_id`, `session_id`, config
   snapshot, runtime mode (`chained_pipeline` | `text_session`),
   artifact store handle, journal handle
-- [ ] `RunContext` stores a safe config snapshot via the WS1 hard-coded
+- [x] `RunContext` stores a safe config snapshot via the WS1 hard-coded
   allowlist in `safe_defaults.py`, not a raw `EasyCatConfig.__dict__`.
   A full `RedactionPolicy` lands in `peripheral-redaction.md` and
   plugs into the existing `apply_write_filter` hook without
   changing the `RunContext` shape.
-- [ ] Construct once per session, pass to every stage
+- [x] Construct once per session, pass to every stage
 
 ### Step 2 — Stage interfaces
 
 ### T3.5: Stage Protocol
 
-- [ ] Create `src/easycat/stages/base.py`
-- [ ] Define `StageStateSnapshot` dataclass/protocol for JSON-safe,
+- [x] Create `src/easycat/stages/base.py`
+- [x] Define `StageStateSnapshot` dataclass/protocol for JSON-safe,
   secret-safe stage state capture
-- [ ] Define `Stage` Protocol:
+- [x] Define `Stage` Protocol:
 
   ```python
   class Stage(Protocol):
@@ -183,14 +183,14 @@ main orchestration model, each stage boundary is journaled with
       async def handle_upstream(self, signal: ControlSignal) -> None: ...
   ```
 
-- [ ] Define `ControlSignal` sum type: `Interrupt`, `Cancel`, `Pause`,
+- [x] Define `ControlSignal` sum type: `Interrupt`, `Cancel`, `Pause`,
   `Resume`, `Backpressure`
-- [ ] Stages emit `ControlSignalRecord` (defined in WS1 T1.1) when
+- [x] Stages emit `ControlSignalRecord` (defined in WS1 T1.1) when
   they observe a control signal via `handle_upstream`. Stages MUST
   NOT invent a new record shape — the cross-framework shape lives
   in WS1's records module.
-- [ ] Stub `ReplaySpec` (filled out in Workstream 4)
-- [ ] Define `NONDETERMINISTIC_FIELDS: frozenset[str]` in `base.py` —
+- [x] Stub `ReplaySpec` (filled out in Workstream 4)
+- [x] Define `NONDETERMINISTIC_FIELDS: frozenset[str]` in `base.py` —
   the canonical set of clock-derived fields masked when comparing
   journal records across runs (`timing.wall_ms`, `timing.cpu_ms`,
   `timing.queue_ms`, `recorded_at_monotonic_ns`, `recorded_at_utc`,
@@ -200,37 +200,37 @@ main orchestration model, each stage boundary is journaled with
   `REPLAY_IGNORE_FIELDS` and extends it with replay-specific fields
   (`timing.wall_deadline_ns`, `artifact_written_at`,
   `artifact_hashed_at`).
-- [ ] Helpers in `base.py` for journal record emission from stage
+- [x] Helpers in `base.py` for journal record emission from stage
   operations
 
 ### T3.6: Port STT, Agent, TTS (highest debugging value)
 
-- [ ] Create `src/easycat/stages/stt.py` — wrap existing STT provider
+- [x] Create `src/easycat/stages/stt.py` — wrap existing STT provider
   calls, emit `state_before`/`state_after` via `snapshot_state()`,
   write journal records
-- [ ] Create `src/easycat/stages/agent.py` — wrap the
+- [x] Create `src/easycat/stages/agent.py` — wrap the
   `ExternalAgentBridge` protocol from Workstream 2A. The stage
   works with any bridge implementing the protocol, including the
   three in-process bridges from WS2A and the
   `ResponsesAPIBridge` from WS2C (which may land in parallel).
   No bridge-specific logic in the stage — the protocol is the
   abstraction boundary.
-- [ ] Create `src/easycat/stages/tts.py` — wrap existing TTS provider
+- [x] Create `src/easycat/stages/tts.py` — wrap existing TTS provider
   calls
-- [ ] Verify `tests/stt/`, `tests/session/` agent tests, and
+- [x] Verify `tests/stt/`, `tests/session/` agent tests, and
   `tests/tts/` pass unmodified
 
 ### T3.7: Port Transport, Audio, VAD, Turn, Telephony
 
-- [ ] Create `src/easycat/stages/transport.py`
-- [ ] Create `src/easycat/stages/audio.py` (noise reduction + echo
+- [x] Create `src/easycat/stages/transport.py`
+- [x] Create `src/easycat/stages/audio.py` (noise reduction + echo
   cancellation)
-- [ ] Create `src/easycat/stages/vad.py`
-- [ ] Create `src/easycat/stages/turn.py` (including SmartTurn
+- [x] Create `src/easycat/stages/vad.py`
+- [x] Create `src/easycat/stages/turn.py` (including SmartTurn
   endpoint detection)
-- [ ] Create `src/easycat/stages/telephony.py`
-- [ ] Verify corresponding test directories pass unmodified
-- [ ] **VAD decision reproducibility (hard requirement).**
+- [x] Create `src/easycat/stages/telephony.py`
+- [x] Verify corresponding test directories pass unmodified
+- [x] **VAD decision reproducibility (hard requirement).**
   `VADStage.snapshot_state()` must capture everything needed to
   re-derive the same VAD decision offline:
   - the input audio frame(s) by artifact ref (content-addressable
@@ -245,7 +245,7 @@ main orchestration model, each stage boundary is journaled with
     Krisp SDK version) so cross-version drift is visible
   - the decision the stage emitted (`speech_start`, `speech_end`,
     `no_change`) so replay can diff live vs replay outputs
-- [ ] **Smart Turn decision reproducibility (hard requirement).**
+- [x] **Smart Turn decision reproducibility (hard requirement).**
   `TurnStage.snapshot_state()` must capture everything needed to
   re-derive the same endpoint classification offline:
   - the input audio window by artifact ref
@@ -256,7 +256,7 @@ main orchestration model, each stage boundary is journaled with
   - decision threshold currently in effect
   - the final endpoint decision (`complete` / `not_complete`) and
     any fallback behavior that fired (e.g., timeout override)
-- [ ] Both stages expose a `replay_decision(snapshot)` helper that
+- [x] Both stages expose a `replay_decision(snapshot)` helper that
   returns the same decision the live session made given a captured
   snapshot. This helper is what WS4 ARTIFACT replay calls; it has
   no side effects and no provider calls beyond running the local
@@ -264,40 +264,40 @@ main orchestration model, each stage boundary is journaled with
 
 ### T3.8: Upstream Control Signals
 
-- [ ] Each stage implements `handle_upstream(signal)` — at minimum,
+- [x] Each stage implements `handle_upstream(signal)` — at minimum,
   emits a `ControlSignalRecord` (WS1 T1.1) so we can see which
   stage observed the signal and in what state
-- [ ] Plumb control signal flow through the session: upstream signals
+- [x] Plumb control signal flow through the session: upstream signals
   walk from late stages (TTS, Transport) back toward early stages
   (VAD, STT)
-- [ ] **Dual-path coexistence.** The shared cancel token is NOT
+- [x] **Dual-path coexistence.** The shared cancel token is NOT
   removed in this workstream. Signal-based upstream flow runs
   side-by-side with the existing shared cancel token through WS3
   and WS4. Both paths must stay behavior-equivalent until WS5
   T5.2.5 removes the token. This is deliberate: the interruption
   tests are the safety net and they must not regress during the
   signal plumbing work.
-- [ ] Verify interruption tests still pass with the new signal flow
+- [x] Verify interruption tests still pass with the new signal flow
   in place and the shared token still live
 
 ### Step 3 — Wire journal and reduce Session
 
 ### T3.9: Journal Wiring
 
-- [ ] Each stage writes records through the journal via helpers in
+- [x] Each stage writes records through the journal via helpers in
   `stages/base.py`
-- [ ] Stages still emit legacy events through WS1's strangler-fig
+- [x] Stages still emit legacy events through WS1's strangler-fig
   adapters during this workstream; dual-write stays on until
   WS5's flip. WS3 must not break the T1.8.5 parity tests — if a
   stage port causes parity drift, fix the drift before merging.
-- [ ] Remove direct observability calls from `_session.py` (the
+- [x] Remove direct observability calls from `_session.py` (the
   strangler-fig adapters from Workstream 1 still cover legacy call
   sites; this step removes the direct journal writes that Session was
   doing)
-- [ ] Every stage operation produces at minimum a `start` and
+- [x] Every stage operation produces at minimum a `start` and
   `complete` (or `error`/`cancel`) record pair with non-null
   `state_before` and `state_after` snapshots
-- [ ] `StageStateSnapshot` values flow through the WS1 T1.5
+- [x] `StageStateSnapshot` values flow through the WS1 T1.5
   `apply_write_filter` hook and honor the hard-coded safe default
   on every write — stages must not bypass the hook. The hook is a
   no-op for non-sensitive fields in WS1; `peripheral-redaction.md`
@@ -305,19 +305,19 @@ main orchestration model, each stage boundary is journaled with
 
 ### T3.10: Session as Facade
 
-- [ ] Session retains: lifecycle (start/stop/close), stage wiring,
+- [x] Session retains: lifecycle (start/stop/close), stage wiring,
   `TurnContext` creation, and orchestration loops
-- [ ] Session delegates everything else to the extracted components
-- [ ] Target: `wc -l src/easycat/session/_session.py` < 400 lines, with
+- [x] Session delegates everything else to the extracted components
+- [x] Target: `wc -l src/easycat/session/_session.py` < 400 lines, with
   a hard ceiling of 500 lines
-- [ ] No per-turn state on Session instance variables (verified by
+- [x] No per-turn state on Session instance variables (verified by
   introspection test)
 
 ### T3.11: Runtime Mode Support
 
-- [ ] `RunContext.runtime_mode` drives which stages are active
-- [ ] In `chained_pipeline` mode, all 8 stages are active
-- [ ] In `text_session` mode, the stage set is:
+- [x] `RunContext.runtime_mode` drives which stages are active
+- [x] In `chained_pipeline` mode, all 8 stages are active
+- [x] In `text_session` mode, the stage set is:
   - `TurnStage` (active as an explicit-boundary driver — each
     `send_text` call begins and ends exactly one turn; SmartTurn
     endpointing is not engaged)
@@ -325,7 +325,7 @@ main orchestration model, each stage boundary is journaled with
     path)
   - all audio stages (`Transport`, `Audio`, `VAD`, `STT`, `TTS`,
     `Telephony`) are inactive
-- [ ] In `text_session` mode, `VoiceDeliveryLedger` operates in
+- [x] In `text_session` mode, `VoiceDeliveryLedger` operates in
   **text-delivery mode**: every text delta yielded to the caller's
   `send_text` iterator is immediately marked as delivered (no
   playback acknowledgement needed, no estimator fallback). The
@@ -334,7 +334,7 @@ main orchestration model, each stage boundary is journaled with
   that delivery is instantaneous rather than bounded by TTS
   playback latency. This means interruption cut-point computation
   in text mode is exact (delivered = yielded), not estimated.
-- [ ] Voice-to-voice / realtime speech-to-speech is not a supported
+- [x] Voice-to-voice / realtime speech-to-speech is not a supported
   runtime mode. `RunContext.runtime_mode` only accepts
   `chained_pipeline` or `text_session`; any other value raises a
   `ValueError` at construction. See Explicit Guardrails in the
@@ -342,11 +342,11 @@ main orchestration model, each stage boundary is journaled with
 
 ### T3.11.5: Text Mode Public API
 
-- [ ] Add `Session.send_text(text: str, *, context=None) ->
+- [x] Add `Session.send_text(text: str, *, context=None) ->
   AsyncIterator[AgentBridgeEvent]` method available in
   `text_session` mode. Raises `RuntimeError` with a clear message
   if called from `chained_pipeline` mode.
-- [ ] Implementation path: `send_text` opens a fresh `TurnContext`,
+- [x] Implementation path: `send_text` opens a fresh `TurnContext`,
   constructs an `AgentTurnInput` via the WS2 T2.1
   `AgentTurnInput.from_text()` helper, runs it through the same
   `TurnStage` → `AgentStage` wiring used by the voice runtime
@@ -354,13 +354,13 @@ main orchestration model, each stage boundary is journaled with
   caller, and closes the turn. No code duplication between text
   and voice paths — same stage invocation, same journal records,
   same framework transition records, same interruption contract.
-- [ ] Expose `create_text_session(...)` as a factory helper
+- [x] Expose `create_text_session(...)` as a factory helper
   alongside `create_session(...)` in `config.py` / `__init__.py`.
   It returns a `Session` pre-configured with
   `runtime_mode="text_session"` and no audio provider wiring.
   `create_session` with an explicit `runtime_mode="text_session"`
   also works; the factory is a thin convenience.
-- [ ] `send_text` routes interruption the same way voice mode does:
+- [x] `send_text` routes interruption the same way voice mode does:
   if a concurrent `send_text` call races with an in-flight agent
   turn, the `InterruptionController` observes the new text input
   as an interrupt signal and applies the configured cancellation
@@ -380,7 +380,7 @@ main orchestration model, each stage boundary is journaled with
   proceeds. This keeps interruption semantics uniform across
   runtime modes and makes text mode a valid repro path for
   interruption bugs.
-- [ ] Text mode journal records use `stage="turn"` and
+- [x] Text mode journal records use `stage="turn"` and
   `stage="agent"` with a `runtime_mode="text_session"` field on
   `RunContext` so the debugger UI, replay, and bundle export can
   distinguish text-mode turns from voice-mode turns without
@@ -388,14 +388,14 @@ main orchestration model, each stage boundary is journaled with
 
 ### T3.12: Perf Regression Gate
 
-- [ ] Re-run the T1.0.5 baseline harness after each stage port
-- [ ] Fail the workstream if P50 turn latency regresses > 5% or
+- [x] Re-run the T1.0.5 baseline harness after each stage port
+- [x] Fail the workstream if P50 turn latency regresses > 5% or
   P90 turn latency regresses > 10% against the baseline
-- [ ] A regression halts further stage work; profile and fix
+- [x] A regression halts further stage work; profile and fix
   before continuing
-- [ ] Capture post-workstream results in `perf/ws3-final.json` for
+- [x] Capture post-workstream results in `perf/ws3-final.json` for
   future comparison
-- [ ] **CI variance mitigation.** The perf gate runs on a
+- [x] **CI variance mitigation.** The perf gate runs on a
   fixed-spec CI runner (dedicated or tagged instance type, not a
   shared pool). Each measurement is the median of 5 consecutive
   harness runs within the same CI job to dampen single-run noise.
@@ -407,7 +407,7 @@ main orchestration model, each stage boundary is journaled with
 
 ## Acceptance Criteria
 
-- [ ] **AC3.2** `TurnContext` holds all per-turn state. Behavior
+- [x] **AC3.2** `TurnContext` holds all per-turn state. Behavior
   check: after a completed turn, `session._current_turn is None`,
   and any attempt to read turn-specific payloads off `Session`
   (e.g., last agent response parts, last playback byte map)
@@ -417,22 +417,22 @@ main orchestration model, each stage boundary is journaled with
   (`list[AgentResponsePart]`, `dict[PlaybackMark, int]`, etc.).
   The check walks values by type rather than attribute-name
   regex to avoid brittleness.
-- [ ] **AC3.3** `InterruptionController` exists in
+- [x] **AC3.3** `InterruptionController` exists in
   `src/easycat/session/_interruption_controller.py` and owns all
   interruption logic.
-- [ ] **AC3.4** `VoiceDeliveryLedger` exists in
+- [x] **AC3.4** `VoiceDeliveryLedger` exists in
   `src/easycat/session/_voice_delivery_ledger.py` and is the single
   source of truth for voice channel delivery state.
-- [ ] **AC3.5** `RunContext` exists in `src/easycat/runtime/context.py`
+- [x] **AC3.5** `RunContext` exists in `src/easycat/runtime/context.py`
   with all required fields, including a safe config snapshot via the
   WS1 `safe_defaults.py` allowlist.
-- [ ] **AC3.6** `Stage` protocol exists in `src/easycat/stages/base.py`
+- [x] **AC3.6** `Stage` protocol exists in `src/easycat/stages/base.py`
   with all four methods and typed `StageStateSnapshot`.
-- [ ] **AC3.7** All 8 stages exist as files under `src/easycat/stages/`
+- [x] **AC3.7** All 8 stages exist as files under `src/easycat/stages/`
   and each implements the `Stage` protocol.
-- [ ] **AC3.8** Every stage writes journal records with non-null
+- [x] **AC3.8** Every stage writes journal records with non-null
   `state_before` and `state_after` on every invocation.
-- [ ] **AC3.8a** Mid-stage crash durability. Stages emit
+- [x] **AC3.8a** Mid-stage crash durability. Stages emit
   `state_before` *before* running their critical-path work and
   `state_after` *after* it. If a crash (SIGKILL or segfault)
   occurs between the two, the reloaded SQLite journal shows a
@@ -445,10 +445,10 @@ main orchestration model, each stage boundary is journaled with
   produces a bundle that shows the stage hang-point in the
   debugger. This is the foundation for debugging field crashes
   without re-running the turn.
-- [ ] **AC3.9** Upstream control signals (`Interrupt`, `Cancel`,
+- [x] **AC3.9** Upstream control signals (`Interrupt`, `Cancel`,
   `Pause`, `Resume`, `Backpressure`) are recorded per-stage in the
   journal. Each stage that observes a signal writes its own record.
-- [ ] **AC3.9a** Signal-vs-cancel-token parity. The existing
+- [x] **AC3.9a** Signal-vs-cancel-token parity. The existing
   shared cancel token path and the new signal-based upstream
   flow are behavior-equivalent. A test runs each pre-existing
   `tests/session/` barge-in scenario twice — once with
@@ -463,31 +463,31 @@ main orchestration model, each stage boundary is journaled with
   workstream and runs on every PR that touches
   `src/easycat/stages/` or `src/easycat/session/` until WS5
   flips it off.
-- [ ] **AC3.10a** `src/easycat/session/_session.py` is a thin facade
+- [x] **AC3.10a** `src/easycat/session/_session.py` is a thin facade
   and stays under the 500-line hard ceiling; `< 400` remains the
   target.
-- [ ] **AC3.10b** Every public method on the `Session` facade is at
+- [x] **AC3.10b** Every public method on the `Session` facade is at
   most 30 statements long (configurable via a lint rule). This
   structural gate prevents a mega-method from defeating the line
   budget. Exceptions must be explicitly marked and justified in
   the plan.
-- [ ] **AC3.11** `chained_pipeline` mode works end-to-end with OpenAI
+- [x] **AC3.11** `chained_pipeline` mode works end-to-end with OpenAI
   Agents + Deepgram STT + ElevenLabs TTS.
-- [ ] **AC3.12** Voice-to-voice / realtime guardrail. A test
+- [x] **AC3.12** Voice-to-voice / realtime guardrail. A test
   asserts that `RunContext(runtime_mode="realtime_session")`
   raises `ValueError`, and a grep-based test asserts zero
   matches in `src/easycat/stages/` or `src/easycat/session/`
   for `RealtimeStage` or `realtime_session`.
-- [ ] **AC3.13** All existing tests pass.
-- [ ] **AC3.14** Any public runtime-mode/config changes introduced here
+- [x] **AC3.13** All existing tests pass.
+- [x] **AC3.14** Any public runtime-mode/config changes introduced here
   are documented in the plan and covered by migration notes with before/after
   examples.
-- [ ] **AC3.15** Perf regression gate (T3.12) passes: P50 turn
+- [x] **AC3.15** Perf regression gate (T3.12) passes: P50 turn
   latency stays within 5% and P90 within 10% of the T1.0.5
   baseline. The gate runs on every PR that touches
   `src/easycat/stages/` or `src/easycat/session/` and blocks merge
   on regression.
-- [ ] **AC3.16** VAD decision reproducibility. A test captures a
+- [x] **AC3.16** VAD decision reproducibility. A test captures a
   `VADStage` snapshot from a live session with a known audio
   fixture, calls `VADStage.replay_decision(snapshot)` on a fresh
   stage instance using only the journal snapshot + captured audio
@@ -497,7 +497,7 @@ main orchestration model, each stage boundary is journaled with
   Parametrized over the Silero backend (mandatory) and Krisp
   backend if credentials are available (otherwise skipped with a
   log line).
-- [ ] **AC3.17** Smart Turn decision reproducibility. A test
+- [x] **AC3.17** Smart Turn decision reproducibility. A test
   captures a `TurnStage` snapshot for an endpointing decision,
   calls `TurnStage.replay_decision(snapshot)` on a fresh stage
   instance using only the journal snapshot + captured audio window,
@@ -505,7 +505,7 @@ main orchestration model, each stage boundary is journaled with
   byte-identical (same logits within float tolerance, same final
   `complete` / `not_complete` output, same fallback behavior if
   any).
-- [ ] **AC3.18** Text mode end-to-end. A test creates a
+- [x] **AC3.18** Text mode end-to-end. A test creates a
   `text_session` Session (via `create_text_session` or
   `create_session(runtime_mode="text_session")`), calls
   `session.send_text("hello")`, iterates the resulting
@@ -519,7 +519,7 @@ main orchestration model, each stage boundary is journaled with
     on the journal)
   - `session.send_text` raises `RuntimeError` when called on a
     Session created with `runtime_mode="chained_pipeline"`
-- [ ] **AC3.19** Text mode interruption parity. A test fires a
+- [x] **AC3.19** Text mode interruption parity. A test fires a
   second `send_text` while a first `send_text` call is still
   streaming, asserts the `InterruptionController` observes the
   second input as an interrupt, the journal records a

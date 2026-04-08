@@ -435,6 +435,56 @@ def create_session(config: EasyCatConfig) -> Session:
     return session
 
 
+def create_text_session(
+    *,
+    agent: Any,
+    session_id: str | None = None,
+    debug: Literal["off", "light", "full"] = "light",
+    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
+    wrap_agent: bool = True,
+    agent_runner: AgentRunnerConfig | None = None,
+) -> Session:
+    """Create a text-only Session (no audio pipeline).
+
+    The returned session supports :meth:`Session.send_text` for
+    request/response agent interaction without STT, TTS, VAD, or
+    transport.  Useful for testing agent logic and building text-based
+    UIs on the same agent adapter stack.
+
+    Raises :class:`RuntimeError` if the caller attempts to call
+    :meth:`Session.start` on a text session.
+    """
+    sid = session_id or f"session-{uuid4().hex[:12]}"
+    journal = create_journal(sid, debug=debug, backend=journal_backend) if debug != "off" else None
+    artifact_store = _create_artifact_store(sid, debug)
+    event_bus = EventBus()
+
+    adapted = auto_adapt_agent(agent) if agent is not None else NoopAgent()
+    if wrap_agent and not isinstance(adapted, AgentRunner):
+        runner_cfg = agent_runner or AgentRunnerConfig()
+        adapted = AgentRunner(adapted, runner_cfg)
+
+    # Text sessions use noop providers — validation is skipped because
+    # runtime_mode="text_session" never enters the audio pipeline.
+    from easycat.stubs import NoopSTT, NoopTransport, NoopTTS, NoopVAD
+
+    session = Session(
+        SessionConfig(
+            stt=NoopSTT(),
+            tts=NoopTTS(),
+            vad=NoopVAD(),
+            transport=NoopTransport(),
+            agent=adapted,
+            event_bus=event_bus,
+            journal=journal,
+            artifact_store=artifact_store,
+            session_id=sid,
+            runtime_mode="text_session",
+        )
+    )
+    return session
+
+
 class _OutboundPipelineWiring:
     """Encapsulates mutable state for the outbound pipeline callbacks.
 

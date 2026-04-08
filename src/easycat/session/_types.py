@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from easycat.bounded_queue import BoundedAudioQueue
 from easycat.events import EventBus
@@ -123,3 +123,8 @@ class SessionConfig:
     # Agent-initiated session actions.
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
+
+    # Runtime mode for the session.
+    runtime_mode: Literal["chained_pipeline", "text_session"] = "chained_pipeline"
+    # Text-mode context to pass through to stages (optional, set by create_text_session).
+    text_mode_context: dict[str, Any] | None = None
