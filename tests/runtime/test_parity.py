@@ -1,24 +1,25 @@
 """Strangler-fig parity tests.
 
 Verify that the journal-derived views match the legacy systems for
-the same inputs. These run with EASYCAT_LEGACY_OBS_DUAL_WRITE=1
-(default) and compare both sides.
+the same inputs. Journal writes are now unconditional (the legacy
+EASYCAT_LEGACY_OBS_DUAL_WRITE flag has been removed).
 """
 
 from __future__ import annotations
 
-import os
+import warnings
 
-from easycat._span_manager import SpanManager
-from easycat.event_logging import EventLoggingConfig, EventTraceLogger
+# Suppress expected deprecation warnings from legacy modules under test.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    from easycat._span_manager import SpanManager
+    from easycat.event_logging import EventLoggingConfig, EventTraceLogger
+    from easycat.metrics import InMemoryMetrics
+    from easycat.tracing import SpanStatus, Tracer
+
 from easycat.events import EventBus, STTFinal, TurnStarted
-from easycat.metrics import InMemoryMetrics
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
-from easycat.tracing import SpanStatus, Tracer
-
-# Ensure dual-write is on for these tests.
-os.environ.setdefault("EASYCAT_LEGACY_OBS_DUAL_WRITE", "1")
 
 # Timestamp fields that legitimately diverge between legacy and journal.
 TIMESTAMP_ALLOWLIST = {"timestamp", "elapsed_s", "wall_ns", "mono_ns", "duration_ms"}
@@ -175,11 +176,10 @@ class TestInMemoryMetricsParity:
         assert all(r.data["metric_type"] == "counter" for r in j_counters)
 
 
-class TestDualWriteFlag:
-    """EASYCAT_LEGACY_OBS_DUAL_WRITE=0 disables journal writes."""
+class TestJournalWriteAlwaysOn:
+    """Journal writes are always on (legacy dual-write flag removed)."""
 
-    def test_disabled_skips_journal(self, monkeypatch):
-        monkeypatch.setenv("EASYCAT_LEGACY_OBS_DUAL_WRITE", "0")
+    def test_journal_writes_unconditionally(self):
         journal = InMemoryRingBuffer(capacity=100)
         metrics = InMemoryMetrics(journal=journal)
         metrics.bind_session("s")
@@ -191,14 +191,5 @@ class TestDualWriteFlag:
         assert metrics.get_metrics()["latencies"]["lat"]["count"] == 1
         assert metrics.get_metrics()["counters"]["cnt"] == 1
 
-        # But journal is empty.
-        assert len(journal.read()) == 0
-
-    def test_enabled_writes_journal(self, monkeypatch):
-        monkeypatch.setenv("EASYCAT_LEGACY_OBS_DUAL_WRITE", "1")
-        journal = InMemoryRingBuffer(capacity=100)
-        metrics = InMemoryMetrics(journal=journal)
-        metrics.bind_session("s")
-
-        metrics.record_latency("lat", 10.0)
-        assert len(journal.read()) == 1
+        # Journal always receives writes now.
+        assert len(journal.read()) == 2

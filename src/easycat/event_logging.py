@@ -1,10 +1,19 @@
 """Structured event-by-event logging helpers for EasyCat sessions."""
+# ruff: noqa: E402
 
 from __future__ import annotations
 
+import warnings
+
+warnings.warn(
+    "easycat.event_logging is deprecated. Use session.journal for observability. "
+    "See docs/migration-debug-first-runtime.md for migration details.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import json
 import logging
-import os
 import time
 from collections import deque
 from collections.abc import Mapping
@@ -42,11 +51,6 @@ from easycat.events import (
     TTSMarkers,
     VoicemailDetected,
 )
-
-
-def _dual_write_enabled() -> bool:
-    """Check EASYCAT_LEGACY_OBS_DUAL_WRITE (default on)."""
-    return os.environ.get("EASYCAT_LEGACY_OBS_DUAL_WRITE", "1") != "0"
 
 
 @dataclass
@@ -132,7 +136,7 @@ class EventTraceLogger:
         self._state = _TraceState(self._state.start_time, self._state.event_index + 1)
         payload = self._to_payload(event, self._state.event_index)
         self._recent.append(payload)
-        if self._journal is not None and _dual_write_enabled():
+        if self._journal is not None:
             from easycat.runtime.records import JournalRecordKind
 
             self._journal.append(

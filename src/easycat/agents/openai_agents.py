@@ -1,5 +1,7 @@
 """OpenAI Agents SDK adapter for the EasyCat voice pipeline.
 
+Deprecated: use easycat.integrations.agents.openai_agents.OpenAIAgentsBridge instead.
+
 Wraps an ``agents.Agent`` (from the ``openai-agents`` package) so it can be
 used directly as the ``agent`` parameter in :class:`easycat.SessionConfig`.
 Satisfies both the basic ``Agent`` protocol (``run()``) and the
@@ -23,8 +25,19 @@ Usage::
     adapter = OpenAIAgentsAdapter(agent)
     session = Session(SessionConfig(agent=adapter, ...))
 """
+# ruff: noqa: E402
 
 from __future__ import annotations
+
+import warnings
+
+warnings.warn(
+    "easycat.agents.openai_agents is deprecated. "
+    "Use easycat.integrations.agents.openai_agents.OpenAIAgentsBridge instead. "
+    "See docs/migration-debug-first-runtime.md for migration details.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import logging
 from collections.abc import AsyncIterator

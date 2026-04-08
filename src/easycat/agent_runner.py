@@ -7,8 +7,18 @@ Provides AgentRunner — a wrapper around any agent that adds:
 - Cooperative cancellation via CancelToken
 - Tracing spans for pipeline observability
 """
+# ruff: noqa: E402
 
 from __future__ import annotations
+
+import warnings
+
+warnings.warn(
+    "easycat.agent_runner is deprecated. Use easycat.integrations.agents bridges instead. "
+    "See docs/migration-debug-first-runtime.md for migration details.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import asyncio
 import enum

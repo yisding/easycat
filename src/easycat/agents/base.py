@@ -1,13 +1,25 @@
 """Base class for agent framework adapters.
 
+Deprecated: use easycat.integrations.agents bridges instead.
+
 Provides shared infrastructure so that adapters for different agent
 frameworks (PydanticAI, OpenAI Agents SDK, etc.) have a consistent
 interface and don't duplicate boilerplate.
 
 Subclasses must implement :meth:`run` and :meth:`run_streaming`.
 """
+# ruff: noqa: E402
 
 from __future__ import annotations
+
+import warnings
+
+warnings.warn(
+    "easycat.agents.base is deprecated. Use easycat.integrations.agents bridges instead. "
+    "See docs/migration-debug-first-runtime.md for migration details.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import json
 import logging

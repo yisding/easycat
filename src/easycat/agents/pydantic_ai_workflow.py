@@ -1,5 +1,7 @@
 """Workflow-level adapter for stateful PydanticAI orchestration.
 
+Deprecated: use easycat.integrations.agents.generic_workflow.GenericWorkflowBridge instead.
+
 Wraps a workflow object that owns the application-level control flow across
 multiple user turns. This is a better fit for PydanticAI's programmatic
 hand-off model than adapting only an individual ``pydantic_ai.Agent``.
@@ -7,8 +9,19 @@ hand-off model than adapting only an individual ``pydantic_ai.Agent``.
 The wrapped workflow is expected to expose ``on_user_turn(text)`` and may
 optionally expose ``on_user_turn_streaming(text, cancel_token=...)``.
 """
+# ruff: noqa: E402
 
 from __future__ import annotations
+
+import warnings
+
+warnings.warn(
+    "easycat.agents.pydantic_ai_workflow is deprecated. "
+    "Use easycat.integrations.agents.generic_workflow.GenericWorkflowBridge instead. "
+    "See docs/migration-debug-first-runtime.md for migration details.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import inspect
 import logging

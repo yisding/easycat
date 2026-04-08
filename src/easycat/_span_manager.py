@@ -4,20 +4,25 @@ Centralizes span creation, finishing, and cleanup so that Session
 doesn't repeat the same ``if self._tracer and self._X_span`` pattern
 in every cancellation/error/completion path.
 """
+# ruff: noqa: E402
 
 from __future__ import annotations
 
-import os
+import warnings
+
+warnings.warn(
+    "easycat._span_manager is deprecated. Use session.journal for observability. "
+    "See docs/migration-debug-first-runtime.md for migration details.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from typing import TYPE_CHECKING
 
 from easycat.tracing import Span, SpanStatus, TraceContext, Tracer
 
 if TYPE_CHECKING:
     from easycat.runtime.journal import ExecutionJournal
-
-
-def _dual_write_enabled() -> bool:
-    return os.environ.get("EASYCAT_LEGACY_OBS_DUAL_WRITE", "1") != "0"
 
 
 class SpanManager:
@@ -125,7 +130,7 @@ class SpanManager:
         self._session_id = session_id
 
     def _journal_span_start(self, name: str, span: Span) -> None:
-        if self._journal is None or not _dual_write_enabled():
+        if self._journal is None:
             return
         from easycat.runtime.records import JournalRecordKind
 
@@ -147,7 +152,7 @@ class SpanManager:
         *,
         error: BaseException | None = None,
     ) -> None:
-        if self._journal is None or not _dual_write_enabled():
+        if self._journal is None:
             return
         from easycat.runtime.records import ErrorInfo, JournalRecordKind
 

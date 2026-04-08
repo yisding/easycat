@@ -1,6 +1,20 @@
-"""Helpers for normalizing third-party agents to EasyCat adapters."""
+"""Helpers for normalizing third-party agents to EasyCat adapters.
+
+Deprecated: use easycat.integrations.agents bridges instead.
+"""
+# ruff: noqa: E402
 
 from __future__ import annotations
+
+import warnings
+
+warnings.warn(
+    "easycat.agents.factory is deprecated. "
+    "Use easycat.integrations.agents bridges instead. "
+    "See docs/migration-debug-first-runtime.md for migration details.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import inspect
 from typing import Any

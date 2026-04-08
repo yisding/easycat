@@ -5,8 +5,18 @@ trace context propagation. Each span records start time, end time,
 status, and metadata. Integrates with the Agents SDK trace context
 pass-through pattern.
 """
+# ruff: noqa: E402
 
 from __future__ import annotations
+
+import warnings
+
+warnings.warn(
+    "easycat.tracing is deprecated. Use session.journal for observability. "
+    "See docs/migration-debug-first-runtime.md for migration details.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import asyncio
 import enum

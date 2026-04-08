@@ -3,12 +3,21 @@
 Provides a MetricsCollector interface and in-memory implementation,
 plus helper decorators and context managers for instrumenting pipeline stages.
 """
+# ruff: noqa: E402
 
 from __future__ import annotations
 
+import warnings
+
+warnings.warn(
+    "easycat.metrics is deprecated. Use session.journal for observability. "
+    "See docs/migration-debug-first-runtime.md for migration details.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import functools
 import logging
-import os
 import time
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
@@ -18,10 +27,6 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from easycat.runtime.journal import ExecutionJournal
-
-
-def _dual_write_enabled() -> bool:
-    return os.environ.get("EASYCAT_LEGACY_OBS_DUAL_WRITE", "1") != "0"
 
 
 logger = logging.getLogger(__name__)
@@ -102,7 +107,7 @@ class InMemoryMetrics:
 
     def record_latency(self, name: str, value_ms: float) -> None:
         self._latencies[name].record(value_ms)
-        if self._journal is not None and _dual_write_enabled():
+        if self._journal is not None:
             from easycat.runtime.records import JournalRecordKind
 
             self._journal.append(
@@ -114,7 +119,7 @@ class InMemoryMetrics:
 
     def increment_counter(self, name: str, amount: int = 1) -> None:
         self._counters[name] += amount
-        if self._journal is not None and _dual_write_enabled():
+        if self._journal is not None:
             from easycat.runtime.records import JournalRecordKind
 
             self._journal.append(

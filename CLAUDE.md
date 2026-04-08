@@ -35,12 +35,13 @@ uv run python examples/ws_server.py  # Run an example
 - `events.py` — `EventBus` pub/sub with sync/async handlers. Two event layers: provider-scoped (`STTEvent`, `TTSEvent`) emitted by providers, mapped to EasyCat-level events (`STTFinal`, `TTSAudio`, `TurnStarted`, etc.) by Session.
 - `providers.py` — `@runtime_checkable` Protocol definitions for all provider interfaces (`STTProvider`, `TTSProvider`, `VADProvider`, `Transport`, `NoiseReducer`). Providers use duck typing, not inheritance.
 - `turn_manager.py` — 5-state FSM (IDLE → USER_SPEAKING → USER_PAUSED → PROCESSING → BOT_SPEAKING) with pre-roll buffering and interruption detection. Supports VAD (automatic) and PUSH_TO_TALK turn modes.
-- `agent_runner.py` — Wraps agents with timeout, tracing, cancellation. Supports both simple and streaming agents.
+- `agent_runner.py` — (Deprecated) Wraps agents with timeout, tracing, cancellation. Supports both simple and streaming agents. New code should use `integrations/agents/` bridges.
+- `runtime/` — Journal-based debug-first runtime. `ExecutionJournal` records events, spans, and metrics. `JournalView` provides query access. Replaces legacy `event_logging`, `tracing`, and `metrics` modules.
 - `smart_turn.py` — Optional ONNX-based endpoint detection that classifies whether a user has finished speaking, enabling faster turn transitions without waiting for silence timeout.
 
 **Provider subpackages** (`stt/`, `tts/`, `transports/`, `telephony/`): one provider per file, each implementing the corresponding Protocol. Base classes (`STTBase`, `TTSBase`, `_ServerTransportBase`) provide shared plumbing.
 
-**Agent adapters** (`agents/`): `BaseAgentAdapter` provides shared history/cancellation; `OpenAIAgentsAdapter` and `PydanticAIAdapter` wrap framework-specific agents.
+**Agent adapters** (`agents/`): Legacy module (deprecated). `BaseAgentAdapter` provides shared history/cancellation; `OpenAIAgentsAdapter` and `PydanticAIAdapter` wrap framework-specific agents. New code should use `integrations/agents/` bridges (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`) which integrate with the journal-based debug-first runtime.
 
 **Dual-backend fallback:** VAD (Krisp → Silero → passthrough) and noise reduction (Krisp → RNNoise → passthrough) both try commercial backends first, then fall back to open-source, then no-op.
 

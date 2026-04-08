@@ -60,7 +60,7 @@ a codebase with one debugging model: the journal.
 
 ### T5.0: Architecture Freeze
 
-- [ ] Design decisions covering:
+- [x] Design decisions covering:
   - deprecation timeline (one prior release with
     `DeprecationWarning` before deletion)
   - explicit shim-survival window. During WS2A the new bridge
@@ -102,11 +102,11 @@ a codebase with one debugging model: the journal.
     and WS4 is removed here
   - rollback plan if a post-removal regression surfaces, with
     named integration tests to run between each deletion commit
-- [ ] Review and merge before any deletions.
+- [x] Review and merge before any deletions.
 
 ### T5.1: Deprecation Release (Prior to Deletion)
 
-- [ ] **Convert the following files to thin shims.** They still
+- [x] **Convert the following files to thin shims.** They still
   exist on disk at the start of WS5 in their pre-redesign form.
   WS5 T5.1 replaces each with a shim that re-exports the
   equivalent symbol from its new location and emits a
@@ -126,108 +126,108 @@ a codebase with one debugging model: the journal.
   - `src/easycat/agents/__init__.py` — shim re-exports
     everything from `src/easycat/integrations/agents/` plus a
     module-level `DeprecationWarning`.
-- [ ] Verify the shims behave identically to the pre-conversion
+- [x] Verify the shims behave identically to the pre-conversion
   files by running the pre-existing `tests/agents/` suite
   unmodified against them. Any test failure blocks the
   conversion and points at a missing re-export.
-- [ ] Add `DeprecationWarning` to every public symbol in
+- [x] Add `DeprecationWarning` to every public symbol in
   `event_logging.py`, `tracing.py`, `metrics.py`, `_span_manager.py`,
   and the converted shim files
-- [ ] Add `DeprecationWarning` or release-note coverage for top-level
+- [x] Add `DeprecationWarning` or release-note coverage for top-level
   re-exports and `EasyCatConfig` fields slated for removal or rename,
   including the `debug: bool` → `debug: Literal[...]` migration
   from WS1 AC1.3
-- [ ] Warning message names the replacement
+- [x] Warning message names the replacement
   (`session.journal`, `ExecutionJournal`, `Stage`,
   `ExternalAgentBridge`, new debug/runtime config fields,
   `easycat.integrations.agents.*`, etc.)
-- [ ] Publish a release containing the shim conversions and
+- [x] Publish a release containing the shim conversions and
   deprecation warnings so external users see them before
   deletion
-- [ ] Ship migration guide in the same release
+- [x] Ship migration guide in the same release
 
 ### T5.2: Remove Strangler-Fig Adapters
 
-- [ ] Flip `EASYCAT_LEGACY_OBS_DUAL_WRITE` default to `0`
-- [ ] Run full test suite with flag off; fix any regressions
-- [ ] Delete the dual-write code paths entirely
-- [ ] Remove the feature flag
+- [x] Flip `EASYCAT_LEGACY_OBS_DUAL_WRITE` default to `0`
+- [x] Run full test suite with flag off; fix any regressions
+- [x] Delete the dual-write code paths entirely
+- [x] Remove the feature flag
 
 ### T5.2.5: Remove Dual-Path Cancel Token
 
-- [ ] The shared cancel token retained in WS3 T3.8 alongside the
+- [x] The shared cancel token retained in WS3 T3.8 alongside the
   signal-based upstream flow is removed here. All cancellation now
   flows through `Stage.handle_upstream(ControlSignal.Cancel)`.
-- [ ] Verify the full barge-in test suite still passes with only
+- [x] Verify the full barge-in test suite still passes with only
   the signal path live
-- [ ] Remove any remaining cancel-token imports from `Session` and
+- [x] Remove any remaining cancel-token imports from `Session` and
   the stages
 
 ### T5.3: Remove EventTraceLogger
 
-- [ ] Delete `src/easycat/event_logging.py`
-- [ ] Delete `tests/test_event_logging.py` and related tests that
+- [x] Delete `src/easycat/event_logging.py`
+- [x] Delete `tests/test_event_logging.py` and related tests that
   test implementation rather than behavior
-- [ ] Update any remaining imports across `src/easycat/` and
+- [x] Update any remaining imports across `src/easycat/` and
   `tests/` to use the journal formatter instead
-- [ ] Verify no references remain:
+- [x] Verify no references remain:
   `grep -rn 'EventTraceLogger\|event_logging' src/ tests/` returns
   zero
 
 ### T5.3.5: Migrate Behavior-Assertion Tests
 
-- [ ] Some existing tests subscribe to `EventTraceLogger` (or
+- [x] Some existing tests subscribe to `EventTraceLogger` (or
   snapshot `InMemoryMetrics`) to assert *pipeline behavior*, not
   logger internals. These are behavior tests using the only
   observability surface that existed pre-redesign, and they must
   be preserved — not deleted.
-- [ ] The list of such files is compiled during T5.0.
+- [x] The list of such files is compiled during T5.0.
   Each test is rewritten to read `session.journal` directly, or
   via WS4's `load_bundle()` pytest fixture helper when a
   bundle-based fixture is cleaner.
-- [ ] This task runs BEFORE T5.3's deletion step — behavior
+- [x] This task runs BEFORE T5.3's deletion step — behavior
   coverage migrates first, then the legacy module is deleted.
-- [ ] No behavior coverage gaps: every assertion previously made
+- [x] No behavior coverage gaps: every assertion previously made
   against legacy observability output has an equivalent
   assertion against the journal before `event_logging.py` is
   removed.
 
 ### T5.4: Remove Tracer / Span / SpanManager
 
-- [ ] Delete `src/easycat/tracing.py`
-- [ ] Delete `src/easycat/_span_manager.py`
-- [ ] Delete related test files that test implementation
-- [ ] Update imports to use journal-derived tracing (peripheral
+- [x] Delete `src/easycat/tracing.py`
+- [x] Delete `src/easycat/_span_manager.py`
+- [x] Delete related test files that test implementation
+- [x] Update imports to use journal-derived tracing (peripheral
   OTel exporter in `peripheral-observability-and-cost.md`
   eventually replaces the user-facing OTel projection, but that is
   not part of this workstream)
-- [ ] Verify no references remain:
+- [x] Verify no references remain:
   `grep -rn 'Tracer\|SpanManager' src/ tests/` returns zero (modulo
   occurrences inside comments/docstrings explicitly describing the
   removal)
 
 ### T5.5: Remove InMemoryMetrics
 
-- [ ] Delete `src/easycat/metrics.py`
-- [ ] Delete related test files
-- [ ] Metrics consumers migrate to journal-derived aggregations
-- [ ] Verify no references remain:
+- [x] Delete `src/easycat/metrics.py`
+- [x] Delete related test files
+- [x] Metrics consumers migrate to journal-derived aggregations
+- [x] Verify no references remain:
   `grep -rn 'InMemoryMetrics\|metrics\.' src/ tests/` returns zero
   legacy matches (note: journal-derived metrics may still use the
   word `metrics` — review carefully)
 
 ### T5.6: Remove agent_runner.py
 
-- [ ] Delete `src/easycat/agent_runner.py` (465 lines)
-- [ ] Any remaining utility functions migrate into
+- [x] Delete `src/easycat/agent_runner.py` (465 lines)
+- [x] Any remaining utility functions migrate into
   `src/easycat/stages/agent.py` or
   `src/easycat/integrations/agents/base.py`
-- [ ] Verify no references remain:
+- [x] Verify no references remain:
   `grep -rn 'agent_runner\|AgentRunner' src/ tests/` returns zero
 
 ### T5.6.5: Remove src/easycat/agents/
 
-- [ ] Delete the five legacy adapter files (all consumers use
+- [x] Delete the five legacy adapter files (all consumers use
   `src/easycat/integrations/agents/` by this point):
   - `src/easycat/agents/base.py`
   - `src/easycat/agents/openai_agents.py`
@@ -235,34 +235,34 @@ a codebase with one debugging model: the journal.
   - `src/easycat/agents/pydantic_ai_workflow.py`
   - `src/easycat/agents/factory.py`
   - `src/easycat/agents/__init__.py`
-- [ ] Remove the empty `src/easycat/agents/` directory
-- [ ] Update any import statements that still reference the old
+- [x] Remove the empty `src/easycat/agents/` directory
+- [x] Update any import statements that still reference the old
   path; the compatibility shims from the deprecation release
   (T5.1) are the last consumers and are removed alongside the
   files
 
 ### T5.7: Collapse Duplicate Session State Paths
 
-- [ ] Audit `src/easycat/session/_session.py` for any instance
+- [x] Audit `src/easycat/session/_session.py` for any instance
   variables or methods that were kept only as temporary migration
   shims during Workstream 3
-- [ ] Remove them; verify tests still pass
-- [ ] Final Session line count target: unchanged from Workstream 3's
+- [x] Remove them; verify tests still pass
+- [x] Final Session line count target: unchanged from Workstream 3's
   target/ceiling, minus any shims we remove here
 
 ### T5.8: Documentation Updates
 
-- [ ] Update `CLAUDE.md` to reference the journal model (remove
+- [x] Update `CLAUDE.md` to reference the journal model (remove
   mentions of `EventTraceLogger`, `Tracer`, `InMemoryMetrics`)
-- [ ] Update README sections touching observability
-- [ ] Update any docstrings in remaining modules that reference
+- [x] Update README sections touching observability
+- [x] Update any docstrings in remaining modules that reference
   removed types
-- [ ] Verify `uv run ruff check .` is clean
-- [ ] Verify `uv run ruff format .` produces no diffs
+- [x] Verify `uv run ruff check .` is clean
+- [x] Verify `uv run ruff format .` produces no diffs
 
 ### T5.9: Migration Guide for External Consumers
 
-- [ ] Write `docs/migration-debug-first-runtime.md` (or similar
+- [x] Write `docs/migration-debug-first-runtime.md` (or similar
   location) with before/after snippets:
   - `EventTraceLogger` subscriber → `session.journal.follow()`
   - `Tracer.span(...)` context manager → journal stage operations
@@ -272,26 +272,26 @@ a codebase with one debugging model: the journal.
     settings
   - removed top-level imports → replacement module paths or public
     surfaces
-- [ ] Link the guide from the main README and from any release notes
+- [x] Link the guide from the main README and from any release notes
 
 ### T5.10: Final Cleanup
 
-- [ ] Run full test suite: `uv run pytest`
-- [ ] Run linter: `uv run ruff check .`
-- [ ] Run formatter: `uv run ruff format .`
-- [ ] Run type checker if configured
-- [ ] Run `examples/local_chat.py` and `examples/ws_server.py` as
+- [x] Run full test suite: `uv run pytest`
+- [x] Run linter: `uv run ruff check .`
+- [x] Run formatter: `uv run ruff format .`
+- [x] Run type checker if configured
+- [x] Run `examples/local_chat.py` and `examples/ws_server.py` as
   smoke tests
-- [ ] Verify line count of `src/easycat/` has measurably decreased
+- [x] Verify line count of `src/easycat/` has measurably decreased
 
 ## Acceptance Criteria
 
-- [ ] **AC5.2** A prior release exists with `DeprecationWarning` or
+- [x] **AC5.2** A prior release exists with `DeprecationWarning` or
   explicit release-note coverage on every removed public symbol and
   removed/renamed config field (evidenced by git tag and changelog).
-- [ ] **AC5.3** `EASYCAT_LEGACY_OBS_DUAL_WRITE` feature flag no
+- [x] **AC5.3** `EASYCAT_LEGACY_OBS_DUAL_WRITE` feature flag no
   longer exists in the codebase.
-- [ ] **AC5.4** The following files no longer exist:
+- [x] **AC5.4** The following files no longer exist:
   - `src/easycat/event_logging.py`
   - `src/easycat/tracing.py`
   - `src/easycat/_span_manager.py`
@@ -304,7 +304,7 @@ a codebase with one debugging model: the journal.
   - `src/easycat/agents/factory.py`
   - `src/easycat/agents/__init__.py`
   - the empty `src/easycat/agents/` directory
-- [ ] **AC5.5** Zero grep hits for the removed symbols in
+- [x] **AC5.5** Zero grep hits for the removed symbols in
   `src/easycat/` and `tests/`, using patterns tightened to avoid
   false positives from downstream work (peripheral OTel exporter,
   journal-derived metrics with "metrics" in their names):
@@ -322,25 +322,25 @@ a codebase with one debugging model: the journal.
     the deleted adapter directory
   Comments and docstrings explicitly describing the removal are
   allowed but must be rare and justified.
-- [ ] **AC5.6** Full test suite passes: `uv run pytest` exits 0.
-- [ ] **AC5.7** `uv run ruff check .` exits 0.
-- [ ] **AC5.8** `uv run ruff format .` produces no diff.
-- [ ] **AC5.9** `examples/local_chat.py` and `examples/ws_server.py`
+- [x] **AC5.6** Full test suite passes: `uv run pytest` exits 0.
+- [x] **AC5.7** `uv run ruff check .` exits 0.
+- [x] **AC5.8** `uv run ruff format .` produces no diff.
+- [x] **AC5.9** `examples/local_chat.py` and `examples/ws_server.py`
   run end-to-end without errors.
-- [ ] **AC5.10** Line count of `src/easycat/` is materially lower than
+- [x] **AC5.10** Line count of `src/easycat/` is materially lower than
   the pre-workstream baseline, with at least 1,000 lines removed as a
   target rather than a gate (baseline: `event_logging.py` 269 +
   `tracing.py` 232 + `metrics.py` 184 + `_span_manager.py` 97 +
   `agent_runner.py` 465 = 1,247 lines, minus any replacements added).
-- [ ] **AC5.11** Migration guide exists and is linked from README.
-- [ ] **AC5.12** `CLAUDE.md` no longer references removed types.
-- [ ] **AC5.13** Supported runtime behavior has no unexpected
+- [x] **AC5.11** Migration guide exists and is linked from README.
+- [x] **AC5.12** `CLAUDE.md` no longer references removed types.
+- [x] **AC5.13** Supported runtime behavior has no unexpected
   regressions, and the migration guide covers the intended public API
   removals/renames.
-- [ ] **AC5.14** `easycat.__all__`, remaining top-level imports, and
+- [x] **AC5.14** `easycat.__all__`, remaining top-level imports, and
   `EasyCatConfig` no longer expose legacy exports/fields that this
   redesign intentionally removed or renamed.
-- [ ] **AC5.15** `easycat.__all__` contract: a single test asserts
+- [x] **AC5.15** `easycat.__all__` contract: a single test asserts
   the exact allowlist of top-level symbols post-cleanup. The list
   is documented in T5.0 and includes at minimum: `Session`,
   `EasyCatConfig`, `create_session`, `ExecutionJournal`,
@@ -348,7 +348,7 @@ a codebase with one debugging model: the journal.
   `RunBundle`, `load_bundle`, and any intentionally-kept
   convenience exports. New additions require a plan amendment;
   unintended drift fails the test.
-- [ ] **AC5.16** All shim files removed per T5.6 and T5.6.5 are
+- [x] **AC5.16** All shim files removed per T5.6 and T5.6.5 are
   absent from disk. A CI test asserts `agent_runner.py` and every
   file under `src/easycat/agents/` no longer exists, and no stale
   imports reference them.

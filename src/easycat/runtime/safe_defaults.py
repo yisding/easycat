@@ -63,7 +63,6 @@ SAFE_ENV_VARS: frozenset[str] = frozenset(
         # EasyCat runtime control
         "EASYCAT_DEBUG",
         "EASYCAT_DATA_DIR",
-        "EASYCAT_LEGACY_OBS_DUAL_WRITE",
         # Deployment identification (non-secret, useful for bundles)
         "HOSTNAME",
         "REGION",
