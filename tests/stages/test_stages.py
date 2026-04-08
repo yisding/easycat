@@ -293,10 +293,12 @@ class TestStageProtocol:
         _STAGE_CLASSES,
         ids=[c[0].__name__ for c in _STAGE_CLASSES],
     )
-    def test_replay_not_implemented(self, stage_cls, provider_cls):
+    def test_replay_returns_without_error(self, stage_cls, provider_cls):
         stage = stage_cls(provider_cls())
-        with pytest.raises(NotImplementedError, match="WS4"):
-            stage.replay(ReplaySpec())
+        # WS4: replay() now returns captured data (None when no overrides)
+        result = stage.replay(ReplaySpec())
+        # With no overrides, result should be None or empty
+        assert result is None or result == []
 
     @pytest.mark.parametrize(
         "stage_cls,provider_cls",
@@ -414,14 +416,16 @@ class TestReplayDecision:
     def test_vad_replay_decision(self):
         stage = VADStage(_StubVAD())
         snap = stage.snapshot_state()
-        with pytest.raises(NotImplementedError, match="WS4"):
-            stage.replay_decision(snap)
+        # WS4: replay_decision now returns the decision from snapshot fields
+        result = stage.replay_decision(snap)
+        assert result is None  # no "decision" field in default snapshot
 
     def test_turn_replay_decision(self):
         stage = TurnStage(_StubSmartTurn())
         snap = stage.snapshot_state()
-        with pytest.raises(NotImplementedError, match="WS4"):
-            stage.replay_decision(snap)
+        # WS4: replay_decision now returns the decision from snapshot fields
+        result = stage.replay_decision(snap)
+        assert result is None  # no "decision" field in default snapshot
 
 
 # ── InterruptionController ───────────────────────────────────────

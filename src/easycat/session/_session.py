@@ -436,6 +436,26 @@ class Session:
         for event_type, handler in registrations:
             self.event_bus.unsubscribe(event_type, handler)
 
+    def export_debug_bundle(
+        self,
+        path: str,
+        *,
+        inline_artifacts: bool = False,
+        overwrite: bool = False,
+    ) -> None:
+        """Export a debug bundle from this session.
+
+        Delegates to :func:`easycat.debug.export.export_debug_bundle`.
+        """
+        from easycat.debug.export import export_debug_bundle
+
+        export_debug_bundle(
+            self,
+            path,
+            inline_artifacts=inline_artifacts,
+            overwrite=overwrite,
+        )
+
     @property
     def turn_state(self) -> TurnState:
         """Session-level turn state, derived from the TurnManager."""

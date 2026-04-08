@@ -50,11 +50,27 @@ class VADStage:
         )
 
     def replay(self, spec: ReplaySpec) -> Any:
-        raise NotImplementedError("Replay not implemented until WS4")
+        """Replay VAD stage from captured data.
+
+        - LIVE: returns captured input for re-processing.
+        - ARTIFACT: returns captured VAD events from spec.overrides.
+        """
+        fidelity = getattr(spec, "fidelity", spec.fidelity if hasattr(spec, "fidelity") else None)
+        overrides = getattr(spec, "overrides", {})
+
+        if fidelity is not None and hasattr(fidelity, "value"):
+            fidelity_val = fidelity.value
+        else:
+            fidelity_val = str(fidelity) if fidelity else "artifact"
+
+        if fidelity_val == "live":
+            return overrides.get("input", None)
+
+        return overrides.get("events", overrides.get("result", []))
 
     def replay_decision(self, snapshot: StageStateSnapshot) -> Any:
-        """Replay a VAD decision from a snapshot.  Stub until WS4."""
-        raise NotImplementedError("replay_decision not implemented until WS4")
+        """Replay a VAD decision from a snapshot."""
+        return snapshot.fields.get("decision", None)
 
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("VADStage received upstream signal: %s", signal)

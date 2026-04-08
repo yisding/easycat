@@ -110,3 +110,5 @@ NONDETERMINISTIC_FIELDS: frozenset[str] = frozenset(
         "cursor.exited_at",
     }
 )
+
+# Extended in WS4 runtime/replay.py as REPLAY_IGNORE_FIELDS

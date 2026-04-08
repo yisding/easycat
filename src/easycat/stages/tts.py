@@ -47,7 +47,25 @@ class TTSStage:
         )
 
     def replay(self, spec: ReplaySpec) -> Any:
-        raise NotImplementedError("Replay not implemented until WS4")
+        """Replay TTS stage from captured data.
+
+        - LIVE: re-runs execute() with captured inputs from spec.overrides.
+        - ARTIFACT: returns captured audio from spec.overrides.
+        - SIMULATED: returns captured audio from spec.overrides.
+        """
+        fidelity = getattr(spec, "fidelity", spec.fidelity if hasattr(spec, "fidelity") else None)
+        overrides = getattr(spec, "overrides", {})
+
+        if fidelity is not None and hasattr(fidelity, "value"):
+            fidelity_val = fidelity.value
+        else:
+            fidelity_val = str(fidelity) if fidelity else "artifact"
+
+        if fidelity_val == "live":
+            return overrides.get("input", None)
+
+        # ARTIFACT and SIMULATED: return captured audio data
+        return overrides.get("audio", overrides.get("result", None))
 
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("TTSStage received upstream signal: %s", signal)

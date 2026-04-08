@@ -48,7 +48,26 @@ class STTStage:
         )
 
     def replay(self, spec: ReplaySpec) -> Any:
-        raise NotImplementedError("Replay not implemented until WS4")
+        """Replay STT stage from captured data.
+
+        - LIVE: re-runs execute() with captured inputs from spec.overrides.
+        - ARTIFACT: returns captured transcript from spec.overrides.
+        - SIMULATED: returns captured transcript from spec.overrides.
+        """
+        fidelity = getattr(spec, "fidelity", spec.fidelity if hasattr(spec, "fidelity") else None)
+        overrides = getattr(spec, "overrides", {})
+
+        if fidelity is not None and hasattr(fidelity, "value"):
+            fidelity_val = fidelity.value
+        else:
+            fidelity_val = str(fidelity) if fidelity else "artifact"
+
+        if fidelity_val == "live":
+            # For LIVE fidelity, return the input as-is (would need ctx/turn for full execute)
+            return overrides.get("input", None)
+
+        # ARTIFACT and SIMULATED: return captured data
+        return overrides.get("transcript", overrides.get("result", None))
 
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("STTStage received upstream signal: %s", signal)

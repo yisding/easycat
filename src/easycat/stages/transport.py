@@ -48,7 +48,23 @@ class TransportStage:
         )
 
     def replay(self, spec: ReplaySpec) -> Any:
-        raise NotImplementedError("Replay not implemented until WS4")
+        """Replay Transport stage from captured data.
+
+        - LIVE: returns captured input for re-processing.
+        - ARTIFACT: returns captured transport data from spec.overrides.
+        """
+        fidelity = getattr(spec, "fidelity", spec.fidelity if hasattr(spec, "fidelity") else None)
+        overrides = getattr(spec, "overrides", {})
+
+        if fidelity is not None and hasattr(fidelity, "value"):
+            fidelity_val = fidelity.value
+        else:
+            fidelity_val = str(fidelity) if fidelity else "artifact"
+
+        if fidelity_val == "live":
+            return overrides.get("input", None)
+
+        return overrides.get("data", overrides.get("result", None))
 
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("TransportStage received upstream signal: %s", signal)

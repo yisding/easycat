@@ -1,0 +1,162 @@
+"""Export API for debug bundles.
+
+``export_debug_bundle`` is the primary entry point: given a Session
+(or session-like object), it writes a portable ``.zip`` bundle
+containing the journal, artifacts, and manifest metadata.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import tempfile
+import zipfile
+from pathlib import Path
+from typing import Any
+
+from easycat.debug.bundle import (
+    FORMAT_VERSION,
+    BundleExists,
+    DebugCaptureDisabledError,
+    Manifest,
+)
+
+
+def export_debug_bundle(
+    session: Any,
+    path: str | Path,
+    *,
+    inline_artifacts: bool = False,
+    overwrite: bool = False,
+) -> None:
+    """Export a debug bundle from a running session."""
+    path = Path(path)
+
+    debug_mode = getattr(session, "_debug", None) or getattr(session, "debug", "off")
+    if isinstance(debug_mode, str) and debug_mode == "off":
+        raise DebugCaptureDisabledError("Debug capture is disabled (debug='off')")
+
+    journal = getattr(session, "_journal", None) or getattr(session, "journal", None)
+
+    if path.exists() and not overwrite:
+        raise BundleExists(f"Bundle already exists: {path}. Use overwrite=True to replace.")
+
+    # Build journal NDJSON
+    journal_lines: list[str] = []
+    if journal is not None:
+        records = journal.read() if hasattr(journal, "read") else []
+        for record in records:
+            journal_lines.append(json.dumps(_record_to_dict(record), default=str))
+    journal_ndjson = "\n".join(journal_lines).encode("utf-8")
+
+    # Collect artifacts and checksums
+    artifact_checksums: dict[str, str] = {}
+    artifact_data: dict[str, bytes] = {}
+    artifact_store = getattr(session, "_artifact_store", None)
+    if artifact_store is not None and hasattr(artifact_store, "_store"):
+        for ref, data in artifact_store._store.items():
+            raw = data if isinstance(data, bytes) else data.encode()
+            sha = hashlib.sha256(raw).hexdigest()
+            artifact_checksums[ref] = sha
+            artifact_data[ref] = raw
+
+    # Provider versions
+    provider_versions = _collect_provider_versions(session)
+
+    # Safe config snapshot (use safe_defaults allowlist)
+    config_snapshot = _safe_config_snapshot(session)
+
+    # Sharing banner
+    try:
+        from easycat.runtime.safe_defaults import DEV_BUNDLE_BANNER
+
+        banner = DEV_BUNDLE_BANNER
+    except ImportError:
+        banner = "This debug bundle is for development use only."
+
+    manifest = Manifest(
+        format_version=FORMAT_VERSION,
+        provider_versions=provider_versions,
+        config_snapshot=config_snapshot,
+        sharing_banner=banner,
+        artifact_checksums=artifact_checksums,
+    )
+
+    # Write zip atomically
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = None
+    try:
+        tmp = tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False)
+        with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", json.dumps(_manifest_to_dict(manifest), indent=2))
+            zf.writestr("journal.ndjson", journal_ndjson)
+            for ref, data in artifact_data.items():
+                zf.writestr(f"artifacts/{ref}.bin", data)
+        Path(tmp.name).rename(path)
+    except Exception:
+        if tmp and Path(tmp.name).exists():
+            Path(tmp.name).unlink()
+        raise
+
+
+def _record_to_dict(record: Any) -> dict[str, Any]:
+    """Convert a journal record to a JSON-safe dict."""
+    if hasattr(record, "__dict__"):
+        d: dict[str, Any] = {}
+        for k, v in record.__dict__.items():
+            if k.startswith("_"):
+                continue
+            if hasattr(v, "__dict__") and not isinstance(v, (str, bytes, int, float)):
+                d[k] = {kk: vv for kk, vv in v.__dict__.items() if not kk.startswith("_")}
+            elif hasattr(v, "value") and not isinstance(v, (str, bytes, int, float)):
+                d[k] = v.value
+            elif isinstance(v, frozenset):
+                d[k] = sorted(v)
+            else:
+                d[k] = v
+        return d
+    return record
+
+
+def _manifest_to_dict(manifest: Manifest) -> dict[str, Any]:
+    d: dict[str, Any] = {}
+    for k, v in manifest.__dict__.items():
+        if not k.startswith("_"):
+            d[k] = v
+    return d
+
+
+def _collect_provider_versions(session: Any) -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for attr in ("_stt", "_tts", "_transport", "stt", "tts", "transport"):
+        provider = getattr(session, attr, None)
+        if provider is not None and hasattr(provider, "version_info"):
+            try:
+                vi = provider.version_info()
+                role = attr.lstrip("_")
+                versions[role] = vi if isinstance(vi, str) else str(vi)
+            except Exception:
+                pass
+    return versions
+
+
+def _safe_config_snapshot(session: Any) -> dict[str, Any]:
+    """Extract only allowlisted config fields."""
+    try:
+        from easycat.runtime.safe_defaults import SAFE_CONFIG_FIELDS
+
+        config = getattr(session, "_config", None)
+        if config is None:
+            return {}
+        snapshot: dict[str, Any] = {}
+        for key in SAFE_CONFIG_FIELDS:
+            val = getattr(config, key, None)
+            if val is not None:
+                try:
+                    json.dumps(val, default=str)
+                    snapshot[key] = val
+                except (TypeError, ValueError):
+                    snapshot[key] = str(val)
+        return snapshot
+    except ImportError:
+        return {}

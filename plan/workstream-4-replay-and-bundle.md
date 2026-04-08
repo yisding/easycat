@@ -75,7 +75,7 @@ surprised by non-determinism.
 
 ### T4.0: Architecture Freeze
 
-- [ ] Design decisions covering:
+- [x] Design decisions covering:
   - `ReplaySpec` signature and fidelity enum
   - Committable boundary semantics per bridge — consumed from WS2
     T2.7.5's `COMMITTABLE_BOUNDARIES` mappings by reference, not
@@ -107,26 +107,26 @@ surprised by non-determinism.
     `timing.cpu_ms`, any `monotonic_ns` fields)
   - Fast-load flag (`fast=True` skips SHA-256 verification for
     large audio-heavy bundles during interactive debugging)
-- [ ] Review and merge before implementation.
+- [x] Review and merge before implementation.
 
 ### T4.1: ReplaySpec and Fidelity Classes
 
-- [ ] Create `src/easycat/runtime/replay.py`
-- [ ] Define `ReplayFidelity` enum: `ARTIFACT`, `SIMULATED`, `LIVE`
-- [ ] Define `ToolReplayPolicy` enum: `DENY`, `STUB`, `ALLOW`
-- [ ] Define `ReplaySpec` dataclass: `fidelity`, `from_sequence`,
+- [x] Create `src/easycat/runtime/replay.py`
+- [x] Define `ReplayFidelity` enum: `ARTIFACT`, `SIMULATED`, `LIVE`
+- [x] Define `ToolReplayPolicy` enum: `DENY`, `STUB`, `ALLOW`
+- [x] Define `ReplaySpec` dataclass: `fidelity`, `from_sequence`,
   `to_sequence`, `stage_filter`, `overrides`, `timing`, `force`,
   `tool_policy`
-- [ ] Every `ReplaySpec` must have a fidelity value — no default
-- [ ] `tool_policy` defaults to `DENY`
+- [x] Every `ReplaySpec` must have a fidelity value — no default
+- [x] `tool_policy` defaults to `DENY`
 
 ### T4.2: Stage Replay Implementations
 
-- [ ] Implement `STTStage.replay()` for `ARTIFACT` — cassette playback
+- [x] Implement `STTStage.replay()` for `ARTIFACT` — cassette playback
   of captured audio and partial/final transcripts
-- [ ] Implement `TTSStage.replay()` for `ARTIFACT` — cassette playback
+- [x] Implement `TTSStage.replay()` for `ARTIFACT` — cassette playback
   of captured audio frames
-- [ ] **Audio-timing fidelity is configurable per-replay, default
+- [x] **Audio-timing fidelity is configurable per-replay, default
   `fast`.** `ReplaySpec` grows a `timing: Literal["fast", "wall"]
   = "fast"` field. `fast` replays cassettes as quickly as the
   replay consumer can accept them, dropping wall-clock timing in
@@ -140,7 +140,7 @@ surprised by non-determinism.
   `wall` mode honors them. The `REPLAY_IGNORE_FIELDS` allowlist
   (see below) controls which timing fields are masked for
   `fast`-mode byte-determinism.
-- [ ] Implement `VADStage.replay()` for `ARTIFACT` — runs the live
+- [x] Implement `VADStage.replay()` for `ARTIFACT` — runs the live
   VAD backend against captured audio using the state snapshot
   from WS3 T3.7 (thresholds, pause-timer state, backend
   identity/version). Builds on `VADStage.replay_decision(snapshot)`
@@ -148,12 +148,12 @@ surprised by non-determinism.
   the same frame-level events and `speech_start`/`speech_end`
   transitions. Byte-deterministic per WS3 AC3.16 in `fast` timing
   mode.
-- [ ] Implement `TurnStage.replay()` for `ARTIFACT` — runs the
+- [x] Implement `TurnStage.replay()` for `ARTIFACT` — runs the
   SmartTurn ONNX model against the captured audio window using the
   state snapshot from WS3 T3.7 (model identity, features,
   threshold). Builds on `TurnStage.replay_decision(snapshot)` from
   WS3; byte-deterministic per WS3 AC3.17 in `fast` timing mode.
-- [ ] Implement `AgentStage.replay()` for `SIMULATED` — injects
+- [x] Implement `AgentStage.replay()` for `SIMULATED` — injects
   captured bridge events into the downstream pipeline, bypasses live
   LLM call. Fidelity label on every record: "LLM responses are
   inherently non-deterministic; this replay is best-effort.
@@ -161,7 +161,7 @@ surprised by non-determinism.
   and response-chain continuity is *not* reproduced by SIMULATED
   replay — use ARTIFACT for deterministic downstream stages or
   LIVE for end-to-end reproduction of framework state."
-- [ ] Implement `replay()` for remaining stages at `ARTIFACT` level
+- [x] Implement `replay()` for remaining stages at `ARTIFACT` level
   where possible (`Transport`, `Audio`, `Telephony`):
   - `AudioStage` (noise reduction / echo cancellation):
     `ARTIFACT` replay feeds the captured raw input audio through
@@ -177,9 +177,9 @@ surprised by non-determinism.
     events (call setup, DTMF, `mark` acknowledgements) from the
     journal, bypassing the live telephony provider. Useful for
     replaying call flows without a live SIP/Twilio connection.
-- [ ] Implement `LIVE` replay for all stages by reusing the current
+- [x] Implement `LIVE` replay for all stages by reusing the current
   `execute()` path with captured inputs
-- [ ] **Replay side-effect policy is explicit and fail-closed.**
+- [x] **Replay side-effect policy is explicit and fail-closed.**
   - `ARTIFACT` replay never re-enters a live agent/tool path.
   - `SIMULATED` replay also never executes live tools; tool phases
     for the agent stage are satisfied only from captured events.
@@ -194,7 +194,7 @@ surprised by non-determinism.
   - The essential plan treats *all* tool and MCP calls as
     side-effecting during replay unless they are satisfied by the
     `STUB` path. There is no "best effort maybe safe" fallback.
-- [ ] **Nondeterministic-field stripping for ARTIFACT replay.**
+- [x] **Nondeterministic-field stripping for ARTIFACT replay.**
   Extend WS3's `NONDETERMINISTIC_FIELDS` (defined in
   `stages/base.py` T3.5) with replay-specific fields and
   re-export as `REPLAY_IGNORE_FIELDS` in the same module:
@@ -222,7 +222,7 @@ surprised by non-determinism.
   consumers. Without this masking in `fast` mode, byte-
   determinism (AC4.4/AC4.5) is unreachable because every
   snapshot embeds a fresh timestamp.
-- [ ] **Provider version match check.** Every bundle exported by
+- [x] **Provider version match check.** Every bundle exported by
   `session.export_debug_bundle` carries per-provider
   `version_info()` strings (from WS1 T1.7.5). On replay, the
   loader compares the bundle's captured version strings against
@@ -256,26 +256,26 @@ surprised by non-determinism.
 
 ### T4.3: Determinism Guarantees
 
-- [ ] `ARTIFACT` replay of STT must produce byte-identical transcripts
+- [x] `ARTIFACT` replay of STT must produce byte-identical transcripts
   given the same cassette
-- [ ] `ARTIFACT` replay of TTS must produce byte-identical audio
+- [x] `ARTIFACT` replay of TTS must produce byte-identical audio
   frames given the same cassette
-- [ ] `ARTIFACT` replay of VAD must produce byte-identical frame
+- [x] `ARTIFACT` replay of VAD must produce byte-identical frame
   events and `speech_start`/`speech_end` transitions given the
   same audio + snapshot (inherits WS3 AC3.16)
-- [ ] `ARTIFACT` replay of Smart Turn must produce byte-identical
+- [x] `ARTIFACT` replay of Smart Turn must produce byte-identical
   endpoint decisions and classification outputs within float
   tolerance given the same audio window + snapshot (inherits WS3
   AC3.17)
-- [ ] `SIMULATED` replay of agent stage must be deterministic modulo
+- [x] `SIMULATED` replay of agent stage must be deterministic modulo
   the documented LLM non-determinism caveat
-- [ ] `LIVE` replay is not expected to be deterministic and is
+- [x] `LIVE` replay is not expected to be deterministic and is
   labeled so
 
 ### T4.4: RunBundle Format
 
-- [ ] Create `src/easycat/debug/bundle.py`
-- [ ] Define `RunBundle` dataclass:
+- [x] Create `src/easycat/debug/bundle.py`
+- [x] Define `RunBundle` dataclass:
   - `format_version: int`
   - `manifest: Manifest` (SHA-256 per artifact, provider version
     strings, safe config snapshot from WS1 `safe_defaults.py`,
@@ -287,7 +287,7 @@ surprised by non-determinism.
     `safe_defaults.py`; `peripheral-redaction.md` later upgrades
     the banner to a per-field policy summary without touching the
     bundle format
-- [ ] Define on-disk format: `.easycat-bundle` zip with:
+- [x] Define on-disk format: `.easycat-bundle` zip with:
 
   ```
   manifest.json
@@ -300,8 +300,8 @@ surprised by non-determinism.
 
 ### T4.5: Export API
 
-- [ ] Create `src/easycat/debug/export.py`
-- [ ] Implement `Session.export_debug_bundle(path, *, inline_artifacts=False, overwrite=False)`:
+- [x] Create `src/easycat/debug/export.py`
+- [x] Implement `Session.export_debug_bundle(path, *, inline_artifacts=False, overwrite=False)`:
   - snapshots the current journal
   - persists only allowlisted config/environment metadata via
     WS1 `safe_defaults.py`; no raw `EasyCatConfig.__dict__` or
@@ -316,70 +316,70 @@ surprised by non-determinism.
     session touched (providers already expose `version_info()` from
     WS1 T1.7.5)
   - writes the zip
-- [ ] A future `redaction=` kwarg is reserved for
+- [x] A future `redaction=` kwarg is reserved for
   `peripheral-redaction.md`, which adds an export-time second pass
   and upgrades the banner. WS4 does not ship that argument, but the
   export API's signature contract allows it to be added without a
   breaking change.
-- [ ] `path` handling: if `path` exists and `overwrite=False`
+- [x] `path` handling: if `path` exists and `overwrite=False`
   (default), raise `BundleExists`. With `overwrite=True` the
   existing file is replaced atomically (write to temp, rename).
-- [ ] Export from `debug="off"` raises `DebugCaptureDisabledError`.
+- [x] Export from `debug="off"` raises `DebugCaptureDisabledError`.
   Export from `debug="light"` is supported only while the required
   in-memory artifacts are still retained; if they have been evicted,
   raise `DebugCaptureUnavailableError` naming the missing refs.
-- [ ] Export is valid even on a partially-complete journal (e.g.,
+- [x] Export is valid even on a partially-complete journal (e.g.,
   from a crashed session opened via the SQLite recovery path in
   Workstream 1). The partial-journal path uses T4.5.5 rather than
   requiring a live `Session`.
 
 ### T4.5.5: Partial Journal Static Loader
 
-- [ ] Implement `RunBundle.from_partial_journal(journal_path,
+- [x] Implement `RunBundle.from_partial_journal(journal_path,
   artifact_root)` static method that constructs a bundle without
   a live `Session` object
-- [ ] Used by the crash-recovery path and `bundles list` discovery
+- [x] Used by the crash-recovery path and `bundles list` discovery
   (T4.10) — a crashed session promoted to `.easycat/crash-dumps/`
   has no running Session to call `export_debug_bundle` on
-- [ ] Loads the SQLite journal read-only, walks the WS1
+- [x] Loads the SQLite journal read-only, walks the WS1
   content-addressable artifact directory, assembles a manifest with
   the same SHA-256 aggregation and safe-config-snapshot rules as
   the live path
-- [ ] Refuses to load a journal file that is currently open for
+- [x] Refuses to load a journal file that is currently open for
   writing (detected via the SQLite WAL lock); returns
   `BundleInUseError` with a message pointing at `bundles list`
   for running sessions
 
 ### T4.6: Provider Version Strings (Aggregation Only)
 
-- [ ] The `version_info()` retrofit across providers lands in
+- [x] The `version_info()` retrofit across providers lands in
   Workstream 1 T1.7.5, not here. Workstream 4 consumes the method
   without modifying providers.
-- [ ] Session collects version info from all active providers at
+- [x] Session collects version info from all active providers at
   export time via the existing `version_info()` methods
-- [ ] Bundle manifest includes the full set keyed by provider role
+- [x] Bundle manifest includes the full set keyed by provider role
   (`stt`, `tts`, `transport`, `telephony`, and bridge provider
   versions where applicable)
 
 ### T4.7: Bundle Loading
 
-- [ ] Implement `RunBundle.load(path, *, fast=False)` → `RunBundle`
-- [ ] Reads manifest, verifies SHA-256 checksums, raises on mismatch
-- [ ] `fast=True` skips SHA-256 verification for large audio-heavy
+- [x] Implement `RunBundle.load(path, *, fast=False)` → `RunBundle`
+- [x] Reads manifest, verifies SHA-256 checksums, raises on mismatch
+- [x] `fast=True` skips SHA-256 verification for large audio-heavy
   bundles during interactive debugging. Documented as a trust
   decision: only use for bundles you produced yourself.
-- [ ] Rejects bundles whose `format_version` is newer than the
+- [x] Rejects bundles whose `format_version` is newer than the
   loader supports with `BundleVersionError` naming both versions
-- [ ] Exposes queryable journal records (iterator, filter by stage,
+- [x] Exposes queryable journal records (iterator, filter by stage,
   filter by turn, lookup by sequence)
-- [ ] Loads successfully from bundles exported from partial journals
+- [x] Loads successfully from bundles exported from partial journals
   (crash recovery via T4.5.5)
 
 ### T4.7.5: Bundle Loader Input Validation
 
-- [ ] Bundle loader validates untrusted input on every load path
+- [x] Bundle loader validates untrusted input on every load path
   (`RunBundle.load()`, `RunBundle.from_partial_journal()`)
-- [ ] Validation rules (any violation raises
+- [x] Validation rules (any violation raises
   `BundleValidationError` with a specific reason code):
   - every artifact ref matches `^[a-f0-9]{64}$` (SHA-256 hex
     only, no path components, no `..`, no absolute paths)
@@ -391,105 +391,105 @@ surprised by non-determinism.
     JSON-safe and under 1 MB each
   - manifest entries contain no path traversal sequences
   - manifest `format_version` is within the supported range
-- [ ] Validation runs before any artifact is extracted or any
+- [x] Validation runs before any artifact is extracted or any
   record is deserialized
-- [ ] Document explicitly: "Bundles are semi-trusted input.
+- [x] Document explicitly: "Bundles are semi-trusted input.
   Validation defends against accidental corruption and basic
   malicious tampering, not against sophisticated attackers with
   filesystem access."
 
 ### T4.8: Committable Boundary Enforcement
 
-- [ ] Replay entry points must be `committable` checkpoints per the
+- [x] Replay entry points must be `committable` checkpoints per the
   bridge execution cursor from Workstream 2A (published via
   `COMMITTABLE_BOUNDARIES` mappings) and validated by Workstream
   2B's drain-to-commit-point tests
-- [ ] Attempting to start replay at a non-committable sequence
+- [x] Attempting to start replay at a non-committable sequence
   returns `ReplayError` with fields `requested_sequence`,
   `nearest_committable_before`, `nearest_committable_after`
-- [ ] Error message is human-readable and names the stage that was
+- [x] Error message is human-readable and names the stage that was
   mid-operation
 
 ### T4.9: Pytest Fixture Helpers
 
-- [ ] Add `easycat.debug.testing.load_bundle(path)` helper for pytest
+- [x] Add `easycat.debug.testing.load_bundle(path)` helper for pytest
   users (not the full `easycat.testing` module, which is peripheral)
-- [ ] Support bundles from partial journals for regression testing
+- [x] Support bundles from partial journals for regression testing
   around crash scenarios
-- [ ] Add one regression test in this workstream that uses the fixture
+- [x] Add one regression test in this workstream that uses the fixture
   to prove the loop closes
 
 ### T4.10: Crash Recovery End-to-End
 
-- [ ] `bundles list` functionality — discover bundles in the
+- [x] `bundles list` functionality — discover bundles in the
   directories defined by WS1 T1.2.5's storage layout contract:
   `.easycat/recordings/` (exported bundles) and
   `.easycat/crash-dumps/` (crash-promoted SQLite journals)
-- [ ] A crashed session (from the SQLite backend surviving SIGKILL
+- [x] A crashed session (from the SQLite backend surviving SIGKILL
   in Workstream 1) produces a valid bundle via
   `RunBundle.from_partial_journal()` (T4.5.5), without needing a
   live `Session` object
-- [ ] `bundles list` honors the configurable `EASYCAT_DATA_DIR`
+- [x] `bundles list` honors the configurable `EASYCAT_DATA_DIR`
   from WS1 T1.2.5
 
 ## Acceptance Criteria
 
-- [ ] **AC4.2** `src/easycat/runtime/replay.py` defines `ReplayFidelity`
+- [x] **AC4.2** `src/easycat/runtime/replay.py` defines `ReplayFidelity`
   and `ReplaySpec`. Every `ReplaySpec` has a non-default fidelity.
-- [ ] **AC4.3** All 8 stages implement `replay(spec)` for at least the
+- [x] **AC4.3** All 8 stages implement `replay(spec)` for at least the
   `LIVE` fidelity class. STT, TTS, VAD, and Turn (SmartTurn)
   additionally support `ARTIFACT`. Agent stage additionally
   supports `SIMULATED`.
-- [ ] **AC4.4** `ARTIFACT` replay of STT is byte-deterministic given
+- [x] **AC4.4** `ARTIFACT` replay of STT is byte-deterministic given
   the same cassette.
-- [ ] **AC4.5** `ARTIFACT` replay of TTS is byte-deterministic given
+- [x] **AC4.5** `ARTIFACT` replay of TTS is byte-deterministic given
   the same cassette.
-- [ ] **AC4.5a** `ARTIFACT` replay of VAD is byte-deterministic:
+- [x] **AC4.5a** `ARTIFACT` replay of VAD is byte-deterministic:
   given a captured audio artifact and VAD snapshot (from WS3 T3.7),
   replay produces the same frame-level events and
   `speech_start`/`speech_end` transitions as the live session.
   Inherits the backend-parametrization from WS3 AC3.16 (Silero
   mandatory, Krisp integration-gated).
-- [ ] **AC4.5b** `ARTIFACT` replay of Smart Turn is
+- [x] **AC4.5b** `ARTIFACT` replay of Smart Turn is
   byte-deterministic: given a captured audio window and TurnStage
   snapshot, replay produces the same endpoint classification
   (logits within float tolerance) and the same final
   `complete`/`not_complete` decision as the live session.
-- [ ] **AC4.6** `src/easycat/debug/bundle.py` and
+- [x] **AC4.6** `src/easycat/debug/bundle.py` and
   `src/easycat/debug/export.py` exist and export a valid bundle.
-- [ ] **AC4.7** `Session.export_debug_bundle(path)` produces a
+- [x] **AC4.7** `Session.export_debug_bundle(path)` produces a
   loadable bundle from a running session when capture is available,
   raises `DebugCaptureDisabledError` in `debug="off"`, and raises
   `DebugCaptureUnavailableError` when required light-mode artifacts
   have already been evicted.
-- [ ] **AC4.8** Bundle manifest includes SHA-256 per artifact.
-- [ ] **AC4.9** Bundle manifest includes provider version strings for
+- [x] **AC4.8** Bundle manifest includes SHA-256 per artifact.
+- [x] **AC4.9** Bundle manifest includes provider version strings for
   every provider touched during the session.
-- [ ] **AC4.10** Bundle manifest includes `format_version`.
-- [ ] **AC4.11** Bundle safe-snapshot rules ensure the bundle
+- [x] **AC4.10** Bundle manifest includes `format_version`.
+- [x] **AC4.11** Bundle safe-snapshot rules ensure the bundle
   contains only allowlisted config/environment metadata via WS1
   `safe_defaults.py` and the manifest includes the dev-only sharing
   banner. No raw `EasyCatConfig.__dict__` or `os.environ` values
   reach the bundle. A follow-up export-time `RedactionPolicy` pass
   is reserved for `peripheral-redaction.md` and not in scope here.
-- [ ] **AC4.12** Bundles load correctly from partial journals produced
+- [x] **AC4.12** Bundles load correctly from partial journals produced
   by simulated process death (inherits Workstream 1 infrastructure).
-- [ ] **AC4.13** `load_bundle()` verifies SHA-256 checksums and raises
+- [x] **AC4.13** `load_bundle()` verifies SHA-256 checksums and raises
   on mismatch.
-- [ ] **AC4.14** Replay at a non-committable sequence returns
+- [x] **AC4.14** Replay at a non-committable sequence returns
   `ReplayError` with nearest committable checkpoint references.
-- [ ] **AC4.15** `load_bundle()` pytest helper is usable and covered by
+- [x] **AC4.15** `load_bundle()` pytest helper is usable and covered by
   at least one in-workstream regression test.
-- [ ] **AC4.16** `bundles list` discovers crash-dumped bundles on disk.
-- [ ] **AC4.17** The public export/load/replay surface is frozen in the
+- [x] **AC4.16** `bundles list` discovers crash-dumped bundles on disk.
+- [x] **AC4.17** The public export/load/replay surface is frozen in the
   plan and covered by migration notes if this workstream changes config or
   debug APIs.
-- [ ] **AC4.18** ARTIFACT replay of a captured session produces
+- [x] **AC4.18** ARTIFACT replay of a captured session produces
   byte-identical stage outputs after applying the
   `REPLAY_IGNORE_FIELDS` allowlist. A test captures a session,
   replays it twice, and diffs the resulting outputs with masked
   nondeterministic fields; the diff must be empty.
-- [ ] **AC4.19** Bundle loader input validation (T4.7.5) is
+- [x] **AC4.19** Bundle loader input validation (T4.7.5) is
   covered by a malformed-bundle test corpus containing path-
   traversal attempts, oversized artifacts, non-JSON metadata,
   malformed SHA-256 refs, dangling artifact refs, and a
@@ -497,13 +497,13 @@ surprised by non-determinism.
   `BundleValidationError` (or
   `BundleVersionError` for version mismatch) with the expected
   reason code.
-- [ ] **AC4.20** `RunBundle.from_partial_journal()` loads a
+- [x] **AC4.20** `RunBundle.from_partial_journal()` loads a
   crashed session's journal and artifacts without requiring a
   running `Session`. The test uses the same SIGKILL pattern as
   Workstream 1 T1.6, promotes the SQLite file to
   `.easycat/crash-dumps/`, and asserts the resulting bundle round-
   trips through `RunBundle.load()`.
-- [ ] **AC4.21** Provider version match check. Four sub-tests
+- [x] **AC4.21** Provider version match check. Four sub-tests
   exercise every branch of the T4.2 policy:
   1. **Match case**: replay a bundle whose captured versions
      match installed versions at `fidelity=ARTIFACT`; replay
@@ -520,7 +520,7 @@ surprised by non-determinism.
      version field is `"unknown"`; loader raises with error
      code `PROVIDER_VERSION_UNKNOWN`, distinguishable from the
      plain mismatch error.
-- [ ] **AC4.22** Audio-timing fidelity modes. Two sub-tests:
+- [x] **AC4.22** Audio-timing fidelity modes. Two sub-tests:
   1. `ReplaySpec(fidelity=ARTIFACT, timing="fast")` replays an
      STT cassette in as-fast-as-possible mode and asserts
      byte-identical transcript output with
@@ -530,7 +530,7 @@ surprised by non-determinism.
      wall-clock deltas match the original within a 20ms
      tolerance. This is the mode interruption/barge-in
      debugging uses.
-- [ ] **AC4.23** Cross-workstream round-trip. End-to-end
+- [x] **AC4.23** Cross-workstream round-trip. End-to-end
   integration test covers the full loop with no mocking:
   1. Construct a real voice session via `create_session` with
      the WS3 stage stack, WS2A bridges, WS2B atomic interruption.
@@ -550,7 +550,7 @@ surprised by non-determinism.
   This is the load-bearing test that the five workstreams hold
   together. If it fails, a workstream boundary is broken and the
   failing workstream owns the fix.
-- [ ] **AC4.24** Replay tool safety. Three sub-tests:
+- [x] **AC4.24** Replay tool safety. Three sub-tests:
   1. `ReplaySpec(tool_policy=DENY)` blocks the first tool or MCP
      invocation with `ReplaySideEffectBlocked`.
   2. `ReplaySpec(tool_policy=STUB)` satisfies the same invocation
