@@ -136,6 +136,9 @@ class BridgeAdapterShim(BaseAgentAdapter):
                     accumulated += stream_event.text
                 elif stream_event.type == AgentStreamEventType.DONE:
                     self._last_output = stream_event.structured_output
+                    # Use DONE text as fallback for bridges that only emit done.
+                    if stream_event.text and not accumulated:
+                        accumulated = stream_event.text
                 yield stream_event
 
         # Maintain shadow history for AgentRunner compatibility.

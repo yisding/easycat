@@ -111,6 +111,7 @@ class Session:
 
     def __init__(self, config: SessionConfig | None = None) -> None:
         cfg = config or SessionConfig()
+        self._config = cfg
 
         # Providers (fall back to no-op stubs)
         self.stt = cfg.stt or NoopSTT()
@@ -1525,9 +1526,12 @@ class Session:
         if self._runtime_mode != "text_session":
             raise RuntimeError("send_text() is only available in text_session mode")
         try:
+            kwargs: dict[str, Any] = {}
+            if context is not None:
+                kwargs["context"] = context
             if hasattr(self.agent, "run_streaming"):
                 accumulated = ""
-                async for event in self.agent.run_streaming(text):
+                async for event in self.agent.run_streaming(text, **kwargs):
                     if hasattr(event, "type") and event.type == AgentStreamEventType.DONE:
                         if hasattr(event, "text") and event.text:
                             accumulated = event.text
@@ -1536,7 +1540,7 @@ class Session:
                         accumulated += event.text
                 response = accumulated
             else:
-                response = await self.agent.run(text)
+                response = await self.agent.run(text, **kwargs)
         except Exception:
             logger.exception("Agent error in text_session send_text")
             raise
