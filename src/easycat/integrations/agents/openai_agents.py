@@ -107,6 +107,8 @@ class OpenAIAgentsBridge:
 
         input_data = self._build_input(turn_input.text)
         kwargs = self._build_kwargs()
+        if self._mcp_servers and hasattr(self._agent, "mcp_servers"):
+            self._agent.mcp_servers = list(self._mcp_servers)
         result = Runner.run_streamed(self._agent, input_data, **kwargs)
 
         accumulated = ""

@@ -426,9 +426,11 @@ class SqliteJournal:
         session_id: str,
         *,
         data_dir: str | Path | None = None,
+        retention_mode: Literal["archive", "delete"] = "archive",
     ) -> None:
         root = Path(data_dir) if data_dir else Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat"))
         self._root = root
+        self._retention_mode = retention_mode
         journals_dir = root / "journals"
         journals_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = journals_dir / f"{session_id}.sqlite"
@@ -629,7 +631,7 @@ class SqliteJournal:
                 pass  # already closed
         # Run retention opportunistically — never block a turn.
         try:
-            run_retention(self._root)
+            run_retention(self._root, mode=self._retention_mode)
         except Exception:
             logger.debug("Retention sweep failed", exc_info=True)
 
@@ -786,8 +788,9 @@ class LitestreamSqliteJournal:
         *,
         data_dir: str | Path | None = None,
         replica_url: str | None = None,
+        retention_mode: Literal["archive", "delete"] = "archive",
     ) -> None:
-        self._inner = SqliteJournal(session_id, data_dir=data_dir)
+        self._inner = SqliteJournal(session_id, data_dir=data_dir, retention_mode=retention_mode)
         self._replica_url = replica_url or os.environ.get("EASYCAT_JOURNAL_LITESTREAM_REPLICA", "")
         self._sidecar: subprocess.Popen[bytes] | None = None
         self._litestream_available = False
@@ -1234,6 +1237,7 @@ def create_journal(
     capacity: int = 10_000,
     data_dir: str | None = None,
     artifact_store: InMemoryArtifactStore | None = None,
+    retention_mode: Literal["archive", "delete"] = "archive",
 ) -> InMemoryRingBuffer | SqliteJournal | LitestreamSqliteJournal | LibsqlJournal:
     """Create a journal backend based on the debug level and backend selection.
 
@@ -1252,7 +1256,11 @@ def create_journal(
     if debug == "full":
         if backend == "sqlite+litestream":
             journal: SqliteJournal | LitestreamSqliteJournal | LibsqlJournal
-            journal = LitestreamSqliteJournal(session_id, data_dir=data_dir)
+            journal = LitestreamSqliteJournal(
+                session_id,
+                data_dir=data_dir,
+                retention_mode=retention_mode,
+            )
             logger.info(
                 "Journal: session=%s backend=%s path=%s",
                 session_id,
@@ -1276,7 +1284,7 @@ def create_journal(
                     "libsql_experimental SDK not installed; falling back to SqliteJournal"
                 )
 
-        journal = SqliteJournal(session_id, data_dir=data_dir)
+        journal = SqliteJournal(session_id, data_dir=data_dir, retention_mode=retention_mode)
         logger.info(
             "Journal: session=%s backend=%s path=%s",
             session_id,

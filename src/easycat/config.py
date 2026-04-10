@@ -309,6 +309,7 @@ def create_session(config: EasyCatConfig) -> Session:
             artifact_store=(
                 artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
             ),
+            retention_mode=config.journal_retention,
         )
         if config.debug != "off"
         else None
@@ -419,6 +420,7 @@ def create_text_session(
     session_id: str | None = None,
     debug: Literal["off", "light", "full"] = "light",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
+    journal_retention: Literal["archive", "delete"] = "archive",
     wrap_agent: bool = True,
     agent_runner: AgentRunnerConfig | None = None,
 ) -> Session:
@@ -442,6 +444,7 @@ def create_text_session(
             artifact_store=(
                 artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
             ),
+            retention_mode=journal_retention,
         )
         if debug != "off"
         else None
