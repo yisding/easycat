@@ -496,6 +496,10 @@ class Session:
 
     async def start(self) -> None:
         """Initialize providers and begin the audio receive loop."""
+        if self._runtime_mode == "text_session":
+            raise RuntimeError(
+                "start() is not supported for text sessions. Use send_text() instead."
+            )
         if self._is_running:
             return
         transport_connected = False
@@ -597,10 +601,9 @@ class Session:
                 pass
         await self.transport.disconnect()
         await self._turn_manager.shutdown()
-        if self._artifact_store:
-            self._artifact_store.close()
-        if self._journal:
-            self._journal.close()
+        # NOTE: journal and artifact store are intentionally kept open so
+        # callers can inspect / export debug data after stop().  They are
+        # released in shutdown() or close().
         self._turn = None
 
     async def shutdown(self) -> None:

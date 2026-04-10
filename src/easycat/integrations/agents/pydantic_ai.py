@@ -440,14 +440,17 @@ class PydanticAIBridge:
             run_history = getattr(graph_run, "history", None)
             if run_history is not None:
                 try:
-                    json.dumps(
+                    serialized = json.dumps(
                         [
                             {"node": type(n).__name__, "index": i}
                             for i, n in enumerate(run_history)
                         ],
                         default=str,
                     )
-                    recorder.record_state_snapshot(ref=f"graph-history-{uuid4().hex[:8]}")
+                    recorder.record_state_snapshot(
+                        ref=f"graph-history-{uuid4().hex[:8]}",
+                        payload=serialized.encode("utf-8"),
+                    )
                 except (TypeError, ValueError):
                     logger.debug("Failed to serialize graph run history")
 
