@@ -1,33 +1,21 @@
 """Base class for agent framework adapters.
 
-Deprecated: use easycat.integrations.agents bridges instead.
-
 Provides shared infrastructure so that adapters for different agent
 frameworks (PydanticAI, OpenAI Agents SDK, etc.) have a consistent
 interface and don't duplicate boilerplate.
 
 Subclasses must implement :meth:`run` and :meth:`run_streaming`.
 """
-# ruff: noqa: E402
 
 from __future__ import annotations
-
-import warnings
-
-warnings.warn(
-    "easycat.agents.base is deprecated. Use easycat.integrations.agents bridges instead. "
-    "See docs/migration-debug-first-runtime.md for migration details.",
-    DeprecationWarning,
-    stacklevel=2,
-)
 
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, Literal
 
-from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._legacy_types import AgentStreamEvent, AgentStreamEventType
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +27,11 @@ def serialize_output(output: Any) -> str:
     Prefers JSON serialization for structured types so the result is valid
     JSON rather than a Python repr.
 
-    - ``str`` → returned as-is
-    - Pydantic v2 model (has ``model_dump_json``) → JSON string
-    - Pydantic v1 model (has ``json`` method) → JSON string
-    - ``dict`` / ``list`` → ``json.dumps``
-    - anything else → ``str()``
+    - ``str`` -> returned as-is
+    - Pydantic v2 model (has ``model_dump_json``) -> JSON string
+    - Pydantic v1 model (has ``json`` method) -> JSON string
+    - ``dict`` / ``list`` -> ``json.dumps``
+    - anything else -> ``str()``
     """
     if isinstance(output, str):
         return output
@@ -53,7 +41,7 @@ def serialize_output(output: Any) -> str:
     # Pydantic v1
     if hasattr(output, "json") and callable(output.json):
         return output.json()
-    # dict / list → JSON
+    # dict / list -> JSON
     if isinstance(output, (dict, list)):
         return json.dumps(output, default=str)
     return str(output)
@@ -221,9 +209,9 @@ class BaseAgentAdapter:
             The portion of the assistant's response that was approximately
             delivered to the user before the interruption.
         mode:
-            ``"truncate"`` (default) — replace the last assistant message
+            ``"truncate"`` (default) -- replace the last assistant message
             with ``text_spoken + "..."`` so the model sees what was heard.
-            ``"message"`` — append an explicit system/developer message
+            ``"message"`` -- append an explicit system/developer message
             noting the interruption (requires model support for interleaved
             system messages).
 
@@ -267,4 +255,4 @@ class BaseAgentAdapter:
         Yields ``AgentStreamEvent`` objects (TEXT_DELTA, TOOL_*, DONE).
         """
         raise NotImplementedError
-        yield  # pragma: no cover – makes this a valid async generator
+        yield  # pragma: no cover -- makes this a valid async generator

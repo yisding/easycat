@@ -1,16 +1,35 @@
-"""Tests for the SqliteJournal backend."""
+"""Tests for the SqliteJournal backend and adapter backends."""
 
 from __future__ import annotations
 
+import os
+import shutil
 import sqlite3
+from unittest import mock
 
 import pytest
 
-from easycat.runtime.journal import SqliteJournal, run_retention
+from easycat.runtime.journal import (
+    LitestreamSqliteJournal,
+    SqliteJournal,
+    create_journal,
+    run_retention,
+)
 from easycat.runtime.records import (
     ErrorInfo,
     JournalRecordKind,
 )
+from easycat.runtime.safe_defaults import safe_env_snapshot
+
+
+def _libsql_available() -> bool:
+    """Check if the libsql_experimental SDK is importable."""
+    try:
+        import libsql_experimental  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
 
 
 @pytest.fixture
@@ -359,3 +378,189 @@ class TestSqliteHotPathBehavior:
             f"Expected zero fsync/fdatasync on hot path, got {fsync_calls}.\n"
             f"strace output:\n{stderr}"
         )
+
+
+# ── Litestream adapter tests ────────────────────────────────────
+
+
+class TestLitestreamSqliteJournal:
+    def test_fallback_when_binary_missing(self, tmp_path):
+        """When litestream is not on PATH, adapter degrades to plain SqliteJournal."""
+        with mock.patch("easycat.runtime.journal.shutil.which", return_value=None):
+            j = LitestreamSqliteJournal(
+                "test-ls-fallback",
+                data_dir=tmp_path,
+                replica_url="file:///tmp/replica",
+            )
+        # Should behave as a working journal (backed by SqliteJournal).
+        seq = j.append(
+            kind=JournalRecordKind.EVENT,
+            name="ev1",
+            session_id="test-ls-fallback",
+            data={"x": 1},
+        )
+        assert seq == 1
+        records = j.read()
+        assert len(records) == 1
+        assert records[0].name == "ev1"
+        assert not j.degraded
+        # Sidecar should not have been started.
+        assert j._sidecar is None
+        assert not j._litestream_available
+        j.close()
+
+    def test_no_replica_url_degrades(self, tmp_path):
+        """Without a replica URL configured, adapter still functions."""
+        j = LitestreamSqliteJournal(
+            "test-ls-no-url",
+            data_dir=tmp_path,
+            replica_url="",
+        )
+        seq = j.append(
+            kind=JournalRecordKind.EVENT,
+            name="ev",
+            session_id="test-ls-no-url",
+        )
+        assert seq == 1
+        assert j._sidecar is None
+        j.close()
+
+    def test_factory_creates_litestream_adapter(self, tmp_path):
+        """create_journal with backend='sqlite+litestream' returns the adapter."""
+        with mock.patch("easycat.runtime.journal.shutil.which", return_value=None):
+            j = create_journal(
+                "test-factory-ls",
+                debug="full",
+                backend="sqlite+litestream",
+                data_dir=str(tmp_path),
+            )
+        assert isinstance(j, LitestreamSqliteJournal)
+        j.close()
+
+    @pytest.mark.integration
+    @pytest.mark.skipif(
+        shutil.which("litestream") is None,
+        reason="litestream binary not on PATH",
+    )
+    def test_litestream_sqlite_adapter_round_trip(self, tmp_path):
+        """Integration: write records with litestream replicating to a file target."""
+        replica_dir = tmp_path / "replica"
+        replica_dir.mkdir()
+        replica_url = f"file://{replica_dir}"
+
+        j = LitestreamSqliteJournal(
+            "test-ls-rt",
+            data_dir=tmp_path,
+            replica_url=replica_url,
+        )
+        assert j._litestream_available
+        assert j._sidecar is not None
+
+        for i in range(10):
+            j.append(
+                kind=JournalRecordKind.EVENT,
+                name=f"event_{i}",
+                session_id="test-ls-rt",
+                data={"i": i},
+            )
+        j.flush()
+
+        # Give litestream a moment to replicate, then close.
+        import time
+
+        time.sleep(2)
+        j.close()
+
+        # Restore from replica.
+        import subprocess
+
+        restore_path = tmp_path / "restored.sqlite"
+        subprocess.run(
+            ["litestream", "restore", "-o", str(restore_path), replica_url],
+            check=True,
+            timeout=10,
+        )
+        assert restore_path.exists()
+
+        conn = sqlite3.connect(str(restore_path))
+        count = conn.execute("SELECT COUNT(*) FROM journal").fetchone()[0]
+        conn.close()
+        assert count >= 1, f"Expected records in restored DB, got {count}"
+
+
+# ── libSQL adapter tests ────────────────────────────────────────
+
+
+class TestLibsqlJournal:
+    def test_fallback_when_sdk_missing(self, tmp_path):
+        """When libsql_experimental is not installed, factory falls back to SQLite."""
+        with mock.patch.dict("sys.modules", {"libsql_experimental": None}):
+            j = create_journal(
+                "test-libsql-fallback",
+                debug="full",
+                backend="libsql",
+                data_dir=str(tmp_path),
+            )
+        # Should fall back to SqliteJournal, not LibsqlJournal.
+        assert isinstance(j, SqliteJournal)
+        j.close()
+
+    @pytest.mark.integration
+    @pytest.mark.skipif(
+        not _libsql_available(),
+        reason="libsql_experimental SDK not installed",
+    )
+    def test_libsql_adapter_round_trip(self, tmp_path):
+        """Integration: round-trip through LibsqlJournal (local-only, no remote)."""
+        from easycat.runtime.journal import LibsqlJournal
+
+        j = LibsqlJournal("test-libsql-rt", data_dir=tmp_path)
+        for i in range(5):
+            j.append(
+                kind=JournalRecordKind.EVENT,
+                name=f"event_{i}",
+                session_id="test-libsql-rt",
+                data={"i": i},
+            )
+        records = j.read()
+        assert len(records) == 5
+        assert records[0].name == "event_0"
+        assert records[4].data == {"i": 4}
+        j.close()
+
+
+# ── AC1.18: Credential redaction tests ──────────────────────────
+
+
+class TestCredentialRedaction:
+    def test_journal_adapter_credentials_redacted(self):
+        """Synthetic secrets must not appear in the safe env snapshot.
+
+        Non-secret adapter vars (EASYCAT_JOURNAL_LITESTREAM_REPLICA,
+        EASYCAT_LIBSQL_URL) should appear if they are in the allowlist.
+        Secret vars (AWS_SECRET_ACCESS_KEY, EASYCAT_LIBSQL_AUTH_TOKEN)
+        must never appear.
+        """
+        env_overrides = {
+            "EASYCAT_JOURNAL_LITESTREAM_REPLICA": "s3://bucket/path",
+            "AWS_SECRET_ACCESS_KEY": "synthetic-aws-key",
+            "EASYCAT_LIBSQL_URL": "libsql://org.turso.io",
+            "EASYCAT_LIBSQL_AUTH_TOKEN": "synthetic-libsql-token",
+        }
+        with mock.patch.dict(os.environ, env_overrides, clear=False):
+            snapshot = safe_env_snapshot()
+
+        # Non-secret allowlisted vars should be present.
+        assert "EASYCAT_JOURNAL_LITESTREAM_REPLICA" in snapshot
+        assert snapshot["EASYCAT_JOURNAL_LITESTREAM_REPLICA"] == "s3://bucket/path"
+        assert "EASYCAT_LIBSQL_URL" in snapshot
+        assert snapshot["EASYCAT_LIBSQL_URL"] == "libsql://org.turso.io"
+
+        # Secret vars must NOT appear.
+        assert "AWS_SECRET_ACCESS_KEY" not in snapshot
+        assert "EASYCAT_LIBSQL_AUTH_TOKEN" not in snapshot
+
+        # Ensure the synthetic secret values don't leak anywhere in the snapshot.
+        all_values = " ".join(snapshot.values())
+        assert "synthetic-aws-key" not in all_values
+        assert "synthetic-libsql-token" not in all_values

@@ -7,11 +7,6 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from easycat.agent_runner import (
-    AgentRunner,
-    AgentStreamEvent,
-    AgentStreamEventType,
-)
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -35,6 +30,11 @@ from easycat.events import (
     TurnStarted,
     VADStartSpeaking,
     VADStopSpeaking,
+)
+from easycat.integrations.agents._agent_runner import AgentRunner
+from easycat.integrations.agents._legacy_types import (
+    AgentStreamEvent,
+    AgentStreamEventType,
 )
 from easycat.session._interruption import (
     _all_tts_audio_delivered,
@@ -1179,12 +1179,6 @@ async def test_session_with_agent_runner_streaming():
     # Verify AgentRunner recorded history
     assert len(runner.history) == 2
     assert runner.history[0]["content"] == "hello"
-
-    # Verify tracing spans were created
-    assert len(runner.spans) > 0
-    span_names = [s.name for s in runner.spans]
-    assert "stt_to_agent" in span_names
-    assert "agent_execution" in span_names
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,19 @@
 Public exports for bridge construction and protocol types.
 """
 
+from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
+from easycat.integrations.agents._base_adapter import (
+    BaseAgentAdapter,
+    serialize_output,
+    split_replacement_by_original_parts,
+)
+from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents._legacy_types import (
+    INTERRUPTION_NOTE,
+    AgentStreamEvent,
+    AgentStreamEventType,
+    StreamingAgent,
+)
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -30,7 +43,12 @@ from easycat.integrations.agents.responses_api import ResponsesAPIBridge
 __all__ = [
     "AgentBridgeEvent",
     "AgentRecorder",
+    "AgentRunner",
+    "AgentRunnerConfig",
+    "AgentStreamEvent",
+    "AgentStreamEventType",
     "AgentTurnInput",
+    "BaseAgentAdapter",
     "BridgeConfigurationError",
     "BridgeInputError",
     "CancellationMode",
@@ -40,13 +58,18 @@ __all__ = [
     "ExternalAgentBridge",
     "FrameworkStateSnapshot",
     "GenericWorkflowBridge",
+    "INTERRUPTION_NOTE",
     "InterruptionPlan",
     "MutationInjectedError",
     "OpenAIAgentsBridge",
     "PydanticAIBridge",
     "RecorderContext",
-    "ResponsesAPIBridge",
     "RecorderInvariantError",
+    "ResponsesAPIBridge",
     "ShallowModeInterruptionError",
+    "StreamingAgent",
     "UnitKind",
+    "auto_adapt_agent",
+    "serialize_output",
+    "split_replacement_by_original_parts",
 ]

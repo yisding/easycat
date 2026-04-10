@@ -14,9 +14,9 @@ from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
-from easycat.agents.base import BaseAgentAdapter
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._base_adapter import BaseAgentAdapter
+from easycat.integrations.agents._legacy_types import AgentStreamEvent, AgentStreamEventType
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,

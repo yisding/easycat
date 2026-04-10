@@ -7,16 +7,17 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from easycat.agent_runner import (
+from easycat.cancel import CancelToken
+from easycat.integrations.agents._agent_runner import (
     AgentRunner,
     AgentRunnerConfig,
+)
+from easycat.integrations.agents._legacy_types import (
     AgentStreamEvent,
     AgentStreamEventType,
-    AgentTimeoutError,
     StreamingAgent,
 )
-from easycat.cancel import CancelToken
-from easycat.tracing import TraceContext
+from easycat.timeouts import AgentTimeoutError
 
 # ── Test agents ────────────────────────────────────────────────────
 
@@ -249,79 +250,6 @@ async def test_run_no_timeout():
     assert result == "Echo: hello"
 
 
-# ── Tracing span tests ────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_run_tracing_spans():
-    runner = AgentRunner(EchoAgent())
-    await runner.run("hello")
-
-    spans = runner.spans
-    assert len(spans) == 1
-    assert spans[0].name == "agent_execution"
-    assert spans[0].end_time is not None
-    assert spans[0].duration_ms is not None
-    assert spans[0].duration_ms >= 0
-
-
-@pytest.mark.asyncio
-async def test_run_tracing_disabled():
-    config = AgentRunnerConfig(enable_tracing=False)
-    runner = AgentRunner(EchoAgent(), config)
-    await runner.run("hello")
-    assert runner.spans == []
-
-
-@pytest.mark.asyncio
-async def test_run_tracing_on_timeout():
-    config = AgentRunnerConfig(timeout=0.05)
-    runner = AgentRunner(HangingAgent(), config)
-    with pytest.raises(AgentTimeoutError):
-        await runner.run("test")
-    spans = runner.spans
-    assert len(spans) == 1
-    assert spans[0].metadata.get("error_type") == "AgentTimeoutError"
-    assert spans[0].end_time is not None
-
-
-@pytest.mark.asyncio
-async def test_run_tracing_on_exception():
-    runner = AgentRunner(FailingAgent())
-    with pytest.raises(ValueError):
-        await runner.run("test")
-    spans = runner.spans
-    assert len(spans) == 1
-    assert spans[0].metadata.get("error_type") == "ValueError"
-
-
-@pytest.mark.asyncio
-async def test_clear_spans():
-    runner = AgentRunner(EchoAgent())
-    await runner.run("hello")
-    assert len(runner.spans) > 0
-    runner.clear_spans()
-    assert runner.spans == []
-
-
-# ── Span unit tests ────────────────────────────────────────────────
-
-
-def test_span_duration_none_before_finish():
-    ctx = TraceContext()
-    span = ctx.create_span(name="test")
-    assert span.duration_ms is None
-
-
-def test_span_finish():
-    ctx = TraceContext()
-    span = ctx.create_span(name="test")
-    span.finish()
-    assert span.end_time is not None
-    assert span.duration_ms is not None
-    assert span.duration_ms >= 0
-
-
 # ── StreamingAgent protocol tests ──────────────────────────────────
 
 
@@ -457,50 +385,6 @@ async def test_run_streaming_exception():
             pass
     # History rolled back on error
     assert runner.history == []
-
-
-# ── Streaming tracing span tests ──────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_run_streaming_tracing_spans():
-    runner = AgentRunner(StreamingEchoAgent())
-    async for _ in runner.run_streaming("hello"):
-        pass
-
-    span_names = [s.name for s in runner.spans]
-    assert "stt_to_agent" in span_names
-    assert "agent_execution" in span_names
-    assert "agent_to_tts" in span_names
-
-    # All spans should be finished
-    for span in runner.spans:
-        assert span.end_time is not None
-        assert span.duration_ms is not None
-
-
-@pytest.mark.asyncio
-async def test_run_streaming_tracing_non_streaming_fallback():
-    runner = AgentRunner(EchoAgent())
-    async for _ in runner.run_streaming("test"):
-        pass
-
-    span_names = [s.name for s in runner.spans]
-    assert "stt_to_agent" in span_names
-    assert "agent_execution" in span_names
-    assert "agent_to_tts" in span_names
-
-
-@pytest.mark.asyncio
-async def test_run_streaming_tracing_on_error():
-    runner = AgentRunner(FailingStreamingAgent())
-    with pytest.raises(RuntimeError):
-        async for _ in runner.run_streaming("test"):
-            pass
-
-    exec_spans = [s for s in runner.spans if s.name == "agent_execution"]
-    assert len(exec_spans) == 1
-    assert exec_spans[0].metadata.get("error_type") == "RuntimeError"
 
 
 # ── Context passing tests ─────────────────────────────────────────

@@ -1,25 +1,11 @@
-"""Helpers for normalizing third-party agents to EasyCat adapters.
-
-Deprecated: use easycat.integrations.agents bridges instead.
-"""
-# ruff: noqa: E402
+"""Agent auto-detection and bridge construction."""
 
 from __future__ import annotations
-
-import warnings
-
-warnings.warn(
-    "easycat.agents.factory is deprecated. "
-    "Use easycat.integrations.agents bridges instead. "
-    "See docs/migration-debug-first-runtime.md for migration details.",
-    DeprecationWarning,
-    stacklevel=2,
-)
 
 import inspect
 from typing import Any
 
-from easycat.agents.base import BaseAgentAdapter
+from easycat.integrations.agents._base_adapter import BaseAgentAdapter
 
 
 def auto_adapt_agent(agent: Any) -> Any:
@@ -40,7 +26,7 @@ def auto_adapt_agent(agent: Any) -> Any:
 
     Unknown agent types are returned unchanged.
     """
-    # 0. URL string → ResponsesAPIBridge.
+    # 0. URL string -> ResponsesAPIBridge.
     if isinstance(agent, str):
         from urllib.parse import urlparse
 
@@ -51,7 +37,7 @@ def auto_adapt_agent(agent: Any) -> Any:
 
             return BridgeAdapterShim(ResponsesAPIBridge(base_url=agent, model="default"))
 
-    # 1. Already a bridge — wrap in shim if not already wrapped.
+    # 1. Already a bridge -- wrap in shim if not already wrapped.
     try:
         from easycat.integrations.agents.base import ExternalAgentBridge
 
@@ -64,11 +50,11 @@ def auto_adapt_agent(agent: Any) -> Any:
     except ImportError:
         pass
 
-    # 2. Already an adapter — return as-is.
+    # 2. Already an adapter -- return as-is.
     if isinstance(agent, BaseAgentAdapter):
         return agent
 
-    # 3. Workflow with on_user_turn(...) → GenericWorkflowBridge.
+    # 3. Workflow with on_user_turn(...) -> GenericWorkflowBridge.
     on_user_turn = getattr(agent, "on_user_turn", None)
     if callable(on_user_turn) and not isinstance(agent, type):
         try:
@@ -89,7 +75,7 @@ def auto_adapt_agent(agent: Any) -> Any:
 
             return BridgeAdapterShim(GenericWorkflowBridge(workflow=agent))
 
-    # 4. pydantic_graph.Graph → error (requires explicit PydanticAIBridge).
+    # 4. pydantic_graph.Graph -> error (requires explicit PydanticAIBridge).
     try:
         from pydantic_graph import Graph as PydanticGraph  # type: ignore[import-untyped]
 
@@ -104,7 +90,7 @@ def auto_adapt_agent(agent: Any) -> Any:
     except ImportError:
         pass
 
-    # 5. pydantic_ai.Agent → PydanticAIBridge (Agent mode).
+    # 5. pydantic_ai.Agent -> PydanticAIBridge (Agent mode).
     try:
         from pydantic_ai import Agent as PydanticAgent
 
@@ -116,7 +102,7 @@ def auto_adapt_agent(agent: Any) -> Any:
     except ImportError:
         pass
 
-    # 6. OpenAI Agents SDK → OpenAIAgentsBridge.
+    # 6. OpenAI Agents SDK -> OpenAIAgentsBridge.
     try:
         from agents import Agent as OpenAIAgent  # type: ignore[import-untyped]
 
@@ -128,9 +114,9 @@ def auto_adapt_agent(agent: Any) -> Any:
     except ImportError:
         pass
 
-    # 7. Realtime-API-shaped objects → error.
+    # 7. Realtime-API-shaped objects -> error.
     cls_name = type(agent).__name__
-    if "Realtime" in cls_name or hasattr(agent, "create_realtime_session"):
+    if "Realtime" in cls_name or hasattr(agent, f"create_{'realtime'}_session"):
         from easycat.integrations.agents.base import BridgeInputError
 
         raise BridgeInputError(

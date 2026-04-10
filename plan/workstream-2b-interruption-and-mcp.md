@@ -222,7 +222,7 @@ bridge design is wrong and must be fixed before moving on.
 - [x] `GenericWorkflowBridge` shallow mode's `apply_interruption`
   continues to raise `ShallowModeInterruptionError` at the
   bridge boundary (shipped in WS2A T2.5).
-- [ ] `InterruptionController` (WS3 T3.2) catches the exception
+- [x] `InterruptionController` (WS3 T3.2) catches the exception
   and downgrades the turn:
   - emits a `ControlSignalRecord(signal_kind="interrupt",
     cause="shallow_mode_downgrade",
@@ -238,7 +238,7 @@ bridge design is wrong and must be fixed before moving on.
   delegates to the workflow's method via the same four-step
   atomic write ordering as deep mode (with the workflow's
   method playing the role of `_apply_planned_mutation`).
-- [ ] Document the downgrade prominently in the
+- [x] Document the downgrade prominently in the
   `GenericWorkflowBridge` README, in `easycat doctor` output,
   and in the CLI warning when a shallow workflow is detected
   alongside a voice transport.

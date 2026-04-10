@@ -29,11 +29,12 @@ import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
+from agents import Agent  # type: ignore[import-untyped]
+
 from easycat import (
     EasyCatConfig,
     WebSocketTransportConfig,
     attach_runtime_feedback,
-    build_openai_agents_adapter,
     create_session,
     default_event_logging,
     require_env,
@@ -61,14 +62,15 @@ def _run_http_server() -> None:
 
 async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
-    adapter = build_openai_agents_adapter(
-        instructions="You are a helpful voice assistant. Keep responses concise."
+    agent = Agent(
+        name="assistant",
+        instructions="You are a helpful voice assistant. Keep responses concise.",
     )
 
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=WebSocketTransportConfig(port=WS_PORT),
-        agent=adapter,
+        agent=agent,
         event_logging=default_event_logging(),
     )
     session = create_session(config)

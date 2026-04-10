@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from easycat.agents.base import BaseAgentAdapter, serialize_output
+from easycat.integrations.agents._base_adapter import BaseAgentAdapter, serialize_output
 
 
 class ConcreteAdapter(BaseAgentAdapter):
@@ -57,26 +57,6 @@ async def test_run_streaming_not_implemented():
     with pytest.raises(NotImplementedError):
         async for _ in adapter.run_streaming("test"):
             pass
-
-
-# ── Both adapters inherit from base ──────────────────────────────
-
-
-def test_pydantic_adapter_inherits_from_base():
-    from easycat.agents.pydantic_ai import PydanticAIAdapter
-
-    class FakeAgent:
-        pass
-
-    adapter = PydanticAIAdapter(FakeAgent())
-    assert isinstance(adapter, BaseAgentAdapter)
-
-
-def test_openai_adapter_inherits_from_base():
-    from easycat.agents.openai_agents import OpenAIAgentsAdapter
-
-    adapter = OpenAIAgentsAdapter(object())
-    assert isinstance(adapter, BaseAgentAdapter)
 
 
 # ── serialize_output tests ───────────────────────────────────────
@@ -147,29 +127,11 @@ class TestOutputType:
         adapter = BaseAgentAdapter()
         assert adapter.output_type is None
 
-    def test_agent_without_output_type(self):
+    def test_always_returns_none_for_stub(self):
+        """After legacy removal, output_type is always None on the stub."""
         adapter = ConcreteAdapter()
         adapter._agent = object()
         assert adapter.output_type is None
-
-    def test_agent_with_str_output_type(self):
-        class StrAgent:
-            output_type = str
-
-        adapter = ConcreteAdapter()
-        adapter._agent = StrAgent()
-        assert adapter.output_type is None
-
-    def test_agent_with_custom_output_type(self):
-        class MyModel:
-            pass
-
-        class StructuredAgent:
-            output_type = MyModel
-
-        adapter = ConcreteAdapter()
-        adapter._agent = StructuredAgent()
-        assert adapter.output_type is MyModel
 
 
 # ── last_output property tests ───────────────────────────────────
@@ -188,13 +150,10 @@ class TestDoneStructuredOutput:
         value = {"ok": True}
         assert adapter.done_structured_output(value) == value
 
-    def test_string_with_structured_output_type_is_preserved(self):
-        class StructuredAgent:
-            output_type = dict
-
+    def test_string_without_output_type_returns_none(self):
+        """With stub adapter, output_type is always None, so string returns None."""
         adapter = ConcreteAdapter()
-        adapter._agent = StructuredAgent()
-        assert adapter.done_structured_output("raw") == "raw"
+        assert adapter.done_structured_output("raw") is None
 
 
 class TestLastOutput:

@@ -15,6 +15,7 @@ import asyncio
 import signal
 
 import websockets
+from agents import Agent  # type: ignore[import-untyped]
 from websockets.asyncio.server import ServerConnection
 
 from easycat import (
@@ -22,7 +23,6 @@ from easycat import (
     SessionManager,
     WebSocketConnectionTransport,
     attach_runtime_feedback,
-    build_openai_agents_adapter,
     create_session,
     default_event_logging,
     require_env,
@@ -36,12 +36,12 @@ async def main() -> None:
     async def handle_connection(ws: ServerConnection) -> None:
         transport = WebSocketConnectionTransport(ws)
 
-        adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
+        agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
         session = create_session(
             EasyCatConfig(
                 openai_api_key=api_key,
                 transport=transport,
-                agent=adapter,
+                agent=agent,
                 event_logging=default_event_logging(),
             )
         )

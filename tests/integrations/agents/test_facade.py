@@ -6,9 +6,9 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from easycat.agents.factory import auto_adapt_agent
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,

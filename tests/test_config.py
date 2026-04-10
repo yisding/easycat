@@ -5,11 +5,10 @@ import logging
 import pytest
 
 from easycat import EasyCatConfig, create_session
-from easycat.agent_runner import AgentRunner
-from easycat.agents import OpenAIAgentsAdapter, PydanticAIAdapter
-from easycat.config import EventLoggingConfig, MetricsConfig, TelephonyConfig
+from easycat.config import TelephonyConfig
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.events import DTMFAggregated
+from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.smart_turn import SmartTurnConfig
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.openai_provider import OpenAISTTConfig
@@ -85,6 +84,8 @@ def test_easycat_config_wraps_agent():
 
 def test_create_session_auto_adapts_openai_agents():
     agents_mod = pytest.importorskip("agents")
+    from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+    from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
     raw = agents_mod.Agent(name="test", instructions="hi")
     config = EasyCatConfig(openai_api_key="test-key", agent=raw)
@@ -96,11 +97,14 @@ def test_create_session_auto_adapts_openai_agents():
         raise
 
     assert isinstance(session.agent, AgentRunner)
-    assert isinstance(session.agent._agent, OpenAIAgentsAdapter)
+    assert isinstance(session.agent._agent, BridgeAdapterShim)
+    assert isinstance(session.agent._agent.bridge, OpenAIAgentsBridge)
 
 
 def test_create_session_auto_adapts_pydantic_agents():
     pydantic_ai_mod = pytest.importorskip("pydantic_ai")
+    from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+    from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
     raw = pydantic_ai_mod.Agent("openai:gpt-4o-mini")
     config = EasyCatConfig(openai_api_key="test-key", agent=raw)
@@ -112,7 +116,8 @@ def test_create_session_auto_adapts_pydantic_agents():
         raise
 
     assert isinstance(session.agent, AgentRunner)
-    assert isinstance(session.agent._agent, PydanticAIAdapter)
+    assert isinstance(session.agent._agent, BridgeAdapterShim)
+    assert isinstance(session.agent._agent.bridge, PydanticAIBridge)
 
 
 def test_create_session_does_not_mutate_turn_taking_config():
@@ -166,25 +171,6 @@ async def test_telephony_helpers_are_managed_by_session_lifecycle():
     await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "1"}}, bus)
     await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "#"}}, bus)
     assert not aggregated
-
-
-def test_create_session_adds_event_trace_logger_when_enabled():
-    config = EasyCatConfig(
-        openai_api_key="test-key",
-        event_logging=EventLoggingConfig(enabled=True),
-        agent=_DummyAgent(),
-    )
-
-    try:
-        session = create_session(config)
-    except RuntimeError as exc:
-        if "No VAD backend available" in str(exc):
-            pytest.skip("No VAD backend available")
-        raise
-
-    assert any(
-        type(helper).__name__ == "EventTraceLogger" for helper in session._telephony_helpers
-    )
 
 
 def test_create_session_adds_twilio_action_executor_when_configured():
@@ -365,33 +351,6 @@ def test_create_session_keeps_vad_enabled_for_flux_when_voicemail_detector_enabl
 # ── debug mode tests ──────────────────────────────────────────────────
 
 
-def test_debug_mode_enables_event_logging_with_partials():
-    config = EasyCatConfig(openai_api_key="test-key", debug=True)
-    assert config.event_logging.enabled is True
-    assert config.event_logging.include_partials is True
-    assert config.event_logging.level == logging.DEBUG
-
-
-def test_debug_mode_enables_metrics():
-    config = EasyCatConfig(openai_api_key="test-key", debug=True)
-    assert config.metrics is not None
-    assert config.metrics.enabled is True
-
-
 def test_debug_mode_sets_easycat_logger_to_debug():
     EasyCatConfig(openai_api_key="test-key", debug=True)
     assert logging.getLogger("easycat").level == logging.DEBUG
-
-
-def test_debug_mode_does_not_override_explicit_metrics():
-    explicit = MetricsConfig(enabled=False)
-    config = EasyCatConfig(openai_api_key="test-key", debug=True, metrics=explicit)
-    assert config.metrics is explicit
-    assert config.metrics.enabled is False
-
-
-def test_debug_false_does_not_change_defaults():
-    config = EasyCatConfig(openai_api_key="test-key", debug=False)
-    assert config.event_logging.include_partials is False
-    assert config.event_logging.level == logging.INFO
-    assert config.metrics is None

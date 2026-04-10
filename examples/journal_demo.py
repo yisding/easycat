@@ -13,7 +13,6 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.event_logging import EventLoggingConfig, EventTraceLogger
 from easycat.events import (
     Event,
     STTEvent,
@@ -23,11 +22,9 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.metrics import InMemoryMetrics
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
-from easycat.tracing import Tracer
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
 
@@ -116,10 +113,8 @@ class StubNoiseReducer:
 
 
 async def main() -> None:
-    # Create journal and observability stack.
+    # Create journal — the single source of truth for all observability.
     journal = InMemoryRingBuffer(capacity=10_000)
-    tracer = Tracer()
-    metrics = InMemoryMetrics(journal=journal)
 
     config = SessionConfig(
         transport=StubTransport(),
@@ -130,14 +125,8 @@ async def main() -> None:
         noise_reducer=StubNoiseReducer(),
         turn_manager_config=TurnManagerConfig(end_of_turn_silence_ms=1),
         journal=journal,
-        tracer=tracer,
-        metrics=metrics,
     )
     session = Session(config)
-
-    # Wire EventTraceLogger for event → journal dual-write.
-    etl = EventTraceLogger(session.event_bus, EventLoggingConfig(enabled=True), journal=journal)
-    session._telephony_helpers.append(etl)
 
     # Run one turn.
     print("Starting session...")

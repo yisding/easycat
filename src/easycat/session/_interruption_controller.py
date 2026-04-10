@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from easycat.integrations.agents.base import ShallowModeInterruptionError
 from easycat.runtime.records import JournalRecordKind
 
 logger = logging.getLogger(__name__)
@@ -66,8 +67,21 @@ class InterruptionController:
                     delivered_text=delivered_text,
                     mode=effective_mode,
                 )
+            except ShallowModeInterruptionError:
+                # Step 6a: observe — shallow workflow cannot be interrupted
+                # mid-turn.  Downgrade to end-of-turn interruption and
+                # record the downgrade in the journal so replay/doctor
+                # can surface it.
+                self._pending_downgrade = True
+                self._record_signal("shallow_mode_downgrade")
+                logger.warning(
+                    "Shallow-mode workflow does not support mid-turn "
+                    "interruption; downgrading to end-of-turn interruption. "
+                    "Convert to deep mode or implement "
+                    "workflow.apply_interruption() to enable barge-in."
+                )
             except Exception:
-                # Step 6: observe — handle failures gracefully
+                # Step 6b: observe — handle other failures gracefully
                 logger.debug("apply_interruption failed for cause=%s", cause, exc_info=True)
                 self._pending_downgrade = True
 

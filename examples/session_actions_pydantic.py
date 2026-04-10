@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from easycat import (
     EasyCatConfig,
     LocalTransportConfig,
-    PydanticAIAdapter,
     SessionActions,
     attach_runtime_feedback,
     create_session,
@@ -74,12 +73,10 @@ async def main() -> None:
         ctx.deps.actions.end_call(reason=reason)
         return "Ending the call now."
 
-    adapter = PydanticAIAdapter(voice_agent, deps=deps)
-
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
-        agent=adapter,
+        agent=voice_agent,
         session_actions=actions,
         event_logging=default_event_logging(),
     )

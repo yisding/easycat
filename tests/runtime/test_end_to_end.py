@@ -1,11 +1,9 @@
-"""AC1.11: End-to-end journal verification.
+"""End-to-end session turn verification.
 
-Runs a full session turn with stub providers and verifies that the
-journal captures records from every observability layer:
-  - EVENT records (from EventTraceLogger strangler-fig)
-  - SPAN_START / SPAN_END records (from SpanManager strangler-fig)
-  - METRIC records (from InMemoryMetrics strangler-fig)
-  - provider_versions record (from create_session)
+Runs a full session turn with stub providers and verifies that the session
+completes without error. Legacy strangler-fig journal records (EVENT,
+SPAN_START, SPAN_END, METRIC) are no longer produced after the WS5 migration
+to no-op shims.
 """
 
 from __future__ import annotations
@@ -16,7 +14,6 @@ from collections.abc import AsyncIterator
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.event_logging import EventLoggingConfig, EventTraceLogger
 from easycat.events import (
     Event,
     STTEvent,
@@ -26,12 +23,8 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.metrics import InMemoryMetrics
-from easycat.runtime.journal import InMemoryRingBuffer, JournalView
-from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
-from easycat.tracing import Tracer
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
 
@@ -122,77 +115,24 @@ class _NoiseReducer:
 
 
 @pytest.mark.asyncio
-async def test_full_turn_populates_journal():
-    """One turn with stub providers produces journal records from all layers."""
-    journal = InMemoryRingBuffer(capacity=10_000)
-    tracer = Tracer()
-    metrics = InMemoryMetrics(journal=journal)
-    session_id = "e2e-test"
-
+async def test_full_turn_completes_successfully():
+    """One turn with stub providers completes without error."""
+    transport = _Transport()
     config = SessionConfig(
-        transport=_Transport(),
+        transport=transport,
         vad=_VAD(),
         stt=_STT(),
         agent=_Agent(),
         tts=_TTS(),
         noise_reducer=_NoiseReducer(),
         turn_manager_config=TurnManagerConfig(end_of_turn_silence_ms=1),
-        journal=journal,
-        session_id=session_id,
-        tracer=tracer,
-        metrics=metrics,
+        session_id="e2e-test",
     )
     session = Session(config)
 
-    # Wire EventTraceLogger as a telephony helper (same as create_session).
-    etl = EventTraceLogger(session.event_bus, EventLoggingConfig(enabled=True), journal=journal)
-    session._telephony_helpers.append(etl)
-
-    # ── Verify journal view is available ──────────────────────
-    assert session.journal is not None
-    assert isinstance(session.journal, JournalView)
-    assert session.journal.enabled is True
-    assert session.journal.degraded is False
-
-    # ── Run one turn ──────────────────────────────────────────
     await session.start()
     await asyncio.sleep(0.5)  # let the pipeline complete
     await session.stop()
 
-    # ── Read all records ──────────────────────────────────────
-    records = journal.read()
-    assert len(records) > 0, "Journal should have records after one turn"
-
-    kinds = {r.kind for r in records}
-
-    # ── EVENT records from EventTraceLogger adapter ───────────
-    assert JournalRecordKind.EVENT in kinds, f"No EVENT records; kinds={kinds}"
-    event_names = {r.name for r in records if r.kind == JournalRecordKind.EVENT}
-    # At minimum, TurnStarted and STTFinal should appear.
-    assert "TurnStarted" in event_names, f"Missing TurnStarted; events={event_names}"
-    assert "STTFinal" in event_names, f"Missing STTFinal; events={event_names}"
-
-    # ── SPAN records from SpanManager adapter ──────────��──────
-    assert JournalRecordKind.SPAN_START in kinds, f"No SPAN_START records; kinds={kinds}"
-    assert JournalRecordKind.SPAN_END in kinds, f"No SPAN_END records; kinds={kinds}"
-    span_names = {r.name for r in records if r.kind == JournalRecordKind.SPAN_START}
-    assert "turn" in span_names, f"Missing turn span; spans={span_names}"
-
-    # ── METRIC records from InMemoryMetrics adapter ───────────
-    assert JournalRecordKind.METRIC in kinds, f"No METRIC records; kinds={kinds}"
-    metric_names = {r.name for r in records if r.kind == JournalRecordKind.METRIC}
-    assert len(metric_names) > 0, "Should have at least one metric"
-
-    # ── Monotonic sequence ────────────────────────────────────
-    seqs = [r.sequence for r in records]
-    assert seqs == sorted(seqs), "Sequences should be monotonically increasing"
-    assert len(seqs) == len(set(seqs)), "No duplicate sequence numbers"
-
-    # ── All records have session_id ───────────────────────────
-    for r in records:
-        assert r.session_id == session_id, f"Record {r.sequence} has wrong session_id"
-
-    # ── Timing is populated ───────────────────────────────────
-    for r in records:
-        assert r.timing.wall_ns > 0, f"Record {r.sequence} missing wall_ns"
-        assert r.timing.mono_ns > 0, f"Record {r.sequence} missing mono_ns"
+    # The transport should have received at least one audio chunk from TTS
+    assert len(transport.sent) > 0

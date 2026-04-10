@@ -785,7 +785,7 @@ units they care to expose.
     pointing the user at the provider SDK directly.
 - [x] `auto_adapt_agent()` is documented as best-effort convenience, not
   a compatibility guarantee for every pre-redesign construction path
-- [ ] `auto_adapt_agent()` survives Workstream 5. It is listed in the
+- [x] `auto_adapt_agent()` survives Workstream 5. It is listed in the
   preserved-public-surface allowlist that WS5 AC5.15 freezes in
   `easycat.__all__`.
 

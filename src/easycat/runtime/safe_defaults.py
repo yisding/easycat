@@ -63,6 +63,9 @@ SAFE_ENV_VARS: frozenset[str] = frozenset(
         # EasyCat runtime control
         "EASYCAT_DEBUG",
         "EASYCAT_DATA_DIR",
+        # Journal backend adapters (presence only — values may contain paths)
+        "EASYCAT_JOURNAL_LITESTREAM_REPLICA",
+        "EASYCAT_LIBSQL_URL",
         # Deployment identification (non-secret, useful for bundles)
         "HOSTNAME",
         "REGION",

@@ -419,23 +419,23 @@ class TestURLDetection:
     """AC2C.8 -- auto_adapt_agent detects HTTP URLs."""
 
     def test_http_url_detected(self):
-        from easycat.agents.factory import auto_adapt_agent
         from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+        from easycat.integrations.agents._factory import auto_adapt_agent
 
         adapted = auto_adapt_agent("https://api.example.com/v1")
         assert isinstance(adapted, BridgeAdapterShim)
         assert isinstance(adapted.bridge, ResponsesAPIBridge)
 
     def test_non_url_string_passthrough(self):
-        from easycat.agents.factory import auto_adapt_agent
+        from easycat.integrations.agents._factory import auto_adapt_agent
 
         # A plain string (not a URL) should pass through unchanged.
         result = auto_adapt_agent("just-a-string")
         assert result == "just-a-string"
 
     def test_http_url_with_path(self):
-        from easycat.agents.factory import auto_adapt_agent
         from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+        from easycat.integrations.agents._factory import auto_adapt_agent
 
         adapted = auto_adapt_agent("http://localhost:8080")
         assert isinstance(adapted, BridgeAdapterShim)

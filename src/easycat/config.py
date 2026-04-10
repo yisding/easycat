@@ -10,13 +10,11 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from uuid import uuid4
 
-from easycat.agent_runner import AgentRunner, AgentRunnerConfig
-from easycat.agents.factory import auto_adapt_agent
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
-from easycat.event_logging import EventLoggingConfig, EventTraceLogger
 from easycat.events import CallInitiated, CallScreening, EventBus, TTSAudio
+from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
+from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.llm_output_processing import LLMOutputProcessor
-from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.providers import Transport
 from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
@@ -60,7 +58,6 @@ from easycat.telephony.voicemail import (
     VoicemailPolicyHandler,
 )
 from easycat.timeouts import TimeoutConfig
-from easycat.tracing import TraceExporter, Tracer
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
@@ -75,22 +72,6 @@ from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, create_vad
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class MetricsConfig:
-    """Configuration for metrics collection."""
-
-    enabled: bool = False
-    collector: MetricsCollector | None = None
-
-
-@dataclass
-class TracingConfig:
-    """Configuration for tracing."""
-
-    enabled: bool = False
-    exporter: TraceExporter | None = None
 
 
 @dataclass
@@ -189,9 +170,6 @@ class EasyCatConfig:
     smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
     telephony: TelephonyConfig | None = None
-    event_logging: EventLoggingConfig = field(default_factory=EventLoggingConfig)
-    metrics: MetricsConfig | None = None
-    tracing: TracingConfig | None = None
     agent: Any = None
     agent_model: str | None = None
     remote_agent_api_key: str | None = None
@@ -243,29 +221,13 @@ class EasyCatConfig:
         return EchoCancellationConfig(enabled=enable_aec)
 
     def _apply_debug_defaults(self) -> None:
-        """Enable verbose logging, event tracing with partials, and metrics."""
-        # Ensure log output is visible — add a root handler if none exists.
+        """Enable verbose logging when debug mode is active."""
         if not logging.root.handlers:
             logging.basicConfig(
                 level=logging.DEBUG,
                 format="%(asctime)s %(name)s %(levelname)s %(message)s",
             )
-        # Set the easycat logger to DEBUG regardless of the root level.
         logging.getLogger("easycat").setLevel(logging.DEBUG)
-
-        # Enable event trace logging with partials so STT progress is visible,
-        # but only if the caller didn't supply an explicit config.
-        if self.event_logging == EventLoggingConfig():
-            self.event_logging = EventLoggingConfig(
-                enabled=True,
-                include_partials=True,
-                level=logging.DEBUG,
-            )
-
-        # Enable in-memory metrics so latency data is always collected.
-        if self.metrics is None:
-            self.metrics = MetricsConfig(enabled=True)
-
         logger.debug("EasyCat debug mode enabled")
 
     def _validate(self) -> None:
@@ -328,12 +290,19 @@ def _create_artifact_store(
 def create_session(config: EasyCatConfig) -> Session:
     """Create a fully wired Session from EasyCatConfig."""
     session_id = f"session-{uuid4().hex[:12]}"
+    artifact_store = _create_artifact_store(session_id, config.debug)
     journal = (
-        create_journal(session_id, debug=config.debug, backend=config.journal_backend)
+        create_journal(
+            session_id,
+            debug=config.debug,
+            backend=config.journal_backend,
+            artifact_store=(
+                artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
+            ),
+        )
         if config.debug != "off"
         else None
     )
-    artifact_store = _create_artifact_store(session_id, config.debug)
 
     event_bus = EventBus()
     stt = create_stt_provider_from_config(config.stt, event_bus)
@@ -367,9 +336,6 @@ def create_session(config: EasyCatConfig) -> Session:
     if journal is not None:
         _emit_provider_versions(journal, session_id, stt=stt, tts=tts, transport=transport)
 
-    metrics = _create_metrics(config.metrics, journal=journal)
-    tracer = _create_tracer(config.tracing)
-
     turn_config = config.turn_taking
     smart_turn = create_smart_turn(config.smart_turn)
     if smart_turn is not None:
@@ -377,10 +343,6 @@ def create_session(config: EasyCatConfig) -> Session:
 
     telephony_helpers = _create_telephony_helpers(event_bus, config.telephony)
     action_executors = [*config.action_executors, *_create_action_executors(config.telephony)]
-    if config.event_logging.enabled:
-        telephony_helpers.append(
-            EventTraceLogger(event_bus, config.event_logging, journal=journal)
-        )
 
     # Extract audio gate from the outbound call state machine, if present.
     audio_gate = None
@@ -407,8 +369,6 @@ def create_session(config: EasyCatConfig) -> Session:
             event_bus=event_bus,
             turn_manager_config=turn_config,
             timeout_config=config.timeouts,
-            metrics=metrics,
-            tracer=tracer,
             journal=journal,
             artifact_store=artifact_store,
             session_id=session_id,
@@ -455,8 +415,19 @@ def create_text_session(
     :meth:`Session.start` on a text session.
     """
     sid = session_id or f"session-{uuid4().hex[:12]}"
-    journal = create_journal(sid, debug=debug, backend=journal_backend) if debug != "off" else None
     artifact_store = _create_artifact_store(sid, debug)
+    journal = (
+        create_journal(
+            sid,
+            debug=debug,
+            backend=journal_backend,
+            artifact_store=(
+                artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
+            ),
+        )
+        if debug != "off"
+        else None
+    )
     event_bus = EventBus()
 
     adapted = auto_adapt_agent(agent) if agent is not None else NoopAgent()
@@ -755,17 +726,3 @@ def _emit_provider_versions(
         session_id=session_id,
         data=versions,
     )
-
-
-def _create_metrics(
-    config: MetricsConfig | None, *, journal: Any = None
-) -> MetricsCollector | None:
-    if not config or not config.enabled:
-        return None
-    return config.collector or InMemoryMetrics(journal=journal)
-
-
-def _create_tracer(config: TracingConfig | None) -> Tracer | None:
-    if not config or not config.enabled:
-        return None
-    return Tracer(exporter=config.exporter)

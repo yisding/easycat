@@ -1,97 +1,26 @@
-"""Agents SDK integration: AgentRunner with streaming, context, timeout, and tracing.
+"""AgentRunner: wraps agents with streaming, context, timeout, and cancellation.
 
-Provides AgentRunner — a wrapper around any agent that adds:
-- Conversation context management (history tracking)
-- Configurable timeout handling
-- Streaming support with text deltas and tool events
-- Cooperative cancellation via CancelToken
-- Tracing spans for pipeline observability
+Migrated from agent_runner.py with tracing/span code removed.
 """
-# ruff: noqa: E402
 
 from __future__ import annotations
 
-import warnings
-
-warnings.warn(
-    "easycat.agent_runner is deprecated. Use easycat.integrations.agents bridges instead. "
-    "See docs/migration-debug-first-runtime.md for migration details.",
-    DeprecationWarning,
-    stacklevel=2,
-)
-
 import asyncio
-import enum
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._legacy_types import (
+    INTERRUPTION_NOTE,
+    AgentStreamEvent,
+    AgentStreamEventType,
+    StreamingAgent,
+)
 from easycat.timeouts import AgentTimeoutError
-from easycat.tracing import Span, SpanStatus, TraceContext
 
 logger = logging.getLogger(__name__)
-
-# Shared constant used by AgentRunner and adapter subclasses when recording
-# an interruption in message history.
-INTERRUPTION_NOTE = (
-    "[The user interrupted the assistant's response and may not have heard all of it.]"
-)
-
-
-# ── Stream event types ──────────────────────────────────────────────
-
-
-class AgentStreamEventType(enum.Enum):
-    TEXT_DELTA = "text_delta"
-    TOOL_STARTED = "tool_started"
-    TOOL_DELTA = "tool_delta"
-    TOOL_RESULT = "tool_result"
-    DONE = "done"
-
-
-@dataclass(frozen=True)
-class AgentStreamEvent:
-    """Event produced by a streaming agent run.
-
-    Fields are overloaded per event type:
-    - TEXT_DELTA: ``text`` contains the delta string
-    - TOOL_STARTED: ``tool_name`` and ``call_id``
-    - TOOL_DELTA: ``call_id`` and ``text`` (delta content)
-    - TOOL_RESULT: ``call_id`` and ``result``
-    - DONE: ``text`` contains the full accumulated response (optional),
-      ``structured_output`` carries the raw typed output when the agent
-      uses a structured ``output_type`` (e.g. a Pydantic model).
-    """
-
-    type: AgentStreamEventType
-    text: str = ""
-    tool_name: str = ""
-    call_id: str = ""
-    result: str = ""
-    structured_output: Any = None
-
-
-# ── Protocols ───────────────────────────────────────────────────────
-
-
-@runtime_checkable
-class StreamingAgent(Protocol):
-    """Agent that supports streaming text deltas and tool events.
-
-    Implementations yield ``AgentStreamEvent`` objects as the agent produces
-    output. The optional ``context`` parameter carries conversation history.
-    ``cancel_token`` supports cooperative cancellation.
-    """
-
-    def run_streaming(
-        self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
-        cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]: ...
 
 
 # ── Configuration ───────────────────────────────────────────────────
@@ -102,18 +31,18 @@ class AgentRunnerConfig:
     """Configuration for AgentRunner."""
 
     timeout: float | None = 30.0
-    enable_tracing: bool = True
+    enable_tracing: bool = True  # kept for compat but is a no-op
 
 
 # ── AgentRunner ─────────────────────────────────────────────────────
 
 
 class AgentRunner:
-    """Wraps an agent with context management, timeout, cancellation, and tracing.
+    """Wraps an agent with context management, timeout, and cancellation.
 
     Supports both basic agents (``Agent`` protocol with ``run()``) and streaming
     agents (``StreamingAgent`` protocol with ``run_streaming()``). Maintains
-    conversation history across turns and records tracing spans.
+    conversation history across turns.
 
     Usage::
 
@@ -136,8 +65,6 @@ class AgentRunner:
         self._agent = agent
         self._config = config or AgentRunnerConfig()
         self._history: list[dict[str, str]] = []
-        self._spans: list[Span] = []
-        self._trace_context = TraceContext()
         self._is_streaming = isinstance(agent, StreamingAgent)
         # When the inner agent manages its own history (e.g. BaseAgentAdapter
         # subclasses), defer to it instead of maintaining a shadow copy.
@@ -153,11 +80,6 @@ class AgentRunner:
         if self._delegates_history:
             return self._agent.message_history
         return list(self._history)
-
-    @property
-    def spans(self) -> list[Span]:
-        """Recorded tracing spans (copies)."""
-        return list(self._spans)
 
     @property
     def is_streaming(self) -> bool:
@@ -182,10 +104,6 @@ class AgentRunner:
             self._agent.clear_history()
         else:
             self._history.clear()
-
-    def clear_spans(self) -> None:
-        """Clear recorded tracing spans."""
-        self._spans.clear()
 
     # ── Interruption handling ─────────────────────────────────
 
@@ -263,26 +181,17 @@ class AgentRunner:
         if callable(fn):
             fn(text)
 
-    # ── Internal helpers ───────────────────────────────────────
-
-    def _record_span(self, name: str, **metadata: Any) -> Span:
-        span = self._trace_context.create_span(name=name, **metadata)
-        self._spans.append(span)
-        return span
-
     # ── Basic run (Agent protocol) ─────────────────────────────
 
     async def run(self, text: str) -> str:
         """Invoke the agent and return the full response text.
 
-        Handles timeout, records conversation history, and creates tracing spans.
+        Handles timeout and records conversation history.
         Satisfies the basic ``Agent`` protocol so AgentRunner can be used as a
         drop-in replacement wherever an Agent is expected.
         """
         if not self._delegates_history:
             self._history.append({"role": "user", "content": text})
-
-        span = self._record_span("agent_execution") if self._config.enable_tracing else None
 
         try:
             if self._config.timeout is not None:
@@ -294,22 +203,13 @@ class AgentRunner:
                 response = await self._agent.run(text)
         except TimeoutError:
             err = AgentTimeoutError(self._config.timeout or 0)
-            if span:
-                span.set_error(err)
-                span.finish(SpanStatus.ERROR)
             if not self._delegates_history:
                 self._history.pop()
             raise err
-        except Exception as exc:
-            if span:
-                span.set_error(exc)
-                span.finish(SpanStatus.ERROR)
+        except Exception:
             if not self._delegates_history:
                 self._history.pop()
             raise
-
-        if span:
-            span.finish(SpanStatus.OK)
 
         if not self._delegates_history:
             self._history.append({"role": "assistant", "content": response})
@@ -334,12 +234,6 @@ class AgentRunner:
         """
         if not self._delegates_history:
             self._history.append({"role": "user", "content": text})
-
-        if self._config.enable_tracing:
-            stt_to_agent = self._record_span("stt_to_agent")
-            stt_to_agent.finish(SpanStatus.OK)
-
-        exec_span = self._record_span("agent_execution") if self._config.enable_tracing else None
 
         accumulated = ""
         stream: AsyncIterator[AgentStreamEvent] | None = None
@@ -442,34 +336,18 @@ class AgentRunner:
         except TimeoutError:
             if stream and hasattr(stream, "aclose"):
                 await stream.aclose()
-            if exec_span:
-                exec_span.set_error(AgentTimeoutError(self._config.timeout or 0))
-                exec_span.finish(SpanStatus.ERROR)
             if not self._delegates_history and not history_recorded:
                 self._history.pop()
             raise AgentTimeoutError(self._config.timeout or 0)
         except GeneratorExit:
             # Generator was closed by caller (e.g., barge-in) — not an error.
-            # The caller is responsible for calling notify_interruption() to
-            # record the interruption in history.
-            if exec_span:
-                exec_span.finish(SpanStatus.CANCELLED)
             if not self._delegates_history and not history_recorded:
                 self._history.append({"role": "assistant", "content": accumulated})
             return
-        except Exception as exc:
-            if exec_span:
-                exec_span.set_error(exc)
-                exec_span.finish(SpanStatus.ERROR)
+        except Exception:
             if not self._delegates_history and not history_recorded:
                 self._history.pop()
             raise
 
-        interrupted = cancel_token and cancel_token.is_cancelled
-        if exec_span:
-            exec_span.finish(SpanStatus.CANCELLED if interrupted else SpanStatus.OK)
-        if self._config.enable_tracing and not interrupted:
-            agent_to_tts = self._record_span("agent_to_tts")
-            agent_to_tts.finish(SpanStatus.OK)
         if not self._delegates_history and not history_recorded:
             self._history.append({"role": "assistant", "content": accumulated})

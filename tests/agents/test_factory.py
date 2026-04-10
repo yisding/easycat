@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from easycat.agents.factory import auto_adapt_agent
 from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+from easycat.integrations.agents._factory import auto_adapt_agent
 
 
 class _CustomAgent:
@@ -22,9 +22,13 @@ def test_auto_adapt_agent_passthrough_for_unknown_agents():
 
 
 def test_auto_adapt_agent_keeps_existing_adapter():
-    from easycat.agents import PydanticAIAdapter
+    from easycat.integrations.agents._base_adapter import BaseAgentAdapter
 
-    adapter = PydanticAIAdapter(_CustomAgent())
+    class _FakeAdapter(BaseAgentAdapter):
+        async def run(self, text: str) -> str:
+            return text
+
+    adapter = _FakeAdapter()
     assert auto_adapt_agent(adapter) is adapter
 
 

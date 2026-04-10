@@ -21,7 +21,6 @@ from agents import Agent, RunContextWrapper, function_tool  # type: ignore[impor
 from easycat import (
     EasyCatConfig,
     LocalTransportConfig,
-    OpenAIAgentsAdapter,
     SessionActions,
     attach_runtime_feedback,
     create_session,
@@ -64,12 +63,10 @@ agent = Agent(
 async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
 
-    adapter = OpenAIAgentsAdapter(agent, context=actions)
-
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
-        agent=adapter,
+        agent=agent,
         session_actions=actions,
         event_logging=default_event_logging(),
     )

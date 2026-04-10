@@ -243,7 +243,7 @@ class TestAgentRunnerHistoryUpdate:
     """Test that AgentRunner.replace_last_assistant_text updates history."""
 
     def test_replace_updates_last_assistant_entry(self) -> None:
-        from easycat.agent_runner import AgentRunner
+        from easycat.integrations.agents._agent_runner import AgentRunner
 
         class DummyAgent:
             async def run(self, text: str) -> str:
@@ -261,7 +261,7 @@ class TestAgentRunnerHistoryUpdate:
         assert runner._history[0]["content"] == "hello"
 
     def test_replace_with_no_history_is_noop(self) -> None:
-        from easycat.agent_runner import AgentRunner
+        from easycat.integrations.agents._agent_runner import AgentRunner
 
         class DummyAgent:
             async def run(self, text: str) -> str:
@@ -277,148 +277,10 @@ class TestBaseAdapterHistoryUpdate:
     """Test BaseAgentAdapter.replace_last_assistant_text (default no-op)."""
 
     def test_default_is_noop(self) -> None:
-        from easycat.agents.base import BaseAgentAdapter
+        from easycat.integrations.agents._base_adapter import BaseAgentAdapter
 
         adapter = BaseAgentAdapter()
         adapter._message_history = [{"role": "assistant", "content": "**hi**"}]
         # Default implementation does nothing
         adapter.replace_last_assistant_text("hi")
         assert adapter._message_history[0]["content"] == "**hi**"
-
-
-class TestOpenAIAdapterHistoryUpdate:
-    """Test OpenAIAgentsAdapter.replace_last_assistant_text."""
-
-    def test_replaces_output_text_part(self) -> None:
-        from easycat.agents.openai_agents import OpenAIAgentsAdapter
-
-        class FakeAgent:
-            pass
-
-        adapter = OpenAIAgentsAdapter(FakeAgent())
-        adapter._message_history = [
-            {"role": "user", "content": "hello"},
-            {
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "**Hello!**"}],
-            },
-        ]
-
-        adapter.replace_last_assistant_text("Hello!")
-
-        part = adapter._message_history[1]["content"][0]
-        assert part["text"] == "Hello!"
-
-    def test_preserves_output_text_part_granularity(self) -> None:
-        from easycat.agents.openai_agents import OpenAIAgentsAdapter
-
-        class FakeAgent:
-            pass
-
-        adapter = OpenAIAgentsAdapter(FakeAgent())
-        adapter._message_history = [
-            {"role": "user", "content": "hello"},
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "**Hello** "},
-                    {"type": "other_type", "value": 1},
-                    {"type": "output_text", "text": "*world*"},
-                ],
-            },
-        ]
-
-        adapter.replace_last_assistant_text("Hello world")
-
-        parts = adapter._message_history[1]["content"]
-        assert parts[0]["text"] == "Hello "
-        assert parts[2]["text"] == "world"
-        assert parts[0]["text"] + parts[2]["text"] == "Hello world"
-
-    def test_replaces_string_content(self) -> None:
-        from easycat.agents.openai_agents import OpenAIAgentsAdapter
-
-        class FakeAgent:
-            pass
-
-        adapter = OpenAIAgentsAdapter(FakeAgent())
-        adapter._message_history = [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "content": "**Hello!**"},
-        ]
-
-        adapter.replace_last_assistant_text("Hello!")
-        assert adapter._message_history[1]["content"] == "Hello!"
-
-    def test_empty_history_is_noop(self) -> None:
-        from easycat.agents.openai_agents import OpenAIAgentsAdapter
-
-        class FakeAgent:
-            pass
-
-        adapter = OpenAIAgentsAdapter(FakeAgent())
-        adapter.replace_last_assistant_text("Hello!")
-        assert adapter._message_history == []
-
-
-class TestPydanticAIAdapterHistoryUpdate:
-    """Test PydanticAIAdapter.replace_last_assistant_text."""
-
-    def test_replaces_text_part_content(self) -> None:
-        from easycat.agents.pydantic_ai import PydanticAIAdapter
-
-        # Simulate PydanticAI ModelResponse / TextPart without importing them
-        class TextPart:
-            def __init__(self, content: str) -> None:
-                self.content = content
-
-        class ModelResponse:
-            def __init__(self, parts: list) -> None:
-                self.parts = parts
-
-        class FakeAgent:
-            pass
-
-        adapter = PydanticAIAdapter(FakeAgent())
-        text_part = TextPart("**Hello!**")
-        adapter._message_history = [ModelResponse(parts=[text_part])]
-
-        adapter.replace_last_assistant_text("Hello!")
-        assert text_part.content == "Hello!"
-
-    def test_preserves_text_part_granularity(self) -> None:
-        from easycat.agents.pydantic_ai import PydanticAIAdapter
-
-        class TextPart:
-            def __init__(self, content: str) -> None:
-                self.content = content
-
-        class ToolPart:
-            pass
-
-        class ModelResponse:
-            def __init__(self, parts: list) -> None:
-                self.parts = parts
-
-        class FakeAgent:
-            pass
-
-        adapter = PydanticAIAdapter(FakeAgent())
-        first = TextPart("**Hello** ")
-        second = TextPart("*world*")
-        adapter._message_history = [ModelResponse(parts=[first, ToolPart(), second])]
-
-        adapter.replace_last_assistant_text("Hello world")
-        assert first.content == "Hello "
-        assert second.content == "world"
-        assert first.content + second.content == "Hello world"
-
-    def test_empty_history_is_noop(self) -> None:
-        from easycat.agents.pydantic_ai import PydanticAIAdapter
-
-        class FakeAgent:
-            pass
-
-        adapter = PydanticAIAdapter(FakeAgent())
-        adapter.replace_last_assistant_text("Hello!")
-        assert adapter._message_history == []

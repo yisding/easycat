@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from easycat.bounded_queue import BoundedAudioQueue
 from easycat.events import EventBus
 from easycat.llm_output_processing import LLMOutputProcessor
-from easycat.metrics import MetricsCollector
 from easycat.providers import (
     EchoCanceller,
     NoiseReducer,
@@ -21,7 +20,6 @@ from easycat.providers import (
 )
 from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.timeouts import TimeoutConfig
-from easycat.tracing import Tracer
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
 
 if TYPE_CHECKING:
@@ -85,8 +83,6 @@ class SessionConfig:
     turn_manager: TurnManager | None = None
     turn_manager_config: TurnManagerConfig | None = None
     timeout_config: TimeoutConfig | None = None
-    metrics: MetricsCollector | None = None
-    tracer: Tracer | None = None
     journal: ExecutionJournal | None = None
     artifact_store: ArtifactStore | None = None
     session_id: str | None = None

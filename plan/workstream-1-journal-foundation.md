@@ -77,7 +77,7 @@ full `RedactionPolicy` write filter lands later in
 
 ### T1.0: Architecture Freeze
 
-- [ ] Design decisions covering:
+- [x] Design decisions covering:
   - concrete journal record classes building on the appendix schema
   - `ArtifactStore` interface
   - backend selection policy (in-memory default, SQLite for
@@ -214,7 +214,7 @@ full `RedactionPolicy` write filter lands later in
   - `debug="full"` → persistent artifact store under
     `.easycat/artifacts/<session_id>/` (or backend-native
     equivalent for replicated backends)
-- [ ] Retained records must always resolve their artifact refs. If
+- [x] Retained records must always resolve their artifact refs. If
   in-memory retention evicts a record, it also evicts artifacts
   that are now unreachable from the retained journal window.
 
@@ -303,7 +303,7 @@ full `RedactionPolicy` write filter lands later in
     turn does not pay the ~50ms cold `PRAGMA` roundtrip.
     Documented for serverless adapters (Modal, Cloud Run) that
     run the warmup inside their startup hook.
-- [ ] Implement **`LitestreamSqliteJournal`** adapter. Wraps
+- [x] Implement **`LitestreamSqliteJournal`** adapter. Wraps
   `SqliteJournal` and delegates to the `litestream` sidecar (or
   the Litestream Go library embedded via a subprocess) to ship
   WAL segments to S3-compatible object storage. Configured via
@@ -315,7 +315,7 @@ full `RedactionPolicy` write filter lands later in
   guide and assumes the file is already present when the
   backend opens it. This is the Tier 1 adapter for Fly
   Machines, EC2/Fargate with a volume, and Railway.
-- [ ] Implement **`LibsqlJournal`** adapter. Uses the `libsql`
+- [x] Implement **`LibsqlJournal`** adapter. Uses the `libsql`
   Python SDK to open an embedded libSQL replica with a remote
   primary URL (Turso or self-hosted libSQL server). Reads are
   local µs; local appends commit before return and remote sync runs
@@ -643,7 +643,7 @@ Workstream 2A starts.
 - [x] **AC1.16** Strangler-fig parity (T1.8.5): dual-write parity
   tests pass zero-diff for every event type in the pre-workstream
   test suite, modulo a small explicit timestamp allowlist.
-- [~] **AC1.17** Journal backend adapters. Four sub-tests (2/4 done):
+- [x] **AC1.17** Journal backend adapters. Four sub-tests (4/4 done):
   - `test_sqlite_journal_no_hot_path_fsync` — writes 100
     records during a session, measures `fsync`/`fdatasync` count
     via `strace` (or equivalent), asserts **zero fsyncs** during
@@ -669,7 +669,7 @@ Workstream 2A starts.
     `sqld --http-listen-addr`), asserts records sync to the
     remote primary and are readable from a fresh embedded
     replica. Gated on `sqld` being available.
-- [ ] **AC1.18** Safe-default env var filtering covers the new
+- [x] **AC1.18** Safe-default env var filtering covers the new
   Litestream and libSQL credentials. A test sets
   `EASYCAT_JOURNAL_LITESTREAM_REPLICA=s3://bucket/path`,
   `AWS_SECRET_ACCESS_KEY=synthetic`,

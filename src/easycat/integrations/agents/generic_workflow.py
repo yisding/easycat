@@ -58,6 +58,37 @@ class GenericWorkflowBridge:
       ``recorder.record_*`` methods from inside their orchestration.
 
     Mode is detected at construction via signature inspection.
+
+    Interruption / barge-in behaviour
+    ----------------------------------
+    **Deep mode** supports mid-turn barge-in out of the box.  The
+    ``InterruptionController`` calls ``apply_interruption`` and the bridge
+    runs the four-step atomic write ordering (plan -> commit -> mutate ->
+    paired record) as described in WS2B T2B.1.
+
+    **Shallow mode** does **not** support mid-turn interruption by default
+    because the bridge has no visibility into the workflow's internal state.
+    When the ``InterruptionController`` attempts barge-in on a shallow
+    workflow, ``apply_interruption`` raises
+    ``ShallowModeInterruptionError``.  The controller catches the exception
+    and **downgrades the turn to end-of-turn interruption**:
+
+    1. The controller records a ``ControlSignalRecord`` with
+       ``cause="shallow_mode_downgrade"`` in the journal.
+    2. The current turn completes normally (no mid-turn cancellation).
+    3. The next turn starts immediately after, without attempting barge-in.
+
+    To opt in to mid-turn interruption in shallow mode, implement
+    ``apply_interruption(delivered_text, mode)`` directly on the workflow
+    object.  The bridge delegates to it via the same four-step atomic
+    write ordering used by deep mode.
+
+    The downgrade is visible via:
+
+    - Journal records (``cause="shallow_mode_downgrade"``).
+    - A ``logger.warning`` emitted by the ``InterruptionController``.
+    - ``easycat doctor`` output when a shallow workflow is paired with a
+      voice transport.
     """
 
     COMMITTABLE_BOUNDARIES = {

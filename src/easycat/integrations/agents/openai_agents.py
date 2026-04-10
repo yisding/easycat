@@ -13,8 +13,13 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
-from easycat.agents.base import split_replacement_by_original_parts
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._base_adapter import split_replacement_by_original_parts
+from easycat.integrations.agents._openai_agents_events import (
+    extract_text_delta,
+    extract_tool_delta,
+    map_run_item,
+)
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -115,15 +120,13 @@ class OpenAIAgentsBridge:
                         interrupted = True
                     if pending_tool_calls:
                         if event.type == "run_item_stream_event":
-                            bridge_ev = self._map_run_item(
-                                event.item, recorder, pending_tool_calls
-                            )
+                            bridge_ev = map_run_item(event.item, recorder, pending_tool_calls)
                             if bridge_ev is not None:
                                 yield bridge_ev
                                 if not pending_tool_calls:
                                     break
                         elif event.type == "raw_response_event":
-                            bridge_ev = self._extract_tool_delta(event.data)
+                            bridge_ev = extract_tool_delta(event.data)
                             if bridge_ev is not None:
                                 yield bridge_ev
                         continue
@@ -131,16 +134,16 @@ class OpenAIAgentsBridge:
                         break
 
                 if event.type == "raw_response_event":
-                    delta = self._extract_text_delta(event.data)
+                    delta = extract_text_delta(event.data)
                     if delta:
                         accumulated += delta
                         yield AgentBridgeEvent(kind="text_delta", text=delta)
                     else:
-                        bridge_ev = self._extract_tool_delta(event.data)
+                        bridge_ev = extract_tool_delta(event.data)
                         if bridge_ev is not None:
                             yield bridge_ev
                 elif event.type == "run_item_stream_event":
-                    bridge_ev = self._map_run_item(event.item, recorder, pending_tool_calls)
+                    bridge_ev = map_run_item(event.item, recorder, pending_tool_calls)
                     if bridge_ev is not None:
                         yield bridge_ev
         except Exception as exc:
@@ -318,43 +321,3 @@ class OpenAIAgentsBridge:
         if self._hooks is not None:
             kwargs["hooks"] = self._hooks
         return kwargs
-
-    @staticmethod
-    def _extract_text_delta(data: Any) -> str:
-        event_type = getattr(data, "type", "")
-        if event_type == "response.output_text.delta":
-            return getattr(data, "delta", "") or ""
-        return ""
-
-    @staticmethod
-    def _extract_tool_delta(data: Any) -> AgentBridgeEvent | None:
-        event_type = getattr(data, "type", "")
-        if event_type == "response.function_call_arguments.delta":
-            delta = getattr(data, "delta", "") or ""
-            if delta:
-                call_id = getattr(data, "call_id", "") or getattr(data, "item_id", "") or ""
-                return AgentBridgeEvent(kind="tool_delta", text=delta, call_id=call_id)
-        return None
-
-    @staticmethod
-    def _map_run_item(
-        item: Any,
-        recorder: AgentRecorder,
-        pending: set[str],
-    ) -> AgentBridgeEvent | None:
-        item_type = getattr(item, "type", "")
-        if item_type == "tool_call_item":
-            raw = getattr(item, "raw_item", None)
-            name = getattr(raw, "name", "") or ""
-            call_id = getattr(raw, "call_id", "") or ""
-            pending.add(call_id)
-            recorder.record_tool_call(phase="start", name=name)
-            return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
-        if item_type == "tool_call_output_item":
-            raw = getattr(item, "raw_item", None)
-            call_id = getattr(raw, "call_id", "") or ""
-            result_str = str(getattr(item, "output", "")) if hasattr(item, "output") else ""
-            pending.discard(call_id)
-            recorder.record_tool_call(phase="result", name="")
-            return AgentBridgeEvent(kind="tool_result", call_id=call_id, result=result_str)
-        return None

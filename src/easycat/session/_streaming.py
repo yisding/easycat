@@ -15,7 +15,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from easycat.agent_runner import AgentStreamEventType
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
@@ -25,7 +24,7 @@ from easycat.events import (
     ToolCallResult,
     ToolCallStarted,
 )
-from easycat.metrics import AGENT_LATENCY, MetricsCollector
+from easycat.integrations.agents._legacy_types import AgentStreamEventType
 from easycat.session._text_utils import (
     _has_unclosed_markdown_delimiters,
     _split_at_sentence_boundaries,
@@ -57,7 +56,6 @@ async def consume_agent_stream(
     prepare_tts_payload: Callable[..., TTSInput],
     strip_md: bool,
     turn: TurnContext,
-    metrics: MetricsCollector | None,
 ) -> AgentStreamResult:
     """Consume a streaming agent and queue TTS payloads on sentence boundaries.
 
@@ -124,11 +122,6 @@ async def consume_agent_stream(
                 # Record first-token latency
                 if turn.first_agent_time is None:
                     turn.first_agent_time = time.monotonic()
-                    if metrics and turn.stt_final_time is not None:
-                        metrics.record_latency(
-                            AGENT_LATENCY,
-                            (turn.first_agent_time - turn.stt_final_time) * 1000,
-                        )
 
                 # Buffer text and queue complete sentences for TTS
                 if strip_md:
