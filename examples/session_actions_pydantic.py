@@ -28,6 +28,7 @@ from easycat import (
     require_env,
     wait_for_shutdown_signal,
 )
+from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
 # ── Dependencies ─────────────────────────────────────────────────
 # PydanticAI tools access SessionActions through the deps object.
@@ -73,10 +74,12 @@ async def main() -> None:
         ctx.deps.actions.end_call(reason=reason)
         return "Ending the call now."
 
+    bridge = PydanticAIBridge(agent=voice_agent, deps=deps)
+
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
-        agent=voice_agent,
+        agent=bridge,
         session_actions=actions,
         event_logging=default_event_logging(),
     )

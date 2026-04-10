@@ -183,8 +183,18 @@ class EasyCatConfig:
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
     mcp_servers: list[str] | None = None
+    event_logging: Any = None
 
     def __post_init__(self) -> None:
+        # ── Ignored legacy field ────────────────────────────────
+        if self.event_logging is not None:
+            warnings.warn(
+                "EasyCatConfig(event_logging=...) is deprecated and ignored. "
+                "Observability is handled by the journal-based runtime.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         # ── Bool → enum compat shim (one-release deprecation) ────
         if isinstance(self.debug, bool):
             warnings.warn(
@@ -326,6 +336,14 @@ def create_session(config: EasyCatConfig) -> Session:
             agent._artifact_store = artifact_store
             agent._session_id = session_id
             agent._mcp_servers = mcp_servers
+            # Inject model/API key for URL-backed agents.
+            from easycat.integrations.agents.responses_api import ResponsesAPIBridge
+
+            if isinstance(agent.bridge, ResponsesAPIBridge):
+                if config.agent_model:
+                    agent.bridge._model = config.agent_model
+                if config.remote_agent_api_key:
+                    agent.bridge._api_key = config.remote_agent_api_key
         if config.wrap_agent and not isinstance(agent, AgentRunner):
             runner_cfg = config.agent_runner or AgentRunnerConfig()
             agent = AgentRunner(agent, runner_cfg)
@@ -431,6 +449,14 @@ def create_text_session(
     event_bus = EventBus()
 
     adapted = auto_adapt_agent(agent) if agent is not None else NoopAgent()
+    # Backfill journal metadata into the bridge shim (mirrors create_session).
+    from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+
+    _inner = adapted
+    if isinstance(_inner, BridgeAdapterShim):
+        _inner._journal = journal
+        _inner._artifact_store = artifact_store
+        _inner._session_id = sid
     if wrap_agent and not isinstance(adapted, AgentRunner):
         runner_cfg = agent_runner or AgentRunnerConfig()
         adapted = AgentRunner(adapted, runner_cfg)

@@ -28,6 +28,7 @@ from easycat import (
     require_env,
     wait_for_shutdown_signal,
 )
+from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
 # ── Shared action queue ──────────────────────────────────────────
 # The same SessionActions instance is injected into the agent's
@@ -63,10 +64,12 @@ agent = Agent(
 async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
 
+    bridge = OpenAIAgentsBridge(agent=agent, context=actions)
+
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
-        agent=agent,
+        agent=bridge,
         session_actions=actions,
         event_logging=default_event_logging(),
     )
