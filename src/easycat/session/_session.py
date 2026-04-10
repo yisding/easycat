@@ -655,11 +655,11 @@ class Session:
                 pass
         await self.transport.disconnect()
         await self._turn_manager.shutdown()
-        # Finalize the journal so persistent backends (e.g. SqliteJournal)
-        # write their clean-close marker and checkpoint the WAL.  In-memory
-        # backends treat close() as a no-op, so this is always safe.
-        if self._journal:
-            self._journal.close()
+        # Flush the journal but keep it readable so callers can inspect
+        # records and export debug bundles after stop().  The connection is
+        # only closed in shutdown() (force-teardown).
+        if self._journal and hasattr(self._journal, "flush"):
+            self._journal.flush()
         self._turn = None
 
     async def shutdown(self) -> None:

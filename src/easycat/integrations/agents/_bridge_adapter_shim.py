@@ -165,17 +165,12 @@ class BridgeAdapterShim(BaseAgentAdapter):
     def _append_interruption_note(self) -> None:
         """Append an interruption note for message-mode barge-in.
 
-        Called when ``interruption_mode='message'``.  Records the
-        interruption both in the bridge (via ``apply_interruption``)
-        and in the shadow history so the next turn's context includes
-        the interruption signal.
+        Called when ``interruption_mode='message'``.  In message mode we
+        do NOT call ``bridge.apply_interruption`` because that would
+        blank the assistant message in the bridge's own history.  Instead
+        we only append a note to the shadow history so the next turn
+        sees the interruption signal without losing what was actually said.
         """
-        recorder = self._make_recorder()
-        self._bridge.apply_interruption(
-            "",
-            CancellationMode.IMMEDIATE_STOP,
-            recorder=recorder,
-        )
         self._message_history.append(
             {
                 "role": "system",

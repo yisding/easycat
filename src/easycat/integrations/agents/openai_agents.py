@@ -112,6 +112,7 @@ class OpenAIAgentsBridge:
         accumulated = ""
         pending_tool_calls: set[str] = set()
         interrupted = False
+        cursor_exited = False
 
         try:
             async for event in result.stream_events():
@@ -149,35 +150,37 @@ class OpenAIAgentsBridge:
         except Exception as exc:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
+            cursor_exited = True
             raise
         finally:
             self._message_history = result.to_input_list()
             if self._use_previous_response_id:
                 self._previous_response_id = getattr(result, "last_response_id", None)
-            last_agent = getattr(result, "last_agent", None)
-            if last_agent is not None and last_agent is not self._agent:
-                # Record handoff.
-                old_name = getattr(self._agent, "name", "unknown")
-                new_name = getattr(last_agent, "name", "unknown")
-                recorder.record_unit_exited(agent_cursor, reason="handoff")
-                recorder.record_framework_handoff(
-                    from_unit=old_name,
-                    to_unit=new_name,
-                    reason="agent_handoff",
-                )
-                self._agent = last_agent
-                # Enter new agent cursor for the handoff target.
-                new_cursor = ExecutionCursor(
-                    unit_id=f"agent-{uuid4().hex[:8]}",
-                    unit_kind=UnitKind.AGENT,
-                    display_name=new_name,
-                    entered_at=time.monotonic_ns(),
-                    committable=True,
-                )
-                recorder.record_unit_entered(new_cursor)
-                recorder.record_unit_exited(new_cursor.with_committable(True), reason=None)
-            else:
-                recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
+            if not cursor_exited:
+                last_agent = getattr(result, "last_agent", None)
+                if last_agent is not None and last_agent is not self._agent:
+                    # Record handoff.
+                    old_name = getattr(self._agent, "name", "unknown")
+                    new_name = getattr(last_agent, "name", "unknown")
+                    recorder.record_unit_exited(agent_cursor, reason="handoff")
+                    recorder.record_framework_handoff(
+                        from_unit=old_name,
+                        to_unit=new_name,
+                        reason="agent_handoff",
+                    )
+                    self._agent = last_agent
+                    # Enter new agent cursor for the handoff target.
+                    new_cursor = ExecutionCursor(
+                        unit_id=f"agent-{uuid4().hex[:8]}",
+                        unit_kind=UnitKind.AGENT,
+                        display_name=new_name,
+                        entered_at=time.monotonic_ns(),
+                        committable=True,
+                    )
+                    recorder.record_unit_entered(new_cursor)
+                    recorder.record_unit_exited(new_cursor.with_committable(True), reason=None)
+                else:
+                    recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
 
         self._last_output = getattr(result, "final_output", None)
         yield AgentBridgeEvent(
