@@ -46,6 +46,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.health_check import PeriodicHealthChecker
+from easycat.integrations.agents._legacy_types import AgentStreamEventType
 from easycat.llm_output_processing import (
     LLMOutputProcessor,
     apply_output_processors,
@@ -1526,7 +1527,11 @@ class Session:
         try:
             if hasattr(self.agent, "run_streaming"):
                 accumulated = ""
-                async for event in self.agent.run_streaming(text, context=context):
+                async for event in self.agent.run_streaming(text):
+                    if hasattr(event, "type") and event.type == AgentStreamEventType.DONE:
+                        if hasattr(event, "text") and event.text:
+                            accumulated = event.text
+                        break
                     if hasattr(event, "text") and event.text:
                         accumulated += event.text
                 response = accumulated

@@ -152,6 +152,7 @@ class GenericWorkflowBridge:
                 )
             )
 
+        self._last_output = None
         accumulated = ""
         try:
             if self._deep_mode:
