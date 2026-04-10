@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -224,8 +225,6 @@ class RunBundle:
             raise FileNotFoundError(f"Journal not found: {journal_path}")
 
         # Build journal NDJSON from SQLite
-        import sqlite3
-
         try:
             conn = sqlite3.connect(f"file:{journal_path}?mode=ro", uri=True)
         except sqlite3.OperationalError as e:
@@ -237,11 +236,7 @@ class RunBundle:
             raise BundleRecoveryError(f"Cannot open journal: {e}") from e
 
         try:
-            cursor = conn.execute("SELECT data FROM records ORDER BY sequence")
-            lines = []
-            for (data,) in cursor:
-                lines.append(data if isinstance(data, str) else json.dumps(data))
-            journal_ndjson = "\n".join(lines).encode("utf-8")
+            journal_ndjson = _read_journal_ndjson(conn)
         except sqlite3.OperationalError as e:
             raise BundleRecoveryError(f"Cannot read journal records: {e}") from e
         finally:
@@ -273,6 +268,58 @@ class RunBundle:
             journal_ndjson=journal_ndjson,
             artifact_index=artifact_index,
         )
+
+
+def _read_journal_ndjson(conn: sqlite3.Connection) -> bytes:
+    """Read journal records from a SQLite database and return NDJSON bytes.
+
+    Tries the current ``journal`` table schema first, then falls back to
+    the legacy ``records(sequence, data)`` table for backwards compat.
+    """
+    # Check which tables exist.
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+    lines: list[str] = []
+
+    if "journal" in tables:
+        cursor = conn.execute(
+            "SELECT sequence, session_id, kind, name, wall_ns, mono_ns, "
+            "turn_id, data, error_type, error_msg, input_ref, output_ref, tags "
+            "FROM journal ORDER BY sequence"
+        )
+        for row in cursor:
+            record: dict[str, Any] = {
+                "sequence": row[0],
+                "session_id": row[1],
+                "kind": row[2],
+                "name": row[3],
+                "wall_ns": row[4],
+                "mono_ns": row[5],
+                "turn_id": row[6],
+            }
+            if row[7] and row[7] != "{}":
+                try:
+                    record["data"] = json.loads(row[7])
+                except json.JSONDecodeError:
+                    record["data"] = row[7]
+            if row[8]:
+                record["error"] = {"type": row[8], "message": row[9] or ""}
+            if row[10]:
+                record["input_ref"] = row[10]
+            if row[11]:
+                record["output_ref"] = row[11]
+            if row[12] and row[12] != "":
+                record["tags"] = row[12].split(",")
+            lines.append(json.dumps(record, default=str))
+    elif "records" in tables:
+        # Legacy schema: single JSON blob per row.
+        cursor = conn.execute("SELECT data FROM records ORDER BY sequence")
+        for (data,) in cursor:
+            lines.append(data if isinstance(data, str) else json.dumps(data))
+    else:
+        raise sqlite3.OperationalError("no recognized journal table found")
+
+    return "\n".join(lines).encode("utf-8")
 
 
 def discover_bundles(data_dir: str | None = None) -> list[Path]:

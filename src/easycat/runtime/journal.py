@@ -471,9 +471,21 @@ class SqliteJournal:
                 import shutil
 
                 try:
-                    # Close, copy the old file, reopen.
+                    # Checkpoint WAL into the main database before copying.
+                    # With wal_autocheckpoint=0, recent records may only
+                    # exist in the WAL file; a bare file copy would lose them.
+                    try:
+                        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    except sqlite3.OperationalError:
+                        pass  # Best-effort; copy WAL files as fallback below.
                     self._conn.close()
                     shutil.copy2(str(self._db_path), str(crash_path))
+                    # Also copy WAL/SHM if they still exist (checkpoint may
+                    # have been incomplete due to concurrent readers).
+                    for suffix in ("-wal", "-shm"):
+                        wal_src = Path(str(self._db_path) + suffix)
+                        if wal_src.exists():
+                            shutil.copy2(str(wal_src), str(crash_path) + suffix)
                     self._conn = sqlite3.connect(
                         str(self._db_path),
                         check_same_thread=False,

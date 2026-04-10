@@ -32,11 +32,17 @@ def export_debug_bundle(
     """Export a debug bundle from a running session."""
     path = Path(path)
 
-    debug_mode = getattr(session, "_debug", None) or getattr(session, "debug", "off")
+    journal = getattr(session, "_journal", None) or getattr(session, "journal", None)
+
+    # Infer debug mode: check explicit attributes first, then fall back to
+    # whether a journal is present (real Session objects created by
+    # create_session / create_text_session don't store a _debug attribute,
+    # but they do store _journal when debug != "off").
+    debug_mode = getattr(session, "_debug", None) or getattr(session, "debug", None)
+    if debug_mode is None:
+        debug_mode = "off" if journal is None else "light"
     if isinstance(debug_mode, str) and debug_mode == "off":
         raise DebugCaptureDisabledError("Debug capture is disabled (debug='off')")
-
-    journal = getattr(session, "_journal", None) or getattr(session, "journal", None)
 
     if path.exists() and not overwrite:
         raise BundleExists(f"Bundle already exists: {path}. Use overwrite=True to replace.")
@@ -53,12 +59,25 @@ def export_debug_bundle(
     artifact_checksums: dict[str, str] = {}
     artifact_data: dict[str, bytes] = {}
     artifact_store = getattr(session, "_artifact_store", None)
-    if artifact_store is not None and hasattr(artifact_store, "_store"):
-        for ref, data in artifact_store._store.items():
-            raw = data if isinstance(data, bytes) else data.encode()
-            sha = hashlib.sha256(raw).hexdigest()
-            artifact_checksums[ref] = sha
-            artifact_data[ref] = raw
+    if artifact_store is not None:
+        if hasattr(artifact_store, "_store"):
+            # InMemoryArtifactStore — iterate the in-memory dict.
+            for ref, data in artifact_store._store.items():
+                raw = data if isinstance(data, bytes) else data.encode()
+                sha = hashlib.sha256(raw).hexdigest()
+                artifact_checksums[ref] = sha
+                artifact_data[ref] = raw
+        elif hasattr(artifact_store, "_dir"):
+            # FilesystemArtifactStore — read .bin files from disk.
+            artifact_dir = artifact_store._dir
+            if artifact_dir.is_dir():
+                for f in artifact_dir.iterdir():
+                    if f.suffix == ".bin" and f.is_file():
+                        ref = f.stem
+                        raw = f.read_bytes()
+                        sha = hashlib.sha256(raw).hexdigest()
+                        artifact_checksums[ref] = sha
+                        artifact_data[ref] = raw
 
     # Provider versions
     provider_versions = _collect_provider_versions(session)
