@@ -354,6 +354,10 @@ class ResponsesAPIBridge:
         self._replay_items = replay if replay else None
         self._pending_interruption_note = _INTERRUPTION_NOTE
 
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client, releasing connection pools."""
+        await self._client.aclose()
+
     def reset(self) -> None:
         self._last_completed_response_id = None
         self._response_count = 0

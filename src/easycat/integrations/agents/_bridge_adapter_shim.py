@@ -86,6 +86,7 @@ class BridgeAdapterShim(BaseAgentAdapter):
         self._session_id = session_id
         self._mcp_servers = mcp_servers
         self._active_turn_id: str | None = None
+        self._last_turn_id: str | None = None
 
     @property
     def bridge(self) -> ExternalAgentBridge:
@@ -123,6 +124,7 @@ class BridgeAdapterShim(BaseAgentAdapter):
         # the session.  Fall back to a generated ID for standalone use.
         turn_id = self._active_turn_id or f"turn-{uuid4().hex[:8]}"
         self._active_turn_id = None  # consumed
+        self._last_turn_id = turn_id
         turn_input = AgentTurnInput.from_text(text, context=context, turn_id=turn_id)
         recorder = self._make_recorder(turn_id)
 
@@ -150,7 +152,7 @@ class BridgeAdapterShim(BaseAgentAdapter):
             self._message_history[-1]["content"] = text
 
     def _truncate_last_assistant_for_interruption(self, text_spoken: str) -> bool:
-        recorder = self._make_recorder()
+        recorder = self._make_recorder(self._last_turn_id)
         self._bridge.apply_interruption(
             text_spoken,
             CancellationMode.IMMEDIATE_STOP,
@@ -177,6 +179,11 @@ class BridgeAdapterShim(BaseAgentAdapter):
                 "content": "[The user interrupted the assistant's response.]",
             }
         )
+
+    async def aclose(self) -> None:
+        """Close the underlying bridge if it supports it."""
+        if hasattr(self._bridge, "aclose"):
+            await self._bridge.aclose()
 
     def clear_history(self) -> None:
         super().clear_history()

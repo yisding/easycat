@@ -697,6 +697,11 @@ class Session:
             self._outbound_queue.close()
         await self.transport.disconnect()
         await self._turn_manager.shutdown()
+        if hasattr(self.agent, "aclose"):
+            try:
+                await self.agent.aclose()
+            except Exception:
+                pass
         if self._artifact_store:
             self._artifact_store.close()
         if self._journal:
@@ -1519,7 +1524,14 @@ class Session:
         if self._runtime_mode != "text_session":
             raise RuntimeError("send_text() is only available in text_session mode")
         try:
-            response = await self.agent.run(text)
+            if hasattr(self.agent, "run_streaming"):
+                accumulated = ""
+                async for event in self.agent.run_streaming(text, context=context):
+                    if hasattr(event, "text") and event.text:
+                        accumulated += event.text
+                response = accumulated
+            else:
+                response = await self.agent.run(text)
         except Exception:
             logger.exception("Agent error in text_session send_text")
             raise

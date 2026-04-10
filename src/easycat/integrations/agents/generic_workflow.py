@@ -306,10 +306,12 @@ class GenericWorkflowBridge:
                     yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
         elif inspect.isawaitable(result):
             output = await result
+            self._last_output = output
             text = self._extract_text(output)
             if text:
                 yield AgentBridgeEvent(kind="text_delta", text=text)
         else:
+            self._last_output = result
             text = self._extract_text(result)
             if text:
                 yield AgentBridgeEvent(kind="text_delta", text=text)
@@ -336,10 +338,12 @@ class GenericWorkflowBridge:
                     yield AgentBridgeEvent(kind="text_delta", text=chunk)
         elif inspect.isawaitable(result):
             output = await result
+            self._last_output = output
             text = self._extract_text(output)
             if text:
                 yield AgentBridgeEvent(kind="text_delta", text=text)
         else:
+            self._last_output = result
             text = self._extract_text(result)
             if text:
                 yield AgentBridgeEvent(kind="text_delta", text=text)
