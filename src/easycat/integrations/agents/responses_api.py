@@ -92,6 +92,7 @@ class ResponsesAPIBridge:
         self._replay_items: list[dict[str, Any]] | None = None
         self._pending_interruption_note: str | None = None
         self._last_accumulated_items: list[dict[str, Any]] = []
+        self._last_user_text: str | None = None
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 
@@ -110,6 +111,8 @@ class ResponsesAPIBridge:
         )
         recorder.record_unit_entered(agent_cursor)
         yield AgentBridgeEvent(kind="cursor_entered", cursor=agent_cursor)
+
+        self._last_user_text = turn_input.text
 
         body = self._build_request_body(turn_input)
         headers = self._build_headers()
@@ -172,13 +175,16 @@ class ResponsesAPIBridge:
 
                     if event_type == "response.failed":
                         error_info = data.get("response", {}).get("error", {})
+                        error_msg = str(error_info.get("message", "unknown error"))
                         recorder.record_framework_error(
                             ErrorInfo(
                                 type="ResponsesAPIError",
-                                message=str(error_info.get("message", "unknown error")),
+                                message=error_msg,
                             )
                         )
-                        break
+                        # Raise so Session treats this as an agent error.
+                        # The except blocks below handle unit_exited recording.
+                        raise RuntimeError(f"Responses API failed: {error_msg}")
 
                     bridge_ev = translate_sse_event(event_type, data, recorder)
                     if bridge_ev is not None:
@@ -286,6 +292,7 @@ class ResponsesAPIBridge:
                 "delivered_text": delivered_text,
                 "truncated_text": truncated,
                 "accumulated_items": getattr(self, "_last_accumulated_items", []),
+                "user_text": getattr(self, "_last_user_text", None),
             },
         )
 
@@ -305,8 +312,14 @@ class ResponsesAPIBridge:
         instructions = plan.framework_instructions
         truncated = instructions.get("truncated_text", "")
         accumulated_items = instructions.get("accumulated_items", [])
+        user_text = instructions.get("user_text")
 
         replay: list[dict[str, Any]] = []
+
+        # Add the user message from the interrupted turn so the model
+        # sees the question it was answering when interrupted.
+        if user_text:
+            replay.append({"role": "user", "content": user_text})
 
         # Add completed tool calls from interrupted turn.
         for item in accumulated_items:
@@ -347,6 +360,7 @@ class ResponsesAPIBridge:
         self._replay_items = None
         self._pending_interruption_note = None
         self._last_accumulated_items = []
+        self._last_user_text = None
 
     # ── Internal helpers ─────────────────────────────────────────
 
@@ -355,9 +369,11 @@ class ResponsesAPIBridge:
         input_items: list[dict[str, Any]] = []
 
         # If we have replay items from an interrupted turn, prepend them.
+        # Note: we do NOT clear _replay_items / _pending_interruption_note
+        # here — they are cleared in invoke() only after the request
+        # succeeds, so a transient HTTP failure doesn't lose them.
         if self._replay_items:
             input_items.extend(self._replay_items)
-            self._replay_items = None
 
         # Add interruption note if pending.
         if self._pending_interruption_note:
@@ -367,7 +383,6 @@ class ResponsesAPIBridge:
                     "content": self._pending_interruption_note,
                 }
             )
-            self._pending_interruption_note = None
 
         # Add the current user message.
         input_items.append(

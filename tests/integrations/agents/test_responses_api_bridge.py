@@ -375,20 +375,16 @@ class TestGracefulDegradation:
     """AC2C.7 -- bridge handles server errors gracefully."""
 
     @pytest.mark.asyncio
-    async def test_server_failure_event_records_error(self):
+    async def test_server_failure_event_raises(self):
         server = MockResponsesServer()
         server.fail_on_next = "Internal server error"
         bridge = _make_bridge(server)
         journal = InMemoryRingBuffer(capacity=1000)
         rec = _recorder(journal)
 
-        events = []
-        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), rec):
-            events.append(ev)
-
-        # Should still produce a done event.
-        kinds = [e.kind for e in events]
-        assert "done" in kinds
+        with pytest.raises(RuntimeError, match="Responses API failed"):
+            async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), rec):
+                pass
 
         # Journal should have a framework error.
         records = journal.read()

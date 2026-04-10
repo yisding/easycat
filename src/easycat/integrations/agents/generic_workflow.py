@@ -297,10 +297,22 @@ class GenericWorkflowBridge:
                     yield AgentBridgeEvent(kind="text_delta", text=chunk)
             return
 
-        result = await self._workflow.on_user_turn(turn_input.text)
-        text = self._extract_text(result)
-        if text:
-            yield AgentBridgeEvent(kind="text_delta", text=text)
+        result = self._workflow.on_user_turn(turn_input.text)
+        if inspect.isasyncgen(result):
+            async for chunk in result:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                if chunk:
+                    yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
+        elif inspect.isawaitable(result):
+            output = await result
+            text = self._extract_text(output)
+            if text:
+                yield AgentBridgeEvent(kind="text_delta", text=text)
+        else:
+            text = self._extract_text(result)
+            if text:
+                yield AgentBridgeEvent(kind="text_delta", text=text)
 
     # ── Deep mode ────────────────────────────────────────────────
 
