@@ -64,11 +64,20 @@ def auto_adapt_agent(agent: Any) -> Any:
                 for p in sig.parameters.values()
                 if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
             ]
-            if len(positional) >= 1:
+            if len(positional) == 1:
                 from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
                 from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
 
                 return BridgeAdapterShim(GenericWorkflowBridge(workflow=agent))
+            elif len(positional) > 1:
+                from easycat.integrations.agents.base import BridgeInputError
+
+                raise BridgeInputError(
+                    f"on_user_turn() has {len(positional)} required positional "
+                    f"parameters but GenericWorkflowBridge only passes (text). "
+                    f"Remove extra required parameters or construct the bridge "
+                    f"explicitly."
+                )
         except (ValueError, TypeError):
             from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
             from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge

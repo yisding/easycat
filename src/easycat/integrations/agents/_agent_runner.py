@@ -159,6 +159,17 @@ class AgentRunner:
         if not self._delegates_history:
             self._apply_interruption(text_spoken, mode=mode)
 
+    def set_active_turn_id(self, turn_id: str) -> None:
+        """Delegate turn-ID propagation to the wrapped agent.
+
+        Called by :class:`Session` so that bridge-backed agents tag
+        journal records with the session's turn ID rather than a
+        synthetic fallback.
+        """
+        fn = getattr(self._agent, "set_active_turn_id", None)
+        if callable(fn):
+            fn(turn_id)
+
     def replace_last_assistant_text(self, text: str) -> None:
         """Replace the text content of the last assistant message in history.
 

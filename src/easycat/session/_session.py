@@ -655,9 +655,11 @@ class Session:
                 pass
         await self.transport.disconnect()
         await self._turn_manager.shutdown()
-        # NOTE: journal and artifact store are intentionally kept open so
-        # callers can inspect / export debug data after stop().  They are
-        # released in shutdown() or close().
+        # Finalize the journal so persistent backends (e.g. SqliteJournal)
+        # write their clean-close marker and checkpoint the WAL.  In-memory
+        # backends treat close() as a no-op, so this is always safe.
+        if self._journal:
+            self._journal.close()
         self._turn = None
 
     async def shutdown(self) -> None:
