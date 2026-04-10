@@ -85,11 +85,20 @@ class BridgeAdapterShim(BaseAgentAdapter):
         self._artifact_store = artifact_store
         self._session_id = session_id
         self._mcp_servers = mcp_servers
+        self._active_turn_id: str | None = None
 
     @property
     def bridge(self) -> ExternalAgentBridge:
         """Access the wrapped bridge."""
         return self._bridge
+
+    def set_active_turn_id(self, turn_id: str) -> None:
+        """Set the turn ID for the next invocation.
+
+        Called by Session before ``run_streaming()`` so that bridge journal
+        records share the same turn_id as the rest of the session.
+        """
+        self._active_turn_id = turn_id
 
     # ── Legacy adapter interface ─────────────────────────────────
 
@@ -109,7 +118,11 @@ class BridgeAdapterShim(BaseAgentAdapter):
         context: list[dict[str, str]] | None = None,
         cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
-        turn_id = f"turn-{uuid4().hex[:8]}"
+        # Prefer the turn ID set by Session (via set_active_turn_id) so
+        # bridge records are attributed to the same turn as the rest of
+        # the session.  Fall back to a generated ID for standalone use.
+        turn_id = self._active_turn_id or f"turn-{uuid4().hex[:8]}"
+        self._active_turn_id = None  # consumed
         turn_input = AgentTurnInput.from_text(text, context=context, turn_id=turn_id)
         recorder = self._make_recorder(turn_id)
 
@@ -127,6 +140,15 @@ class BridgeAdapterShim(BaseAgentAdapter):
         self._message_history.append({"role": "user", "content": text})
         self._message_history.append({"role": "assistant", "content": accumulated})
 
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Update the last assistant message in shadow history.
+
+        Called by Session after markdown stripping so that subsequent
+        turns are conditioned on the cleaned text the user actually heard.
+        """
+        if self._message_history and self._message_history[-1].get("role") == "assistant":
+            self._message_history[-1]["content"] = text
+
     def _truncate_last_assistant_for_interruption(self, text_spoken: str) -> bool:
         recorder = self._make_recorder()
         self._bridge.apply_interruption(
@@ -139,6 +161,27 @@ class BridgeAdapterShim(BaseAgentAdapter):
             replacement = self.interruption_replacement_text(text_spoken)
             self._message_history[-1]["content"] = replacement
         return True
+
+    def _append_interruption_note(self) -> None:
+        """Append an interruption note for message-mode barge-in.
+
+        Called when ``interruption_mode='message'``.  Records the
+        interruption both in the bridge (via ``apply_interruption``)
+        and in the shadow history so the next turn's context includes
+        the interruption signal.
+        """
+        recorder = self._make_recorder()
+        self._bridge.apply_interruption(
+            "",
+            CancellationMode.IMMEDIATE_STOP,
+            recorder=recorder,
+        )
+        self._message_history.append(
+            {
+                "role": "system",
+                "content": "[The user interrupted the assistant's response.]",
+            }
+        )
 
     def clear_history(self) -> None:
         super().clear_history()

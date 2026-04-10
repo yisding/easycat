@@ -52,7 +52,8 @@ from easycat.llm_output_processing import (
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.providers import PlaybackAckTransport
-from easycat.runtime.journal import JournalView
+from easycat.runtime.journal import ExecutionJournal, JournalView
+from easycat.runtime.records import JournalRecordKind
 from easycat.session._interruption import estimate_and_notify_interruption
 from easycat.session._streaming import consume_agent_stream
 from easycat.session._text_utils import (
@@ -181,6 +182,10 @@ class Session:
         self._journal = cfg.journal
         self._artifact_store = cfg.artifact_store
 
+        # Wire journal to event bus so session activity is recorded.
+        if self._journal is not None:
+            self._subscribe_journal_sink(self._journal)
+
         # Backpressure (outbound audio queue)
         self._outbound_queue_external = cfg.outbound_queue is not None
         self._outbound_queue_max_size = 200
@@ -271,6 +276,55 @@ class Session:
 
     async def _emit(self, event: Any) -> None:
         await self.event_bus.emit(self._with_correlation(event))
+
+    def _subscribe_journal_sink(self, journal: ExecutionJournal) -> None:
+        """Subscribe event bus handlers that write session events to the journal."""
+        from easycat.runtime.records import ErrorInfo
+
+        session = self
+        EVT = JournalRecordKind.EVENT
+        CTL = JournalRecordKind.CONTROL
+
+        def _make(kind: JournalRecordKind, name: str):
+            def _handler(event: Any) -> None:
+                data: dict[str, Any] = {}
+                for attr in ("text", "track", "result", "tool_name", "call_id"):
+                    val = getattr(event, attr, None)
+                    if val is not None:
+                        data[attr] = val
+                error = None
+                exc = getattr(event, "exception", None)
+                if exc is not None:
+                    stage = getattr(event, "stage", None)
+                    if hasattr(stage, "value"):
+                        data["stage"] = stage.value
+                    error = ErrorInfo.from_exception(exc)
+                journal.append(
+                    kind=kind,
+                    name=name,
+                    session_id=session.session_id,
+                    turn_id=getattr(event, "turn_id", None),
+                    data=data or None,
+                    error=error,
+                )
+
+            return _handler
+
+        _sub = self.event_bus.subscribe
+        _sub(TurnStarted, _make(EVT, "turn_started"))
+        _sub(TurnEnded, _make(EVT, "turn_ended"))
+        _sub(VADStartSpeaking, _make(EVT, "vad_start_speaking"))
+        _sub(VADStopSpeaking, _make(EVT, "vad_stop_speaking"))
+        _sub(STTPartial, _make(EVT, "stt_partial"))
+        _sub(STTFinal, _make(EVT, "stt_final"))
+        _sub(AgentDelta, _make(EVT, "agent_delta"))
+        _sub(AgentFinal, _make(EVT, "agent_final"))
+        _sub(BotStartedSpeaking, _make(EVT, "bot_started_speaking"))
+        _sub(BotStoppedSpeaking, _make(EVT, "bot_stopped_speaking"))
+        _sub(Interruption, _make(CTL, "interruption"))
+        _sub(Error, _make(EVT, "error"))
+        _sub(ToolCallStarted, _make(EVT, "tool_call_started"))
+        _sub(ToolCallResult, _make(EVT, "tool_call_result"))
 
     def _reset_turn_state(self) -> None:
         """Clear turn correlation state and reset the turn manager."""
@@ -992,6 +1046,13 @@ class Session:
             if self._turn is turn:
                 self._reset_turn_state()
             return
+
+        # Pass the active turn ID to bridge-backed agents so their journal
+        # records share the same turn_id as the rest of the session.
+        turn_id = turn.id if turn else None
+        _set_fn = getattr(self.agent, "set_active_turn_id", None)
+        if callable(_set_fn) and turn_id:
+            _set_fn(turn_id)
 
         # Route to streaming or basic agent path
         if hasattr(self.agent, "run_streaming"):
