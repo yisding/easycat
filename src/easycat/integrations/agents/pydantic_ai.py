@@ -250,6 +250,47 @@ class PydanticAIBridge:
         self._state = None
         self._active_node = None
 
+    # ── History post-processing ───────────────────────────────────
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Rewrite the last assistant ``TextPart`` in history to ``text``.
+
+        Called by the adapter shim after post-processing (e.g. Markdown
+        stripping) so that subsequent turns condition on the cleaned text
+        rather than the raw LLM output.
+        """
+        try:
+            from pydantic_ai.messages import ModelResponse
+        except ImportError:
+            return
+        for msg in reversed(self._message_history):
+            if not isinstance(msg, ModelResponse):
+                continue
+            for part in msg.parts:
+                if type(part).__name__ == "TextPart":
+                    try:
+                        part.content = text
+                    except (AttributeError, TypeError):
+                        object.__setattr__(part, "content", text)
+                    return
+            return
+
+    def append_interruption_note(self, note: str) -> None:
+        """Append an interruption note to PydanticAI message history.
+
+        Appends a ``ModelRequest`` containing a ``SystemPromptPart`` so
+        the next turn sees the interruption signal. Best effort — if the
+        required message types can't be imported, this is a no-op.
+        """
+        try:
+            from pydantic_ai.messages import ModelRequest, SystemPromptPart
+        except ImportError:
+            return
+        try:
+            self._message_history.append(ModelRequest(parts=[SystemPromptPart(content=note)]))
+        except Exception:
+            logger.debug("Failed to append interruption note to PydanticAI history", exc_info=True)
+
     # ── Agent mode ───────────────────────────────────────────────
 
     async def _invoke_agent(

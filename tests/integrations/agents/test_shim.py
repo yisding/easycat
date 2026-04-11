@@ -66,6 +66,8 @@ class _StubBridge:
         ]
         self._reset_called = False
         self._apply_called = False
+        self._replaced_text: str | None = None
+        self._appended_note: str | None = None
 
     async def invoke(self, turn_input, recorder, cancel_token=None):
         for ev in self._events:
@@ -76,6 +78,12 @@ class _StubBridge:
 
     def apply_interruption(self, delivered_text, mode, recorder=None, caused_by_signal_id=None):
         self._apply_called = True
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        self._replaced_text = text
+
+    def append_interruption_note(self, note: str) -> None:
+        self._appended_note = note
 
     def reset(self):
         self._reset_called = True
@@ -129,3 +137,56 @@ class TestBridgeAdapterShim:
         bridge = _StubBridge()
         shim = BridgeAdapterShim(bridge)
         assert shim.bridge is bridge
+
+    def test_replace_last_assistant_text_delegates(self):
+        """Shim must forward markdown-stripping writes to the bridge so
+        bridges that keep their own message history stay in sync."""
+        bridge = _StubBridge()
+        shim = BridgeAdapterShim(bridge)
+        shim._message_history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "**hello**"},
+        ]
+        shim.replace_last_assistant_text("hello")
+        assert shim._message_history[-1]["content"] == "hello"
+        assert bridge._replaced_text == "hello"
+
+    def test_append_interruption_note_delegates(self):
+        """Shim must forward message-mode interruption notes to the
+        bridge so the bridge's own history reflects the interruption."""
+        bridge = _StubBridge()
+        shim = BridgeAdapterShim(bridge)
+        shim._append_interruption_note()
+        assert shim._message_history[-1]["role"] == "system"
+        assert bridge._appended_note is not None
+        assert "interrupted" in bridge._appended_note.lower()
+
+    def test_shim_tolerates_bridge_without_postprocessing_methods(self):
+        """A minimal bridge missing the optional post-processing methods
+        must still work — the shim should fall back to shadow-only updates."""
+
+        class _BareBridge:
+            COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CancellationMode.IMMEDIATE_STOP}
+
+            async def invoke(self, turn_input, recorder, cancel_token=None):
+                if False:
+                    yield  # pragma: no cover
+
+            def snapshot_state(self):
+                return FrameworkStateSnapshot(fields={}, kind="bare")
+
+            def apply_interruption(self, *args, **kwargs):
+                pass
+
+            def reset(self):
+                pass
+
+        shim = BridgeAdapterShim(_BareBridge())
+        shim._message_history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "raw"},
+        ]
+        shim.replace_last_assistant_text("clean")
+        shim._append_interruption_note()
+        assert shim._message_history[1]["content"] == "clean"
+        assert shim._message_history[-1]["role"] == "system"

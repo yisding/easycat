@@ -42,9 +42,7 @@ uv run python examples/ws_server.py  # Run an example
 
 **Provider subpackages** (`stt/`, `tts/`, `transports/`, `telephony/`): one provider per file, each implementing the corresponding Protocol. Base classes (`STTBase`, `TTSBase`, `_ServerTransportBase`) provide shared plumbing.
 
-**Agent bridges** (`integrations/agents/`): `ExternalAgentBridge` protocol with implementations `OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, and `ResponsesAPIBridge`. These integrate with the journal-based debug-first runtime. The legacy `agents/` package and `agent_runner.py` are thin deprecation shims that re-export from bridges or provide no-op stubs.
-
-**Legacy shims** (`event_logging.py`, `tracing.py`, `_span_manager.py`, `metrics.py`, `agent_runner.py`, `agents/`): These modules are deprecated no-op stubs kept only for import compatibility. All observability is handled by the journal-based `runtime/` package. See `docs/migration-debug-first-runtime.md`.
+**Agent bridges** (`integrations/agents/`): `ExternalAgentBridge` protocol with implementations `OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, and `ResponsesAPIBridge`. `BridgeAdapterShim` adapts a bridge to the legacy streaming-adapter surface that `Session` consumes. `AgentRunner` (in `integrations/agents/_agent_runner.py`) wraps any agent with timeout, cancellation, and in-memory history for simple non-bridge agents.
 
 **Dual-backend fallback:** VAD (Krisp → Silero → passthrough) and noise reduction (Krisp → RNNoise → passthrough) both try commercial backends first, then fall back to open-source, then no-op.
 

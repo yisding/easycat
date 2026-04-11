@@ -194,7 +194,7 @@ class AgentRunner:
 
     # ── Basic run (Agent protocol) ─────────────────────────────
 
-    async def run(self, text: str, **kwargs: Any) -> str:
+    async def run(self, text: str) -> str:
         """Invoke the agent and return the full response text.
 
         Handles timeout and records conversation history.
@@ -207,11 +207,11 @@ class AgentRunner:
         try:
             if self._config.timeout is not None:
                 response = await asyncio.wait_for(
-                    self._agent.run(text, **kwargs),
+                    self._agent.run(text),
                     timeout=self._config.timeout,
                 )
             else:
-                response = await self._agent.run(text, **kwargs)
+                response = await self._agent.run(text)
         except TimeoutError:
             err = AgentTimeoutError(self._config.timeout or 0)
             if not self._delegates_history:
@@ -232,7 +232,6 @@ class AgentRunner:
         self,
         text: str,
         *,
-        context: list[dict[str, str]] | None = None,
         cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         """Run the agent with streaming output.
@@ -256,16 +255,13 @@ class AgentRunner:
                 if self._delegates_history:
                     stream = self._agent.run_streaming(
                         text,
-                        context=context,
                         cancel_token=cancel_token,
                     )
                 else:
-                    merged_context = list(self._history[:-1])
-                    if context:
-                        merged_context = context + merged_context
+                    context = list(self._history[:-1])
                     stream = self._agent.run_streaming(
                         text,
-                        context=merged_context,
+                        context=context,
                         cancel_token=cancel_token,
                     )
 

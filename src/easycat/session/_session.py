@@ -1504,7 +1504,7 @@ class Session:
 
     # ── Text mode ──────────────────────────────────────────────
 
-    async def send_text(self, text: str, *, context: dict[str, Any] | None = None) -> str:
+    async def send_text(self, text: str) -> str:
         """Send text input and return the agent response.
 
         Only available when the session was created with
@@ -1515,8 +1515,6 @@ class Session:
         ----------
         text:
             User message to send to the agent.
-        context:
-            Optional context dict forwarded to the agent.
 
         Returns
         -------
@@ -1526,12 +1524,9 @@ class Session:
         if self._runtime_mode != "text_session":
             raise RuntimeError("send_text() is only available in text_session mode")
         try:
-            kwargs: dict[str, Any] = {}
-            if context is not None:
-                kwargs["context"] = context
             if hasattr(self.agent, "run_streaming"):
                 accumulated = ""
-                async for event in self.agent.run_streaming(text, **kwargs):
+                async for event in self.agent.run_streaming(text):
                     if hasattr(event, "type") and event.type == AgentStreamEventType.DONE:
                         if hasattr(event, "text") and event.text:
                             accumulated = event.text
@@ -1540,7 +1535,7 @@ class Session:
                         accumulated += event.text
                 response = accumulated
             else:
-                response = await self.agent.run(text, **kwargs)
+                response = await self.agent.run(text)
         except Exception:
             logger.exception("Agent error in text_session send_text")
             raise

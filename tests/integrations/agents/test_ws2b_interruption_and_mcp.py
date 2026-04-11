@@ -975,3 +975,95 @@ class TestBackwardCompatibility:
         bridge = _generic_deep_bridge_no_override()
         # Should not raise — just logs debug.
         bridge.apply_interruption("partial", CancellationMode.IMMEDIATE_STOP)
+
+
+# ── Bridge history post-processing (markdown strip + message-mode note) ──
+
+
+class TestOpenAIAgentsBridgeHistoryPostProcessing:
+    """OpenAIAgentsBridge.replace_last_assistant_text and
+    append_interruption_note must mutate the bridge's own
+    ``_message_history`` so subsequent turns see the update."""
+
+    def test_replace_last_assistant_text_list_content(self):
+        bridge = _openai_bridge()
+        bridge.replace_last_assistant_text("cleaned")
+        content = bridge._message_history[1]["content"]
+        parts = [p for p in content if p.get("type") == "output_text"]
+        assert parts[0]["text"] == "cleaned"
+
+    def test_replace_last_assistant_text_plain_string(self):
+        agent = MagicMock()
+        agent.name = "Plain"
+        bridge = OpenAIAgentsBridge(agent)
+        bridge._message_history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "**bold** text"},
+        ]
+        bridge.replace_last_assistant_text("bold text")
+        assert bridge._message_history[1]["content"] == "bold text"
+
+    def test_replace_last_assistant_text_no_assistant_is_noop(self):
+        agent = MagicMock()
+        agent.name = "NoAssistant"
+        bridge = OpenAIAgentsBridge(agent)
+        bridge._message_history = [{"role": "user", "content": "hi"}]
+        # Should not raise.
+        bridge.replace_last_assistant_text("anything")
+        assert bridge._message_history == [{"role": "user", "content": "hi"}]
+
+    def test_append_interruption_note_adds_developer_message(self):
+        bridge = _openai_bridge()
+        bridge.append_interruption_note("note")
+        assert bridge._message_history[-1] == {"role": "developer", "content": "note"}
+
+    def test_append_interruption_note_sets_pending_in_response_id_mode(self):
+        bridge = _openai_bridge()
+        bridge._use_previous_response_id = True
+        bridge._previous_response_id = "resp-prior"
+        bridge.append_interruption_note("note")
+        assert bridge._pending_interruption == "note"
+
+    def test_append_interruption_note_survives_subsequent_build_input(self):
+        """The appended note must participate in the next _build_input()
+        so a new turn actually sees the interruption signal."""
+        bridge = _openai_bridge()
+        bridge._use_previous_response_id = False
+        bridge._previous_response_id = None
+        bridge.append_interruption_note("note")
+        input_data = bridge._build_input("next question")
+        assert isinstance(input_data, list)
+        assert any(
+            isinstance(item, dict)
+            and item.get("role") == "developer"
+            and item.get("content") == "note"
+            for item in input_data
+        )
+
+
+class TestPydanticAIBridgeHistoryPostProcessing:
+    """PydanticAIBridge.replace_last_assistant_text must mutate the last
+    ``ModelResponse``'s ``TextPart``. append_interruption_note must
+    append a new ``ModelRequest`` with ``SystemPromptPart``."""
+
+    def test_replace_last_assistant_text(self):
+        bridge = _pydantic_ai_bridge_agent()
+        bridge.replace_last_assistant_text("cleaned")
+        from pydantic_ai.messages import ModelResponse
+
+        last = bridge._message_history[-1]
+        assert isinstance(last, ModelResponse)
+        text_part = next(p for p in last.parts if type(p).__name__ == "TextPart")
+        assert text_part.content == "cleaned"
+
+    def test_append_interruption_note(self):
+        bridge = _pydantic_ai_bridge_agent()
+        original_len = len(bridge._message_history)
+        bridge.append_interruption_note("interrupted")
+        from pydantic_ai.messages import ModelRequest, SystemPromptPart
+
+        assert len(bridge._message_history) == original_len + 1
+        appended = bridge._message_history[-1]
+        assert isinstance(appended, ModelRequest)
+        system_part = next(p for p in appended.parts if isinstance(p, SystemPromptPart))
+        assert system_part.content == "interrupted"

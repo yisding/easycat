@@ -150,9 +150,18 @@ class BridgeAdapterShim(BaseAgentAdapter):
 
         Called by Session after markdown stripping so that subsequent
         turns are conditioned on the cleaned text the user actually heard.
+        Also delegates to the wrapped bridge so bridges that maintain
+        their own message history (e.g. ``OpenAIAgentsBridge``,
+        ``PydanticAIBridge``) see the cleaned text too.
         """
         if self._message_history and self._message_history[-1].get("role") == "assistant":
             self._message_history[-1]["content"] = text
+        bridge_fn = getattr(self._bridge, "replace_last_assistant_text", None)
+        if callable(bridge_fn):
+            try:
+                bridge_fn(text)
+            except Exception:
+                logger.debug("Bridge replace_last_assistant_text failed", exc_info=True)
 
     def _truncate_last_assistant_for_interruption(self, text_spoken: str) -> bool:
         recorder = self._make_recorder(self._last_turn_id)
@@ -173,15 +182,20 @@ class BridgeAdapterShim(BaseAgentAdapter):
         Called when ``interruption_mode='message'``.  In message mode we
         do NOT call ``bridge.apply_interruption`` because that would
         blank the assistant message in the bridge's own history.  Instead
-        we only append a note to the shadow history so the next turn
-        sees the interruption signal without losing what was actually said.
+        we append a note to the shadow history AND delegate to the bridge
+        via ``append_interruption_note`` so bridges that maintain their
+        own message history (e.g. ``OpenAIAgentsBridge``,
+        ``PydanticAIBridge``) see the interruption signal on the next
+        turn without losing what was actually said.
         """
-        self._message_history.append(
-            {
-                "role": "system",
-                "content": "[The user interrupted the assistant's response.]",
-            }
-        )
+        note = "[The user interrupted the assistant's response.]"
+        self._message_history.append({"role": "system", "content": note})
+        bridge_fn = getattr(self._bridge, "append_interruption_note", None)
+        if callable(bridge_fn):
+            try:
+                bridge_fn(note)
+            except Exception:
+                logger.debug("Bridge append_interruption_note failed", exc_info=True)
 
     async def aclose(self) -> None:
         """Close the underlying bridge if it supports it."""

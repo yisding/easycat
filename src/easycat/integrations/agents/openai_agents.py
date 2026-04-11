@@ -297,6 +297,51 @@ class OpenAIAgentsBridge:
         self._pending_interruption = None
         self._last_output = None
 
+    # ── History post-processing ───────────────────────────────────
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Rewrite the last assistant entry in ``_message_history`` to ``text``.
+
+        Called by the adapter shim after post-processing (e.g. Markdown
+        stripping) so that subsequent turns condition on the cleaned text
+        rather than the raw LLM output.
+        """
+        for i in range(len(self._message_history) - 1, -1, -1):
+            item = self._message_history[i]
+            role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
+            if role != "assistant":
+                continue
+            if isinstance(item, dict) and "content" in item:
+                content = item["content"]
+                if isinstance(content, list):
+                    parts_list = [
+                        p
+                        for p in content
+                        if isinstance(p, dict) and p.get("type") == "output_text"
+                    ]
+                    if parts_list:
+                        originals = [str(p.get("text", "")) for p in parts_list]
+                        replacements = split_replacement_by_original_parts(originals, text)
+                        for p, r in zip(parts_list, replacements):
+                            p["text"] = r
+                elif isinstance(content, str):
+                    item["content"] = text
+            elif not isinstance(item, dict) and hasattr(item, "content"):
+                item.content = text
+            return
+
+    def append_interruption_note(self, note: str) -> None:
+        """Append an interruption note so the next turn sees it.
+
+        Appends a ``developer``-role message to ``_message_history`` for
+        the full-history code path, and also stores it as
+        ``_pending_interruption`` so that the response-id chaining path
+        in ``_build_input`` surfaces it on the next turn.
+        """
+        self._message_history.append({"role": "developer", "content": note})
+        if self._use_previous_response_id:
+            self._pending_interruption = note
+
     # ── Internal helpers ─────────────────────────────────────────
 
     def _build_input(self, text: str) -> Any:

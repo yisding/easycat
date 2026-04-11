@@ -1,23 +1,17 @@
 # Migration Guide: Legacy Observability to Debug-First Runtime
 
-This guide covers migrating from EasyCat's legacy observability modules
-(`event_logging`, `tracing`, `metrics`, `_span_manager`) and legacy agent
-adapters (`easycat.agents`) to the new journal-based debug-first runtime
-and bridge-based agent integrations.
-
-## Why migrate?
-
-The legacy observability stack (`EventTraceLogger`, `Tracer`/`Span`,
-`InMemoryMetrics`) and the legacy agent adapters (`OpenAIAgentsAdapter`,
-`PydanticAIAdapter`) are deprecated. They will emit `DeprecationWarning`
-on import and will be removed in a future release.
+EasyCat's legacy observability modules (`easycat.event_logging`,
+`easycat.tracing`, `easycat.metrics`, `easycat._span_manager`) and legacy
+agent adapters (`easycat.agents.*`) have been **removed**. The import
+paths no longer exist — there are no deprecation shims. Code that still
+references them must be updated before upgrading.
 
 The replacement systems are:
 
 - **`session.journal`** (`ExecutionJournal`) for all observability
 - **`easycat.integrations.agents`** bridges for agent framework integration
 
-## EventTraceLogger to session.journal
+## EventTraceLogger → session.journal
 
 ### Before
 
@@ -35,16 +29,15 @@ recent = logger.snapshot_recent_events()
 ### After
 
 ```python
-from easycat.runtime import ExecutionJournal, JournalRecordKind, JournalView
+from easycat.runtime import JournalRecordKind
 
 journal = session.journal  # available on every Session
 
 # Query events
-view = JournalView(journal)
 events = journal.slice(kind=JournalRecordKind.EVENT)
 ```
 
-## Tracer / Span to journal stage operations
+## Tracer / Span → journal stage operations
 
 ### Before
 
@@ -62,13 +55,12 @@ tracer.finish_span(span, SpanStatus.OK)
 
 ```python
 # Spans are recorded automatically by Session into the journal.
-# Query them via:
 from easycat.runtime import JournalRecordKind
 
 spans = journal.slice(kind=JournalRecordKind.SPAN_START)
 ```
 
-## InMemoryMetrics to journal query
+## InMemoryMetrics → journal query
 
 ### Before
 
@@ -91,33 +83,7 @@ metric_records = journal.slice(kind=JournalRecordKind.METRIC)
 latencies = [r for r in metric_records if r.data.get("metric_type") == "latency"]
 ```
 
-## AgentRunner to bridge/stage
-
-### Before
-
-```python
-from easycat.agent_runner import AgentRunner, AgentRunnerConfig
-
-runner = AgentRunner(my_agent, AgentRunnerConfig(timeout=30.0))
-response = await runner.run("Hello")
-```
-
-### After
-
-```python
-from easycat.integrations.agents import OpenAIAgentsBridge, PydanticAIBridge
-
-# Use bridges directly -- they integrate with the journal automatically.
-bridge = OpenAIAgentsBridge(agent=my_openai_agent)
-# Or for PydanticAI:
-bridge = PydanticAIBridge(agent=my_pydantic_agent)
-
-# Pass to SessionConfig or use auto_adapt_agent():
-from easycat.agents.factory import auto_adapt_agent
-adapted = auto_adapt_agent(my_agent)  # auto-detects and wraps in bridge
-```
-
-## Legacy agent adapter imports to new imports
+## Agent adapters → bridges
 
 ### Before
 
@@ -139,22 +105,29 @@ from easycat.integrations.agents import (
     PydanticAIBridge,
     GenericWorkflowBridge,
     ExternalAgentBridge,
+    auto_adapt_agent,
 )
+
+bridge = OpenAIAgentsBridge(agent=my_openai_agent)
+# or
+bridge = PydanticAIBridge(agent=my_pydantic_agent)
+
+# Or let EasyCat auto-detect the framework:
+adapted = auto_adapt_agent(my_agent)
 ```
 
 ## EASYCAT_LEGACY_OBS_DUAL_WRITE removal
 
 The `EASYCAT_LEGACY_OBS_DUAL_WRITE` environment variable has been removed.
-Journal writes from legacy observability modules are now unconditional.
-Remove any references to this variable from your deployment configuration.
+Remove any references to it from your deployment configuration.
 
-## Summary of deprecated modules
+## Summary of removed modules
 
-| Deprecated module | Replacement |
+| Removed module | Replacement |
 |---|---|
-| `easycat.event_logging` | `session.journal` / `JournalView` |
+| `easycat.event_logging` | `session.journal` / `JournalRecordKind.EVENT` |
 | `easycat.tracing` | `session.journal` (auto-recorded spans) |
 | `easycat.metrics` | `session.journal` (metric records) |
 | `easycat._span_manager` | `session.journal` (auto-recorded spans) |
-| `easycat.agent_runner` | `easycat.integrations.agents` bridges |
-| `easycat.agents.*` | `easycat.integrations.agents.*` |
+| `easycat.agent_runner` | `easycat.integrations.agents._agent_runner.AgentRunner` |
+| `easycat.agents.*` | `easycat.integrations.agents.*` (bridges) |
