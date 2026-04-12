@@ -226,6 +226,7 @@ class Session:
         # State
         self._is_running = False
         self._closed = False
+        self._flushed = False
         self._pipeline_task: asyncio.Task[None] | None = None
         self._stt_task: asyncio.Task[None] | None = None
         self._current_tts_task: asyncio.Task[None] | None = None
@@ -627,6 +628,7 @@ class Session:
         """Gracefully stop the session: finish current turn, close providers."""
         if self._closed:
             return
+        self._closed = True
         was_running = self._is_running
         self._is_running = False
         current_task = asyncio.current_task()
@@ -671,12 +673,13 @@ class Session:
             except Exception:
                 pass
         self._turn = None
-        self.destroy()
+        self.close()
 
     async def shutdown(self) -> None:
         """Force-close everything and release resources."""
         if self._closed:
             return
+        self._closed = True
         self._is_running = False
 
         if self._turn:
@@ -716,7 +719,7 @@ class Session:
             except Exception:
                 pass
         self._turn = None
-        self.destroy()
+        self.close()
 
     def close(self) -> None:
         """Flush journal and artifact store resources.
@@ -730,9 +733,9 @@ class Session:
         that post-stop reads (e.g. ``export_debug_bundle``) still work.
         Call :meth:`destroy` to release connections and free memory.
         """
-        if self._closed:
+        if self._flushed:
             return
-        self._closed = True
+        self._flushed = True
         if self._journal:
             self._journal.flush()
 
