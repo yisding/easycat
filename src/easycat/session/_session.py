@@ -662,10 +662,6 @@ class Session:
                 await self.agent.aclose()
             except Exception:
                 pass
-        if self._artifact_store:
-            self._artifact_store.close()
-        if self._journal:
-            self._journal.close()
         self._turn = None
 
     async def shutdown(self) -> None:
@@ -708,11 +704,20 @@ class Session:
                 await self.agent.aclose()
             except Exception:
                 pass
+        self._turn = None
+
+    def close(self) -> None:
+        """Release journal and artifact store resources.
+
+        Call this after ``stop()`` / ``shutdown()`` and any post-stop work
+        such as ``export_debug_bundle()``.  Safe to call multiple times.
+        """
         if self._artifact_store:
             self._artifact_store.close()
+            self._artifact_store = None
         if self._journal:
             self._journal.close()
-        self._turn = None
+            self._journal = None
 
     # ── Cancellation ───────────────────────────────────────────
 
@@ -1527,7 +1532,17 @@ class Session:
         """
         if self._runtime_mode != "text_session":
             raise RuntimeError("send_text() is only available in text_session mode")
+        turn_id = f"turn-{uuid4().hex[:12]}"
+        if self._journal:
+            self._journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="turn_started",
+                session_id=self.session_id,
+                turn_id=turn_id,
+                data={"text": text},
+            )
         try:
+            t0 = time.monotonic()
             if hasattr(self.agent, "run_streaming"):
                 accumulated = ""
                 async for event in self.agent.run_streaming(text):
@@ -1540,9 +1555,43 @@ class Session:
                 response = accumulated
             else:
                 response = await self.agent.run(text)
-        except Exception:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            if self._journal:
+                self._journal.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="agent_final",
+                    session_id=self.session_id,
+                    turn_id=turn_id,
+                    data={"text": response},
+                )
+                self._journal.append(
+                    kind=JournalRecordKind.METRIC,
+                    name="text_turn_latency_ms",
+                    session_id=self.session_id,
+                    turn_id=turn_id,
+                    data={"value": elapsed_ms},
+                )
+        except Exception as exc:
             logger.exception("Agent error in text_session send_text")
+            if self._journal:
+                from easycat.runtime.records import ErrorInfo
+
+                self._journal.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="error",
+                    session_id=self.session_id,
+                    turn_id=turn_id,
+                    error=ErrorInfo.from_exception(exc),
+                )
             raise
+        finally:
+            if self._journal:
+                self._journal.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="turn_ended",
+                    session_id=self.session_id,
+                    turn_id=turn_id,
+                )
         return response
 
     async def _cancel_stt(self) -> None:

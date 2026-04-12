@@ -172,8 +172,7 @@ def _safe_config_snapshot(session: Any) -> dict[str, Any]:
             val = getattr(config, key, None)
             if val is not None:
                 try:
-                    json.dumps(val, default=str)
-                    snapshot[key] = val
+                    snapshot[key] = json.loads(json.dumps(val, default=str))
                 except (TypeError, ValueError):
                     snapshot[key] = str(val)
         return snapshot

@@ -105,6 +105,11 @@ class AgentRunner:
         else:
             self._history.clear()
 
+    async def aclose(self) -> None:
+        """Close the wrapped agent, releasing any held resources."""
+        if hasattr(self._agent, "aclose"):
+            await self._agent.aclose()
+
     # ── Interruption handling ─────────────────────────────────
 
     def _apply_interruption(
