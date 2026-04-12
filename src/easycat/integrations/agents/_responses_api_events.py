@@ -64,6 +64,15 @@ def translate_sse_event(
             return AgentBridgeEvent(kind="text_delta", text=delta)
         return None
 
+    if event_type == "response.output_item.added":
+        item = data.get("item", {})
+        if item.get("type") == "function_call":
+            name = item.get("name", "")
+            call_id = item.get("call_id", "") or item.get("id", "") or ""
+            recorder.record_tool_call(phase="start", name=name, call_id=call_id)
+            return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
+        return None
+
     if event_type == "response.function_call_arguments.delta":
         delta = data.get("delta", "")
         call_id = data.get("call_id", "") or data.get("item_id", "") or ""
@@ -76,10 +85,8 @@ def translate_sse_event(
         item_type = item.get("type", "")
 
         if item_type == "function_call":
-            name = item.get("name", "")
-            call_id = item.get("call_id", "") or item.get("id", "") or ""
-            recorder.record_tool_call(phase="start", name=name, call_id=call_id)
-            return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
+            # tool_started already emitted on output_item.added
+            return None
 
         if item_type == "function_call_output":
             call_id = item.get("call_id", "") or item.get("id", "") or ""

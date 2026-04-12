@@ -71,7 +71,7 @@ class CommittableCheckpoint:
 @dataclass(frozen=True)
 class Manifest:
     format_version: int = FORMAT_VERSION
-    provider_versions: dict[str, str] = field(default_factory=dict)
+    provider_versions: dict[str, Any] = field(default_factory=dict)
     config_snapshot: dict[str, Any] = field(default_factory=dict)
     env_metadata: dict[str, str] = field(default_factory=dict)
     sharing_banner: str = ""

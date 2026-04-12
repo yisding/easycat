@@ -501,8 +501,9 @@ class PydanticAIBridge:
                     prev_cursor = cursor
                     prev_node_name = node_name
 
-                    # Let the node run — agent calls inside will use the
-                    # event handler on the state.
+                    # Forward any events the handler captured during this node.
+                    for ev in _handler.drain():
+                        yield ev
 
             # Close the last cursor.
             if prev_cursor is not None:
@@ -592,6 +593,7 @@ class _GraphEventHandler:
         self._recorder = recorder
         self._accumulated_text = ""
         self._was_called = False
+        self._pending: list[AgentBridgeEvent] = []
 
     @property
     def accumulated_text(self) -> str:
@@ -601,12 +603,19 @@ class _GraphEventHandler:
     def was_called(self) -> bool:
         return self._was_called
 
+    def drain(self) -> list[AgentBridgeEvent]:
+        events = self._pending
+        self._pending = []
+        return events
+
     async def __call__(self, event: Any) -> None:
         """Handle a PydanticAI streaming event from inside a graph node."""
         self._was_called = True
         mapped = translate_event(event, self._recorder)
-        if mapped is not None and mapped.kind == "text_delta":
-            self._accumulated_text += mapped.text
+        if mapped is not None:
+            if mapped.kind == "text_delta":
+                self._accumulated_text += mapped.text
+            self._pending.append(mapped)
 
 
 # ── Helpers ──────────────────────────────────────────────────────

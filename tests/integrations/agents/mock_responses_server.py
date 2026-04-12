@@ -1,7 +1,7 @@
 """Mock ASGI server for the OpenAI Responses API.
 
 Provides a minimal in-process server for testing
-:class:`ResponsesAPIBridge` without network I/O.  Uses raw ASGI
+:class:`RemoteResponsesAPIBridge` without network I/O.  Uses raw ASGI
 (no starlette dependency) and runs via ``httpx.ASGITransport``.
 """
 
@@ -173,6 +173,21 @@ class MockResponsesServer:
                 "name": name,
                 "arguments": arguments,
             }
+            # Emit added → argument deltas → done (matches real API sequence).
+            added_item = {
+                "type": "function_call",
+                "id": fc_item["id"],
+                "call_id": call_id,
+                "name": name,
+            }
+            added_ev = {"type": "response.output_item.added", "item": added_item}
+            events.append(f"data: {json.dumps(added_ev)}")
+            arg_ev = {
+                "type": "response.function_call_arguments.delta",
+                "call_id": call_id,
+                "delta": arguments,
+            }
+            events.append(f"data: {json.dumps(arg_ev)}")
             events.append(
                 f"data: {json.dumps({'type': 'response.output_item.done', 'item': fc_item})}"
             )

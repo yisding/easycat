@@ -767,11 +767,11 @@ class TestSSETranslator:
         assert ev.kind == "tool_delta"
         assert ev.call_id == "c1"
 
-    def test_function_call_done(self):
+    def test_function_call_added(self):
         journal = InMemoryRingBuffer(capacity=1000)
         rec = _recorder(journal)
         ev = translate_sse_event(
-            "response.output_item.done",
+            "response.output_item.added",
             {
                 "item": {
                     "type": "function_call",
@@ -789,6 +789,15 @@ class TestSSETranslator:
         tool_records = [r for r in records if r.name == "tool_phase_changed"]
         assert len(tool_records) == 1
         assert tool_records[0].data["phase"] == "start"
+
+    def test_function_call_done_returns_none(self):
+        rec = _recorder()
+        ev = translate_sse_event(
+            "response.output_item.done",
+            {"item": {"type": "function_call", "name": "get_weather", "call_id": "c1"}},
+            rec,
+        )
+        assert ev is None
 
     def test_function_call_output_done(self):
         journal = InMemoryRingBuffer(capacity=1000)
