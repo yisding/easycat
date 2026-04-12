@@ -359,9 +359,9 @@ def create_session(config: EasyCatConfig) -> Session:
             if mcp_servers and hasattr(shim.bridge, "_mcp_servers"):
                 shim.bridge._mcp_servers = list(mcp_servers)
             # Inject model/API key for URL-backed agents.
-            from easycat.integrations.agents.responses_api import ResponsesAPIBridge
+            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
-            if isinstance(shim.bridge, ResponsesAPIBridge):
+            if isinstance(shim.bridge, RemoteResponsesAPIBridge):
                 if config.agent_model:
                     shim.bridge._model = config.agent_model
                 if config.remote_agent_api_key:
@@ -484,6 +484,16 @@ def create_text_session(
         )
         debug = "light" if debug else "off"
 
+    _VALID_DEBUG = {"off", "light", "full"}
+    if debug not in _VALID_DEBUG:
+        raise ValueError(f"Invalid debug={debug!r}. Must be one of {sorted(_VALID_DEBUG)}.")
+    _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
+    if journal_backend not in _VALID_JOURNAL_BACKEND:
+        raise ValueError(
+            f"Invalid journal_backend={journal_backend!r}. "
+            f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
+        )
+
     sid = session_id or f"session-{uuid4().hex[:12]}"
     artifact_store = _create_artifact_store(sid, debug)
     journal = (
@@ -514,9 +524,9 @@ def create_text_session(
         _inner._artifact_store = artifact_store
         _inner._session_id = sid
         # Inject model/API key for URL-backed agents (mirrors create_session).
-        from easycat.integrations.agents.responses_api import ResponsesAPIBridge
+        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
-        if isinstance(_inner.bridge, ResponsesAPIBridge):
+        if isinstance(_inner.bridge, RemoteResponsesAPIBridge):
             if agent_model:
                 _inner.bridge._model = agent_model
             if remote_agent_api_key:

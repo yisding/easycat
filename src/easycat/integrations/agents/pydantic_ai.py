@@ -316,7 +316,10 @@ class PydanticAIBridge:
         raw_output: Any = None
         done_emitted = False
 
+        saved_mcp_servers = getattr(self._agent, "mcp_servers", None)
         try:
+            if self._mcp_servers and hasattr(self._agent, "mcp_servers"):
+                self._agent.mcp_servers = list(self._mcp_servers)
             if hasattr(self._agent, "iter"):
                 async for ev in self._stream_via_iter(turn_input.text, recorder, cancel_token):
                     if ev.kind == "text_delta":
@@ -335,6 +338,9 @@ class PydanticAIBridge:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
             raise
+        finally:
+            if hasattr(self._agent, "mcp_servers"):
+                self._agent.mcp_servers = saved_mcp_servers
 
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         if not done_emitted:
@@ -437,6 +443,14 @@ class PydanticAIBridge:
         prev_node_name: str | None = None
         prev_cursor: ExecutionCursor | None = None
 
+        # Inject MCP servers into graph agents (same save/restore pattern).
+        saved_mcp: list[tuple[Any, Any]] = []
+        if self._mcp_servers and self._agents:
+            for ag in self._agents:
+                if hasattr(ag, "mcp_servers"):
+                    saved_mcp.append((ag, getattr(ag, "mcp_servers", None)))
+                    ag.mcp_servers = list(self._mcp_servers)
+
         try:
             async with self._graph.iter(initial_node, state=state) as graph_run:
                 async for node in graph_run:
@@ -535,6 +549,9 @@ class PydanticAIBridge:
             if prev_cursor is not None:
                 recorder.record_unit_exited(prev_cursor, reason="error")
             raise
+        finally:
+            for ag, original in saved_mcp:
+                ag.mcp_servers = original
 
         yield AgentBridgeEvent(
             kind="done",
