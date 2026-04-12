@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.runtime.context import RunContext
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._turn_context import TurnContext
@@ -19,7 +20,7 @@ class AgentStage:
     name = "agent"
 
     def __init__(self, provider: Any, *, journal: Any = None) -> None:
-        self._provider = provider
+        self._provider = auto_adapt_agent(provider)
         self._journal = journal
         self._last_snapshot = StageStateSnapshot(stage_name=self.name)
 

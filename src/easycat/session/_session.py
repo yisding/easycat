@@ -46,6 +46,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.health_check import PeriodicHealthChecker
+from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents._legacy_types import AgentStreamEventType
 from easycat.llm_output_processing import (
     LLMOutputProcessor,
@@ -120,7 +121,7 @@ class Session:
         self.noise_reducer = cfg.noise_reducer or PassthroughNoiseReducer()
         self.echo_canceller = cfg.echo_canceller or PassthroughAEC()
         self.transport = cfg.transport or NoopTransport()
-        self.agent: Agent = cfg.agent or NoopAgent()
+        self.agent: Agent = auto_adapt_agent(cfg.agent) if cfg.agent else NoopAgent()
 
         # Skip noop validation in text_session mode — audio providers
         # are intentionally noop.
