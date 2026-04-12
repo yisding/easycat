@@ -101,7 +101,11 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
                     f"Remove required keyword-only parameters or construct "
                     f"the bridge explicitly."
                 )
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as exc:
+            from easycat.integrations.agents.base import BridgeInputError
+
+            if isinstance(exc, BridgeInputError):
+                raise
             from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
             from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
 

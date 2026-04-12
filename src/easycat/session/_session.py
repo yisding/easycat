@@ -249,6 +249,7 @@ class Session:
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
         self._active_text_turn: asyncio.Task[str] | None = None
+        self._text_turn_accumulated: str = ""
         self._turn_manager.bind_session(self.session_id)
 
         # Backfill journal/session-id into bridge adapter shims so that the
@@ -1612,14 +1613,24 @@ class Session:
         if self._closed:
             raise RuntimeError("Session has been stopped")
 
-        # Cancel any in-flight text turn so the new message interrupts it.
+        # Cancel any in-flight text turn so the new message interrupts it,
+        # routing through the same interruption path as voice barge-in.
         prev = self._active_text_turn
         if prev is not None and not prev.done():
+            delivered = self._text_turn_accumulated
             prev.cancel()
             try:
                 await prev
             except (asyncio.CancelledError, Exception):
                 pass
+            if hasattr(self.agent, "notify_interruption"):
+                try:
+                    self.agent.notify_interruption(delivered, mode=self._interruption_mode)
+                except Exception:
+                    logger.debug(
+                        "Failed to notify agent of text-turn interruption",
+                        exc_info=True,
+                    )
 
         task = asyncio.ensure_future(self._execute_text_turn(text))
         self._active_text_turn = task
@@ -1634,6 +1645,7 @@ class Session:
             if callable(_set_fn):
                 _set_fn(turn_id)
             structured_output = None
+            self._text_turn_accumulated = ""
             if hasattr(self.agent, "run_streaming"):
                 accumulated = ""
                 async for event in self.agent.run_streaming(text):
@@ -1651,6 +1663,7 @@ class Session:
                         and event.text
                     ):
                         accumulated += event.text
+                        self._text_turn_accumulated = accumulated
                         await self._emit(
                             AgentDelta(
                                 text=event.text,
@@ -1688,6 +1701,7 @@ class Session:
                 response = accumulated
             else:
                 response = await self.agent.run(text)
+                self._text_turn_accumulated = response
             elapsed_ms = (time.monotonic() - t0) * 1000
             await self._emit(
                 AgentFinal(
