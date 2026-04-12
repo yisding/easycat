@@ -144,19 +144,21 @@ class JournalAgentRecorder:
 
     # ── State snapshots ──────────────────────────────────────────
 
-    def record_state_snapshot(self, ref: str, *, payload: bytes | None = None) -> None:
+    def record_state_snapshot(self, ref: str, *, payload: bytes | None = None) -> str:
         stored_ref: str | None = ref
         if payload is not None and self._artifact_store is not None:
             result = self._artifact_store.put(payload)
             stored_ref = result if result else None
         else:
             stored_ref = None
+        actual_ref = stored_ref or ref
         self._append(
             kind=JournalRecordKind.FRAMEWORK_TRANSITION,
             name="state_snapshot",
-            data={"state_ref": stored_ref or ref},
+            data={"state_ref": actual_ref},
             output_ref=stored_ref,
         )
+        return actual_ref
 
     # ── Framework handoffs ───────────────────────────────────────
 

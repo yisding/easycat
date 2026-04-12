@@ -223,8 +223,9 @@ class OpenAIAgentsBridge:
         plan = self._plan_interruption(delivered_text, mode)
 
         # Step 1b: persist pre-mutation state snapshot.
+        actual_pre_ref = plan.pre_state_ref
         if recorder is not None:
-            recorder.record_state_snapshot(
+            actual_pre_ref = recorder.record_state_snapshot(
                 plan.pre_state_ref,
                 payload=self._serialize_framework_state(),
             )
@@ -234,7 +235,7 @@ class OpenAIAgentsBridge:
             try:
                 recorder.record_state_committed(
                     mutation_kind=plan.mutation_kind,
-                    pre_state_ref=plan.pre_state_ref,
+                    pre_state_ref=actual_pre_ref,
                     post_state_ref=plan.post_state_ref,
                 )
             except Exception:
@@ -249,7 +250,7 @@ class OpenAIAgentsBridge:
             if recorder is not None:
                 recorder.record_interruption_apply_failed(
                     mutation_kind=plan.mutation_kind,
-                    pre_state_ref=plan.pre_state_ref,
+                    pre_state_ref=actual_pre_ref,
                     post_state_ref=plan.post_state_ref,
                     failure_error=ErrorInfo.from_exception(exc),
                 )

@@ -165,6 +165,13 @@ class EasyCatConfig:
     vad: VADConfig = field(default_factory=VADConfig)
     noise_reduction: NoiseReducerConfig = field(default_factory=NoiseReducerConfig)
     echo_cancellation: EchoCancellationConfig | None = None
+    # Pipeline-stage enable flags. Defaults match the "batteries-included"
+    # behaviour where the pipeline refuses to silently degrade if a
+    # requested non-noop provider falls back to passthrough. Set to
+    # ``False`` when passthrough is an acceptable outcome (e.g. headless
+    # test environments without RNNoise/Krisp installed).
+    enable_noise_reduction: bool = True
+    enable_echo_cancellation: bool = True
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
     smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
@@ -421,6 +428,8 @@ def create_session(config: EasyCatConfig) -> Session:
             session_id=session_id,
             telephony_helpers=telephony_helpers,
             enable_vad=enable_vad,
+            enable_noise_reduction=config.enable_noise_reduction,
+            enable_echo_cancellation=config.enable_echo_cancellation,
             auto_turn_from_stt_final=auto_turn_from_stt_final,
             strip_markdown=config.strip_markdown,
             output_processors=config.output_processors,
@@ -457,6 +466,7 @@ def create_text_session(
     agent_runner: AgentRunnerConfig | None = None,
     agent_model: str | None = None,
     remote_agent_api_key: str | None = None,
+    mcp_servers: list[str] | None = None,
 ) -> Session:
     """Create a text-only Session (no audio pipeline).
 
@@ -544,6 +554,11 @@ def create_text_session(
                 _inner.bridge._model = agent_model
             if remote_agent_api_key:
                 _inner.bridge._api_key = remote_agent_api_key
+        if mcp_servers is not None:
+            _mcp = tuple(mcp_servers)
+            _inner._mcp_servers = _mcp
+            if hasattr(_inner.bridge, "_mcp_servers"):
+                _inner.bridge._mcp_servers = list(_mcp)
     if wrap_agent and not isinstance(adapted, AgentRunner):
         runner_cfg = agent_runner or AgentRunnerConfig()
         adapted = AgentRunner(adapted, runner_cfg)
