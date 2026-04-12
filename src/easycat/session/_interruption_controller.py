@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from easycat.integrations.agents.base import ShallowModeInterruptionError
+from easycat.integrations.agents.base import CancellationMode, ShallowModeInterruptionError
 from easycat.runtime.records import JournalRecordKind
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class InterruptionController:
         delivered_text: str = "",
         bridge: Any = None,
         recorder: Any = None,
-        mode: str | None = None,
+        mode: CancellationMode | str | None = None,
     ) -> None:
         """Execute the interruption flow.
 
@@ -50,7 +50,8 @@ class InterruptionController:
         recorder:
             Journal or recorder for audit trail (optional).
         mode:
-            Cancellation mode override (``"truncate"`` or ``"message"``).
+            Cancellation mode override. Accepts a ``CancellationMode`` enum
+            or a string value (resolved via the enum).
         """
         # Step 2: signal
         self._record_signal(cause)
@@ -58,7 +59,7 @@ class InterruptionController:
         # Step 3: measure delivered text (caller provides it)
 
         # Step 4: select cancellation mode
-        effective_mode = mode or "truncate"
+        effective_mode = self._resolve_mode(mode)
 
         # Step 5: mutate
         if bridge is not None and hasattr(bridge, "apply_interruption"):
@@ -90,6 +91,17 @@ class InterruptionController:
     def signal_text_interrupt(self, new_text: str) -> None:
         """Handle concurrent ``send_text`` as an interruption."""
         self._record_signal(f"text_interrupt:{new_text[:40]}")
+
+    @staticmethod
+    def _resolve_mode(mode: CancellationMode | str | None) -> CancellationMode:
+        if isinstance(mode, CancellationMode):
+            return mode
+        if isinstance(mode, str):
+            try:
+                return CancellationMode(mode)
+            except ValueError:
+                return CancellationMode.IMMEDIATE_STOP
+        return CancellationMode.IMMEDIATE_STOP
 
     def _record_signal(self, cause: str) -> None:
         if self._journal is not None:

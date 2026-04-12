@@ -428,6 +428,8 @@ def create_text_session(
     journal_retention: Literal["archive", "delete"] = "archive",
     wrap_agent: bool = True,
     agent_runner: AgentRunnerConfig | None = None,
+    agent_model: str | None = None,
+    remote_agent_api_key: str | None = None,
 ) -> Session:
     """Create a text-only Session (no audio pipeline).
 
@@ -465,6 +467,14 @@ def create_text_session(
         _inner._journal = journal
         _inner._artifact_store = artifact_store
         _inner._session_id = sid
+        # Inject model/API key for URL-backed agents (mirrors create_session).
+        from easycat.integrations.agents.responses_api import ResponsesAPIBridge
+
+        if isinstance(_inner.bridge, ResponsesAPIBridge):
+            if agent_model:
+                _inner.bridge._model = agent_model
+            if remote_agent_api_key:
+                _inner.bridge._api_key = remote_agent_api_key
     if wrap_agent and not isinstance(adapted, AgentRunner):
         runner_cfg = agent_runner or AgentRunnerConfig()
         adapted = AgentRunner(adapted, runner_cfg)

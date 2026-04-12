@@ -1543,6 +1543,11 @@ class Session:
             )
         try:
             t0 = time.monotonic()
+            # Propagate turn_id to bridge-backed agents so their journal
+            # records (framework_transition, etc.) share the same turn.
+            _set_fn = getattr(self.agent, "set_active_turn_id", None)
+            if callable(_set_fn):
+                _set_fn(turn_id)
             if hasattr(self.agent, "run_streaming"):
                 accumulated = ""
                 async for event in self.agent.run_streaming(text):
