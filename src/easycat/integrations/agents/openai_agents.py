@@ -306,6 +306,7 @@ class OpenAIAgentsBridge:
         stripping) so that subsequent turns condition on the cleaned text
         rather than the raw LLM output.
         """
+        original: str | None = None
         for i in range(len(self._message_history) - 1, -1, -1):
             item = self._message_history[i]
             role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
@@ -321,14 +322,36 @@ class OpenAIAgentsBridge:
                     ]
                     if parts_list:
                         originals = [str(p.get("text", "")) for p in parts_list]
+                        original = "".join(originals)
                         replacements = split_replacement_by_original_parts(originals, text)
                         for p, r in zip(parts_list, replacements):
                             p["text"] = r
                 elif isinstance(content, str):
+                    original = content
                     item["content"] = text
             elif not isinstance(item, dict) and hasattr(item, "content"):
+                original = getattr(item, "content", None)
                 item.content = text
-            return
+            break
+
+        # When chaining by response_id the server maintains its own
+        # conversation and won't see local history edits.  Queue a
+        # developer note so the next turn informs the model about what
+        # the user actually heard.
+        if (
+            self._use_previous_response_id
+            and self._previous_response_id is not None
+            and original is not None
+            and original != text
+        ):
+            note = (
+                "[The assistant's last response was post-processed before delivery. "
+                f'The user heard: "{text}"]'
+            )
+            if self._pending_interruption is not None:
+                self._pending_interruption += "\n" + note
+            else:
+                self._pending_interruption = note
 
     def append_interruption_note(self, note: str) -> None:
         """Append an interruption note so the next turn sees it.

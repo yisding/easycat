@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 from easycat.runtime.context import RunContext
@@ -31,6 +33,13 @@ class TTSStage:
         except Exception as exc:
             self._record(ctx, "stage_error", state_before=state_before, error=str(exc))
             raise
+
+        # Real TTS providers return an async iterator — defer stage_complete
+        # until the stream is fully consumed so the journal reflects actual
+        # synthesis duration and captures iteration errors.
+        if isinstance(result, AsyncIterator) or inspect.isasyncgen(result):
+            return self._wrap_stream(result, ctx, state_before)
+
         state_after = self.snapshot_state()
         self._record(
             ctx,
@@ -39,6 +48,24 @@ class TTSStage:
             state_after=state_after,
         )
         return result
+
+    async def _wrap_stream(
+        self, stream: Any, ctx: RunContext, state_before: StageStateSnapshot
+    ) -> AsyncIterator[Any]:
+        """Yield from the TTS stream and record completion/error after consumption."""
+        try:
+            async for chunk in stream:
+                yield chunk
+        except Exception as exc:
+            self._record(ctx, "stage_error", state_before=state_before, error=str(exc))
+            raise
+        state_after = self.snapshot_state()
+        self._record(
+            ctx,
+            "stage_complete",
+            state_before=state_before,
+            state_after=state_after,
+        )
 
     def snapshot_state(self) -> StageStateSnapshot:
         return StageStateSnapshot(

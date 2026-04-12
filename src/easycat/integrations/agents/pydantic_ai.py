@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._base_adapter import split_replacement_by_original_parts
 from easycat.integrations.agents._pydantic_ai_events import translate_event
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -235,13 +236,13 @@ class PydanticAIBridge:
         for i in range(len(history) - 1, -1, -1):
             msg = history[i]
             if isinstance(msg, ModelResponse):
-                for part in msg.parts:
-                    if type(part).__name__ == "TextPart":
-                        try:
-                            part.content = replacement
-                        except (AttributeError, TypeError):
-                            object.__setattr__(part, "content", replacement)
-                        return
+                text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
+                for idx, part in enumerate(text_parts):
+                    value = replacement if idx == 0 else ""
+                    try:
+                        part.content = value
+                    except (AttributeError, TypeError):
+                        object.__setattr__(part, "content", value)
                 break
 
     def reset(self) -> None:
@@ -266,13 +267,16 @@ class PydanticAIBridge:
         for msg in reversed(self._message_history):
             if not isinstance(msg, ModelResponse):
                 continue
-            for part in msg.parts:
-                if type(part).__name__ == "TextPart":
-                    try:
-                        part.content = text
-                    except (AttributeError, TypeError):
-                        object.__setattr__(part, "content", text)
-                    return
+            text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
+            if not text_parts:
+                return
+            originals = [p.content for p in text_parts]
+            replacements = split_replacement_by_original_parts(originals, text)
+            for part, repl in zip(text_parts, replacements):
+                try:
+                    part.content = repl
+                except (AttributeError, TypeError):
+                    object.__setattr__(part, "content", repl)
             return
 
     def append_interruption_note(self, note: str) -> None:
