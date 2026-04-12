@@ -251,11 +251,39 @@ class Session:
         self._runtime_mode = cfg.runtime_mode
         self._turn_manager.bind_session(self.session_id)
 
+        # Backfill journal/session-id into bridge adapter shims so that the
+        # direct Session(SessionConfig(...)) construction path produces the
+        # same observability data as create_session().
+        self._backfill_bridge_context()
+
     @staticmethod
     def _default_timeout_config():
         from easycat.timeouts import TimeoutConfig
 
         return TimeoutConfig()
+
+    def _backfill_bridge_context(self) -> None:
+        """Inject journal/session-id into bridge shims attached to this session.
+
+        ``create_session()`` already does this, but callers using the direct
+        ``Session(SessionConfig(...))`` path would otherwise get shims with
+        ``_journal=None`` / ``_session_id=""``, producing no bridge-level
+        journal records.  This method is idempotent — re-injecting the same
+        values is harmless.
+        """
+        from easycat.integrations.agents._agent_runner import AgentRunner
+        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+
+        shim = self.agent
+        if isinstance(shim, AgentRunner):
+            shim = shim._agent
+        if isinstance(shim, BridgeAdapterShim):
+            if shim._journal is None and self._journal is not None:
+                shim._journal = self._journal
+            if shim._artifact_store is None and self._artifact_store is not None:
+                shim._artifact_store = self._artifact_store
+            if not shim._session_id:
+                shim._session_id = self.session_id
 
     def _with_correlation(self, event: Any) -> Any:
         """Attach session/turn identifiers to events when supported."""
@@ -629,44 +657,45 @@ class Session:
         if self._closed:
             return
         self._closed = True
-        was_running = self._is_running
         self._is_running = False
         current_task = asyncio.current_task()
 
         if self._turn:
             self._turn.cancel_token.cancel()
 
-        if was_running:
-            if (
-                self._pipeline_task
-                and self._pipeline_task is not current_task
-                and not self._pipeline_task.done()
-            ):
-                self._pipeline_task.cancel()
-                try:
-                    await self._pipeline_task
-                except asyncio.CancelledError:
-                    logger.debug(
-                        "TTS processing task was cancelled; ensuring"
-                        " BotStoppedSpeaking is emitted if needed."
-                    )
+        # Always perform cleanup — even when _run_pipeline() already flipped
+        # _is_running to False (e.g. after a transport disconnect).  Each step
+        # is individually guarded and safe to call when no work was started.
+        if (
+            self._pipeline_task
+            and self._pipeline_task is not current_task
+            and not self._pipeline_task.done()
+        ):
+            self._pipeline_task.cancel()
+            try:
+                await self._pipeline_task
+            except asyncio.CancelledError:
+                logger.debug(
+                    "TTS processing task was cancelled; ensuring"
+                    " BotStoppedSpeaking is emitted if needed."
+                )
 
-            await self._cancel_stt()
-            await self._cancel_tts()
-            for checker in self._health_checkers:
-                await checker.stop()
-            self._health_checkers = []
-            self._stop_helpers()
-            if not self._outbound_queue_external:
-                self._outbound_queue.close()
-            if self._outbound_task and not self._outbound_task.done():
-                self._outbound_task.cancel()
-                try:
-                    await self._outbound_task
-                except asyncio.CancelledError:
-                    pass
-            await self.transport.disconnect()
-            await self._turn_manager.shutdown()
+        await self._cancel_stt()
+        await self._cancel_tts()
+        for checker in self._health_checkers:
+            await checker.stop()
+        self._health_checkers = []
+        self._stop_helpers()
+        if not self._outbound_queue_external:
+            self._outbound_queue.close()
+        if self._outbound_task and not self._outbound_task.done():
+            self._outbound_task.cancel()
+            try:
+                await self._outbound_task
+            except asyncio.CancelledError:
+                pass
+        await self.transport.disconnect()
+        await self._turn_manager.shutdown()
         if hasattr(self.agent, "aclose"):
             try:
                 await self.agent.aclose()

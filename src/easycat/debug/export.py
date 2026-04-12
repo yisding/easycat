@@ -7,6 +7,7 @@ containing the journal, artifacts, and manifest metadata.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import tempfile
@@ -101,16 +102,23 @@ def export_debug_bundle(
         artifact_checksums=artifact_checksums,
     )
 
+    manifest_dict = _manifest_to_dict(manifest)
+    if inline_artifacts and artifact_data:
+        manifest_dict["inline_artifacts"] = {
+            ref: base64.b64encode(data).decode("ascii") for ref, data in artifact_data.items()
+        }
+
     # Write zip atomically
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = None
     try:
         tmp = tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False)
         with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("manifest.json", json.dumps(_manifest_to_dict(manifest), indent=2))
+            zf.writestr("manifest.json", json.dumps(manifest_dict, indent=2))
             zf.writestr("journal.ndjson", journal_ndjson)
-            for ref, data in artifact_data.items():
-                zf.writestr(f"artifacts/{ref}.bin", data)
+            if not inline_artifacts:
+                for ref, data in artifact_data.items():
+                    zf.writestr(f"artifacts/{ref}.bin", data)
         Path(tmp.name).rename(path)
     except Exception:
         if tmp and Path(tmp.name).exists():
