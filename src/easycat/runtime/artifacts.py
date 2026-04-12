@@ -159,16 +159,19 @@ class FilesystemArtifactStore:
         path = self._ref_path(ref)
         if path.exists():
             return ref
-        try:
-            self._dir.mkdir(parents=True, exist_ok=True)
-            os.chmod(self._dir, 0o700)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_bytes(payload)
-            os.chmod(tmp, 0o600)
-            tmp.rename(path)
-        except OSError:
-            logger.warning("Artifact write failed for ref=%s", ref, exc_info=True)
-            return ""
+        with self._lock:
+            if path.exists():
+                return ref
+            try:
+                self._dir.mkdir(parents=True, exist_ok=True)
+                os.chmod(self._dir, 0o700)
+                tmp = path.with_suffix(".tmp")
+                tmp.write_bytes(payload)
+                os.chmod(tmp, 0o600)
+                tmp.rename(path)
+            except OSError:
+                logger.warning("Artifact write failed for ref=%s", ref, exc_info=True)
+                return ""
         return ref
 
     def get(self, ref: str) -> bytes | None:

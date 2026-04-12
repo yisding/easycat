@@ -248,7 +248,7 @@ class Session:
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
-        self._text_turn_lock = asyncio.Lock()
+        self._active_text_turn: asyncio.Task[str] | None = None
         self._turn_manager.bind_session(self.session_id)
 
         # Backfill journal/session-id into bridge adapter shims so that the
@@ -1611,102 +1611,114 @@ class Session:
             raise RuntimeError("send_text() is only available in text_session mode")
         if self._closed:
             raise RuntimeError("Session has been stopped")
-        async with self._text_turn_lock:
-            turn_id = f"turn-{uuid4().hex[:12]}"
-            await self._emit(TurnStarted(session_id=self.session_id, turn_id=turn_id))
+
+        # Cancel any in-flight text turn so the new message interrupts it.
+        prev = self._active_text_turn
+        if prev is not None and not prev.done():
+            prev.cancel()
             try:
-                t0 = time.monotonic()
-                # Propagate turn_id to bridge-backed agents so their journal
-                # records (framework_transition, etc.) share the same turn.
-                _set_fn = getattr(self.agent, "set_active_turn_id", None)
-                if callable(_set_fn):
-                    _set_fn(turn_id)
-                structured_output = None
-                if hasattr(self.agent, "run_streaming"):
-                    accumulated = ""
-                    async for event in self.agent.run_streaming(text):
-                        if not hasattr(event, "type"):
-                            continue
-                        if event.type == AgentStreamEventType.DONE:
-                            if hasattr(event, "text") and event.text:
-                                accumulated = event.text
-                            if getattr(event, "structured_output", None) is not None:
-                                structured_output = event.structured_output
-                            break
-                        if (
-                            event.type == AgentStreamEventType.TEXT_DELTA
-                            and hasattr(event, "text")
-                            and event.text
-                        ):
-                            accumulated += event.text
-                            await self._emit(
-                                AgentDelta(
-                                    text=event.text,
-                                    session_id=self.session_id,
-                                    turn_id=turn_id,
-                                )
+                await prev
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        task = asyncio.ensure_future(self._execute_text_turn(text))
+        self._active_text_turn = task
+        return await task
+
+    async def _execute_text_turn(self, text: str) -> str:
+        turn_id = f"turn-{uuid4().hex[:12]}"
+        await self._emit(TurnStarted(session_id=self.session_id, turn_id=turn_id))
+        try:
+            t0 = time.monotonic()
+            _set_fn = getattr(self.agent, "set_active_turn_id", None)
+            if callable(_set_fn):
+                _set_fn(turn_id)
+            structured_output = None
+            if hasattr(self.agent, "run_streaming"):
+                accumulated = ""
+                async for event in self.agent.run_streaming(text):
+                    if not hasattr(event, "type"):
+                        continue
+                    if event.type == AgentStreamEventType.DONE:
+                        if hasattr(event, "text") and event.text:
+                            accumulated = event.text
+                        if getattr(event, "structured_output", None) is not None:
+                            structured_output = event.structured_output
+                        break
+                    if (
+                        event.type == AgentStreamEventType.TEXT_DELTA
+                        and hasattr(event, "text")
+                        and event.text
+                    ):
+                        accumulated += event.text
+                        await self._emit(
+                            AgentDelta(
+                                text=event.text,
+                                session_id=self.session_id,
+                                turn_id=turn_id,
                             )
-                        elif event.type == AgentStreamEventType.TOOL_STARTED:
-                            await self._emit(
-                                ToolCallStarted(
-                                    tool_name=getattr(event, "tool_name", ""),
-                                    call_id=getattr(event, "call_id", ""),
-                                    session_id=self.session_id,
-                                    turn_id=turn_id,
-                                )
+                        )
+                    elif event.type == AgentStreamEventType.TOOL_STARTED:
+                        await self._emit(
+                            ToolCallStarted(
+                                tool_name=getattr(event, "tool_name", ""),
+                                call_id=getattr(event, "call_id", ""),
+                                session_id=self.session_id,
+                                turn_id=turn_id,
                             )
-                        elif event.type == AgentStreamEventType.TOOL_DELTA:
-                            await self._emit(
-                                ToolCallDelta(
-                                    call_id=getattr(event, "call_id", ""),
-                                    delta=getattr(event, "text", ""),
-                                    session_id=self.session_id,
-                                    turn_id=turn_id,
-                                )
+                        )
+                    elif event.type == AgentStreamEventType.TOOL_DELTA:
+                        await self._emit(
+                            ToolCallDelta(
+                                call_id=getattr(event, "call_id", ""),
+                                delta=getattr(event, "text", ""),
+                                session_id=self.session_id,
+                                turn_id=turn_id,
                             )
-                        elif event.type == AgentStreamEventType.TOOL_RESULT:
-                            await self._emit(
-                                ToolCallResult(
-                                    call_id=getattr(event, "call_id", ""),
-                                    result=getattr(event, "result", ""),
-                                    session_id=self.session_id,
-                                    turn_id=turn_id,
-                                )
+                        )
+                    elif event.type == AgentStreamEventType.TOOL_RESULT:
+                        await self._emit(
+                            ToolCallResult(
+                                call_id=getattr(event, "call_id", ""),
+                                result=getattr(event, "result", ""),
+                                session_id=self.session_id,
+                                turn_id=turn_id,
                             )
-                    response = accumulated
-                else:
-                    response = await self.agent.run(text)
-                elapsed_ms = (time.monotonic() - t0) * 1000
-                await self._emit(
-                    AgentFinal(
-                        text=response,
-                        structured_output=structured_output,
-                        session_id=self.session_id,
-                        turn_id=turn_id,
-                    )
+                        )
+                response = accumulated
+            else:
+                response = await self.agent.run(text)
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            await self._emit(
+                AgentFinal(
+                    text=response,
+                    structured_output=structured_output,
+                    session_id=self.session_id,
+                    turn_id=turn_id,
                 )
-                if self._journal:
-                    self._journal.append(
-                        kind=JournalRecordKind.METRIC,
-                        name="text_turn_latency_ms",
-                        session_id=self.session_id,
-                        turn_id=turn_id,
-                        data={"value": elapsed_ms},
-                    )
-            except Exception as exc:
-                logger.exception("Agent error in text_session send_text")
-                await self._emit(
-                    Error(
-                        exception=exc,
-                        stage=ErrorStage.AGENT,
-                        session_id=self.session_id,
-                        turn_id=turn_id,
-                    )
+            )
+            if self._journal:
+                self._journal.append(
+                    kind=JournalRecordKind.METRIC,
+                    name="text_turn_latency_ms",
+                    session_id=self.session_id,
+                    turn_id=turn_id,
+                    data={"value": elapsed_ms},
                 )
-                raise
-            finally:
-                await self._emit(TurnEnded(session_id=self.session_id, turn_id=turn_id))
-            return response
+        except Exception as exc:
+            logger.exception("Agent error in text_session send_text")
+            await self._emit(
+                Error(
+                    exception=exc,
+                    stage=ErrorStage.AGENT,
+                    session_id=self.session_id,
+                    turn_id=turn_id,
+                )
+            )
+            raise
+        finally:
+            await self._emit(TurnEnded(session_id=self.session_id, turn_id=turn_id))
+        return response
 
     async def _cancel_stt(self) -> None:
         try:
