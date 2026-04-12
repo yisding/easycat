@@ -7,6 +7,7 @@ journal via ``AgentRecorder``.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -221,6 +222,13 @@ class OpenAIAgentsBridge:
         # Step 1: plan the mutation.
         plan = self._plan_interruption(delivered_text, mode)
 
+        # Step 1b: persist pre-mutation state snapshot.
+        if recorder is not None:
+            recorder.record_state_snapshot(
+                plan.pre_state_ref,
+                payload=self._serialize_framework_state(),
+            )
+
         # Step 2: write FrameworkStateCommitted to the journal.
         if recorder is not None:
             try:
@@ -247,13 +255,24 @@ class OpenAIAgentsBridge:
                 )
             raise
 
-        # Step 4b: success — write FrameworkCancellationBoundaryReached.
+        # Step 4b: success — persist post-mutation state and write boundary.
         if recorder is not None:
+            recorder.record_state_snapshot(
+                plan.post_state_ref,
+                payload=self._serialize_framework_state(),
+            )
             recorder.record_cancellation_boundary(
                 mode=mode,
                 reason=plan.mutation_kind,
                 caused_by_signal_id=caused_by_signal_id,
             )
+
+    def _serialize_framework_state(self) -> bytes:
+        """Serialize message history for artifact storage."""
+        try:
+            return json.dumps(self._message_history, default=str).encode()
+        except (TypeError, ValueError):
+            return b"[]"
 
     def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
         replacement = delivered_text + "..." if delivered_text else ""

@@ -53,13 +53,13 @@ def map_run_item(
         name = getattr(raw, "name", "") or ""
         call_id = getattr(raw, "call_id", "") or ""
         pending.add(call_id)
-        recorder.record_tool_call(phase="start", name=name)
+        recorder.record_tool_call(phase="start", name=name, call_id=call_id)
         return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
     if item_type == "tool_call_output_item":
         raw = getattr(item, "raw_item", None)
         call_id = getattr(raw, "call_id", "") or ""
         result_str = str(getattr(item, "output", "")) if hasattr(item, "output") else ""
         pending.discard(call_id)
-        recorder.record_tool_call(phase="result", name="")
+        recorder.record_tool_call(phase="result", name="", call_id=call_id)
         return AgentBridgeEvent(kind="tool_result", call_id=call_id, result=result_str)
     return None

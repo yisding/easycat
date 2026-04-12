@@ -1,4 +1,4 @@
-"""ResponsesAPIBridge — remote agent bridge using the OpenAI Responses API.
+"""RemoteResponsesAPIBridge — remote agent bridge using the OpenAI Responses API.
 
 Speaks the ``/v1/responses`` HTTP+SSE protocol to a remote agent server,
 translating streamed events into :class:`AgentBridgeEvent` instances.
@@ -8,6 +8,7 @@ N-1 chain interruption and four-step atomic mutation writes.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -43,7 +44,7 @@ _INTERRUPTION_NOTE = (
 )
 
 
-class ResponsesAPIBridge:
+class RemoteResponsesAPIBridge:
     """Bridge wrapping the OpenAI Responses API over HTTP+SSE.
 
     Implements :class:`ExternalAgentBridge` for remote agent execution.
@@ -255,6 +256,13 @@ class ResponsesAPIBridge:
         # Step 1: plan the mutation.
         plan = self._plan_interruption(delivered_text, mode)
 
+        # Step 1b: persist pre-mutation state snapshot.
+        if recorder is not None:
+            recorder.record_state_snapshot(
+                plan.pre_state_ref,
+                payload=self._serialize_framework_state(),
+            )
+
         # Step 2: write FrameworkStateCommitted to the journal.
         if recorder is not None:
             try:
@@ -281,8 +289,12 @@ class ResponsesAPIBridge:
                 )
             raise
 
-        # Step 4b: success -- write FrameworkCancellationBoundaryReached.
+        # Step 4b: success -- persist post-mutation state and write boundary.
         if recorder is not None:
+            recorder.record_state_snapshot(
+                plan.post_state_ref,
+                payload=self._serialize_framework_state(),
+            )
             recorder.record_cancellation_boundary(
                 mode=mode,
                 reason=plan.mutation_kind,
@@ -298,6 +310,20 @@ class ResponsesAPIBridge:
         if self._interrupted_response_id:
             turn_meta["easycat.interrupted_response_id"] = self._interrupted_response_id
         self._pending_turn_metadata = turn_meta
+
+    def _serialize_framework_state(self) -> bytes:
+        """Serialize bridge state for artifact storage."""
+        try:
+            return json.dumps(
+                {
+                    "accumulated_items": self._last_accumulated_items,
+                    "user_text": self._last_user_text,
+                    "interrupted_response_id": self._interrupted_response_id,
+                },
+                default=str,
+            ).encode()
+        except (TypeError, ValueError):
+            return b"{}"
 
     def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
         truncated = delivered_text + "..." if delivered_text else ""

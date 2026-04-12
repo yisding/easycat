@@ -322,7 +322,16 @@ class Session:
         def _make(kind: JournalRecordKind, name: str):
             def _handler(event: Any) -> None:
                 data: dict[str, Any] = {}
-                for attr in ("text", "track", "result", "tool_name", "call_id", "delta"):
+                _JOURNAL_ATTRS = (
+                    "text",
+                    "track",
+                    "result",
+                    "tool_name",
+                    "call_id",
+                    "delta",
+                    "structured_output",
+                )
+                for attr in _JOURNAL_ATTRS:
                     val = getattr(event, attr, None)
                     if val is not None:
                         data[attr] = val
@@ -1615,20 +1624,58 @@ class Session:
                 _set_fn = getattr(self.agent, "set_active_turn_id", None)
                 if callable(_set_fn):
                     _set_fn(turn_id)
+                structured_output = None
                 if hasattr(self.agent, "run_streaming"):
                     accumulated = ""
                     async for event in self.agent.run_streaming(text):
-                        if hasattr(event, "type") and event.type == AgentStreamEventType.DONE:
+                        if not hasattr(event, "type"):
+                            continue
+                        if event.type == AgentStreamEventType.DONE:
                             if hasattr(event, "text") and event.text:
                                 accumulated = event.text
+                            if getattr(event, "structured_output", None) is not None:
+                                structured_output = event.structured_output
                             break
                         if (
-                            hasattr(event, "type")
-                            and event.type == AgentStreamEventType.TEXT_DELTA
+                            event.type == AgentStreamEventType.TEXT_DELTA
                             and hasattr(event, "text")
                             and event.text
                         ):
                             accumulated += event.text
+                            await self._emit(
+                                AgentDelta(
+                                    text=event.text,
+                                    session_id=self.session_id,
+                                    turn_id=turn_id,
+                                )
+                            )
+                        elif event.type == AgentStreamEventType.TOOL_STARTED:
+                            await self._emit(
+                                ToolCallStarted(
+                                    tool_name=getattr(event, "tool_name", ""),
+                                    call_id=getattr(event, "call_id", ""),
+                                    session_id=self.session_id,
+                                    turn_id=turn_id,
+                                )
+                            )
+                        elif event.type == AgentStreamEventType.TOOL_DELTA:
+                            await self._emit(
+                                ToolCallDelta(
+                                    call_id=getattr(event, "call_id", ""),
+                                    delta=getattr(event, "text", ""),
+                                    session_id=self.session_id,
+                                    turn_id=turn_id,
+                                )
+                            )
+                        elif event.type == AgentStreamEventType.TOOL_RESULT:
+                            await self._emit(
+                                ToolCallResult(
+                                    call_id=getattr(event, "call_id", ""),
+                                    result=getattr(event, "result", ""),
+                                    session_id=self.session_id,
+                                    turn_id=turn_id,
+                                )
+                            )
                     response = accumulated
                 else:
                     response = await self.agent.run(text)
@@ -1636,6 +1683,7 @@ class Session:
                 await self._emit(
                     AgentFinal(
                         text=response,
+                        structured_output=structured_output,
                         session_id=self.session_id,
                         turn_id=turn_id,
                     )

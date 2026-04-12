@@ -78,19 +78,19 @@ def translate_sse_event(
         if item_type == "function_call":
             name = item.get("name", "")
             call_id = item.get("call_id", "") or item.get("id", "") or ""
-            recorder.record_tool_call(phase="start", name=name)
+            recorder.record_tool_call(phase="start", name=name, call_id=call_id)
             return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
 
         if item_type == "function_call_output":
             call_id = item.get("call_id", "") or item.get("id", "") or ""
             result_str = str(item.get("output", ""))
-            recorder.record_tool_call(phase="result", name="")
+            recorder.record_tool_call(phase="result", name="", call_id=call_id)
             return AgentBridgeEvent(kind="tool_result", call_id=call_id, result=result_str)
 
         return None
 
     if event_type in ("response.completed", "response.failed"):
-        # Handled by the streaming loop in ResponsesAPIBridge.invoke().
+        # Handled by the streaming loop in RemoteResponsesAPIBridge.invoke().
         return None
 
     logger.debug("Unhandled Responses API SSE event: %s", event_type)

@@ -187,6 +187,7 @@ class AgentRecorder(Protocol):
         name: str,
         args_ref: str | None = None,
         result_ref: str | None = None,
+        call_id: str | None = None,
     ) -> None: ...
 
     def record_state_snapshot(self, ref: str, *, payload: bytes | None = None) -> None: ...

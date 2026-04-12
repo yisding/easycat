@@ -128,6 +128,7 @@ class JournalAgentRecorder:
         name: str,
         args_ref: str | None = None,
         result_ref: str | None = None,
+        call_id: str | None = None,
     ) -> None:
         self._append(
             kind=JournalRecordKind.FRAMEWORK_TRANSITION,
@@ -137,6 +138,7 @@ class JournalAgentRecorder:
                 "tool_name": name,
                 "args_ref": args_ref,
                 "result_ref": result_ref,
+                "call_id": call_id,
             },
         )
 

@@ -44,7 +44,7 @@ def translate_event(
         name = getattr(part, "tool_name", "") or ""
         call_id = getattr(part, "tool_call_id", "") or ""
         if recorder is not None:
-            recorder.record_tool_call(phase="start", name=name)
+            recorder.record_tool_call(phase="start", name=name, call_id=call_id)
         return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
 
     # FunctionToolResultEvent → tool_result
@@ -52,7 +52,7 @@ def translate_event(
         call_id = getattr(event, "tool_call_id", "") or ""
         result_str = str(getattr(event, "result", "")) if hasattr(event, "result") else ""
         if recorder is not None:
-            recorder.record_tool_call(phase="result", name="")
+            recorder.record_tool_call(phase="result", name="", call_id=call_id)
         return AgentBridgeEvent(kind="tool_result", call_id=call_id, result=result_str)
 
     # FinalResultEvent → done (structured output capture)
