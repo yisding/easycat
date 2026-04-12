@@ -15,7 +15,6 @@ import asyncio
 import signal
 
 import websockets
-from agents import Agent  # type: ignore[import-untyped]
 from websockets.asyncio.server import ServerConnection
 
 from easycat import (
@@ -30,6 +29,8 @@ from easycat import (
 
 
 async def main() -> None:
+    from agents import Agent  # type: ignore[import-untyped]
+
     api_key = require_env("OPENAI_API_KEY")
     manager: SessionManager[int] = SessionManager()
 

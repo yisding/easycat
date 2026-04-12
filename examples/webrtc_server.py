@@ -33,8 +33,6 @@ from __future__ import annotations
 import asyncio
 import os
 
-from agents import Agent  # type: ignore[import-untyped]
-
 from easycat import (
     EasyCatConfig,
     ICEServer,
@@ -68,6 +66,8 @@ def _build_ice_servers() -> list[ICEServer]:
 
 
 async def main() -> None:
+    from agents import Agent  # type: ignore[import-untyped]
+
     api_key = require_env("OPENAI_API_KEY")
     agent = Agent(
         name="assistant",

@@ -168,11 +168,18 @@ def _collect_provider_versions(session: Any) -> dict[str, str]:
 
 
 def _safe_config_snapshot(session: Any) -> dict[str, Any]:
-    """Extract only allowlisted config fields, redacting secrets."""
+    """Extract only allowlisted config fields, redacting secrets.
+
+    Prefers ``_easycat_config`` (the original user-facing config) over
+    ``_config`` (SessionConfig with live provider instances) so the
+    snapshot captures meaningful settings like debug mode, journal
+    backend, and turn-taking policy instead of ``<object at 0x…>``
+    repr strings.
+    """
     try:
         from easycat.runtime.safe_defaults import safe_config_snapshot
 
-        config = getattr(session, "_config", None)
+        config = getattr(session, "_easycat_config", None) or getattr(session, "_config", None)
         if config is None:
             return {}
         return safe_config_snapshot(config)

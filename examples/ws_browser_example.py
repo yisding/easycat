@@ -29,8 +29,6 @@ import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
-from agents import Agent  # type: ignore[import-untyped]
-
 from easycat import (
     EasyCatConfig,
     WebSocketTransportConfig,
@@ -61,6 +59,8 @@ def _run_http_server() -> None:
 
 
 async def main() -> None:
+    from agents import Agent  # type: ignore[import-untyped]
+
     api_key = require_env("OPENAI_API_KEY")
     agent = Agent(
         name="assistant",

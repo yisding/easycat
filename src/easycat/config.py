@@ -422,6 +422,10 @@ def create_session(config: EasyCatConfig) -> Session:
             audio_gate=audio_gate,
         )
     )
+    # Stash the original EasyCatConfig so debug bundle export can snapshot
+    # user-facing settings (debug, journal_backend, turn_taking, etc.)
+    # instead of serializing live provider instances from SessionConfig.
+    session._easycat_config = config
 
     if _outbound_sm is not None:
         _wire_outbound_pipeline(
@@ -538,6 +542,15 @@ def create_text_session(
             session_id=sid,
             runtime_mode="text_session",
         )
+    )
+    # Stash user-facing settings so debug bundle export can snapshot them
+    # instead of serializing live provider instances from SessionConfig.
+    from types import SimpleNamespace
+
+    session._easycat_config = SimpleNamespace(
+        debug=debug,
+        journal_backend=journal_backend,
+        journal_retention=journal_retention,
     )
     return session
 

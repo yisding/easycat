@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import asyncio
 
-from agents import Agent  # type: ignore[import-untyped]
-
 from easycat import (
     EasyCatConfig,
     EchoCancellationConfig,
@@ -25,6 +23,8 @@ from easycat import (
 
 
 async def main() -> None:
+    from agents import Agent  # type: ignore[import-untyped]
+
     api_key = require_env("OPENAI_API_KEY")
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
