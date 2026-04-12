@@ -8,7 +8,7 @@ from typing import Any
 from easycat.integrations.agents._base_adapter import BaseAgentAdapter
 
 
-def auto_adapt_agent(agent: Any) -> Any:
+def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     """Wrap known third-party agent objects in an EasyCat adapter.
 
     Routes framework agents through bridges wrapped in
@@ -26,16 +26,24 @@ def auto_adapt_agent(agent: Any) -> Any:
 
     Unknown agent types are returned unchanged.
     """
-    # 0. URL string -> ResponsesAPIBridge.
+    # 0. URL string -> RemoteResponsesAPIBridge.
     if isinstance(agent, str):
         from urllib.parse import urlparse
 
         parsed = urlparse(agent)
         if parsed.scheme in ("http", "https") and parsed.netloc:
-            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
-            from easycat.integrations.agents.responses_api import ResponsesAPIBridge
+            if model is None:
+                from easycat.integrations.agents.base import BridgeInputError
 
-            return BridgeAdapterShim(ResponsesAPIBridge(base_url=agent, model="default"))
+                raise BridgeInputError(
+                    "auto_adapt_agent() requires model= when agent is a URL. "
+                    "Pass model= explicitly or use create_session(agent=url, "
+                    "agent_model=...) instead."
+                )
+            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+
+            return BridgeAdapterShim(RemoteResponsesAPIBridge(base_url=agent, model=model))
 
     # 1. Already a bridge -- wrap in shim if not already wrapped.
     try:

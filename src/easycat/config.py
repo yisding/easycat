@@ -216,6 +216,12 @@ class EasyCatConfig:
                 f"Invalid journal_backend={self.journal_backend!r}. "
                 f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
             )
+        _VALID_JOURNAL_RETENTION = {"archive", "delete"}
+        if self.journal_retention not in _VALID_JOURNAL_RETENTION:
+            raise ValueError(
+                f"Invalid journal_retention={self.journal_retention!r}. "
+                f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
+            )
 
         if self.openai_api_key:
             if self.stt is None:
@@ -340,7 +346,7 @@ def create_session(config: EasyCatConfig) -> Session:
     mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
 
     if config.agent is not None:
-        agent = auto_adapt_agent(config.agent)
+        agent = auto_adapt_agent(config.agent, model=config.agent_model)
         # Inject MCP servers and journal into the shim if it's a bridge adapter.
         # Unwrap AgentRunner if the caller pre-wrapped the shim.
         from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
@@ -493,6 +499,12 @@ def create_text_session(
             f"Invalid journal_backend={journal_backend!r}. "
             f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
         )
+    _VALID_JOURNAL_RETENTION = {"archive", "delete"}
+    if journal_retention not in _VALID_JOURNAL_RETENTION:
+        raise ValueError(
+            f"Invalid journal_retention={journal_retention!r}. "
+            f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
+        )
 
     sid = session_id or f"session-{uuid4().hex[:12]}"
     artifact_store = _create_artifact_store(sid, debug)
@@ -511,7 +523,7 @@ def create_text_session(
     )
     event_bus = EventBus()
 
-    adapted = auto_adapt_agent(agent) if agent is not None else NoopAgent()
+    adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
     # Backfill journal metadata into the bridge shim (mirrors create_session).
     # Unwrap AgentRunner if the caller pre-wrapped the shim.
     from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim

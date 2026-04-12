@@ -1,4 +1,4 @@
-"""WS2C: ResponsesAPIBridge acceptance criteria tests.
+"""WS2C: RemoteResponsesAPIBridge acceptance criteria tests.
 
 Covers:
 - AC2C.2:  Bridge implements ExternalAgentBridge protocol
@@ -41,7 +41,7 @@ from easycat.integrations.agents.base import (
     RecorderContext,
     UnitKind,
 )
-from easycat.integrations.agents.responses_api import ResponsesAPIBridge
+from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 from easycat.runtime.journal import InMemoryRingBuffer
 
 from .mock_responses_server import MockResponsesServer
@@ -63,10 +63,10 @@ def _make_bridge(
     model: str = "test-model",
     api_key: str = "test-key",
     metadata: dict[str, Any] | None = None,
-) -> ResponsesAPIBridge:
-    """Create a ResponsesAPIBridge wired to the mock ASGI server."""
+) -> RemoteResponsesAPIBridge:
+    """Create a RemoteResponsesAPIBridge wired to the mock ASGI server."""
     transport = httpx.ASGITransport(app=mock_server)
-    bridge = ResponsesAPIBridge(
+    bridge = RemoteResponsesAPIBridge(
         base_url="http://testserver",
         model=model,
         api_key=api_key,
@@ -81,7 +81,7 @@ def _make_bridge(
 
 
 class TestProtocolConformance:
-    """AC2C.2 -- ResponsesAPIBridge implements ExternalAgentBridge."""
+    """AC2C.2 -- RemoteResponsesAPIBridge implements ExternalAgentBridge."""
 
     def test_is_runtime_checkable_bridge(self):
         server = MockResponsesServer()
@@ -89,19 +89,19 @@ class TestProtocolConformance:
         assert isinstance(bridge, ExternalAgentBridge)
 
     def test_has_committable_boundaries(self):
-        assert hasattr(ResponsesAPIBridge, "COMMITTABLE_BOUNDARIES")
+        assert hasattr(RemoteResponsesAPIBridge, "COMMITTABLE_BOUNDARIES")
 
     def test_has_invoke(self):
-        assert hasattr(ResponsesAPIBridge, "invoke")
+        assert hasattr(RemoteResponsesAPIBridge, "invoke")
 
     def test_has_snapshot_state(self):
-        assert hasattr(ResponsesAPIBridge, "snapshot_state")
+        assert hasattr(RemoteResponsesAPIBridge, "snapshot_state")
 
     def test_has_apply_interruption(self):
-        assert hasattr(ResponsesAPIBridge, "apply_interruption")
+        assert hasattr(RemoteResponsesAPIBridge, "apply_interruption")
 
     def test_has_reset(self):
-        assert hasattr(ResponsesAPIBridge, "reset")
+        assert hasattr(RemoteResponsesAPIBridge, "reset")
 
 
 # ── AC2C.3: Turn execution journal records ──────────────────────
@@ -418,9 +418,16 @@ class TestURLDetection:
         from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
         from easycat.integrations.agents._factory import auto_adapt_agent
 
-        adapted = auto_adapt_agent("https://api.example.com/v1")
+        adapted = auto_adapt_agent("https://api.example.com/v1", model="gpt-4o")
         assert isinstance(adapted, BridgeAdapterShim)
-        assert isinstance(adapted.bridge, ResponsesAPIBridge)
+        assert isinstance(adapted.bridge, RemoteResponsesAPIBridge)
+
+    def test_http_url_without_model_raises(self):
+        from easycat.integrations.agents._factory import auto_adapt_agent
+        from easycat.integrations.agents.base import BridgeInputError
+
+        with pytest.raises(BridgeInputError, match="requires model="):
+            auto_adapt_agent("https://api.example.com/v1")
 
     def test_non_url_string_passthrough(self):
         from easycat.integrations.agents._factory import auto_adapt_agent
@@ -433,9 +440,9 @@ class TestURLDetection:
         from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
         from easycat.integrations.agents._factory import auto_adapt_agent
 
-        adapted = auto_adapt_agent("http://localhost:8080")
+        adapted = auto_adapt_agent("http://localhost:8080", model="gpt-4o")
         assert isinstance(adapted, BridgeAdapterShim)
-        assert isinstance(adapted.bridge, ResponsesAPIBridge)
+        assert isinstance(adapted.bridge, RemoteResponsesAPIBridge)
 
 
 class TestEasyCatConfigURLValidation:
@@ -514,21 +521,21 @@ class TestCommittableBoundaries:
     """AC2C.10 -- COMMITTABLE_BOUNDARIES mapping is correct."""
 
     def test_mapping_present(self):
-        assert hasattr(ResponsesAPIBridge, "COMMITTABLE_BOUNDARIES")
+        assert hasattr(RemoteResponsesAPIBridge, "COMMITTABLE_BOUNDARIES")
 
     def test_mapping_non_empty(self):
-        assert len(ResponsesAPIBridge.COMMITTABLE_BOUNDARIES) > 0
+        assert len(RemoteResponsesAPIBridge.COMMITTABLE_BOUNDARIES) > 0
 
     def test_agent_is_between_turns(self):
-        boundaries = ResponsesAPIBridge.COMMITTABLE_BOUNDARIES
+        boundaries = RemoteResponsesAPIBridge.COMMITTABLE_BOUNDARIES
         assert boundaries[UnitKind.AGENT] == CommitRule.BETWEEN_TURNS
 
     def test_values_are_commit_rules(self):
-        for rule in ResponsesAPIBridge.COMMITTABLE_BOUNDARIES.values():
+        for rule in RemoteResponsesAPIBridge.COMMITTABLE_BOUNDARIES.values():
             assert isinstance(rule, CommitRule)
 
     def test_keys_are_unit_kinds(self):
-        for kind in ResponsesAPIBridge.COMMITTABLE_BOUNDARIES:
+        for kind in RemoteResponsesAPIBridge.COMMITTABLE_BOUNDARIES:
             assert isinstance(kind, UnitKind)
 
 
@@ -557,16 +564,16 @@ class TestNoWebSocketProtocol:
 
 
 class TestApplyInterruptionFourStep:
-    """Four-step atomic write ordering for ResponsesAPIBridge."""
+    """Four-step atomic write ordering for RemoteResponsesAPIBridge."""
 
     def test_four_step_method_calls_present(self):
-        assert hasattr(ResponsesAPIBridge, "_plan_interruption")
-        assert hasattr(ResponsesAPIBridge, "_apply_planned_mutation")
-        assert hasattr(ResponsesAPIBridge, "apply_interruption")
+        assert hasattr(RemoteResponsesAPIBridge, "_plan_interruption")
+        assert hasattr(RemoteResponsesAPIBridge, "_apply_planned_mutation")
+        assert hasattr(RemoteResponsesAPIBridge, "apply_interruption")
 
         import textwrap
 
-        source = textwrap.dedent(inspect.getsource(ResponsesAPIBridge.apply_interruption))
+        source = textwrap.dedent(inspect.getsource(RemoteResponsesAPIBridge.apply_interruption))
         tree = ast.parse(source)
 
         call_names = set()
@@ -580,7 +587,7 @@ class TestApplyInterruptionFourStep:
     def test_record_state_committed_before_apply(self):
         import textwrap
 
-        source = textwrap.dedent(inspect.getsource(ResponsesAPIBridge.apply_interruption))
+        source = textwrap.dedent(inspect.getsource(RemoteResponsesAPIBridge.apply_interruption))
         tree = ast.parse(source)
 
         calls_with_line: list[tuple[int, str]] = []
@@ -598,7 +605,7 @@ class TestApplyInterruptionFourStep:
     def test_no_direct_mutation_outside_apply_planned(self):
         import textwrap
 
-        source = textwrap.dedent(inspect.getsource(ResponsesAPIBridge.apply_interruption))
+        source = textwrap.dedent(inspect.getsource(RemoteResponsesAPIBridge.apply_interruption))
         assert "_replay_items" not in source
         assert "_last_completed_response_id" not in source
 
@@ -652,7 +659,7 @@ class TestInterruptionApplyFailed:
 
 
 class TestCancellationModeMatrix:
-    """All three cancellation modes work on ResponsesAPIBridge."""
+    """All three cancellation modes work on RemoteResponsesAPIBridge."""
 
     @pytest.mark.parametrize(
         "mode",
@@ -934,12 +941,12 @@ class TestRequestBody:
 
 
 class TestExports:
-    """ResponsesAPIBridge is exported from the package."""
+    """RemoteResponsesAPIBridge is exported from the package."""
 
     def test_importable_from_package(self):
-        from easycat.integrations.agents import ResponsesAPIBridge as Imported
+        from easycat.integrations.agents import RemoteResponsesAPIBridge as Imported
 
-        assert Imported is ResponsesAPIBridge
+        assert Imported is RemoteResponsesAPIBridge
 
 
 # ── InterruptionPlan tests ──────────────────────────────────────
@@ -994,7 +1001,7 @@ class TestIntegration:
                 "-- skipping live integration test"
             )
 
-        bridge = ResponsesAPIBridge(
+        bridge = RemoteResponsesAPIBridge(
             base_url=base_url,
             model=model,
             api_key=api_key,
