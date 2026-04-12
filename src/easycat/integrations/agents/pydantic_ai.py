@@ -314,12 +314,15 @@ class PydanticAIBridge:
 
         accumulated = ""
         raw_output: Any = None
+        done_emitted = False
 
         try:
             if hasattr(self._agent, "iter"):
                 async for ev in self._stream_via_iter(turn_input.text, recorder, cancel_token):
                     if ev.kind == "text_delta":
                         accumulated += ev.text
+                    elif ev.kind == "done":
+                        done_emitted = True
                     yield ev
                 raw_output = self._last_output
             else:
@@ -334,11 +337,12 @@ class PydanticAIBridge:
             raise
 
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
-        yield AgentBridgeEvent(
-            kind="done",
-            text=accumulated,
-            structured_output=raw_output,
-        )
+        if not done_emitted:
+            yield AgentBridgeEvent(
+                kind="done",
+                text=accumulated,
+                structured_output=raw_output,
+            )
 
     async def _stream_via_iter(
         self,

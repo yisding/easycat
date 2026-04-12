@@ -105,11 +105,16 @@ class OpenAIAgentsBridge:
         recorder.record_unit_entered(agent_cursor)
         yield AgentBridgeEvent(kind="cursor_entered", cursor=agent_cursor)
 
-        input_data = self._build_input(turn_input.text)
-        kwargs = self._build_kwargs()
-        if self._mcp_servers and hasattr(self._agent, "mcp_servers"):
-            self._agent.mcp_servers = list(self._mcp_servers)
-        result = Runner.run_streamed(self._agent, input_data, **kwargs)
+        try:
+            input_data = self._build_input(turn_input.text)
+            kwargs = self._build_kwargs()
+            if self._mcp_servers and hasattr(self._agent, "mcp_servers"):
+                self._agent.mcp_servers = list(self._mcp_servers)
+            result = Runner.run_streamed(self._agent, input_data, **kwargs)
+        except Exception as exc:
+            recorder.record_framework_error(ErrorInfo.from_exception(exc))
+            recorder.record_unit_exited(agent_cursor, reason="error")
+            raise
 
         accumulated = ""
         pending_tool_calls: set[str] = set()

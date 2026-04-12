@@ -558,6 +558,10 @@ class Session:
             raise RuntimeError(
                 "start() is not supported for text sessions. Use send_text() instead."
             )
+        if self._closed:
+            raise RuntimeError(
+                "Session has been stopped and cannot be restarted. Create a new Session."
+            )
         if self._is_running:
             return
         transport_connected = False
