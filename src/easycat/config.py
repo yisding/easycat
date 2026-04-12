@@ -179,7 +179,7 @@ class EasyCatConfig:
     output_processors: Sequence[LLMOutputProcessor] = ()
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
-    debug: Literal["off", "light", "full"] | bool = "light"
+    debug: Literal["off", "light", "full"] | bool = "off"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
     mcp_servers: list[str] | None = None
@@ -427,7 +427,7 @@ def create_text_session(
     *,
     agent: Any,
     session_id: str | None = None,
-    debug: Literal["off", "light", "full"] | bool = "light",
+    debug: Literal["off", "light", "full"] | bool = "off",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     journal_retention: Literal["archive", "delete"] = "archive",
     wrap_agent: bool = True,
@@ -466,7 +466,7 @@ def create_text_session(
             DeprecationWarning,
             stacklevel=2,
         )
-        debug = "full" if debug else "off"
+        debug = "light" if debug else "off"
 
     sid = session_id or f"session-{uuid4().hex[:12]}"
     artifact_store = _create_artifact_store(sid, debug)

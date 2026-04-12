@@ -227,6 +227,7 @@ class Session:
         # State
         self._is_running = False
         self._closed = False
+        self._stopping = False
         self._flushed = False
         self._pipeline_task: asyncio.Task[None] | None = None
         self._stt_task: asyncio.Task[None] | None = None
@@ -655,101 +656,109 @@ class Session:
 
     async def stop(self) -> None:
         """Gracefully stop the session: finish current turn, close providers."""
-        if self._closed:
+        if self._closed or self._stopping:
             return
-        self._closed = True
+        self._stopping = True
         self._is_running = False
         current_task = asyncio.current_task()
 
-        if self._turn:
-            self._turn.cancel_token.cancel()
+        try:
+            if self._turn:
+                self._turn.cancel_token.cancel()
 
-        # Always perform cleanup — even when _run_pipeline() already flipped
-        # _is_running to False (e.g. after a transport disconnect).  Each step
-        # is individually guarded and safe to call when no work was started.
-        if (
-            self._pipeline_task
-            and self._pipeline_task is not current_task
-            and not self._pipeline_task.done()
-        ):
-            self._pipeline_task.cancel()
-            try:
-                await self._pipeline_task
-            except asyncio.CancelledError:
-                logger.debug(
-                    "TTS processing task was cancelled; ensuring"
-                    " BotStoppedSpeaking is emitted if needed."
-                )
+            # Always perform cleanup — even when _run_pipeline() already flipped
+            # _is_running to False (e.g. after a transport disconnect).  Each step
+            # is individually guarded and safe to call when no work was started.
+            if (
+                self._pipeline_task
+                and self._pipeline_task is not current_task
+                and not self._pipeline_task.done()
+            ):
+                self._pipeline_task.cancel()
+                try:
+                    await self._pipeline_task
+                except asyncio.CancelledError:
+                    logger.debug(
+                        "TTS processing task was cancelled; ensuring"
+                        " BotStoppedSpeaking is emitted if needed."
+                    )
 
-        await self._cancel_stt()
-        await self._cancel_tts()
-        for checker in self._health_checkers:
-            await checker.stop()
-        self._health_checkers = []
-        self._stop_helpers()
-        if not self._outbound_queue_external:
-            self._outbound_queue.close()
-        if self._outbound_task and not self._outbound_task.done():
-            self._outbound_task.cancel()
-            try:
-                await self._outbound_task
-            except asyncio.CancelledError:
-                pass
-        await self.transport.disconnect()
-        await self._turn_manager.shutdown()
-        if hasattr(self.agent, "aclose"):
-            try:
-                await self.agent.aclose()
-            except Exception:
-                pass
-        self._turn = None
-        self.close()
+            await self._cancel_stt()
+            await self._cancel_tts()
+            for checker in self._health_checkers:
+                await checker.stop()
+            self._health_checkers = []
+            self._stop_helpers()
+            if not self._outbound_queue_external:
+                self._outbound_queue.close()
+            if self._outbound_task and not self._outbound_task.done():
+                self._outbound_task.cancel()
+                try:
+                    await self._outbound_task
+                except asyncio.CancelledError:
+                    pass
+            await self.transport.disconnect()
+            await self._turn_manager.shutdown()
+            if hasattr(self.agent, "aclose"):
+                try:
+                    await self.agent.aclose()
+                except Exception:
+                    pass
+            self._turn = None
+            self.close()
+            self._closed = True
+        finally:
+            self._stopping = False
 
     async def shutdown(self) -> None:
         """Force-close everything and release resources."""
-        if self._closed:
+        if self._closed or self._stopping:
             return
-        self._closed = True
+        self._stopping = True
         self._is_running = False
 
-        if self._turn:
-            self._turn.cancel_token.cancel()
+        try:
+            if self._turn:
+                self._turn.cancel_token.cancel()
 
-        tasks: list[asyncio.Task[Any]] = []
-        if self._pipeline_task and not self._pipeline_task.done():
-            self._pipeline_task.cancel()
-            tasks.append(self._pipeline_task)
-        if self._stt_task and not self._stt_task.done():
-            self._stt_task.cancel()
-            tasks.append(self._stt_task)
-        if self._current_tts_task and not self._current_tts_task.done():
-            self._current_tts_task.cancel()
-            tasks.append(self._current_tts_task)
-        if self._outbound_task and not self._outbound_task.done():
-            self._outbound_task.cancel()
-            tasks.append(self._outbound_task)
+            tasks: list[asyncio.Task[Any]] = []
+            if self._pipeline_task and not self._pipeline_task.done():
+                self._pipeline_task.cancel()
+                tasks.append(self._pipeline_task)
+            if self._stt_task and not self._stt_task.done():
+                self._stt_task.cancel()
+                tasks.append(self._stt_task)
+            if self._current_tts_task and not self._current_tts_task.done():
+                self._current_tts_task.cancel()
+                tasks.append(self._current_tts_task)
+            if self._outbound_task and not self._outbound_task.done():
+                self._outbound_task.cancel()
+                tasks.append(self._outbound_task)
 
-        for task in tasks:
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+            for task in tasks:
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
-        for checker in self._health_checkers:
-            await checker.stop()
-        self._health_checkers = []
-        self._stop_helpers()
-        if not self._outbound_queue_external:
-            self._outbound_queue.close()
-        await self.transport.disconnect()
-        await self._turn_manager.shutdown()
-        if hasattr(self.agent, "aclose"):
-            try:
-                await self.agent.aclose()
-            except Exception:
-                pass
-        self._turn = None
-        self.close()
+            for checker in self._health_checkers:
+                await checker.stop()
+            self._health_checkers = []
+            self._stop_helpers()
+            if not self._outbound_queue_external:
+                self._outbound_queue.close()
+            await self.transport.disconnect()
+            await self._turn_manager.shutdown()
+            if hasattr(self.agent, "aclose"):
+                try:
+                    await self.agent.aclose()
+                except Exception:
+                    pass
+            self._turn = None
+            self.close()
+            self._closed = True
+        finally:
+            self._stopping = False
 
     def close(self) -> None:
         """Finalize journal and artifact store resources.
