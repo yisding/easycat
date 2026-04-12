@@ -149,6 +149,7 @@ class JournalAgentRecorder:
             kind=JournalRecordKind.FRAMEWORK_TRANSITION,
             name="state_snapshot",
             data={"state_ref": ref},
+            output_ref=ref,
         )
 
     # ── Framework handoffs ───────────────────────────────────────
@@ -241,6 +242,7 @@ class JournalAgentRecorder:
         name: str,
         data: dict[str, Any] | None = None,
         error: ErrorInfo | None = None,
+        output_ref: str | None = None,
     ) -> None:
         if self._journal is None:
             return
@@ -251,6 +253,7 @@ class JournalAgentRecorder:
             turn_id=self._context.turn_id,
             data=_scrub_secrets(data) if data else data,
             error=error,
+            output_ref=output_ref,
         )
 
 

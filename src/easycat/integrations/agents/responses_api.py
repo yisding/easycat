@@ -93,6 +93,8 @@ class ResponsesAPIBridge:
         self._pending_interruption_note: str | None = None
         self._last_accumulated_items: list[dict[str, Any]] = []
         self._last_user_text: str | None = None
+        self._interrupted_response_id: str | None = None
+        self._pending_turn_metadata: dict[str, str] | None = None
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 
@@ -210,6 +212,12 @@ class ResponsesAPIBridge:
             self._last_completed_response_id = response_id
             self._response_count += 1
 
+        # Track the interrupted response ID for per-turn metadata.
+        if interrupted and response_id:
+            self._interrupted_response_id = response_id
+        elif not interrupted:
+            self._interrupted_response_id = None
+
         # Store accumulated items for potential interruption replay.
         self._last_accumulated_items = accumulated_items
 
@@ -217,6 +225,7 @@ class ResponsesAPIBridge:
         # but the caller will call apply_interruption separately).
         self._replay_items = None
         self._pending_interruption_note = None
+        self._pending_turn_metadata = None
 
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(
@@ -279,6 +288,16 @@ class ResponsesAPIBridge:
                 reason=plan.mutation_kind,
                 caused_by_signal_id=caused_by_signal_id,
             )
+
+        # Store per-turn metadata for the next request so a server that
+        # supports the EasyCat extension can use richer interruption semantics.
+        turn_meta: dict[str, str] = {
+            "easycat.delivered_text": delivered_text,
+            "easycat.cancellation_mode": mode.value if hasattr(mode, "value") else str(mode),
+        }
+        if self._interrupted_response_id:
+            turn_meta["easycat.interrupted_response_id"] = self._interrupted_response_id
+        self._pending_turn_metadata = turn_meta
 
     def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
         truncated = delivered_text + "..." if delivered_text else ""
@@ -365,6 +384,8 @@ class ResponsesAPIBridge:
         self._pending_interruption_note = None
         self._last_accumulated_items = []
         self._last_user_text = None
+        self._interrupted_response_id = None
+        self._pending_turn_metadata = None
 
     # ── Internal helpers ─────────────────────────────────────────
 
@@ -405,8 +426,11 @@ class ResponsesAPIBridge:
         if self._last_completed_response_id:
             body["previous_response_id"] = self._last_completed_response_id
 
-        if self._metadata:
-            body["metadata"] = self._metadata
+        if self._metadata or self._pending_turn_metadata:
+            merged = {**self._metadata}
+            if self._pending_turn_metadata:
+                merged.update(self._pending_turn_metadata)
+            body["metadata"] = merged
 
         return body
 

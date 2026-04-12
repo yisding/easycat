@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import fields as dc_fields
 from typing import Any
+from urllib.parse import urlparse
 
 from easycat.runtime.records import JournalRecord
 
@@ -73,6 +74,15 @@ SAFE_ENV_VARS: frozenset[str] = frozenset(
     }
 )
 
+# Vars whose values are URLs that may embed credentials or signed query
+# params.  ``safe_env_snapshot`` reduces these to ``scheme://host`` form.
+_URL_VALUED_VARS: frozenset[str] = frozenset(
+    {
+        "EASYCAT_JOURNAL_LITESTREAM_REPLICA",
+        "EASYCAT_LIBSQL_URL",
+    }
+)
+
 
 # ── Snapshot helpers ──────────────────────────────────────────────
 
@@ -120,9 +130,33 @@ def safe_config_snapshot(config: object) -> dict[str, Any]:
     return result
 
 
+def _sanitize_url(raw: str) -> str:
+    """Reduce a URL to ``scheme://host`` so credentials/query params are stripped."""
+    try:
+        parsed = urlparse(raw)
+        scheme = parsed.scheme or "unknown"
+        host = parsed.hostname or "unknown"
+        return f"{scheme}://{host}"
+    except Exception:
+        return "<redacted>"
+
+
 def safe_env_snapshot() -> dict[str, str]:
-    """Return a dict of allowlisted environment variables that are set."""
-    return {var: os.environ[var] for var in SAFE_ENV_VARS if var in os.environ}
+    """Return a dict of allowlisted environment variables that are set.
+
+    URL-valued vars (``EASYCAT_LIBSQL_URL``, etc.) are reduced to
+    ``scheme://host`` to avoid leaking embedded credentials or signed
+    query parameters.
+    """
+    result: dict[str, str] = {}
+    for var in SAFE_ENV_VARS:
+        if var not in os.environ:
+            continue
+        if var in _URL_VALUED_VARS:
+            result[var] = _sanitize_url(os.environ[var])
+        else:
+            result[var] = os.environ[var]
+    return result
 
 
 # ── Write filter hook ─────────────────────────────────────────────

@@ -550,9 +550,9 @@ class TestCredentialRedaction:
         with mock.patch.dict(os.environ, env_overrides, clear=False):
             snapshot = safe_env_snapshot()
 
-        # Non-secret allowlisted vars should be present.
+        # Non-secret allowlisted vars should be present (sanitized to scheme://host).
         assert "EASYCAT_JOURNAL_LITESTREAM_REPLICA" in snapshot
-        assert snapshot["EASYCAT_JOURNAL_LITESTREAM_REPLICA"] == "s3://bucket/path"
+        assert snapshot["EASYCAT_JOURNAL_LITESTREAM_REPLICA"] == "s3://bucket"
         assert "EASYCAT_LIBSQL_URL" in snapshot
         assert snapshot["EASYCAT_LIBSQL_URL"] == "libsql://org.turso.io"
 

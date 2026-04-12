@@ -1580,7 +1580,12 @@ class Session:
                         if hasattr(event, "text") and event.text:
                             accumulated = event.text
                         break
-                    if hasattr(event, "text") and event.text:
+                    if (
+                        hasattr(event, "type")
+                        and event.type == AgentStreamEventType.TEXT_DELTA
+                        and hasattr(event, "text")
+                        and event.text
+                    ):
                         accumulated += event.text
                 response = accumulated
             else:
