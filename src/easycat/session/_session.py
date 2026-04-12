@@ -249,6 +249,7 @@ class Session:
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
         self._active_text_turn: asyncio.Task[str] | None = None
+        self._text_turn_cancel_token: CancelToken | None = None
         self._text_turn_accumulated: str = ""
         self._turn_manager.bind_session(self.session_id)
 
@@ -673,6 +674,18 @@ class Session:
             if self._turn:
                 self._turn.cancel_token.cancel()
 
+            # Cancel any in-flight text turn so it doesn't emit events
+            # after the session is torn down.
+            if self._text_turn_cancel_token:
+                self._text_turn_cancel_token.cancel()
+            text_task = self._active_text_turn
+            if text_task is not None and not text_task.done():
+                text_task.cancel()
+                try:
+                    await text_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
             # Always perform cleanup — even when _run_pipeline() already flipped
             # _is_running to False (e.g. after a transport disconnect).  Each step
             # is individually guarded and safe to call when no work was started.
@@ -712,7 +725,7 @@ class Session:
                 except Exception:
                     pass
             self._turn = None
-            self.destroy()
+            self.close()
             self._closed = True
         finally:
             self._stopping = False
@@ -727,6 +740,17 @@ class Session:
         try:
             if self._turn:
                 self._turn.cancel_token.cancel()
+
+            # Cancel any in-flight text turn.
+            if self._text_turn_cancel_token:
+                self._text_turn_cancel_token.cancel()
+            text_task = self._active_text_turn
+            if text_task is not None and not text_task.done():
+                text_task.cancel()
+                try:
+                    await text_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
             tasks: list[asyncio.Task[Any]] = []
             if self._pipeline_task and not self._pipeline_task.done():
@@ -762,7 +786,7 @@ class Session:
                 except Exception:
                     pass
             self._turn = None
-            self.destroy()
+            self.close()
             self._closed = True
         finally:
             self._stopping = False
@@ -1618,6 +1642,8 @@ class Session:
         prev = self._active_text_turn
         if prev is not None and not prev.done():
             delivered = self._text_turn_accumulated
+            if self._text_turn_cancel_token:
+                self._text_turn_cancel_token.cancel()
             prev.cancel()
             try:
                 await prev
@@ -1632,11 +1658,13 @@ class Session:
                         exc_info=True,
                     )
 
-        task = asyncio.ensure_future(self._execute_text_turn(text))
+        token = CancelToken()
+        self._text_turn_cancel_token = token
+        task = asyncio.ensure_future(self._execute_text_turn(text, token))
         self._active_text_turn = task
         return await task
 
-    async def _execute_text_turn(self, text: str) -> str:
+    async def _execute_text_turn(self, text: str, cancel_token: CancelToken | None = None) -> str:
         turn_id = f"turn-{uuid4().hex[:12]}"
         await self._emit(TurnStarted(session_id=self.session_id, turn_id=turn_id))
         try:
@@ -1648,7 +1676,7 @@ class Session:
             self._text_turn_accumulated = ""
             if hasattr(self.agent, "run_streaming"):
                 accumulated = ""
-                async for event in self.agent.run_streaming(text):
+                async for event in self.agent.run_streaming(text, cancel_token=cancel_token):
                     if not hasattr(event, "type"):
                         continue
                     if event.type == AgentStreamEventType.DONE:
