@@ -751,22 +751,23 @@ class Session:
         self.close()
 
     def close(self) -> None:
-        """Flush journal and artifact store resources.
+        """Finalize journal and artifact store resources.
 
         Called automatically by ``stop()`` and ``shutdown()``.
         Safe to call multiple times.  References are preserved so
         callers can still inspect ``session.journal`` and call
         ``session.export_debug_bundle()`` after the session stops.
 
-        Only flushes — does **not** destroy the underlying backends so
-        that post-stop reads (e.g. ``export_debug_bundle``) still work.
+        Writes the clean-close marker and runs retention but does
+        **not** close the underlying backends so that post-stop reads
+        (e.g. ``export_debug_bundle``) still work.
         Call :meth:`destroy` to release connections and free memory.
         """
         if self._flushed:
             return
         self._flushed = True
         if self._journal:
-            self._journal.flush()
+            self._journal.finalize()
 
     def destroy(self) -> None:
         """Close journal and artifact store backends, releasing resources.

@@ -90,6 +90,17 @@ class ExecutionJournal(Protocol):
 
     def flush(self) -> None: ...
 
+    def finalize(self) -> None:
+        """Mark the session as cleanly closed without closing the backend.
+
+        Writes the ``clean_close`` marker (for backends that support it)
+        so that a subsequent session with the same id is not treated as
+        crash recovery.  The backend remains readable — callers can still
+        query records after this call.  ``close()`` is still required to
+        release the underlying connection.
+        """
+        ...
+
     @property
     def latest_sequence(self) -> int: ...
 
@@ -234,6 +245,9 @@ class InMemoryRingBuffer:
         pass
 
     def flush(self) -> None:
+        pass
+
+    def finalize(self) -> None:
         pass
 
     @property
@@ -646,6 +660,32 @@ class SqliteJournal:
             except sqlite3.OperationalError:
                 pass
 
+    def finalize(self) -> None:
+        """Write clean_close marker and run retention without closing the connection."""
+        if self._closed:
+            return
+        with self._lock:
+            try:
+                self._conn.execute("COMMIT")
+            except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                pass
+            try:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
+                )
+                self._conn.commit()
+            except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                pass
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                logger.debug("WAL checkpoint skipped on finalize", exc_info=True)
+        # Run retention opportunistically — never block a turn.
+        try:
+            run_retention(self._root, mode=self._retention_mode)
+        except Exception:
+            logger.debug("Retention sweep failed", exc_info=True)
+
     @property
     def latest_sequence(self) -> int:
         with self._lock:
@@ -878,6 +918,9 @@ class LitestreamSqliteJournal:
     def flush(self) -> None:
         self._inner.flush()
 
+    def finalize(self) -> None:
+        self._inner.finalize()
+
     def close(self) -> None:
         self._stop_sidecar()
         self._inner.close()
@@ -1058,6 +1101,14 @@ class LibsqlJournal:
         except Exception:
             logger.debug("libsql sync failed during flush", exc_info=True)
 
+    def finalize(self) -> None:
+        if self._closed:
+            return
+        try:
+            self._conn.sync()
+        except Exception:
+            logger.debug("libsql sync failed during finalize", exc_info=True)
+
     def close(self) -> None:
         if self._closed:
             return
@@ -1198,8 +1249,12 @@ def run_retention(
             archive_dir.mkdir(parents=True, exist_ok=True)
             archive_path = archive_dir / f"{oldest.stem}.tar.gz"
             try:
+                session_id = oldest.stem
+                artifact_dir = root / "artifacts" / session_id
                 with tarfile.open(str(archive_path), "w:gz") as tar:
                     tar.add(str(oldest), arcname=oldest.name)
+                    if artifact_dir.is_dir():
+                        tar.add(str(artifact_dir), arcname=f"artifacts/{session_id}")
             except OSError:
                 logger.warning("Failed to archive %s", oldest, exc_info=True)
                 continue
