@@ -142,7 +142,8 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
             from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
             from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
-            return BridgeAdapterShim(OpenAIAgentsBridge(agent=agent))
+            run_config = _build_default_openai_run_config()
+            return BridgeAdapterShim(OpenAIAgentsBridge(agent=agent, run_config=run_config))
     except ImportError:
         pass
 
@@ -158,3 +159,17 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
         )
 
     return agent
+
+
+def _build_default_openai_run_config() -> Any:
+    """Build an OpenAI Agents RunConfig with Responses WebSocket enabled.
+
+    Falls back to None when the SDK version doesn't support RunConfig.
+    """
+    try:
+        from agents import OpenAIProvider, RunConfig  # type: ignore[import-untyped]
+
+        provider = OpenAIProvider(use_responses=True, use_responses_websocket=True)
+        return RunConfig(model_provider=provider)
+    except (ImportError, TypeError):
+        return None
