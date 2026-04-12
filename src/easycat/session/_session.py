@@ -705,7 +705,7 @@ class Session:
                 except Exception:
                     pass
             self._turn = None
-            self.close()
+            self.destroy()
             self._closed = True
         finally:
             self._stopping = False
@@ -755,23 +755,22 @@ class Session:
                 except Exception:
                     pass
             self._turn = None
-            self.close()
+            self.destroy()
             self._closed = True
         finally:
             self._stopping = False
 
     def close(self) -> None:
-        """Finalize journal and artifact store resources.
+        """Finalize journal without releasing backend connections.
 
-        Called automatically by ``stop()`` and ``shutdown()``.
-        Safe to call multiple times.  References are preserved so
-        callers can still inspect ``session.journal`` and call
-        ``session.export_debug_bundle()`` after the session stops.
+        Writes the clean-close marker so the journal is marked as
+        properly shut down.  Does **not** close the underlying SQLite
+        connection or artifact store, so callers can still call
+        ``export_debug_bundle()`` afterwards.
 
-        Writes the clean-close marker and runs retention but does
-        **not** close the underlying backends so that post-stop reads
-        (e.g. ``export_debug_bundle``) still work.
-        Call :meth:`destroy` to release connections and free memory.
+        Most callers should use :meth:`destroy` (or just let
+        ``stop()`` / ``shutdown()`` handle cleanup) to also release
+        connections.  Safe to call multiple times.
         """
         if self._flushed:
             return

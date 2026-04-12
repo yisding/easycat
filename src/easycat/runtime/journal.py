@@ -680,11 +680,6 @@ class SqliteJournal:
                 self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 logger.debug("WAL checkpoint skipped on finalize", exc_info=True)
-        # Run retention opportunistically — never block a turn.
-        try:
-            run_retention(self._root, mode=self._retention_mode)
-        except Exception:
-            logger.debug("Retention sweep failed", exc_info=True)
 
     @property
     def latest_sequence(self) -> int:
