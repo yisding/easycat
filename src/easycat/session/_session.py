@@ -663,6 +663,7 @@ class Session:
             except Exception:
                 pass
         self._turn = None
+        self.close()
 
     async def shutdown(self) -> None:
         """Force-close everything and release resources."""
@@ -705,12 +706,13 @@ class Session:
             except Exception:
                 pass
         self._turn = None
+        self.close()
 
     def close(self) -> None:
         """Release journal and artifact store resources.
 
-        Call this after ``stop()`` / ``shutdown()`` and any post-stop work
-        such as ``export_debug_bundle()``.  Safe to call multiple times.
+        Called automatically by ``stop()`` and ``shutdown()``.
+        Safe to call multiple times.
         """
         if self._artifact_store:
             self._artifact_store.close()

@@ -441,6 +441,19 @@ def create_text_session(
     Raises :class:`RuntimeError` if the caller attempts to call
     :meth:`Session.start` on a text session.
     """
+    # Validate URL-backed agents early (mirrors EasyCatConfig._validate).
+    if isinstance(agent, str):
+        from urllib.parse import urlparse
+
+        parsed = urlparse(agent)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            if agent_model is None:
+                raise EasyCatConfigError(
+                    "agent_model is required when agent is a URL string. "
+                    "Set agent_model to the model identifier the remote "
+                    "Responses API server should use."
+                )
+
     sid = session_id or f"session-{uuid4().hex[:12]}"
     artifact_store = _create_artifact_store(sid, debug)
     journal = (

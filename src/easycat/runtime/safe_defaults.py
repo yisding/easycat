@@ -82,23 +82,41 @@ def _is_secret_name(name: str) -> bool:
     return any(frag in lower for frag in _SECRET_FRAGMENTS)
 
 
+def _safe_repr(val: Any) -> str:
+    """repr() that redacts secret-looking fields in nested dataclasses.
+
+    For plain scalars this is just ``repr(val)``.  For dataclass values
+    it rebuilds a repr string with secret fields (api_key, token, …)
+    replaced by ``'***'``.
+    """
+    try:
+        nested = dc_fields(val)
+    except TypeError:
+        return repr(val)
+    parts: list[str] = []
+    for f in nested:
+        if _is_secret_name(f.name):
+            parts.append(f"{f.name}='***'")
+        else:
+            parts.append(f"{f.name}={repr(getattr(val, f.name))}")
+    return f"{type(val).__name__}({', '.join(parts)})"
+
+
 def safe_config_snapshot(config: object) -> dict[str, Any]:
     """Return a dict containing only allowlisted, non-secret config fields.
 
     Accepts any object (typically ``EasyCatConfig`` or ``SessionConfig``).
-    Fields are serialised as ``repr(value)`` to avoid leaking complex
-    objects — full typed snapshots are a future peripheral.
+    Fields are serialised via :func:`_safe_repr` which redacts secret
+    fields in nested dataclass values (e.g. provider configs that contain
+    ``api_key``).
     """
     result: dict[str, Any] = {}
-    # Support both dataclasses and plain objects.
-    try:
-        names = [f.name for f in dc_fields(config)]
-    except TypeError:
-        names = list(vars(config))
-    for name in names:
-        if name in SAFE_CONFIG_FIELDS and not _is_secret_name(name):
-            val = getattr(config, name, None)
-            result[name] = repr(val)
+    for name in SAFE_CONFIG_FIELDS:
+        if _is_secret_name(name):
+            continue
+        val = getattr(config, name, None)
+        if val is not None:
+            result[name] = _safe_repr(val)
     return result
 
 

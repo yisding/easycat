@@ -160,21 +160,13 @@ def _collect_provider_versions(session: Any) -> dict[str, str]:
 
 
 def _safe_config_snapshot(session: Any) -> dict[str, Any]:
-    """Extract only allowlisted config fields."""
+    """Extract only allowlisted config fields, redacting secrets."""
     try:
-        from easycat.runtime.safe_defaults import SAFE_CONFIG_FIELDS
+        from easycat.runtime.safe_defaults import safe_config_snapshot
 
         config = getattr(session, "_config", None)
         if config is None:
             return {}
-        snapshot: dict[str, Any] = {}
-        for key in SAFE_CONFIG_FIELDS:
-            val = getattr(config, key, None)
-            if val is not None:
-                try:
-                    snapshot[key] = json.loads(json.dumps(val, default=str))
-                except (TypeError, ValueError):
-                    snapshot[key] = str(val)
-        return snapshot
+        return safe_config_snapshot(config)
     except ImportError:
         return {}
