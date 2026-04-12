@@ -225,6 +225,7 @@ class Session:
 
         # State
         self._is_running = False
+        self._closed = False
         self._pipeline_task: asyncio.Task[None] | None = None
         self._stt_task: asyncio.Task[None] | None = None
         self._current_tts_task: asyncio.Task[None] | None = None
@@ -619,44 +620,46 @@ class Session:
 
     async def stop(self) -> None:
         """Gracefully stop the session: finish current turn, close providers."""
-        if not self._is_running:
+        if self._closed:
             return
+        was_running = self._is_running
         self._is_running = False
         current_task = asyncio.current_task()
 
         if self._turn:
             self._turn.cancel_token.cancel()
 
-        if (
-            self._pipeline_task
-            and self._pipeline_task is not current_task
-            and not self._pipeline_task.done()
-        ):
-            self._pipeline_task.cancel()
-            try:
-                await self._pipeline_task
-            except asyncio.CancelledError:
-                logger.debug(
-                    "TTS processing task was cancelled; ensuring"
-                    " BotStoppedSpeaking is emitted if needed."
-                )
+        if was_running:
+            if (
+                self._pipeline_task
+                and self._pipeline_task is not current_task
+                and not self._pipeline_task.done()
+            ):
+                self._pipeline_task.cancel()
+                try:
+                    await self._pipeline_task
+                except asyncio.CancelledError:
+                    logger.debug(
+                        "TTS processing task was cancelled; ensuring"
+                        " BotStoppedSpeaking is emitted if needed."
+                    )
 
-        await self._cancel_stt()
-        await self._cancel_tts()
-        for checker in self._health_checkers:
-            await checker.stop()
-        self._health_checkers = []
-        self._stop_helpers()
-        if not self._outbound_queue_external:
-            self._outbound_queue.close()
-        if self._outbound_task and not self._outbound_task.done():
-            self._outbound_task.cancel()
-            try:
-                await self._outbound_task
-            except asyncio.CancelledError:
-                pass
-        await self.transport.disconnect()
-        await self._turn_manager.shutdown()
+            await self._cancel_stt()
+            await self._cancel_tts()
+            for checker in self._health_checkers:
+                await checker.stop()
+            self._health_checkers = []
+            self._stop_helpers()
+            if not self._outbound_queue_external:
+                self._outbound_queue.close()
+            if self._outbound_task and not self._outbound_task.done():
+                self._outbound_task.cancel()
+                try:
+                    await self._outbound_task
+                except asyncio.CancelledError:
+                    pass
+            await self.transport.disconnect()
+            await self._turn_manager.shutdown()
         if hasattr(self.agent, "aclose"):
             try:
                 await self.agent.aclose()
@@ -667,6 +670,8 @@ class Session:
 
     async def shutdown(self) -> None:
         """Force-close everything and release resources."""
+        if self._closed:
+            return
         self._is_running = False
 
         if self._turn:
@@ -709,17 +714,20 @@ class Session:
         self.close()
 
     def close(self) -> None:
-        """Release journal and artifact store resources.
+        """Flush journal and artifact store resources.
 
         Called automatically by ``stop()`` and ``shutdown()``.
-        Safe to call multiple times.
+        Safe to call multiple times.  References are preserved so
+        callers can still inspect ``session.journal`` and call
+        ``session.export_debug_bundle()`` after the session stops.
         """
+        if self._closed:
+            return
+        self._closed = True
         if self._artifact_store:
             self._artifact_store.close()
-            self._artifact_store = None
         if self._journal:
             self._journal.close()
-            self._journal = None
 
     # ── Cancellation ───────────────────────────────────────────
 

@@ -418,8 +418,11 @@ class PydanticAIBridge:
         recorder: AgentRecorder,
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
-        state = self._state_factory()
-        self._state = state
+        if self._state is None:
+            state = self._state_factory()
+            self._state = state
+        else:
+            state = self._state
         initial_node = self._initial_node_factory(turn_input.text, state)
 
         # Install event handler on state for per-agent capture.
@@ -498,6 +501,16 @@ class PydanticAIBridge:
                     )
                 except (TypeError, ValueError):
                     logger.debug("Failed to serialize graph run history")
+
+            # Populate _message_history so the default interruption
+            # truncation path has something to work with in graph mode.
+            if accumulated:
+                try:
+                    from pydantic_ai.messages import ModelResponse, TextPart
+
+                    self._message_history = [ModelResponse(parts=[TextPart(content=accumulated)])]
+                except ImportError:
+                    pass
 
             # Convention enforcement: verify handler was actually used.
             if not _handler.was_called and prev_node_name is not None:
