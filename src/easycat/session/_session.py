@@ -279,12 +279,11 @@ class Session:
         if isinstance(shim, AgentRunner):
             shim = shim._agent
         if isinstance(shim, BridgeAdapterShim):
-            if shim._journal is None and self._journal is not None:
+            if self._journal is not None:
                 shim._journal = self._journal
-            if shim._artifact_store is None and self._artifact_store is not None:
+            if self._artifact_store is not None:
                 shim._artifact_store = self._artifact_store
-            if not shim._session_id:
-                shim._session_id = self.session_id
+            shim._session_id = self.session_id
 
     def _with_correlation(self, event: Any) -> Any:
         """Attach session/turn identifiers to events when supported."""

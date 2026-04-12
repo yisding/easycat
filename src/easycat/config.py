@@ -427,7 +427,7 @@ def create_text_session(
     *,
     agent: Any,
     session_id: str | None = None,
-    debug: Literal["off", "light", "full"] = "light",
+    debug: Literal["off", "light", "full"] | bool = "light",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     journal_retention: Literal["archive", "delete"] = "archive",
     wrap_agent: bool = True,
@@ -457,6 +457,16 @@ def create_text_session(
                     "Set agent_model to the model identifier the remote "
                     "Responses API server should use."
                 )
+
+    # ── Bool → enum compat shim (mirrors EasyCatConfig.__post_init__) ──
+    if isinstance(debug, bool):
+        warnings.warn(
+            "create_text_session(debug=bool) is deprecated. "
+            'Use debug="off" | "light" | "full" instead.',
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        debug = "full" if debug else "off"
 
     sid = session_id or f"session-{uuid4().hex[:12]}"
     artifact_store = _create_artifact_store(sid, debug)
