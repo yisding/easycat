@@ -203,7 +203,7 @@ class EasyCatConfig:
                 DeprecationWarning,
                 stacklevel=2,
             )
-            self.debug = "full" if self.debug else "off"
+            self.debug = "light" if self.debug else "off"
 
         if self.openai_api_key:
             if self.stt is None:

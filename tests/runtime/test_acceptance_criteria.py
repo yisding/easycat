@@ -81,9 +81,9 @@ class TestDebugCapabilityMatrix:
 
 
 class TestDebugBoolCompatShim:
-    """AC1.3 — debug=True emits DeprecationWarning and routes to 'full'."""
+    """AC1.3 — debug=True emits DeprecationWarning and routes to 'light'."""
 
-    def test_true_emits_warning_and_maps_to_full(self):
+    def test_true_emits_warning_and_maps_to_light(self):
         from easycat.config import EasyCatConfig
         from easycat.stt.openai_provider import OpenAISTTConfig
         from easycat.tts.openai_tts import OpenAITTSConfig
@@ -97,7 +97,7 @@ class TestDebugBoolCompatShim:
             )
         dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
         assert len(dep_warnings) >= 1
-        assert cfg.debug == "full"
+        assert cfg.debug == "light"
 
     def test_false_maps_to_off(self):
         from easycat.config import EasyCatConfig

@@ -105,6 +105,7 @@ class OpenAIAgentsBridge:
         recorder.record_unit_entered(agent_cursor)
         yield AgentBridgeEvent(kind="cursor_entered", cursor=agent_cursor)
 
+        saved_mcp_servers = getattr(self._agent, "mcp_servers", None)
         try:
             input_data = self._build_input(turn_input.text)
             kwargs = self._build_kwargs()
@@ -112,6 +113,8 @@ class OpenAIAgentsBridge:
                 self._agent.mcp_servers = list(self._mcp_servers)
             result = Runner.run_streamed(self._agent, input_data, **kwargs)
         except Exception as exc:
+            if hasattr(self._agent, "mcp_servers"):
+                self._agent.mcp_servers = saved_mcp_servers
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
             raise
@@ -160,6 +163,8 @@ class OpenAIAgentsBridge:
             cursor_exited = True
             raise
         finally:
+            if hasattr(self._agent, "mcp_servers"):
+                self._agent.mcp_servers = saved_mcp_servers
             self._message_history = result.to_input_list()
             if self._use_previous_response_id:
                 self._previous_response_id = getattr(result, "last_response_id", None)

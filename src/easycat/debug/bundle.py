@@ -7,6 +7,7 @@ shared with teammates.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -177,6 +178,33 @@ class RunBundle:
                         artifact_index[ref] = ArtifactEntry(
                             ref=ref, sha256=actual_sha, size_bytes=len(data)
                         )
+
+            # Reconstruct artifacts from inline base64 blobs in manifest
+            for ref, b64 in manifest_data.get("inline_artifacts", {}).items():
+                if ref in artifact_index:
+                    continue  # file-based entry takes precedence
+                if not _SHA256_REF.match(ref):
+                    raise BundleValidationError(
+                        f"Invalid inline artifact ref: {ref!r}",
+                        reason_code="INVALID_REF",
+                    )
+                data = base64.b64decode(b64)
+                total_size += len(data)
+                if total_size > 500_000_000:
+                    raise BundleValidationError(
+                        "Total artifact size exceeds 500MB cap",
+                        reason_code="SIZE_EXCEEDED",
+                    )
+                actual_sha = hashlib.sha256(data).hexdigest()
+                expected_sha = manifest.artifact_checksums.get(ref, ref)
+                if not fast and actual_sha != expected_sha:
+                    raise BundleIntegrityError(
+                        f"SHA-256 mismatch for inline artifact {ref}: "
+                        f"expected {expected_sha}, got {actual_sha}"
+                    )
+                artifact_index[ref] = ArtifactEntry(
+                    ref=ref, sha256=actual_sha, size_bytes=len(data)
+                )
 
             # Validate metadata sizes
             for record_line in journal_ndjson.decode("utf-8", errors="replace").splitlines():
