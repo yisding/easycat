@@ -671,7 +671,7 @@ class Session:
             except Exception:
                 pass
         self._turn = None
-        self.close()
+        self.destroy()
 
     async def shutdown(self) -> None:
         """Force-close everything and release resources."""
@@ -716,7 +716,7 @@ class Session:
             except Exception:
                 pass
         self._turn = None
-        self.close()
+        self.destroy()
 
     def close(self) -> None:
         """Flush journal and artifact store resources.
@@ -1561,6 +1561,8 @@ class Session:
         """
         if self._runtime_mode != "text_session":
             raise RuntimeError("send_text() is only available in text_session mode")
+        if self._closed:
+            raise RuntimeError("Session has been stopped")
         turn_id = f"turn-{uuid4().hex[:12]}"
         if self._journal:
             self._journal.append(

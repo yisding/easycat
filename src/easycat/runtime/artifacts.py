@@ -88,6 +88,10 @@ class InMemoryArtifactStore:
         with self._lock:
             if ref in self._store:
                 return ref
+            if len(payload) > self._max_bytes:
+                raise ValueError(
+                    f"Artifact size {len(payload)} exceeds max_bytes {self._max_bytes}"
+                )
             self._evict_if_needed(len(payload))
             self._store[ref] = payload
             self._order.append(ref)
