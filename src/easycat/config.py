@@ -330,26 +330,30 @@ def create_session(config: EasyCatConfig) -> Session:
     if config.agent is not None:
         agent = auto_adapt_agent(config.agent)
         # Inject MCP servers and journal into the shim if it's a bridge adapter.
+        # Unwrap AgentRunner if the caller pre-wrapped the shim.
         from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
 
-        if isinstance(agent, BridgeAdapterShim):
-            agent._journal = journal
-            agent._artifact_store = artifact_store
-            agent._session_id = session_id
-            agent._mcp_servers = mcp_servers
+        shim = agent
+        if isinstance(shim, AgentRunner):
+            shim = shim._agent
+        if isinstance(shim, BridgeAdapterShim):
+            shim._journal = journal
+            shim._artifact_store = artifact_store
+            shim._session_id = session_id
+            shim._mcp_servers = mcp_servers
             # Also propagate to the underlying bridge so bridge.invoke()
             # sees the configured servers (e.g. OpenAIAgentsBridge reads
             # its own _mcp_servers, not the shim's).
-            if mcp_servers and hasattr(agent.bridge, "_mcp_servers"):
-                agent.bridge._mcp_servers = list(mcp_servers)
+            if mcp_servers and hasattr(shim.bridge, "_mcp_servers"):
+                shim.bridge._mcp_servers = list(mcp_servers)
             # Inject model/API key for URL-backed agents.
             from easycat.integrations.agents.responses_api import ResponsesAPIBridge
 
-            if isinstance(agent.bridge, ResponsesAPIBridge):
+            if isinstance(shim.bridge, ResponsesAPIBridge):
                 if config.agent_model:
-                    agent.bridge._model = config.agent_model
+                    shim.bridge._model = config.agent_model
                 if config.remote_agent_api_key:
-                    agent.bridge._api_key = config.remote_agent_api_key
+                    shim.bridge._api_key = config.remote_agent_api_key
         if config.wrap_agent and not isinstance(agent, AgentRunner):
             runner_cfg = config.agent_runner or AgentRunnerConfig()
             agent = AgentRunner(agent, runner_cfg)
@@ -473,9 +477,12 @@ def create_text_session(
 
     adapted = auto_adapt_agent(agent) if agent is not None else NoopAgent()
     # Backfill journal metadata into the bridge shim (mirrors create_session).
+    # Unwrap AgentRunner if the caller pre-wrapped the shim.
     from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
 
     _inner = adapted
+    if isinstance(_inner, AgentRunner):
+        _inner = _inner._agent
     if isinstance(_inner, BridgeAdapterShim):
         _inner._journal = journal
         _inner._artifact_store = artifact_store

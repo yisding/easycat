@@ -291,7 +291,7 @@ class Session:
         def _make(kind: JournalRecordKind, name: str):
             def _handler(event: Any) -> None:
                 data: dict[str, Any] = {}
-                for attr in ("text", "track", "result", "tool_name", "call_id"):
+                for attr in ("text", "track", "result", "tool_name", "call_id", "delta"):
                     val = getattr(event, attr, None)
                     if val is not None:
                         data[attr] = val
@@ -327,6 +327,7 @@ class Session:
         _sub(Interruption, _make(CTL, "interruption"))
         _sub(Error, _make(EVT, "error"))
         _sub(ToolCallStarted, _make(EVT, "tool_call_started"))
+        _sub(ToolCallDelta, _make(EVT, "tool_call_delta"))
         _sub(ToolCallResult, _make(EVT, "tool_call_result"))
 
     def _reset_turn_state(self) -> None:
@@ -720,14 +721,28 @@ class Session:
         Safe to call multiple times.  References are preserved so
         callers can still inspect ``session.journal`` and call
         ``session.export_debug_bundle()`` after the session stops.
+
+        Only flushes — does **not** destroy the underlying backends so
+        that post-stop reads (e.g. ``export_debug_bundle``) still work.
+        Call :meth:`destroy` to release connections and free memory.
         """
         if self._closed:
             return
         self._closed = True
-        if self._artifact_store:
-            self._artifact_store.close()
+        if self._journal:
+            self._journal.flush()
+
+    def destroy(self) -> None:
+        """Close journal and artifact store backends, releasing resources.
+
+        After this call ``export_debug_bundle()`` will no longer work.
+        Safe to call multiple times.
+        """
+        self.close()  # ensure flush happened
         if self._journal:
             self._journal.close()
+        if self._artifact_store:
+            self._artifact_store.close()
 
     # ── Cancellation ───────────────────────────────────────────
 
