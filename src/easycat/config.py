@@ -205,6 +205,18 @@ class EasyCatConfig:
             )
             self.debug = "light" if self.debug else "off"
 
+        _VALID_DEBUG = {"off", "light", "full"}
+        if self.debug not in _VALID_DEBUG:
+            raise ValueError(
+                f"Invalid debug={self.debug!r}. Must be one of {sorted(_VALID_DEBUG)}."
+            )
+        _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
+        if self.journal_backend not in _VALID_JOURNAL_BACKEND:
+            raise ValueError(
+                f"Invalid journal_backend={self.journal_backend!r}. "
+                f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
+            )
+
         if self.openai_api_key:
             if self.stt is None:
                 self.stt = OpenAISTTConfig(api_key=self.openai_api_key)

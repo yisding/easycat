@@ -360,6 +360,8 @@ def discover_bundles(data_dir: str | None = None) -> list[Path]:
         search = data_path / subdir
         if search.exists():
             for f in search.iterdir():
-                if f.suffix in (".zip", ".easycat-bundle") or f.name.endswith(".easycat-bundle"):
+                if f.suffix in (".zip", ".easycat-bundle", ".sqlite") or f.name.endswith(
+                    ".easycat-bundle"
+                ):
                     bundles.append(f)
     return sorted(bundles)

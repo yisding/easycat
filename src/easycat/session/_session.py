@@ -1609,14 +1609,6 @@ class Session:
         async with self._text_turn_lock:
             turn_id = f"turn-{uuid4().hex[:12]}"
             await self._emit(TurnStarted(session_id=self.session_id, turn_id=turn_id))
-            if self._journal:
-                self._journal.append(
-                    kind=JournalRecordKind.EVENT,
-                    name="turn_started",
-                    session_id=self.session_id,
-                    turn_id=turn_id,
-                    data={"text": text},
-                )
             try:
                 t0 = time.monotonic()
                 # Propagate turn_id to bridge-backed agents so their journal
@@ -1651,13 +1643,6 @@ class Session:
                 )
                 if self._journal:
                     self._journal.append(
-                        kind=JournalRecordKind.EVENT,
-                        name="agent_final",
-                        session_id=self.session_id,
-                        turn_id=turn_id,
-                        data={"text": response},
-                    )
-                    self._journal.append(
                         kind=JournalRecordKind.METRIC,
                         name="text_turn_latency_ms",
                         session_id=self.session_id,
@@ -1674,26 +1659,9 @@ class Session:
                         turn_id=turn_id,
                     )
                 )
-                if self._journal:
-                    from easycat.runtime.records import ErrorInfo
-
-                    self._journal.append(
-                        kind=JournalRecordKind.EVENT,
-                        name="error",
-                        session_id=self.session_id,
-                        turn_id=turn_id,
-                        error=ErrorInfo.from_exception(exc),
-                    )
                 raise
             finally:
                 await self._emit(TurnEnded(session_id=self.session_id, turn_id=turn_id))
-                if self._journal:
-                    self._journal.append(
-                        kind=JournalRecordKind.EVENT,
-                        name="turn_ended",
-                        session_id=self.session_id,
-                        turn_id=turn_id,
-                    )
             return response
 
     async def _cancel_stt(self) -> None:
