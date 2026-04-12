@@ -249,6 +249,7 @@ class Session:
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
+        self._text_turn_lock = asyncio.Lock()
         self._turn_manager.bind_session(self.session_id)
 
         # Backfill journal/session-id into bridge adapter shims so that the
@@ -1595,77 +1596,78 @@ class Session:
             raise RuntimeError("send_text() is only available in text_session mode")
         if self._closed:
             raise RuntimeError("Session has been stopped")
-        turn_id = f"turn-{uuid4().hex[:12]}"
-        if self._journal:
-            self._journal.append(
-                kind=JournalRecordKind.EVENT,
-                name="turn_started",
-                session_id=self.session_id,
-                turn_id=turn_id,
-                data={"text": text},
-            )
-        try:
-            t0 = time.monotonic()
-            # Propagate turn_id to bridge-backed agents so their journal
-            # records (framework_transition, etc.) share the same turn.
-            _set_fn = getattr(self.agent, "set_active_turn_id", None)
-            if callable(_set_fn):
-                _set_fn(turn_id)
-            if hasattr(self.agent, "run_streaming"):
-                accumulated = ""
-                async for event in self.agent.run_streaming(text):
-                    if hasattr(event, "type") and event.type == AgentStreamEventType.DONE:
-                        if hasattr(event, "text") and event.text:
-                            accumulated = event.text
-                        break
-                    if (
-                        hasattr(event, "type")
-                        and event.type == AgentStreamEventType.TEXT_DELTA
-                        and hasattr(event, "text")
-                        and event.text
-                    ):
-                        accumulated += event.text
-                response = accumulated
-            else:
-                response = await self.agent.run(text)
-            elapsed_ms = (time.monotonic() - t0) * 1000
+        async with self._text_turn_lock:
+            turn_id = f"turn-{uuid4().hex[:12]}"
             if self._journal:
                 self._journal.append(
                     kind=JournalRecordKind.EVENT,
-                    name="agent_final",
+                    name="turn_started",
                     session_id=self.session_id,
                     turn_id=turn_id,
-                    data={"text": response},
+                    data={"text": text},
                 )
-                self._journal.append(
-                    kind=JournalRecordKind.METRIC,
-                    name="text_turn_latency_ms",
-                    session_id=self.session_id,
-                    turn_id=turn_id,
-                    data={"value": elapsed_ms},
-                )
-        except Exception as exc:
-            logger.exception("Agent error in text_session send_text")
-            if self._journal:
-                from easycat.runtime.records import ErrorInfo
+            try:
+                t0 = time.monotonic()
+                # Propagate turn_id to bridge-backed agents so their journal
+                # records (framework_transition, etc.) share the same turn.
+                _set_fn = getattr(self.agent, "set_active_turn_id", None)
+                if callable(_set_fn):
+                    _set_fn(turn_id)
+                if hasattr(self.agent, "run_streaming"):
+                    accumulated = ""
+                    async for event in self.agent.run_streaming(text):
+                        if hasattr(event, "type") and event.type == AgentStreamEventType.DONE:
+                            if hasattr(event, "text") and event.text:
+                                accumulated = event.text
+                            break
+                        if (
+                            hasattr(event, "type")
+                            and event.type == AgentStreamEventType.TEXT_DELTA
+                            and hasattr(event, "text")
+                            and event.text
+                        ):
+                            accumulated += event.text
+                    response = accumulated
+                else:
+                    response = await self.agent.run(text)
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                if self._journal:
+                    self._journal.append(
+                        kind=JournalRecordKind.EVENT,
+                        name="agent_final",
+                        session_id=self.session_id,
+                        turn_id=turn_id,
+                        data={"text": response},
+                    )
+                    self._journal.append(
+                        kind=JournalRecordKind.METRIC,
+                        name="text_turn_latency_ms",
+                        session_id=self.session_id,
+                        turn_id=turn_id,
+                        data={"value": elapsed_ms},
+                    )
+            except Exception as exc:
+                logger.exception("Agent error in text_session send_text")
+                if self._journal:
+                    from easycat.runtime.records import ErrorInfo
 
-                self._journal.append(
-                    kind=JournalRecordKind.EVENT,
-                    name="error",
-                    session_id=self.session_id,
-                    turn_id=turn_id,
-                    error=ErrorInfo.from_exception(exc),
-                )
-            raise
-        finally:
-            if self._journal:
-                self._journal.append(
-                    kind=JournalRecordKind.EVENT,
-                    name="turn_ended",
-                    session_id=self.session_id,
-                    turn_id=turn_id,
-                )
-        return response
+                    self._journal.append(
+                        kind=JournalRecordKind.EVENT,
+                        name="error",
+                        session_id=self.session_id,
+                        turn_id=turn_id,
+                        error=ErrorInfo.from_exception(exc),
+                    )
+                raise
+            finally:
+                if self._journal:
+                    self._journal.append(
+                        kind=JournalRecordKind.EVENT,
+                        name="turn_ended",
+                        session_id=self.session_id,
+                        turn_id=turn_id,
+                    )
+            return response
 
     async def _cancel_stt(self) -> None:
         try:

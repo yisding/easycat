@@ -113,6 +113,7 @@ class GenericWorkflowBridge:
 
         sig = inspect.signature(fn)
         self._deep_mode = "recorder" in sig.parameters
+        self._accepts_cancel_token = "cancel_token" in sig.parameters
         self._last_output: Any = None
         self._mcp_warning_emitted = False
 
@@ -325,11 +326,10 @@ class GenericWorkflowBridge:
         recorder: AgentRecorder,
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
-        result = self._workflow.on_user_turn(
-            turn_input.text,
-            recorder=recorder,
-            cancel_token=cancel_token,
-        )
+        kwargs: dict[str, Any] = {"recorder": recorder}
+        if self._accepts_cancel_token:
+            kwargs["cancel_token"] = cancel_token
+        result = self._workflow.on_user_turn(turn_input.text, **kwargs)
         # Deep mode may return str, AsyncIterator[str], or a coroutine.
         if inspect.isasyncgen(result):
             async for chunk in result:

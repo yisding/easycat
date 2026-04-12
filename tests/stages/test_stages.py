@@ -449,7 +449,7 @@ class TestInterruptionController:
         class _MockBridge:
             applied = False
 
-            def apply_interruption(self, *, delivered_text, mode):
+            def apply_interruption(self, *, delivered_text, mode, recorder=None, **kwargs):
                 self.applied = True
 
         bridge = _MockBridge()

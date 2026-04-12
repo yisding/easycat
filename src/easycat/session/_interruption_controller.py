@@ -67,6 +67,7 @@ class InterruptionController:
                 bridge.apply_interruption(
                     delivered_text=delivered_text,
                     mode=effective_mode,
+                    recorder=recorder,
                 )
             except ShallowModeInterruptionError:
                 # Step 6a: observe — shallow workflow cannot be interrupted
