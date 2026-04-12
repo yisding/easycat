@@ -657,11 +657,15 @@ class Session:
                 pass
         await self.transport.disconnect()
         await self._turn_manager.shutdown()
-        # Flush the journal but keep it readable so callers can inspect
-        # records and export debug bundles after stop().  The connection is
-        # only closed in shutdown() (force-teardown).
-        if self._journal and hasattr(self._journal, "flush"):
-            self._journal.flush()
+        if hasattr(self.agent, "aclose"):
+            try:
+                await self.agent.aclose()
+            except Exception:
+                pass
+        if self._artifact_store:
+            self._artifact_store.close()
+        if self._journal:
+            self._journal.close()
         self._turn = None
 
     async def shutdown(self) -> None:

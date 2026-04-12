@@ -337,6 +337,11 @@ def create_session(config: EasyCatConfig) -> Session:
             agent._artifact_store = artifact_store
             agent._session_id = session_id
             agent._mcp_servers = mcp_servers
+            # Also propagate to the underlying bridge so bridge.invoke()
+            # sees the configured servers (e.g. OpenAIAgentsBridge reads
+            # its own _mcp_servers, not the shim's).
+            if mcp_servers and hasattr(agent.bridge, "_mcp_servers"):
+                agent.bridge._mcp_servers = list(mcp_servers)
             # Inject model/API key for URL-backed agents.
             from easycat.integrations.agents.responses_api import ResponsesAPIBridge
 
