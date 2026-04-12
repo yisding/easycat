@@ -714,7 +714,7 @@ class Session:
                 except Exception:
                     pass
             self._turn = None
-            self.close()
+            self.destroy()
             self._closed = True
         finally:
             self._stopping = False
