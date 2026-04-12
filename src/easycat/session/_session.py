@@ -54,7 +54,8 @@ from easycat.llm_output_processing import (
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.providers import PlaybackAckTransport
-from easycat.runtime.journal import ExecutionJournal, JournalView
+from easycat.runtime.artifacts import SnapshotArtifactStore
+from easycat.runtime.journal import ExecutionJournal, JournalView, ReadonlySqliteJournal
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._interruption import estimate_and_notify_interruption
 from easycat.session._streaming import consume_agent_stream
@@ -514,7 +515,7 @@ class Session:
         inline_artifacts: bool = False,
         overwrite: bool = False,
     ) -> None:
-        """Export a debug bundle from this session.
+        """Export a debug bundle from this running or cleanly stopped session.
 
         Delegates to :func:`easycat.debug.export.export_debug_bundle`.
         """
@@ -549,7 +550,7 @@ class Session:
 
     @property
     def journal(self) -> JournalView | None:
-        """Read-only journal view, or ``None`` when journaling is disabled."""
+        """Read-only journal view, including after a clean stop/shutdown."""
         if self._journal is None:
             return None
         return JournalView(self._journal)
@@ -663,7 +664,7 @@ class Session:
             raise
 
     async def stop(self) -> None:
-        """Gracefully stop the session: finish current turn, close providers."""
+        """Gracefully stop the session and release live backend resources."""
         if self._closed or self._stopping:
             return
         self._stopping = True
@@ -731,7 +732,7 @@ class Session:
             self._stopping = False
 
     async def shutdown(self) -> None:
-        """Force-close everything and release resources."""
+        """Force-cancel in-flight work, then release live backend resources."""
         if self._closed or self._stopping:
             return
         self._stopping = True
@@ -792,16 +793,16 @@ class Session:
             self._stopping = False
 
     def close(self) -> None:
-        """Finalize journal without releasing backend connections.
+        """Finalize the session journal without tearing down backends.
 
         Writes the clean-close marker so the journal is marked as
-        properly shut down.  Does **not** close the underlying SQLite
-        connection or artifact store, so callers can still call
-        ``export_debug_bundle()`` afterwards.
+        properly shut down. This is the logical end-of-session marker,
+        not the physical resource teardown step.
 
-        Most callers should use :meth:`destroy` (or just let
-        ``stop()`` / ``shutdown()`` handle cleanup) to also release
-        connections.  Safe to call multiple times.
+        Most callers should use :meth:`destroy` or the higher-level
+        :meth:`stop` / :meth:`shutdown`, which release live backend
+        resources while preserving a read-only post-stop debug surface.
+        Safe to call multiple times.
         """
         if self._flushed:
             return
@@ -810,16 +811,41 @@ class Session:
             self._journal.finalize()
 
     def destroy(self) -> None:
-        """Close journal and artifact store backends, releasing resources.
+        """Release live debug backends while keeping post-stop inspection working.
 
-        After this call ``export_debug_bundle()`` will no longer work.
+        This closes backend resources such as SQLite connections,
+        Litestream sidecars, libSQL sync threads, and in-memory artifact
+        stores. The session retains a read-only postmortem view, so
+        ``session.journal.read()`` and ``export_debug_bundle()`` continue
+        to work after :meth:`stop` / :meth:`shutdown`.
+
         Safe to call multiple times.
         """
-        self.close()  # ensure flush happened
+        self.close()  # ensure the clean-close marker is written first
+
         if self._journal:
-            self._journal.close()
+            live_journal = self._journal
+            replacement = self._preserve_journal_after_destroy(live_journal)
+            live_journal.close()
+            self._journal = replacement
+
         if self._artifact_store:
-            self._artifact_store.close()
+            live_store = self._artifact_store
+            replacement_store = self._preserve_artifacts_after_destroy(live_store)
+            live_store.close()
+            self._artifact_store = replacement_store
+
+    def _preserve_journal_after_destroy(self, journal: ExecutionJournal) -> ExecutionJournal:
+        db_path = getattr(journal, "db_path", None)
+        if db_path is not None:
+            return ReadonlySqliteJournal(db_path, degraded=journal.degraded)
+        return journal
+
+    def _preserve_artifacts_after_destroy(self, artifact_store: Any) -> Any:
+        store = getattr(artifact_store, "_store", None)
+        if isinstance(store, dict):
+            return SnapshotArtifactStore(store)
+        return artifact_store
 
     # ── Cancellation ───────────────────────────────────────────
 

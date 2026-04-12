@@ -84,7 +84,13 @@ class OpenAIRealtimeSTT(STTBase):
         self._audio_sent: bool = False
 
     async def _on_start(self) -> None:
-        url = f"{self._config.ws_url}?model={self._config.model}"
+        # Use OpenAI's transcription-only realtime endpoint — the
+        # transcription models (gpt-4o-transcribe, whisper-1, etc.)
+        # aren't valid for the generic ``?model=...`` session form,
+        # which expects a realtime S2S model. ``?intent=transcription``
+        # opens a cheaper STT-only session; the transcription model is
+        # selected via ``session.update.input_audio_transcription.model``.
+        url = f"{self._config.ws_url}?intent=transcription"
         headers = {
             "Authorization": f"Bearer {self._config.api_key}",
             "OpenAI-Beta": "realtime=v1",

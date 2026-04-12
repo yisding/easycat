@@ -1,6 +1,7 @@
 """Tests for Session lifecycle, cancellation, pipeline, and CancelToken."""
 
 import asyncio
+import zipfile
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, patch
 
@@ -38,6 +39,9 @@ from easycat.llm_output_processing import (
     PhoneticReplacementProcessor,
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
+from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
+from easycat.runtime.journal import InMemoryRingBuffer, SqliteJournal
+from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig, TurnState
@@ -177,6 +181,54 @@ class FakeTTS:
         pass
 
 
+class TrackingJournal:
+    def __init__(self) -> None:
+        self.finalize_calls = 0
+        self.close_calls = 0
+
+    def append(
+        self,
+        kind: JournalRecordKind,
+        name: str,
+        session_id: str,
+        turn_id: str | None = None,
+        data: dict[str, object] | None = None,
+        error: object | None = None,
+        tags: frozenset[str] = frozenset(),
+        input_ref: str | None = None,
+        output_ref: str | None = None,
+    ) -> int:
+        return 1
+
+    def read(self, start: int = 0, limit: int | None = None) -> list[object]:
+        return []
+
+    def slice(
+        self,
+        *,
+        kind: JournalRecordKind | None = None,
+        session_id: str | None = None,
+    ) -> list[object]:
+        return []
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+    def flush(self) -> None:
+        pass
+
+    def finalize(self) -> None:
+        self.finalize_calls += 1
+
+    @property
+    def latest_sequence(self) -> int:
+        return 0
+
+    @property
+    def degraded(self) -> bool:
+        return False
+
+
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
 
 
@@ -275,6 +327,20 @@ async def test_session_shutdown():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method_name", ["stop", "shutdown"])
+async def test_session_teardown_finalizes_and_closes_journal(method_name: str):
+    transport = FakeTransport()
+    journal = TrackingJournal()
+    session = Session(_full_config(transport=transport, journal=journal, session_id="sess"))
+
+    await session.start()
+    await getattr(session, method_name)()
+
+    assert journal.finalize_calls == 1
+    assert journal.close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
 async def test_external_outbound_queue_survives_session_teardown(method_name: str):
     transport = FakeTransport()
     queue = BoundedAudioQueue()
@@ -353,6 +419,84 @@ async def test_session_stop_idempotent():
     session = Session(_full_config())
     await session.stop()
     assert not session.is_running
+
+
+@pytest.mark.asyncio
+async def test_stop_keeps_sqlite_journal_and_bundle_readable(tmp_path):
+    session_id = "sess"
+    transport = FakeTransport()
+    journal = SqliteJournal(session_id, data_dir=tmp_path)
+    artifact_store = FilesystemArtifactStore(session_id, data_dir=tmp_path)
+    ref = artifact_store.put(b"artifact-bytes")
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="before_stop",
+        session_id=session_id,
+        input_ref=ref,
+    )
+    session = Session(
+        _full_config(
+            transport=transport,
+            journal=journal,
+            artifact_store=artifact_store,
+            session_id=session_id,
+        )
+    )
+
+    await session.stop()
+
+    assert (
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="after_stop",
+            session_id=session_id,
+        )
+        == -1
+    )
+
+    assert session.journal is not None
+    records = session.journal.read()
+    assert [record.name for record in records] == ["before_stop"]
+
+    bundle_path = tmp_path / "after-stop-full.zip"
+    session.export_debug_bundle(str(bundle_path))
+    with zipfile.ZipFile(bundle_path) as zf:
+        assert "journal.ndjson" in zf.namelist()
+        assert f"artifacts/{ref}.bin" in zf.namelist()
+
+
+@pytest.mark.asyncio
+async def test_stop_keeps_in_memory_bundle_exportable(tmp_path):
+    session_id = "sess"
+    transport = FakeTransport()
+    artifact_store = InMemoryArtifactStore()
+    journal = InMemoryRingBuffer(artifact_store=artifact_store)
+    ref = artifact_store.put(b"artifact-bytes")
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="before_stop",
+        session_id=session_id,
+        input_ref=ref,
+    )
+    session = Session(
+        _full_config(
+            transport=transport,
+            journal=journal,
+            artifact_store=artifact_store,
+            session_id=session_id,
+        )
+    )
+
+    await session.stop()
+
+    assert artifact_store.get(ref) is None
+    assert session.journal is not None
+    assert [record.name for record in session.journal.read()] == ["before_stop"]
+
+    bundle_path = tmp_path / "after-stop-light.zip"
+    session.export_debug_bundle(str(bundle_path))
+    with zipfile.ZipFile(bundle_path) as zf:
+        assert f"artifacts/{ref}.bin" in zf.namelist()
 
 
 # ── Cancellation tests ─────────────────────────────────────────────

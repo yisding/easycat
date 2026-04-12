@@ -8,7 +8,6 @@ containing the journal, artifacts, and manifest metadata.
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import tempfile
 import zipfile
@@ -30,7 +29,7 @@ def export_debug_bundle(
     inline_artifacts: bool = False,
     overwrite: bool = False,
 ) -> None:
-    """Export a debug bundle from a running session."""
+    """Export a debug bundle from a running or cleanly stopped session."""
     path = Path(path)
 
     journal = getattr(session, "_journal", None) or getattr(session, "journal", None)
@@ -56,8 +55,9 @@ def export_debug_bundle(
             journal_lines.append(json.dumps(_record_to_dict(record), default=str))
     journal_ndjson = "\n".join(journal_lines).encode("utf-8")
 
-    # Collect artifacts and checksums
-    artifact_checksums: dict[str, str] = {}
+    # Collect artifacts. The refs are already content-addressed
+    # SHA-256 hex digests produced by ``ArtifactStore.put`` — we just
+    # copy the bytes; the bundle does not carry separate checksums.
     artifact_data: dict[str, bytes] = {}
     artifact_store = getattr(session, "_artifact_store", None)
     if artifact_store is not None:
@@ -65,8 +65,6 @@ def export_debug_bundle(
             # InMemoryArtifactStore — iterate the in-memory dict.
             for ref, data in artifact_store._store.items():
                 raw = data if isinstance(data, bytes) else data.encode()
-                sha = hashlib.sha256(raw).hexdigest()
-                artifact_checksums[ref] = sha
                 artifact_data[ref] = raw
         elif hasattr(artifact_store, "_dir"):
             # FilesystemArtifactStore — read .bin files from disk.
@@ -75,10 +73,7 @@ def export_debug_bundle(
                 for f in artifact_dir.iterdir():
                     if f.suffix == ".bin" and f.is_file():
                         ref = f.stem
-                        raw = f.read_bytes()
-                        sha = hashlib.sha256(raw).hexdigest()
-                        artifact_checksums[ref] = sha
-                        artifact_data[ref] = raw
+                        artifact_data[ref] = f.read_bytes()
 
     # Provider versions
     provider_versions = _collect_provider_versions(session)
@@ -99,7 +94,6 @@ def export_debug_bundle(
         provider_versions=provider_versions,
         config_snapshot=config_snapshot,
         sharing_banner=banner,
-        artifact_checksums=artifact_checksums,
     )
 
     manifest_dict = _manifest_to_dict(manifest)

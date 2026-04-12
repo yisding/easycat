@@ -46,3 +46,8 @@
 - Use environment variables for secrets (`OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`); never commit keys.
 - Example apps may also require deployment/runtime env vars such as `TWILIO_STREAM_URL`, `TURN_SERVER_URL`, `TURN_USERNAME`, and `TURN_CREDENTIAL`.
 - Keep optional provider dependencies in extras and document any new env vars in `README.md`.
+
+## Session Lifecycle Notes
+- `await session.stop()` and `await session.shutdown()` both perform full live-backend teardown through `Session.destroy()`.
+- `Session.close()` is only the logical clean-close marker for the journal; do not treat it as full session teardown.
+- After a clean `stop()` or `shutdown()`, postmortem inspection is still valid: `session.journal.read()` and `session.export_debug_bundle(...)` should continue to work.

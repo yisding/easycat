@@ -35,7 +35,7 @@
 
 ## Goal
 
-Ship `ResponsesAPIBridge`, a fourth `ExternalAgentBridge`
+Ship `RemoteResponsesAPIBridge`, a fourth `ExternalAgentBridge`
 implementation that speaks the OpenAI Responses API over HTTP to a
 remote agent server. This enables deployments where the agent runs
 on separate infrastructure from the voice pipeline — the most
@@ -50,7 +50,7 @@ beyond conversation history.
 
 **In scope:**
 
-- `ResponsesAPIBridge` implementing `ExternalAgentBridge`
+- `RemoteResponsesAPIBridge` implementing `ExternalAgentBridge`
 - SSE stream parsing for Responses API events
 - Translation of Responses API SSE events to `AgentBridgeEvent`
   yields and `AgentRecorder` calls
@@ -70,7 +70,7 @@ beyond conversation history.
   (`easycat.supports_interruption`)
 - `EasyCatConfig` accepts a URL string for the `agent` field,
   auto-detected by `auto_adapt_agent()` and routed to
-  `ResponsesAPIBridge`
+  `RemoteResponsesAPIBridge`
 - Authentication: `api_key` parameter on the bridge,
   `EASYCAT_REMOTE_AGENT_API_KEY` env var, and
   `Authorization: Bearer` header on requests. The API key is
@@ -106,7 +106,7 @@ beyond conversation history.
 ### T2C.0: Architecture Freeze
 
 - [x] Design decisions covering:
-  - `ResponsesAPIBridge` class design and constructor arguments
+  - `RemoteResponsesAPIBridge` class design and constructor arguments
   - SSE event taxonomy: which Responses API events map to which
     `AgentBridgeEvent` types and `AgentRecorder` calls
   - N-1 chain interruption protocol: how
@@ -164,9 +164,9 @@ beyond conversation history.
 - [x] Unknown SSE event types are logged at debug level and
   skipped — forward-compatible with Responses API additions
 
-### T2C.2: ResponsesAPIBridge Implementation
+### T2C.2: RemoteResponsesAPIBridge Implementation
 
-- [x] `ResponsesAPIBridge.__init__` accepts:
+- [x] `RemoteResponsesAPIBridge.__init__` accepts:
   - `base_url: str` — Responses API base URL
     (e.g., `https://api.openai.com` or a self-hosted server)
   - `model: str` — model identifier passed on every request
@@ -234,7 +234,7 @@ beyond conversation history.
 - [x] `auto_adapt_agent()` detects URL strings via
   `urllib.parse.urlparse` — if the value has a scheme in
   `{"http", "https"}` and a netloc, route to
-  `ResponsesAPIBridge(base_url=url, model=config.agent_model)`
+  `RemoteResponsesAPIBridge(base_url=url, model=config.agent_model)`
 - [x] `EasyCatConfig.agent_model: str | None = None` — new
   field, required when `agent` is a URL string. Raises
   `EasyCatConfigError` if `agent` is a URL and `agent_model` is
@@ -313,7 +313,7 @@ beyond conversation history.
 - [x] All tests use the mock Responses API server from T2C.6
   unless gated on `OPENAI_API_KEY` for integration tests
 - [x] Bridge construction and protocol conformance:
-  - `ResponsesAPIBridge` implements `ExternalAgentBridge`
+  - `RemoteResponsesAPIBridge` implements `ExternalAgentBridge`
   - Constructor validates `base_url` (must have scheme and
     netloc)
   - `api_key` is excluded from snapshots and journal records
@@ -348,11 +348,11 @@ beyond conversation history.
     (not N-1), and the conversation is coherent
 - [x] `EasyCatConfig` URL detection:
   - `EasyCatConfig(agent="https://example.com", agent_model=
-    "gpt-5.2")` constructs a `ResponsesAPIBridge`
+    "gpt-5.2")` constructs a `RemoteResponsesAPIBridge`
   - `EasyCatConfig(agent="https://example.com")` without
     `agent_model` raises `EasyCatConfigError`
   - `auto_adapt_agent("https://example.com")` returns a
-    `ResponsesAPIBridge`
+    `RemoteResponsesAPIBridge`
 - [x] Integration test (gated on `OPENAI_API_KEY`):
   - Runs a full turn against the real OpenAI Responses API
   - Verifies SSE events are parsed correctly
@@ -365,7 +365,7 @@ beyond conversation history.
 
 ## Acceptance Criteria
 
-- [x] **AC2C.2** `ResponsesAPIBridge` exists in
+- [x] **AC2C.2** `RemoteResponsesAPIBridge` exists in
   `src/easycat/integrations/agents/responses_api.py` and
   implements `ExternalAgentBridge`.
 - [x] **AC2C.3** A turn against the mock server produces the
@@ -397,9 +397,9 @@ beyond conversation history.
   is coherent despite the server not understanding interruption
   metadata.
 - [x] **AC2C.8** `EasyCatConfig(agent="https://example.com",
-  agent_model="gpt-5.2")` constructs a `ResponsesAPIBridge`.
+  agent_model="gpt-5.2")` constructs a `RemoteResponsesAPIBridge`.
   `auto_adapt_agent("https://example.com")` returns a
-  `ResponsesAPIBridge`. Missing `agent_model` raises
+  `RemoteResponsesAPIBridge`. Missing `agent_model` raises
   `EasyCatConfigError`.
 - [x] **AC2C.9** API key is excluded from journal records,
   snapshots, and bundles. A test constructs a bridge with
@@ -418,7 +418,7 @@ beyond conversation history.
 
 | AC | Verification |
 |---|---|
-| AC2C.2 | `python -c "from easycat.integrations.agents.responses_api import ResponsesAPIBridge"` exits 0; new test `test_responses_api_bridge_implements_protocol` asserts `isinstance(ResponsesAPIBridge(...), ExternalAgentBridge)`. |
+| AC2C.2 | `python -c "from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge"` exits 0; new test `test_responses_api_bridge_implements_protocol` asserts `isinstance(RemoteResponsesAPIBridge(...), ExternalAgentBridge)`. |
 | AC2C.3 | New test `test_responses_api_turn_execution` — runs a turn with text + tool calls against the mock server, walks the journal, asserts the expected record sequence and snapshot kind. |
 | AC2C.4 | New test `test_responses_api_n1_chain_interruption` — runs 3 turns, interrupts the 2nd, inspects the 3rd turn's request body for correct `previous_response_id` and input items with truncated assistant text and completed tool calls. |
 | AC2C.5 | New test `test_responses_api_drain_current_unit` — configures mock to delay `output_item.done` for a tool call by 100ms, triggers `immediate_stop` (asserts stream closes before tool completes) and `drain_current_unit` (asserts stream stays open until tool completes). |
@@ -471,7 +471,7 @@ beyond conversation history.
 
 When this workstream is complete:
 
-- **Workstream 3** wraps `ResponsesAPIBridge` in `AgentStage`
+- **Workstream 3** wraps `RemoteResponsesAPIBridge` in `AgentStage`
   alongside the three in-process bridges. No special handling
   needed — the remote bridge implements the same
   `ExternalAgentBridge` protocol.
@@ -480,6 +480,6 @@ When this workstream is complete:
   captured framework state). The bundle manifest includes the
   remote agent's base URL (host only) and discovered
   `easycat.framework` value.
-- **Workstream 5** includes `ResponsesAPIBridge` and
+- **Workstream 5** includes `RemoteResponsesAPIBridge` and
   `auto_adapt_agent` URL detection in the `easycat.__all__`
   allowlist.

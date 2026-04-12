@@ -15,7 +15,6 @@ from easycat.debug.bundle import (
     ArtifactEntry,
     BundleError,
     BundleExists,
-    BundleIntegrityError,
     BundleInUseError,
     BundleRecoveryError,
     BundleValidationError,
@@ -57,12 +56,6 @@ def _make_bundle_zip(
         journal_lines = []
     if artifacts is None:
         artifacts = {}
-
-    # Build artifact checksums
-    checksums = {}
-    for ref, data in artifacts.items():
-        checksums[ref] = hashlib.sha256(data).hexdigest()
-    manifest.setdefault("artifact_checksums", checksums)
 
     bundle_path = tmp_path / name
     with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -271,13 +264,14 @@ class TestRunBundleFormat:
 
 
 class TestBundleManifest:
-    def test_sha256_in_manifest(self, tmp_path):
+    def test_artifact_indexed_by_ref(self, tmp_path):
         data = b"artifact-data"
         ref = hashlib.sha256(data).hexdigest()
         bundle_path = _make_bundle_zip(tmp_path, artifacts={ref: data})
         loaded = RunBundle.load(bundle_path)
         assert ref in loaded.artifact_index
-        assert loaded.artifact_index[ref].sha256 == ref
+        assert loaded.artifact_index[ref].ref == ref
+        assert loaded.artifact_index[ref].size_bytes == len(data)
 
     def test_format_version_preserved(self, tmp_path):
         bundle_path = _make_bundle_zip(tmp_path, manifest={"format_version": FORMAT_VERSION})
@@ -392,49 +386,6 @@ class TestBundleSafeDefaults:
             assert len(manifest["sharing_banner"]) > 0
 
 
-# ── TestBundleIntegrity ─────────────────────────────────────────
-
-
-class TestBundleIntegrity:
-    def test_tamper_detection(self, tmp_path):
-        """Loading a bundle with tampered artifact data should fail."""
-        ref = hashlib.sha256(b"original").hexdigest()
-        # Create bundle with original data
-        bundle_path = _make_bundle_zip(tmp_path, artifacts={ref: b"original"})
-
-        # Tamper with the artifact inside the zip
-        tampered_path = tmp_path / "tampered.zip"
-        with zipfile.ZipFile(bundle_path, "r") as zf_in:
-            with zipfile.ZipFile(tampered_path, "w") as zf_out:
-                for name in zf_in.namelist():
-                    data = zf_in.read(name)
-                    if name.startswith("artifacts/"):
-                        data = b"TAMPERED"
-                    zf_out.writestr(name, data)
-
-        with pytest.raises(BundleIntegrityError, match="SHA-256 mismatch"):
-            RunBundle.load(tampered_path)
-
-    def test_fast_load_skips_integrity(self, tmp_path):
-        """fast=True should skip SHA-256 validation."""
-        ref = hashlib.sha256(b"original").hexdigest()
-        bundle_path = _make_bundle_zip(tmp_path, artifacts={ref: b"original"})
-
-        # Tamper
-        tampered_path = tmp_path / "tampered.zip"
-        with zipfile.ZipFile(bundle_path, "r") as zf_in:
-            with zipfile.ZipFile(tampered_path, "w") as zf_out:
-                for name in zf_in.namelist():
-                    data = zf_in.read(name)
-                    if name.startswith("artifacts/"):
-                        data = b"TAMPERED"
-                    zf_out.writestr(name, data)
-
-        # Should not raise with fast=True
-        loaded = RunBundle.load(tampered_path, fast=True)
-        assert len(loaded.artifact_index) == 1
-
-
 # ── TestBundleValidation ────────────────────────────────────────
 
 
@@ -457,7 +408,7 @@ class TestBundleValidation:
         with zipfile.ZipFile(bundle_path, "w") as zf:
             zf.writestr(
                 "manifest.json",
-                json.dumps({"format_version": 1, "artifact_checksums": {}}),
+                json.dumps({"format_version": 1}),
             )
             zf.writestr("journal.ndjson", "")
             zf.writestr("artifacts/not-a-sha256.bin", b"data")
@@ -542,7 +493,8 @@ class TestBundlePartialJournal:
 
         bundle = RunBundle.from_partial_journal(db_path, artifact_root=art_dir)
         assert ref in bundle.artifact_index
-        assert bundle.artifact_index[ref].sha256 == hashlib.sha256(data).hexdigest()
+        assert bundle.artifact_index[ref].ref == ref
+        assert bundle.artifact_index[ref].size_bytes == len(data)
 
     def test_not_found(self, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -932,12 +884,6 @@ class TestLoadBundleHelper:
         records = list(bundle.records())
         assert len(records) == 1
 
-    def test_load_bundle_fast(self, tmp_path):
-        ref = hashlib.sha256(b"data").hexdigest()
-        bundle_path = _make_bundle_zip(tmp_path, artifacts={ref: b"data"})
-        bundle = load_bundle(bundle_path, fast=True)
-        assert isinstance(bundle, RunBundle)
-
     def test_load_bundle_not_found(self):
         with pytest.raises(FileNotFoundError):
             load_bundle("/nonexistent/bundle.zip")
@@ -949,7 +895,6 @@ class TestLoadBundleHelper:
 class TestBundleExceptions:
     def test_hierarchy(self):
         assert issubclass(BundleExists, BundleError)
-        assert issubclass(BundleIntegrityError, BundleError)
         assert issubclass(BundleVersionError, BundleError)
         assert issubclass(BundleValidationError, BundleError)
         assert issubclass(BundleInUseError, BundleError)
@@ -974,7 +919,6 @@ class TestManifest:
         assert m.config_snapshot == {}
         assert m.env_metadata == {}
         assert m.sharing_banner == ""
-        assert m.artifact_checksums == {}
 
     def test_frozen(self):
         m = Manifest()
@@ -987,12 +931,11 @@ class TestManifest:
 
 class TestArtifactEntry:
     def test_construction(self):
-        ae = ArtifactEntry(ref="abc", sha256="def", size_bytes=42)
+        ae = ArtifactEntry(ref="abc", size_bytes=42)
         assert ae.ref == "abc"
-        assert ae.sha256 == "def"
         assert ae.size_bytes == 42
 
     def test_frozen(self):
-        ae = ArtifactEntry(ref="abc", sha256="def")
+        ae = ArtifactEntry(ref="abc")
         with pytest.raises(AttributeError):
             ae.ref = "xyz"  # type: ignore[misc]

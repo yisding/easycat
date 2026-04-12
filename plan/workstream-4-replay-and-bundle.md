@@ -7,7 +7,7 @@
 > **Predecessors**: Workstreams 1, 2A, 2B, 2C, and 3 must all be
 > complete. WS2C (Remote Agent Bridge) is required because this
 > workstream implements SIMULATED and LIVE replay for
-> `ResponsesAPIBridge` — without it, the remote bridge replay paths
+> `RemoteResponsesAPIBridge` — without it, the remote bridge replay paths
 > cannot be built or tested.
 > **Successors**: Workstream 5 (Legacy Removal) is gated on this
 > workstream demonstrating that journal-based debugging fully replaces
@@ -43,8 +43,9 @@ surprised by non-determinism.
 - Three replay classes: `artifact_replay`, `simulated_replay`,
   `live_reexecution`
 - Per-stage `replay()` implementation (hook defined in Workstream 3)
-- `RunBundle` dataclass and on-disk format
-- SHA-256 manifest for artifact integrity
+- `RunBundle` dataclass and on-disk format (artifact refs are
+  content-addressed SHA-256 hex digests produced by the artifact
+  store; the bundle itself is not tamper-evident)
 - Provider version strings captured in bundles
 - `session.export_debug_bundle(...)` API
 - Secret-safe, allowlisted config/environment metadata in bundles
@@ -81,9 +82,9 @@ surprised by non-determinism.
     T2.7.5's `COMMITTABLE_BOUNDARIES` mappings by reference, not
     re-declared here
   - `RunBundle` dataclass and serialization format (zip with manifest
-    JSON, journal NDJSON, artifact directory)
-  - SHA-256 manifest schema (hashes pre-computed by WS1 T1.2
-    content-addressable artifacts — no rehashing on export)
+    JSON, journal NDJSON, artifact directory). Artifact refs are the
+    SHA-256 hex digests the artifact store already uses for
+    content-addressing — no separate integrity manifest
   - Safe snapshot schema for persisted config/environment metadata
     (consumed from WS1 `safe_defaults.py`)
   - Dev-only banner text read from WS1 `safe_defaults.py` and the
@@ -98,15 +99,14 @@ surprised by non-determinism.
     `RunBundle.from_partial_journal()` (T4.5.5)
   - Bundle loader security model (T4.7.5): path-traversal
     prevention, artifact size caps, JSON-safe metadata size caps,
-    SHA-256 ref format validation
+    SHA-256 ref format validation (structural check on the ref
+    string, not content verification)
   - replay side-effect policy for tools and MCP (`ToolReplayPolicy`,
     default-deny behavior, stub override path, explicit unsafe-allow
     path)
   - ARTIFACT replay nondeterministic-field stripping policy
     (`REPLAY_IGNORE_FIELDS` allowlist covering `timing.wall_ms`,
     `timing.cpu_ms`, any `monotonic_ns` fields)
-  - Fast-load flag (`fast=True` skips SHA-256 verification for
-    large audio-heavy bundles during interactive debugging)
 - [x] Review and merge before implementation.
 
 ### T4.1: ReplaySpec and Fidelity Classes
@@ -250,9 +250,8 @@ surprised by non-determinism.
     (`PROVIDER_VERSION_UNKNOWN`) so CI can fail on it
     explicitly without confusing it with a real version skew.
   `ReplaySpec` grows a `force: bool = False` field for this
-  path. The version-match check runs after SHA-256 integrity
-  verification and before any stage `replay()` method is
-  invoked.
+  path. The version-match check runs before any stage `replay()`
+  method is invoked.
 
 ### T4.3: Determinism Guarantees
 
@@ -277,9 +276,9 @@ surprised by non-determinism.
 - [x] Create `src/easycat/debug/bundle.py`
 - [x] Define `RunBundle` dataclass:
   - `format_version: int`
-  - `manifest: Manifest` (SHA-256 per artifact, provider version
-    strings, safe config snapshot from WS1 `safe_defaults.py`,
-    allowlisted env metadata, sharing banner text)
+  - `manifest: Manifest` (provider version strings, safe config
+    snapshot from WS1 `safe_defaults.py`, allowlisted env metadata,
+    sharing banner text)
   - `journal_ndjson: bytes`
   - `artifact_index: dict[str, ArtifactEntry]`
   - `replay_entry_points: list[CommittableCheckpoint]`
@@ -309,9 +308,9 @@ surprised by non-determinism.
   - stamps the dev-only sharing banner read from
     `safe_defaults.py` onto the manifest
   - bundles artifacts by reference (default) or inline (if
-    `inline_artifacts=True`)
-  - aggregates SHA-256 per artifact from WS1's content-addressable
-    artifact store (no re-hashing)
+    `inline_artifacts=True`). Refs are already SHA-256 hex digests
+    produced by WS1's content-addressable artifact store; no
+    per-bundle integrity manifest is computed
   - aggregates provider version strings from every provider the
     session touched (providers already expose `version_info()` from
     WS1 T1.7.5)
@@ -343,8 +342,7 @@ surprised by non-determinism.
   has no running Session to call `export_debug_bundle` on
 - [x] Loads the SQLite journal read-only, walks the WS1
   content-addressable artifact directory, assembles a manifest with
-  the same SHA-256 aggregation and safe-config-snapshot rules as
-  the live path
+  the same safe-config-snapshot rules as the live path
 - [x] Refuses to load a journal file that is currently open for
   writing (detected via the SQLite WAL lock); returns
   `BundleInUseError` with a message pointing at `bundles list`
@@ -363,11 +361,11 @@ surprised by non-determinism.
 
 ### T4.7: Bundle Loading
 
-- [x] Implement `RunBundle.load(path, *, fast=False)` → `RunBundle`
-- [x] Reads manifest, verifies SHA-256 checksums, raises on mismatch
-- [x] `fast=True` skips SHA-256 verification for large audio-heavy
-  bundles during interactive debugging. Documented as a trust
-  decision: only use for bundles you produced yourself.
+- [x] Implement `RunBundle.load(path)` → `RunBundle`
+- [x] Reads manifest, extracts artifacts, builds the artifact index
+- [x] Bundles are not tamper-evident. Trust the transport you use
+  to share them; add a signing layer on top if that's not good
+  enough.
 - [x] Rejects bundles whose `format_version` is newer than the
   loader supports with `BundleVersionError` naming both versions
 - [x] Exposes queryable journal records (iterator, filter by stage,
@@ -393,10 +391,11 @@ surprised by non-determinism.
   - manifest `format_version` is within the supported range
 - [x] Validation runs before any artifact is extracted or any
   record is deserialized
-- [x] Document explicitly: "Bundles are semi-trusted input.
-  Validation defends against accidental corruption and basic
-  malicious tampering, not against sophisticated attackers with
-  filesystem access."
+- [x] Document explicitly: "Bundles are not tamper-evident. The
+  loader validates structural properties (path traversal, size
+  caps, ref format) but does not verify that artifact contents
+  match any per-bundle checksum. Use filesystem ACLs or a signing
+  layer on top if you need integrity guarantees."
 
 ### T4.8: Committable Boundary Enforcement
 
@@ -458,11 +457,14 @@ surprised by non-determinism.
 - [x] **AC4.6** `src/easycat/debug/bundle.py` and
   `src/easycat/debug/export.py` exist and export a valid bundle.
 - [x] **AC4.7** `Session.export_debug_bundle(path)` produces a
-  loadable bundle from a running session when capture is available,
+  loadable bundle from a running or cleanly stopped session when capture is available,
   raises `DebugCaptureDisabledError` in `debug="off"`, and raises
   `DebugCaptureUnavailableError` when required light-mode artifacts
   have already been evicted.
-- [x] **AC4.8** Bundle manifest includes SHA-256 per artifact.
+- [x] **AC4.8** Bundle stores artifacts keyed by their
+  content-addressed SHA-256 ref. The ref format is validated
+  structurally on load; no per-bundle integrity manifest is
+  produced or checked.
 - [x] **AC4.9** Bundle manifest includes provider version strings for
   every provider touched during the session.
 - [x] **AC4.10** Bundle manifest includes `format_version`.
@@ -474,8 +476,8 @@ surprised by non-determinism.
   is reserved for `peripheral-redaction.md` and not in scope here.
 - [x] **AC4.12** Bundles load correctly from partial journals produced
   by simulated process death (inherits Workstream 1 infrastructure).
-- [x] **AC4.13** `load_bundle()` verifies SHA-256 checksums and raises
-  on mismatch.
+- [x] **AC4.13** *(removed)* Bundles are not tamper-evident.
+  Trust is delegated to the transport / signing layer on top.
 - [x] **AC4.14** Replay at a non-committable sequence returns
   `ReplayError` with nearest committable checkpoint references.
 - [x] **AC4.15** `load_bundle()` pytest helper is usable and covered by
@@ -572,12 +574,12 @@ surprised by non-determinism.
 | AC4.5b | New test `test_smart_turn_artifact_replay_bit_deterministic` — captures a Smart Turn cassette (audio window + `TurnStage` snapshot), replays via `TurnStage.replay(ReplaySpec(fidelity=ARTIFACT))`, asserts byte-identical classification (logits within float tolerance) and endpoint decision. Cross-references WS3 AC3.17. |
 | AC4.6 | `python -c "from easycat.debug.bundle import RunBundle; from easycat.debug.export import export_debug_bundle"` exits 0. |
 | AC4.7 | New test `test_export_and_load_roundtrip` — runs a one-turn session, exports to a temp file, loads, asserts journal records round-trip. Sub-tests cover `debug="off"` raising `DebugCaptureDisabledError` and a light-mode retention-expiry case raising `DebugCaptureUnavailableError`. |
-| AC4.8 | New test `test_bundle_manifest_sha256` — exports a bundle, parses `manifest.json`, asserts every artifact entry has a `sha256` field that matches the file content hash. |
+| AC4.8 | New test `test_bundle_artifact_indexed_by_ref` — exports a bundle, parses `manifest.json`, asserts each artifact file in the zip is keyed by a SHA-256-formatted ref (structural check only; content is not re-verified). |
 | AC4.9 | New test `test_bundle_provider_versions` — runs with Deepgram + ElevenLabs, exports, asserts manifest contains version info for both. |
 | AC4.10 | Same test as AC4.9 asserts `format_version` is present and > 0. |
 | AC4.11 | New test `test_export_safe_defaults_and_banner` — runs a session with a config containing a synthetic API key and a non-`EASYCAT_*` env var, exports a bundle, loads it, asserts: (a) the API key does not appear anywhere in the bundle, (b) the non-allowlisted env var does not appear anywhere, (c) the manifest contains the dev-only sharing banner string read from `safe_defaults.py`, (d) the `redaction=` kwarg is not yet exposed on the export signature (reserved for `peripheral-redaction.md`). |
 | AC4.12 | New test `test_partial_journal_bundle_export` — uses the subprocess-SIGKILL pattern from Workstream 1, reopens the SQLite journal, exports to a bundle, loads, asserts the records prior to the crash are present. |
-| AC4.13 | New test `test_bundle_manifest_tamper_detection` — exports a bundle, manually corrupts one artifact byte, attempts to load, asserts `BundleIntegrityError` is raised. |
+| AC4.13 | *(removed)* Bundles are not tamper-evident. Per-bundle integrity is delegated to the transport / signing layer on top. |
 | AC4.14 | New test `test_replay_refuses_non_committable` — captures a mid-LLM-stream sequence, constructs `ReplaySpec` at that sequence, asserts `ReplayError` with populated `nearest_committable_before`/`after`. |
 | AC4.15 | Demonstration regression test `test_bundle_as_fixture` — loads a committed fixture bundle via `load_bundle()`, asserts a journal property. The test itself is the proof that the fixture helper works. |
 | AC4.16 | New test `test_bundles_list_discovery` — writes two bundles to a temp directory, calls the discovery function, asserts both are found. |
@@ -607,9 +609,6 @@ surprised by non-determinism.
   Workstream 1), document recoverable vs unrecoverable cases in the
   bundle loader, raise `BundleRecoveryError` with a clear message
   when the journal file is too corrupted to load.
-- **SHA-256 checksums slow export**: mitigation — hashes are computed
-  once at write time into the artifact store (content-addressable
-  naming), so export-time only aggregates pre-computed hashes.
 - **`SIMULATED` replay of agent stage confuses users who expect
   determinism**: mitigation — `SIMULATED` fidelity includes a
   docstring and a runtime warning on first use in a process:

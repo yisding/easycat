@@ -72,28 +72,51 @@ class LiveKitAEC:
         self.close()
 
     async def process(self, chunk: AudioChunk) -> AudioChunk:
-        """Process a near-end (microphone) audio chunk through AEC."""
-        frame_samples = _frame_samples_for_rate(chunk.format.sample_rate)
-        frame_bytes = frame_samples * chunk.format.frame_size
+        """Process a near-end (microphone) audio chunk through AEC.
+
+        LiveKit's APM modifies the ``AudioFrame`` in place, so we wrap
+        each 10 ms slice, invoke ``process_stream``, then reassemble
+        from the frame's (now-processed) data buffer.
+        """
+        from livekit import rtc
+
+        fmt = chunk.format
+        frame_samples = _frame_samples_for_rate(fmt.sample_rate)
+        frame_bytes = frame_samples * fmt.frame_size
         frames = _split_frames(chunk.data, frame_bytes)
 
         processed_parts: list[bytes] = []
-        for frame in frames:
-            result = self._apm.process_stream(frame)
-            processed_parts.append(result)
+        for frame_bytes_slice in frames:
+            af = rtc.AudioFrame(
+                data=frame_bytes_slice,
+                sample_rate=fmt.sample_rate,
+                num_channels=fmt.channels,
+                samples_per_channel=frame_samples,
+            )
+            self._apm.process_stream(af)
+            processed_parts.append(bytes(af.data))
 
         # Trim to original length (last frame may have been zero-padded).
         joined = b"".join(processed_parts)[: len(chunk.data)]
-        return AudioChunk(data=joined, format=chunk.format, timestamp=chunk.timestamp)
+        return AudioChunk(data=joined, format=fmt, timestamp=chunk.timestamp)
 
     def feed_reference(self, chunk: AudioChunk) -> None:
         """Feed a far-end (speaker) audio chunk as the AEC reference signal."""
-        frame_samples = _frame_samples_for_rate(chunk.format.sample_rate)
-        frame_bytes = frame_samples * chunk.format.frame_size
+        from livekit import rtc
+
+        fmt = chunk.format
+        frame_samples = _frame_samples_for_rate(fmt.sample_rate)
+        frame_bytes = frame_samples * fmt.frame_size
         frames = _split_frames(chunk.data, frame_bytes)
 
-        for frame in frames:
-            self._apm.process_reverse_stream(frame)
+        for frame_bytes_slice in frames:
+            af = rtc.AudioFrame(
+                data=frame_bytes_slice,
+                sample_rate=fmt.sample_rate,
+                num_channels=fmt.channels,
+                samples_per_channel=frame_samples,
+            )
+            self._apm.process_reverse_stream(af)
 
     def version_info(self) -> dict[str, str]:
         sdk_ver = "unknown"

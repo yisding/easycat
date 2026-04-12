@@ -8,7 +8,6 @@ shared with teammates.
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import os
 import re
@@ -25,9 +24,6 @@ class BundleError(RuntimeError): ...
 
 
 class BundleExists(BundleError): ...
-
-
-class BundleIntegrityError(BundleError): ...
 
 
 class BundleVersionError(BundleError): ...
@@ -51,13 +47,16 @@ class DebugCaptureDisabledError(BundleError): ...
 class DebugCaptureUnavailableError(BundleError): ...
 
 
+# Artifact refs are the content-addressed SHA-256 hex digests produced
+# by ``ArtifactStore.put``. This regex validates that incoming refs
+# match that format — purely a structural sanity check on the ref
+# string, not a tamper-proofing mechanism for the bundle contents.
 _SHA256_REF = re.compile(r"^[a-f0-9]{64}$")
 
 
 @dataclass(frozen=True)
 class ArtifactEntry:
     ref: str
-    sha256: str
     size_bytes: int = 0
 
 
@@ -75,7 +74,6 @@ class Manifest:
     config_snapshot: dict[str, Any] = field(default_factory=dict)
     env_metadata: dict[str, str] = field(default_factory=dict)
     sharing_banner: str = ""
-    artifact_checksums: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -110,8 +108,13 @@ class RunBundle:
         return None
 
     @staticmethod
-    def load(path: str | Path, *, fast: bool = False) -> RunBundle:
-        """Load a bundle from disk."""
+    def load(path: str | Path) -> RunBundle:
+        """Load a bundle from disk.
+
+        Bundles are not tamper-evident: we trust the contents of the
+        ZIP we're handed. Use filesystem ACLs or a signing layer on
+        top if you need integrity guarantees.
+        """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"Bundle not found: {path}")
@@ -140,13 +143,12 @@ class RunBundle:
                 config_snapshot=manifest_data.get("config_snapshot", {}),
                 env_metadata=manifest_data.get("env_metadata", {}),
                 sharing_banner=manifest_data.get("sharing_banner", ""),
-                artifact_checksums=manifest_data.get("artifact_checksums", {}),
             )
 
             # Read journal
             journal_ndjson = zf.read("journal.ndjson")
 
-            # Read and validate artifacts
+            # Read artifacts
             artifact_index: dict[str, ArtifactEntry] = {}
             total_size = 0
             for name in zf.namelist():
@@ -165,19 +167,7 @@ class RunBundle:
                                 "Total artifact size exceeds 500MB cap",
                                 reason_code="SIZE_EXCEEDED",
                             )
-
-                        actual_sha = hashlib.sha256(data).hexdigest()
-                        expected_sha = manifest.artifact_checksums.get(ref, ref)
-
-                        if not fast and actual_sha != expected_sha:
-                            raise BundleIntegrityError(
-                                f"SHA-256 mismatch for artifact {ref}: "
-                                f"expected {expected_sha}, got {actual_sha}"
-                            )
-
-                        artifact_index[ref] = ArtifactEntry(
-                            ref=ref, sha256=actual_sha, size_bytes=len(data)
-                        )
+                        artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=len(data))
 
             # Reconstruct artifacts from inline base64 blobs in manifest
             for ref, b64 in manifest_data.get("inline_artifacts", {}).items():
@@ -195,16 +185,7 @@ class RunBundle:
                         "Total artifact size exceeds 500MB cap",
                         reason_code="SIZE_EXCEEDED",
                     )
-                actual_sha = hashlib.sha256(data).hexdigest()
-                expected_sha = manifest.artifact_checksums.get(ref, ref)
-                if not fast and actual_sha != expected_sha:
-                    raise BundleIntegrityError(
-                        f"SHA-256 mismatch for inline artifact {ref}: "
-                        f"expected {expected_sha}, got {actual_sha}"
-                    )
-                artifact_index[ref] = ArtifactEntry(
-                    ref=ref, sha256=actual_sha, size_bytes=len(data)
-                )
+                artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=len(data))
 
             # Validate metadata sizes
             for record_line in journal_ndjson.decode("utf-8", errors="replace").splitlines():
@@ -272,23 +253,14 @@ class RunBundle:
 
         # Walk artifact directory
         artifact_index: dict[str, ArtifactEntry] = {}
-        checksums: dict[str, str] = {}
         if artifact_root and Path(artifact_root).exists():
             for f in Path(artifact_root).iterdir():
                 if f.is_file():
                     ref = f.stem
                     if _SHA256_REF.match(ref):
-                        data = f.read_bytes()
-                        sha = hashlib.sha256(data).hexdigest()
-                        artifact_index[ref] = ArtifactEntry(
-                            ref=ref, sha256=sha, size_bytes=len(data)
-                        )
-                        checksums[ref] = sha
+                        artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=f.stat().st_size)
 
-        manifest = Manifest(
-            format_version=FORMAT_VERSION,
-            artifact_checksums=checksums,
-        )
+        manifest = Manifest(format_version=FORMAT_VERSION)
 
         return RunBundle(
             format_version=FORMAT_VERSION,

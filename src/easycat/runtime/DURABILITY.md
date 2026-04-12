@@ -123,3 +123,23 @@ automatically — no special handling is needed.
 - Root directory: configurable via `EASYCAT_DATA_DIR` env var
 - Directories: created lazily on first write
 - Permissions: files `0600`, directories `0700` (secret-adjacent data)
+
+## Session teardown contract
+
+EasyCat distinguishes between logical finalization and physical backend
+teardown:
+
+- `Session.close()` writes the journal's clean-close marker but keeps the
+  live backend open. This is a low-level primitive, not the normal
+  shutdown path.
+- `Session.destroy()` closes live backend resources such as SQLite
+  connections, Litestream sidecars, libSQL sync threads, and in-memory
+  artifact stores.
+- `await session.stop()` and `await session.shutdown()` both end by
+  calling `destroy()`. The difference is cancellation strategy, not
+  whether resources are released.
+
+Post-stop inspection is still supported: after a clean `stop()` or
+`shutdown()`, `session.journal.read()` and
+`session.export_debug_bundle(...)` continue to work through a read-only
+postmortem view. New journal writes are no longer accepted.

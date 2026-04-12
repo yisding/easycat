@@ -212,7 +212,7 @@ main orchestration model, each stage boundary is journaled with
   `ExternalAgentBridge` protocol from Workstream 2A. The stage
   works with any bridge implementing the protocol, including the
   three in-process bridges from WS2A and the
-  `ResponsesAPIBridge` from WS2C (which may land in parallel).
+  `RemoteResponsesAPIBridge` from WS2C (which may land in parallel).
   No bridge-specific logic in the stage — the protocol is the
   abstraction boundary.
 - [x] Create `src/easycat/stages/tts.py` — wrap existing TTS provider

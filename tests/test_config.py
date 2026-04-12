@@ -11,7 +11,8 @@ from easycat.events import DTMFAggregated
 from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.smart_turn import SmartTurnConfig
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
-from easycat.stt.openai_provider import OpenAISTTConfig
+from easycat.stt.openai_provider import OpenAISTTConfig  # noqa: F401  (re-exported symbol)
+from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.telephony.dtmf import emit_twilio_dtmf
 from easycat.telephony.session_actions import (
     TwilioSessionActionConfig,
@@ -37,7 +38,10 @@ def test_easycat_config_requires_stt_tts():
 
 def test_easycat_config_openai_defaults():
     config = EasyCatConfig(openai_api_key="test-key")
-    assert isinstance(config.stt, OpenAISTTConfig)
+    # Default STT is the streaming Realtime provider (sub-second
+    # stop-to-final); the batch OpenAISTTConfig is still usable via
+    # explicit override but is no longer the auto-wired default.
+    assert isinstance(config.stt, OpenAIRealtimeSTTConfig)
     assert isinstance(config.tts, OpenAITTSConfig)
 
 

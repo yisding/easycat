@@ -486,7 +486,7 @@ data — while the voice orchestration runs as a managed service or
 on edge infrastructure. This is the deployment model used by
 Pipecat, Retell, Vapi, and similar platforms.
 
-EasyCat supports this via the `ResponsesAPIBridge`, a fourth bridge
+EasyCat supports this via the `RemoteResponsesAPIBridge`, a fourth bridge
 that speaks the OpenAI Responses API over HTTP to a remote agent
 server. See the "Remote Agent Bridge" section under Agent
 Compatibility Boundary for the protocol design, and
@@ -962,7 +962,9 @@ Portable export unit for debugging and regression testing.
 Contains:
 
 - journal records
-- artifact index with checksums (SHA-256 manifest for integrity verification)
+- artifact index (refs are content-addressed SHA-256 hex digests; the
+  bundle is not tamper-evident — trust comes from the transport you
+  use to share it, not from the bundle itself)
 - safe config snapshot (hard-coded allowlist per Config and Environment
   Safety Default above)
 - allowlisted environment metadata (hard-coded allowlist)
@@ -1435,7 +1437,7 @@ whatever backend it uses.
 
 The three bridges above are in-process: the agent framework runs in
 the same Python process as the voice runtime. The
-`ResponsesAPIBridge` is the fourth bridge — it speaks the OpenAI
+`RemoteResponsesAPIBridge` is the fourth bridge — it speaks the OpenAI
 Responses API over HTTP to a remote agent server, enabling
 deployments where the agent runs on separate infrastructure from
 the voice pipeline.
@@ -1657,7 +1659,6 @@ Production issues are exportable as a self-contained bundle:
 - `session.export_debug_bundle(...)`
 - optional inline artifacts
 - stable schema for replay and regression tests
-- SHA-256 manifest for integrity
 - provider version strings for reproduction fidelity
 - dev-only banner on every essential-plan bundle until the peripheral
   `RedactionPolicy` ships (see `peripheral-redaction.md`)
@@ -1912,7 +1913,7 @@ the `InterruptionController` or four-step atomic write ordering
 because interruption is handled locally via N-1 chain + partial
 input replay.
 
-**Goal**: ship `ResponsesAPIBridge`, a fourth `ExternalAgentBridge`
+**Goal**: ship `RemoteResponsesAPIBridge`, a fourth `ExternalAgentBridge`
 implementation that speaks the OpenAI Responses API over HTTP to a
 remote agent server. Interruption uses the Responses API's native
 `input` field to chain from the last completed response and replay

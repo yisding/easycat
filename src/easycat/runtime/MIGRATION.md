@@ -64,6 +64,11 @@ session.journal.enabled   # True when journaling is active
 session.journal.degraded  # True if a backend write has failed
 ```
 
+After a clean `await session.stop()` or `await session.shutdown()`,
+`session.journal.read()` still works. EasyCat tears down the live
+journal backend first, then keeps a read-only postmortem view for
+inspection and `session.export_debug_bundle(...)`.
+
 ### Debug levels
 
 ```python

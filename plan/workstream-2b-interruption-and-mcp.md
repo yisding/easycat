@@ -257,7 +257,7 @@ bridge design is wrong and must be fixed before moving on.
   | `GenericWorkflowBridge` | Shallow (no workflow override) | downgrade path only |
   | `GenericWorkflowBridge` | Shallow (with workflow override) | `immediate_stop`, `drain_current_unit`, `drain_to_commit_point` |
 
-  > **Note:** `ResponsesAPIBridge` (WS2C) is not in this matrix
+  > **Note:** `RemoteResponsesAPIBridge` (WS2C) is not in this matrix
   > because its interruption is local (N-1 response chain, no
   > framework state mutation) and does not use the four-step
   > atomic write ordering. WS2C owns its own drain tests

@@ -38,6 +38,7 @@ __all__ = [
     "JournalView",
     "LibsqlJournal",
     "LitestreamSqliteJournal",
+    "ReadonlySqliteJournal",
     "SqliteJournal",
     "create_journal",
 ]
@@ -161,6 +162,89 @@ class JournalView:
     @property
     def degraded(self) -> bool:
         return self._journal.degraded
+
+
+class ReadonlySqliteJournal:
+    """Read-only wrapper over a persisted SQLite journal file.
+
+    Used after session teardown so callers can still inspect or export
+    the final journal after the live backend connection, Litestream
+    sidecar, or libSQL sync thread has been closed.
+    """
+
+    def __init__(self, db_path: str | Path, *, degraded: bool = False) -> None:
+        self._db_path = Path(db_path)
+        self._degraded = degraded
+
+    def append(
+        self,
+        kind: JournalRecordKind,
+        name: str,
+        session_id: str,
+        turn_id: str | None = None,
+        data: dict[str, Any] | None = None,
+        error: ErrorInfo | None = None,
+        tags: frozenset[str] = frozenset(),
+        input_ref: str | None = None,
+        output_ref: str | None = None,
+    ) -> int:
+        return -1
+
+    def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
+        sql = "SELECT * FROM journal WHERE sequence >= ? ORDER BY sequence"
+        params: list[Any] = [start]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return self._query(sql, params)
+
+    def slice(
+        self,
+        *,
+        kind: JournalRecordKind | None = None,
+        session_id: str | None = None,
+    ) -> list[JournalRecord]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if kind is not None:
+            clauses.append("kind = ?")
+            params.append(kind.value)
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return self._query(f"SELECT * FROM journal{where} ORDER BY sequence", params)
+
+    def close(self) -> None:
+        pass
+
+    def flush(self) -> None:
+        pass
+
+    def finalize(self) -> None:
+        pass
+
+    @property
+    def latest_sequence(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT MAX(sequence) FROM journal").fetchone()
+        return row[0] if row and row[0] is not None else 0
+
+    @property
+    def degraded(self) -> bool:
+        return self._degraded
+
+    @property
+    def db_path(self) -> Path:
+        return self._db_path
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True)
+
+    def _query(self, sql: str, params: list[Any]) -> list[JournalRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [SqliteJournal._row_to_record(r) for r in rows]
 
 
 # ── InMemoryRingBuffer backend ───────────────────────────────────

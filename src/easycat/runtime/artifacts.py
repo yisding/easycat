@@ -19,6 +19,7 @@ __all__ = [
     "ArtifactStore",
     "FilesystemArtifactStore",
     "InMemoryArtifactStore",
+    "SnapshotArtifactStore",
 ]
 
 ArtifactClass = Literal["replay_critical", "debug_verbose"]
@@ -132,6 +133,34 @@ class InMemoryArtifactStore:
             data = self._store.pop(oldest_ref, None)
             if data is not None:
                 self._current_bytes -= len(data)
+
+
+class SnapshotArtifactStore:
+    """Read-only artifact snapshot preserved across session teardown."""
+
+    def __init__(self, store: dict[str, bytes]) -> None:
+        self._store = dict(store)
+
+    def put(
+        self,
+        payload: bytes,
+        *,
+        artifact_class: ArtifactClass = "debug_verbose",
+    ) -> str:
+        ref = _sha256(payload)
+        return ref if ref in self._store else ""
+
+    def get(self, ref: str) -> bytes | None:
+        return self._store.get(ref)
+
+    def has(self, ref: str) -> bool:
+        return ref in self._store
+
+    def delete(self, ref: str) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
 
 
 # ── Filesystem backend ───────────────────────────────────────────

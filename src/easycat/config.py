@@ -25,7 +25,8 @@ from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.factory import STTConfig, create_stt_provider_from_config
-from easycat.stt.openai_provider import OpenAISTTConfig
+from easycat.stt.openai_provider import OpenAISTTConfig  # noqa: F401  (public re-export)
+from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.stubs import NoopAgent
 from easycat.telephony.call_state import (
     CallStateChanged,
@@ -232,7 +233,11 @@ class EasyCatConfig:
 
         if self.openai_api_key:
             if self.stt is None:
-                self.stt = OpenAISTTConfig(api_key=self.openai_api_key)
+                # Default to the Realtime WebSocket STT: audio is streamed
+                # as it arrives (sub-second stop-to-final), versus the
+                # batch ``/v1/audio/transcriptions`` endpoint which waits
+                # for end-of-turn to upload the whole utterance.
+                self.stt = OpenAIRealtimeSTTConfig(api_key=self.openai_api_key)
             if self.tts is None:
                 # Match the TTS output format to the transport's audio format
                 # so that TTSBase._normalize_audio resamples correctly
@@ -347,7 +352,13 @@ def create_session(config: EasyCatConfig) -> Session:
     enable_vad = not auto_turn_from_stt_final
     vad = create_vad(config.vad) if enable_vad else None
     noise_reducer = create_noise_reducer(config.noise_reduction)
-    echo_canceller = create_echo_canceller(config.echo_cancellation or EchoCancellationConfig())
+    # enable_echo_cancellation acts as a shortcut: when True and no
+    # explicit EchoCancellationConfig is provided, auto-construct one
+    # with enabled=True so the LiveKit backend is actually activated.
+    echo_cfg = config.echo_cancellation
+    if echo_cfg is None:
+        echo_cfg = EchoCancellationConfig(enabled=config.enable_echo_cancellation)
+    echo_canceller = create_echo_canceller(echo_cfg)
     transport = _create_transport(config.transport, event_bus)
 
     mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
@@ -516,6 +527,13 @@ def create_text_session(
             f"Invalid journal_retention={journal_retention!r}. "
             f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
         )
+    if mcp_servers is not None:
+        for uri in mcp_servers:
+            if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
+                raise EasyCatConfigError(
+                    f"Invalid MCP server URI: {uri!r}. "
+                    f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
+                )
 
     sid = session_id or f"session-{uuid4().hex[:12]}"
     artifact_store = _create_artifact_store(sid, debug)

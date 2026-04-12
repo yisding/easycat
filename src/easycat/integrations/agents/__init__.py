@@ -38,7 +38,7 @@ from easycat.integrations.agents.base import (
 from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
 from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
-from easycat.integrations.agents.responses_api import ResponsesAPIBridge
+from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
 __all__ = [
     "AgentBridgeEvent",
@@ -65,7 +65,7 @@ __all__ = [
     "PydanticAIBridge",
     "RecorderContext",
     "RecorderInvariantError",
-    "ResponsesAPIBridge",
+    "RemoteResponsesAPIBridge",
     "ShallowModeInterruptionError",
     "StreamingAgent",
     "UnitKind",
