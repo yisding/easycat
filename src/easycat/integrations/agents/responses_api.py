@@ -393,6 +393,10 @@ class ResponsesAPIBridge:
         """Build the JSON body for a ``POST /v1/responses`` request."""
         input_items: list[dict[str, Any]] = []
 
+        # Seeded context (system prompt, prior messages) from the caller.
+        if turn_input.context:
+            input_items.extend(turn_input.context)
+
         # If we have replay items from an interrupted turn, prepend them.
         # Note: we do NOT clear _replay_items / _pending_interruption_note
         # here — they are cleared in invoke() only after the request

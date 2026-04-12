@@ -1608,6 +1608,7 @@ class Session:
             raise RuntimeError("Session has been stopped")
         async with self._text_turn_lock:
             turn_id = f"turn-{uuid4().hex[:12]}"
+            await self._emit(TurnStarted(session_id=self.session_id, turn_id=turn_id))
             if self._journal:
                 self._journal.append(
                     kind=JournalRecordKind.EVENT,
@@ -1641,6 +1642,13 @@ class Session:
                 else:
                     response = await self.agent.run(text)
                 elapsed_ms = (time.monotonic() - t0) * 1000
+                await self._emit(
+                    AgentFinal(
+                        text=response,
+                        session_id=self.session_id,
+                        turn_id=turn_id,
+                    )
+                )
                 if self._journal:
                     self._journal.append(
                         kind=JournalRecordKind.EVENT,
@@ -1658,6 +1666,14 @@ class Session:
                     )
             except Exception as exc:
                 logger.exception("Agent error in text_session send_text")
+                await self._emit(
+                    Error(
+                        exception=exc,
+                        stage=ErrorStage.AGENT,
+                        session_id=self.session_id,
+                        turn_id=turn_id,
+                    )
+                )
                 if self._journal:
                     from easycat.runtime.records import ErrorInfo
 
@@ -1670,6 +1686,7 @@ class Session:
                     )
                 raise
             finally:
+                await self._emit(TurnEnded(session_id=self.session_id, turn_id=turn_id))
                 if self._journal:
                     self._journal.append(
                         kind=JournalRecordKind.EVENT,

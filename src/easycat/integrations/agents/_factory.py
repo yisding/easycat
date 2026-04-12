@@ -64,7 +64,12 @@ def auto_adapt_agent(agent: Any) -> Any:
                 for p in sig.parameters.values()
                 if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
             ]
-            if len(positional) == 1:
+            required_kw_only = [
+                p
+                for p in sig.parameters.values()
+                if p.kind == p.KEYWORD_ONLY and p.default is p.empty
+            ]
+            if len(positional) == 1 and not required_kw_only:
                 from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
                 from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
 
@@ -77,6 +82,16 @@ def auto_adapt_agent(agent: Any) -> Any:
                     f"parameters but GenericWorkflowBridge only passes (text). "
                     f"Remove extra required parameters or construct the bridge "
                     f"explicitly."
+                )
+            elif required_kw_only:
+                from easycat.integrations.agents.base import BridgeInputError
+
+                names = ", ".join(p.name for p in required_kw_only)
+                raise BridgeInputError(
+                    f"on_user_turn() has required keyword-only parameter(s) "
+                    f"({names}) that GenericWorkflowBridge cannot supply. "
+                    f"Remove required keyword-only parameters or construct "
+                    f"the bridge explicitly."
                 )
         except (ValueError, TypeError):
             from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
