@@ -17,8 +17,11 @@ from easycat.cancel import CancelToken
 class TurnContext:
     """Holds all mutable state scoped to a single conversational turn."""
 
+    _generation_counter: int = 0
+
     __slots__ = (
         "id",
+        "generation",
         "cancel_token",
         "end_time",
         "stt_final_time",
@@ -33,7 +36,9 @@ class TurnContext:
     )
 
     def __init__(self, turn_id: str, cancel_token: CancelToken) -> None:
+        TurnContext._generation_counter += 1
         self.id = turn_id
+        self.generation = TurnContext._generation_counter
         self.cancel_token = cancel_token
 
         # Timing markers (set as the turn progresses)
