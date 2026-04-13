@@ -97,9 +97,12 @@ class OpenAIRealtimeSTT(STTBase):
         )
 
     async def _on_start(self) -> None:
-        # Use a standard realtime session and enable input audio
-        # transcription on that session. This keeps STT fully streaming
-        # without falling back to the slower Audio API upload path.
+        if self._close_task is not None:
+            try:
+                await self._close_task
+            except Exception:
+                pass
+            self._close_task = None
         url = self._websocket_url()
         headers = {
             "Authorization": f"Bearer {self._config.api_key}",
@@ -237,6 +240,7 @@ class OpenAIRealtimeSTT(STTBase):
 
     async def _receive_loop(self) -> None:
         assert self._ws is not None
+        queue = self._event_queue
         try:
             async for raw_message in self._ws.recv_iter():
                 if isinstance(raw_message, bytes):
@@ -255,7 +259,7 @@ class OpenAIRealtimeSTT(STTBase):
                 self._session_ready.set_exception(
                     RuntimeError("OpenAI Realtime connection closed before session was ready")
                 )
-            self._event_queue.put_nowait(None)
+            queue.put_nowait(None)
 
     def _handle_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type", "")

@@ -254,7 +254,7 @@ class EasyCatConfig:
         self._validate()
 
     def _default_echo_cancellation_for_transport(self) -> EchoCancellationConfig:
-        enable_aec = isinstance(
+        enable_aec = self.enable_echo_cancellation and isinstance(
             self.transport,
             (LocalTransportConfig, WebSocketTransportConfig, WebSocketConnectionTransport),
         )
@@ -538,6 +538,10 @@ def create_text_session(
                 )
 
     sid = session_id or f"session-{uuid4().hex[:12]}"
+    if session_id is not None and ("/" in session_id or "\\" in session_id or ".." in session_id):
+        raise EasyCatConfigError(
+            f"session_id must not contain path separators or '..': {session_id!r}"
+        )
     artifact_store = _create_artifact_store(sid, debug)
     journal = (
         create_journal(

@@ -140,6 +140,12 @@ class ElevenLabsSTT(STTBase):
     # -- Realtime (WebSocket) mode -----------------------------------------
 
     async def _start_realtime(self) -> None:
+        if self._close_task is not None:
+            try:
+                await self._close_task
+            except Exception:
+                pass
+            self._close_task = None
         headers = {"xi-api-key": self._config.api_key}
         self._ws = ReconnectingWebSocket(
             url=self._build_realtime_ws_url(),
@@ -249,6 +255,7 @@ class ElevenLabsSTT(STTBase):
 
     async def _receive_loop(self) -> None:
         assert self._ws is not None
+        queue = self._event_queue
         try:
             async for raw_message in self._ws.recv_iter():
                 if isinstance(raw_message, bytes):
@@ -263,7 +270,7 @@ class ElevenLabsSTT(STTBase):
         except Exception:
             logger.exception("Error in ElevenLabs receive loop")
         finally:
-            self._event_queue.put_nowait(None)
+            queue.put_nowait(None)
 
     def _handle_ws_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("message_type") or msg.get("type", "")
