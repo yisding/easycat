@@ -16,7 +16,6 @@ from easycat import (
     LocalTransportConfig,
     attach_runtime_feedback,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
@@ -33,7 +32,6 @@ async def main() -> None:
         transport=LocalTransportConfig(),
         echo_cancellation=EchoCancellationConfig(enabled=True),
         agent=agent,
-        event_logging=default_event_logging(),
     )
     session = create_session(config)
 

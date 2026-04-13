@@ -24,7 +24,6 @@ from easycat import (
     SessionActions,
     attach_runtime_feedback,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
@@ -81,7 +80,6 @@ async def main() -> None:
         transport=LocalTransportConfig(),
         agent=bridge,
         session_actions=actions,
-        event_logging=default_event_logging(),
     )
     session = create_session(config)
     attach_runtime_feedback(session)

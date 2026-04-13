@@ -14,10 +14,14 @@ import logging
 import os
 import platform
 import struct
+import threading
 import time
 from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
+from ctypes import CDLL, POINTER, RTLD_GLOBAL, c_float, c_int, c_int32, c_size_t, c_void_p
 from dataclasses import dataclass
-from importlib.metadata import PackageNotFoundError, distribution, version
+from importlib.metadata import version
+from pathlib import Path
 from typing import Any
 
 from easycat.audio_format import AudioChunk
@@ -33,6 +37,8 @@ _SILERO_SAMPLE_RATE = 16000
 _SILERO_FRAME_SAMPLES = 512
 _SILERO_CONTEXT_SAMPLES = 64
 _SILERO_RISKY_TORCH_ARCHES = {"aarch64", "arm64"}
+_SILERO_ONNX_MODEL = Path(__file__).parent / "models" / "silero_vad_16k_op15.onnx"
+_TEN_BUNDLED_PACKAGE = "easycat_ten_vad_linux_arm64"
 # TEN VAD expects 16 kHz audio and defaults to a hop size of 256 samples.
 _TEN_SAMPLE_RATE = 16000
 _TEN_HOP_SAMPLES = 256
@@ -51,7 +57,7 @@ class _VADBase:
     def __init__(self) -> None:
         self._threshold: float = 0.5
         self._min_speech_duration_ms: int = 250
-        self._min_silence_duration_ms: int = 300
+        self._min_silence_duration_ms: int = 150
         self._pre_roll_ms: int = 100
         self._post_roll_ms: int = 100
 
@@ -65,7 +71,7 @@ class _VADBase:
         self,
         *,
         min_speech_duration_ms: int = 250,
-        min_silence_duration_ms: int = 300,
+        min_silence_duration_ms: int = 150,
         sensitivity: float = 0.5,
         pre_roll_ms: int = 100,
         post_roll_ms: int = 100,
@@ -146,18 +152,63 @@ def _silero_backend_candidates() -> tuple[str, ...]:
 
 
 def _silero_onnx_model_path() -> str:
-    try:
-        dist = distribution("silero-vad")
-    except PackageNotFoundError as exc:
-        raise ImportError(
-            "Silero VAD ONNX requires the silero-vad package. "
-            "Install with: uv add easycat[silero-vad]."
-        ) from exc
+    if not _SILERO_ONNX_MODEL.exists():
+        raise RuntimeError(f"Bundled Silero VAD ONNX model file not found: {_SILERO_ONNX_MODEL}")
+    return str(_SILERO_ONNX_MODEL)
 
-    model_path = dist.locate_file("silero_vad/data/silero_vad.onnx")
-    if not model_path.exists():
-        raise RuntimeError(f"Silero VAD ONNX model file not found: {model_path}")
-    return str(model_path)
+
+def _ten_backend_override() -> str | None:
+    override = os.getenv("EASYCAT_TEN_BACKEND", "").strip().lower()
+    if override in {"bundled", "package"}:
+        return override
+    return None
+
+
+def _ten_bundled_root() -> Path | None:
+    if platform.system() != "Linux":
+        return None
+    if platform.machine().strip().lower() not in {"aarch64", "arm64"}:
+        return None
+    try:
+        bundled = __import__(_TEN_BUNDLED_PACKAGE, fromlist=["bundle_root"])
+    except ImportError:
+        return None
+    bundle_root = Path(bundled.bundle_root())
+    required = (bundle_root / "libten_vad.so", bundle_root / "onnx_model" / "ten-vad.onnx")
+    if not all(path.exists() for path in required):
+        return None
+    return bundle_root
+
+
+def _ten_onnxruntime_library_path(onnxruntime_module: Any) -> Path:
+    capi_dir = Path(onnxruntime_module.__file__).resolve().parent / "capi"
+    candidates = sorted(capi_dir.glob("libonnxruntime.so.*"))
+    if not candidates:
+        raise RuntimeError(f"onnxruntime shared library not found in {capi_dir}")
+    return candidates[-1]
+
+
+def _ten_backend_candidates() -> tuple[str, ...]:
+    override = _ten_backend_override()
+    if override is not None:
+        return (override,)
+    if _ten_bundled_root() is not None:
+        return ("bundled", "package")
+    return ("package",)
+
+
+_cwd_lock = threading.Lock()
+
+
+@contextmanager
+def _temporary_cwd(path: Path) -> Iterator[None]:
+    with _cwd_lock:
+        original = Path.cwd()
+        os.chdir(path)
+        try:
+            yield
+        finally:
+            os.chdir(original)
 
 
 class _SileroOnnxModel:
@@ -339,14 +390,18 @@ class SileroVAD(_VADBase):
                 pass
 
     def version_info(self) -> dict[str, str]:
+        sdk_package = "torch" if self._backend == "torch" else "onnxruntime"
         sdk_ver = "unknown"
         try:
-            sdk_ver = version("silero-vad")
+            sdk_ver = version(sdk_package)
         except Exception:
             pass
+        model_name = "silero-vad-torch"
+        if self._backend == "onnx":
+            model_name = "silero-vad-16k-op15-onnx"
         return {
             "provider": "silero",
-            "model": f"silero-vad-{self._backend or 'unknown'}",
+            "model": model_name if self._backend is not None else "silero-vad-unknown",
             "api_version": "unknown",
             "sdk_version": sdk_ver,
         }
@@ -452,9 +507,44 @@ class TenVAD(_VADBase):
         self._buffer: bytes = b""
         self._ten_vad: Any = None
         self._numpy: Any = None
+        self._backend: str | None = None
         self._initialize()
 
     def _initialize(self) -> None:
+        errors: list[str] = []
+        for backend in _ten_backend_candidates():
+            try:
+                if backend == "bundled":
+                    self._initialize_bundled()
+                else:
+                    self._initialize_package()
+                logger.info("TEN VAD initialized via %s backend", self._backend)
+                return
+            except (ImportError, RuntimeError) as exc:
+                errors.append(f"{backend}: {exc}")
+                logger.info("TEN VAD %s backend unavailable: %s", backend, exc)
+
+        joined = "; ".join(errors) or "no backend candidates"
+        raise RuntimeError(f"TEN VAD initialization failed: {joined}")
+
+    def _initialize_bundled(self) -> None:
+        bundle_root = _ten_bundled_root()
+        if bundle_root is None:
+            raise RuntimeError("bundled TEN VAD assets not available for this platform")
+        try:
+            numpy = require_module("numpy", extra="ten-vad", purpose="TEN VAD")
+            onnxruntime = require_module("onnxruntime", extra="ten-vad", purpose="TEN VAD")
+        except ImportError as exc:
+            raise RuntimeError(str(exc)) from exc
+        self._ten_vad = _BundledTenVad(
+            bundle_root=bundle_root,
+            hop_size=self._hop_size,
+            onnxruntime_module=onnxruntime,
+        )
+        self._numpy = numpy
+        self._backend = "bundled"
+
+    def _initialize_package(self) -> None:
         try:
             ten_vad = require_module("ten_vad", extra="ten-vad", purpose="TEN VAD")
             numpy = require_module("numpy", extra="ten-vad", purpose="TEN VAD")
@@ -465,14 +555,13 @@ class TenVAD(_VADBase):
             self._ten_vad = ten_vad.TenVad(hop_size=self._hop_size, threshold=0.5)
         except Exception as exc:
             raise RuntimeError(
-                "TEN VAD initialization failed. "
                 "If you are on macOS/Windows, install a recent ten-vad build "
                 "with ONNX support. Original error: "
                 f"{exc}"
             ) from exc
 
         self._numpy = numpy
-        logger.info("TEN VAD initialized")
+        self._backend = "package"
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process an audio chunk and yield VAD events."""
@@ -502,12 +591,99 @@ class TenVAD(_VADBase):
         self._buffer = b""
 
     def version_info(self) -> dict[str, str]:
+        sdk_ver = "unknown"
+        if self._backend == "package":
+            try:
+                sdk_ver = version("ten-vad")
+            except Exception:
+                pass
+        elif self._backend == "bundled":
+            try:
+                sdk_ver = version("easycat-ten-vad-linux-arm64")
+            except Exception:
+                sdk_ver = "bundled"
         return {
             "provider": "ten",
-            "model": "ten-vad",
+            "model": "ten-vad-bundled-onnx" if self._backend == "bundled" else "ten-vad",
             "api_version": "unknown",
-            "sdk_version": "unknown",
+            "sdk_version": sdk_ver,
         }
+
+
+class _BundledTenVad:
+    """Minimal ctypes wrapper around the vendored TEN VAD shared library."""
+
+    def __init__(
+        self,
+        *,
+        bundle_root: Path,
+        hop_size: int,
+        onnxruntime_module: Any,
+        threshold: float = 0.5,
+    ) -> None:
+        self._bundle_root = bundle_root
+        self._hop_size = hop_size
+        self._threshold = threshold
+        self._onnxruntime_library = CDLL(
+            str(_ten_onnxruntime_library_path(onnxruntime_module)),
+            mode=RTLD_GLOBAL,
+        )
+        self._vad_library = CDLL(str(bundle_root / "libten_vad.so"))
+        self._vad_handler = c_void_p(0)
+        self._out_probability = c_float()
+        self._out_flags = c_int32()
+
+        self._vad_library.ten_vad_create.argtypes = [
+            POINTER(c_void_p),
+            c_size_t,
+            c_float,
+        ]
+        self._vad_library.ten_vad_create.restype = c_int
+
+        self._vad_library.ten_vad_destroy.argtypes = [POINTER(c_void_p)]
+        self._vad_library.ten_vad_destroy.restype = c_int
+
+        self._vad_library.ten_vad_process.argtypes = [
+            c_void_p,
+            c_void_p,
+            c_size_t,
+            POINTER(c_float),
+            POINTER(c_int32),
+        ]
+        self._vad_library.ten_vad_process.restype = c_int
+
+        with _temporary_cwd(bundle_root):
+            result = self._vad_library.ten_vad_create(
+                POINTER(c_void_p)(self._vad_handler),
+                c_size_t(self._hop_size),
+                c_float(self._threshold),
+            )
+        if result != 0:
+            raise RuntimeError("bundled TEN VAD create failed")
+
+    def process(self, audio_data: Any) -> tuple[float, int]:
+        audio_data = audio_data.squeeze()
+        if len(audio_data.shape) != 1 or audio_data.shape[0] != self._hop_size:
+            raise ValueError(f"TEN VAD audio data shape should be [{self._hop_size}]")
+        input_pointer = c_void_p(audio_data.__array_interface__["data"][0])
+        result = self._vad_library.ten_vad_process(
+            self._vad_handler,
+            input_pointer,
+            c_size_t(self._hop_size),
+            POINTER(c_float)(self._out_probability),
+            POINTER(c_int32)(self._out_flags),
+        )
+        if result != 0:
+            raise RuntimeError("bundled TEN VAD processing failed")
+        return self._out_probability.value, self._out_flags.value
+
+    def __del__(self) -> None:
+        try:
+            if self._vad_handler:
+                self._vad_library.ten_vad_destroy(POINTER(c_void_p)(self._vad_handler))
+                self._vad_handler = c_void_p(0)
+        except Exception:
+            pass
 
 
 # ── Factory ─────────────────────────────────────────────────────────
@@ -523,7 +699,7 @@ class VADConfig:
     krisp_model_path: str | None = None
     # Shared VAD settings
     min_speech_duration_ms: int = 250
-    min_silence_duration_ms: int = 300
+    min_silence_duration_ms: int = 150
     sensitivity: float = 0.5
     pre_roll_ms: int = 100
     post_roll_ms: int = 100

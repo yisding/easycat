@@ -51,7 +51,6 @@ from easycat import (
     WebRTCTransportConfig,
     attach_runtime_feedback,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
@@ -239,7 +238,6 @@ async def main() -> None:
             static_dir=_STATIC_DIR,
         ),
         agent=agent,
-        event_logging=default_event_logging(),
     )
     session = create_session(config)
     attach_runtime_feedback(session)

@@ -23,7 +23,6 @@ from easycat import (
     WebSocketConnectionTransport,
     attach_runtime_feedback,
     create_session,
-    default_event_logging,
     require_env,
 )
 
@@ -43,7 +42,6 @@ async def main() -> None:
                 openai_api_key=api_key,
                 transport=transport,
                 agent=agent,
-                event_logging=default_event_logging(),
             )
         )
         attach_runtime_feedback(session)

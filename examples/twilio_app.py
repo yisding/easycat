@@ -27,7 +27,6 @@ from easycat import (
     TwilioSessionActionConfig,
     attach_runtime_feedback,
     create_session,
-    default_event_logging,
 )
 from easycat.transports.twilio_media import twiml_connect_stream
 
@@ -64,7 +63,6 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
                 transport=transport,
                 telephony=telephony,
                 agent=agent,
-                event_logging=default_event_logging(),
             )
         )
         attach_runtime_feedback(session)

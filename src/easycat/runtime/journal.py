@@ -1349,6 +1349,14 @@ def run_retention(
             archive_dir.mkdir(parents=True, exist_ok=True)
             archive_path = archive_dir / f"{oldest.stem}.tar.gz"
             try:
+                # Checkpoint WAL so all data is in the main database file
+                # before archiving — otherwise uncheckpointed pages are lost.
+                conn = sqlite3.connect(str(oldest))
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                finally:
+                    conn.close()
+
                 session_id = oldest.stem
                 artifact_dir = root / "artifacts" / session_id
                 with tarfile.open(str(archive_path), "w:gz") as tar:
