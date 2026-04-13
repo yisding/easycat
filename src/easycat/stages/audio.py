@@ -32,19 +32,23 @@ class AudioStage:
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         state_before = self.snapshot_state()
-        self._record(ctx, "stage_start", state_before=state_before)
+        self._record(ctx, "stage_start", turn_id=turn.id, state_before=state_before)
         try:
             chunk = input
+            chunk = await self._provider.process(chunk)
             if self._echo_canceller is not None:
                 chunk = await self._echo_canceller.process(chunk)
-            result = await self._provider.process(chunk)
+            result = chunk
         except Exception as exc:
-            self._record(ctx, "stage_error", state_before=state_before, error=str(exc))
+            self._record(
+                ctx, "stage_error", turn_id=turn.id, state_before=state_before, error=str(exc)
+            )
             raise
         state_after = self.snapshot_state()
         self._record(
             ctx,
             "stage_complete",
+            turn_id=turn.id,
             state_before=state_before,
             state_after=state_after,
         )
@@ -80,11 +84,14 @@ class AudioStage:
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("AudioStage received upstream signal: %s", signal)
 
-    def _record(self, ctx: RunContext, name: str, **kwargs: Any) -> None:
+    def _record(
+        self, ctx: RunContext, name: str, *, turn_id: str | None = None, **kwargs: Any
+    ) -> None:
         if ctx.journal is not None:
             ctx.journal.append(
                 kind=JournalRecordKind.EVENT,
                 name=name,
                 session_id=ctx.session_id,
+                turn_id=turn_id,
                 data={k: str(v) if v is not None else None for k, v in kwargs.items()},
             )

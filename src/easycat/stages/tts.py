@@ -27,42 +27,48 @@ class TTSStage:
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         state_before = self.snapshot_state()
-        self._record(ctx, "stage_start", state_before=state_before)
+        self._record(ctx, "stage_start", turn_id=turn.id, state_before=state_before)
         try:
             result = self._provider.synthesize(input)
         except Exception as exc:
-            self._record(ctx, "stage_error", state_before=state_before, error=str(exc))
+            self._record(
+                ctx, "stage_error", turn_id=turn.id, state_before=state_before, error=str(exc)
+            )
             raise
 
         # Real TTS providers return an async iterator — defer stage_complete
         # until the stream is fully consumed so the journal reflects actual
         # synthesis duration and captures iteration errors.
         if isinstance(result, AsyncIterator) or inspect.isasyncgen(result):
-            return self._wrap_stream(result, ctx, state_before)
+            return self._wrap_stream(result, ctx, turn.id, state_before)
 
         state_after = self.snapshot_state()
         self._record(
             ctx,
             "stage_complete",
+            turn_id=turn.id,
             state_before=state_before,
             state_after=state_after,
         )
         return result
 
     async def _wrap_stream(
-        self, stream: Any, ctx: RunContext, state_before: StageStateSnapshot
+        self, stream: Any, ctx: RunContext, turn_id: str, state_before: StageStateSnapshot
     ) -> AsyncIterator[Any]:
         """Yield from the TTS stream and record completion/error after consumption."""
         try:
             async for chunk in stream:
                 yield chunk
         except Exception as exc:
-            self._record(ctx, "stage_error", state_before=state_before, error=str(exc))
+            self._record(
+                ctx, "stage_error", turn_id=turn_id, state_before=state_before, error=str(exc)
+            )
             raise
         state_after = self.snapshot_state()
         self._record(
             ctx,
             "stage_complete",
+            turn_id=turn_id,
             state_before=state_before,
             state_after=state_after,
         )
@@ -97,11 +103,14 @@ class TTSStage:
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("TTSStage received upstream signal: %s", signal)
 
-    def _record(self, ctx: RunContext, name: str, **kwargs: Any) -> None:
+    def _record(
+        self, ctx: RunContext, name: str, *, turn_id: str | None = None, **kwargs: Any
+    ) -> None:
         if ctx.journal is not None:
             ctx.journal.append(
                 kind=JournalRecordKind.EVENT,
                 name=name,
                 session_id=ctx.session_id,
+                turn_id=turn_id,
                 data={k: str(v) if v is not None else None for k, v in kwargs.items()},
             )
