@@ -127,6 +127,14 @@ class OpenAIRealtimeSTT(STTBase):
         try:
             await asyncio.wait_for(self._session_ready, timeout=5.0)
         except TimeoutError as exc:
+            ws = self._ws
+            receive_task = self._receive_task
+            self._ws = None
+            self._receive_task = None
+            self._session_ready = None
+            if ws is not None:
+                task = asyncio.create_task(self._close_connection(ws, receive_task))
+                task.add_done_callback(self._log_close_task_exception)
             raise TimeoutError("timed out waiting for OpenAI Realtime session.update") from exc
 
     async def _send_session_update(self) -> None:

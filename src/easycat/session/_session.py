@@ -1394,7 +1394,8 @@ class Session:
                         await self._emit(STTPartial(text=stt_event.text, track=stt_event.track))
                     elif stt_event.type == STTEventType.FINAL:
                         if turn:
-                            turn.stt_has_uncommitted_audio = False
+                            if not self._stt_pending_segment_futures:
+                                turn.stt_has_uncommitted_audio = False
                             turn.append_stt_segment(stt_event.text, track=stt_event.track)
                             self._append_journal_record(
                                 name="stt_segment_final",
