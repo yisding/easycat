@@ -45,6 +45,7 @@ from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig, TurnState
+from easycat.session.actions import SessionActionResult
 from easycat.timeouts import AgentTimeoutError
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig, TurnManagerState
@@ -221,6 +222,12 @@ class FakeTTS:
 
     async def cancel(self) -> None:
         pass
+
+
+class MarkerTTS(FakeTTS):
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+        yield TTSEvent(type=TTSEventType.MARKERS, markers=[{"word": payload.text, "start_ms": 0}])
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
 
 
 class TrackingJournal:
@@ -756,7 +763,8 @@ async def test_pause_commit_keeps_turn_open_but_collects_segment_final():
 
 
 @pytest.mark.asyncio
-async def test_handle_end_of_speech_emits_single_turn_level_stt_final_from_segments():
+async def test_handle_end_of_speech_no_duplicate_stt_final():
+    """_handle_end_of_speech must not re-emit per-segment STTFinals."""
     session = Session(_full_config())
     session._turn = TurnContext("turn-stale", CancelToken())
     session._turn.append_stt_segment("hello")
@@ -769,8 +777,7 @@ async def test_handle_end_of_speech_emits_single_turn_level_stt_final_from_segme
     await session._handle_end_of_speech()
 
     stt_finals = [e for e in timeline if isinstance(e, STTFinal)]
-    assert len(stt_finals) == 1
-    assert stt_finals[0].text == "hello world"
+    assert len(stt_finals) == 0
     agent_finals = [e for e in timeline if isinstance(e, AgentFinal)]
     assert len(agent_finals) == 1
     assert agent_finals[0].text == "HELLO WORLD"
@@ -802,6 +809,146 @@ async def test_run_basic_agent_tts_error_cleans_turn_state_and_turn_id():
 
     # _synthesize_tts's finally block cleans up the turn when playback was started.
     assert session._turn is None
+
+
+@pytest.mark.asyncio
+async def test_run_basic_agent_strip_markdown_writes_journal_record():
+    class MarkdownAgent:
+        async def run(self, text: str) -> str:
+            return "Go to **Settings** first."
+
+    journal = InMemoryRingBuffer()
+    session = Session(_full_config(agent=MarkdownAgent(), journal=journal, strip_markdown=True))
+    session._turn = TurnContext("turn-markdown", CancelToken())
+    session._synthesize_tts = AsyncMock(return_value=SessionActionResult())
+
+    await session._run_basic_agent("help", token=None)
+
+    records = [record for record in journal.read() if record.name == "markdown_stripped"]
+    assert len(records) == 1
+    assert records[0].turn_id == "turn-markdown"
+    assert records[0].data == {
+        "phase": "basic_final",
+        "changed": True,
+        "original_text": "Go to **Settings** first.",
+        "stripped_text": "Go to Settings first.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_tts_payload_writes_journal_record():
+    class PrefixProcessor:
+        def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
+            return TTSInput(text=f"speak: {payload.text}", format=payload.format)
+
+    journal = InMemoryRingBuffer()
+    session = Session(
+        _full_config(
+            journal=journal,
+            output_processors=[PrefixProcessor()],
+        )
+    )
+    session._turn = TurnContext("turn-tts-prepared", CancelToken())
+
+    payload = session._prepare_tts_payload("hello", is_streaming=False, is_final=True)
+
+    assert payload.text == "speak: hello"
+    records = [record for record in journal.read() if record.name == "tts_payload_prepared"]
+    assert len(records) == 1
+    assert records[0].turn_id == "turn-tts-prepared"
+    assert records[0].data == {
+        "is_streaming": False,
+        "is_final": True,
+        "changed": True,
+        "original_text": "hello",
+        "original_format": "plain",
+        "prepared_text": "speak: hello",
+        "prepared_format": "plain",
+        "processors": ["PrefixProcessor"],
+        "ssml_downgraded": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_pause_commit_journals_segment_commit_and_final():
+    stt = SegmentingSTT(["hello"])
+    journal = InMemoryRingBuffer()
+    session = Session(
+        _full_config(
+            stt=stt,
+            journal=journal,
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=1000,
+                stt_segment_silence_ms=1,
+            ),
+        )
+    )
+    session._turn = TurnContext("turn-segment-journal", CancelToken())
+    session._turn.stt_has_uncommitted_audio = True
+    session._stt_active = True
+    session._turn_manager._state = TurnManagerState.USER_PAUSED
+    session._start_stt_event_task()
+
+    await session._start_stt_segment_commit()
+    await asyncio.sleep(0.05)
+
+    records = [record for record in journal.read() if record.name.startswith("stt_segment_")]
+    records_by_name = {record.name: record for record in records}
+    assert set(records_by_name) == {
+        "stt_segment_commit_requested",
+        "stt_segment_final",
+        "stt_segment_commit_result",
+    }
+    assert records_by_name["stt_segment_commit_requested"].data == {
+        "segment_index": 1,
+        "transcript_text": "",
+    }
+    assert records_by_name["stt_segment_final"].data == {
+        "segment_index": 1,
+        "text": "hello",
+        "track": None,
+        "transcript_text": "hello",
+    }
+    assert records_by_name["stt_segment_commit_result"].data == {
+        "segment_index": 1,
+        "committed": True,
+        "transcript_text": "",
+    }
+
+
+@pytest.mark.asyncio
+async def test_tts_audio_and_markers_are_journaled_with_artifact_ref():
+    artifact_store = InMemoryArtifactStore()
+    journal = InMemoryRingBuffer(artifact_store=artifact_store)
+    session = Session(
+        _full_config(
+            tts=MarkerTTS(),
+            journal=journal,
+            artifact_store=artifact_store,
+        )
+    )
+    session._turn = TurnContext("turn-tts-audio", CancelToken())
+
+    await session._synthesize_tts("hello", token=None)
+
+    audio_records = [record for record in journal.read() if record.name == "tts_audio"]
+    marker_records = [record for record in journal.read() if record.name == "tts_markers"]
+
+    assert len(audio_records) == 1
+    assert audio_records[0].turn_id == "turn-tts-audio"
+    assert audio_records[0].output_ref is not None
+    assert artifact_store.has(audio_records[0].output_ref)
+    assert audio_records[0].data == {
+        "audio_bytes": 320,
+        "duration_ms": 10.0,
+        "sample_rate": 16000,
+        "channels": 1,
+        "sample_width": 2,
+        "encoding": "pcm",
+        "bypass_gate": False,
+    }
+    assert len(marker_records) == 1
+    assert marker_records[0].data == {"markers": [{"word": "hello", "start_ms": 0}]}
 
 
 @pytest.mark.asyncio

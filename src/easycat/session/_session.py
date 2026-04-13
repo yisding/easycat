@@ -1558,7 +1558,6 @@ class Session:
                 self._stt_final_future.set_result(transcript)
             if turn:
                 turn.stt_final_time = time.monotonic()
-            await self._emit(STTFinal(text=transcript, track=turn.stt_track if turn else None))
 
         if not transcript or (token and token.is_cancelled):
             if self._turn is turn:
