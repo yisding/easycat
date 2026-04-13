@@ -60,8 +60,8 @@ class LiveKitAEC:
     """
 
     def __init__(self) -> None:
-        rtc = require_module("livekit.rtc", extra="aec", purpose="Echo cancellation")
-        self._apm: Any = rtc.AudioProcessingModule(echo_cancellation=True)
+        self._rtc = require_module("livekit.rtc", extra="aec", purpose="Echo cancellation")
+        self._apm: Any = self._rtc.AudioProcessingModule(echo_cancellation=True)
         logger.info("LiveKit AEC initialized")
 
     def close(self) -> None:
@@ -78,8 +78,6 @@ class LiveKitAEC:
         each 10 ms slice, invoke ``process_stream``, then reassemble
         from the frame's (now-processed) data buffer.
         """
-        from livekit import rtc
-
         fmt = chunk.format
         frame_samples = _frame_samples_for_rate(fmt.sample_rate)
         frame_bytes = frame_samples * fmt.frame_size
@@ -87,7 +85,7 @@ class LiveKitAEC:
 
         processed_parts: list[bytes] = []
         for frame_bytes_slice in frames:
-            af = rtc.AudioFrame(
+            af = self._rtc.AudioFrame(
                 data=frame_bytes_slice,
                 sample_rate=fmt.sample_rate,
                 num_channels=fmt.channels,
@@ -102,15 +100,13 @@ class LiveKitAEC:
 
     def feed_reference(self, chunk: AudioChunk) -> None:
         """Feed a far-end (speaker) audio chunk as the AEC reference signal."""
-        from livekit import rtc
-
         fmt = chunk.format
         frame_samples = _frame_samples_for_rate(fmt.sample_rate)
         frame_bytes = frame_samples * fmt.frame_size
         frames = _split_frames(chunk.data, frame_bytes)
 
         for frame_bytes_slice in frames:
-            af = rtc.AudioFrame(
+            af = self._rtc.AudioFrame(
                 data=frame_bytes_slice,
                 sample_rate=fmt.sample_rate,
                 num_channels=fmt.channels,

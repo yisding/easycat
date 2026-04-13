@@ -347,7 +347,9 @@ def create_session(config: EasyCatConfig) -> Session:
     enable_vad = not auto_turn_from_stt_final
     vad = create_vad(config.vad) if enable_vad else None
     noise_reducer = (
-        create_noise_reducer(config.noise_reduction) if config.enable_noise_reduction else None
+        create_noise_reducer(config.noise_reduction)
+        if config.enable_noise_reduction or config.noise_reduction != NoiseReducerConfig()
+        else None
     )
     # enable_echo_cancellation acts as a shortcut: when True and no
     # explicit EchoCancellationConfig is provided, auto-construct one
