@@ -255,6 +255,67 @@ class ReadonlySqliteJournal:
         return [SqliteJournal._row_to_record(r) for r in rows]
 
 
+# ── Frozen snapshot (read-only in-memory journal) ────────────────
+
+
+class FrozenJournalSnapshot:
+    """Immutable point-in-time copy of an in-memory journal."""
+
+    def __init__(self, records: list[JournalRecord], *, degraded: bool = False) -> None:
+        self._records = tuple(records)
+        self._degraded = degraded
+
+    def append(
+        self,
+        kind: JournalRecordKind,
+        name: str,
+        session_id: str,
+        turn_id: str | None = None,
+        data: dict[str, Any] | None = None,
+        error: ErrorInfo | None = None,
+        tags: frozenset[str] = frozenset(),
+        input_ref: str | None = None,
+        output_ref: str | None = None,
+    ) -> int:
+        return -1
+
+    def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
+        out = [r for r in self._records if r.sequence >= start]
+        if limit is not None:
+            out = out[:limit]
+        return out
+
+    def slice(
+        self,
+        *,
+        kind: JournalRecordKind | None = None,
+        session_id: str | None = None,
+    ) -> list[JournalRecord]:
+        out = list(self._records)
+        if kind is not None:
+            out = [r for r in out if r.kind == kind]
+        if session_id is not None:
+            out = [r for r in out if r.session_id == session_id]
+        return out
+
+    def close(self) -> None:
+        pass
+
+    def flush(self) -> None:
+        pass
+
+    def finalize(self) -> None:
+        pass
+
+    @property
+    def latest_sequence(self) -> int:
+        return self._records[-1].sequence if self._records else 0
+
+    @property
+    def degraded(self) -> bool:
+        return self._degraded
+
+
 # ── InMemoryRingBuffer backend ───────────────────────────────────
 
 
@@ -341,6 +402,11 @@ class InMemoryRingBuffer:
 
     def finalize(self) -> None:
         pass
+
+    def snapshot(self) -> FrozenJournalSnapshot:
+        """Return a read-only copy of the current buffer contents."""
+        with self._lock:
+            return FrozenJournalSnapshot(list(self._buf), degraded=self._degraded)
 
     @property
     def latest_sequence(self) -> int:
@@ -1378,14 +1444,21 @@ def run_retention(
                 # before archiving — otherwise uncheckpointed pages are lost.
                 conn = sqlite3.connect(str(oldest))
                 try:
-                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
                 finally:
                     conn.close()
+
+                checkpoint_incomplete = row is not None and row[1] != row[2]
 
                 session_id = oldest.stem
                 artifact_dir = root / "artifacts" / session_id
                 with tarfile.open(str(archive_path), "w:gz") as tar:
                     tar.add(str(oldest), arcname=oldest.name)
+                    if checkpoint_incomplete:
+                        for suffix in ("-wal", "-shm"):
+                            sidecar = Path(str(oldest) + suffix)
+                            if sidecar.exists():
+                                tar.add(str(sidecar), arcname=oldest.name + suffix)
                     if artifact_dir.is_dir():
                         tar.add(str(artifact_dir), arcname=f"artifacts/{session_id}")
             except OSError:

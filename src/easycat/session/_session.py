@@ -58,7 +58,12 @@ from easycat.llm_output_processing import (
 from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.providers import PlaybackAckTransport
 from easycat.runtime.artifacts import SnapshotArtifactStore
-from easycat.runtime.journal import ExecutionJournal, JournalView, ReadonlySqliteJournal
+from easycat.runtime.journal import (
+    ExecutionJournal,
+    InMemoryRingBuffer,
+    JournalView,
+    ReadonlySqliteJournal,
+)
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._interruption import estimate_and_notify_interruption
 from easycat.session._streaming import consume_agent_stream
@@ -1027,6 +1032,8 @@ class Session:
         db_path = getattr(journal, "db_path", None)
         if db_path is not None:
             return ReadonlySqliteJournal(db_path, degraded=journal.degraded)
+        if isinstance(journal, InMemoryRingBuffer):
+            return journal.snapshot()
         return journal
 
     def _preserve_artifacts_after_destroy(self, artifact_store: Any) -> Any:

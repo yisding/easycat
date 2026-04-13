@@ -178,6 +178,12 @@ class RunBundle:
                         f"Invalid inline artifact ref: {ref!r}",
                         reason_code="INVALID_REF",
                     )
+                estimated_size = (len(b64) * 3) // 4
+                if total_size + estimated_size > 500_000_000:
+                    raise BundleValidationError(
+                        "Total artifact size exceeds 500MB cap",
+                        reason_code="SIZE_EXCEEDED",
+                    )
                 data = base64.b64decode(b64)
                 total_size += len(data)
                 if total_size > 500_000_000:
