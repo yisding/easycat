@@ -1417,6 +1417,7 @@ class Session:
                                     "transcript_text": turn.transcript_text,
                                 },
                             )
+                        await self._emit(STTFinal(text=stt_event.text, track=stt_event.track))
                         if self._stt_pending_segment_futures:
                             future = self._stt_pending_segment_futures.pop(0)
                             if not future.done():
@@ -1504,6 +1505,11 @@ class Session:
         token = turn.cancel_token if turn else None
         self._cancel_scheduled_stt_segment_commit()
 
+        # Stop forwarding audio to STT immediately so trailing frames
+        # from continuous transports don't leak into the transcript.
+        stt_needs_close = self._stt_active
+        self._stt_active = False
+
         if self._stt_segment_commit_task and not self._stt_segment_commit_task.done():
             await self._stt_segment_commit_task
 
@@ -1512,13 +1518,12 @@ class Session:
                 self._reset_turn_state()
             return
 
-        if self._stt_active:
+        if stt_needs_close:
             if turn is not None and turn.stt_has_uncommitted_audio:
                 turn.stt_has_uncommitted_audio = False
                 future = asyncio.get_running_loop().create_future()
                 self._stt_pending_segment_futures.append(future)
             await self.stt.end_stream()
-            self._stt_active = False
 
         if not await self._await_pending_stt_segments():
             if self._turn is turn:
