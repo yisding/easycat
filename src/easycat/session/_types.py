@@ -91,8 +91,8 @@ class SessionConfig:
     audio_gate: Callable[[], bool] | None = None
 
     # Pipeline flags
-    enable_noise_reduction: bool = True
-    enable_echo_cancellation: bool = True
+    enable_noise_reduction: bool = False
+    enable_echo_cancellation: bool = False
     enable_vad: bool = True
     auto_turn_from_stt_final: bool = False
     strip_markdown: bool = False

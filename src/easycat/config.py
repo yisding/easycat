@@ -166,13 +166,8 @@ class EasyCatConfig:
     vad: VADConfig = field(default_factory=VADConfig)
     noise_reduction: NoiseReducerConfig = field(default_factory=NoiseReducerConfig)
     echo_cancellation: EchoCancellationConfig | None = None
-    # Pipeline-stage enable flags. Defaults match the "batteries-included"
-    # behaviour where the pipeline refuses to silently degrade if a
-    # requested non-noop provider falls back to passthrough. Set to
-    # ``False`` when passthrough is an acceptable outcome (e.g. headless
-    # test environments without RNNoise/Krisp installed).
-    enable_noise_reduction: bool = True
-    enable_echo_cancellation: bool = True
+    enable_noise_reduction: bool = False
+    enable_echo_cancellation: bool = False
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
     smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
