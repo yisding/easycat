@@ -277,6 +277,7 @@ class Session:
         self._active_text_turn: asyncio.Task[str] | None = None
         self._text_turn_cancel_token: CancelToken | None = None
         self._text_turn_accumulated: str = ""
+        self._text_turn_lock = asyncio.Lock()
         self._turn_manager.bind_session(self.session_id)
 
         # Backfill journal/session-id into bridge adapter shims so that the
@@ -502,7 +503,7 @@ class Session:
                 journal.append(
                     kind=kind,
                     name=name,
-                    session_id=session.session_id,
+                    session_id=getattr(event, "session_id", None) or session.session_id,
                     turn_id=getattr(event, "turn_id", None),
                     data=data or None,
                     error=error,
@@ -2071,39 +2072,40 @@ class Session:
         if self._closed:
             raise RuntimeError("Session has been stopped")
 
-        # Cancel any in-flight text turn so the new message interrupts it,
-        # routing through the same interruption path as voice barge-in.
-        prev = self._active_text_turn
-        if prev is not None and not prev.done():
-            delivered = self._text_turn_accumulated
-            if self._text_turn_cancel_token:
-                self._text_turn_cancel_token.cancel()
-            prev.cancel()
-            try:
-                await prev
-            except (asyncio.CancelledError, Exception):
-                pass
-            if hasattr(self.agent, "notify_interruption"):
-                notified = True
+        # Serialize cancel-and-launch so concurrent send_text() calls
+        # cannot both observe the same prev task and launch parallel turns.
+        async with self._text_turn_lock:
+            prev = self._active_text_turn
+            if prev is not None and not prev.done():
+                delivered = self._text_turn_accumulated
+                if self._text_turn_cancel_token:
+                    self._text_turn_cancel_token.cancel()
+                prev.cancel()
                 try:
-                    self.agent.notify_interruption(delivered, mode=self._interruption_mode)
-                except Exception:
-                    notified = False
-                    logger.debug(
-                        "Failed to notify agent of text-turn interruption",
-                        exc_info=True,
+                    await prev
+                except (asyncio.CancelledError, Exception):
+                    pass
+                if hasattr(self.agent, "notify_interruption"):
+                    notified = True
+                    try:
+                        self.agent.notify_interruption(delivered, mode=self._interruption_mode)
+                    except Exception:
+                        notified = False
+                        logger.debug(
+                            "Failed to notify agent of text-turn interruption",
+                            exc_info=True,
+                        )
+                    self._record_interruption_notification(
+                        source="text_session",
+                        mode=self._interruption_mode,
+                        text_spoken=delivered,
+                        notified=notified,
                     )
-                self._record_interruption_notification(
-                    source="text_session",
-                    mode=self._interruption_mode,
-                    text_spoken=delivered,
-                    notified=notified,
-                )
 
-        token = CancelToken()
-        self._text_turn_cancel_token = token
-        task = asyncio.ensure_future(self._execute_text_turn(text, token))
-        self._active_text_turn = task
+            token = CancelToken()
+            self._text_turn_cancel_token = token
+            task = asyncio.ensure_future(self._execute_text_turn(text, token))
+            self._active_text_turn = task
         return await task
 
     async def _execute_text_turn(self, text: str, cancel_token: CancelToken | None = None) -> str:
