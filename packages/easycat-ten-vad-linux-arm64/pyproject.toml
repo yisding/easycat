@@ -1,0 +1,20 @@
+[project]
+name = "easycat-ten-vad-linux-arm64"
+version = "0.1.0"
+description = "Linux ARM64 TEN VAD runtime assets for EasyCat"
+readme = "README.md"
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+easycat_ten_vad_linux_arm64 = ["libten_vad.so", "onnx_model/ten-vad.onnx"]
