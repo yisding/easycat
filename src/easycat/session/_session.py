@@ -137,6 +137,10 @@ class Session:
                 noops.append("tts")
             if cfg.enable_vad and isinstance(self.vad, NoopVAD):
                 noops.append("vad")
+            if cfg.enable_noise_reduction and isinstance(
+                self.noise_reducer, PassthroughNoiseReducer
+            ):
+                noops.append("noise_reducer")
             if isinstance(self.transport, NoopTransport):
                 noops.append("transport")
             if isinstance(self.agent, NoopAgent):
