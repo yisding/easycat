@@ -202,13 +202,18 @@ _cwd_lock = threading.Lock()
 
 @contextmanager
 def _temporary_cwd(path: Path) -> Iterator[None]:
+    # The bundled TEN VAD library hardcodes "onnx_model/ten-vad.onnx" as a
+    # relative path, so os.chdir() is unavoidable.  We use an fd-based restore
+    # to guarantee we return to the original directory even if another thread
+    # changes cwd concurrently, and hold _cwd_lock to serialize our own callers.
     with _cwd_lock:
-        original = Path.cwd()
-        os.chdir(path)
+        orig_fd = os.open(".", os.O_RDONLY)
         try:
+            os.chdir(path)
             yield
         finally:
-            os.chdir(original)
+            os.fchdir(orig_fd)
+            os.close(orig_fd)
 
 
 class _SileroOnnxModel:
