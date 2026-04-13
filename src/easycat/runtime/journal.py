@@ -147,11 +147,19 @@ class JournalView:
         if from_sequence is not None:
             cursor = from_sequence
         else:
+            # Read latest_sequence and compute cursor atomically — the
+            # property getter holds the backend lock, so no record can
+            # slip in between read and +1.
             cursor = self._journal.latest_sequence + 1
         while True:
+            # Fetch records from cursor onward.  read() is lock-protected
+            # in every backend, so we won't miss records that were appended
+            # between the previous iteration's yield and this call.
             records = self._journal.read(start=cursor)
             for rec in records:
                 yield rec
+                # Advance cursor past the yielded record so we never
+                # re-deliver it, even if the caller suspends mid-batch.
                 cursor = rec.sequence + 1
             await asyncio.sleep(poll_interval)
 
@@ -570,42 +578,45 @@ class SqliteJournal:
                 # Copy rather than move so we can keep writing to the current path.
                 import shutil
 
-                try:
-                    # Checkpoint WAL into the main database before copying.
-                    # With wal_autocheckpoint=0, recent records may only
-                    # exist in the WAL file; a bare file copy would lose them.
+                # Hold the lock across the close→copy→reopen sequence so no
+                # concurrent append() can use the connection while it's closed.
+                with self._lock:
                     try:
-                        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                    except sqlite3.OperationalError:
-                        pass  # Best-effort; copy WAL files as fallback below.
-                    self._conn.close()
-                    shutil.copy2(str(self._db_path), str(crash_path))
-                    # Also copy WAL/SHM if they still exist (checkpoint may
-                    # have been incomplete due to concurrent readers).
-                    for suffix in ("-wal", "-shm"):
-                        wal_src = Path(str(self._db_path) + suffix)
-                        if wal_src.exists():
-                            shutil.copy2(str(wal_src), str(crash_path) + suffix)
-                    self._conn = sqlite3.connect(
-                        str(self._db_path),
-                        check_same_thread=False,
-                        isolation_level=None,
-                    )
-                    self._conn.execute("PRAGMA journal_mode=WAL")
-                    self._conn.execute("PRAGMA synchronous=NORMAL")
-                    self._conn.execute("PRAGMA wal_autocheckpoint=0")
-                    logger.info(
-                        "Recovered unclean journal for session %s (%d records) → %s",
-                        session_id,
-                        prior_count,
-                        crash_path,
-                    )
-                except OSError:
-                    logger.warning(
-                        "Failed to promote crash dump for session %s",
-                        session_id,
-                        exc_info=True,
-                    )
+                        # Checkpoint WAL into the main database before copying.
+                        # With wal_autocheckpoint=0, recent records may only
+                        # exist in the WAL file; a bare file copy would lose them.
+                        try:
+                            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        except sqlite3.OperationalError:
+                            pass  # Best-effort; copy WAL files as fallback below.
+                        self._conn.close()
+                        shutil.copy2(str(self._db_path), str(crash_path))
+                        # Also copy WAL/SHM if they still exist (checkpoint may
+                        # have been incomplete due to concurrent readers).
+                        for suffix in ("-wal", "-shm"):
+                            wal_src = Path(str(self._db_path) + suffix)
+                            if wal_src.exists():
+                                shutil.copy2(str(wal_src), str(crash_path) + suffix)
+                        self._conn = sqlite3.connect(
+                            str(self._db_path),
+                            check_same_thread=False,
+                            isolation_level=None,
+                        )
+                        self._conn.execute("PRAGMA journal_mode=WAL")
+                        self._conn.execute("PRAGMA synchronous=NORMAL")
+                        self._conn.execute("PRAGMA wal_autocheckpoint=0")
+                        logger.info(
+                            "Recovered unclean journal for session %s (%d records) → %s",
+                            session_id,
+                            prior_count,
+                            crash_path,
+                        )
+                    except OSError:
+                        logger.warning(
+                            "Failed to promote crash dump for session %s",
+                            session_id,
+                            exc_info=True,
+                        )
 
         # Clear the clean_close marker (we're starting a new session).
         self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
@@ -745,7 +756,12 @@ class SqliteJournal:
                 pass
 
     def finalize(self) -> None:
-        """Write clean_close marker and run retention without closing the connection."""
+        """Write clean_close marker and run retention without closing the connection.
+
+        The connection remains open and a new transaction is started so that
+        subsequent ``append()`` calls (e.g. post-stop debug events) are still
+        wrapped in a transaction.
+        """
         if self._closed:
             return
         with self._lock:
@@ -764,6 +780,11 @@ class SqliteJournal:
                 self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 logger.debug("WAL checkpoint skipped on finalize", exc_info=True)
+            # Restart a transaction so subsequent appends are batched.
+            try:
+                self._conn.execute("BEGIN")
+            except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                pass
 
     @property
     def latest_sequence(self) -> int:

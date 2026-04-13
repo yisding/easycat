@@ -104,19 +104,21 @@ def export_debug_bundle(
 
     # Write zip atomically
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = None
+    tmp_name: str | None = None
     try:
         tmp = tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False)
-        with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+        tmp_name = tmp.name
+        tmp.close()  # Release the fd; ZipFile will open the path itself.
+        with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("manifest.json", json.dumps(manifest_dict, indent=2))
             zf.writestr("journal.ndjson", journal_ndjson)
             if not inline_artifacts:
                 for ref, data in artifact_data.items():
                     zf.writestr(f"artifacts/{ref}.bin", data)
-        Path(tmp.name).rename(path)
+        Path(tmp_name).rename(path)
     except Exception:
-        if tmp and Path(tmp.name).exists():
-            Path(tmp.name).unlink()
+        if tmp_name and Path(tmp_name).exists():
+            Path(tmp_name).unlink()
         raise
 
 

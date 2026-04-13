@@ -23,6 +23,11 @@ class VADStage:
         self._journal = journal
         self._last_snapshot = StageStateSnapshot(stage_name=self.name)
 
+    # VAD processes a single audio chunk and yields 0-2 events (speech
+    # start/stop).  Cap the collection as a safety net against a misbehaving
+    # provider that yields endlessly from a single chunk.
+    _MAX_EVENTS_PER_CHUNK: int = 64
+
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         state_before = self.snapshot_state()
         self._record(ctx, "stage_start", state_before=state_before)
@@ -30,6 +35,11 @@ class VADStage:
             events: list[Any] = []
             async for event in self._provider.process(input):
                 events.append(event)
+                if len(events) >= self._MAX_EVENTS_PER_CHUNK:
+                    logger.warning(
+                        "VAD provider yielded too many events for a single chunk; truncating"
+                    )
+                    break
             result = events
         except Exception as exc:
             self._record(ctx, "stage_error", state_before=state_before, error=str(exc))

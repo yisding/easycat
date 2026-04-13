@@ -84,6 +84,7 @@ class RemoteResponsesAPIBridge:
         self._metadata = metadata or {}
 
         self._client = httpx.AsyncClient(timeout=timeout)
+        self._client_closed = False
 
         # Conversation chaining state.
         self._last_completed_response_id: str | None = None
@@ -402,7 +403,15 @@ class RemoteResponsesAPIBridge:
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client, releasing connection pools."""
+        self._client_closed = True
         await self._client.aclose()
+
+    def __del__(self) -> None:
+        if not self._client_closed:
+            logger.warning(
+                "RemoteResponsesAPIBridge was garbage-collected without aclose(). "
+                "Call aclose() explicitly or use Session.stop() to avoid connection leaks."
+            )
 
     def reset(self) -> None:
         self._last_completed_response_id = None

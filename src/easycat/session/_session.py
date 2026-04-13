@@ -245,8 +245,11 @@ class Session:
         self._tts_playback_suppressed = False
         self._auto_turn_speech_frames = 0
 
-        # Per-turn state — created fresh at each turn start
+        # Per-turn state — created fresh at each turn start.
+        # _turn_generation is a monotonic counter that increases each time a
+        # new turn starts, used to detect stale callbacks from previous turns.
         self._turn: TurnContext | None = None
+        self._turn_generation: int = 0
         self._replay_chunks_pending: int = 0
         self._playback_mark_bytes_interval: int = 4_000  # throttle: ~125ms at 16kHz/16-bit
         self._playback_mark_seq: int = 0  # session-scoped so mark names never collide across turns
@@ -727,11 +730,14 @@ class Session:
             self._stop_helpers()
             if not self._outbound_queue_external:
                 self._outbound_queue.close()
+            # Cancel the outbound drain task BEFORE disconnecting the
+            # transport — otherwise the task may hang on send_audio()
+            # with a disconnected transport.
             if self._outbound_task and not self._outbound_task.done():
                 self._outbound_task.cancel()
                 try:
                     await self._outbound_task
-                except asyncio.CancelledError:
+                except (asyncio.CancelledError, Exception):
                     pass
             await self.transport.disconnect()
             await self._turn_manager.shutdown()
@@ -1020,8 +1026,15 @@ class Session:
         self._resolve_pending_stt_segment_futures("")
         self._stt_final_future = None
 
+        # Cancel the previous turn's token so any in-flight agent/TTS work
+        # notices the cancellation before we overwrite self._turn.
+        prev = self._turn
+        if prev and not prev.cancel_token.is_cancelled:
+            prev.cancel_token.cancel()
+
         cancel_token = self._turn_manager.cancel_token or CancelToken()
         self._turn = TurnContext(turn_id=event.turn_id, cancel_token=cancel_token)
+        self._turn_generation = self._turn.generation
         self._auto_turn_speech_frames = 0
         self._tts_playback_suppressed = False
 
@@ -1055,11 +1068,14 @@ class Session:
         self._cancel_scheduled_stt_segment_commit()
         if self._current_tts_task and not self._current_tts_task.done():
             self._current_tts_task.cancel()
-        self._current_tts_task = asyncio.create_task(self._on_turn_ended(event))
+        gen = self._turn_generation
+        self._current_tts_task = asyncio.create_task(self._on_turn_ended(event, gen))
         self._current_tts_task.add_done_callback(self._log_task_exception)
 
-    async def _on_turn_ended(self, event: TurnEnded) -> None:
+    async def _on_turn_ended(self, event: TurnEnded, generation: int) -> None:
         """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
+        if self._turn_generation != generation:
+            return
         if self._turn and self._turn.cancel_token.is_cancelled:
             return
         if self._turn_manager.state != TurnManagerState.PROCESSING:
@@ -1429,6 +1445,7 @@ class Session:
         """
         turn = self._turn
         assert turn is not None
+        turn_gen = self._turn_generation
         tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
         tts_playback_started = False
         tts_chunks: list[tuple[str, int, bool]] = []
@@ -1505,7 +1522,7 @@ class Session:
                     # marks for the tail of this turn's audio.
                     await self._wait_outbound_drain()
                 # Only clear if a new turn hasn't started during the drain.
-                if self._turn is turn:
+                if self._turn is turn and self._turn_generation == turn_gen:
                     self._turn = None
             elif started and not tts_playback_started:
                 if gated:
@@ -1558,6 +1575,10 @@ class Session:
             raise
         except Exception as exc:
             caught_exc = exc
+            # AgentTimeoutError is already logged and emitted by with_agent_timeout.
+            if not isinstance(exc, AgentTimeoutError):
+                logger.exception("Streaming agent error")
+                await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
             if not agent_task.done():
                 agent_task.cancel()
             if not tts_task.done():
@@ -1603,7 +1624,7 @@ class Session:
             return
 
         # If a newer turn started (e.g. barge-in), avoid clobbering its state.
-        if self._turn is turn:
+        if self._turn is turn and self._turn_generation == turn_gen:
             if self._turn_manager.state != TurnManagerState.IDLE:
                 self._reset_turn_state()
 
