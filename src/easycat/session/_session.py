@@ -41,6 +41,8 @@ from easycat.events import (
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
+    TTSAudio,
+    TTSMarkers,
     TurnEnded,
     TurnStarted,
     VADStartSpeaking,
@@ -322,6 +324,138 @@ class Session:
     async def _emit(self, event: Any) -> None:
         await self.event_bus.emit(self._with_correlation(event))
 
+    def _journal_turn_id(self, turn_id: str | None = None) -> str | None:
+        if turn_id is not None:
+            return turn_id
+        if self._turn is not None:
+            return self._turn.id
+        return None
+
+    def _store_journal_artifact(
+        self,
+        payload: bytes,
+        *,
+        artifact_class: str = "debug_verbose",
+    ) -> str | None:
+        if self._artifact_store is None or not payload:
+            return None
+        ref = self._artifact_store.put(payload, artifact_class=artifact_class)
+        return ref or None
+
+    def _append_journal_record(
+        self,
+        *,
+        name: str,
+        kind: JournalRecordKind = JournalRecordKind.EVENT,
+        turn_id: str | None = None,
+        data: dict[str, Any] | None = None,
+        input_bytes: bytes | None = None,
+        output_bytes: bytes | None = None,
+        input_artifact_class: str = "debug_verbose",
+        output_artifact_class: str = "debug_verbose",
+    ) -> None:
+        if self._journal is None:
+            return
+        input_ref = (
+            self._store_journal_artifact(input_bytes, artifact_class=input_artifact_class)
+            if input_bytes is not None
+            else None
+        )
+        output_ref = (
+            self._store_journal_artifact(output_bytes, artifact_class=output_artifact_class)
+            if output_bytes is not None
+            else None
+        )
+        self._journal.append(
+            kind=kind,
+            name=name,
+            session_id=self.session_id,
+            turn_id=self._journal_turn_id(turn_id),
+            data=data,
+            input_ref=input_ref,
+            output_ref=output_ref,
+        )
+
+    def _record_markdown_strip(
+        self,
+        *,
+        phase: str,
+        original_text: str,
+        stripped_text: str,
+        turn_id: str | None = None,
+    ) -> None:
+        """Append a journal record when final-response markdown stripping runs."""
+        self._append_journal_record(
+            name="markdown_stripped",
+            turn_id=turn_id,
+            data={
+                "phase": phase,
+                "changed": original_text != stripped_text,
+                "original_text": original_text,
+                "stripped_text": stripped_text,
+            },
+        )
+
+    def _record_tts_payload_prepared(
+        self,
+        *,
+        original_text: str,
+        original_format: str,
+        prepared_payload: TTSInput,
+        is_streaming: bool,
+        is_final: bool,
+        turn_id: str | None = None,
+    ) -> None:
+        self._append_journal_record(
+            name="tts_payload_prepared",
+            turn_id=turn_id,
+            data={
+                "is_streaming": is_streaming,
+                "is_final": is_final,
+                "changed": (
+                    original_text != prepared_payload.text
+                    or original_format != prepared_payload.format
+                ),
+                "original_text": original_text,
+                "original_format": original_format,
+                "prepared_text": prepared_payload.text,
+                "prepared_format": prepared_payload.format,
+                "processors": [type(processor).__name__ for processor in self._output_processors],
+                "ssml_downgraded": (
+                    original_format == "ssml" and prepared_payload.format == "plain"
+                ),
+            },
+        )
+
+    def _record_interruption_notification(
+        self,
+        *,
+        source: str,
+        mode: str,
+        text_spoken: str,
+        notified: bool,
+        turn_id: str | None = None,
+    ) -> None:
+        replacement_text = None
+        if mode == "truncate":
+            replacement_fn = getattr(self.agent, "interruption_replacement_text", None)
+            if callable(replacement_fn):
+                try:
+                    replacement_text = replacement_fn(text_spoken)
+                except Exception:
+                    logger.debug("Failed to compute interruption replacement text", exc_info=True)
+        self._append_journal_record(
+            name="assistant_interruption_notified",
+            turn_id=turn_id,
+            data={
+                "source": source,
+                "mode": mode,
+                "text_spoken": text_spoken,
+                "notified": notified,
+                "replacement_text": replacement_text,
+            },
+        )
+
     def _subscribe_journal_sink(self, journal: ExecutionJournal) -> None:
         """Subscribe event bus handlers that write session events to the journal."""
         from easycat.runtime.records import ErrorInfo
@@ -364,6 +498,30 @@ class Session:
 
             return _handler
 
+        def _handle_tts_audio(event: TTSAudio) -> None:
+            self._append_journal_record(
+                name="tts_audio",
+                turn_id=event.turn_id,
+                data={
+                    "audio_bytes": len(event.chunk.data),
+                    "duration_ms": event.chunk.duration_ms,
+                    "sample_rate": event.chunk.format.sample_rate,
+                    "channels": event.chunk.format.channels,
+                    "sample_width": event.chunk.format.sample_width,
+                    "encoding": event.chunk.format.encoding,
+                    "bypass_gate": event.bypass_gate,
+                },
+                output_bytes=event.chunk.data,
+                output_artifact_class="replay_critical",
+            )
+
+        def _handle_tts_markers(event: TTSMarkers) -> None:
+            self._append_journal_record(
+                name="tts_markers",
+                turn_id=event.turn_id,
+                data={"markers": event.markers},
+            )
+
         _sub = self.event_bus.subscribe
         _sub(TurnStarted, _make(EVT, "turn_started"))
         _sub(TurnEnded, _make(EVT, "turn_ended"))
@@ -374,6 +532,8 @@ class Session:
         _sub(AgentRequestStarted, _make(EVT, "agent_request_started"))
         _sub(AgentDelta, _make(EVT, "agent_delta"))
         _sub(AgentFinal, _make(EVT, "agent_final"))
+        _sub(TTSAudio, _handle_tts_audio)
+        _sub(TTSMarkers, _handle_tts_markers)
         _sub(BotStartedSpeaking, _make(EVT, "bot_started_speaking"))
         _sub(BotStoppedSpeaking, _make(EVT, "bot_stopped_speaking"))
         _sub(Interruption, _make(CTL, "interruption"))
@@ -1152,6 +1312,15 @@ class Session:
         ):
             return
 
+        next_segment_index = len(turn.stt_segments) + 1
+        self._append_journal_record(
+            name="stt_segment_commit_requested",
+            turn_id=turn.id,
+            data={
+                "segment_index": next_segment_index,
+                "transcript_text": turn.transcript_text,
+            },
+        )
         turn.stt_has_uncommitted_audio = False
         future = asyncio.get_running_loop().create_future()
         self._stt_pending_segment_futures.append(future)
@@ -1163,6 +1332,15 @@ class Session:
         except Exception:
             logger.debug("STT segment commit failed", exc_info=True)
         finally:
+            self._append_journal_record(
+                name="stt_segment_commit_result",
+                turn_id=turn.id,
+                data={
+                    "segment_index": next_segment_index,
+                    "committed": committed,
+                    "transcript_text": turn.transcript_text,
+                },
+            )
             if not committed:
                 turn.stt_has_uncommitted_audio = True
                 if future in self._stt_pending_segment_futures:
@@ -1212,7 +1390,18 @@ class Session:
                         await self._emit(STTPartial(text=stt_event.text, track=stt_event.track))
                     elif stt_event.type == STTEventType.FINAL:
                         if turn:
+                            turn.stt_has_uncommitted_audio = False
                             turn.append_stt_segment(stt_event.text, track=stt_event.track)
+                            self._append_journal_record(
+                                name="stt_segment_final",
+                                turn_id=turn.id,
+                                data={
+                                    "segment_index": len(turn.stt_segments),
+                                    "text": stt_event.text,
+                                    "track": stt_event.track,
+                                    "transcript_text": turn.transcript_text,
+                                },
+                            )
                         if self._stt_pending_segment_futures:
                             future = self._stt_pending_segment_futures.pop(0)
                             if not future.done():
@@ -1247,14 +1436,11 @@ class Session:
                     chunk = await self.echo_canceller.process(chunk)
 
                 # Stage 3: VAD (optional)
-                saw_vad_stop = False
                 if self._enable_vad:
                     async for vad_event in self.vad.process(chunk):
                         vad_event = self._with_correlation(vad_event)
                         await self._emit(vad_event)
                         await self._turn_manager.on_vad_event(vad_event)
-                        if isinstance(vad_event, VADStopSpeaking):
-                            saw_vad_stop = True
 
                 # TurnManager always sees raw audio frames for pre-roll buffering
                 self._turn_manager.on_audio_frame(chunk)
@@ -1275,11 +1461,7 @@ class Session:
                     else:
                         self._auto_turn_speech_frames = 0
 
-                if (
-                    (self._turn_manager.state == TurnManagerState.USER_SPEAKING or saw_vad_stop)
-                    and self._stt_active
-                    and not started_turn_from_chunk
-                ):
+                if self._stt_active and not started_turn_from_chunk:
                     if self._turn is not None:
                         self._turn.stt_has_uncommitted_audio = True
                     await self.stt.send_audio(chunk)
@@ -1416,8 +1598,15 @@ class Session:
             return
 
         if self._strip_markdown:
+            original_response = agent_response
             stripped = strip_markdown(agent_response, normalize_code_spans=True)
-            if stripped != agent_response:
+            self._record_markdown_strip(
+                phase="basic_final",
+                original_text=original_response,
+                stripped_text=stripped,
+                turn_id=turn.id if turn is not None else None,
+            )
+            if stripped != original_response:
                 agent_response = stripped
                 _replace_last_assistant_text(self.agent, stripped)
 
@@ -1590,8 +1779,15 @@ class Session:
         stream_succeeded = agent_error is None and not (token and token.is_cancelled)
 
         if self._strip_markdown and accumulated_text and stream_succeeded:
+            original_text = accumulated_text
             stripped = strip_markdown(accumulated_text, normalize_code_spans=True)
-            if stripped != accumulated_text:
+            self._record_markdown_strip(
+                phase="streaming_final",
+                original_text=original_text,
+                stripped_text=stripped,
+                turn_id=turn.id,
+            )
+            if stripped != original_text:
                 accumulated_text = stripped
                 _replace_last_assistant_text(self.agent, stripped)
 
@@ -1606,7 +1802,7 @@ class Session:
             pass
 
         # Estimate what the user heard and notify the agent
-        estimate_and_notify_interruption(
+        interruption_notification = estimate_and_notify_interruption(
             self.agent,
             token,
             turn,
@@ -1618,6 +1814,14 @@ class Session:
             ack_stale_ms=self._interruption_ack_stale_ms,
             ack_tail_cap_ms=self._interruption_ack_tail_cap_ms,
         )
+        if interruption_notification is not None:
+            self._record_interruption_notification(
+                source="streaming_turn",
+                mode=interruption_notification.mode,
+                text_spoken=interruption_notification.text_spoken,
+                notified=interruption_notification.notified,
+                turn_id=turn.id,
+            )
 
         if tts_action_outcome.stop_session:
             await self.stop()
@@ -1629,7 +1833,8 @@ class Session:
                 self._reset_turn_state()
 
     def _prepare_tts_payload(self, text: str, *, is_streaming: bool, is_final: bool) -> TTSInput:
-        payload = TTSInput(text=text, format="plain")
+        original_payload = TTSInput(text=text, format="plain")
+        payload = original_payload
         payload = apply_output_processors(
             payload,
             self._output_processors,
@@ -1637,7 +1842,14 @@ class Session:
             is_streaming=is_streaming,
         )
         if payload.format == "ssml" and not getattr(self.tts, "supports_ssml", False):
-            return TTSInput(text=strip_ssml_tags(payload.text), format="plain")
+            payload = TTSInput(text=strip_ssml_tags(payload.text), format="plain")
+        self._record_tts_payload_prepared(
+            original_text=original_payload.text,
+            original_format=original_payload.format,
+            prepared_payload=payload,
+            is_streaming=is_streaming,
+            is_final=is_final,
+        )
         return payload
 
     # ── TTS synthesis helper ───────────────────────────────────
@@ -1853,13 +2065,21 @@ class Session:
             except (asyncio.CancelledError, Exception):
                 pass
             if hasattr(self.agent, "notify_interruption"):
+                notified = True
                 try:
                     self.agent.notify_interruption(delivered, mode=self._interruption_mode)
                 except Exception:
+                    notified = False
                     logger.debug(
                         "Failed to notify agent of text-turn interruption",
                         exc_info=True,
                     )
+                self._record_interruption_notification(
+                    source="text_session",
+                    mode=self._interruption_mode,
+                    text_spoken=delivered,
+                    notified=notified,
+                )
 
         token = CancelToken()
         self._text_turn_cancel_token = token
