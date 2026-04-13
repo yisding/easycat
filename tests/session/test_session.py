@@ -137,6 +137,48 @@ class FakeSTT:
             yield event
 
 
+class SegmentingSTT:
+    """STT that supports early segment commits within a single stream."""
+
+    def __init__(self, committed_segments: list[str], final_segment: str = "") -> None:
+        self._committed_segments = list(committed_segments)
+        self._final_segment = final_segment
+        self._queue: asyncio.Queue[STTEvent | None] = asyncio.Queue()
+        self.commit_calls = 0
+        self.start_calls = 0
+        self.end_calls = 0
+
+    async def start_stream(self) -> None:
+        self.start_calls += 1
+        self._queue = asyncio.Queue()
+
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        pass
+
+    async def commit_segment(self) -> bool:
+        if not self._committed_segments:
+            return False
+        self.commit_calls += 1
+        await self._queue.put(
+            STTEvent(type=STTEventType.FINAL, text=self._committed_segments.pop(0))
+        )
+        return True
+
+    async def end_stream(self) -> None:
+        self.end_calls += 1
+        if self._final_segment:
+            await self._queue.put(STTEvent(type=STTEventType.FINAL, text=self._final_segment))
+            self._final_segment = ""
+        await self._queue.put(None)
+
+    async def events(self) -> AsyncIterator[STTEvent]:
+        while True:
+            event = await self._queue.get()
+            if event is None:
+                break
+            yield event
+
+
 class AutoTurnSTT(FakeSTT):
     def __init__(self, transcript: str = "hello flux", *, final_after_chunks: int = 3) -> None:
         super().__init__(transcript=transcript)
@@ -684,6 +726,54 @@ async def test_handle_end_of_speech_clears_turn_id_on_empty_transcript():
 
     assert session._turn is None
     assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_pause_commit_keeps_turn_open_but_collects_segment_final():
+    stt = SegmentingSTT(["hello"])
+    session = Session(
+        _full_config(
+            stt=stt,
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=1000,
+                stt_segment_silence_ms=1,
+            ),
+        )
+    )
+    session._turn = TurnContext("turn-1", CancelToken())
+    session._turn.stt_has_uncommitted_audio = True
+    session._stt_active = True
+    session._turn_manager._state = TurnManagerState.USER_PAUSED
+    session._start_stt_event_task()
+
+    session._schedule_stt_segment_commit(VADStopSpeaking())
+    await asyncio.sleep(0.05)
+
+    assert stt.commit_calls == 1
+    assert session._turn is not None
+    assert session._turn_manager.state == TurnManagerState.USER_PAUSED
+    assert session._turn.transcript_text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_handle_end_of_speech_emits_single_turn_level_stt_final_from_segments():
+    session = Session(_full_config())
+    session._turn = TurnContext("turn-stale", CancelToken())
+    session._turn.append_stt_segment("hello")
+    session._turn.append_stt_segment("world")
+
+    timeline: list[Event] = []
+    session.event_bus.subscribe(STTFinal, lambda e: timeline.append(e))
+    session.event_bus.subscribe(AgentFinal, lambda e: timeline.append(e))
+
+    await session._handle_end_of_speech()
+
+    stt_finals = [e for e in timeline if isinstance(e, STTFinal)]
+    assert len(stt_finals) == 1
+    assert stt_finals[0].text == "hello world"
+    agent_finals = [e for e in timeline if isinstance(e, AgentFinal)]
+    assert len(agent_finals) == 1
+    assert agent_finals[0].text == "HELLO WORLD"
 
 
 @pytest.mark.asyncio

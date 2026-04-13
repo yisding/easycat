@@ -260,6 +260,45 @@ async def test_openai_realtime_sends_commit_on_end():
         if isinstance(m, str) and "input_audio_buffer.commit" in m
     ]
     assert len(commit_msgs) == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_commit_segment_keeps_stream_open_for_later_audio():
+    factory = _MockWSFactory(
+        [
+            _make_transcription_completed("hello"),
+            _make_transcription_completed("world"),
+        ]
+    )
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    stt = OpenAIRealtimeSTT(config)
+
+    collected = []
+    await stt.start_stream()
+
+    async def _collect() -> None:
+        async for event in stt.events():
+            collected.append(event)
+
+    collect_task = asyncio.create_task(_collect())
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100))[0]
+
+    await stt.send_audio(chunk)
+    assert await stt.commit_segment() is True
+    await asyncio.sleep(0)
+    await stt.send_audio(chunk)
+    await stt.end_stream()
+    await collect_task
+
+    finals = [event.text for event in collected if event.type == STTEventType.FINAL]
+    assert finals == ["hello", "world"]
+
+    commit_msgs = [
+        json.loads(m)
+        for m in factory.connection.sent
+        if isinstance(m, str) and "input_audio_buffer.commit" in m
+    ]
+    assert len(commit_msgs) == 2
     assert commit_msgs[0]["type"] == "input_audio_buffer.commit"
 
 

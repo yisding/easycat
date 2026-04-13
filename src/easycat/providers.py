@@ -37,6 +37,14 @@ class STTProvider(Protocol):
         """Send an audio chunk to the active STT stream."""
         ...
 
+    async def commit_segment(self) -> bool:
+        """Finalize the current STT segment without ending the stream.
+
+        Returns ``True`` when the provider accepted a segment commit request.
+        Providers that do not support segmented commits should return ``False``.
+        """
+        ...
+
     async def end_stream(self) -> None:
         """Signal that no more audio will be sent for the current stream."""
         ...

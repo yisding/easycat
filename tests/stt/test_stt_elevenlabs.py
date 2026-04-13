@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock
 
@@ -145,9 +146,10 @@ async def test_elevenlabs_realtime_connects_with_query_params():
     stt, ws, connect_meta = _make_el_stt_realtime([])
 
     await stt.start_stream()
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+    await stt.send_audio(chunk)
     await stt.end_stream()
 
-    assert ws.sent
     url = connect_meta["url"]
     assert "/v1/speech-to-text/realtime?" in url
     assert "model_id=scribe_v2_realtime" in url
@@ -181,6 +183,8 @@ async def test_elevenlabs_realtime_sends_stop():
     stt, ws, _ = _make_el_stt_realtime([])
 
     await stt.start_stream()
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+    await stt.send_audio(chunk)
     await stt.end_stream()
 
     json_sent = [json.loads(s) for s in ws.sent]
@@ -190,6 +194,42 @@ async def test_elevenlabs_realtime_sends_stop():
         if m.get("message_type") == "input_audio_chunk" and m.get("commit") is True
     ]
     assert len(stop_msgs) == 1
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_commit_segment_keeps_stream_open_for_later_audio():
+    messages = [
+        _el_transcript("hello", is_final=True),
+        _el_transcript("world", is_final=True),
+    ]
+    stt, ws, _ = _make_el_stt_realtime(messages)
+
+    collected = []
+    await stt.start_stream()
+
+    async def _collect() -> None:
+        async for event in stt.events():
+            collected.append(event)
+
+    collect_task = asyncio.create_task(_collect())
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+
+    await stt.send_audio(chunk)
+    assert await stt.commit_segment() is True
+    await stt.send_audio(chunk)
+    await stt.end_stream()
+    await collect_task
+
+    finals = [event.text for event in collected if event.type == STTEventType.FINAL]
+    assert finals == ["hello", "world"]
+
+    json_sent = [json.loads(s) for s in ws.sent]
+    commit_msgs = [
+        m
+        for m in json_sent
+        if m.get("message_type") == "input_audio_chunk" and m.get("commit") is True
+    ]
+    assert len(commit_msgs) == 2
 
 
 @pytest.mark.asyncio

@@ -71,6 +71,7 @@ class ElevenLabsSTT(STTBase):
         self._receive_task: asyncio.Task[None] | None = None
         self._close_task: asyncio.Task[None] | None = None
         self._final_received: asyncio.Event | None = None
+        self._audio_pending_commit: bool = False
 
     def _resolved_model(self) -> str:
         if self._config.model is not None:
@@ -149,7 +150,8 @@ class ElevenLabsSTT(STTBase):
         )
         await self._ws.connect()
         self._receive_task = asyncio.create_task(self._receive_loop())
-        self._final_received = asyncio.Event()
+        self._final_received = None
+        self._audio_pending_commit = False
 
     async def _send_realtime(self, chunk: AudioChunk) -> None:
         if self._ws is not None:
@@ -169,30 +171,16 @@ class ElevenLabsSTT(STTBase):
                 }
             )
             await self._ws.send(payload)
+            self._audio_pending_commit = True
+
+    async def _on_commit_segment(self) -> bool:
+        return await self._send_commit(wait_for_final=False)
 
     async def _end_realtime(self) -> None:
         ws = self._ws
         receive_task = self._receive_task
-        if ws is not None:
-            try:
-                await ws.send(
-                    json.dumps(
-                        {
-                            "message_type": "input_audio_chunk",
-                            "audio_base_64": "",
-                            "commit": True,
-                            "sample_rate": self._config.realtime_sample_rate,
-                        }
-                    )
-                )
-            except Exception:
-                logger.debug("Error sending realtime commit", exc_info=True)
-
-            if self._final_received is not None:
-                try:
-                    await asyncio.wait_for(self._final_received.wait(), timeout=5.0)
-                except TimeoutError:
-                    logger.warning("Timed out waiting for final transcript from ElevenLabs")
+        if ws is not None and self._audio_pending_commit:
+            await self._send_commit(wait_for_final=True)
 
         self._ws = None
         self._receive_task = None
@@ -200,6 +188,38 @@ class ElevenLabsSTT(STTBase):
         if ws is not None:
             self._close_task = asyncio.create_task(self._close_connection(ws, receive_task))
             self._close_task.add_done_callback(self._log_close_task_exception)
+
+    async def _send_commit(self, *, wait_for_final: bool) -> bool:
+        ws = self._ws
+        if ws is None or not self._audio_pending_commit:
+            return False
+
+        final_received = asyncio.Event()
+        self._final_received = final_received
+        try:
+            await ws.send(
+                json.dumps(
+                    {
+                        "message_type": "input_audio_chunk",
+                        "audio_base_64": "",
+                        "commit": True,
+                        "sample_rate": self._config.realtime_sample_rate,
+                    }
+                )
+            )
+        except Exception:
+            logger.debug("Error sending realtime commit", exc_info=True)
+            if self._final_received is final_received:
+                self._final_received = None
+            return False
+
+        self._audio_pending_commit = False
+        if wait_for_final:
+            try:
+                await asyncio.wait_for(final_received.wait(), timeout=5.0)
+            except TimeoutError:
+                logger.warning("Timed out waiting for final transcript from ElevenLabs")
+        return True
 
     async def _close_connection(
         self,

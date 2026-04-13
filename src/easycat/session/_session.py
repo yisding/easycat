@@ -176,7 +176,11 @@ class Session:
         )
         self.event_bus.subscribe(TurnStarted, self._on_turn_started)
         self.event_bus.subscribe(TurnEnded, self._schedule_turn_ended)
+        self.event_bus.subscribe(VADStopSpeaking, self._schedule_stt_segment_commit)
+        self.event_bus.subscribe(VADStartSpeaking, self._cancel_scheduled_stt_segment_commit)
         self.event_bus.subscribe(PlaybackMarkAck, self._on_playback_mark_ack)
+        tm_config = getattr(self._turn_manager, "_config", None)
+        self._stt_segment_silence_ms = max(0, getattr(tm_config, "stt_segment_silence_ms", 0))
 
         # Reliability/observability config
         self._timeout_config = cfg.timeout_config or self._default_timeout_config()
@@ -232,6 +236,9 @@ class Session:
         self._stt_task: asyncio.Task[None] | None = None
         self._current_tts_task: asyncio.Task[None] | None = None
         self._stt_final_future: asyncio.Future[str] | None = None
+        self._stt_pending_segment_futures: list[asyncio.Future[str]] = []
+        self._stt_pause_commit_task: asyncio.Task[None] | None = None
+        self._stt_segment_commit_task: asyncio.Task[None] | None = None
 
         # STT stream started for current turn
         self._stt_active = False
@@ -374,6 +381,12 @@ class Session:
 
     def _reset_turn_state(self) -> None:
         """Clear turn correlation state and reset the turn manager."""
+        self._cancel_scheduled_stt_segment_commit()
+        self._cancel_inflight_stt_segment_commit()
+        self._resolve_pending_stt_segment_futures("")
+        if self._stt_final_future and not self._stt_final_future.done():
+            self._stt_final_future.set_result("")
+        self._stt_final_future = None
         self._turn = None
         self._auto_turn_speech_frames = 0
         self._replay_chunks_pending = 0
@@ -1002,6 +1015,11 @@ class Session:
         if not self._is_running:
             return
 
+        self._cancel_scheduled_stt_segment_commit()
+        self._cancel_inflight_stt_segment_commit()
+        self._resolve_pending_stt_segment_futures("")
+        self._stt_final_future = None
+
         cancel_token = self._turn_manager.cancel_token or CancelToken()
         self._turn = TurnContext(turn_id=event.turn_id, cancel_token=cancel_token)
         self._auto_turn_speech_frames = 0
@@ -1021,6 +1039,8 @@ class Session:
         # Prime STT with pre-roll frames captured by TurnManager
         for chunk in self._turn_manager.turn_audio:
             await self.stt.send_audio(chunk)
+            if self._turn is not None:
+                self._turn.stt_has_uncommitted_audio = True
 
     def _stop_helpers(self) -> None:
         """Stop attached helper components that own event subscriptions/state."""
@@ -1032,6 +1052,7 @@ class Session:
 
     def _schedule_turn_ended(self, event: TurnEnded) -> None:
         """Schedule end-of-turn processing without blocking other handlers."""
+        self._cancel_scheduled_stt_segment_commit()
         if self._current_tts_task and not self._current_tts_task.done():
             self._current_tts_task.cancel()
         self._current_tts_task = asyncio.create_task(self._on_turn_ended(event))
@@ -1056,15 +1077,116 @@ class Session:
         except Exception:
             logger.exception("Background task failed")
 
+    def _cancel_scheduled_stt_segment_commit(self, _event: VADStartSpeaking | None = None) -> None:
+        task = self._stt_pause_commit_task
+        if task is not None and not task.done():
+            task.cancel()
+        self._stt_pause_commit_task = None
+
+    def _cancel_inflight_stt_segment_commit(self) -> None:
+        task = self._stt_segment_commit_task
+        if task is not None and not task.done():
+            task.cancel()
+        self._stt_segment_commit_task = None
+
+    def _resolve_pending_stt_segment_futures(self, value: str) -> None:
+        while self._stt_pending_segment_futures:
+            future = self._stt_pending_segment_futures.pop(0)
+            if not future.done():
+                future.set_result(value)
+
+    def _schedule_stt_segment_commit(self, _event: VADStopSpeaking) -> None:
+        """Finalize the current STT segment on a shorter pause than turn end."""
+        if not self._stt_active or self._turn is None or self._auto_turn_from_stt_final:
+            return
+        self._cancel_scheduled_stt_segment_commit()
+        delay_s = self._stt_segment_silence_ms / 1000.0
+        self._stt_pause_commit_task = asyncio.create_task(self._commit_stt_segment_after(delay_s))
+        self._stt_pause_commit_task.add_done_callback(self._log_task_exception)
+
+    async def _commit_stt_segment_after(self, delay_s: float) -> None:
+        if delay_s > 0:
+            await asyncio.sleep(delay_s)
+        if self._turn_manager.state != TurnManagerState.USER_PAUSED:
+            return
+        await self._start_stt_segment_commit()
+
+    async def _start_stt_segment_commit(self) -> None:
+        turn = self._turn
+        if (
+            turn is None
+            or turn.cancel_token.is_cancelled
+            or not self._stt_active
+            or not turn.stt_has_uncommitted_audio
+        ):
+            return
+        if self._stt_segment_commit_task is not None and not self._stt_segment_commit_task.done():
+            return
+        self._stt_segment_commit_task = asyncio.create_task(self._commit_stt_segment())
+        self._stt_segment_commit_task.add_done_callback(self._log_task_exception)
+
+    async def _commit_stt_segment(self) -> None:
+        turn = self._turn
+        commit_segment = getattr(self.stt, "commit_segment", None)
+        if (
+            turn is None
+            or not callable(commit_segment)
+            or turn.cancel_token.is_cancelled
+            or not turn.stt_has_uncommitted_audio
+        ):
+            return
+
+        turn.stt_has_uncommitted_audio = False
+        future = asyncio.get_running_loop().create_future()
+        self._stt_pending_segment_futures.append(future)
+        committed = False
+        try:
+            committed = await commit_segment()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("STT segment commit failed", exc_info=True)
+        finally:
+            if not committed:
+                turn.stt_has_uncommitted_audio = True
+                if future in self._stt_pending_segment_futures:
+                    self._stt_pending_segment_futures.remove(future)
+                if not future.done():
+                    future.set_result("")
+            self._stt_segment_commit_task = None
+
+    async def _await_pending_stt_segments(self) -> bool:
+        timeout = self._timeout_config.stt_timeout if self._timeout_config else None
+        while self._stt_pending_segment_futures:
+            future = self._stt_pending_segment_futures[0]
+            try:
+                if timeout:
+                    await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+                else:
+                    await future
+            except TimeoutError:
+                err = STTTimeoutError("stt", timeout)
+                await self._emit(Error(exception=err, stage=ErrorStage.STT))
+                return False
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("Ignoring STT segment wait failure", exc_info=True)
+            finally:
+                if (
+                    self._stt_pending_segment_futures
+                    and self._stt_pending_segment_futures[0] is future
+                ):
+                    self._stt_pending_segment_futures.pop(0)
+        return True
+
     def _start_stt_event_task(self) -> None:
         """Start background consumption of provider-scoped STT events."""
         if self._stt_task and not self._stt_task.done():
             self._stt_task.cancel()
-        loop = asyncio.get_running_loop()
-        self._stt_final_future = loop.create_future()
+        self._stt_final_future = None
 
         async def _consume() -> None:
-            saw_final = False
             turn = self._turn
             try:
                 async for stt_event in self.stt.events():
@@ -1073,25 +1195,19 @@ class Session:
                     if stt_event.type == STTEventType.PARTIAL:
                         await self._emit(STTPartial(text=stt_event.text, track=stt_event.track))
                     elif stt_event.type == STTEventType.FINAL:
-                        saw_final = True
-                        await self._emit(STTFinal(text=stt_event.text, track=stt_event.track))
                         if turn:
-                            turn.stt_final_time = time.monotonic()
-                        if self._stt_final_future and not self._stt_final_future.done():
-                            self._stt_final_future.set_result(stt_event.text)
+                            turn.append_stt_segment(stt_event.text, track=stt_event.track)
+                        if self._stt_pending_segment_futures:
+                            future = self._stt_pending_segment_futures.pop(0)
+                            if not future.done():
+                                future.set_result(stt_event.text)
                         if self._auto_turn_from_stt_final:
                             await self._turn_manager.end_turn()
-                        break
             except Exception as exc:
                 logger.exception("STT event loop error")
                 await self._emit(Error(exception=exc, stage=ErrorStage.STT))
-                if self._stt_final_future and not self._stt_final_future.done():
-                    self._stt_final_future.set_result("")
             finally:
-                if self._stt_final_future and not self._stt_final_future.done():
-                    self._stt_final_future.set_result("")
-                if not saw_final:
-                    pass
+                self._resolve_pending_stt_segment_futures("")
 
         self._stt_task = asyncio.create_task(_consume())
 
@@ -1115,11 +1231,14 @@ class Session:
                     chunk = await self.echo_canceller.process(chunk)
 
                 # Stage 3: VAD (optional)
+                saw_vad_stop = False
                 if self._enable_vad:
                     async for vad_event in self.vad.process(chunk):
                         vad_event = self._with_correlation(vad_event)
                         await self._emit(vad_event)
                         await self._turn_manager.on_vad_event(vad_event)
+                        if isinstance(vad_event, VADStopSpeaking):
+                            saw_vad_stop = True
 
                 # TurnManager always sees raw audio frames for pre-roll buffering
                 self._turn_manager.on_audio_frame(chunk)
@@ -1140,7 +1259,13 @@ class Session:
                     else:
                         self._auto_turn_speech_frames = 0
 
-                if self.is_speaking and self._stt_active and not started_turn_from_chunk:
+                if (
+                    (self._turn_manager.state == TurnManagerState.USER_SPEAKING or saw_vad_stop)
+                    and self._stt_active
+                    and not started_turn_from_chunk
+                ):
+                    if self._turn is not None:
+                        self._turn.stt_has_uncommitted_audio = True
                     await self.stt.send_audio(chunk)
 
         except asyncio.CancelledError:
@@ -1162,15 +1287,35 @@ class Session:
 
     async def _handle_end_of_speech(self) -> None:
         """Called when VAD signals end of speech: finalize STT, run agent, synthesize TTS."""
+        turn = self._turn
+        token = turn.cancel_token if turn else None
+        self._cancel_scheduled_stt_segment_commit()
+
+        if self._stt_segment_commit_task and not self._stt_segment_commit_task.done():
+            await self._stt_segment_commit_task
+
+        if not await self._await_pending_stt_segments():
+            if self._turn is turn:
+                self._reset_turn_state()
+            return
+
         if self._stt_active:
+            if turn is not None and turn.stt_has_uncommitted_audio:
+                turn.stt_has_uncommitted_audio = False
+                future = asyncio.get_running_loop().create_future()
+                self._stt_pending_segment_futures.append(future)
             await self.stt.end_stream()
             self._stt_active = False
 
-        turn = self._turn
-        token = turn.cancel_token if turn else None
+        if not await self._await_pending_stt_segments():
+            if self._turn is turn:
+                self._reset_turn_state()
+            return
 
         transcript = ""
-        if self._stt_final_future is not None:
+        if turn is not None:
+            transcript = turn.transcript_text
+        if not transcript and self._stt_final_future is not None:
             try:
                 if self._timeout_config and self._timeout_config.stt_timeout:
                     transcript = await asyncio.wait_for(
@@ -1189,6 +1334,13 @@ class Session:
                 transcript = ""
             finally:
                 self._stt_final_future = None
+
+        if transcript:
+            if self._stt_final_future is not None and not self._stt_final_future.done():
+                self._stt_final_future.set_result(transcript)
+            if turn:
+                turn.stt_final_time = time.monotonic()
+            await self._emit(STTFinal(text=transcript, track=turn.stt_track if turn else None))
 
         if not transcript or (token and token.is_cancelled):
             if self._turn is turn:
@@ -1794,6 +1946,15 @@ class Session:
         return response
 
     async def _cancel_stt(self) -> None:
+        self._cancel_scheduled_stt_segment_commit()
+        commit_task = self._stt_segment_commit_task
+        if commit_task is not None and not commit_task.done():
+            commit_task.cancel()
+            try:
+                await commit_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._stt_segment_commit_task = None
         try:
             await self.stt.end_stream()
         except Exception:
@@ -1806,6 +1967,7 @@ class Session:
                 await self._stt_task
             except (asyncio.CancelledError, Exception):
                 pass
+        self._resolve_pending_stt_segment_futures("")
         if self._stt_final_future and not self._stt_final_future.done():
             self._stt_final_future.set_result("")
         self._stt_final_future = None

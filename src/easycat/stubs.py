@@ -25,6 +25,9 @@ class NoopSTT:
     async def send_audio(self, chunk: AudioChunk) -> None:
         pass
 
+    async def commit_segment(self) -> bool:
+        return False
+
     async def end_stream(self) -> None:
         pass
 

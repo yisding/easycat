@@ -65,6 +65,9 @@ class TurnManagerConfig:
 
     # End-of-turn silence timeout in milliseconds
     end_of_turn_silence_ms: int = 1000
+    # Silence budget, after VAD stop, before finalizing the current STT segment.
+    # 0 means commit the segment immediately when VAD reports a pause.
+    stt_segment_silence_ms: int = 0
     # Pre-roll buffer duration in milliseconds
     pre_roll_ms: int = 300
     # Turn detection mode

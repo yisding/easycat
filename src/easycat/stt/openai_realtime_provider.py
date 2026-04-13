@@ -84,7 +84,7 @@ class OpenAIRealtimeSTT(STTBase):
         self._close_task: asyncio.Task[None] | None = None
         self._partial_text: str = ""
         self._final_received: asyncio.Event | None = None
-        self._audio_sent: bool = False
+        self._audio_pending_commit: bool = False
         self._session_ready: asyncio.Future[None] | None = None
 
     def _websocket_url(self) -> str:
@@ -119,8 +119,8 @@ class OpenAIRealtimeSTT(STTBase):
         self._receive_task = asyncio.create_task(self._receive_loop())
         await self._send_session_update()
         self._partial_text = ""
-        self._audio_sent = False
-        self._final_received = asyncio.Event()
+        self._audio_pending_commit = False
+        self._final_received = None
         try:
             await asyncio.wait_for(self._session_ready, timeout=5.0)
         except TimeoutError as exc:
@@ -163,31 +163,16 @@ class OpenAIRealtimeSTT(STTBase):
                 }
             )
             await self._ws.send(msg)
-            self._audio_sent = True
+            self._audio_pending_commit = True
+
+    async def _on_commit_segment(self) -> bool:
+        return await self._send_commit(wait_for_final=False)
 
     async def _on_end(self) -> None:
         ws = self._ws
         receive_task = self._receive_task
-        if ws is not None:
-            if self._audio_sent:
-                try:
-                    await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                except Exception:
-                    logger.debug("Error sending input_audio_buffer.commit", exc_info=True)
-
-                # Wait for the server to send the completed transcription
-                # (set by _handle_message), then close the socket so that the
-                # receive loop (blocked on recv_iter) can exit promptly. Do
-                # not wait for the close path here; overlapping that cleanup
-                # with agent/TTS removes a multi-second stall from the turn
-                # critical path.
-                if self._final_received is not None:
-                    try:
-                        await asyncio.wait_for(self._final_received.wait(), timeout=5.0)
-                    except TimeoutError:
-                        logger.warning(
-                            "Timed out waiting for final transcript from OpenAI Realtime"
-                        )
+        if ws is not None and self._audio_pending_commit:
+            await self._send_commit(wait_for_final=True)
 
         self._ws = None
         self._receive_task = None
@@ -197,6 +182,29 @@ class OpenAIRealtimeSTT(STTBase):
         if ws is not None:
             self._close_task = asyncio.create_task(self._close_connection(ws, receive_task))
             self._close_task.add_done_callback(self._log_close_task_exception)
+
+    async def _send_commit(self, *, wait_for_final: bool) -> bool:
+        ws = self._ws
+        if ws is None or not self._audio_pending_commit:
+            return False
+
+        final_received = asyncio.Event()
+        self._final_received = final_received
+        try:
+            await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+        except Exception:
+            logger.debug("Error sending input_audio_buffer.commit", exc_info=True)
+            if self._final_received is final_received:
+                self._final_received = None
+            return False
+
+        self._audio_pending_commit = False
+        if wait_for_final:
+            try:
+                await asyncio.wait_for(final_received.wait(), timeout=5.0)
+            except TimeoutError:
+                logger.warning("Timed out waiting for final transcript from OpenAI Realtime")
+        return True
 
     async def _close_connection(
         self,
@@ -264,6 +272,7 @@ class OpenAIRealtimeSTT(STTBase):
                 self._emit_event(STTEvent(type=STTEventType.FINAL, text=transcript))
             elif self._partial_text:
                 self._emit_event(STTEvent(type=STTEventType.FINAL, text=self._partial_text))
+            self._partial_text = ""
             if self._final_received is not None:
                 self._final_received.set()
 
