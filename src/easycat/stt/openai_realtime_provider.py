@@ -120,7 +120,18 @@ class OpenAIRealtimeSTT(STTBase):
         loop = asyncio.get_running_loop()
         self._session_ready = loop.create_future()
         self._receive_task = asyncio.create_task(self._receive_loop())
-        await self._send_session_update()
+        try:
+            await self._send_session_update()
+        except Exception:
+            ws = self._ws
+            receive_task = self._receive_task
+            self._ws = None
+            self._receive_task = None
+            self._session_ready = None
+            if ws is not None:
+                task = asyncio.create_task(self._close_connection(ws, receive_task))
+                task.add_done_callback(self._log_close_task_exception)
+            raise
         self._partial_text = ""
         self._audio_pending_commit = False
         self._final_received = None

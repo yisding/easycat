@@ -158,11 +158,14 @@ class Session:
         self._maybe_attach_event_bus(self.tts)
         self._maybe_attach_event_bus(self.transport)
 
-        # Pipeline flags
-        self._enable_noise_reduction = cfg.enable_noise_reduction
-        self._enable_aec = cfg.enable_echo_cancellation and not isinstance(
-            self.echo_canceller, PassthroughAEC
+        # Pipeline flags — auto-enable when a real provider is supplied so
+        # that direct SessionConfig users don't silently lose processing.
+        self._enable_noise_reduction = cfg.enable_noise_reduction or not isinstance(
+            self.noise_reducer, PassthroughNoiseReducer
         )
+        self._enable_aec = (
+            cfg.enable_echo_cancellation or not isinstance(self.echo_canceller, PassthroughAEC)
+        ) and not isinstance(self.echo_canceller, PassthroughAEC)
         self._enable_vad = cfg.enable_vad
         self._auto_turn_from_stt_final = cfg.auto_turn_from_stt_final
         self._interruption_mode = cfg.interruption_mode
