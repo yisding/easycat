@@ -354,6 +354,7 @@ uv pip install torch
 Optional dependencies you may need depending on providers/transports:
 - sounddevice (LocalTransport)
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
+- numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
 - ten-vad + numpy (TEN VAD; use latest ten-vad for macOS/Windows ONNX support)
 - torch (Silero VAD)
 - pyrnnoise + requests (RNNoise noise reduction backend)

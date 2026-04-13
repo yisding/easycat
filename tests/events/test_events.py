@@ -9,6 +9,7 @@ from easycat.events import (
     DTMF,
     AgentDelta,
     AgentFinal,
+    AgentRequestStarted,
     AudioIn,
     BotStartedSpeaking,
     BotStoppedSpeaking,
@@ -64,8 +65,10 @@ def test_stt_events():
 
 
 def test_agent_events():
+    started = AgentRequestStarted()
     delta = AgentDelta(text="Hi")
     final = AgentFinal(text="Hi there!")
+    assert started.timestamp > 0
     assert delta.text == "Hi"
     assert final.text == "Hi there!"
 

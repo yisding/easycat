@@ -109,6 +109,7 @@ from easycat.events import (
     VAD_EVENTS,
     AgentDelta,
     AgentFinal,
+    AgentRequestStarted,
     AudioIn,
     BotStartedSpeaking,
     BotStoppedSpeaking,
@@ -283,6 +284,7 @@ __all__ = [
     # EasyCat-level events
     "AgentDelta",
     "AgentFinal",
+    "AgentRequestStarted",
     "AudioIn",
     "BotStartedSpeaking",
     "BotStoppedSpeaking",

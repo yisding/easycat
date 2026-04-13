@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,6 +33,10 @@ class WSVoiceClient:
     _inbound_json: list[dict[str, Any]] = field(default_factory=list, init=False)
     _closed: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     server_audio_format: dict[str, Any] | None = field(default=None, init=False)
+    first_binary_ts: float | None = field(default=None, init=False)
+    open_timeout: float = 30.0
+    connect_attempts: int = 2
+    connect_retry_delay_s: float = 0.25
 
     async def __aenter__(self) -> WSVoiceClient:
         await self.connect()
@@ -41,14 +46,31 @@ class WSVoiceClient:
         await self.close()
 
     async def connect(self) -> None:
-        self._ws = await websockets.connect(self.url, max_size=None)
-        self._recv_task = asyncio.create_task(self._recv_loop())
+        last_error: Exception | None = None
+        for attempt in range(1, self.connect_attempts + 1):
+            try:
+                self._ws = await websockets.connect(
+                    self.url,
+                    max_size=None,
+                    open_timeout=self.open_timeout,
+                )
+                self._recv_task = asyncio.create_task(self._recv_loop())
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if attempt >= self.connect_attempts:
+                    break
+                await asyncio.sleep(self.connect_retry_delay_s)
+        assert last_error is not None
+        raise last_error
 
     async def _recv_loop(self) -> None:
         assert self._ws is not None
         try:
             async for msg in self._ws:
                 if isinstance(msg, (bytes, bytearray)):
+                    if self.first_binary_ts is None:
+                        self.first_binary_ts = time.monotonic()
                     self._inbound_binary.append(bytes(msg))
                 else:
                     try:

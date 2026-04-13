@@ -21,6 +21,7 @@ from easycat.echo_cancellation import PassthroughAEC
 from easycat.events import (
     AgentDelta,
     AgentFinal,
+    AgentRequestStarted,
     AudioIn,
     BotStartedSpeaking,
     BotStoppedSpeaking,
@@ -360,6 +361,7 @@ class Session:
         _sub(VADStopSpeaking, _make(EVT, "vad_stop_speaking"))
         _sub(STTPartial, _make(EVT, "stt_partial"))
         _sub(STTFinal, _make(EVT, "stt_final"))
+        _sub(AgentRequestStarted, _make(EVT, "agent_request_started"))
         _sub(AgentDelta, _make(EVT, "agent_delta"))
         _sub(AgentFinal, _make(EVT, "agent_final"))
         _sub(BotStartedSpeaking, _make(EVT, "bot_started_speaking"))
@@ -1200,6 +1202,8 @@ class Session:
         if callable(_set_fn) and turn_id:
             _set_fn(turn_id)
 
+        await self._emit(AgentRequestStarted())
+
         # Route to streaming or basic agent path
         if hasattr(self.agent, "run_streaming"):
             await self._run_streaming_agent(transcript, token)
@@ -1698,6 +1702,7 @@ class Session:
             _set_fn = getattr(self.agent, "set_active_turn_id", None)
             if callable(_set_fn):
                 _set_fn(turn_id)
+            await self._emit(AgentRequestStarted(session_id=self.session_id, turn_id=turn_id))
             structured_output = None
             self._text_turn_accumulated = ""
             if hasattr(self.agent, "run_streaming"):

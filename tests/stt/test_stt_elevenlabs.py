@@ -48,27 +48,31 @@ def _el_transcript(
     words: list[dict] | None = None,
 ) -> str:
     """Create an ElevenLabs-format transcript message."""
-    msg: dict = {"type": "transcript", "text": text, "is_final": is_final}
+    msg_type = "committed_transcript" if is_final else "partial_transcript"
+    msg: dict = {"message_type": msg_type, "text": text}
     if confidence is not None:
         msg["confidence"] = confidence
     if language:
-        msg["language"] = language
+        msg["language_code"] = language
     if words:
+        msg["message_type"] = "committed_transcript_with_timestamps"
         msg["words"] = words
     return json.dumps(msg)
 
 
 def _make_el_stt_realtime(
     messages: list[str] | None = None,
-) -> tuple[ElevenLabsSTT, MockWebSocket]:
+) -> tuple[ElevenLabsSTT, MockWebSocket, dict[str, str]]:
     """Create an ElevenLabs realtime STT with a mocked WebSocket."""
     ws = MockWebSocket(messages or [])
+    connect_meta: dict[str, str] = {}
 
     async def mock_connect(url: str, **kwargs) -> MockWebSocket:
+        connect_meta["url"] = url
         return ws
 
     config = ElevenLabsSTTConfig(api_key="test-key", mode="realtime", ws_connect=mock_connect)
-    return ElevenLabsSTT(config), ws
+    return ElevenLabsSTT(config), ws, connect_meta
 
 
 def _make_mock_http_client(
@@ -93,7 +97,7 @@ def _make_mock_http_client(
 
 
 def test_elevenlabs_stt_conforms_to_protocol():
-    stt, _ = _make_el_stt_realtime()
+    stt, _, _ = _make_el_stt_realtime()
     assert isinstance(stt, STTProvider)
 
 
@@ -110,7 +114,7 @@ def test_elevenlabs_batch_conforms_to_protocol():
 @pytest.mark.asyncio
 async def test_elevenlabs_realtime_receives_final():
     messages = [_el_transcript("hello world", is_final=True)]
-    stt, ws = _make_el_stt_realtime(messages)
+    stt, ws, _ = _make_el_stt_realtime(messages)
 
     pcm = generate_pcm_sine(duration_ms=200)
     events = await collect_stt_events(stt, make_audio_chunks(pcm))
@@ -126,7 +130,7 @@ async def test_elevenlabs_realtime_partial_and_final():
         _el_transcript("hel", is_final=False),
         _el_transcript("hello world", is_final=True),
     ]
-    stt, ws = _make_el_stt_realtime(messages)
+    stt, ws, _ = _make_el_stt_realtime(messages)
 
     pcm = generate_pcm_sine(duration_ms=200)
     events = await collect_stt_events(stt, make_audio_chunks(pcm))
@@ -137,21 +141,23 @@ async def test_elevenlabs_realtime_partial_and_final():
 
 
 @pytest.mark.asyncio
-async def test_elevenlabs_realtime_sends_init_message():
-    stt, ws = _make_el_stt_realtime([])
+async def test_elevenlabs_realtime_connects_with_query_params():
+    stt, ws, connect_meta = _make_el_stt_realtime([])
 
     await stt.start_stream()
     await stt.end_stream()
 
-    # First sent message should be the init config
-    assert len(ws.sent) >= 1
-    init = json.loads(ws.sent[0])
-    assert init["type"] == "start"
+    assert ws.sent
+    url = connect_meta["url"]
+    assert "/v1/speech-to-text/realtime?" in url
+    assert "model_id=scribe_v2_realtime" in url
+    assert "audio_format=pcm_16000" in url
+    assert "commit_strategy=manual" in url
 
 
 @pytest.mark.asyncio
 async def test_elevenlabs_realtime_sends_audio_as_base64():
-    stt, ws = _make_el_stt_realtime([])
+    stt, ws, _ = _make_el_stt_realtime([])
 
     pcm = generate_pcm_sine(duration_ms=100)
     chunks = make_audio_chunks(pcm, chunk_duration_ms=100)
@@ -162,28 +168,34 @@ async def test_elevenlabs_realtime_sends_audio_as_base64():
     await stt.end_stream()
 
     # Audio messages should be base64-encoded JSON
-    audio_msgs = [json.loads(s) for s in ws.sent if '"audio"' in s]
+    audio_msgs = [json.loads(s) for s in ws.sent if '"input_audio_chunk"' in s]
     assert len(audio_msgs) >= 1
-    assert audio_msgs[0]["type"] == "audio"
-    assert "data" in audio_msgs[0]
+    assert audio_msgs[0]["message_type"] == "input_audio_chunk"
+    assert "audio_base_64" in audio_msgs[0]
+    assert audio_msgs[0]["commit"] is False
+    assert audio_msgs[0]["sample_rate"] == 16000
 
 
 @pytest.mark.asyncio
 async def test_elevenlabs_realtime_sends_stop():
-    stt, ws = _make_el_stt_realtime([])
+    stt, ws, _ = _make_el_stt_realtime([])
 
     await stt.start_stream()
     await stt.end_stream()
 
     json_sent = [json.loads(s) for s in ws.sent]
-    stop_msgs = [m for m in json_sent if m.get("type") == "stop"]
+    stop_msgs = [
+        m
+        for m in json_sent
+        if m.get("message_type") == "input_audio_chunk" and m.get("commit") is True
+    ]
     assert len(stop_msgs) == 1
 
 
 @pytest.mark.asyncio
 async def test_elevenlabs_realtime_with_confidence():
     messages = [_el_transcript("test", is_final=True, confidence=0.92)]
-    stt, _ = _make_el_stt_realtime(messages)
+    stt, _, _ = _make_el_stt_realtime(messages)
 
     pcm = generate_pcm_sine(duration_ms=100)
     events = await collect_stt_events(stt, make_audio_chunks(pcm))
@@ -194,11 +206,11 @@ async def test_elevenlabs_realtime_with_confidence():
 @pytest.mark.asyncio
 async def test_elevenlabs_realtime_with_word_timestamps():
     words = [
-        {"word": "hello", "start": 0.0, "end": 0.3},
-        {"word": "world", "start": 0.4, "end": 0.7},
+        {"text": "hello", "start": 0.0, "end": 0.3},
+        {"text": "world", "start": 0.4, "end": 0.7},
     ]
     messages = [_el_transcript("hello world", is_final=True, words=words)]
-    stt, _ = _make_el_stt_realtime(messages)
+    stt, _, _ = _make_el_stt_realtime(messages)
 
     pcm = generate_pcm_sine(duration_ms=100)
     events = await collect_stt_events(stt, make_audio_chunks(pcm))
@@ -210,10 +222,10 @@ async def test_elevenlabs_realtime_with_word_timestamps():
 @pytest.mark.asyncio
 async def test_elevenlabs_realtime_ignores_non_transcript():
     messages = [
-        json.dumps({"type": "status", "status": "connected"}),
+        json.dumps({"message_type": "session_started"}),
         _el_transcript("hello", is_final=True),
     ]
-    stt, _ = _make_el_stt_realtime(messages)
+    stt, _, _ = _make_el_stt_realtime(messages)
 
     pcm = generate_pcm_sine(duration_ms=100)
     events = await collect_stt_events(stt, make_audio_chunks(pcm))

@@ -63,7 +63,17 @@ class _MockWSFactory:
     """Factory that returns a mock connection and records the URL/headers."""
 
     def __init__(self, messages: list[str] | None = None) -> None:
-        self.connection = _MockWSConnection(messages)
+        scripted = list(messages or [])
+        if not any('"type": "session.created"' in msg for msg in scripted):
+            scripted.insert(0, _make_session_created())
+        if not any(
+            event in msg
+            for msg in scripted
+            for event in ('"type": "session.updated"', '"type": "transcription_session.updated"')
+        ):
+            insert_at = 1 if scripted and '"type": "session.created"' in scripted[0] else 0
+            scripted.insert(insert_at, _make_transcription_session_updated())
+        self.connection = _MockWSConnection(scripted)
         self.call_url: str | None = None
         self.call_headers: dict[str, str] | None = None
 
@@ -99,6 +109,10 @@ def _make_session_updated() -> str:
     return json.dumps({"type": "session.updated", "session": {}})
 
 
+def _make_transcription_session_updated() -> str:
+    return json.dumps({"type": "transcription_session.updated", "session": {}})
+
+
 # ── Protocol conformance ────────────────────────────────────────
 
 
@@ -128,9 +142,11 @@ async def test_openai_realtime_sends_session_update_on_start():
     assert len(factory.connection.sent) >= 1
     session_msg = json.loads(factory.connection.sent[0])
     assert session_msg["type"] == "session.update"
-    assert session_msg["session"]["turn_detection"] is None
-    assert "input_audio_transcription" in session_msg["session"]
-    assert session_msg["session"]["input_audio_transcription"]["model"] == "gpt-4o-transcribe"
+    session = session_msg["session"]
+    assert session["type"] == "realtime"
+    assert session["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24000}
+    assert session["audio"]["input"]["turn_detection"] is None
+    assert session["audio"]["input"]["transcription"]["model"] == "gpt-4o-transcribe"
 
 
 @pytest.mark.asyncio
@@ -146,7 +162,7 @@ async def test_openai_realtime_sends_language_in_session_update():
     await collect_stt_events(stt, [])
 
     session_msg = json.loads(factory.connection.sent[0])
-    assert session_msg["session"]["input_audio_transcription"]["language"] == "es"
+    assert session_msg["session"]["audio"]["input"]["transcription"]["language"] == "es"
 
 
 @pytest.mark.asyncio
@@ -159,11 +175,12 @@ async def test_openai_realtime_auth_headers():
 
     assert factory.call_headers is not None
     assert factory.call_headers["Authorization"] == "Bearer sk-secret-123"
-    assert factory.call_headers["OpenAI-Beta"] == "realtime=v1"
+    assert "OpenAI-Beta" not in factory.call_headers
 
 
 @pytest.mark.asyncio
-async def test_openai_realtime_url_includes_model():
+async def test_openai_realtime_model_is_set_via_session_update():
+    """The connection model and transcription model are distinct."""
     factory = _MockWSFactory([_make_transcription_completed("hi")])
     config = OpenAIRealtimeSTTConfig(
         api_key="sk-test", model="gpt-4o-mini-transcribe", ws_connect=factory
@@ -173,7 +190,31 @@ async def test_openai_realtime_url_includes_model():
     await collect_stt_events(stt, [])
 
     assert factory.call_url is not None
-    assert "model=gpt-4o-mini-transcribe" in factory.call_url
+    assert "model=gpt-realtime-mini" in factory.call_url
+    # The transcription model also belongs in the session.update payload.
+    session_msg = json.loads(factory.connection.sent[0])
+    assert (
+        session_msg["session"]["audio"]["input"]["transcription"]["model"]
+        == "gpt-4o-mini-transcribe"
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_merges_explicit_connection_model_into_existing_query_string():
+    factory = _MockWSFactory([_make_transcription_completed("hi")])
+    config = OpenAIRealtimeSTTConfig(
+        api_key="sk-test",
+        ws_url="wss://api.openai.com/v1/realtime?foo=bar",
+        connection_model="gpt-realtime-mini",
+        ws_connect=factory,
+    )
+    stt = OpenAIRealtimeSTT(config)
+
+    await collect_stt_events(stt, [])
+
+    assert factory.call_url is not None
+    assert "foo=bar" in factory.call_url
+    assert "model=gpt-realtime-mini" in factory.call_url
 
 
 # ── Audio sending ───────────────────────────────────────────────

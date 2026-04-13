@@ -96,6 +96,7 @@ async def test_baseline_voice_roundtrip_websocket(
     journal = session.journal
     assert journal is not None
 
+    pre_stop_records = journal.read()
     events = journal.slice(kind=JournalRecordKind.EVENT)
     names = [e.name for e in events]
     for required in ("turn_started", "stt_final", "agent_final", "turn_ended"):
@@ -120,7 +121,22 @@ async def test_baseline_voice_roundtrip_websocket(
         f"expected enter/exit framework records, saw directions={directions}"
     )
 
-    # 7. Export bundle and verify provider versions are real.
+    # 7. A clean stop must preserve journal visibility and bundle export.
+    await session.stop()
+
+    post_stop_journal = session.journal
+    assert post_stop_journal is not None
+    post_stop_records = post_stop_journal.read()
+    assert len(post_stop_records) >= len(pre_stop_records)
+
+    post_stop_events = post_stop_journal.slice(kind=JournalRecordKind.EVENT)
+    post_stop_stt_final_text = next(
+        (e.data.get("text", "").lower() for e in post_stop_events if e.name == "stt_final"),
+        "",
+    )
+    assert post_stop_stt_final_text == stt_final_text
+
+    # 8. Export bundle after stop and verify provider versions are real.
     with tempfile.TemporaryDirectory() as td:
         bundle_path = pathlib.Path(td) / "baseline.zip"
         session.export_debug_bundle(str(bundle_path))

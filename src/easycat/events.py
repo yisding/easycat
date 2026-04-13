@@ -96,6 +96,11 @@ class AgentDelta(Event):
 
 
 @dataclass(frozen=True)
+class AgentRequestStarted(Event):
+    """The runtime has started the agent/LLM request for this turn."""
+
+
+@dataclass(frozen=True)
 class AgentFinal(Event):
     """Final complete response from the agent.
 
@@ -358,7 +363,7 @@ class SessionActionFailed(Event):
 AUDIO_EVENTS: tuple[type[Event], ...] = (AudioIn,)
 VAD_EVENTS: tuple[type[Event], ...] = (VADStartSpeaking, VADStopSpeaking)
 STT_EVENTS: tuple[type[Event], ...] = (STTPartial, STTFinal)
-AGENT_EVENTS: tuple[type[Event], ...] = (AgentDelta, AgentFinal)
+AGENT_EVENTS: tuple[type[Event], ...] = (AgentRequestStarted, AgentDelta, AgentFinal)
 TTS_EVENTS: tuple[type[Event], ...] = (TTSAudio, TTSMarkers)
 TOOL_EVENTS: tuple[type[Event], ...] = (ToolCallStarted, ToolCallDelta, ToolCallResult)
 LIFECYCLE_EVENTS: tuple[type[Event], ...] = (

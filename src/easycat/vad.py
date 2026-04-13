@@ -11,10 +11,13 @@ with automatic fallback from Krisp -> TEN -> Silero.
 from __future__ import annotations
 
 import logging
+import os
+import platform
 import struct
 import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, distribution, version
 from typing import Any
 
 from easycat.audio_format import AudioChunk
@@ -28,6 +31,8 @@ logger = logging.getLogger(__name__)
 _SILERO_SAMPLE_RATE = 16000
 # Silero processes 512-sample frames (32 ms at 16 kHz)
 _SILERO_FRAME_SAMPLES = 512
+_SILERO_CONTEXT_SAMPLES = 64
+_SILERO_RISKY_TORCH_ARCHES = {"aarch64", "arm64"}
 # TEN VAD expects 16 kHz audio and defaults to a hop size of 256 samples.
 _TEN_SAMPLE_RATE = 16000
 _TEN_HOP_SAMPLES = 256
@@ -123,6 +128,101 @@ class _VADBase:
 # ── Silero VAD (open-source) ────────────────────────────────────────
 
 
+def _silero_backend_override() -> str | None:
+    override = os.getenv("EASYCAT_SILERO_BACKEND", "").strip().lower()
+    if override in {"torch", "onnx"}:
+        return override
+    return None
+
+
+def _silero_backend_candidates() -> tuple[str, ...]:
+    override = _silero_backend_override()
+    if override is not None:
+        return (override,)
+    machine = platform.machine().strip().lower()
+    if machine in _SILERO_RISKY_TORCH_ARCHES:
+        return ("onnx",)
+    return ("torch", "onnx")
+
+
+def _silero_onnx_model_path() -> str:
+    try:
+        dist = distribution("silero-vad")
+    except PackageNotFoundError as exc:
+        raise ImportError(
+            "Silero VAD ONNX requires the silero-vad package. "
+            "Install with: uv add easycat[silero-vad]."
+        ) from exc
+
+    model_path = dist.locate_file("silero_vad/data/silero_vad.onnx")
+    if not model_path.exists():
+        raise RuntimeError(f"Silero VAD ONNX model file not found: {model_path}")
+    return str(model_path)
+
+
+class _SileroOnnxModel:
+    """Small ONNX-only Silero wrapper that mirrors the recurrent model contract."""
+
+    def __init__(self, model_path: str) -> None:
+        numpy = require_module("numpy", extra="silero-vad", purpose="Silero VAD ONNX")
+        onnxruntime = require_module("onnxruntime", extra="silero-vad", purpose="Silero VAD ONNX")
+
+        opts = onnxruntime.SessionOptions()
+        opts.inter_op_num_threads = 1
+        opts.intra_op_num_threads = 1
+
+        providers = None
+        available = onnxruntime.get_available_providers()
+        if "CPUExecutionProvider" in available:
+            providers = ["CPUExecutionProvider"]
+
+        if providers is None:
+            self._session = onnxruntime.InferenceSession(model_path, sess_options=opts)
+        else:
+            self._session = onnxruntime.InferenceSession(
+                model_path, providers=providers, sess_options=opts
+            )
+        self._numpy = numpy
+        self.reset_states()
+
+    def reset_states(self) -> None:
+        np = self._numpy
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros((1, 0), dtype=np.float32)
+        self._last_sr = 0
+
+    def predict(self, samples: list[float], sample_rate: int) -> float:
+        if sample_rate != _SILERO_SAMPLE_RATE:
+            raise ValueError(f"Silero ONNX expects {_SILERO_SAMPLE_RATE} Hz audio")
+
+        np = self._numpy
+        frame = np.asarray(samples, dtype=np.float32).reshape(1, -1)
+        if frame.shape[-1] != _SILERO_FRAME_SAMPLES:
+            raise ValueError(
+                f"Silero ONNX expects {_SILERO_FRAME_SAMPLES} samples, got {frame.shape[-1]}"
+            )
+
+        if self._last_sr and self._last_sr != sample_rate:
+            self.reset_states()
+        if self._context.shape[1] == 0:
+            self._context = np.zeros((frame.shape[0], _SILERO_CONTEXT_SAMPLES), dtype=np.float32)
+
+        model_input = np.concatenate([self._context, frame], axis=1)
+        outputs = self._session.run(
+            None,
+            {
+                "input": model_input,
+                "state": self._state,
+                "sr": np.asarray(sample_rate, dtype=np.int64),
+            },
+        )
+        speech_prob, next_state = outputs
+        self._state = next_state.astype(np.float32, copy=False)
+        self._context = model_input[:, -_SILERO_CONTEXT_SAMPLES:]
+        self._last_sr = sample_rate
+        return float(np.asarray(speech_prob).reshape(-1)[0])
+
+
 class SileroVAD(_VADBase):
     """Voice activity detection using the Silero VAD model.
 
@@ -142,6 +242,7 @@ class SileroVAD(_VADBase):
         super().__init__()
         self._model: Any = None
         self._torch: Any = None
+        self._backend: str | None = None
 
         # Accumulation buffer for sub-frame chunks
         self._buffer: bytes = b""
@@ -150,6 +251,23 @@ class SileroVAD(_VADBase):
 
     def _load_model(self) -> None:
         """Load the Silero VAD model."""
+        errors: list[str] = []
+        for backend in _silero_backend_candidates():
+            try:
+                if backend == "onnx":
+                    self._load_onnx_model()
+                else:
+                    self._load_torch_model()
+                logger.info("Silero VAD model loaded successfully via %s", self._backend)
+                return
+            except (ImportError, RuntimeError) as exc:
+                errors.append(f"{backend}: {exc}")
+                logger.info("Silero VAD %s backend unavailable: %s", backend, exc)
+
+        joined = "; ".join(errors) or "no backend candidates"
+        raise RuntimeError(f"Failed to load Silero VAD model: {joined}")
+
+    def _load_torch_model(self) -> None:
         try:
             torch = require_module("torch", extra="all", purpose="Silero VAD")
         except ImportError as exc:
@@ -162,17 +280,24 @@ class SileroVAD(_VADBase):
                 trust_repo=True,
             )
         except Exception as exc:
-            raise RuntimeError(f"Failed to load Silero VAD model: {exc}") from exc
+            raise RuntimeError(f"torch loader failed: {exc}") from exc
         self._model = model
         self._torch = torch
-        logger.info("Silero VAD model loaded successfully")
+        self._backend = "torch"
+
+    def _load_onnx_model(self) -> None:
+        try:
+            model_path = _silero_onnx_model_path()
+            self._model = _SileroOnnxModel(model_path)
+        except ImportError as exc:
+            raise RuntimeError(str(exc)) from exc
+        except Exception as exc:
+            raise RuntimeError(f"onnx loader failed: {exc}") from exc
+        self._torch = None
+        self._backend = "onnx"
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process an audio chunk and yield VAD events."""
-        if self._torch is None:
-            self._torch = require_module("torch", extra="all", purpose="Silero VAD")
-        torch = self._torch
-
         # Resample to 16 kHz if needed
         if chunk.format.sample_rate != _SILERO_SAMPLE_RATE:
             chunk = resample_chunk(chunk, _SILERO_SAMPLE_RATE)
@@ -190,10 +315,14 @@ class SileroVAD(_VADBase):
             n = len(frame_data) // 2
             samples = struct.unpack(f"<{n}h", frame_data)
             float_samples = [s / 32768.0 for s in samples]
-            tensor = torch.FloatTensor(float_samples)
 
-            # Run model inference
-            speech_prob = self._model(tensor, _SILERO_SAMPLE_RATE).item()
+            if self._backend == "onnx":
+                speech_prob = self._model.predict(float_samples, _SILERO_SAMPLE_RATE)
+            else:
+                if self._torch is None:
+                    self._torch = require_module("torch", extra="all", purpose="Silero VAD")
+                tensor = self._torch.FloatTensor(float_samples)
+                speech_prob = self._model(tensor, _SILERO_SAMPLE_RATE).item()
             now = time.monotonic()
 
             for event in self._evaluate_speech(speech_prob, now):
@@ -210,11 +339,16 @@ class SileroVAD(_VADBase):
                 pass
 
     def version_info(self) -> dict[str, str]:
+        sdk_ver = "unknown"
+        try:
+            sdk_ver = version("silero-vad")
+        except Exception:
+            pass
         return {
             "provider": "silero",
-            "model": "silero-vad",
+            "model": f"silero-vad-{self._backend or 'unknown'}",
             "api_version": "unknown",
-            "sdk_version": "unknown",
+            "sdk_version": sdk_ver,
         }
 
 
@@ -446,6 +580,6 @@ def create_vad(config: VADConfig | None = None) -> Any:
     except (RuntimeError, ImportError):
         logger.info("Silero VAD not available either")
         raise RuntimeError(
-            "No VAD backend available. Install ten-vad (for TEN), torch (for Silero), "
+            "No VAD backend available. Install easycat[ten-vad], easycat[silero-vad], "
             "or krisp-audio (for Krisp)."
         )
