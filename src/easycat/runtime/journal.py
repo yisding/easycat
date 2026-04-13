@@ -618,10 +618,16 @@ class SqliteJournal:
                             exc_info=True,
                         )
 
+            if row is not None and prior_count > 0:
+                # Clean reuse — prior session closed normally. Truncate stale
+                # records so the new session starts with an empty journal.
+                self._conn.execute("DELETE FROM journal")
+
         # Clear the clean_close marker (we're starting a new session).
         self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
 
-        # Recover sequence counter from any existing records.
+        # Recover sequence counter from any existing records (crash-recovery
+        # path keeps old rows; clean-reuse truncates them above).
         row = self._conn.execute("SELECT MAX(sequence) FROM journal").fetchone()
         if row and row[0] is not None:
             self._seq = row[0]
