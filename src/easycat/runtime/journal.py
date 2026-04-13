@@ -1105,7 +1105,19 @@ class LibsqlJournal:
         self._conn = libsql.connect(**connect_kwargs)
         self._conn.executescript(_SQLITE_SCHEMA)
 
-        # Recover sequence counter from any existing records.
+        # Handle session-id reuse: mirror SqliteJournal's truncation logic.
+        row = self._conn.execute(
+            "SELECT value FROM session_state WHERE key = 'clean_close'"
+        ).fetchone()
+        prior_count_row = self._conn.execute("SELECT COUNT(*) FROM journal").fetchone()
+        prior_count = prior_count_row[0] if prior_count_row else 0
+
+        if row is not None and prior_count > 0:
+            self._conn.execute("DELETE FROM journal")
+
+        self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
+
+        # Recover sequence counter from any remaining records.
         row = self._conn.execute("SELECT MAX(sequence) FROM journal").fetchone()
         self._seq = row[0] if row and row[0] is not None else 0
 
@@ -1210,6 +1222,13 @@ class LibsqlJournal:
     def finalize(self) -> None:
         if self._closed:
             return
+        try:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
+            )
+            self._conn.commit()
+        except Exception:
+            logger.debug("libsql clean_close marker write failed", exc_info=True)
         try:
             self._conn.sync()
         except Exception:

@@ -32,6 +32,8 @@ class AgentStage:
                 self._provider._journal = ctx.journal
             if hasattr(self._provider, "_session_id"):
                 self._provider._session_id = ctx.session_id
+            if hasattr(self._provider, "_artifact_store") and ctx.artifact_store is not None:
+                self._provider._artifact_store = ctx.artifact_store
             if hasattr(self._provider, "set_active_turn_id"):
                 self._provider.set_active_turn_id(turn.id)
             result = await self._provider.run(input)
