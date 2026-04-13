@@ -249,7 +249,7 @@ class EasyCatConfig:
         self._validate()
 
     def _default_echo_cancellation_for_transport(self) -> EchoCancellationConfig:
-        enable_aec = self.enable_echo_cancellation and isinstance(
+        enable_aec = self.enable_echo_cancellation or isinstance(
             self.transport,
             (LocalTransportConfig, WebSocketTransportConfig, WebSocketConnectionTransport),
         )
@@ -437,7 +437,7 @@ def create_session(config: EasyCatConfig) -> Session:
             telephony_helpers=telephony_helpers,
             enable_vad=enable_vad,
             enable_noise_reduction=config.enable_noise_reduction,
-            enable_echo_cancellation=config.enable_echo_cancellation,
+            enable_echo_cancellation=echo_cfg.enabled,
             auto_turn_from_stt_final=auto_turn_from_stt_final,
             strip_markdown=config.strip_markdown,
             output_processors=config.output_processors,
