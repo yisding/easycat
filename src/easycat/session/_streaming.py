@@ -155,6 +155,8 @@ async def consume_agent_stream(
                 await emit(ToolCallResult(call_id=event.call_id, result=event.result))
             elif event.type == AgentStreamEventType.DONE:
                 if event.text:
+                    if not result.text:
+                        text_buffer = event.text
                     result.text = event.text
                 if event.structured_output is not None:
                     result.structured_output = event.structured_output
