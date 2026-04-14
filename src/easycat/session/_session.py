@@ -1821,7 +1821,6 @@ class Session:
         except asyncio.CancelledError:
             pass
 
-        # Estimate what the user heard and notify the agent
         interruption_notification = estimate_and_notify_interruption(
             self.agent,
             token,
