@@ -102,7 +102,7 @@ class FakeReconnectingWS:
 class TestElevenLabsTTSConfig:
     def test_defaults(self):
         config = ElevenLabsTTSConfig(api_key="test-key")
-        assert config.voice_id == "21m00Tcm4TlvDq8ikWAM"
+        assert config.voice_id == "EXAVITQu4vr4xnSDxMaL"
         assert config.model_id == "eleven_monolingual_v1"
         assert config.stability == 0.5
         assert config.similarity_boost == 0.75

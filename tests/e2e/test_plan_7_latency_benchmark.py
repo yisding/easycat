@@ -273,14 +273,30 @@ def _build_session_with_flags(
     stt_provider: str = "openai-realtime",
 ):
     """Build a live session with fine-grained control over each stage."""
-    from agents import Agent  # type: ignore[import-untyped]
+    from agents import (
+        Agent,  # type: ignore[import-untyped]
+        ModelSettings,  # type: ignore[import-untyped]
+    )
+    from openai.types.shared import Reasoning
 
     import easycat.config as config_module
-    from easycat import EasyCatConfig, ElevenLabsSTTConfig, OpenAIRealtimeSTTConfig
+    from easycat import (
+        EasyCatConfig,
+        ElevenLabsSTTConfig,
+        ElevenLabsTTSConfig,
+        OpenAIRealtimeSTTConfig,
+        OpenAITTSConfig,
+    )
     from easycat.smart_turn import SmartTurnConfig
+    from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode
 
     api_key = os.environ["OPENAI_API_KEY"]
+    llm_model = os.environ.get("EASYCAT_BENCHMARK_LLM_MODEL", "gpt-5.4")
+    reasoning_effort = os.environ.get("EASYCAT_BENCHMARK_LLM_REASONING_EFFORT", "none").strip()
     provider_name = stt_provider.strip().lower()
+    tts_provider = os.environ.get("EASYCAT_BENCHMARK_TTS_PROVIDER", "openai").strip().lower()
+    tts_voice_id = os.environ.get("EASYCAT_BENCHMARK_TTS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL").strip()
+    openai_tts_voice = os.environ.get("EASYCAT_BENCHMARK_TTS_VOICE", "alloy").strip()
     stt_config: OpenAIRealtimeSTTConfig | ElevenLabsSTTConfig | None
     if provider_name in {"openai", "openai-realtime"}:
         stt_config = OpenAIRealtimeSTTConfig(api_key=api_key)
@@ -291,16 +307,52 @@ def _build_session_with_flags(
         stt_config = ElevenLabsSTTConfig(api_key=elevenlabs_api_key, mode="realtime")
     else:
         raise ValueError(f"Unsupported STT provider for benchmark: {stt_provider!r}")
+
+    transport_fmt = getattr(transport, "audio_format", None)
+    if tts_provider == "openai":
+        tts_model = os.environ.get("EASYCAT_BENCHMARK_TTS_MODEL", "gpt-4o-mini-tts").strip()
+        tts_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "model": tts_model,
+            "voice": openai_tts_voice,
+        }
+        if transport_fmt is not None:
+            tts_kwargs["output_format"] = transport_fmt
+        tts_config = OpenAITTSConfig(**tts_kwargs)
+    elif tts_provider == "elevenlabs":
+        elevenlabs_api_key = os.environ.get("ELEVENLABS_API_KEY")
+        if not elevenlabs_api_key:
+            pytest.skip("ELEVENLABS_API_KEY required for ElevenLabs latency benchmark")
+        elevenlabs_model = os.environ.get("EASYCAT_BENCHMARK_TTS_MODEL", "eleven_v3").strip()
+        tts_kwargs = {
+            "api_key": elevenlabs_api_key,
+            "voice_id": tts_voice_id,
+            "model_id": elevenlabs_model,
+            "stream_mode": ElevenLabsStreamMode.HTTP,
+            "output_format": "pcm_24000",
+        }
+        if transport_fmt is not None:
+            tts_kwargs["output_format"] = f"pcm_{transport_fmt.sample_rate}"
+            tts_kwargs["audio_format"] = transport_fmt
+        tts_config = ElevenLabsTTSConfig(**tts_kwargs)
+    else:
+        raise ValueError(f"Unsupported TTS provider for benchmark: {tts_provider!r}")
+
+    model_settings = ModelSettings()
+    if reasoning_effort:
+        model_settings = ModelSettings(reasoning=Reasoning(effort=reasoning_effort))
     agent = Agent(
         name="latency_probe",
         instructions="Reply in one short sentence.",
-        model="gpt-4o-mini",
+        model=llm_model,
+        model_settings=model_settings,
     )
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=transport,
         agent=agent,
         stt=stt_config,
+        tts=tts_config,
         debug=debug,  # type: ignore[arg-type]
         enable_noise_reduction=enable_noise_reduction,
         enable_echo_cancellation=enable_echo_cancellation,

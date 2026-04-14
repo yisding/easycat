@@ -72,7 +72,7 @@ class TestTTSProviderVersionInfo:
         info = OpenAITTS(config).version_info()
         assert set(info.keys()) == EXPECTED_KEYS
         assert info["provider"] == "openai"
-        assert info["model"] == "tts-1"
+        assert info["model"] == "gpt-4o-mini-tts"
 
     def test_deepgram_tts(self):
         config = DeepgramTTSConfig(api_key="test")

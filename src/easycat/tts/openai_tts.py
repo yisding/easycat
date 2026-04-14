@@ -34,7 +34,7 @@ class OpenAITTSConfig:
     """Configuration for the OpenAI TTS provider."""
 
     api_key: str = ""
-    model: str = "tts-1"
+    model: str = "gpt-4o-mini-tts"
     voice: str = "alloy"
     speed: float = 1.0
     base_url: str = "https://api.openai.com/v1"

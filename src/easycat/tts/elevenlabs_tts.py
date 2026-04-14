@@ -51,7 +51,7 @@ class ElevenLabsTTSConfig:
     """Configuration for the ElevenLabs TTS provider."""
 
     api_key: str = ""
-    voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel (default)
+    voice_id: str = "EXAVITQu4vr4xnSDxMaL"  # Sarah (default)
     model_id: str = "eleven_monolingual_v1"
     stability: float = 0.5
     similarity_boost: float = 0.75

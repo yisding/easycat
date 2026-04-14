@@ -38,6 +38,9 @@ class StubSTT:
     async def send_audio(self, chunk: AudioChunk) -> None:
         pass
 
+    async def commit_segment(self) -> bool:
+        return True
+
     async def end_stream(self) -> None:
         pass
 
@@ -77,7 +80,7 @@ class StubVAD:
         self,
         *,
         min_speech_duration_ms: int = 250,
-        min_silence_duration_ms: int = 300,
+        min_silence_duration_ms: int = 150,
         sensitivity: float = 0.5,
         pre_roll_ms: int = 100,
         post_roll_ms: int = 100,
