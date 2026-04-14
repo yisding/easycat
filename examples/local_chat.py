@@ -22,9 +22,9 @@ from easycat import (
 
 
 async def main() -> None:
+    api_key = require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
-    api_key = require_env("OPENAI_API_KEY")
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
     config = EasyCatConfig(

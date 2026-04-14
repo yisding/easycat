@@ -28,9 +28,9 @@ from easycat import (
 
 
 async def main() -> None:
+    api_key = require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
-    api_key = require_env("OPENAI_API_KEY")
     manager: SessionManager[int] = SessionManager()
 
     async def handle_connection(ws: ServerConnection) -> None:
