@@ -325,58 +325,75 @@ class TestSqliteHotPathBehavior:
         reason="strace-based fsync counting requires Linux with strace installed",
     )
     def test_no_hot_path_fsync(self, tmp_path):
-        """During normal appends, zero fsync/fdatasync calls should occur.
+        """Hot-path appends + flush must not add any fsync/fdatasync calls.
 
-        Uses strace to count fsync/fdatasync syscalls on the journal fd.
-        Only runs on Linux; skipped on other platforms with a log line.
+        The SQLite WAL bootstrap (creating the ``-wal`` file, writing the
+        journal-mode header) legitimately emits a small number of fsync
+        calls regardless of ``synchronous=NORMAL``; those happen once per
+        session, not per turn, and are not what this test is guarding.
+
+        To isolate the per-turn hot path we compare two runs under strace:
+
+        - **baseline**: open journal, ``flush()``, exit
+        - **full**: open journal, 100 appends, ``flush()``, exit
+
+        Setup and shutdown fsync costs cancel out in the delta.  What
+        remains is whatever the 100 appends + commit contribute — which
+        under ``PRAGMA synchronous=NORMAL`` in WAL mode should be zero.
         """
         import subprocess
         import textwrap
 
-        script = textwrap.dedent(f"""\
-            import sys
-            sys.path.insert(0, "src")
-            from easycat.runtime.journal import SqliteJournal
-            from easycat.runtime.records import JournalRecordKind
+        def _count_fsync(data_dir, appends: int):
+            script = textwrap.dedent(f"""\
+                import sys
+                sys.path.insert(0, "src")
+                from easycat.runtime.journal import SqliteJournal
+                from easycat.runtime.records import JournalRecordKind
 
-            j = SqliteJournal("strace-sess", data_dir="{tmp_path}")
-            for i in range(100):
-                j.append(
-                    kind=JournalRecordKind.EVENT,
-                    name=f"event_{{i}}",
-                    session_id="strace-sess",
-                )
-            j.flush()
-            # Do NOT close — close triggers the checkpoint which may fsync.
-            # We only care about the hot path.
-            print("done")
-        """)
+                j = SqliteJournal("strace-sess", data_dir="{data_dir}")
+                for i in range({appends}):
+                    j.append(
+                        kind=JournalRecordKind.EVENT,
+                        name=f"event_{{i}}",
+                        session_id="strace-sess",
+                    )
+                j.flush()
+                # Do NOT close — close triggers the checkpoint which fsyncs.
+                print("done")
+            """)
+            result = subprocess.run(
+                ["strace", "-e", "trace=fsync,fdatasync", "-f", "-c", "python", "-c", script],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            count = 0
+            for line in result.stderr.splitlines():
+                # strace -c summary rows:
+                #   % time     seconds  usecs/call  calls  errors  syscall
+                parts = line.split()
+                if parts and parts[-1] in ("fsync", "fdatasync"):
+                    try:
+                        count += int(parts[-3])
+                    except (ValueError, IndexError):
+                        pass
+            return count, result.stderr
 
-        result = subprocess.run(
-            ["strace", "-e", "trace=fsync,fdatasync", "-f", "-c", "python", "-c", script],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        # strace -c prints a summary table to stderr.  If fsync/fdatasync
-        # appear, the count will be > 0.  On a clean run they should not
-        # appear at all (or appear with 0 calls).
-        stderr = result.stderr
-        fsync_calls = 0
-        for line in stderr.splitlines():
-            # strace -c output lines look like:
-            #   % time     seconds  usecs/call     calls    errors syscall
-            #   ------ ----------- ----------- --------- --------- -------
-            #   100.00    0.000010          10         1           fsync
-            parts = line.split()
-            if parts and parts[-1] in ("fsync", "fdatasync"):
-                try:
-                    fsync_calls += int(parts[-3])
-                except (ValueError, IndexError):
-                    pass
-        assert fsync_calls == 0, (
-            f"Expected zero fsync/fdatasync on hot path, got {fsync_calls}.\n"
-            f"strace output:\n{stderr}"
+        baseline_dir = tmp_path / "baseline"
+        baseline_dir.mkdir()
+        baseline, baseline_out = _count_fsync(baseline_dir, appends=0)
+
+        hot_dir = tmp_path / "hot"
+        hot_dir.mkdir()
+        hot, hot_out = _count_fsync(hot_dir, appends=100)
+
+        delta = hot - baseline
+        assert delta == 0, (
+            f"Expected zero hot-path fsync/fdatasync (baseline={baseline}, "
+            f"full={hot}), got delta={delta}.\n"
+            f"baseline strace:\n{baseline_out}\n"
+            f"full strace:\n{hot_out}"
         )
 
 
