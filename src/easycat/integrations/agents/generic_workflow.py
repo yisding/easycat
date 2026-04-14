@@ -262,9 +262,32 @@ class GenericWorkflowBridge:
             )
 
     def _serialize_framework_state(self) -> bytes:
-        """Serialize workflow state for artifact storage."""
+        """Serialize workflow state for artifact storage.
+
+        Prefer the workflow's own ``snapshot_state()`` when available so
+        user code decides what is safe to persist.  The fallback path
+        walks ``__dict__`` but scrubs values whose keys look like
+        credentials — artifacts end up in debug bundles that can be
+        shared, so a blanket ``__dict__`` dump would otherwise leak API
+        keys and auth headers stored on the workflow object.
+        """
+        from easycat.runtime.safe_defaults import _is_secret_name
+
         try:
-            state = getattr(self._workflow, "__dict__", {})
+            state: dict[str, Any] | None = None
+            if hasattr(self._workflow, "snapshot_state"):
+                try:
+                    ws = self._workflow.snapshot_state()
+                    if isinstance(ws, dict):
+                        state = ws
+                except Exception:
+                    state = None
+            if state is None:
+                raw = getattr(self._workflow, "__dict__", {})
+                if isinstance(raw, dict):
+                    state = {k: v for k, v in raw.items() if not _is_secret_name(str(k))}
+                else:
+                    state = {}
             return json.dumps(state, default=str).encode()
         except (TypeError, ValueError):
             return b"{}"

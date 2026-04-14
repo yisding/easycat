@@ -269,8 +269,19 @@ def _scrub_secrets(data: dict[str, Any]) -> dict[str, Any]:
     """Remove data keys whose names match secret-adjacent fragments.
 
     Enforces the WS1 safe-default: no raw API keys, auth headers, or
-    credentials reach the journal via bridge records.
+    credentials reach the journal via bridge records.  The scrub recurses
+    into nested dicts and lists so secrets buried below the top level
+    (e.g. ``{"headers": {"Authorization": "…"}}``) are dropped too.
     """
     from easycat.runtime.safe_defaults import _is_secret_name
 
-    return {k: v for k, v in data.items() if not _is_secret_name(k)}
+    def _scrub(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {k: _scrub(v) for k, v in value.items() if not _is_secret_name(str(k))}
+        if isinstance(value, list):
+            return [_scrub(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(_scrub(item) for item in value)
+        return value
+
+    return _scrub(data)

@@ -1,7 +1,7 @@
 This project includes modified code from the following third-party component:
 
 1. File: lpcnet_enc.c
-   - Source: LPCNet (https:github.com/xiph/LPCNet)
+   - Source: LPCNet (https://github.com/xiph/LPCNet)
    - License: BSD-2-Clause
    - Copyright: 2017-2019, Mozilla
    - Original License Text:
@@ -30,7 +30,7 @@ This project includes modified code from the following third-party component:
         SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 2. Project: LPCNet
-    - Source: LPCNet (https:github.com/xiph/LPCNet)
+    - Source: LPCNet (https://github.com/xiph/LPCNet)
     - License: BSD-3-Clause
     - Copyright: 2017-2018, Mozilla, 2007-2017, Jean-Marc Valin, 2005-2017, Xiph.Org Foundation, 2003-2004, Mark Borgerding
     - Original License Text of LPCNet open source project:

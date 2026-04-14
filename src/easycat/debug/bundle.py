@@ -14,8 +14,28 @@ import re
 import sqlite3
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+
+_ARTIFACT_SIZE_CAP = 500_000_000  # 500MB aggregate cap across artifacts.
+
+
+def _reject_traversal(name: str) -> None:
+    """Raise if *name* looks like a traversal or absolute path.
+
+    ZIP entry names are POSIX-style, but attackers can embed backslashes
+    or absolute paths that naïve string checks miss.  Normalise
+    backslashes, parse as a posix path, and reject absolute paths or any
+    ``..`` component.
+    """
+    normalized = name.replace("\\", "/")
+    posix = PurePosixPath(normalized)
+    if posix.is_absolute() or any(part == ".." for part in posix.parts):
+        raise BundleValidationError(
+            f"Path traversal detected: {name!r}",
+            reason_code="PATH_TRAVERSAL",
+        )
+
 
 FORMAT_VERSION = 1
 
@@ -131,11 +151,7 @@ class RunBundle:
 
             # Validate manifest entries for path traversal
             for name in zf.namelist():
-                if ".." in name or name.startswith("/"):
-                    raise BundleValidationError(
-                        f"Path traversal detected: {name!r}",
-                        reason_code="PATH_TRAVERSAL",
-                    )
+                _reject_traversal(name)
 
             manifest = Manifest(
                 format_version=fmt_ver,
@@ -148,26 +164,37 @@ class RunBundle:
             # Read journal
             journal_ndjson = zf.read("journal.ndjson")
 
-            # Read artifacts
+            # Read artifacts.  Check each entry's declared uncompressed
+            # size before reading so a zip bomb can't force a massive
+            # in-memory decompression.
             artifact_index: dict[str, ArtifactEntry] = {}
             total_size = 0
-            for name in zf.namelist():
-                if name.startswith("artifacts/"):
-                    ref = name.removeprefix("artifacts/").removesuffix(".bin")
-                    if ref:
-                        if not _SHA256_REF.match(ref):
-                            raise BundleValidationError(
-                                f"Invalid artifact ref: {ref!r}",
-                                reason_code="INVALID_REF",
-                            )
-                        data = zf.read(name)
-                        total_size += len(data)
-                        if total_size > 500_000_000:  # 500MB
-                            raise BundleValidationError(
-                                "Total artifact size exceeds 500MB cap",
-                                reason_code="SIZE_EXCEEDED",
-                            )
-                        artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=len(data))
+            for info in zf.infolist():
+                name = info.filename
+                if not name.startswith("artifacts/"):
+                    continue
+                ref = name.removeprefix("artifacts/").removesuffix(".bin")
+                if not ref:
+                    continue
+                if not _SHA256_REF.match(ref):
+                    raise BundleValidationError(
+                        f"Invalid artifact ref: {ref!r}",
+                        reason_code="INVALID_REF",
+                    )
+                declared = info.file_size
+                if declared < 0 or total_size + declared > _ARTIFACT_SIZE_CAP:
+                    raise BundleValidationError(
+                        "Total artifact size exceeds 500MB cap",
+                        reason_code="SIZE_EXCEEDED",
+                    )
+                data = zf.read(name)
+                if len(data) > declared or total_size + len(data) > _ARTIFACT_SIZE_CAP:
+                    raise BundleValidationError(
+                        "Total artifact size exceeds 500MB cap",
+                        reason_code="SIZE_EXCEEDED",
+                    )
+                total_size += len(data)
+                artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=len(data))
 
             # Reconstruct artifacts from inline base64 blobs in manifest
             for ref, b64 in manifest_data.get("inline_artifacts", {}).items():
@@ -179,14 +206,14 @@ class RunBundle:
                         reason_code="INVALID_REF",
                     )
                 estimated_size = (len(b64) * 3) // 4
-                if total_size + estimated_size > 500_000_000:
+                if total_size + estimated_size > _ARTIFACT_SIZE_CAP:
                     raise BundleValidationError(
                         "Total artifact size exceeds 500MB cap",
                         reason_code="SIZE_EXCEEDED",
                     )
                 data = base64.b64decode(b64)
                 total_size += len(data)
-                if total_size > 500_000_000:
+                if total_size > _ARTIFACT_SIZE_CAP:
                     raise BundleValidationError(
                         "Total artifact size exceeds 500MB cap",
                         reason_code="SIZE_EXCEEDED",

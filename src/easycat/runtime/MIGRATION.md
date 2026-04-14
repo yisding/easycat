@@ -119,8 +119,3 @@ Each `SPAN_END` record includes `data["span_id"]`, `data["status"]`,
 and `data["duration_ms"]`. Error spans also carry an `error` field
 with `ErrorInfo(type=..., message=...)`.
 
-## Dual-write toggle
-
-Set `EASYCAT_LEGACY_OBS_DUAL_WRITE=0` to disable journal writes from
-the strangler-fig adapters. The legacy systems continue to function
-independently. Default is `1` (on).

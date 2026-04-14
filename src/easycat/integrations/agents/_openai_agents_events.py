@@ -40,26 +40,29 @@ def extract_tool_delta(data: Any) -> AgentBridgeEvent | None:
 def map_run_item(
     item: Any,
     recorder: AgentRecorder,
-    pending: set[str],
+    pending: dict[str, str],
 ) -> AgentBridgeEvent | None:
     """Map a ``run_item_stream_event`` item to an :class:`AgentBridgeEvent`.
 
-    Tracks pending tool calls via *pending* and records tool phases to
-    the *recorder*.  Returns ``None`` for unrecognised item types.
+    Tracks pending tool calls via *pending* (``call_id -> tool_name``) and
+    records tool phases to the *recorder*.  The tool name captured on the
+    start phase is reused when recording the matching result so journal
+    entries stay interpretable when several tools are in flight.  Returns
+    ``None`` for unrecognised item types.
     """
     item_type = getattr(item, "type", "")
     if item_type == "tool_call_item":
         raw = getattr(item, "raw_item", None)
         name = getattr(raw, "name", "") or ""
         call_id = getattr(raw, "call_id", "") or ""
-        pending.add(call_id)
+        pending[call_id] = name
         recorder.record_tool_call(phase="start", name=name, call_id=call_id)
         return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
     if item_type == "tool_call_output_item":
         raw = getattr(item, "raw_item", None)
         call_id = getattr(raw, "call_id", "") or ""
         result_str = str(getattr(item, "output", "")) if hasattr(item, "output") else ""
-        pending.discard(call_id)
-        recorder.record_tool_call(phase="result", name="", call_id=call_id)
+        name = pending.pop(call_id, "")
+        recorder.record_tool_call(phase="result", name=name, call_id=call_id)
         return AgentBridgeEvent(kind="tool_result", call_id=call_id, result=result_str)
     return None

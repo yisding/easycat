@@ -8,7 +8,6 @@ journal via ``AgentRecorder``.
 from __future__ import annotations
 
 import json
-import logging
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -34,16 +33,10 @@ from easycat.integrations.agents.base import (
 )
 from easycat.runtime.records import ErrorInfo
 
-logger = logging.getLogger(__name__)
-
 try:
     from agents import Runner  # type: ignore[import-untyped]
 except ImportError:
     Runner = None  # type: ignore[assignment,misc]
-
-INTERRUPTION_NOTE = (
-    "[The user interrupted the assistant's response and may not have heard all of it.]"
-)
 
 
 class OpenAIAgentsBridge:
@@ -121,7 +114,7 @@ class OpenAIAgentsBridge:
             raise
 
         accumulated = ""
-        pending_tool_calls: set[str] = set()
+        pending_tool_calls: dict[str, str] = {}
         interrupted = False
         cursor_exited = False
 
