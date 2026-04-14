@@ -371,11 +371,14 @@ class TestSqliteHotPathBehavior:
             count = 0
             for line in result.stderr.splitlines():
                 # strace -c summary rows:
-                #   % time     seconds  usecs/call  calls  errors  syscall
+                #   % time     seconds  usecs/call  calls  [errors]  syscall
+                # The "errors" column is blank when no errors occur, so we
+                # can't rely on negative indexing — "calls" is always at
+                # position 3 from the start.
                 parts = line.split()
-                if parts and parts[-1] in ("fsync", "fdatasync"):
+                if len(parts) >= 5 and parts[-1] in ("fsync", "fdatasync"):
                     try:
-                        count += int(parts[-3])
+                        count += int(parts[3])
                     except (ValueError, IndexError):
                         pass
             return count, result.stderr
