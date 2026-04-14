@@ -375,13 +375,11 @@ def create_session(config: EasyCatConfig) -> Session:
             shim._journal = journal
             shim._artifact_store = artifact_store
             shim._session_id = session_id
-            if config.mcp_servers is not None:
-                shim._mcp_servers = mcp_servers
-                # Also propagate to the underlying bridge so bridge.invoke()
-                # sees the configured servers (e.g. OpenAIAgentsBridge reads
-                # its own _mcp_servers, not the shim's).
-                if hasattr(shim.bridge, "_mcp_servers"):
-                    shim.bridge._mcp_servers = list(mcp_servers)
+            # Always overwrite so a reused shim from a prior session doesn't
+            # leak old MCP servers into a new session that leaves MCP unset.
+            shim._mcp_servers = mcp_servers
+            if hasattr(shim.bridge, "_mcp_servers"):
+                shim.bridge._mcp_servers = list(mcp_servers)
             # Inject model/API key for URL-backed agents.
             from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 

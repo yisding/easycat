@@ -1396,6 +1396,7 @@ class Session:
         self._stt_final_future = None
 
         async def _consume() -> None:
+            my_task = asyncio.current_task()
             turn = self._turn
             try:
                 async for stt_event in self.stt.events():
@@ -1429,7 +1430,12 @@ class Session:
                 logger.exception("STT event loop error")
                 await self._emit(Error(exception=exc, stage=ErrorStage.STT))
             finally:
-                self._resolve_pending_stt_segment_futures("")
+                # A predecessor consumer canceled by _start_stt_event_task()
+                # must not clear futures that the successor has already
+                # enqueued for the new turn.  Only the current owner of
+                # self._stt_task is allowed to touch the shared list here.
+                if self._stt_task is my_task:
+                    self._resolve_pending_stt_segment_futures("")
 
         self._stt_task = asyncio.create_task(_consume())
 
