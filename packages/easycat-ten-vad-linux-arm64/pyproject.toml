@@ -17,4 +17,9 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-easycat_ten_vad_linux_arm64 = ["libten_vad.so", "onnx_model/ten-vad.onnx"]
+easycat_ten_vad_linux_arm64 = [
+    "libten_vad.so",
+    "onnx_model/ten-vad.onnx",
+    "LICENSE",
+    "NOTICES",
+]

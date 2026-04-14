@@ -45,6 +45,12 @@ class SmartTurnProvider(Protocol):
 
 
 # ── Minimal Whisper feature extraction (NumPy only) ──────────────
+#
+# The helpers below and ``_WhisperFeatureExtractorNP`` are NumPy ports
+# derived from HuggingFace Transformers (audio_utils.py and Whisper's
+# feature_extraction_whisper.py), Apache 2.0 licensed. Modified to drop
+# PyTorch and keep only the single-waveform, 16 kHz code path Smart Turn
+# needs. See LICENSE.transformers in this package.
 
 
 def _hertz_to_mel(freq: Any, *, np: Any, mel_scale: str = "slaney") -> Any:
