@@ -47,7 +47,7 @@ def test_silero_backend_candidates_respect_override(monkeypatch: pytest.MonkeyPa
 
 def test_silero_onnx_model_path_uses_bundled_asset():
     model_path = vad_module._silero_onnx_model_path()
-    assert model_path.endswith("src/easycat/models/silero_vad_16k_op15.onnx")
+    assert model_path.endswith("src/easycat/models/silero_vad.onnx")
 
 
 def test_silero_fails_when_only_torch_backend_is_allowed(monkeypatch: pytest.MonkeyPatch):

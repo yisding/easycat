@@ -1,6 +1,7 @@
-Applies to: silero_vad_16k_op15.onnx
+Applies to: silero_vad.onnx
 
 Upstream: https://github.com/snakers4/silero-vad
+Vendored from tag: v6.2.1
 
 MIT License
 

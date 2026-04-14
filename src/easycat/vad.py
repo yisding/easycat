@@ -31,13 +31,16 @@ from easycat.extras import require_module
 
 logger = logging.getLogger(__name__)
 
-# Silero VAD expects 16 kHz mono audio
-_SILERO_SAMPLE_RATE = 16000
-# Silero processes 512-sample frames (32 ms at 16 kHz)
-_SILERO_FRAME_SAMPLES = 512
-_SILERO_CONTEXT_SAMPLES = 64
+# Silero v5 VAD accepts 8 kHz or 16 kHz mono audio via the ``sr`` input.
+# Telephony transports feed 8 kHz natively; WebRTC / local mic typically
+# arrives at 16 kHz (or is resampled there from higher rates).  Chunk and
+# context sizes are fixed 32 ms windows at each rate.
+_SILERO_SUPPORTED_RATES: tuple[int, ...] = (8000, 16000)
+_SILERO_DEFAULT_RATE = 16000
+_SILERO_FRAME_SAMPLES_AT: dict[int, int] = {8000: 256, 16000: 512}
+_SILERO_CONTEXT_SAMPLES_AT: dict[int, int] = {8000: 32, 16000: 64}
 _SILERO_RISKY_TORCH_ARCHES = {"aarch64", "arm64"}
-_SILERO_ONNX_MODEL = Path(__file__).parent / "models" / "silero_vad_16k_op15.onnx"
+_SILERO_ONNX_MODEL = Path(__file__).parent / "models" / "silero_vad.onnx"
 _TEN_BUNDLED_PACKAGE = "easycat_ten_vad_linux_arm64"
 # TEN VAD expects 16 kHz audio and defaults to a hop size of 256 samples.
 _TEN_SAMPLE_RATE = 16000
@@ -248,20 +251,25 @@ class _SileroOnnxModel:
         self._last_sr = 0
 
     def predict(self, samples: list[float], sample_rate: int) -> float:
-        if sample_rate != _SILERO_SAMPLE_RATE:
-            raise ValueError(f"Silero ONNX expects {_SILERO_SAMPLE_RATE} Hz audio")
+        if sample_rate not in _SILERO_SUPPORTED_RATES:
+            raise ValueError(
+                f"Silero ONNX expects one of {_SILERO_SUPPORTED_RATES} Hz, got {sample_rate}"
+            )
+        expected_frame = _SILERO_FRAME_SAMPLES_AT[sample_rate]
+        context_size = _SILERO_CONTEXT_SAMPLES_AT[sample_rate]
 
         np = self._numpy
         frame = np.asarray(samples, dtype=np.float32).reshape(1, -1)
-        if frame.shape[-1] != _SILERO_FRAME_SAMPLES:
+        if frame.shape[-1] != expected_frame:
             raise ValueError(
-                f"Silero ONNX expects {_SILERO_FRAME_SAMPLES} samples, got {frame.shape[-1]}"
+                f"Silero ONNX at {sample_rate} Hz expects {expected_frame} samples, "
+                f"got {frame.shape[-1]}"
             )
 
         if self._last_sr and self._last_sr != sample_rate:
             self.reset_states()
         if self._context.shape[1] == 0:
-            self._context = np.zeros((frame.shape[0], _SILERO_CONTEXT_SAMPLES), dtype=np.float32)
+            self._context = np.zeros((frame.shape[0], context_size), dtype=np.float32)
 
         model_input = np.concatenate([self._context, frame], axis=1)
         outputs = self._session.run(
@@ -274,7 +282,7 @@ class _SileroOnnxModel:
         )
         speech_prob, next_state = outputs
         self._state = next_state.astype(np.float32, copy=False)
-        self._context = model_input[:, -_SILERO_CONTEXT_SAMPLES:]
+        self._context = model_input[:, -context_size:]
         self._last_sr = sample_rate
         return float(np.asarray(speech_prob).reshape(-1)[0])
 
@@ -354,15 +362,18 @@ class SileroVAD(_VADBase):
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process an audio chunk and yield VAD events."""
-        # Resample to 16 kHz if needed
-        if chunk.format.sample_rate != _SILERO_SAMPLE_RATE:
-            chunk = resample_chunk(chunk, _SILERO_SAMPLE_RATE)
+        # Silero v5 handles 8 kHz and 16 kHz natively.  Anything else (24 k,
+        # 48 k, …) resamples to 16 kHz to preserve fidelity.
+        if chunk.format.sample_rate not in _SILERO_SUPPORTED_RATES:
+            chunk = resample_chunk(chunk, _SILERO_DEFAULT_RATE)
+        target_rate = chunk.format.sample_rate
 
         # Accumulate into buffer
         self._buffer += chunk.data
 
         # Process complete frames
-        frame_bytes = _SILERO_FRAME_SAMPLES * 2  # 2 bytes per PCM16 sample
+        frame_samples = _SILERO_FRAME_SAMPLES_AT[target_rate]
+        frame_bytes = frame_samples * 2  # 2 bytes per PCM16 sample
         while len(self._buffer) >= frame_bytes:
             frame_data = self._buffer[:frame_bytes]
             self._buffer = self._buffer[frame_bytes:]
@@ -373,12 +384,12 @@ class SileroVAD(_VADBase):
             float_samples = [s / 32768.0 for s in samples]
 
             if self._backend == "onnx":
-                speech_prob = self._model.predict(float_samples, _SILERO_SAMPLE_RATE)
+                speech_prob = self._model.predict(float_samples, target_rate)
             else:
                 if self._torch is None:
                     self._torch = require_module("torch", extra="all", purpose="Silero VAD")
                 tensor = self._torch.FloatTensor(float_samples)
-                speech_prob = self._model(tensor, _SILERO_SAMPLE_RATE).item()
+                speech_prob = self._model(tensor, target_rate).item()
             now = time.monotonic()
 
             for event in self._evaluate_speech(speech_prob, now):
@@ -403,7 +414,7 @@ class SileroVAD(_VADBase):
             pass
         model_name = "silero-vad-torch"
         if self._backend == "onnx":
-            model_name = "silero-vad-16k-op15-onnx"
+            model_name = "silero-vad-v6.2.1-onnx"
         return {
             "provider": "silero",
             "model": model_name if self._backend is not None else "silero-vad-unknown",
