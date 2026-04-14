@@ -9,10 +9,16 @@ surface.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from easycat.runtime.context import RunContext
 from easycat.session._turn_context import TurnContext
+
+if TYPE_CHECKING:
+    # Annotation-only import.  At runtime ``ReplaySpec`` resolves via
+    # ``__getattr__`` below so we stay clear of the import cycle with
+    # ``runtime.replay`` (which imports NONDETERMINISTIC_FIELDS from here).
+    from easycat.runtime.replay import ReplaySpec
 
 # ── Control signals ──────────────────────────────────────────────
 
@@ -61,15 +67,6 @@ class StageStateSnapshot:
     state_ref: str | None = None
 
 
-@dataclass(frozen=True)
-class ReplaySpec:
-    """Stub -- fleshed out in WS4."""
-
-    fidelity: str = "artifact"
-    from_sequence: int | None = None
-    to_sequence: int | None = None
-
-
 # ── Stage protocol ───────────────────────────────────────────────
 
 
@@ -112,3 +109,18 @@ NONDETERMINISTIC_FIELDS: frozenset[str] = frozenset(
 )
 
 # Extended in WS4 runtime/replay.py as REPLAY_IGNORE_FIELDS
+
+
+# ── Lazy re-export: ReplaySpec lives in runtime.replay ──────────
+# ``runtime.replay`` imports :data:`NONDETERMINISTIC_FIELDS` from this
+# module, so a top-level ``from easycat.runtime.replay import
+# ReplaySpec`` would deadlock during initial module load.  We defer
+# the lookup to attribute access time instead.
+
+
+def __getattr__(name: str) -> Any:  # pragma: no cover - trivial forwarder
+    if name == "ReplaySpec":
+        from easycat.runtime.replay import ReplaySpec
+
+        return ReplaySpec
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

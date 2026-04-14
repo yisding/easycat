@@ -15,7 +15,14 @@ import sqlite3
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from easycat.runtime.replay import (
+        ReplayCassette,
+        ReplayResult,
+        ReplaySpec,
+    )
 
 _ARTIFACT_SIZE_CAP = 500_000_000  # 500MB aggregate cap across artifacts.
 
@@ -102,6 +109,7 @@ class RunBundle:
     manifest: Manifest = field(default_factory=Manifest)
     journal_ndjson: bytes = b""
     artifact_index: dict[str, ArtifactEntry] = field(default_factory=dict)
+    artifact_blobs: dict[str, bytes] = field(default_factory=dict)
     replay_entry_points: list[CommittableCheckpoint] = field(default_factory=list)
     sharing_banner: str = ""
 
@@ -116,7 +124,13 @@ class RunBundle:
 
     def filter_by_stage(self, stage_name: str) -> list[dict[str, Any]]:
         """Filter journal records by stage name."""
-        return [r for r in self.records() if r.get("data", {}).get("stage") == stage_name]
+        results: list[dict[str, Any]] = []
+        for r in self.records():
+            data = r.get("data") or {}
+            if isinstance(data, dict):
+                if data.get("stage") == stage_name or data.get("observed_stage") == stage_name:
+                    results.append(r)
+        return results
 
     def filter_by_turn(self, turn_id: str) -> list[dict[str, Any]]:
         return [r for r in self.records() if r.get("turn_id") == turn_id]
@@ -126,6 +140,55 @@ class RunBundle:
             if r.get("sequence") == seq:
                 return r
         return None
+
+    # ── Replay surface ────────────────────────────────────────
+
+    def cassette_for_stage(
+        self,
+        stage_name: str,
+        *,
+        turn_id: str | None = None,
+    ) -> ReplayCassette:
+        """Return a :class:`ReplayCassette` slicing this bundle for one stage.
+
+        The cassette holds every journal record for the named stage
+        (optionally restricted to one turn) and a resolver closure that
+        looks refs up in :attr:`artifact_blobs`.  Stages consume this
+        via :meth:`easycat.stages.base.Stage.replay`.
+        """
+        from easycat.runtime.replay import ReplayCassette
+
+        records = self.filter_by_stage(stage_name)
+        if turn_id is not None:
+            records = [r for r in records if r.get("turn_id") == turn_id]
+        blobs = self.artifact_blobs
+
+        def _resolver(ref: str) -> bytes | None:
+            return blobs.get(ref)
+
+        return ReplayCassette(
+            stage_name=stage_name,
+            records=tuple(records),
+            _resolver=_resolver,
+        )
+
+    def replay(
+        self,
+        spec: ReplaySpec,
+        *,
+        installed_versions: dict[str, str] | None = None,
+    ) -> ReplayResult:
+        """Orchestrate a replay of this bundle under *spec*.
+
+        Thin wrapper around :class:`easycat.runtime.replay.ReplayRunner`.
+        Pass ``installed_versions`` (``{"stt": "openai-1.2.3", ...}``) to
+        enable the provider-version match check from T4.2; omit it for
+        offline replay where version skew is acceptable.
+        """
+        from easycat.runtime.replay import ReplayRunner
+
+        runner = ReplayRunner(self, spec, installed_versions=installed_versions)
+        return runner.run()
 
     @staticmethod
     def load(path: str | Path) -> RunBundle:
@@ -168,6 +231,7 @@ class RunBundle:
             # size before reading so a zip bomb can't force a massive
             # in-memory decompression.
             artifact_index: dict[str, ArtifactEntry] = {}
+            artifact_blobs: dict[str, bytes] = {}
             total_size = 0
             for info in zf.infolist():
                 name = info.filename
@@ -195,6 +259,7 @@ class RunBundle:
                     )
                 total_size += len(data)
                 artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=len(data))
+                artifact_blobs[ref] = data
 
             # Reconstruct artifacts from inline base64 blobs in manifest
             for ref, b64 in manifest_data.get("inline_artifacts", {}).items():
@@ -219,6 +284,7 @@ class RunBundle:
                         reason_code="SIZE_EXCEEDED",
                     )
                 artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=len(data))
+                artifact_blobs[ref] = data
 
             # Validate metadata sizes
             for record_line in journal_ndjson.decode("utf-8", errors="replace").splitlines():
@@ -252,6 +318,7 @@ class RunBundle:
                 manifest=manifest,
                 journal_ndjson=journal_ndjson,
                 artifact_index=artifact_index,
+                artifact_blobs=artifact_blobs,
                 replay_entry_points=entry_points,
                 sharing_banner=manifest.sharing_banner,
             )
@@ -284,14 +351,28 @@ class RunBundle:
         finally:
             conn.close()
 
-        # Walk artifact directory
+        # Walk artifact directory.  Read blobs so downstream replay has
+        # the bytes available; respect the same 500MB cap as ``load`` to
+        # avoid OOM on a corrupted artifact tree.
         artifact_index: dict[str, ArtifactEntry] = {}
+        artifact_blobs: dict[str, bytes] = {}
         if artifact_root and Path(artifact_root).exists():
+            total_size = 0
             for f in Path(artifact_root).iterdir():
-                if f.is_file():
-                    ref = f.stem
-                    if _SHA256_REF.match(ref):
-                        artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=f.stat().st_size)
+                if not f.is_file():
+                    continue
+                ref = f.stem
+                if not _SHA256_REF.match(ref):
+                    continue
+                size = f.stat().st_size
+                if total_size + size > _ARTIFACT_SIZE_CAP:
+                    raise BundleValidationError(
+                        "Total artifact size exceeds 500MB cap",
+                        reason_code="SIZE_EXCEEDED",
+                    )
+                total_size += size
+                artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=size)
+                artifact_blobs[ref] = f.read_bytes()
 
         manifest = Manifest(format_version=FORMAT_VERSION)
 
@@ -300,6 +381,7 @@ class RunBundle:
             manifest=manifest,
             journal_ndjson=journal_ndjson,
             artifact_index=artifact_index,
+            artifact_blobs=artifact_blobs,
         )
 
 

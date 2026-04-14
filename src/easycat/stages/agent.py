@@ -8,8 +8,9 @@ from typing import Any
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.runtime.context import RunContext
 from easycat.runtime.records import JournalRecordKind
+from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.session._turn_context import TurnContext
-from easycat.stages.base import ControlSignal, ReplaySpec, StageStateSnapshot
+from easycat.stages.base import ControlSignal, StageStateSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -58,29 +59,57 @@ class AgentStage:
             fields={"provider": type(self._provider).__name__},
         )
 
-    def replay(self, spec: ReplaySpec) -> Any:
-        """Replay Agent stage from captured data.
+    def replay(
+        self,
+        spec: ReplaySpec,
+        cassette: ReplayCassette | None = None,
+    ) -> Any:
+        """Replay Agent stage.
 
-        - LIVE: returns captured input for re-processing.
-        - ARTIFACT: returns captured agent response from spec.overrides.
-        - SIMULATED: returns captured events/response from spec.overrides.
+        ``ARTIFACT`` returns the captured final response.  ``SIMULATED``
+        returns the sequence of captured bridge events so downstream
+        stages can be driven without calling the live LLM.  ``LIVE``
+        returns the captured user input so the caller can re-run the
+        bridge on a fresh agent.
         """
-        fidelity = getattr(spec, "fidelity", spec.fidelity if hasattr(spec, "fidelity") else None)
-        overrides = getattr(spec, "overrides", {})
+        overrides = spec.overrides
+        if spec.fidelity is ReplayFidelity.LIVE:
+            if "input" in overrides:
+                return overrides["input"]
+            if cassette is not None:
+                record = cassette.last_record("stage_start") or cassette.last_record()
+                if record is not None:
+                    data = record.get("data") or {}
+                    if isinstance(data, dict) and "input" in data:
+                        return data["input"]
+            return None
 
-        if fidelity is not None and hasattr(fidelity, "value"):
-            fidelity_val = fidelity.value
-        else:
-            fidelity_val = str(fidelity) if fidelity else "artifact"
-
-        if fidelity_val == "live":
-            return overrides.get("input", None)
-
-        if fidelity_val == "simulated":
-            return overrides.get("events", overrides.get("result", None))
+        if spec.fidelity is ReplayFidelity.SIMULATED:
+            if "events" in overrides or "result" in overrides:
+                return overrides.get("events", overrides.get("result"))
+            if cassette is not None:
+                events = [
+                    r.get("data") for r in cassette.records if r.get("name") == "bridge_event"
+                ]
+                if events:
+                    return events
+            return None
 
         # ARTIFACT
-        return overrides.get("response", overrides.get("result", None))
+        if "response" in overrides or "result" in overrides:
+            return overrides.get("response", overrides.get("result"))
+        if cassette is not None:
+            record = cassette.last_record("stage_complete") or cassette.last_record()
+            if record is not None:
+                data = record.get("data") or {}
+                if isinstance(data, dict):
+                    for key in ("response", "text", "result"):
+                        if key in data:
+                            return data[key]
+                blob = cassette.blob(record.get("output_ref"))
+                if blob is not None:
+                    return blob
+        return None
 
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("AgentStage received upstream signal: %s", signal)
@@ -89,10 +118,12 @@ class AgentStage:
         self, ctx: RunContext, name: str, *, turn_id: str | None = None, **kwargs: Any
     ) -> None:
         if ctx.journal is not None:
+            payload = {k: str(v) if v is not None else None for k, v in kwargs.items()}
+            payload["stage"] = self.name
             ctx.journal.append(
                 kind=JournalRecordKind.EVENT,
                 name=name,
                 session_id=ctx.session_id,
                 turn_id=turn_id,
-                data={k: str(v) if v is not None else None for k, v in kwargs.items()},
+                data=payload,
             )

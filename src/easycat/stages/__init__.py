@@ -5,6 +5,7 @@ Each stage wraps an existing provider with a uniform ``execute`` /
 recording.
 """
 
+from easycat.runtime.replay import ReplaySpec
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
 from easycat.stages.base import (
@@ -14,7 +15,6 @@ from easycat.stages.base import (
     ControlSignal,
     InterruptSignal,
     PauseSignal,
-    ReplaySpec,
     ResumeSignal,
     Stage,
     StageStateSnapshot,

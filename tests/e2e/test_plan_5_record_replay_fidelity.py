@@ -216,18 +216,74 @@ async def test_provider_version_mismatch_error_shape() -> None:
 
 
 async def test_byte_identical_replay_pending() -> None:
-    """Full byte-for-byte audio replay depends on the WS4 ReplayRunner
-    implementation.  Mark as pending when not available so it stays on
-    the radar without failing the suite."""
-    try:
-        from easycat.runtime import replay as replay_mod  # noqa: F401
+    """ReplayRunner now exists — verify the class is importable.
 
-        runner_cls = getattr(replay_mod, "ReplayRunner", None)
-    except ImportError:  # pragma: no cover
-        runner_cls = None
+    Full byte-identical TTS audio replay (AC4.5) is still pending
+    because stages don't yet capture audio blobs at WS3-level; the
+    bundle walk and per-stage cassette surface land in this PR.
+    """
+    from easycat.runtime import replay as replay_mod
 
-    if runner_cls is None:
-        pytest.skip(
-            "ReplayRunner not yet implemented — byte-identical replay "
-            "will be added once WS4 replay engine lands."
+    assert getattr(replay_mod, "ReplayRunner", None) is not None
+
+
+async def test_replay_runner_walks_real_session_bundle(tmp_path: pathlib.Path) -> None:
+    """Record a text-only session, export, load, and run the walker.
+
+    This is the smallest end-to-end proof that bundle export, journal
+    records, and :class:`ReplayRunner` agree on a common record shape.
+    """
+    from easycat.runtime.replay import (
+        ReplayFidelity,
+        ReplayResult,
+        ReplaySpec,
+        ToolReplayPolicy,
+    )
+
+    session = create_text_session(agent=DeterministicAgent(), debug="full", wrap_agent=False)
+    for i in range(2):
+        await session.send_text(f"q{i}")
+    await session.stop()
+
+    bundle_path = tmp_path / "replay.zip"
+    session.export_debug_bundle(str(bundle_path))
+    bundle = RunBundle.load(bundle_path)
+
+    result = bundle.replay(
+        ReplaySpec(
+            fidelity=ReplayFidelity.ARTIFACT,
+            timing="fast",
+            tool_policy=ToolReplayPolicy.DENY,
         )
+    )
+    assert isinstance(result, ReplayResult)
+    # Every record is reflected as a frame.
+    assert len(result.frames) == sum(1 for _ in bundle.records())
+    # DENY didn't trip (this session has no tool calls).
+    assert result.blocked_tool_calls == []
+    assert result.side_effecting is False
+    # Fidelity is preserved when no version info is supplied.
+    assert result.fidelity_label is ReplayFidelity.ARTIFACT
+
+
+async def test_cassette_for_stage_is_queryable(tmp_path: pathlib.Path) -> None:
+    """``cassette_for_stage`` returns a ReplayCassette even when a text
+    session doesn't route through the agent *stage* (text sessions call
+    the agent adapter directly)."""
+    from easycat.runtime.replay import ReplayCassette
+
+    session = create_text_session(agent=DeterministicAgent(), debug="full", wrap_agent=False)
+    await session.send_text("ping")
+    await session.stop()
+
+    bundle_path = tmp_path / "cassette.zip"
+    session.export_debug_bundle(str(bundle_path))
+    bundle = RunBundle.load(bundle_path)
+
+    cassette = bundle.cassette_for_stage("agent")
+    assert isinstance(cassette, ReplayCassette)
+    assert cassette.stage_name == "agent"
+    # Cassette records (if any) must all match the requested stage.
+    for record in cassette.records:
+        data = record.get("data") or {}
+        assert data.get("stage") == "agent" or data.get("observed_stage") == "agent"

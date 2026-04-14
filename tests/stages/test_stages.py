@@ -239,15 +239,26 @@ class TestNondeterministicFields:
 
 
 class TestReplaySpec:
-    def test_defaults(self):
-        spec = ReplaySpec()
-        assert spec.fidelity == "artifact"
+    def test_fidelity_required(self):
+        from easycat.runtime.replay import ReplayFidelity
+
+        # fidelity has no default; ReplaySpec() must fail.
+        with pytest.raises(TypeError):
+            ReplaySpec()  # type: ignore[call-arg]
+        spec = ReplaySpec(fidelity=ReplayFidelity.ARTIFACT)
+        assert spec.fidelity is ReplayFidelity.ARTIFACT
         assert spec.from_sequence is None
         assert spec.to_sequence is None
 
     def test_with_range(self):
-        spec = ReplaySpec(fidelity="full", from_sequence=5, to_sequence=10)
-        assert spec.fidelity == "full"
+        from easycat.runtime.replay import ReplayFidelity
+
+        spec = ReplaySpec(
+            fidelity=ReplayFidelity.LIVE,
+            from_sequence=5,
+            to_sequence=10,
+        )
+        assert spec.fidelity is ReplayFidelity.LIVE
         assert spec.from_sequence == 5
         assert spec.to_sequence == 10
 
@@ -294,10 +305,11 @@ class TestStageProtocol:
         ids=[c[0].__name__ for c in _STAGE_CLASSES],
     )
     def test_replay_returns_without_error(self, stage_cls, provider_cls):
+        from easycat.runtime.replay import ReplayFidelity
+
         stage = stage_cls(provider_cls())
-        # WS4: replay() now returns captured data (None when no overrides)
-        result = stage.replay(ReplaySpec())
-        # With no overrides, result should be None or empty
+        # WS4: replay() now returns captured data (None when no overrides).
+        result = stage.replay(ReplaySpec(fidelity=ReplayFidelity.ARTIFACT))
         assert result is None or result == []
 
     @pytest.mark.parametrize(
