@@ -981,3 +981,53 @@ def test_filter_records_zero_limit_raises():
             to_seq=None,
             limit=0,
         )
+
+
+def test_static_index_blocks_protocol_relative_urls():
+    """Round-3 follow-up: ``_sanitiseUrl`` in the SPA must reject
+    ``//evil.com`` (protocol-relative cross-origin)."""
+    static_path = (
+        pathlib.Path(__file__).resolve().parent.parent.parent
+        / "src/easycat/debugger/static/index.html"
+    )
+    text = static_path.read_text(encoding="utf-8")
+    assert r"if (/^\/\//.test(trimmed)) return" in text, (
+        "_sanitiseUrl missing protocol-relative reject"
+    )
+    # Single-leading-slash same-origin path remains allowed via the
+    # ``\\/[^/]`` pattern in the safe-scheme regex.
+    assert r"\/[^/]" in text
+
+
+def test_static_index_force_destructive_check():
+    """Round-3 follow-up: the JS ``isDestructive`` check must include
+    ``force`` so a future force toggle can't bypass the confirm dialog."""
+    static_path = (
+        pathlib.Path(__file__).resolve().parent.parent.parent
+        / "src/easycat/debugger/static/index.html"
+    )
+    text = static_path.read_text(encoding="utf-8")
+    assert "isDestructive" in text
+    assert "|| force" in text
+
+
+async def test_replay_force_artifact_with_confirm_succeeds(tmp_path):
+    """``force=True`` with ``fidelity=artifact`` is destructive but must
+    still run when ``confirm=true`` is supplied — the gate exists to
+    require acknowledgement, not to disable force entirely."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    headers = {"Origin": "http://localhost:8765", "Content-Type": "application/json"}
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact", "force": True, "confirm": True},
+            headers=headers,
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["destructive"] is True
+        assert body["fidelity_label"] == "artifact"

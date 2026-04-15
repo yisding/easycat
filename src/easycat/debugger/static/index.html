@@ -647,9 +647,12 @@ function _sanitiseUrl(value) {
   // Reject anything that could load script.
   if (/^(javascript|vbscript|file):/i.test(trimmed)) return "";
   if (/^data:text\/html/i.test(trimmed)) return "";
-  // Allow scheme-less paths, fragments, and same-origin URLs straight
-  // through; everything else has to start with a known-safe scheme.
-  if (/^(https?:|blob:|data:audio\/|data:image\/|\/|#|\?|\.)/i.test(trimmed)) {
+  // Reject protocol-relative URLs: ``//evil.com`` is interpreted as
+  // same-protocol cross-origin, which the sanitiser must not bless.
+  if (/^\/\//.test(trimmed)) return "";
+  // Allow same-origin paths (single leading /), fragments, queries,
+  // relative refs, and explicit safe schemes.
+  if (/^(https?:|blob:|data:audio\/|data:image\/|\/[^/]|#|\?|\.)/i.test(trimmed)) {
     return trimmed;
   }
   // No scheme separator at all → relative path, safe.
@@ -1190,7 +1193,11 @@ async function runReplay(opts) {
   const fidelity = $("#replay-fidelity").value;
   const toolPolicy = $("#replay-tool-policy").value;
   const timing = $("#replay-timing").value;
-  const isDestructive = fidelity === "live" || toolPolicy === "allow";
+  // Destructive iff: LIVE fidelity, ALLOW tool policy, or force=true.
+  // Mirror the server-side rule exactly so a future ``force`` toggle
+  // can't silently bypass the confirm dialog.
+  const force = !!(opts && opts.force);
+  const isDestructive = fidelity === "live" || toolPolicy === "allow" || force;
   // The server enforces a confirm flag for destructive combos so a
   // CSRF / drive-by from another tab can't fire LIVE/ALLOW silently.
   // Surface that in the UI with a real warning instead of waiting for
