@@ -169,7 +169,10 @@ full `RedactionPolicy` write filter lands later in
   records while recovery metadata is still addressable.
 - [x] Implement `JournalDegraded` marker record (emitted once per
   session when a backend write fails; see T1.9)
-- [x] Implement `TimingInfo` (`wall_ms`, `cpu_ms`, `queue_ms`)
+- [x] Implement `TimingInfo` (`wall_ns`, `cpu_ns`, `queue_ns`, `mono_ns`).
+  Implementation switched to nanosecond units to preserve sub-millisecond
+  precision needed by the latency budget and replay-determinism work; the
+  field set is otherwise as specified.
 - [x] Implement `ErrorInfo` (exception class, message, notes, traceback
   summary, collapsed third-party frames)
 - [x] Expose a `JournalRecordKind` enum to make filtering explicit

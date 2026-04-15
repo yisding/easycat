@@ -331,7 +331,14 @@ which builds on the bridges shipped here.
           args_ref: str | None,
           result_ref: str | None,
       ) -> None: ...
-      def record_state_snapshot(self, ref: str) -> None: ...
+      def record_state_snapshot(
+          self, ref: str, *, payload: bytes | None = None
+      ) -> str: ...
+      # Implementation accepts an optional ``payload`` so callers can hand
+      # the recorder bytes-to-store-and-hash in one call rather than
+      # juggling ``ArtifactStore.put`` themselves.  Returns the resolved
+      # artifact ref (``ref`` when payload is None, or the SHA-256 of the
+      # newly-stored payload).
       def record_framework_handoff(
           self,
           from_unit: str | None,
