@@ -25,6 +25,10 @@ rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.31.0"]
 ten-vad = ["numpy>=1.24.0", "onnxruntime>=1.16.0", "ten-vad>=1.0.6.8"]
 silero-vad = ["numpy>=1.24.0", "onnxruntime>=1.16.0"]
 smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.16.0"]
+# Interactive debugger UI (peripheral-eval-and-debugger-ui.md).
+debugger = [
+    "aiohttp>=3.9.0",
+]
 webrtc = ["aiortc>=1.9.0", "aiohttp>=3.9.0"]
 quickstart = [
     "sounddevice>=0.4.6",

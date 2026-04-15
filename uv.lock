@@ -911,6 +911,9 @@ all = [
     { name = "twilio" },
     { name = "uvicorn" },
 ]
+debugger = [
+    { name = "aiohttp" },
+]
 deepgram = [
     { name = "deepgram-sdk" },
 ]
@@ -977,6 +980,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'all'", specifier = ">=3.9.0" },
+    { name = "aiohttp", marker = "extra == 'debugger'", specifier = ">=3.9.0" },
     { name = "aiohttp", marker = "extra == 'webrtc'", specifier = ">=3.9.0" },
     { name = "aiortc", marker = "extra == 'all'", specifier = ">=1.9.0" },
     { name = "aiortc", marker = "extra == 'webrtc'", specifier = ">=1.9.0" },
@@ -1025,7 +1029,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'telephony'", specifier = ">=0.29.0" },
     { name = "websockets", specifier = ">=16.0" },
 ]
-provides-extras = ["openai-agents", "pydantic-ai", "openai", "deepgram", "elevenlabs", "telephony", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "smart-turn", "webrtc", "quickstart", "all"]
+provides-extras = ["openai-agents", "pydantic-ai", "openai", "deepgram", "elevenlabs", "telephony", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "smart-turn", "debugger", "webrtc", "quickstart", "all"]
 
 [package.metadata.requires-dev]
 dev = [

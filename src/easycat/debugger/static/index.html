@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>EasyCat Debugger</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a22;
+    --panel-2: #1d2330;
+    --text: #d9dde3;
+    --muted: #7d8597;
+    --accent: #6ea8fe;
+    --green: #44d18a;
+    --orange: #e8a64b;
+    --red: #e0635a;
+    --purple: #b78dff;
+    --border: #232a37;
+    --row-hover: #1f2531;
+    --row-selected: #2a3550;
+    --mono: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+    font-size: 13px;
+    height: 100vh;
+    overflow: hidden;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 {
+    font-size: 14px;
+    margin: 0;
+    font-weight: 600;
+  }
+  header .source { color: var(--muted); font-family: var(--mono); }
+  header button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  header button:hover { background: var(--row-hover); }
+  main {
+    display: grid;
+    grid-template-rows: 220px 1fr;
+    height: calc(100vh - 49px);
+  }
+  #turns {
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    overflow: auto;
+    padding: 8px 12px;
+  }
+  #turns h2 { font-size: 12px; margin: 4px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .turn {
+    display: grid;
+    grid-template-columns: 200px 1fr 120px 60px;
+    gap: 12px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    align-items: center;
+    border: 1px solid transparent;
+  }
+  .turn:hover { background: var(--row-hover); }
+  .turn.selected { background: var(--row-selected); border-color: var(--accent); }
+  .turn .id { font-family: var(--mono); color: var(--accent); }
+  .turn .waterfall {
+    height: 18px;
+    background: var(--panel-2);
+    border-radius: 3px;
+    display: flex;
+    overflow: hidden;
+  }
+  .waterfall .bar {
+    height: 100%;
+    border-right: 1px solid var(--bg);
+    font-size: 10px;
+    line-height: 18px;
+    text-align: center;
+    color: var(--bg);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .turn .meta { color: var(--muted); font-family: var(--mono); }
+  .turn .badges { display: flex; gap: 4px; }
+  .turn .badge { font-family: var(--mono); padding: 1px 6px; border-radius: 10px; font-size: 10px; }
+  .badge.err { background: var(--red); color: var(--bg); }
+  .badge.intr { background: var(--orange); color: var(--bg); }
+  .body {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    height: 100%;
+    overflow: hidden;
+  }
+  #records-pane {
+    overflow: auto;
+    padding: 8px 12px;
+    border-right: 1px solid var(--border);
+  }
+  #filters {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+  #filters input, #filters select {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+  #filters .count { color: var(--muted); margin-left: auto; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  th {
+    text-align: left;
+    color: var(--muted);
+    font-weight: 500;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: .04em;
+  }
+  td {
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--panel);
+    cursor: pointer;
+  }
+  tr:hover td { background: var(--row-hover); }
+  tr.selected td { background: var(--row-selected); }
+  .stage-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    background: var(--panel-2);
+    color: var(--text);
+  }
+  .stage-tag.tts { background: #2c3e50; color: var(--purple); }
+  .stage-tag.stt { background: #2c3e50; color: var(--green); }
+  .stage-tag.agent { background: #2c3e50; color: var(--accent); }
+  .stage-tag.vad, .stage-tag.audio, .stage-tag.transport, .stage-tag.turn, .stage-tag.telephony {
+    background: #2c3e50;
+    color: var(--orange);
+  }
+  .kind-control { color: var(--orange); }
+  .has-error { color: var(--red); }
+  .ref { color: var(--accent); font-size: 11px; }
+  #inspector-pane {
+    overflow: auto;
+    padding: 12px;
+    background: var(--panel);
+  }
+  #inspector-pane h3 {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    margin: 0 0 8px;
+  }
+  pre {
+    background: var(--panel-2);
+    padding: 8px;
+    border-radius: 4px;
+    overflow: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text);
+    margin: 0 0 12px;
+    border: 1px solid var(--border);
+  }
+  .empty {
+    color: var(--muted);
+    font-style: italic;
+    padding: 32px;
+    text-align: center;
+  }
+  audio { width: 100%; margin-top: 8px; }
+  .field-grid {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 4px 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+  .field-grid .label { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>EasyCat Debugger</h1>
+  <span class="source" id="source-label">loading…</span>
+  <button id="refresh">Refresh</button>
+  <button id="clear-filters">Clear filters</button>
+</header>
+<main>
+  <section id="turns">
+    <h2>Turns</h2>
+    <div id="turns-list"></div>
+  </section>
+  <section class="body">
+    <div id="records-pane">
+      <div id="filters">
+        <select id="stage-filter"><option value="">all stages</option></select>
+        <input id="name-filter" placeholder="filter name…" />
+        <span class="count" id="record-count"></span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>seq</th>
+            <th>kind</th>
+            <th>name</th>
+            <th>stage</th>
+            <th>turn</th>
+            <th>refs</th>
+          </tr>
+        </thead>
+        <tbody id="records-body"></tbody>
+      </table>
+    </div>
+    <aside id="inspector-pane">
+      <div class="empty" id="inspector-empty">Select a record to inspect.</div>
+      <div id="inspector-content" hidden></div>
+    </aside>
+  </section>
+</main>
+
+<script>
+const $ = sel => document.querySelector(sel);
+let allRecords = [];
+let selectedSeq = null;
+let selectedTurn = null;
+
+async function loadManifest() {
+  const m = await fetch('/api/manifest').then(r => r.json());
+  $('#source-label').textContent =
+    m.source === 'bundle'
+      ? `bundle ${m.path} · ${m.record_count} records · ${m.artifact_count} artifacts`
+      : `live session ${m.session_id} · running=${m.is_running}`;
+}
+
+async function loadRecords() {
+  const params = new URLSearchParams();
+  if (selectedTurn) params.set('turn', selectedTurn);
+  const stage = $('#stage-filter').value;
+  if (stage) params.set('stage', stage);
+  const name = $('#name-filter').value.trim();
+  if (name) params.set('name', name);
+  const r = await fetch(`/api/records?${params}`).then(r => r.json());
+  allRecords = r.records;
+  $('#record-count').textContent = `${r.total} record${r.total === 1 ? '' : 's'}`;
+  renderRecords();
+  populateStageFilter();
+}
+
+function populateStageFilter() {
+  const select = $('#stage-filter');
+  if (select.options.length > 1) return;
+  const stages = new Set();
+  for (const r of allRecords) {
+    const data = r.data || {};
+    if (data.stage) stages.add(data.stage);
+  }
+  for (const s of [...stages].sort()) {
+    const opt = document.createElement('option');
+    opt.value = s; opt.textContent = s;
+    select.appendChild(opt);
+  }
+}
+
+function renderRecords() {
+  const body = $('#records-body');
+  body.innerHTML = '';
+  for (const r of allRecords) {
+    const tr = document.createElement('tr');
+    if (r.sequence === selectedSeq) tr.classList.add('selected');
+    tr.dataset.seq = r.sequence;
+    const data = r.data || {};
+    const stage = data.stage || data.observed_stage || '';
+    const stageTag = stage
+      ? `<span class="stage-tag ${stage}">${stage}</span>` : '';
+    const errCls = r.error ? 'has-error' : '';
+    const kindCls = r.kind === 'control' ? 'kind-control' : '';
+    const refs = [];
+    if (r.input_ref) refs.push(`<span class="ref">in:${r.input_ref.slice(0,8)}</span>`);
+    if (r.output_ref) refs.push(`<span class="ref">out:${r.output_ref.slice(0,8)}</span>`);
+    tr.innerHTML = `
+      <td>${r.sequence}</td>
+      <td class="${kindCls}">${r.kind || ''}</td>
+      <td class="${errCls}">${r.name || ''}</td>
+      <td>${stageTag}</td>
+      <td>${(r.turn_id || '').slice(-8)}</td>
+      <td>${refs.join(' ')}</td>
+    `;
+    tr.addEventListener('click', () => selectRecord(r));
+    body.appendChild(tr);
+  }
+}
+
+async function loadTurns() {
+  const t = await fetch('/api/turns').then(r => r.json());
+  const list = $('#turns-list');
+  list.innerHTML = '';
+  if (t.turns.length === 0) {
+    list.innerHTML = '<div class="empty">No turn-scoped records yet.</div>';
+    return;
+  }
+  const maxWall = Math.max(...t.turns.map(turn => turn.wall_ms || 0)) || 1;
+  for (const turn of t.turns) {
+    const div = document.createElement('div');
+    div.className = 'turn';
+    if (turn.turn_id === selectedTurn) div.classList.add('selected');
+    const stages = turn.stage_counts || {};
+    const stageOrder = ['transport', 'audio', 'vad', 'stt', 'agent', 'tts'];
+    const stageColors = {
+      transport: '#e8a64b', audio: '#7d8597', vad: '#b78dff',
+      stt: '#44d18a', agent: '#6ea8fe', tts: '#e0635a',
+    };
+    let bars = '';
+    let totalWidth = Object.values(stages).reduce((a, b) => a + b, 0) || 1;
+    for (const s of stageOrder) {
+      const count = stages[s] || 0;
+      if (!count) continue;
+      const pct = (count / totalWidth) * 100;
+      bars += `<div class="bar" style="background:${stageColors[s]};width:${pct}%" title="${s}: ${count} records">${s}</div>`;
+    }
+    const badges = [];
+    if (turn.error_count) badges.push(`<span class="badge err">${turn.error_count} err</span>`);
+    if (turn.interruption_count) badges.push(`<span class="badge intr">int</span>`);
+    div.innerHTML = `
+      <div class="id">${turn.turn_id}</div>
+      <div class="waterfall">${bars}</div>
+      <div class="meta">${(turn.wall_ms || 0).toFixed(0)}ms · ${turn.tts_audio_bytes}b out</div>
+      <div class="badges">${badges.join('')}</div>
+    `;
+    div.addEventListener('click', () => {
+      selectedTurn = selectedTurn === turn.turn_id ? null : turn.turn_id;
+      loadRecords();
+      loadTurns();
+    });
+    list.appendChild(div);
+  }
+}
+
+function selectRecord(record) {
+  selectedSeq = record.sequence;
+  renderRecords();
+  const empty = $('#inspector-empty');
+  const content = $('#inspector-content');
+  empty.hidden = true;
+  content.hidden = false;
+
+  const data = record.data || {};
+  const grid = `
+    <div class="field-grid">
+      <div class="label">sequence</div><div>${record.sequence}</div>
+      <div class="label">kind</div><div>${record.kind || ''}</div>
+      <div class="label">name</div><div>${record.name || ''}</div>
+      <div class="label">turn_id</div><div>${record.turn_id || ''}</div>
+      ${record.input_ref ? `<div class="label">input_ref</div><div class="ref">${record.input_ref}</div>` : ''}
+      ${record.output_ref ? `<div class="label">output_ref</div><div class="ref">${record.output_ref}</div>` : ''}
+    </div>`;
+
+  let audioControls = '';
+  if (record.output_ref && record.name === 'tts_frame' && data.encoding === 'pcm') {
+    audioControls = `
+      <h3>Audio (PCM ${data.sample_rate}Hz, ${data.channels}ch, ${data.sample_width * 8}-bit)</h3>
+      <button onclick="playPCM('${record.output_ref}', ${data.sample_rate}, ${data.channels}, ${data.sample_width})">▶ Play</button>
+    `;
+  }
+
+  let errorBlock = '';
+  if (record.error) {
+    errorBlock = `<h3 class="has-error">Error</h3><pre>${escapeHtml(JSON.stringify(record.error, null, 2))}</pre>`;
+  }
+
+  content.innerHTML = `
+    <h3>Record</h3>
+    ${grid}
+    <h3>Data</h3>
+    <pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>
+    ${errorBlock}
+    ${audioControls}
+  `;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"]/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'
+  }[ch]));
+}
+
+// Convert raw PCM bytes to a WAV blob the browser can play.
+async function playPCM(ref, sampleRate, channels, sampleWidth) {
+  const resp = await fetch(`/api/artifact/${ref}`);
+  const pcm = new Uint8Array(await resp.arrayBuffer());
+  const wav = pcmToWav(pcm, sampleRate, channels, sampleWidth);
+  const blob = new Blob([wav], { type: 'audio/wav' });
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  audio.play();
+}
+
+function pcmToWav(pcm, sampleRate, channels, sampleWidth) {
+  const bitsPerSample = sampleWidth * 8;
+  const byteRate = sampleRate * channels * sampleWidth;
+  const blockAlign = channels * sampleWidth;
+  const dataSize = pcm.length;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  // RIFF header
+  writeStr(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(view, 8, 'WAVE');
+  // fmt chunk
+  writeStr(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);  // PCM
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  // data chunk
+  writeStr(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+  new Uint8Array(buffer, 44).set(pcm);
+  return buffer;
+}
+function writeStr(view, offset, str) {
+  for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+}
+
+$('#refresh').addEventListener('click', () => {
+  loadManifest(); loadTurns(); loadRecords();
+});
+$('#clear-filters').addEventListener('click', () => {
+  selectedTurn = null;
+  $('#stage-filter').value = '';
+  $('#name-filter').value = '';
+  loadTurns(); loadRecords();
+});
+$('#stage-filter').addEventListener('change', loadRecords);
+$('#name-filter').addEventListener('input', () => {
+  clearTimeout(window._t);
+  window._t = setTimeout(loadRecords, 200);
+});
+
+loadManifest();
+loadTurns();
+loadRecords();
+</script>
+</body>
+</html>
