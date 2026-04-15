@@ -89,8 +89,12 @@ class Stage(Protocol):
         """Replay from journal/artifacts.  Stub until WS4."""
         ...
 
-    async def handle_upstream(self, signal: ControlSignal) -> None:
-        """React to an upstream control signal."""
+    async def handle_upstream(self, signal: ControlSignal, ctx: RunContext | None = None) -> None:
+        """React to an upstream control signal.
+
+        When *ctx* is supplied, the stage journals a ``ControlSignalRecord``
+        so the signal path is visible alongside normal stage events.
+        """
         ...
 
 
@@ -207,3 +211,49 @@ def audio_format_fields(audio: Any) -> dict[str, Any]:
         "sample_width": getattr(fmt, "sample_width", None),
         "encoding": getattr(fmt, "encoding", None),
     }
+
+
+_SIGNAL_KIND_BY_CLASS: dict[str, str] = {
+    "InterruptSignal": "interrupt",
+    "CancelSignal": "cancel",
+    "PauseSignal": "pause",
+    "ResumeSignal": "resume",
+    "BackpressureSignal": "backpressure",
+}
+
+
+def journal_append_control_signal(
+    ctx: RunContext,
+    *,
+    stage: str,
+    signal: ControlSignal,
+    turn_id: str | None = None,
+    direction: Literal["upstream", "downstream"] = "upstream",
+    cause: str | None = None,
+) -> None:
+    """Append a ``ControlSignalRecord`` describing one stage observing a signal.
+
+    Emits ``kind=JournalRecordKind.CONTROL`` with the signal's class
+    mapped into the canonical ``signal_kind`` enum and the observing
+    stage stamped into ``data["observed_stage"]`` so the replay runner's
+    stage filter keeps working.  The ``signal_id`` is preserved so
+    upstream fan-out across stages can be correlated.
+    """
+    if ctx.journal is None:
+        return
+    signal_cls = type(signal).__name__
+    signal_kind = _SIGNAL_KIND_BY_CLASS.get(signal_cls, signal_cls.lower().replace("signal", ""))
+    ctx.journal.append(
+        kind=JournalRecordKind.CONTROL,
+        name="control_signal",
+        session_id=ctx.session_id,
+        turn_id=turn_id,
+        data={
+            "stage": stage,
+            "observed_stage": stage,
+            "signal_kind": signal_kind,
+            "signal_id": getattr(signal, "signal_id", ""),
+            "direction": direction,
+            "cause": cause,
+        },
+    )

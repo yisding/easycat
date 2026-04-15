@@ -85,6 +85,12 @@ from easycat.session.action_executors import CoreSessionActionExecutor
 from easycat.session.actions import SessionAction, SessionActionExecutor
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
+from easycat.stages.base import (
+    ControlSignal as _ControlSignal,
+)
+from easycat.stages.base import (
+    InterruptSignal as _InterruptSignal,
+)
 from easycat.stages.stt import STTStage
 from easycat.stages.telephony import TelephonyStage
 from easycat.stages.transport import TransportStage
@@ -452,6 +458,53 @@ class Session:
             input_ref=input_ref,
             output_ref=output_ref,
         )
+
+    async def _propagate_upstream_signal(
+        self,
+        signal: _ControlSignal,
+        *,
+        cause: str | None = None,
+    ) -> None:
+        """Walk the upstream signal through every stage, late → early.
+
+        WS3 T3.8: control signals propagate from late stages (TTS,
+        Transport) back toward early stages (VAD, STT) so each one can
+        observe the event in journal order.  Each stage's
+        ``handle_upstream`` writes a ``ControlSignalRecord`` so a replay
+        can see who saw the signal and when.
+
+        Errors inside ``handle_upstream`` are isolated per-stage —
+        signal propagation must not throw and break the legacy cancel
+        path that the same caller relies on.
+        """
+        ordered = (
+            self._transport_stage,
+            self._tts_stage,
+            self._agent_stage,
+            self._turn_stage,
+            self._stt_stage,
+            self._vad_stage,
+            self._audio_stage,
+            self._telephony_stage,
+        )
+        for stage in ordered:
+            if stage is None:
+                continue
+            try:
+                await stage.handle_upstream(signal, self._run_ctx)
+            except Exception:  # noqa: BLE001 - never break cancel path
+                logger.exception("Stage %s.handle_upstream failed", stage.name)
+        # Annotate the trailing signal record with the originating cause
+        # so the replay UI can display "interrupt — barge_in" instead of
+        # bare signal IDs.
+        if cause and self._journal is not None:
+            self._journal.append(
+                kind=JournalRecordKind.CONTROL,
+                name="control_signal_cause",
+                session_id=self.session_id,
+                turn_id=self._turn.id if self._turn else None,
+                data={"signal_id": signal.signal_id, "cause": cause},
+            )
 
     def _record_markdown_strip(
         self,
@@ -1132,7 +1185,10 @@ class Session:
     async def cancel_turn(self, *, barge_in: bool = False) -> None:
         """Trigger cancel token, abort STT/agent/TTS, reset turn state.
 
-        If barge_in is True, emits an Interruption event.
+        If barge_in is True, emits an Interruption event and dispatches
+        an upstream ``InterruptSignal`` through every stage so each one
+        records its own ``ControlSignalRecord`` (WS3 T3.8 dual-path
+        coexistence: signal flow runs alongside the legacy cancel token).
         """
         if self._turn:
             self._turn.cancel_token.cancel()
@@ -1141,6 +1197,10 @@ class Session:
             if self._turn:
                 self._turn.record_barge_in()
             await self._emit(Interruption())
+            await self._propagate_upstream_signal(
+                _InterruptSignal(signal_id=f"barge-in-{uuid4().hex[:8]}"),
+                cause="barge_in",
+            )
 
         await self._cancel_stt()
         await self._cancel_tts()

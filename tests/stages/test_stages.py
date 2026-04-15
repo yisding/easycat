@@ -327,6 +327,53 @@ class TestStageProtocol:
         _STAGE_CLASSES,
         ids=[c[0].__name__ for c in _STAGE_CLASSES],
     )
+    async def test_handle_upstream_journals_control_signal_when_ctx_supplied(
+        self, stage_cls, provider_cls
+    ):
+        """WS3 T3.8: every stage's ``handle_upstream`` writes a
+        ``ControlSignalRecord`` when called with a ``RunContext``.
+
+        Without ctx (legacy callers), it stays a silent passthrough so
+        the protocol change is non-breaking.
+        """
+        from easycat.runtime.records import JournalRecordKind
+
+        journal = InMemoryRingBuffer(capacity=32)
+        ctx = _make_ctx(journal=journal)
+        stage = stage_cls(provider_cls())
+
+        await stage.handle_upstream(InterruptSignal(signal_id="sig-1"), ctx)
+
+        records = journal.read()
+        signal_records = [r for r in records if r.kind == JournalRecordKind.CONTROL]
+        assert len(signal_records) == 1
+        rec = signal_records[0]
+        assert rec.name == "control_signal"
+        assert rec.data["signal_kind"] == "interrupt"
+        assert rec.data["signal_id"] == "sig-1"
+        assert rec.data["observed_stage"] == stage.name
+        assert rec.data["direction"] == "upstream"
+
+    @pytest.mark.parametrize(
+        "stage_cls,provider_cls",
+        _STAGE_CLASSES,
+        ids=[c[0].__name__ for c in _STAGE_CLASSES],
+    )
+    async def test_handle_upstream_without_ctx_is_silent(self, stage_cls, provider_cls):
+        """Legacy callers (no ctx) keep the historical no-op behaviour."""
+        from easycat.runtime.records import JournalRecordKind
+
+        journal = InMemoryRingBuffer(capacity=32)
+        stage = stage_cls(provider_cls(), journal=journal)
+        await stage.handle_upstream(InterruptSignal(signal_id="sig-1"))
+        signals = [r for r in journal.read() if r.kind == JournalRecordKind.CONTROL]
+        assert signals == []
+
+    @pytest.mark.parametrize(
+        "stage_cls,provider_cls",
+        _STAGE_CLASSES,
+        ids=[c[0].__name__ for c in _STAGE_CLASSES],
+    )
     def test_runtime_checkable(self, stage_cls, provider_cls):
         stage = stage_cls(provider_cls())
         assert isinstance(stage, Stage)

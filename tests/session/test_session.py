@@ -577,6 +577,44 @@ async def test_cancel_turn_barge_in_emits_interruption():
 
 
 @pytest.mark.asyncio
+async def test_cancel_turn_barge_in_propagates_signal_through_all_stages():
+    """WS3 T3.8: a barge-in must dispatch an InterruptSignal through
+    every stage, producing one ControlSignalRecord per stage in the
+    journal so replay can see who observed the signal and when.
+    """
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(_full_config(journal=journal))
+    session._turn_state = TurnState.BOT_SPEAKING
+    session._turn = TurnContext("test-turn-signal", CancelToken())
+
+    await session.cancel_turn(barge_in=True)
+
+    signal_records = [r for r in journal.read() if r.kind == JournalRecordKind.CONTROL]
+    # One per stage plus the trailing cause record.
+    stage_records = [r for r in signal_records if r.name == "control_signal"]
+    cause_records = [r for r in signal_records if r.name == "control_signal_cause"]
+    observed = {r.data["observed_stage"] for r in stage_records}
+    assert observed == {
+        "transport",
+        "tts",
+        "agent",
+        "turn",
+        "stt",
+        "vad",
+        "audio",
+        "telephony",
+    }
+    # Every stage record carries the same signal_id so a replay UI can
+    # group the upstream walk into one logical event.
+    signal_ids = {r.data["signal_id"] for r in stage_records}
+    assert len(signal_ids) == 1
+    # The cause record links the signal back to "barge_in".
+    assert len(cause_records) == 1
+    assert cause_records[0].data["cause"] == "barge_in"
+    assert cause_records[0].data["signal_id"] == next(iter(signal_ids))
+
+
+@pytest.mark.asyncio
 async def test_cancel_tts_playback_resets_state():
     session = Session(_full_config())
     session._turn_state = TurnState.BOT_SPEAKING

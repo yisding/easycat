@@ -11,6 +11,7 @@ from easycat.session._turn_context import TurnContext
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
+    journal_append_control_signal,
     journal_append_event,
 )
 
@@ -110,5 +111,11 @@ class TelephonyStage:
                     return blob
         return None
 
-    async def handle_upstream(self, signal: ControlSignal) -> None:
+    async def handle_upstream(
+        self,
+        signal: ControlSignal,
+        ctx: RunContext | None = None,
+    ) -> None:
         logger.debug("TelephonyStage received upstream signal: %s", signal)
+        if ctx is not None:
+            journal_append_control_signal(ctx, stage=self.name, signal=signal)

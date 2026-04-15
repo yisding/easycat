@@ -14,6 +14,7 @@ from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
     audio_format_fields,
+    journal_append_control_signal,
     journal_append_event,
     put_artifact,
 )
@@ -188,5 +189,11 @@ class TTSStage:
                             return data[key]
         return None
 
-    async def handle_upstream(self, signal: ControlSignal) -> None:
+    async def handle_upstream(
+        self,
+        signal: ControlSignal,
+        ctx: RunContext | None = None,
+    ) -> None:
         logger.debug("TTSStage received upstream signal: %s", signal)
+        if ctx is not None:
+            journal_append_control_signal(ctx, stage=self.name, signal=signal)
