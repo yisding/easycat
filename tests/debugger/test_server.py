@@ -324,3 +324,335 @@ def test_debugger_source_session_adapts_live_journal():
     # this is the polling contract live sources rely on.
     journal.append(kind=JournalRecordKind.EVENT, name="test", session_id="stub-1")
     assert any(r["name"] == "test" for r in source.records())
+
+
+# ── Production-grade UI endpoints ────────────────────────────────
+
+
+async def test_api_timeline_emits_per_stage_spans(tmp_path):
+    """``/api/timeline`` should compute real per-stage span timing for
+    each turn, not just record counts.  The waterfall view depends on
+    the ``offset_ms`` + ``duration_ms`` it returns."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        body = await (await client.get("/api/timeline")).json()
+        assert "timeline" in body
+        # At least one turn with stage spans (TTS minimum).
+        assert any(t["spans"] for t in body["timeline"])
+        for turn in body["timeline"]:
+            for span in turn["spans"]:
+                assert span["offset_ms"] >= 0
+                assert span["duration_ms"] >= 0
+                assert span["stage"] in {
+                    "transport",
+                    "audio",
+                    "vad",
+                    "stt",
+                    "agent",
+                    "tts",
+                    "turn",
+                    "telephony",
+                }
+
+
+async def test_api_transcript_extracts_user_and_agent_text(tmp_path):
+    """The transcript endpoint must surface user STT text and agent text."""
+    session = create_text_session(agent=_DeterministicAgent(), debug="full", wrap_agent=False)
+    await session.send_text("hello-world")
+    bundle_path = tmp_path / "t.zip"
+    session.export_debug_bundle(str(bundle_path))
+    await session.stop()
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        body = await (await client.get("/api/transcript")).json()
+        assert "transcripts" in body
+        # Single turn with the agent reply visible.
+        agent_turns = [t for t in body["transcripts"] if t["agent"]]
+        assert agent_turns, "expected at least one turn with an agent reply"
+        # DeterministicAgent returns "reply-<input>".
+        assert any("reply-hello-world" in t["agent"] for t in agent_turns)
+
+
+async def test_api_audio_concat_returns_valid_wav(tmp_path):
+    """Concatenated audio endpoint should stitch all TTS frames for a
+    turn into one WAV with a parseable RIFF header."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    # Find a turn with TTS frames.
+    bundle = RunBundle.load(bundle_path)
+    turn_id = next(
+        r.get("turn_id")
+        for r in bundle.records()
+        if r.get("name") == "tts_frame" and r.get("turn_id")
+    )
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/audio/concat/{turn_id}")
+        assert resp.status == 200
+        body = await resp.read()
+        # WAV magic bytes
+        assert body[:4] == b"RIFF"
+        assert body[8:12] == b"WAVE"
+        assert len(body) > 44
+
+
+async def test_api_audio_concat_rejects_unknown_turn(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/concat/no-such-turn")
+        assert resp.status == 404
+
+
+async def test_api_artifact_rejects_invalid_ref(tmp_path):
+    """The route must reject anything that isn't a SHA-256 hex digest
+    before the filesystem store sees it — guards against URL-encoded
+    path traversal."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        # Wrong length.
+        r1 = await client.get("/api/artifact/notahash")
+        assert r1.status == 400
+        # Right length but not hex.
+        r2 = await client.get("/api/artifact/" + "z" * 64)
+        assert r2.status == 400
+
+
+async def test_api_audio_concat_rejects_invalid_turn_id(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        # Path-traversal-like turn id.
+        resp = await client.get("/api/audio/concat/" + "x" * 200)
+        assert resp.status == 400
+
+
+async def test_api_replay_runs_against_bundle(tmp_path):
+    """``POST /api/replay`` should invoke the bundle's replay runner and
+    return a structured result with fidelity_label and frame_count."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post("/api/replay", json={"fidelity": "artifact"})
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["fidelity_label"] == "artifact"
+        assert body["frame_count"] > 0
+        assert body["side_effecting"] is False
+
+
+async def test_api_replay_rejected_for_live_sessions():
+    """Live-session sources don't have a bundle to replay; the endpoint
+    must respond with 405, not crash."""
+    artifact_store = InMemoryArtifactStore()
+    journal = InMemoryRingBuffer(capacity=4, artifact_store=artifact_store)
+
+    class _StubSession:
+        session_id = "live-1"
+        is_running = True
+        turn_state = "IDLE"
+        _artifact_store = artifact_store
+
+        @property
+        def journal(self):
+            return journal
+
+    source = _session_source(_StubSession())
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post("/api/replay", json={"fidelity": "artifact"})
+        assert resp.status == 405
+
+
+async def test_api_cost_returns_zero_when_no_cost_records(tmp_path):
+    """Cost panel must degrade gracefully — a bundle with no CostRecord
+    events still returns a well-formed totals dict."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        body = await (await client.get("/api/cost")).json()
+        assert "totals" in body and "per_turn" in body
+        for k in ("usd", "stt_seconds", "tts_chars", "llm_tokens"):
+            assert body["totals"][k] == 0
+
+
+async def test_api_health_returns_ok(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        body = await (await client.get("/api/health")).json()
+        assert body["ok"] is True
+        assert body["is_live"] is False
+
+
+async def test_origin_guard_refuses_cross_origin_requests(tmp_path):
+    """By default, the origin guard middleware blocks non-loopback
+    Origin headers so a malicious page on the local machine can't talk
+    to the debugger via CSRF."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)  # allow_remote=False (default)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(
+            "/api/manifest",
+            headers={"Origin": "https://evil.example.com"},
+        )
+        assert resp.status == 403
+
+
+async def test_origin_guard_allows_loopback_origin(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(
+            "/api/manifest",
+            headers={"Origin": "http://localhost:8765"},
+        )
+        assert resp.status == 200
+
+
+async def test_manifest_strips_filesystem_path(tmp_path):
+    """``manifest`` should expose only the bundle's basename, never the
+    full filesystem path — bundles often live under user-named dirs."""
+    bundle_path = tmp_path / "a-secret-folder" / "user-bundle.zip"
+    bundle_path.parent.mkdir()
+    inner = await _build_voice_bundle(tmp_path)
+    bundle_path.write_bytes(inner.read_bytes())
+
+    source = _bundle_source(bundle_path)
+    manifest = source.manifest()
+    assert manifest["name"] == "user-bundle.zip"
+    assert "a-secret-folder" not in json.dumps(manifest)
+    assert "path" not in manifest
+
+
+def test_check_host_refuses_non_loopback_without_opt_in():
+    from easycat.debugger.server import _check_host
+
+    with pytest.raises(RuntimeError, match="non-loopback"):
+        _check_host("0.0.0.0", allow_remote=False)
+    # Loopback always passes.
+    _check_host("127.0.0.1", allow_remote=False)
+    _check_host("::1", allow_remote=False)
+    _check_host("localhost", allow_remote=False)
+    # Explicit opt-in passes.
+    _check_host("0.0.0.0", allow_remote=True)
+
+
+def test_serve_bundle_refuses_non_loopback_without_allow_remote(tmp_path):
+    """Public entry point should fail loud rather than silently exposing
+    the journal to the network."""
+    import easycat.debugger.server as srv
+
+    bundle_path = tmp_path / "x.zip"
+    with zipfile.ZipFile(bundle_path, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"format_version": 1}))
+        zf.writestr("journal.ndjson", b"")
+
+    with pytest.raises(RuntimeError, match="non-loopback"):
+        srv.serve_bundle(bundle_path, host="0.0.0.0", open_browser=False)
+
+
+async def test_websocket_emits_snapshot_for_bundle(tmp_path):
+    """A WebSocket client should receive at least one snapshot message
+    naming the current record count when it connects to a bundle source."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        async with client.ws_connect("/ws") as ws:
+            msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
+            payload = msg.json()
+            assert payload["type"] == "snapshot"
+            assert payload["record_count"] > 0
+
+
+async def test_records_supports_pagination(tmp_path):
+    """``limit``/``offset`` query params are required for the UI to
+    avoid loading 50K records into one DOM table."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        full = await (await client.get("/api/records")).json()
+        if full["total"] < 5:
+            pytest.skip("bundle too small to exercise pagination")
+        page = await (await client.get("/api/records?limit=3&offset=2")).json()
+        assert page["total"] == 3
+        assert page["records"][0]["sequence"] == full["records"][2]["sequence"]
+
+
+async def test_export_endpoint_returns_zip_for_live_session():
+    """``POST /api/export`` should bundle a live session and return a ZIP."""
+    session = create_text_session(agent=_DeterministicAgent(), debug="full", wrap_agent=False)
+    await session.send_text("export-me")
+    source = _session_source(session)
+    source._export_fn = lambda: __import__(
+        "easycat.debugger.server", fromlist=["_bundle_zip_from_session"]
+    )._bundle_zip_from_session(session)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    try:
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post("/api/export")
+            assert resp.status == 200
+            body = await resp.read()
+            # ZIP magic.
+            assert body[:2] == b"PK"
+    finally:
+        await session.stop()
+
+
+async def test_export_rejected_for_bundle_source(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post("/api/export")
+        assert resp.status == 405
