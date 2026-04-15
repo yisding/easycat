@@ -361,6 +361,7 @@ def _summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "stt_audio_bytes": 0,
                 "interruption_count": 0,
                 "error_count": 0,
+                "_interrupt_signal_ids": set(),
             }
             by_turn[turn_id] = bucket
             order.append(turn_id)
@@ -388,15 +389,28 @@ def _summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if r.get("name") in ("stage_start", "stt_audio_in"):
                 if isinstance(audio_bytes, int) and stage == "stt":
                     bucket["stt_audio_bytes"] += audio_bytes
-        if r.get("name") in ("interruption", "control_signal"):
-            sig = (r.get("data") or {}).get("signal_kind")
-            if r.get("name") == "interruption" or sig == "interrupt":
-                bucket["interruption_count"] += 1
+        # T3.8 fans an InterruptSignal across all 8 stages, so a single
+        # barge-in produces 8 ``control_signal`` records (one per stage)
+        # plus the legacy ``interruption`` event.  We bookkeep both
+        # here and resolve the deduped count in the post-pass below
+        # so record order doesn't affect the result.
+        if r.get("name") == "control_signal":
+            data = r.get("data") or {}
+            if isinstance(data, dict) and data.get("signal_kind") == "interrupt":
+                bucket["_interrupt_signal_ids"].add(data.get("signal_id") or "")
+        elif r.get("name") == "interruption":
+            bucket["_legacy_interruptions"] = bucket.get("_legacy_interruptions", 0) + 1
         if r.get("error"):
             bucket["error_count"] += 1
     rolled: list[dict[str, Any]] = []
     for turn_id in order:
         bucket = by_turn[turn_id]
+        # Prefer the deduped signal-id count; fall back to legacy
+        # ``interruption`` event count for bundles that predate T3.8.
+        signal_count = len(bucket["_interrupt_signal_ids"])
+        legacy_count = bucket.pop("_legacy_interruptions", 0)
+        bucket["interruption_count"] = signal_count if signal_count else legacy_count
+        bucket.pop("_interrupt_signal_ids", None)
         first = bucket["first_wall_ns"]
         last = bucket["last_wall_ns"]
         bucket["wall_ms"] = ((last - first) / 1_000_000) if first and last else None
@@ -444,6 +458,15 @@ def _build_timeline(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(stage, str):
             continue
         name = r.get("name")
+        # Skip ``control_signal`` records when computing stage spans.
+        # T3.8 fans an interrupt across all 8 stages, so each stage
+        # gets a ``control_signal`` with ``observed_stage`` set even
+        # when that stage had no real pipeline activity.  Counting
+        # those here would render a synthetic instant-span for stages
+        # the turn never actually touched.  ``stage_counts`` in
+        # ``_summarise_turns`` still accounts for the signals.
+        if name == "control_signal":
+            continue
         slot = bucket["stages"].setdefault(
             stage,
             {"stage": stage, "first_wall_ns": None, "last_wall_ns": None, "record_count": 0},

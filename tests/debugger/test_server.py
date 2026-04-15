@@ -1011,6 +1011,125 @@ def test_static_index_force_destructive_check():
     assert "|| force" in text
 
 
+def test_summarise_turns_dedupes_t3_8_interrupt_fanout():
+    """T3.8 fans an InterruptSignal across 8 stages, so a single
+    barge-in would appear as 9 interruptions (8 control_signal + 1
+    legacy interruption event).  ``_summarise_turns`` must dedupe by
+    ``signal_id`` and report 1.
+    """
+    from easycat.debugger.server import _summarise_turns
+
+    sig_id = "barge-1"
+    records = [
+        {
+            "sequence": 1,
+            "turn_id": "t1",
+            "name": "interruption",
+            "data": {},
+            "timing": {"wall_ns": 1_000_000},
+        },
+    ]
+    # Fan-out from T3.8: one control_signal per stage, all sharing
+    # the same signal_id.
+    for i, stage in enumerate(
+        ("transport", "tts", "agent", "turn", "stt", "vad", "audio", "telephony")
+    ):
+        records.append(
+            {
+                "sequence": 2 + i,
+                "turn_id": "t1",
+                "kind": "control",
+                "name": "control_signal",
+                "data": {
+                    "stage": stage,
+                    "observed_stage": stage,
+                    "signal_kind": "interrupt",
+                    "signal_id": sig_id,
+                },
+                "timing": {"wall_ns": (2 + i) * 1_000_000},
+            }
+        )
+    out = _summarise_turns(records)
+    assert len(out) == 1
+    assert out[0]["interruption_count"] == 1
+
+
+def test_summarise_turns_counts_legacy_interruption_when_no_signals():
+    """Older bundles have only the legacy ``interruption`` event with
+    no ``control_signal`` records.  The counter should still find them."""
+    from easycat.debugger.server import _summarise_turns
+
+    records = [
+        {
+            "sequence": 1,
+            "turn_id": "t1",
+            "name": "interruption",
+            "data": {},
+            "timing": {"wall_ns": 1_000_000},
+        },
+    ]
+    out = _summarise_turns(records)
+    assert len(out) == 1
+    assert out[0]["interruption_count"] == 1
+
+
+def test_build_timeline_skips_control_signal_records_for_spans():
+    """``control_signal`` from a barge-in shouldn't generate synthetic
+    instant-spans for stages that had no real pipeline activity in
+    that turn (e.g. telephony in a pure-WS session)."""
+    from easycat.debugger.server import _build_timeline
+
+    records = [
+        {
+            "sequence": 1,
+            "turn_id": "t1",
+            "name": "stage_start",
+            "data": {"stage": "tts"},
+            "timing": {"wall_ns": 1_000_000},
+        },
+        {
+            "sequence": 2,
+            "turn_id": "t1",
+            "name": "stage_complete",
+            "data": {"stage": "tts"},
+            "timing": {"wall_ns": 5_000_000},
+        },
+        # Barge-in fan-out reaches telephony but it had no real activity.
+        {
+            "sequence": 3,
+            "turn_id": "t1",
+            "kind": "control",
+            "name": "control_signal",
+            "data": {
+                "stage": "telephony",
+                "observed_stage": "telephony",
+                "signal_kind": "interrupt",
+                "signal_id": "barge-1",
+            },
+            "timing": {"wall_ns": 6_000_000},
+        },
+    ]
+    timeline = _build_timeline(records)
+    assert len(timeline) == 1
+    stage_names = [s["stage"] for s in timeline[0]["spans"]]
+    assert "tts" in stage_names
+    assert "telephony" not in stage_names
+
+
+def test_static_index_pipeline_includes_turn_stage():
+    """Round-4 follow-up: the SVG pipeline graph must enumerate all 8
+    stages, including ``turn`` (SmartTurn endpointing).  Previously the
+    array silently omitted it."""
+    static_path = (
+        pathlib.Path(__file__).resolve().parent.parent.parent
+        / "src/easycat/debugger/static/index.html"
+    )
+    text = static_path.read_text(encoding="utf-8")
+    assert 'id: "turn"' in text and 'label: "Turn"' in text, (
+        "PIPELINE_STAGES missing the turn (SmartTurn) node"
+    )
+
+
 async def test_replay_force_artifact_with_confirm_succeeds(tmp_path):
     """``force=True`` with ``fidelity=artifact`` is destructive but must
     still run when ``confirm=true`` is supplied — the gate exists to

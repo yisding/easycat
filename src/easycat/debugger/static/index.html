@@ -901,14 +901,18 @@ function filterRecordsByTurn(turnId) {
 }
 
 // ── Pipeline view ────────────────────────────────────────────────
+// Eight stages in the order audio + control flow through them.  The
+// ``turn`` stage runs SmartTurn endpointing between STT and Agent;
+// previously this list omitted it and the SVG hid SmartTurn entirely.
 const PIPELINE_STAGES = [
   { id: "transport", x: 60, label: "Transport" },
-  { id: "audio", x: 180, label: "Audio (NR/AEC)" },
-  { id: "vad", x: 320, label: "VAD" },
-  { id: "stt", x: 440, label: "STT" },
-  { id: "agent", x: 560, label: "Agent" },
-  { id: "tts", x: 700, label: "TTS" },
-  { id: "telephony", x: 820, label: "Telephony" },
+  { id: "audio", x: 170, label: "Audio (NR/AEC)" },
+  { id: "vad", x: 280, label: "VAD" },
+  { id: "stt", x: 390, label: "STT" },
+  { id: "turn", x: 500, label: "Turn" },
+  { id: "agent", x: 610, label: "Agent" },
+  { id: "tts", x: 720, label: "TTS" },
+  { id: "telephony", x: 830, label: "Telephony" },
 ];
 
 function renderPipelineView() {
