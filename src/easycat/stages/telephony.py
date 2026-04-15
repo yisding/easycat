@@ -6,16 +6,25 @@ import logging
 from typing import Any
 
 from easycat.runtime.context import RunContext
-from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.session._turn_context import TurnContext
-from easycat.stages.base import ControlSignal, StageStateSnapshot
+from easycat.stages.base import (
+    ControlSignal,
+    StageStateSnapshot,
+    journal_append_event,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class TelephonyStage:
-    """Stage wrapper around telephony helpers (DTMF, voicemail, etc.)."""
+    """Stage wrapper around telephony helpers (DTMF, voicemail, etc.).
+
+    Telephony is event-driven rather than request/response, so
+    ``execute`` is a passthrough that just journals the invocation.
+    Helpers that want rich per-event coverage emit their own records
+    through the bridge wiring Session already sets up.
+    """
 
     name = "telephony"
 
@@ -26,20 +35,31 @@ class TelephonyStage:
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         state_before = self.snapshot_state()
-        self._record(ctx, "stage_start", turn_id=turn.id, state_before=state_before)
+        journal_append_event(
+            ctx,
+            stage=self.name,
+            name="stage_start",
+            turn_id=turn.id,
+            state_before=state_before,
+            data_extra={"input": str(input) if input is not None else None},
+        )
         try:
-            # Telephony helpers are event-driven, not request/response.
-            # execute() is a passthrough that records the invocation.
             result = input
         except Exception as exc:
-            self._record(
-                ctx, "stage_error", turn_id=turn.id, state_before=state_before, error=str(exc)
+            journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_error",
+                turn_id=turn.id,
+                state_before=state_before,
+                error=str(exc),
             )
             raise
         state_after = self.snapshot_state()
-        self._record(
+        journal_append_event(
             ctx,
-            "stage_complete",
+            stage=self.name,
+            name="stage_complete",
             turn_id=turn.id,
             state_before=state_before,
             state_after=state_after,
@@ -92,17 +112,3 @@ class TelephonyStage:
 
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("TelephonyStage received upstream signal: %s", signal)
-
-    def _record(
-        self, ctx: RunContext, name: str, *, turn_id: str | None = None, **kwargs: Any
-    ) -> None:
-        if ctx.journal is not None:
-            payload = {k: str(v) if v is not None else None for k, v in kwargs.items()}
-            payload["stage"] = self.name
-            ctx.journal.append(
-                kind=JournalRecordKind.EVENT,
-                name=name,
-                session_id=ctx.session_id,
-                turn_id=turn_id,
-                data=payload,
-            )

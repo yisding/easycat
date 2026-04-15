@@ -9,9 +9,10 @@ surface.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from easycat.runtime.context import RunContext
+from easycat.runtime.records import JournalRecordKind
 from easycat.session._turn_context import TurnContext
 
 if TYPE_CHECKING:
@@ -124,3 +125,85 @@ def __getattr__(name: str) -> Any:  # pragma: no cover - trivial forwarder
 
         return ReplaySpec
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# ── Shared capture helpers ───────────────────────────────────────
+
+
+def put_artifact(
+    ctx: RunContext,
+    payload: bytes | None,
+    *,
+    artifact_class: Literal["replay_critical", "debug_verbose"] = "replay_critical",
+) -> str | None:
+    """Store ``payload`` in ``ctx.artifact_store`` and return its ref.
+
+    Returns ``None`` when there is no store, the payload is empty, or
+    the store silently rejects the write (over size cap).  Callers
+    should treat the ref as optional and fall back to inline ``data``.
+    """
+    if ctx.artifact_store is None or not payload:
+        return None
+    ref = ctx.artifact_store.put(payload, artifact_class=artifact_class)
+    return ref or None
+
+
+def journal_append_event(
+    ctx: RunContext,
+    *,
+    stage: str,
+    name: str,
+    turn_id: str | None = None,
+    kind: JournalRecordKind = JournalRecordKind.EVENT,
+    state_before: StageStateSnapshot | None = None,
+    state_after: StageStateSnapshot | None = None,
+    error: str | None = None,
+    input_ref: str | None = None,
+    output_ref: str | None = None,
+    data_extra: dict[str, Any] | None = None,
+) -> None:
+    """Append a stage-scoped journal record.
+
+    Centralises the boilerplate every stage used to duplicate: stamping
+    ``data["stage"]`` for replay-runner filtering, stringifying state
+    snapshots for JSON serialization, and passing artifact refs through
+    to the journal's first-class ``input_ref`` / ``output_ref`` fields
+    instead of burying them in ``data`` as strings.
+    """
+    if ctx.journal is None:
+        return
+    payload: dict[str, Any] = {"stage": stage}
+    if state_before is not None:
+        payload["state_before"] = str(state_before)
+    if state_after is not None:
+        payload["state_after"] = str(state_after)
+    if error is not None:
+        payload["error"] = error
+    if data_extra:
+        payload.update(data_extra)
+    ctx.journal.append(
+        kind=kind,
+        name=name,
+        session_id=ctx.session_id,
+        turn_id=turn_id,
+        data=payload,
+        input_ref=input_ref,
+        output_ref=output_ref,
+    )
+
+
+def audio_format_fields(audio: Any) -> dict[str, Any]:
+    """Best-effort extraction of PCM format fields from an AudioChunk-like.
+
+    Returns an empty dict for inputs without a ``format`` attribute so
+    callers can unconditionally splice it into ``data_extra``.
+    """
+    fmt = getattr(audio, "format", None)
+    if fmt is None:
+        return {}
+    return {
+        "sample_rate": getattr(fmt, "sample_rate", None),
+        "channels": getattr(fmt, "channels", None),
+        "sample_width": getattr(fmt, "sample_width", None),
+        "encoding": getattr(fmt, "encoding", None),
+    }

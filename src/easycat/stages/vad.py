@@ -1,4 +1,4 @@
-"""VADStage — wraps a VADProvider with journal recording."""
+"""VADStage — wraps a VADProvider with journal recording and input capture."""
 
 from __future__ import annotations
 
@@ -6,32 +6,55 @@ import logging
 from typing import Any
 
 from easycat.runtime.context import RunContext
-from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.session._turn_context import TurnContext
-from easycat.stages.base import ControlSignal, StageStateSnapshot
+from easycat.stages.base import (
+    ControlSignal,
+    StageStateSnapshot,
+    audio_format_fields,
+    journal_append_event,
+    put_artifact,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class VADStage:
-    """Stage wrapper around a :class:`VADProvider`."""
+    """Stage wrapper around a :class:`VADProvider`.
+
+    ``execute`` runs the provider on a single chunk, captures the raw
+    input bytes as an ``input_ref`` artifact for LIVE-fidelity replay,
+    and returns the list of events emitted.  ``stage_complete`` carries
+    the event descriptors in ``data["events"]`` so ARTIFACT replay can
+    reconstruct VAD output without re-running the model.
+    """
 
     name = "vad"
+
+    _MAX_EVENTS_PER_CHUNK: int = 64
 
     def __init__(self, provider: Any, *, journal: Any = None) -> None:
         self._provider = provider
         self._journal = journal
         self._last_snapshot = StageStateSnapshot(stage_name=self.name)
 
-    # VAD processes a single audio chunk and yields 0-2 events (speech
-    # start/stop).  Cap the collection as a safety net against a misbehaving
-    # provider that yields endlessly from a single chunk.
-    _MAX_EVENTS_PER_CHUNK: int = 64
-
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         state_before = self.snapshot_state()
-        self._record(ctx, "stage_start", turn_id=turn.id, state_before=state_before)
+        data_bytes = getattr(input, "data", None)
+        input_ref = put_artifact(ctx, data_bytes)
+        start_extra = {
+            "audio_bytes": len(data_bytes) if isinstance(data_bytes, (bytes, bytearray)) else 0,
+        }
+        start_extra.update(audio_format_fields(input))
+        journal_append_event(
+            ctx,
+            stage=self.name,
+            name="stage_start",
+            turn_id=turn.id,
+            state_before=state_before,
+            input_ref=input_ref,
+            data_extra=start_extra,
+        )
         try:
             events: list[Any] = []
             async for event in self._provider.process(input):
@@ -43,17 +66,24 @@ class VADStage:
                     break
             result = events
         except Exception as exc:
-            self._record(
-                ctx, "stage_error", turn_id=turn.id, state_before=state_before, error=str(exc)
+            journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_error",
+                turn_id=turn.id,
+                state_before=state_before,
+                error=str(exc),
             )
             raise
         state_after = self.snapshot_state()
-        self._record(
+        journal_append_event(
             ctx,
-            "stage_complete",
+            stage=self.name,
+            name="stage_complete",
             turn_id=turn.id,
             state_before=state_before,
             state_after=state_after,
+            data_extra={"events": [type(e).__name__ for e in events]},
         )
         return result
 
@@ -105,17 +135,3 @@ class VADStage:
 
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("VADStage received upstream signal: %s", signal)
-
-    def _record(
-        self, ctx: RunContext, name: str, *, turn_id: str | None = None, **kwargs: Any
-    ) -> None:
-        if ctx.journal is not None:
-            payload = {k: str(v) if v is not None else None for k, v in kwargs.items()}
-            payload["stage"] = self.name
-            ctx.journal.append(
-                kind=JournalRecordKind.EVENT,
-                name=name,
-                session_id=ctx.session_id,
-                turn_id=turn_id,
-                data=payload,
-            )

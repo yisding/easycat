@@ -56,6 +56,7 @@ async def consume_agent_stream(
     prepare_tts_payload: Callable[..., TTSInput],
     strip_md: bool,
     turn: TurnContext,
+    stream_factory: Callable[[], Any] | None = None,
 ) -> AgentStreamResult:
     """Consume a streaming agent and queue TTS payloads on sentence boundaries.
 
@@ -63,6 +64,13 @@ async def consume_agent_stream(
     payloads.  It accumulates text deltas, splits at sentence boundaries,
     handles markdown buffering, emits EasyCat events, and drains in-flight
     tool calls during cancellation.
+
+    ``stream_factory`` is an optional zero-argument callable returning
+    the async iterator to consume.  Session passes
+    ``lambda: agent_stage.execute_streaming(transcript, ctx, turn, cancel_token=token)``
+    so AgentStage can journal the stream while this function drives the
+    consumer.  Falls back to ``agent.run_streaming(transcript, cancel_token=token)``
+    when the factory is absent, preserving the legacy call path.
 
     Returns an :class:`AgentStreamResult` with the accumulated text,
     structured output, and any error that occurred.
@@ -83,7 +91,11 @@ async def consume_agent_stream(
         text_buffer = ""
 
     try:
-        async for event in agent.run_streaming(transcript, cancel_token=token):
+        if stream_factory is not None:
+            stream = stream_factory()
+        else:
+            stream = agent.run_streaming(transcript, cancel_token=token)
+        async for event in stream:
             if done_received:
                 continue
 

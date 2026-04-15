@@ -1,4 +1,4 @@
-"""TurnStage — wraps SmartTurn with journal recording."""
+"""TurnStage — wraps SmartTurn with journal recording and capture."""
 
 from __future__ import annotations
 
@@ -6,16 +6,28 @@ import logging
 from typing import Any
 
 from easycat.runtime.context import RunContext
-from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.session._turn_context import TurnContext
-from easycat.stages.base import ControlSignal, StageStateSnapshot
+from easycat.stages.base import (
+    ControlSignal,
+    StageStateSnapshot,
+    journal_append_event,
+    put_artifact,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class TurnStage:
-    """Stage wrapper around :class:`SmartTurnProvider`."""
+    """Stage wrapper around :class:`SmartTurnProvider`.
+
+    ``execute`` runs SmartTurn's endpoint classifier on an audio window.
+    The raw input audio is captured as ``input_ref`` on ``stage_start``
+    so a LIVE replay can re-run the same classifier against the same
+    window.  The classifier's decision + probability are recorded on
+    ``stage_complete`` so ARTIFACT replay returns the original verdict
+    without loading the ONNX model.
+    """
 
     name = "turn"
 
@@ -26,21 +38,45 @@ class TurnStage:
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         state_before = self.snapshot_state()
-        self._record(ctx, "stage_start", turn_id=turn.id, state_before=state_before)
+        audio_bytes = _concat_chunks(input)
+        input_ref = put_artifact(ctx, audio_bytes)
+        journal_append_event(
+            ctx,
+            stage=self.name,
+            name="stage_start",
+            turn_id=turn.id,
+            state_before=state_before,
+            input_ref=input_ref,
+            data_extra={
+                "audio_bytes": len(audio_bytes) if audio_bytes else 0,
+            },
+        )
         try:
             result = await self._provider.detect(input)
         except Exception as exc:
-            self._record(
-                ctx, "stage_error", turn_id=turn.id, state_before=state_before, error=str(exc)
+            journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_error",
+                turn_id=turn.id,
+                state_before=state_before,
+                error=str(exc),
             )
             raise
         state_after = self.snapshot_state()
-        self._record(
+        complete_extra: dict[str, Any] = {}
+        if isinstance(result, dict):
+            for key in ("prediction", "probability", "decision"):
+                if key in result:
+                    complete_extra[key] = result[key]
+        journal_append_event(
             ctx,
-            "stage_complete",
+            stage=self.name,
+            name="stage_complete",
             turn_id=turn.id,
             state_before=state_before,
             state_after=state_after,
+            data_extra=complete_extra,
         )
         return result
 
@@ -92,16 +128,29 @@ class TurnStage:
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("TurnStage received upstream signal: %s", signal)
 
-    def _record(
-        self, ctx: RunContext, name: str, *, turn_id: str | None = None, **kwargs: Any
-    ) -> None:
-        if ctx.journal is not None:
-            payload = {k: str(v) if v is not None else None for k, v in kwargs.items()}
-            payload["stage"] = self.name
-            ctx.journal.append(
-                kind=JournalRecordKind.EVENT,
-                name=name,
-                session_id=ctx.session_id,
-                turn_id=turn_id,
-                data=payload,
-            )
+
+def _concat_chunks(input_: Any) -> bytes:
+    """Flatten the smart-turn input into a single byte string.
+
+    SmartTurn is typically fed an iterable of ``AudioChunk``s but some
+    callers hand over a single chunk or raw ``bytes``; accept all three
+    shapes without forcing the caller into a normaliser.
+    """
+    if input_ is None:
+        return b""
+    if isinstance(input_, (bytes, bytearray)):
+        return bytes(input_)
+    data = getattr(input_, "data", None)
+    if isinstance(data, (bytes, bytearray)):
+        return bytes(data)
+    try:
+        pieces: list[bytes] = []
+        for item in input_:
+            chunk_data = getattr(item, "data", None)
+            if isinstance(chunk_data, (bytes, bytearray)):
+                pieces.append(bytes(chunk_data))
+            elif isinstance(item, (bytes, bytearray)):
+                pieces.append(bytes(item))
+        return b"".join(pieces)
+    except TypeError:
+        return b""

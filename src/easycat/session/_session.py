@@ -58,6 +58,7 @@ from easycat.llm_output_processing import (
 from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.providers import PlaybackAckTransport
 from easycat.runtime.artifacts import SnapshotArtifactStore
+from easycat.runtime.context import RunContext
 from easycat.runtime.journal import (
     ExecutionJournal,
     InMemoryRingBuffer,
@@ -82,6 +83,14 @@ from easycat.session._types import (
 )
 from easycat.session.action_executors import CoreSessionActionExecutor
 from easycat.session.actions import SessionAction, SessionActionExecutor
+from easycat.stages.agent import AgentStage
+from easycat.stages.audio import AudioStage
+from easycat.stages.stt import STTStage
+from easycat.stages.telephony import TelephonyStage
+from easycat.stages.transport import TransportStage
+from easycat.stages.tts import TTSStage
+from easycat.stages.turn import TurnStage
+from easycat.stages.vad import VADStage
 from easycat.strip_markdown import strip_markdown
 from easycat.stubs import (
     NoopAgent,
@@ -130,7 +139,9 @@ class Session:
         self.noise_reducer = cfg.noise_reducer or PassthroughNoiseReducer()
         self.echo_canceller = cfg.echo_canceller or PassthroughAEC()
         self.transport = cfg.transport or NoopTransport()
-        self.agent: Agent = auto_adapt_agent(cfg.agent) if cfg.agent else NoopAgent()
+        # Back-store for the ``agent`` property so late assignments
+        # (``session.agent = X``) keep the AgentStage wrapper in sync.
+        self._agent: Agent = auto_adapt_agent(cfg.agent) if cfg.agent else NoopAgent()
 
         # Skip noop validation in text_session mode — audio providers
         # are intentionally noop.
@@ -279,6 +290,59 @@ class Session:
         self._text_turn_accumulated: str = ""
         self._text_turn_lock = asyncio.Lock()
         self._turn_manager.bind_session(self.session_id)
+
+        # WS3 T3.10 integration: instantiate every stage wrapper and a
+        # shared RunContext so Session can route provider calls through
+        # stages for journal + artifact capture.  Stages are the debug /
+        # replay surface; Session keeps pipeline orchestration (T3.10).
+        self._run_ctx = RunContext(
+            run_id=self.session_id,
+            session_id=self.session_id,
+            runtime_mode=cfg.runtime_mode,
+            journal=self._journal,
+            artifact_store=self._artifact_store,
+        )
+        self._no_turn = TurnContext(turn_id="no-turn", cancel_token=CancelToken())
+        self._stt_stage = STTStage(self.stt, journal=self._journal)
+        self._tts_stage = TTSStage(self.tts, journal=self._journal)
+        self._vad_stage = VADStage(self.vad, journal=self._journal)
+        self._audio_stage = AudioStage(
+            self.noise_reducer,
+            echo_canceller=self.echo_canceller if self._enable_aec else None,
+            journal=self._journal,
+        )
+        self._transport_stage = TransportStage(self.transport, journal=self._journal)
+        self._agent_stage = AgentStage(self.agent, journal=self._journal)
+        self._turn_stage = TurnStage(
+            self._turn_manager._config.endpoint_detector  # type: ignore[attr-defined]
+            if self._turn_manager._config is not None  # type: ignore[attr-defined]
+            else None,
+            journal=self._journal,
+        )
+        self._telephony_stage = TelephonyStage(
+            self._telephony_helpers[0] if self._telephony_helpers else None,
+            journal=self._journal,
+        )
+        # Hand the TTS stage to the synthesizer so the existing iteration
+        # loop goes through stage.execute() instead of tts.synthesize()
+        # directly.  The synthesizer needs ctx + turn at call time and
+        # pulls them from these accessors rather than holding references
+        # that could go stale across turn resets.
+        self._tts_synth.bind_stage(
+            self._tts_stage,
+            run_ctx_getter=lambda: self._run_ctx,
+            turn_getter=lambda: self._turn or self._no_turn,
+        )
+        # Plug the TurnStage into the TurnManager's endpoint-detector call
+        # so smart-turn decisions go through stage.execute() and produce
+        # journal records.
+        if self._turn_manager._config is not None:  # type: ignore[attr-defined]
+            if self._turn_manager._config.endpoint_detector is not None:  # type: ignore[attr-defined]
+                self._turn_manager.bind_endpoint_stage(
+                    self._turn_stage,
+                    run_ctx_getter=lambda: self._run_ctx,
+                    turn_getter=lambda: self._turn or self._no_turn,
+                )
 
         # Backfill journal/session-id into bridge adapter shims so that the
         # direct Session(SessionConfig(...)) construction path produces the
@@ -512,6 +576,11 @@ class Session:
             return _handler
 
         def _handle_tts_audio(event: TTSAudio) -> None:
+            # TTSStage.execute now captures the audio bytes as
+            # replay_critical artifacts via ``tts_frame`` records (WS3
+            # T3.9: direct observability calls moved out of Session).
+            # The session-level ``tts_audio`` record stays for legacy
+            # observers but no longer carries the bytes.
             self._append_journal_record(
                 name="tts_audio",
                 turn_id=event.turn_id,
@@ -524,8 +593,6 @@ class Session:
                     "encoding": event.chunk.format.encoding,
                     "bypass_gate": event.bypass_gate,
                 },
-                output_bytes=event.chunk.data,
-                output_artifact_class="replay_critical",
             )
 
         def _handle_tts_markers(event: TTSMarkers) -> None:
@@ -718,6 +785,23 @@ class Session:
             inline_artifacts=inline_artifacts,
             overwrite=overwrite,
         )
+
+    @property
+    def agent(self) -> Agent:
+        """Current agent provider.
+
+        Exposed as a property so callers that swap the agent mid-session
+        (``session.agent = FailingAgent()``) automatically re-point the
+        AgentStage wrapper at the new provider.
+        """
+        return self._agent
+
+    @agent.setter
+    def agent(self, value: Agent) -> None:
+        self._agent = auto_adapt_agent(value) if value is not None else NoopAgent()
+        stage = getattr(self, "_agent_stage", None)
+        if stage is not None:
+            stage._provider = self._agent  # keep the wrapper in sync
 
     @property
     def turn_state(self) -> TurnState:
@@ -1226,7 +1310,7 @@ class Session:
 
         # Prime STT with pre-roll frames captured by TurnManager
         for chunk in self._turn_manager.turn_audio:
-            await self.stt.send_audio(chunk)
+            await self._stt_stage.execute(chunk, self._run_ctx, self._turn or self._no_turn)
             if self._turn is not None:
                 self._turn.stt_has_uncommitted_audio = True
 
@@ -1450,17 +1534,21 @@ class Session:
 
                 await self._emit(AudioIn(chunk=chunk))
 
-                # Stage 1: Noise reduction (optional)
-                if self._enable_noise_reduction:
-                    chunk = await self.noise_reducer.process(chunk)
+                # Stages 1-2: Noise reduction + Echo cancellation via AudioStage.
+                # AudioStage wraps both so a single journal record covers
+                # the pair — matches WS3 T3.10's intent that Audio is
+                # one stage for replay purposes.
+                if self._enable_noise_reduction or self._enable_aec:
+                    chunk = await self._audio_stage.execute(
+                        chunk, self._run_ctx, self._turn or self._no_turn
+                    )
 
-                # Stage 2: Echo cancellation (optional)
-                if self._enable_aec:
-                    chunk = await self.echo_canceller.process(chunk)
-
-                # Stage 3: VAD (optional)
+                # Stage 3: VAD (optional) via VADStage.
                 if self._enable_vad:
-                    async for vad_event in self.vad.process(chunk):
+                    vad_events = await self._vad_stage.execute(
+                        chunk, self._run_ctx, self._turn or self._no_turn
+                    )
+                    for vad_event in vad_events:
                         vad_event = self._with_correlation(vad_event)
                         await self._emit(vad_event)
                         await self._turn_manager.on_vad_event(vad_event)
@@ -1487,7 +1575,9 @@ class Session:
                 if self._stt_active and not started_turn_from_chunk:
                     if self._turn is not None:
                         self._turn.stt_has_uncommitted_audio = True
-                    await self.stt.send_audio(chunk)
+                    await self._stt_stage.execute(
+                        chunk, self._run_ctx, self._turn or self._no_turn
+                    )
 
         except asyncio.CancelledError:
             pass
@@ -1590,13 +1680,14 @@ class Session:
 
     async def _invoke_agent(self, transcript: str) -> str:
         """Invoke the basic agent with optional timeout. Returns the response."""
+        turn = self._turn or self._no_turn
         if self._timeout_config and self._timeout_config.agent_timeout:
             return await with_agent_timeout(
-                self.agent.run(transcript),
+                self._agent_stage.execute(transcript, self._run_ctx, turn),
                 timeout=self._timeout_config.agent_timeout,
                 event_bus=self.event_bus,
             )
-        return await self.agent.run(transcript)
+        return await self._agent_stage.execute(transcript, self._run_ctx, turn)
 
     # ── Basic agent path ───────────────────────────────────────
 
@@ -1762,6 +1853,9 @@ class Session:
                 prepare_tts_payload=self._prepare_tts_payload,
                 strip_md=self._strip_markdown,
                 turn=turn,
+                stream_factory=lambda: self._agent_stage.execute_streaming(
+                    transcript, self._run_ctx, turn, cancel_token=token
+                ),
             )
 
         agent_task = asyncio.create_task(_run_agent_consumer())
@@ -1966,7 +2060,9 @@ class Session:
             replayed_chunk = self._replay_chunks_pending > 0
             turn = self._turn
             try:
-                await self.transport.send_audio(chunk)
+                await self._transport_stage.execute(
+                    chunk, self._run_ctx, self._turn or self._no_turn
+                )
                 if self._enable_aec:
                     self.echo_canceller.feed_reference(chunk)
                 sent_size = len(chunk.data)
@@ -2124,9 +2220,14 @@ class Session:
             await self._emit(AgentRequestStarted(session_id=self.session_id, turn_id=turn_id))
             structured_output = None
             self._text_turn_accumulated = ""
+            # Build a turn context for this text turn so AgentStage can
+            # stamp records with the right turn_id.
+            text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
             if hasattr(self.agent, "run_streaming"):
                 accumulated = ""
-                async for event in self.agent.run_streaming(text, cancel_token=cancel_token):
+                async for event in self._agent_stage.execute_streaming(
+                    text, self._run_ctx, text_turn, cancel_token=cancel_token
+                ):
                     if not hasattr(event, "type"):
                         continue
                     if event.type == AgentStreamEventType.DONE:
@@ -2178,7 +2279,7 @@ class Session:
                         )
                 response = accumulated
             else:
-                response = await self.agent.run(text)
+                response = await self._agent_stage.execute(text, self._run_ctx, text_turn)
                 self._text_turn_accumulated = response
             elapsed_ms = (time.monotonic() - t0) * 1000
             await self._emit(

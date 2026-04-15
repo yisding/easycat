@@ -626,3 +626,155 @@ def _format_version_mismatch(mismatches: Sequence[VersionMismatch]) -> str:
             f"installed={m.installed_version!r} ({m.code})"
         )
     return "; ".join(parts)
+
+
+# ── End-to-end audio emitter ─────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ReplayAudioChunk:
+    """One TTS audio chunk reconstructed from a bundle.
+
+    The ``data`` field is bit-equal to what ``Session`` emitted to its
+    transport during the live recording; the format fields describe the
+    chunk's PCM layout so callers can resample or mix without going
+    back to the journal.
+    """
+
+    sequence: int
+    data: bytes
+    sample_rate: int
+    channels: int
+    sample_width: int
+    encoding: str
+    duration_ms: float
+    turn_id: str | None
+    bypass_gate: bool
+
+
+def _stage_matches(record: dict[str, Any], stage: str) -> bool:
+    data = record.get("data") or {}
+    if not isinstance(data, dict):
+        return False
+    return data.get("stage") == stage or data.get("observed_stage") == stage
+
+
+def replay_stt_audio(
+    bundle: RunBundle,
+    *,
+    turn_id: str | None = None,
+    include_preroll: bool = True,
+) -> list[ReplayAudioChunk]:
+    """Reconstruct the audio the session handed to STT during recording.
+
+    Walks *bundle*'s journal for STTStage ``stage_start`` records (the
+    stage stamps one per input chunk with ``input_ref`` pointing at the
+    captured bytes).  Pass ``turn_id`` to narrow to one turn.  The
+    ``include_preroll`` flag is retained for API stability — stage
+    records don't carry a preroll flag today, so it's currently a no-op.
+
+    This is what a LIVE-fidelity replay would feed to a fresh STT
+    provider to re-run transcription offline.
+    """
+    _ = include_preroll
+    chunks: list[ReplayAudioChunk] = []
+    for record in bundle.records():
+        if record.get("name") != "stage_start":
+            continue
+        if not _stage_matches(record, "stt"):
+            continue
+        if turn_id is not None and record.get("turn_id") != turn_id:
+            continue
+        sequence = int(record.get("sequence") or 0)
+        input_ref = record.get("input_ref")
+        if not input_ref:
+            # STT stage_start without input_ref — no audio bytes were
+            # captured for this chunk (e.g. artifact store absent).
+            # Skip rather than raise: a mix of captured/uncaptured
+            # chunks is still a useful subset.
+            continue
+        blob = bundle.artifact_blobs.get(input_ref)
+        if blob is None:
+            raise ReplayError(
+                f"STT stage_start input_ref {input_ref!r} at sequence {sequence} "
+                "is missing from bundle artifacts",
+                requested_sequence=sequence,
+                stage="stt",
+            )
+        data = record.get("data") or {}
+        if not isinstance(data, dict):
+            data = {}
+        chunks.append(
+            ReplayAudioChunk(
+                sequence=sequence,
+                data=blob,
+                sample_rate=int(data.get("sample_rate") or 0),
+                channels=int(data.get("channels") or 0),
+                sample_width=int(data.get("sample_width") or 0),
+                encoding=str(data.get("encoding") or ""),
+                duration_ms=0.0,
+                turn_id=record.get("turn_id"),
+                bypass_gate=False,
+            )
+        )
+    return chunks
+
+
+def replay_audio(
+    bundle: RunBundle,
+    *,
+    turn_id: str | None = None,
+) -> list[ReplayAudioChunk]:
+    """Reconstruct the audio chunks the user heard during the recording.
+
+    Walks *bundle*'s journal for TTSStage ``tts_frame`` records — one
+    per audio chunk emitted, carrying ``output_ref`` pointing at the
+    captured bytes.  Returns them in journal-sequence order; pass
+    ``turn_id`` to narrow to one turn.
+
+    Concatenating ``chunk.data`` for every returned chunk yields the
+    byte stream Session pushed to its outbound transport.  No live
+    providers involved.
+
+    Raises :class:`ReplayError` when a ``tts_frame`` record has a ref
+    but the bundle is missing that artifact — byte-identical replay is
+    impossible in that case.  Records with no ``output_ref`` at all are
+    skipped (capture was disabled).
+    """
+    chunks: list[ReplayAudioChunk] = []
+    for record in bundle.records():
+        if record.get("name") != "tts_frame":
+            continue
+        if not _stage_matches(record, "tts"):
+            continue
+        if turn_id is not None and record.get("turn_id") != turn_id:
+            continue
+        sequence = int(record.get("sequence") or 0)
+        output_ref = record.get("output_ref")
+        if not output_ref:
+            continue
+        blob = bundle.artifact_blobs.get(output_ref)
+        if blob is None:
+            raise ReplayError(
+                f"tts_frame output_ref {output_ref!r} at sequence {sequence} "
+                "is missing from bundle artifacts",
+                requested_sequence=sequence,
+                stage="tts",
+            )
+        data = record.get("data") or {}
+        if not isinstance(data, dict):
+            data = {}
+        chunks.append(
+            ReplayAudioChunk(
+                sequence=sequence,
+                data=blob,
+                sample_rate=int(data.get("sample_rate") or 0),
+                channels=int(data.get("channels") or 0),
+                sample_width=int(data.get("sample_width") or 0),
+                encoding=str(data.get("encoding") or ""),
+                duration_ms=float(data.get("duration_ms") or 0.0),
+                turn_id=record.get("turn_id"),
+                bypass_gate=False,
+            )
+        )
+    return chunks

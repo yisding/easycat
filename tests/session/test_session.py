@@ -933,11 +933,13 @@ async def test_tts_audio_and_markers_are_journaled_with_artifact_ref():
 
     audio_records = [record for record in journal.read() if record.name == "tts_audio"]
     marker_records = [record for record in journal.read() if record.name == "tts_markers"]
+    tts_frame_records = [record for record in journal.read() if record.name == "tts_frame"]
 
     assert len(audio_records) == 1
     assert audio_records[0].turn_id == "turn-tts-audio"
-    assert audio_records[0].output_ref is not None
-    assert artifact_store.has(audio_records[0].output_ref)
+    # Session-level tts_audio record no longer carries output_ref — WS3
+    # T3.9 moved artifact capture into TTSStage, which emits one
+    # ``tts_frame`` record per chunk with ``output_ref`` set.
     assert audio_records[0].data == {
         "audio_bytes": 320,
         "duration_ms": 10.0,
@@ -947,6 +949,10 @@ async def test_tts_audio_and_markers_are_journaled_with_artifact_ref():
         "encoding": "pcm",
         "bypass_gate": False,
     }
+    assert len(tts_frame_records) >= 1
+    assert tts_frame_records[0].turn_id == "turn-tts-audio"
+    assert tts_frame_records[0].output_ref is not None
+    assert artifact_store.has(tts_frame_records[0].output_ref)
     assert len(marker_records) == 1
     assert marker_records[0].data == {"markers": [{"word": "hello", "start_ms": 0}]}
 

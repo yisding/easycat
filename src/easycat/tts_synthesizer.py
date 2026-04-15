@@ -52,6 +52,30 @@ class TTSSynthesizer:
         self._timeout_config = timeout_config
         self._audio_gate = audio_gate
         self._correlation_ids = correlation_ids
+        # Optional TTSStage wrapper.  When bound, ``synthesize`` calls
+        # ``stage.execute(payload, ctx, turn)`` instead of the raw
+        # provider so the stage can journal start/complete/frame records
+        # and capture audio bytes as replay artifacts.
+        self._stage: Any = None
+        self._run_ctx_getter: Callable[[], Any] | None = None
+        self._turn_getter: Callable[[], Any] | None = None
+
+    def bind_stage(
+        self,
+        stage: Any,
+        *,
+        run_ctx_getter: Callable[[], Any],
+        turn_getter: Callable[[], Any],
+    ) -> None:
+        """Attach a :class:`TTSStage` wrapper for journal + artifact capture.
+
+        The getters defer RunContext / TurnContext lookup to call time so
+        stage records are stamped with the currently-active turn rather
+        than a snapshot taken during Session construction.
+        """
+        self._stage = stage
+        self._run_ctx_getter = run_ctx_getter
+        self._turn_getter = turn_getter
 
     async def synthesize(
         self,
@@ -87,7 +111,17 @@ class TTSSynthesizer:
         # Snapshot the gate state at the start of synthesis.
         gated_at_start = not bypass_gate and bool(self._audio_gate and self._audio_gate())
 
-        tts_iter = self._tts.synthesize(coerce_tts_input(payload))
+        coerced = coerce_tts_input(payload)
+        if (
+            self._stage is not None
+            and self._run_ctx_getter is not None
+            and self._turn_getter is not None
+        ):
+            tts_iter = await self._stage.execute(
+                coerced, self._run_ctx_getter(), self._turn_getter()
+            )
+        else:
+            tts_iter = self._tts.synthesize(coerced)
         if self._timeout_config and self._timeout_config.tts_first_byte_timeout:
             tts_iter = with_tts_timeout(
                 tts_iter,

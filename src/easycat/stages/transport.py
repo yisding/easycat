@@ -1,4 +1,4 @@
-"""TransportStage — wraps a Transport with journal recording."""
+"""TransportStage — wraps a Transport with journal recording and capture."""
 
 from __future__ import annotations
 
@@ -6,16 +6,27 @@ import logging
 from typing import Any
 
 from easycat.runtime.context import RunContext
-from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.session._turn_context import TurnContext
-from easycat.stages.base import ControlSignal, StageStateSnapshot
+from easycat.stages.base import (
+    ControlSignal,
+    StageStateSnapshot,
+    audio_format_fields,
+    journal_append_event,
+    put_artifact,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class TransportStage:
-    """Stage wrapper around a :class:`Transport`."""
+    """Stage wrapper around a :class:`Transport`.
+
+    ``execute`` wraps the outbound ``send_audio`` call: the chunk's
+    bytes are stored as a ``replay_critical`` artifact and attached to
+    ``stage_complete`` via ``output_ref``, so a replay can reconstruct
+    exactly what the transport pushed toward the client.
+    """
 
     name = "transport"
 
@@ -26,22 +37,43 @@ class TransportStage:
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         state_before = self.snapshot_state()
-        self._record(ctx, "stage_start", turn_id=turn.id, state_before=state_before)
+        audio_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
+        output_ref = put_artifact(ctx, audio_bytes)
+        extra = {
+            "audio_bytes": len(audio_bytes) if isinstance(audio_bytes, (bytes, bytearray)) else 0,
+        }
+        extra.update(audio_format_fields(input))
+        journal_append_event(
+            ctx,
+            stage=self.name,
+            name="stage_start",
+            turn_id=turn.id,
+            state_before=state_before,
+            data_extra=extra,
+        )
         try:
             await self._provider.send_audio(input)
             result = input
         except Exception as exc:
-            self._record(
-                ctx, "stage_error", turn_id=turn.id, state_before=state_before, error=str(exc)
+            journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_error",
+                turn_id=turn.id,
+                state_before=state_before,
+                error=str(exc),
             )
             raise
         state_after = self.snapshot_state()
-        self._record(
+        journal_append_event(
             ctx,
-            "stage_complete",
+            stage=self.name,
+            name="stage_complete",
             turn_id=turn.id,
             state_before=state_before,
             state_after=state_after,
+            output_ref=output_ref,
+            data_extra=extra,
         )
         return result
 
@@ -92,17 +124,3 @@ class TransportStage:
 
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("TransportStage received upstream signal: %s", signal)
-
-    def _record(
-        self, ctx: RunContext, name: str, *, turn_id: str | None = None, **kwargs: Any
-    ) -> None:
-        if ctx.journal is not None:
-            payload = {k: str(v) if v is not None else None for k, v in kwargs.items()}
-            payload["stage"] = self.name
-            ctx.journal.append(
-                kind=JournalRecordKind.EVENT,
-                name=name,
-                session_id=ctx.session_id,
-                turn_id=turn_id,
-                data=payload,
-            )

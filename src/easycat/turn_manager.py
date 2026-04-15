@@ -127,6 +127,13 @@ class TurnManager:
         # Optional endpoint detector (smart-turn model)
         self._endpoint_detector = self._config.endpoint_detector
 
+        # Optional TurnStage wrapper that journals each detection call.
+        # When bound, ``detect`` goes through ``stage.execute()`` so the
+        # decision + audio window land in the journal automatically.
+        self._endpoint_stage: Any = None
+        self._endpoint_ctx_getter: Any = None
+        self._endpoint_turn_getter: Any = None
+
         # Correlation identifiers
         self._session_id: str | None = None
         self._turn_counter = 0
@@ -154,6 +161,23 @@ class TurnManager:
     def bind_session(self, session_id: str) -> None:
         """Bind a stable session identifier used for emitted events."""
         self._session_id = session_id
+
+    def bind_endpoint_stage(
+        self,
+        stage: Any,
+        *,
+        run_ctx_getter: Any,
+        turn_getter: Any,
+    ) -> None:
+        """Route smart-turn ``detect`` calls through a TurnStage wrapper.
+
+        ``run_ctx_getter`` / ``turn_getter`` are called at detection time
+        so each decision lands in the journal under the right session +
+        turn id without holding stale references.
+        """
+        self._endpoint_stage = stage
+        self._endpoint_ctx_getter = run_ctx_getter
+        self._endpoint_turn_getter = turn_getter
 
     # ── Audio frame handling ────────────────────────────────────
 
@@ -254,7 +278,18 @@ class TurnManager:
             if self._endpoint_detector is not None and self._turn_audio:
                 try:
                     t0 = time.monotonic()
-                    result = await self._endpoint_detector.detect(list(self._turn_audio))
+                    if (
+                        self._endpoint_stage is not None
+                        and self._endpoint_ctx_getter is not None
+                        and self._endpoint_turn_getter is not None
+                    ):
+                        result = await self._endpoint_stage.execute(
+                            list(self._turn_audio),
+                            self._endpoint_ctx_getter(),
+                            self._endpoint_turn_getter(),
+                        )
+                    else:
+                        result = await self._endpoint_detector.detect(list(self._turn_audio))
                     detector_elapsed = time.monotonic() - t0
                     logger.debug(
                         "Smart-turn prediction=%d probability=%.3f",

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from easycat.runtime.replay import (
+        ReplayAudioChunk,
         ReplayCassette,
         ReplayResult,
         ReplaySpec,
@@ -189,6 +190,37 @@ class RunBundle:
 
         runner = ReplayRunner(self, spec, installed_versions=installed_versions)
         return runner.run()
+
+    def replay_audio(
+        self,
+        *,
+        turn_id: str | None = None,
+    ) -> list[ReplayAudioChunk]:
+        """Return the TTS audio chunks the user heard during recording.
+
+        Byte-identical reconstruction of the outbound audio stream, no
+        live providers involved.  See
+        :func:`easycat.runtime.replay.replay_audio` for the guarantees.
+        """
+        from easycat.runtime.replay import replay_audio as _replay_audio
+
+        return _replay_audio(self, turn_id=turn_id)
+
+    def replay_stt_audio(
+        self,
+        *,
+        turn_id: str | None = None,
+        include_preroll: bool = True,
+    ) -> list[ReplayAudioChunk]:
+        """Return the audio chunks the session handed to STT during recording.
+
+        Useful for LIVE-fidelity replay: feed these to a fresh STT
+        provider to re-transcribe offline.  See
+        :func:`easycat.runtime.replay.replay_stt_audio` for filter options.
+        """
+        from easycat.runtime.replay import replay_stt_audio as _replay_stt
+
+        return _replay_stt(self, turn_id=turn_id, include_preroll=include_preroll)
 
     @staticmethod
     def load(path: str | Path) -> RunBundle:

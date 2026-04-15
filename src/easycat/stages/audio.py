@@ -6,16 +6,28 @@ import logging
 from typing import Any
 
 from easycat.runtime.context import RunContext
-from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.session._turn_context import TurnContext
-from easycat.stages.base import ControlSignal, StageStateSnapshot
+from easycat.stages.base import (
+    ControlSignal,
+    StageStateSnapshot,
+    audio_format_fields,
+    journal_append_event,
+    put_artifact,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class AudioStage:
-    """Stage wrapper around :class:`NoiseReducer` and :class:`EchoCanceller`."""
+    """Stage wrapper around :class:`NoiseReducer` and :class:`EchoCanceller`.
+
+    ``execute`` feeds the input chunk through the NR + AEC chain; it
+    records the raw input bytes as ``input_ref`` on ``stage_start`` and
+    the processed output as ``output_ref`` on ``stage_complete`` so
+    LIVE replay can re-drive a fresh NR backend and ARTIFACT replay can
+    skip processing entirely.
+    """
 
     name = "audio"
 
@@ -26,14 +38,28 @@ class AudioStage:
         echo_canceller: Any = None,
         journal: Any = None,
     ) -> None:
-        self._provider = provider  # NoiseReducer
+        self._provider = provider
         self._echo_canceller = echo_canceller
         self._journal = journal
         self._last_snapshot = StageStateSnapshot(stage_name=self.name)
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         state_before = self.snapshot_state()
-        self._record(ctx, "stage_start", turn_id=turn.id, state_before=state_before)
+        raw_bytes = getattr(input, "data", None)
+        input_ref = put_artifact(ctx, raw_bytes)
+        start_extra = {
+            "audio_bytes": len(raw_bytes) if isinstance(raw_bytes, (bytes, bytearray)) else 0,
+        }
+        start_extra.update(audio_format_fields(input))
+        journal_append_event(
+            ctx,
+            stage=self.name,
+            name="stage_start",
+            turn_id=turn.id,
+            state_before=state_before,
+            input_ref=input_ref,
+            data_extra=start_extra,
+        )
         try:
             chunk = input
             chunk = await self._provider.process(chunk)
@@ -41,17 +67,33 @@ class AudioStage:
                 chunk = await self._echo_canceller.process(chunk)
             result = chunk
         except Exception as exc:
-            self._record(
-                ctx, "stage_error", turn_id=turn.id, state_before=state_before, error=str(exc)
+            journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_error",
+                turn_id=turn.id,
+                state_before=state_before,
+                error=str(exc),
             )
             raise
         state_after = self.snapshot_state()
-        self._record(
+        processed_bytes = getattr(result, "data", None)
+        output_ref = put_artifact(ctx, processed_bytes)
+        complete_extra = {
+            "audio_bytes": (
+                len(processed_bytes) if isinstance(processed_bytes, (bytes, bytearray)) else 0
+            ),
+        }
+        complete_extra.update(audio_format_fields(result))
+        journal_append_event(
             ctx,
-            "stage_complete",
+            stage=self.name,
+            name="stage_complete",
             turn_id=turn.id,
             state_before=state_before,
             state_after=state_after,
+            output_ref=output_ref,
+            data_extra=complete_extra,
         )
         return result
 
@@ -104,17 +146,3 @@ class AudioStage:
 
     async def handle_upstream(self, signal: ControlSignal) -> None:
         logger.debug("AudioStage received upstream signal: %s", signal)
-
-    def _record(
-        self, ctx: RunContext, name: str, *, turn_id: str | None = None, **kwargs: Any
-    ) -> None:
-        if ctx.journal is not None:
-            payload = {k: str(v) if v is not None else None for k, v in kwargs.items()}
-            payload["stage"] = self.name
-            ctx.journal.append(
-                kind=JournalRecordKind.EVENT,
-                name=name,
-                session_id=ctx.session_id,
-                turn_id=turn_id,
-                data=payload,
-            )
