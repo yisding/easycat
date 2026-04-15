@@ -450,6 +450,12 @@ async def test_api_audio_concat_rejects_invalid_turn_id(tmp_path):
         assert resp.status == 400
 
 
+_SAFE_HEADERS = {
+    "Origin": "http://localhost:8765",
+    "Content-Type": "application/json",
+}
+
+
 async def test_api_replay_runs_against_bundle(tmp_path):
     """``POST /api/replay`` should invoke the bundle's replay runner and
     return a structured result with fidelity_label and frame_count."""
@@ -459,7 +465,9 @@ async def test_api_replay_runs_against_bundle(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
 
     async with TestClient(TestServer(app)) as client:
-        resp = await client.post("/api/replay", json={"fidelity": "artifact"})
+        resp = await client.post(
+            "/api/replay", json={"fidelity": "artifact"}, headers=_SAFE_HEADERS
+        )
         assert resp.status == 200
         body = await resp.json()
         assert body["fidelity_label"] == "artifact"
@@ -488,7 +496,9 @@ async def test_api_replay_rejected_for_live_sessions():
     from aiohttp.test_utils import TestClient, TestServer
 
     async with TestClient(TestServer(app)) as client:
-        resp = await client.post("/api/replay", json={"fidelity": "artifact"})
+        resp = await client.post(
+            "/api/replay", json={"fidelity": "artifact"}, headers=_SAFE_HEADERS
+        )
         assert resp.status == 405
 
 
@@ -609,8 +619,9 @@ async def test_websocket_emits_snapshot_for_bundle(tmp_path):
 
 
 async def test_records_supports_pagination(tmp_path):
-    """``limit``/``offset`` query params are required for the UI to
-    avoid loading 50K records into one DOM table."""
+    """``limit``/``offset`` query params return a page slice plus the
+    full match count.  ``total`` is the pre-slice count so the UI can
+    show "showing 3 of N records" — not just the page size."""
     bundle_path = await _build_voice_bundle(tmp_path)
     source = _bundle_source(bundle_path)
     app = _make_app(source)
@@ -621,8 +632,33 @@ async def test_records_supports_pagination(tmp_path):
         if full["total"] < 5:
             pytest.skip("bundle too small to exercise pagination")
         page = await (await client.get("/api/records?limit=3&offset=2")).json()
-        assert page["total"] == 3
+        assert page["page_size"] == 3
+        assert page["total"] == full["total"]  # full count, not page size
+        assert len(page["records"]) == 3
         assert page["records"][0]["sequence"] == full["records"][2]["sequence"]
+
+
+async def test_records_rejects_negative_offset(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/records?offset=-5")
+        assert resp.status == 400
+
+
+async def test_records_rejects_zero_or_negative_limit(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        for bad in ("0", "-1"):
+            resp = await client.get(f"/api/records?limit={bad}")
+            assert resp.status == 400
 
 
 async def test_export_endpoint_returns_zip_for_live_session():
@@ -630,15 +666,15 @@ async def test_export_endpoint_returns_zip_for_live_session():
     session = create_text_session(agent=_DeterministicAgent(), debug="full", wrap_agent=False)
     await session.send_text("export-me")
     source = _session_source(session)
-    source._export_fn = lambda: __import__(
-        "easycat.debugger.server", fromlist=["_bundle_zip_from_session"]
-    )._bundle_zip_from_session(session)
+    from easycat.debugger import server as srv
+
+    source._export_fn = lambda: srv._bundle_zip_from_session(session)
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
     try:
         async with TestClient(TestServer(app)) as client:
-            resp = await client.post("/api/export")
+            resp = await client.post("/api/export", headers=_SAFE_HEADERS)
             assert resp.status == 200
             body = await resp.read()
             # ZIP magic.
@@ -654,5 +690,294 @@ async def test_export_rejected_for_bundle_source(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
 
     async with TestClient(TestServer(app)) as client:
-        resp = await client.post("/api/export")
+        resp = await client.post(
+            "/api/export",
+            headers={
+                "Origin": "http://localhost:8765",
+                "Content-Type": "application/json",
+            },
+        )
         assert resp.status == 405
+
+
+# ── Round 2 hardening: replay confirm gate, CSRF, ws back-off, etc.
+
+
+async def test_replay_destructive_combos_require_confirm(tmp_path):
+    """LIVE fidelity, ALLOW tool policy, or force=True must be gated on
+    an explicit ``confirm: true`` flag so a CSRF / drive-by from another
+    tab can't fire them silently."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    safe_headers = {
+        "Origin": "http://localhost:8765",
+        "Content-Type": "application/json",
+    }
+    async with TestClient(TestServer(app)) as client:
+        for body in (
+            {"fidelity": "live"},
+            {"tool_policy": "allow"},
+            {"fidelity": "artifact", "force": True},
+        ):
+            resp = await client.post("/api/replay", json=body, headers=safe_headers)
+            assert resp.status == 409, f"expected 409 for body {body}, got {resp.status}"
+            data = await resp.json()
+            assert data["destructive"] is True
+
+        # With confirm=true the request proceeds (force still fires the
+        # ARTIFACT path, which works since we don't check provider versions).
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact", "force": True, "confirm": True},
+            headers=safe_headers,
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["destructive"] is True
+
+
+async def test_replay_rejects_unknown_keys(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    headers = {
+        "Origin": "http://localhost:8765",
+        "Content-Type": "application/json",
+    }
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact", "rm_rf": "/"},
+            headers=headers,
+        )
+        assert resp.status == 400
+
+
+async def test_replay_rejects_malformed_json(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    headers = {
+        "Origin": "http://localhost:8765",
+        "Content-Type": "application/json",
+    }
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post("/api/replay", data=b"{not json", headers=headers)
+        assert resp.status == 400
+
+
+async def test_replay_rejects_non_object_json(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    headers = {
+        "Origin": "http://localhost:8765",
+        "Content-Type": "application/json",
+    }
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post("/api/replay", data=b"null", headers=headers)
+        assert resp.status == 400
+
+
+async def test_origin_guard_refuses_missing_origin_on_post(tmp_path):
+    """A POST with no Origin header is suspicious — block it.  Browsers
+    always send Origin on cross-origin POSTs; absence usually means
+    a simple-form-POST CSRF or an attacker bypassing CORS."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact"},
+            # No Origin header at all.
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status == 403
+
+
+async def test_origin_guard_refuses_form_encoded_post(tmp_path):
+    """State-changing requests must use application/json — a form POST
+    sneaks past CORS preflight and could enable simple-form CSRF."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            data="fidelity=artifact",
+            headers={
+                "Origin": "http://localhost:8765",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        assert resp.status == 415
+
+
+async def test_origin_guard_blocks_cross_site_fetch(tmp_path):
+    """``Sec-Fetch-Site: cross-site`` is blocked even if Origin happens
+    to match a loopback prefix."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(
+            "/api/manifest",
+            headers={
+                "Origin": "http://localhost:8765",
+                "Sec-Fetch-Site": "cross-site",
+            },
+        )
+        assert resp.status == 403
+
+
+async def test_export_without_journal_returns_409(tmp_path):
+    """Live session with debug='off' (no journal) can't export — endpoint
+    must return 409, not crash."""
+    artifact_store = InMemoryArtifactStore()
+
+    class _StubSession:
+        session_id = "no-journal"
+        is_running = False
+        turn_state = "IDLE"
+        _artifact_store = artifact_store
+        journal = None
+
+    source = _session_source(_StubSession())
+
+    # Wire the export function so the endpoint can call it.
+    from easycat.debugger import server as srv
+
+    source._export_fn = lambda: srv._bundle_zip_from_session(_StubSession())
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/export",
+            headers={
+                "Origin": "http://localhost:8765",
+                "Content-Type": "application/json",
+            },
+        )
+        assert resp.status == 409
+
+
+async def test_websocket_responds_to_ping_with_pong():
+    """Live-source WebSocket should round-trip ping/pong so heartbeats
+    work cleanly behind proxies."""
+    artifact_store = InMemoryArtifactStore()
+    journal = InMemoryRingBuffer(capacity=4, artifact_store=artifact_store)
+
+    class _StubSession:
+        session_id = "live-ping"
+        is_running = True
+        turn_state = "IDLE"
+        _artifact_store = artifact_store
+
+        @property
+        def journal(self):
+            return journal
+
+    source = _session_source(_StubSession())
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        async with client.ws_connect("/ws") as ws:
+            # First message is the snapshot.
+            await asyncio.wait_for(ws.receive(), timeout=2.0)
+            await ws.send_json({"action": "ping"})
+            # Pong arrives, possibly after another snapshot.
+            saw_pong = False
+            for _ in range(5):
+                msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
+                if msg.json().get("type") == "pong":
+                    saw_pong = True
+                    break
+            assert saw_pong
+
+
+async def test_audio_concat_streams_wav_response(tmp_path):
+    """The route should return ``Content-Type: audio/wav`` with a
+    Content-Length that matches the streamed body length so browsers
+    can scrub to the end without buffering blindly."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    bundle = RunBundle.load(bundle_path)
+    turn_id = next(
+        r.get("turn_id")
+        for r in bundle.records()
+        if r.get("name") == "tts_frame" and r.get("turn_id")
+    )
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/audio/concat/{turn_id}")
+        assert resp.status == 200
+        assert resp.headers.get("Content-Type") == "audio/wav"
+        body = await resp.read()
+        assert resp.headers.get("Content-Length") == str(len(body))
+
+
+async def test_records_total_unchanged_when_filtering(tmp_path):
+    """``?stage=tts`` should narrow ``total`` to TTS records, not return
+    the unfiltered count.  Sanity check that the new pagination
+    contract still respects the filter."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        all_resp = await (await client.get("/api/records")).json()
+        tts_resp = await (await client.get("/api/records?stage=tts")).json()
+        assert tts_resp["total"] < all_resp["total"]
+
+
+def test_filter_records_negative_offset_raises():
+    from easycat.debugger.server import _filter_records
+
+    with pytest.raises(ValueError, match="offset"):
+        _filter_records(
+            [],
+            stage=None,
+            turn_id=None,
+            name=None,
+            from_seq=None,
+            to_seq=None,
+            offset=-1,
+        )
+
+
+def test_filter_records_zero_limit_raises():
+    from easycat.debugger.server import _filter_records
+
+    with pytest.raises(ValueError, match="limit"):
+        _filter_records(
+            [],
+            stage=None,
+            turn_id=None,
+            name=None,
+            from_seq=None,
+            to_seq=None,
+            limit=0,
+        )

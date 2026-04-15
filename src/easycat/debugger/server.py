@@ -262,6 +262,15 @@ def _filter_records(
     limit: int | None = None,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
+    """Filter records.  Slicing happens here for callers that want a
+    single combined operation; pagination on the HTTP API goes through
+    :func:`_filter_and_paginate` so the response can carry both the
+    page slice and the full match count.
+    """
+    if offset < 0:
+        raise ValueError("offset must be >= 0")
+    if limit is not None and limit <= 0:
+        raise ValueError("limit must be > 0")
     out = []
     for r in records:
         seq = r.get("sequence")
@@ -289,6 +298,46 @@ def _filter_records(
     if limit is not None:
         out = out[:limit]
     return out
+
+
+def _filter_and_paginate(
+    records: list[dict[str, Any]],
+    *,
+    stage: str | None,
+    turn_id: str | None,
+    name: str | None,
+    from_seq: int | None,
+    to_seq: int | None,
+    errors_only: bool,
+    limit: int | None,
+    offset: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Return ``(page, total)`` so the UI can render "X of N".
+
+    The previous endpoint returned ``page_size`` as ``total``, which
+    made it impossible to render a real pager and confused tooling.
+    """
+    if offset < 0:
+        raise ValueError("offset must be >= 0")
+    if limit is not None and limit <= 0:
+        raise ValueError("limit must be > 0")
+    full = _filter_records(
+        records,
+        stage=stage,
+        turn_id=turn_id,
+        name=name,
+        from_seq=from_seq,
+        to_seq=to_seq,
+        errors_only=errors_only,
+        limit=None,
+        offset=0,
+    )
+    total = len(full)
+    if offset:
+        full = full[offset:]
+    if limit is not None:
+        full = full[:limit]
+    return full, total
 
 
 def _summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -529,14 +578,17 @@ def _cost_rollup(records: list[dict[str, Any]]) -> dict[str, Any]:
     return {"per_turn": by_turn, "totals": totals}
 
 
-def _concatenated_wav_for_turn(
+def _collect_tts_frames(
     source: DebuggerSource, turn_id: str
-) -> tuple[bytes, dict[str, Any]] | None:
-    """Stitch every TTS frame for a turn into a single WAV blob.
+) -> tuple[list[bytes], dict[str, int]]:
+    """Return ``(pcm_blobs_in_order, format)`` for one turn's TTS frames.
 
-    Returns ``(wav_bytes, format_dict)`` or ``None`` when the turn has
-    no TTS frames.  Frames must share the same PCM format; mismatched
-    formats raise rather than silently splicing different sample rates.
+    Streaming concat reads this and writes the WAV header up-front,
+    then pushes each PCM blob to the response without buffering the
+    entire stream in memory.
+
+    Raises ``ValueError`` if frames have inconsistent PCM formats —
+    never silently splices different sample rates together.
     """
     frames: list[tuple[int, bytes, dict[str, Any]]] = []
     for r in source.records():
@@ -556,47 +608,88 @@ def _concatenated_wav_for_turn(
         frames.append((int(r.get("sequence") or 0), blob, data))
 
     if not frames:
-        return None
+        return [], {}
 
     frames.sort(key=lambda item: item[0])
-    fmt = frames[0][2]
-    sample_rate = int(fmt.get("sample_rate") or 16000)
-    channels = int(fmt.get("channels") or 1)
-    sample_width = int(fmt.get("sample_width") or 2)
-
+    fmt0 = frames[0][2]
+    fmt = {
+        "sample_rate": int(fmt0.get("sample_rate") or 16000),
+        "channels": int(fmt0.get("channels") or 1),
+        "sample_width": int(fmt0.get("sample_width") or 2),
+    }
     for _seq, _blob, data in frames[1:]:
         if (
-            int(data.get("sample_rate") or 0) != sample_rate
-            or int(data.get("channels") or 0) != channels
-            or int(data.get("sample_width") or 0) != sample_width
+            int(data.get("sample_rate") or 0) != fmt["sample_rate"]
+            or int(data.get("channels") or 0) != fmt["channels"]
+            or int(data.get("sample_width") or 0) != fmt["sample_width"]
         ):
             raise ValueError(
-                f"tts_frame format mismatch in turn {turn_id}: cannot stitch frames "
-                "with differing sample_rate/channels/sample_width"
+                f"tts_frame format mismatch in turn {turn_id}: cannot stitch "
+                "frames with differing sample_rate/channels/sample_width"
             )
+    return [blob for _seq, blob, _data in frames], fmt
 
-    pcm = b"".join(blob for _seq, blob, _data in frames)
+
+def _wav_header(*, sample_rate: int, channels: int, sample_width: int, data_size: int) -> bytes:
+    """Build a 44-byte RIFF/WAVE PCM header.
+
+    Used by both the streaming HTTP route and the in-memory helper that
+    backs the legacy ``_concatenated_wav_for_turn`` function.
+    """
+    bits_per_sample = sample_width * 8
+    byte_rate = sample_rate * channels * sample_width
+    block_align = channels * sample_width
+    return b"".join(
+        [
+            b"RIFF",
+            struct.pack("<I", 36 + data_size),
+            b"WAVE",
+            b"fmt ",
+            struct.pack(
+                "<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, bits_per_sample
+            ),
+            b"data",
+            struct.pack("<I", data_size),
+        ]
+    )
+
+
+def _concatenated_wav_for_turn(
+    source: DebuggerSource, turn_id: str
+) -> tuple[bytes, dict[str, Any]] | None:
+    """Backwards-compat helper that returns the entire WAV in memory.
+
+    Tests still use this directly; the HTTP route now streams via
+    :func:`_collect_tts_frames` + :func:`_wav_header` for memory safety.
+    """
+    frames, fmt = _collect_tts_frames(source, turn_id)
+    if not frames:
+        return None
+    pcm = b"".join(frames)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(sample_width)
-        wf.setframerate(sample_rate)
+        wf.setnchannels(fmt["channels"])
+        wf.setsampwidth(fmt["sample_width"])
+        wf.setframerate(fmt["sample_rate"])
         wf.writeframes(pcm)
-    return buf.getvalue(), {
-        "sample_rate": sample_rate,
-        "channels": channels,
-        "sample_width": sample_width,
-        "frame_count": len(frames),
-        "byte_count": len(pcm),
-    }
+    return buf.getvalue(), {**fmt, "frame_count": len(frames), "byte_count": len(pcm)}
 
 
-def _bundle_zip_from_session(session: Any) -> bytes | None:
-    """Build a bundle-shaped ZIP for a live session, in memory.
+def _safe_unlink(path: Any) -> None:
+    """Best-effort delete; never raises so the event-loop callback is safe."""
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:  # pragma: no cover - filesystem race
+        logger.debug("Failed to clean up debugger temp file %s", path, exc_info=True)
 
-    Reuses ``export_debug_bundle`` semantics by writing to a temp file
-    then reading it back.  Returns ``None`` when the session has no
-    journal (debug='off').
+
+def _bundle_zip_from_session(session: Any) -> Path | None:
+    """Build a bundle-shaped ZIP for a live session and return its path.
+
+    The HTTP export route uses :class:`aiohttp.web.FileResponse` to
+    stream the file, then schedules a delayed unlink so we don't have
+    to hold the bundle bytes in memory.  Returns ``None`` when the
+    session has no journal (debug='off').
     """
     journal = getattr(session, "journal", None) or getattr(session, "_journal", None)
     if journal is None:
@@ -609,12 +702,12 @@ def _bundle_zip_from_session(session: Any) -> bytes | None:
         tmp_path = Path(tmp.name)
     try:
         export_debug_bundle(session, tmp_path, overwrite=True)
-        return tmp_path.read_bytes()
-    finally:
-        try:
-            tmp_path.unlink()
-        except OSError:  # pragma: no cover
-            pass
+    except Exception:
+        # Clean up before propagating so callers don't see a half-written
+        # tempfile linger in /tmp.
+        _safe_unlink(tmp_path)
+        raise
+    return tmp_path
 
 
 # ── HTTP API ─────────────────────────────────────────────────────
@@ -632,25 +725,62 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
 
     static_dir = Path(__file__).parent / "static"
 
+    _SAFE_ORIGIN_PREFIXES = (
+        "http://127.0.0.1",
+        "http://localhost",
+        "http://[::1]",
+        "https://127.0.0.1",
+        "https://localhost",
+        "https://[::1]",
+    )
+    _STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+    def _origin_is_safe(origin: str) -> bool:
+        return bool(origin) and origin.startswith(_SAFE_ORIGIN_PREFIXES)
+
     @web.middleware
     async def _origin_guard(request: Any, handler: Any) -> Any:
-        """Refuse non-loopback Origin headers when the server is bound to
-        a non-loopback host.  Loopback-only is the default safe mode.
+        """Refuse cross-origin requests on the loopback default.
+
+        Three checks layered for defense-in-depth:
+
+        1. ``Origin`` header, when present, must point at a loopback
+           address.  Browsers always send Origin on cross-origin
+           fetches, ws upgrades, and POST.
+        2. ``Sec-Fetch-Site`` (set by all modern browsers) must be
+           ``same-origin``, ``same-site``, or ``none`` (top-level nav).
+           Any cross-site value is refused regardless of Origin.
+        3. State-changing methods (POST/PUT/PATCH/DELETE) require an
+           ``application/json`` content type and a present, safe
+           Origin — kills the simple-form-POST CSRF vector that
+           browsers wave through without preflight.
+
+        ``allow_remote=True`` disables all three: callers who want
+        network exposure are on their own.
         """
-        if not allow_remote:
-            origin = request.headers.get("Origin", "")
-            if origin:
-                # Reject any Origin that isn't from the loopback we trust.
-                allowed_prefixes = (
-                    "http://127.0.0.1",
-                    "http://localhost",
-                    "http://[::1]",
-                    "https://127.0.0.1",
-                    "https://localhost",
-                    "https://[::1]",
+        if allow_remote:
+            return await handler(request)
+        origin = request.headers.get("Origin", "")
+        site = request.headers.get("Sec-Fetch-Site", "")
+        if site and site not in ("same-origin", "same-site", "none"):
+            return web.Response(status=403, text="cross-site requests refused")
+        if origin and not _origin_is_safe(origin):
+            return web.Response(status=403, text="cross-origin requests refused")
+        if request.method in _STATE_CHANGING_METHODS:
+            ctype = (request.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype and ctype != "application/json":
+                return web.Response(
+                    status=415, text="state-changing requests must use application/json"
                 )
-                if not origin.startswith(allowed_prefixes):
-                    return web.Response(status=403, text="cross-origin requests refused")
+            # On state-changing requests, a missing Origin from a
+            # browser is suspicious — refuse rather than trust the
+            # caller blindly.  Server-to-server clients can pass an
+            # explicit ``Origin: http://localhost`` or use
+            # ``allow_remote``.
+            if not origin:
+                return web.Response(
+                    status=403, text="state-changing requests require an Origin header"
+                )
         return await handler(request)
 
     async def index(_request: Any) -> Any:
@@ -668,18 +798,29 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             offset = int(params["offset"]) if "offset" in params else 0
         except ValueError:
             return web.Response(status=400, text="from/to/limit/offset must be integers")
-        filtered = _filter_records(
-            source.records(),
-            stage=params.get("stage") or None,
-            turn_id=params.get("turn") or None,
-            name=params.get("name") or None,
-            from_seq=from_seq,
-            to_seq=to_seq,
-            errors_only=params.get("errors") == "1",
-            limit=limit,
-            offset=offset,
+        try:
+            page, total = _filter_and_paginate(
+                source.records(),
+                stage=params.get("stage") or None,
+                turn_id=params.get("turn") or None,
+                name=params.get("name") or None,
+                from_seq=from_seq,
+                to_seq=to_seq,
+                errors_only=params.get("errors") == "1",
+                limit=limit,
+                offset=offset,
+            )
+        except ValueError as exc:
+            return web.Response(status=400, text=str(exc))
+        return web.json_response(
+            {
+                "records": page,
+                "page_size": len(page),
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+            }
         )
-        return web.json_response({"records": filtered, "total": len(filtered)})
 
     async def turns(_request: Any) -> Any:
         return web.json_response({"turns": _summarise_turns(source.records())})
@@ -709,13 +850,37 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         except ValueError:
             return web.Response(status=400, text="invalid turn_id")
         try:
-            result = _concatenated_wav_for_turn(source, turn_id)
+            frames, fmt = _collect_tts_frames(source, turn_id)
         except ValueError as exc:
             return web.Response(status=409, text=str(exc))
-        if result is None:
+        if not frames:
             return web.Response(status=404, text="no tts frames for turn")
-        wav_bytes, _meta = result
-        return web.Response(body=wav_bytes, content_type="audio/wav")
+        # Stream the WAV out incrementally.  Whole-file response would
+        # buffer tens of MB for long turns; StreamResponse lets aiohttp
+        # backpressure the client and avoids the heap spike.
+        pcm_total = sum(len(blob) for blob in frames)
+        header = _wav_header(
+            sample_rate=fmt["sample_rate"],
+            channels=fmt["channels"],
+            sample_width=fmt["sample_width"],
+            data_size=pcm_total,
+        )
+        response = web.StreamResponse(
+            headers={
+                "Content-Type": "audio/wav",
+                "Content-Length": str(len(header) + pcm_total),
+            }
+        )
+        await response.prepare(request)
+        await response.write(header)
+        for blob in frames:
+            await response.write(blob)
+        await response.write_eof()
+        return response
+
+    _DESTRUCTIVE_FIDELITIES = frozenset({"live"})
+    _DESTRUCTIVE_TOOL_POLICIES = frozenset({"allow"})
+    _ALLOWED_REPLAY_KEYS = frozenset({"fidelity", "timing", "force", "tool_policy", "confirm"})
 
     async def replay(request: Any) -> Any:
         if not source.manifest().get("supports_replay"):
@@ -724,34 +889,78 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             payload = await request.json()
         except json.JSONDecodeError:
             return web.Response(status=400, text="body must be JSON")
+        if not isinstance(payload, dict):
+            return web.Response(status=400, text="body must be a JSON object")
+        unknown = set(payload) - _ALLOWED_REPLAY_KEYS
+        if unknown:
+            return web.json_response({"error": f"unknown keys: {sorted(unknown)}"}, status=400)
+        fidelity = payload.get("fidelity", "artifact")
+        tool_policy = payload.get("tool_policy", "deny")
+        force = bool(payload.get("force", False))
+        confirm = bool(payload.pop("confirm", False))
+        # ARTIFACT/SIMULATED with DENY/STUB are always safe; LIVE
+        # fidelity, ALLOW tool policy, or force=True can re-execute
+        # against live providers and need explicit confirmation so a
+        # CSRF / drive-by from another tab can't fire them silently.
+        destructive = (
+            fidelity in _DESTRUCTIVE_FIDELITIES
+            or tool_policy in _DESTRUCTIVE_TOOL_POLICIES
+            or force
+        )
+        if destructive and not confirm:
+            return web.json_response(
+                {
+                    "error": (
+                        "destructive replay requested (live fidelity, allow tool "
+                        "policy, or force) — set 'confirm': true to acknowledge"
+                    ),
+                    "destructive": True,
+                },
+                status=409,
+            )
         try:
             result = source.replay(**payload)
         except (ValueError, TypeError, RuntimeError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
+        result["destructive"] = destructive
         return web.json_response(result)
 
-    async def export(_request: Any) -> Any:
+    async def export(request: Any) -> Any:
         if not source.manifest().get("supports_export"):
             return web.Response(status=405, text="export only supported for live sessions")
-        # Source.bundle() is None for live; we resolve the session via
-        # the closure used to build the source.  For now, this endpoint
-        # is wired up by serve_session below which injects the export
-        # function.
         export_fn = getattr(source, "_export_fn", None)
         if export_fn is None:
             return web.Response(status=503, text="no export function bound")
         try:
-            data = export_fn()
+            tmp_path = export_fn()
         except Exception as exc:  # noqa: BLE001 - never hide export errors
             logger.exception("Export failed")
             return web.Response(status=500, text=str(exc))
-        if data is None:
+        if tmp_path is None:
             return web.Response(status=409, text="session has no journal to export")
-        return web.Response(
-            body=data,
-            content_type="application/zip",
-            headers={"Content-Disposition": "attachment; filename=session.zip"},
+        # ``tmp_path`` is a Path now; FileResponse streams the file
+        # without holding the bundle in memory.  The closure on the
+        # caller side (serve_session._export_fn) deletes the file
+        # via a background callback when the response is finalised.
+        if isinstance(tmp_path, (bytes, bytearray)):
+            # Backwards-compat: an older closure returns bytes.  Smaller
+            # bundles can take this path without harm.
+            return web.Response(
+                body=bytes(tmp_path),
+                content_type="application/zip",
+                headers={"Content-Disposition": "attachment; filename=session.zip"},
+            )
+        response = web.FileResponse(
+            tmp_path,
+            headers={
+                "Content-Type": "application/zip",
+                "Content-Disposition": "attachment; filename=session.zip",
+            },
         )
+        # Schedule cleanup once aiohttp has finished sending.
+        loop = asyncio.get_running_loop()
+        loop.call_later(60.0, _safe_unlink, tmp_path)
+        return response
 
     async def refresh(_request: Any) -> Any:
         return web.json_response({"snapshot_size": len(source.records())})

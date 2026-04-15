@@ -633,21 +633,42 @@
 "use strict";
 
 // ── Pure DOM safety helpers ──────────────────────────────────────
-// Never touch innerHTML with untrusted strings.  Build elements
-// programmatically and set textContent so escape rules are obvious.
+// Never touch innerHTML.  Build elements programmatically and set
+// textContent so escape rules are obvious.  ``href``/``src``/etc. go
+// through a scheme allowlist so a future caller can't accidentally
+// inject ``javascript:`` URLs from journal data.
+const _UNSAFE_URL_ATTRS = new Set([
+  "href", "src", "srcdoc", "xlink:href", "action", "formaction",
+]);
+function _sanitiseUrl(value) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.replace(/^[\s\u0000-\u001f]+/, "");
+  if (!trimmed) return "";
+  // Reject anything that could load script.
+  if (/^(javascript|vbscript|file):/i.test(trimmed)) return "";
+  if (/^data:text\/html/i.test(trimmed)) return "";
+  // Allow scheme-less paths, fragments, and same-origin URLs straight
+  // through; everything else has to start with a known-safe scheme.
+  if (/^(https?:|blob:|data:audio\/|data:image\/|\/|#|\?|\.)/i.test(trimmed)) {
+    return trimmed;
+  }
+  // No scheme separator at all → relative path, safe.
+  if (!trimmed.includes(":")) return trimmed;
+  return "";
+}
 function el(tag, attrs, children) {
   const node = document.createElement(tag);
   if (attrs) {
     for (const [k, v] of Object.entries(attrs)) {
       if (v === null || v === undefined) continue;
       if (k === "class") node.className = v;
-      else if (k === "html") {
-        // explicit opt-in — only used for SVG strings we constructed
-        node.innerHTML = v;
-      } else if (k.startsWith("on") && typeof v === "function") {
+      else if (k.startsWith("on") && typeof v === "function") {
         node.addEventListener(k.slice(2).toLowerCase(), v);
       } else if (k === "dataset") {
         for (const [dk, dv] of Object.entries(v)) node.dataset[dk] = dv;
+      } else if (_UNSAFE_URL_ATTRS.has(k)) {
+        const safe = _sanitiseUrl(v);
+        if (safe) node.setAttribute(k, safe);
       } else {
         node.setAttribute(k, v);
       }
@@ -747,14 +768,18 @@ async function refreshAll() {
 }
 
 async function loadAllSnapshots() {
+  // Cap the snapshot record fetch — the records table re-fetches with
+  // its own filters/limit when the user interacts.  This snapshot is
+  // only used for stage-filter population and pipeline counts.
   const [recsResp, turnsResp, timelineResp, transcriptResp, costResp] = await Promise.all([
-    getJSON("/api/records"),
+    getJSON("/api/records?limit=1000"),
     getJSON("/api/turns"),
     getJSON("/api/timeline"),
     getJSON("/api/transcript"),
     getJSON("/api/cost").catch(() => ({ per_turn: {}, totals: {} })),
   ]);
   state.records = recsResp.records;
+  state.recordsTotal = recsResp.total ?? recsResp.records.length;
   state.turns = turnsResp.turns;
   state.timeline = timelineResp.timeline;
   state.transcripts = transcriptResp.transcripts;
@@ -938,8 +963,15 @@ async function loadAndRenderRecords() {
   if (state.filters.from) params.set("from", state.filters.from);
   if (state.filters.to) params.set("to", state.filters.to);
   if (state.filters.errorsOnly) params.set("errors", "1");
+  // Cap at 500 rows for the table; pager controls below would let the
+  // user step through bigger result sets if we needed to expose more.
+  params.set("limit", "500");
   const r = await getJSON(`/api/records?${params}`);
-  $("#record-count").textContent = `${r.total} record${r.total === 1 ? "" : "s"}`;
+  const shown = r.records.length;
+  const total = r.total ?? shown;
+  $("#record-count").textContent = shown === total
+    ? `${total} record${total === 1 ? "" : "s"}`
+    : `showing ${shown} of ${total} records`;
   renderRecordRows(r.records);
 }
 
@@ -1073,11 +1105,17 @@ function renderTranscriptView() {
     if (turn.agent) {
       node.appendChild(el("div", { class: "speaker agent" }, "Agent"));
       node.appendChild(el("div", { class: "text" }, turn.agent));
-      node.appendChild(el("audio", {
-        controls: "",
-        src: `/api/audio/concat/${encodeURIComponent(turn.turn_id)}`,
-        preload: "none",
-      }));
+      // Only render the audio element when the rollup says this turn
+      // produced TTS bytes — otherwise the browser shows a broken
+      // player when /api/audio/concat 404s.
+      const turnSummary = state.turns.find(t => t.turn_id === turn.turn_id);
+      if (turnSummary && (turnSummary.tts_audio_bytes || 0) > 0) {
+        node.appendChild(el("audio", {
+          controls: "",
+          src: `/api/audio/concat/${encodeURIComponent(turn.turn_id)}`,
+          preload: "none",
+        }));
+      }
     }
     root.appendChild(node);
   }
@@ -1142,18 +1180,39 @@ function renderReplayView() {
   document.querySelector(".replay-form").style.display = supports ? "" : "none";
 }
 
-async function runReplay() {
+async function runReplay(opts) {
   const btn = $("#run-replay-btn");
   btn.disabled = true;
   btn.textContent = "…running";
   const block = $("#replay-result-block");
   const pre = $("#replay-result-pre");
   block.hidden = true;
+  const fidelity = $("#replay-fidelity").value;
+  const toolPolicy = $("#replay-tool-policy").value;
+  const timing = $("#replay-timing").value;
+  const isDestructive = fidelity === "live" || toolPolicy === "allow";
+  // The server enforces a confirm flag for destructive combos so a
+  // CSRF / drive-by from another tab can't fire LIVE/ALLOW silently.
+  // Surface that in the UI with a real warning instead of waiting for
+  // the 409 to come back as a JSON error.
+  if (isDestructive && !(opts && opts.confirmed)) {
+    const ok = window.confirm(
+      `Replay fidelity "${fidelity}" with tool policy "${toolPolicy}" will ` +
+      "re-execute against live providers and may incur cost or trigger real " +
+      "tool side-effects.\n\nProceed?"
+    );
+    if (!ok) {
+      btn.disabled = false;
+      btn.textContent = "▶ Run replay";
+      return;
+    }
+  }
   try {
     const result = await postJSON("/api/replay", {
-      fidelity: $("#replay-fidelity").value,
-      tool_policy: $("#replay-tool-policy").value,
-      timing: $("#replay-timing").value,
+      fidelity,
+      tool_policy: toolPolicy,
+      timing,
+      confirm: isDestructive,
     });
     pre.textContent = JSON.stringify(result, null, 2);
     block.hidden = false;
@@ -1167,26 +1226,51 @@ async function runReplay() {
 }
 
 // ── WebSocket live updates ───────────────────────────────────────
+let _wsBackoffMs = 1000;
+const _WS_BACKOFF_MAX_MS = 30000;
+let _snapshotPending = false;
+
+function _scheduleSnapshotRefresh() {
+  // Coalesce bursty snapshot notifications into one fan-out so the
+  // UI doesn't fire 5×N parallel GETs when a chatty live session
+  // reports new records every 500 ms.
+  if (_snapshotPending) return;
+  _snapshotPending = true;
+  setTimeout(() => {
+    _snapshotPending = false;
+    loadAllSnapshots().then(rerenderActiveTab).catch(() => { /* swallow */ });
+  }, 750);
+}
+
 function connectWS() {
+  // Pause reconnects when the tab is hidden so a backgrounded UI
+  // doesn't peg the loop forever.
+  if (document.visibilityState === "hidden") {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") connectWS();
+    }, { once: true });
+    return;
+  }
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const url = `${proto}//${location.host}/ws`;
   let ws;
   try { ws = new WebSocket(url); }
-  catch (e) { setWSStatus(false); return; }
+  catch (e) { setWSStatus(false); _scheduleReconnect(); return; }
   state.ws = ws;
-  ws.addEventListener("open", () => setWSStatus(true));
+  ws.addEventListener("open", () => {
+    setWSStatus(true);
+    _wsBackoffMs = 1000;  // reset on success
+  });
   ws.addEventListener("close", () => {
     setWSStatus(false);
-    setTimeout(connectWS, 3000);  // auto-reconnect
+    _scheduleReconnect();
   });
   ws.addEventListener("error", () => setWSStatus(false));
   ws.addEventListener("message", (ev) => {
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === "snapshot") {
-        // Live source notified us about a new snapshot — refresh data
-        // for the active tab without thrashing every other view.
-        loadAllSnapshots().then(rerenderActiveTab);
+        _scheduleSnapshotRefresh();
       }
     } catch { /* ignore malformed */ }
   });
@@ -1195,6 +1279,14 @@ function setWSStatus(connected) {
   state.wsConnected = connected;
   $("#ws-dot").classList.toggle("connected", connected);
   $("#ws-label").textContent = connected ? "live" : "disconnected";
+}
+
+function _scheduleReconnect() {
+  // Exponential back-off capped at 30s — protects against thrashing
+  // a downed server and avoids holding a busy loop on hostile networks.
+  const delay = _wsBackoffMs;
+  _wsBackoffMs = Math.min(_WS_BACKOFF_MAX_MS, _wsBackoffMs * 2);
+  setTimeout(connectWS, delay);
 }
 
 // ── Wire-up ──────────────────────────────────────────────────────
