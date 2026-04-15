@@ -8,12 +8,6 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform == 'darwin'",
 ]
 
-[manifest]
-members = [
-    "easycat",
-    "easycat-ten-vad-linux-arm64",
-]
-
 [[package]]
 name = "ag-ui-protocol"
 version = "0.1.14"
@@ -903,7 +897,6 @@ all = [
     { name = "aiohttp" },
     { name = "aiortc" },
     { name = "deepgram-sdk" },
-    { name = "easycat-ten-vad-linux-arm64", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'linux')" },
     { name = "elevenlabs" },
     { name = "fastapi" },
     { name = "livekit" },
@@ -915,7 +908,6 @@ all = [
     { name = "python-multipart" },
     { name = "requests" },
     { name = "sounddevice" },
-    { name = "ten-vad", marker = "(platform_machine != 'aarch64' and platform_machine != 'arm64') or sys_platform != 'linux'" },
     { name = "twilio" },
     { name = "uvicorn" },
 ]
@@ -938,7 +930,6 @@ pydantic-ai = [
     { name = "pydantic-ai" },
 ]
 quickstart = [
-    { name = "easycat-ten-vad-linux-arm64", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'linux')" },
     { name = "numpy" },
     { name = "onnxruntime" },
     { name = "openai" },
@@ -946,7 +937,6 @@ quickstart = [
     { name = "pyrnnoise" },
     { name = "requests" },
     { name = "sounddevice" },
-    { name = "ten-vad", marker = "(platform_machine != 'aarch64' and platform_machine != 'arm64') or sys_platform != 'linux'" },
 ]
 rnnoise = [
     { name = "pyrnnoise" },
@@ -967,10 +957,9 @@ telephony = [
     { name = "uvicorn" },
 ]
 ten-vad = [
-    { name = "easycat-ten-vad-linux-arm64", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'linux')" },
     { name = "numpy" },
     { name = "onnxruntime" },
-    { name = "ten-vad", marker = "(platform_machine != 'aarch64' and platform_machine != 'arm64') or sys_platform != 'linux'" },
+    { name = "ten-vad" },
 ]
 webrtc = [
     { name = "aiohttp" },
@@ -993,9 +982,6 @@ requires-dist = [
     { name = "aiortc", marker = "extra == 'webrtc'", specifier = ">=1.9.0" },
     { name = "deepgram-sdk", marker = "extra == 'all'", specifier = ">=3.0.0" },
     { name = "deepgram-sdk", marker = "extra == 'deepgram'", specifier = ">=3.0.0" },
-    { name = "easycat-ten-vad-linux-arm64", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'all') or (platform_machine == 'arm64' and sys_platform == 'linux' and extra == 'all')", editable = "packages/easycat-ten-vad-linux-arm64" },
-    { name = "easycat-ten-vad-linux-arm64", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'quickstart') or (platform_machine == 'arm64' and sys_platform == 'linux' and extra == 'quickstart')", editable = "packages/easycat-ten-vad-linux-arm64" },
-    { name = "easycat-ten-vad-linux-arm64", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'ten-vad') or (platform_machine == 'arm64' and sys_platform == 'linux' and extra == 'ten-vad')", editable = "packages/easycat-ten-vad-linux-arm64" },
     { name = "elevenlabs", marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "elevenlabs", marker = "extra == 'elevenlabs'", specifier = ">=1.0.0" },
     { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.110.0" },
@@ -1032,9 +1018,7 @@ requires-dist = [
     { name = "sounddevice", marker = "extra == 'all'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'local'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'quickstart'", specifier = ">=0.4.6" },
-    { name = "ten-vad", marker = "(platform_machine != 'aarch64' and platform_machine != 'arm64' and extra == 'all') or (sys_platform != 'linux' and extra == 'all')", specifier = ">=1.0.6.8" },
-    { name = "ten-vad", marker = "(platform_machine != 'aarch64' and platform_machine != 'arm64' and extra == 'quickstart') or (sys_platform != 'linux' and extra == 'quickstart')", specifier = ">=1.0.6.8" },
-    { name = "ten-vad", marker = "(platform_machine != 'aarch64' and platform_machine != 'arm64' and extra == 'ten-vad') or (sys_platform != 'linux' and extra == 'ten-vad')", specifier = ">=1.0.6.8" },
+    { name = "ten-vad", marker = "extra == 'ten-vad'", specifier = ">=1.0.6.8" },
     { name = "twilio", marker = "extra == 'all'", specifier = ">=9.0.0" },
     { name = "twilio", marker = "extra == 'telephony'", specifier = ">=9.0.0" },
     { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.29.0" },
@@ -1050,11 +1034,6 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.0" },
     { name = "ruff", specifier = ">=0.9" },
 ]
-
-[[package]]
-name = "easycat-ten-vad-linux-arm64"
-version = "0.1.0"
-source = { editable = "packages/easycat-ten-vad-linux-arm64" }
 
 [[package]]
 name = "elevenlabs"

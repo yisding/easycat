@@ -20,12 +20,9 @@ telephony = ["fastapi>=0.110.0", "python-multipart>=0.0.9", "twilio>=9.0.0", "uv
 aec = ["livekit>=1.0.0"]
 local = ["sounddevice>=0.4.6"]
 rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.31.0"]
-ten-vad = [
-    "numpy>=1.24.0",
-    "onnxruntime>=1.16.0",
-    "ten-vad>=1.0.6.8; sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64')",
-    "easycat-ten-vad-linux-arm64>=0.1.0; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64')",
-]
+# TEN VAD has a non-permissive license, so we do not vendor its
+# binaries.  Users who accept the license can opt in here.
+ten-vad = ["numpy>=1.24.0", "onnxruntime>=1.16.0", "ten-vad>=1.0.6.8"]
 silero-vad = ["numpy>=1.24.0", "onnxruntime>=1.16.0"]
 smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.16.0"]
 webrtc = ["aiortc>=1.9.0", "aiohttp>=3.9.0"]
@@ -37,8 +34,6 @@ quickstart = [
     "requests>=2.31.0",
     "numpy>=1.24.0",
     "onnxruntime>=1.16.0",
-    "ten-vad>=1.0.6.8; sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64')",
-    "easycat-ten-vad-linux-arm64>=0.1.0; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64')",
 ]
 all = [
     "aiortc>=1.9.0",
@@ -57,8 +52,6 @@ all = [
     "uvicorn>=0.29.0",
     "numpy>=1.24.0",
     "onnxruntime>=1.16.0",
-    "ten-vad>=1.0.6.8; sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64')",
-    "easycat-ten-vad-linux-arm64>=0.1.0; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64')",
 ]
 
 [build-system]
@@ -72,12 +65,6 @@ dev = [
     "pytest-asyncio>=1.0",
     "ruff>=0.9",
 ]
-
-[tool.uv.workspace]
-members = ["packages/*"]
-
-[tool.uv.sources]
-easycat-ten-vad-linux-arm64 = { workspace = true }
 
 [tool.ruff]
 line-length = 99

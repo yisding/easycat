@@ -217,21 +217,8 @@ async def test_krisp_vad_process_mocked():
 # ── TenVAD tests ────────────────────────────────────────────────────
 
 
-def test_ten_backend_candidates_prefer_bundled(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("EASYCAT_TEN_BACKEND", raising=False)
-    monkeypatch.setattr(vad_module, "_ten_bundled_root", lambda: vad_module.Path("/tmp/ten"))
-    assert vad_module._ten_backend_candidates() == ("bundled", "package")
-
-
-def test_ten_backend_candidates_respect_override(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("EASYCAT_TEN_BACKEND", "package")
-    monkeypatch.setattr(vad_module, "_ten_bundled_root", lambda: vad_module.Path("/tmp/ten"))
-    assert vad_module._ten_backend_candidates() == ("package",)
-
-
 def test_ten_vad_fails_without_sdk(monkeypatch: pytest.MonkeyPatch):
     """TenVAD should raise RuntimeError if ten_vad package is missing."""
-    monkeypatch.setattr(vad_module, "_ten_backend_candidates", lambda: ("package",))
 
     def _require_module(module_name: str, **_: object) -> object:
         if module_name == "ten_vad":
@@ -248,7 +235,6 @@ def test_ten_vad_fails_without_sdk(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_ten_vad_process_mocked(monkeypatch: pytest.MonkeyPatch):
     """TenVAD with mocked SDK should process audio."""
-    monkeypatch.setattr(vad_module, "_ten_backend_candidates", lambda: ("package",))
     mock_ten_vad = MagicMock()
     mock_instance = MagicMock()
     mock_instance.process.return_value = (0.9, 1)
@@ -285,61 +271,6 @@ async def test_ten_vad_process_mocked(monkeypatch: pytest.MonkeyPatch):
     finally:
         del sys.modules["ten_vad"]
         del sys.modules["numpy"]
-
-
-@pytest.mark.asyncio
-async def test_ten_vad_process_mocked_bundled(monkeypatch: pytest.MonkeyPatch):
-    class _FakeBundledTenVad:
-        def __init__(
-            self,
-            *,
-            bundle_root: vad_module.Path,
-            hop_size: int,
-            onnxruntime_module: object,
-        ) -> None:
-            assert bundle_root == vad_module.Path("/tmp/ten")
-            assert hop_size == 256
-            assert onnxruntime_module is fake_numpy
-            self.calls = 0
-
-        def process(self, frame):
-            self.calls += 1
-            return (0.9 if self.calls <= 2 else 0.1), 1
-
-    import types
-
-    class _FakeArray:
-        def __init__(self, shape=(256,)):
-            self.shape = shape
-            self.__array_interface__ = {"data": (0, False)}
-
-        def copy(self):
-            return self
-
-        def squeeze(self):
-            return self
-
-    fake_numpy = types.SimpleNamespace(
-        int16="int16",
-        frombuffer=lambda data, dtype: _FakeArray(),
-    )
-
-    monkeypatch.setattr(vad_module, "_ten_backend_candidates", lambda: ("bundled",))
-    monkeypatch.setattr(vad_module, "_ten_bundled_root", lambda: vad_module.Path("/tmp/ten"))
-    monkeypatch.setattr(vad_module, "_BundledTenVad", _FakeBundledTenVad)
-    monkeypatch.setattr(vad_module, "require_module", lambda module_name, **_: fake_numpy)
-
-    vad = TenVAD()
-    vad._min_speech_duration_ms = 0
-    vad._min_silence_duration_ms = 0
-    vad._threshold = 0.5
-
-    events = []
-    async for event in vad.process(_make_chunk(1000, n_samples=512)):
-        events.append(event)
-
-    assert any(isinstance(e, VADStartSpeaking) for e in events)
-    assert vad._backend == "bundled"
 
 
 @pytest.mark.asyncio
@@ -454,24 +385,30 @@ def test_vad_factory_explicit_ten_fails(monkeypatch: pytest.MonkeyPatch):
         create_vad(VADConfig(backend="ten"))
 
 
-def test_vad_factory_krisp_preferred():
-    """In auto mode, Krisp should be tried first."""
-    mock_module = MagicMock()
-    mock_module.create_vad_session.return_value = MagicMock()
+def test_vad_factory_silero_preferred(monkeypatch: pytest.MonkeyPatch):
+    """In auto mode Silero is tried first (permissively licensed, bundled)."""
 
-    import sys
+    class _FakeSilero:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
 
-    sys.modules["krisp_audio"] = mock_module
+        def configure(self, **_kwargs: object) -> None:
+            pass
 
-    try:
-        vad = create_vad(VADConfig(backend="auto"))
-        assert isinstance(vad, KrispVAD)
-    finally:
-        del sys.modules["krisp_audio"]
+    monkeypatch.setattr(vad_module, "SileroVAD", _FakeSilero)
+    vad = create_vad(VADConfig(backend="auto"))
+    assert isinstance(vad, _FakeSilero)
 
 
-def test_vad_factory_ten_fallback_before_silero():
-    """In auto mode, TEN should be used when Krisp is unavailable."""
+def test_vad_factory_ten_fallback_before_krisp(monkeypatch: pytest.MonkeyPatch):
+    """In auto mode, TEN is used when Silero is unavailable but ten_vad is installed."""
+
+    class _BrokenSilero:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("silero missing")
+
+    monkeypatch.setattr(vad_module, "SileroVAD", _BrokenSilero)
+
     mock_ten_vad = MagicMock()
     mock_ten_vad.TenVad.return_value = MagicMock()
 
