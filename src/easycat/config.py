@@ -394,7 +394,16 @@ def create_session(config: EasyCatConfig) -> Session:
 
         # Emit provider versions into the journal at session start.
         if journal is not None:
-            _emit_provider_versions(journal, session_id, stt=stt, tts=tts, transport=transport)
+            _emit_provider_versions(
+                journal,
+                session_id,
+                stt=stt,
+                tts=tts,
+                transport=transport,
+                vad=vad,
+                noise_reducer=noise_reducer,
+                echo_canceller=echo_canceller,
+            )
 
         turn_config = config.turn_taking
         smart_turn = create_smart_turn(config.smart_turn)
@@ -448,10 +457,12 @@ def create_session(config: EasyCatConfig) -> Session:
         if journal is not None and hasattr(journal, "close"):
             journal.close()
         raise
-    # Stash the original EasyCatConfig so debug bundle export can snapshot
-    # user-facing settings (debug, journal_backend, turn_taking, etc.)
-    # instead of serializing live provider instances from SessionConfig.
-    session._easycat_config = config
+    # Stash a snapshot of the original EasyCatConfig so debug bundle export
+    # can snapshot user-facing settings (debug, journal_backend, turn_taking,
+    # etc.) instead of serializing live provider instances from SessionConfig.
+    # We shallow-copy so that callers who reuse/mutate the same config object
+    # across sessions don't corrupt an earlier session's postmortem metadata.
+    session._easycat_config = replace(config)
 
     if _outbound_sm is not None:
         _wire_outbound_pipeline(
@@ -864,13 +875,23 @@ def _emit_provider_versions(
     stt: Any,
     tts: Any,
     transport: Any,
+    vad: Any = None,
+    noise_reducer: Any = None,
+    echo_canceller: Any = None,
 ) -> None:
     """Write a single journal record with version info from all providers."""
     from easycat.runtime.records import JournalRecordKind
 
     versions: dict[str, dict[str, str]] = {}
-    for role, provider in [("stt", stt), ("tts", tts), ("transport", transport)]:
-        if hasattr(provider, "version_info"):
+    for role, provider in [
+        ("stt", stt),
+        ("tts", tts),
+        ("transport", transport),
+        ("vad", vad),
+        ("noise_reducer", noise_reducer),
+        ("echo_canceller", echo_canceller),
+    ]:
+        if provider is not None and hasattr(provider, "version_info"):
             versions[role] = provider.version_info()
     journal.append(
         kind=JournalRecordKind.EVENT,
