@@ -1297,6 +1297,15 @@ class Session:
             if self._stt_task and not self._stt_task.done():
                 self._stt_task.cancel()
                 tasks.append(self._stt_task)
+            # STT segment-commit work runs on background tasks that outlive
+            # _stt_task. Cancel them here so shutdown() does not return while
+            # commit_segment() is still sleeping or awaiting the provider.
+            if self._stt_pause_commit_task and not self._stt_pause_commit_task.done():
+                self._stt_pause_commit_task.cancel()
+                tasks.append(self._stt_pause_commit_task)
+            if self._stt_segment_commit_task and not self._stt_segment_commit_task.done():
+                self._stt_segment_commit_task.cancel()
+                tasks.append(self._stt_segment_commit_task)
             if self._current_tts_task and not self._current_tts_task.done():
                 self._current_tts_task.cancel()
                 tasks.append(self._current_tts_task)
@@ -1312,6 +1321,8 @@ class Session:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+            self._stt_pause_commit_task = None
+            self._stt_segment_commit_task = None
             self._heartbeat_task = None
 
             for checker in self._health_checkers:
