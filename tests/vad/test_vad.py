@@ -528,12 +528,17 @@ def test_vad_factory_no_backends(monkeypatch: pytest.MonkeyPatch):
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             raise RuntimeError("ten missing")
 
+    class _BrokenFunASR:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("funasr missing")
+
     class _BrokenSilero:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             raise RuntimeError("silero missing")
 
     monkeypatch.setattr(vad_module, "KrispVAD", _BrokenKrisp)
     monkeypatch.setattr(vad_module, "TenVAD", _BrokenTen)
+    monkeypatch.setattr(vad_module, "FunASROnnxVAD", _BrokenFunASR)
     monkeypatch.setattr(vad_module, "SileroVAD", _BrokenSilero)
 
     with pytest.raises(RuntimeError, match="No VAD backend"):
@@ -618,14 +623,46 @@ def test_vad_factory_silero_preferred(monkeypatch: pytest.MonkeyPatch):
     assert isinstance(vad, _FakeSilero)
 
 
-def test_vad_factory_ten_fallback_before_krisp(monkeypatch: pytest.MonkeyPatch):
-    """In auto mode, TEN is used when Silero is unavailable but ten_vad is installed."""
+def test_vad_factory_funasr_fallback_before_ten(monkeypatch: pytest.MonkeyPatch):
+    """In auto mode, FunASR is used before TEN when Silero is unavailable."""
 
     class _BrokenSilero:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             raise RuntimeError("silero missing")
 
+    class _FakeFunASR:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        def configure(self, **_kwargs: object) -> None:
+            pass
+
     monkeypatch.setattr(vad_module, "SileroVAD", _BrokenSilero)
+    monkeypatch.setattr(vad_module, "FunASROnnxVAD", _FakeFunASR)
+
+    class _BrokenTen:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("TEN should not be tried before FunASR")
+
+    monkeypatch.setattr(vad_module, "TenVAD", _BrokenTen)
+
+    vad = create_vad(VADConfig(backend="auto"))
+    assert isinstance(vad, _FakeFunASR)
+
+
+def test_vad_factory_ten_fallback_after_funasr(monkeypatch: pytest.MonkeyPatch):
+    """In auto mode, TEN is used when Silero and FunASR are unavailable."""
+
+    class _BrokenSilero:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("silero missing")
+
+    class _BrokenFunASR:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("funasr missing")
+
+    monkeypatch.setattr(vad_module, "SileroVAD", _BrokenSilero)
+    monkeypatch.setattr(vad_module, "FunASROnnxVAD", _BrokenFunASR)
 
     mock_ten_vad = MagicMock()
     mock_ten_vad.TenVad.return_value = MagicMock()

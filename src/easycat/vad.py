@@ -5,7 +5,7 @@ Each implements the VADProvider protocol from providers.py:
     def configure(self, ...) -> None
 
 The factory function `create_vad` selects the best available backend
-with automatic fallback from Silero -> TEN -> Krisp.  TEN VAD is
+with automatic fallback from Silero -> FunASR -> TEN -> Krisp.  TEN VAD is
 installed via the ``ten-vad`` optional extra; we no longer vendor
 its binaries because the upstream license is incompatible with this
 project's redistribution terms.
@@ -764,11 +764,12 @@ def create_vad(config: VADConfig | None = None) -> Any:
 
     Selection order:
       1. If config.backend == "silero": use Silero (fail if unavailable)
-      2. If config.backend == "ten": use TEN VAD (fail if unavailable)
-      3. If config.backend == "krisp": use Krisp (fail if unavailable)
-      4. If config.backend == "funasr": use FunASR ONNX VAD (fail if unavailable)
+      2. If config.backend == "funasr": use FunASR ONNX VAD (fail if unavailable)
+      3. If config.backend == "ten": use TEN VAD (fail if unavailable)
+      4. If config.backend == "krisp": use Krisp (fail if unavailable)
       4. If config.backend == "auto" (default):
          - Try Silero first (permissively-licensed, bundled ONNX model)
+         - Fall back to FunASR ONNX VAD
          - Fall back to TEN VAD (PyPI ``ten-vad`` if user installed it)
          - Fall back to Krisp (requires commercial SDK)
 
@@ -816,11 +817,26 @@ def create_vad(config: VADConfig | None = None) -> Any:
             backend="funasr",
         )
 
-    # Auto mode: try Silero -> TEN -> Krisp.
+    # Auto mode: try Silero -> FunASR -> TEN -> Krisp.
     try:
         return _configure(SileroVAD(), backend="silero")
     except (RuntimeError, ImportError):
-        logger.info("Silero VAD not available, trying TEN fallback")
+        logger.info("Silero VAD not available, trying FunASR fallback")
+
+    try:
+        return _configure(
+            FunASROnnxVAD(
+                model_dir=cfg.funasr_model_dir,
+                chunk_size_ms=cfg.funasr_chunk_size_ms,
+                device_id=cfg.funasr_device_id,
+                quantize=cfg.funasr_quantize,
+                intra_op_num_threads=cfg.funasr_intra_op_num_threads,
+                cache_dir=cfg.funasr_cache_dir,
+            ),
+            backend="funasr",
+        )
+    except (RuntimeError, ImportError):
+        logger.info("FunASR VAD not available, trying TEN fallback")
 
     try:
         return _configure(TenVAD(), backend="ten")
