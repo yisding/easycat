@@ -228,6 +228,9 @@ class Session:
         self._timeout_config = cfg.timeout_config or self._default_timeout_config()
         self._metrics = None  # Legacy field, retained for attribute access only
         self._journal = cfg.journal
+        self._journal_view: JournalView | None = (
+            JournalView(self._journal) if self._journal is not None else None
+        )
         self._artifact_store = cfg.artifact_store
 
         # Wire journal to event bus so session activity is recorded.
@@ -1084,10 +1087,13 @@ class Session:
 
     @property
     def journal(self) -> JournalView | None:
-        """Read-only journal view, including after a clean stop/shutdown."""
-        if self._journal is None:
-            return None
-        return JournalView(self._journal)
+        """Read-only journal view, including after a clean stop/shutdown.
+
+        Returns a stable view — callers may cache the result and it will
+        remain valid even after :meth:`stop` / :meth:`shutdown` replace
+        the underlying journal backend with a read-only snapshot.
+        """
+        return self._journal_view
 
     @property
     def cancel_token(self) -> CancelToken | None:
@@ -1394,6 +1400,11 @@ class Session:
             replacement = self._preserve_journal_after_destroy(live_journal)
             live_journal.close()
             self._journal = replacement
+            # Update the cached JournalView so previously-cached references
+            # (e.g. ``view = session.journal``) transparently delegate to
+            # the read-only snapshot instead of the now-closed backend.
+            if self._journal_view is not None:
+                self._journal_view._journal = replacement
 
         if self._artifact_store:
             live_store = self._artifact_store

@@ -320,6 +320,29 @@ def _create_artifact_store(
     return InMemoryArtifactStore()
 
 
+def _safe_config_ns(config: EasyCatConfig) -> object:
+    """Build a lightweight namespace snapshot of the safe config fields.
+
+    Only copies the fields that ``safe_config_snapshot`` reads so we
+    never attempt to deep-copy live client objects, agents, or other
+    non-picklable instances on the config.
+    """
+    from types import SimpleNamespace
+
+    from easycat.runtime.safe_defaults import SAFE_CONFIG_FIELDS
+
+    attrs: dict[str, Any] = {}
+    for name in SAFE_CONFIG_FIELDS:
+        val = getattr(config, name, None)
+        if val is None:
+            continue
+        # Shallow-copy dataclass values so later mutation of the original
+        # config (e.g. turn_taking.end_of_turn_silence_ms = 500) doesn't
+        # retroactively change the snapshot.
+        attrs[name] = copy.copy(val) if hasattr(val, "__dataclass_fields__") else val
+    return SimpleNamespace(**attrs)
+
+
 def create_session(config: EasyCatConfig) -> Session:
     """Create a fully wired Session from EasyCatConfig."""
     session_id = f"session-{uuid4().hex[:12]}"
@@ -458,13 +481,12 @@ def create_session(config: EasyCatConfig) -> Session:
         if journal is not None and hasattr(journal, "close"):
             journal.close()
         raise
-    # Stash a snapshot of the original EasyCatConfig so debug bundle export
-    # can snapshot user-facing settings (debug, journal_backend, turn_taking,
-    # etc.) instead of serializing live provider instances from SessionConfig.
-    # Deep-copy so that callers who reuse/mutate the same config object
-    # (including nested dataclasses like turn_taking or timeouts) across
-    # sessions don't corrupt an earlier session's postmortem metadata.
-    session._easycat_config = copy.deepcopy(config)
+    # Stash a lightweight snapshot of user-facing config fields so debug
+    # bundle export can serialise settings (debug, journal_backend,
+    # turn_taking, etc.) without touching live provider instances.
+    # We intentionally avoid ``copy.deepcopy(config)`` because configs
+    # may carry non-picklable objects (httpx clients, agent instances).
+    session._easycat_config = _safe_config_ns(config)
     session._agent_model = config.agent_model
     session._remote_agent_api_key = config.remote_agent_api_key
 
