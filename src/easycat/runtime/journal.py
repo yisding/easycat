@@ -1428,12 +1428,26 @@ def run_retention(
     if not files:
         return 0
 
-    total_bytes = sum(f.stat().st_size for f in files)
+    artifacts_root = root / "artifacts"
+
+    def _session_bytes(db_path: Path) -> int:
+        """Total bytes for a session: DB + WAL/SHM sidecars + artifacts."""
+        size = db_path.stat().st_size
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(db_path) + suffix)
+            if sidecar.exists():
+                size += sidecar.stat().st_size
+        art_dir = artifacts_root / db_path.stem
+        if art_dir.is_dir():
+            size += sum(f.stat().st_size for f in art_dir.rglob("*") if f.is_file())
+        return size
+
+    total_bytes = sum(_session_bytes(f) for f in files)
     removed = 0
 
     while files and (len(files) > max_sessions or total_bytes > max_bytes):
         oldest = files.pop(0)
-        fsize = oldest.stat().st_size
+        fsize = _session_bytes(oldest)
 
         if mode == "archive":
             archive_dir = root / "archive"

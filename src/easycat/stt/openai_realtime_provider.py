@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -274,6 +275,8 @@ class OpenAIRealtimeSTT(STTBase):
                 await asyncio.wait_for(receive_task, timeout=2.0)
             except TimeoutError:
                 receive_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await receive_task
                 logger.warning("OpenAI Realtime receive loop timed out on close")
             except asyncio.CancelledError:
                 raise
