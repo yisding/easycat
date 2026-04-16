@@ -164,7 +164,7 @@ class EasyCatConfig:
     stt: STTConfig | None = None
     tts: TTSConfig | None = None
     vad: VADConfig = field(default_factory=VADConfig)
-    noise_reduction: NoiseReducerConfig = field(default_factory=NoiseReducerConfig)
+    noise_reduction: NoiseReducerConfig | None = None
     echo_cancellation: EchoCancellationConfig | None = None
     enable_noise_reduction: bool = False
     enable_echo_cancellation: bool | None = None
@@ -337,112 +337,117 @@ def create_session(config: EasyCatConfig) -> Session:
         else None
     )
 
-    event_bus = EventBus()
-    stt = create_stt_provider_from_config(config.stt, event_bus)
-    tts = create_tts_provider_from_config(config.tts, event_bus)
-    auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
-    enable_vad = not auto_turn_from_stt_final
-    vad = create_vad(config.vad) if enable_vad else None
-    noise_reducer = (
-        create_noise_reducer(config.noise_reduction)
-        if config.enable_noise_reduction or config.noise_reduction != NoiseReducerConfig()
-        else None
-    )
-    # enable_echo_cancellation acts as a shortcut: when True and no
-    # explicit EchoCancellationConfig is provided, auto-construct one
-    # with enabled=True so the LiveKit backend is actually activated.
-    echo_cfg = config.echo_cancellation
-    if echo_cfg is None:
-        echo_cfg = EchoCancellationConfig(enabled=bool(config.enable_echo_cancellation))
-    echo_canceller = create_echo_canceller(echo_cfg)
-    transport = _create_transport(config.transport, event_bus)
-
-    mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
-
-    if config.agent is not None:
-        agent = auto_adapt_agent(config.agent, model=config.agent_model)
-        # Inject MCP servers and journal into the shim if it's a bridge adapter.
-        # Unwrap AgentRunner if the caller pre-wrapped the shim.
-        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
-
-        shim = agent
-        if isinstance(shim, AgentRunner):
-            shim = shim._agent
-        if isinstance(shim, BridgeAdapterShim):
-            shim._journal = journal
-            shim._artifact_store = artifact_store
-            shim._session_id = session_id
-            # Always overwrite so a reused shim from a prior session doesn't
-            # leak old MCP servers into a new session that leaves MCP unset.
-            shim._mcp_servers = mcp_servers
-            if hasattr(shim.bridge, "_mcp_servers"):
-                shim.bridge._mcp_servers = list(mcp_servers)
-            # Inject model/API key for URL-backed agents.
-            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-            if isinstance(shim.bridge, RemoteResponsesAPIBridge):
-                if config.agent_model:
-                    shim.bridge._model = config.agent_model
-                if config.remote_agent_api_key:
-                    shim.bridge._api_key = config.remote_agent_api_key
-        if config.wrap_agent and not isinstance(agent, AgentRunner):
-            runner_cfg = config.agent_runner or AgentRunnerConfig()
-            agent = AgentRunner(agent, runner_cfg)
-    else:
-        agent = NoopAgent()
-
-    # Emit provider versions into the journal at session start.
-    if journal is not None:
-        _emit_provider_versions(journal, session_id, stt=stt, tts=tts, transport=transport)
-
-    turn_config = config.turn_taking
-    smart_turn = create_smart_turn(config.smart_turn)
-    if smart_turn is not None:
-        turn_config = replace(turn_config, endpoint_detector=smart_turn)
-
-    telephony_helpers = _create_telephony_helpers(event_bus, config.telephony)
-    action_executors = [*config.action_executors, *_create_action_executors(config.telephony)]
-
-    # Extract audio gate from the outbound call state machine, if present.
-    audio_gate = None
-    _outbound_sm = None
-    for h in telephony_helpers:
-        if isinstance(h, OutboundCallStateMachine):
-            _outbound_sm = h
-            break
-
-    if _outbound_sm is not None:
-
-        def audio_gate() -> bool:
-            return _outbound_sm.gate.is_buffering
-
-    session = Session(
-        SessionConfig(
-            stt=stt,
-            tts=tts,
-            vad=vad,
-            noise_reducer=noise_reducer,
-            echo_canceller=echo_canceller,
-            transport=transport,
-            agent=agent,
-            event_bus=event_bus,
-            turn_manager_config=turn_config,
-            timeout_config=config.timeouts,
-            journal=journal,
-            artifact_store=artifact_store,
-            session_id=session_id,
-            telephony_helpers=telephony_helpers,
-            enable_vad=enable_vad,
-            enable_noise_reduction=config.enable_noise_reduction,
-            enable_echo_cancellation=echo_cfg.enabled,
-            auto_turn_from_stt_final=auto_turn_from_stt_final,
-            strip_markdown=config.strip_markdown,
-            output_processors=config.output_processors,
-            session_actions=config.session_actions,
-            action_executors=action_executors,
-            audio_gate=audio_gate,
+    try:
+        event_bus = EventBus()
+        stt = create_stt_provider_from_config(config.stt, event_bus)
+        tts = create_tts_provider_from_config(config.tts, event_bus)
+        auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
+        enable_vad = not auto_turn_from_stt_final
+        vad = create_vad(config.vad) if enable_vad else None
+        noise_reducer = (
+            create_noise_reducer(config.noise_reduction or NoiseReducerConfig())
+            if config.enable_noise_reduction or config.noise_reduction is not None
+            else None
         )
-    )
+        # enable_echo_cancellation acts as a shortcut: when True and no
+        # explicit EchoCancellationConfig is provided, auto-construct one
+        # with enabled=True so the LiveKit backend is actually activated.
+        echo_cfg = config.echo_cancellation
+        if echo_cfg is None:
+            echo_cfg = EchoCancellationConfig(enabled=bool(config.enable_echo_cancellation))
+        echo_canceller = create_echo_canceller(echo_cfg)
+        transport = _create_transport(config.transport, event_bus)
+
+        mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
+
+        if config.agent is not None:
+            agent = auto_adapt_agent(config.agent, model=config.agent_model)
+            # Inject MCP servers and journal into the shim if it's a bridge adapter.
+            # Unwrap AgentRunner if the caller pre-wrapped the shim.
+            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+
+            shim = agent
+            if isinstance(shim, AgentRunner):
+                shim = shim._agent
+            if isinstance(shim, BridgeAdapterShim):
+                shim._journal = journal
+                shim._artifact_store = artifact_store
+                shim._session_id = session_id
+                # Always overwrite so a reused shim from a prior session doesn't
+                # leak old MCP servers into a new session that leaves MCP unset.
+                shim._mcp_servers = mcp_servers
+                if hasattr(shim.bridge, "_mcp_servers"):
+                    shim.bridge._mcp_servers = list(mcp_servers)
+                # Inject model/API key for URL-backed agents.
+                from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+
+                if isinstance(shim.bridge, RemoteResponsesAPIBridge):
+                    if config.agent_model:
+                        shim.bridge._model = config.agent_model
+                    if config.remote_agent_api_key:
+                        shim.bridge._api_key = config.remote_agent_api_key
+            if config.wrap_agent and not isinstance(agent, AgentRunner):
+                runner_cfg = config.agent_runner or AgentRunnerConfig()
+                agent = AgentRunner(agent, runner_cfg)
+        else:
+            agent = NoopAgent()
+
+        # Emit provider versions into the journal at session start.
+        if journal is not None:
+            _emit_provider_versions(journal, session_id, stt=stt, tts=tts, transport=transport)
+
+        turn_config = config.turn_taking
+        smart_turn = create_smart_turn(config.smart_turn)
+        if smart_turn is not None:
+            turn_config = replace(turn_config, endpoint_detector=smart_turn)
+
+        telephony_helpers = _create_telephony_helpers(event_bus, config.telephony)
+        action_executors = [*config.action_executors, *_create_action_executors(config.telephony)]
+
+        # Extract audio gate from the outbound call state machine, if present.
+        audio_gate = None
+        _outbound_sm = None
+        for h in telephony_helpers:
+            if isinstance(h, OutboundCallStateMachine):
+                _outbound_sm = h
+                break
+
+        if _outbound_sm is not None:
+
+            def audio_gate() -> bool:
+                return _outbound_sm.gate.is_buffering
+
+        session = Session(
+            SessionConfig(
+                stt=stt,
+                tts=tts,
+                vad=vad,
+                noise_reducer=noise_reducer,
+                echo_canceller=echo_canceller,
+                transport=transport,
+                agent=agent,
+                event_bus=event_bus,
+                turn_manager_config=turn_config,
+                timeout_config=config.timeouts,
+                journal=journal,
+                artifact_store=artifact_store,
+                session_id=session_id,
+                telephony_helpers=telephony_helpers,
+                enable_vad=enable_vad,
+                enable_noise_reduction=config.enable_noise_reduction,
+                enable_echo_cancellation=echo_cfg.enabled,
+                auto_turn_from_stt_final=auto_turn_from_stt_final,
+                strip_markdown=config.strip_markdown,
+                output_processors=config.output_processors,
+                session_actions=config.session_actions,
+                action_executors=action_executors,
+                audio_gate=audio_gate,
+            )
+        )
+    except Exception:
+        if journal is not None and hasattr(journal, "close"):
+            journal.close()
+        raise
     # Stash the original EasyCatConfig so debug bundle export can snapshot
     # user-facing settings (debug, journal_backend, turn_taking, etc.)
     # instead of serializing live provider instances from SessionConfig.
@@ -537,56 +542,61 @@ def create_text_session(
         if debug != "off"
         else None
     )
-    event_bus = EventBus()
+    try:
+        event_bus = EventBus()
 
-    adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
-    # Backfill journal metadata into the bridge shim (mirrors create_session).
-    # Unwrap AgentRunner if the caller pre-wrapped the shim.
-    from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+        adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
+        # Backfill journal metadata into the bridge shim (mirrors create_session).
+        # Unwrap AgentRunner if the caller pre-wrapped the shim.
+        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
 
-    _inner = adapted
-    if isinstance(_inner, AgentRunner):
-        _inner = _inner._agent
-    if isinstance(_inner, BridgeAdapterShim):
-        _inner._journal = journal
-        _inner._artifact_store = artifact_store
-        _inner._session_id = sid
-        # Inject model/API key for URL-backed agents (mirrors create_session).
-        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+        _inner = adapted
+        if isinstance(_inner, AgentRunner):
+            _inner = _inner._agent
+        if isinstance(_inner, BridgeAdapterShim):
+            _inner._journal = journal
+            _inner._artifact_store = artifact_store
+            _inner._session_id = sid
+            # Inject model/API key for URL-backed agents (mirrors create_session).
+            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
-        if isinstance(_inner.bridge, RemoteResponsesAPIBridge):
-            if agent_model:
-                _inner.bridge._model = agent_model
-            if remote_agent_api_key:
-                _inner.bridge._api_key = remote_agent_api_key
-        # Always overwrite so a reused shim from a prior session doesn't
-        # leak old MCP servers into a new session that leaves MCP unset.
-        _mcp = tuple(mcp_servers) if mcp_servers else ()
-        _inner._mcp_servers = _mcp
-        if hasattr(_inner.bridge, "_mcp_servers"):
-            _inner.bridge._mcp_servers = list(_mcp)
-    if wrap_agent and not isinstance(adapted, AgentRunner):
-        runner_cfg = agent_runner or AgentRunnerConfig()
-        adapted = AgentRunner(adapted, runner_cfg)
+            if isinstance(_inner.bridge, RemoteResponsesAPIBridge):
+                if agent_model:
+                    _inner.bridge._model = agent_model
+                if remote_agent_api_key:
+                    _inner.bridge._api_key = remote_agent_api_key
+            # Always overwrite so a reused shim from a prior session doesn't
+            # leak old MCP servers into a new session that leaves MCP unset.
+            _mcp = tuple(mcp_servers) if mcp_servers else ()
+            _inner._mcp_servers = _mcp
+            if hasattr(_inner.bridge, "_mcp_servers"):
+                _inner.bridge._mcp_servers = list(_mcp)
+        if wrap_agent and not isinstance(adapted, AgentRunner):
+            runner_cfg = agent_runner or AgentRunnerConfig()
+            adapted = AgentRunner(adapted, runner_cfg)
 
-    # Text sessions use noop providers — validation is skipped because
-    # runtime_mode="text_session" never enters the audio pipeline.
-    from easycat.stubs import NoopSTT, NoopTransport, NoopTTS, NoopVAD
+        # Text sessions use noop providers — validation is skipped because
+        # runtime_mode="text_session" never enters the audio pipeline.
+        from easycat.stubs import NoopSTT, NoopTransport, NoopTTS, NoopVAD
 
-    session = Session(
-        SessionConfig(
-            stt=NoopSTT(),
-            tts=NoopTTS(),
-            vad=NoopVAD(),
-            transport=NoopTransport(),
-            agent=adapted,
-            event_bus=event_bus,
-            journal=journal,
-            artifact_store=artifact_store,
-            session_id=sid,
-            runtime_mode="text_session",
+        session = Session(
+            SessionConfig(
+                stt=NoopSTT(),
+                tts=NoopTTS(),
+                vad=NoopVAD(),
+                transport=NoopTransport(),
+                agent=adapted,
+                event_bus=event_bus,
+                journal=journal,
+                artifact_store=artifact_store,
+                session_id=sid,
+                runtime_mode="text_session",
+            )
         )
-    )
+    except Exception:
+        if journal is not None and hasattr(journal, "close"):
+            journal.close()
+        raise
     # Stash user-facing settings so debug bundle export can snapshot them
     # instead of serializing live provider instances from SessionConfig.
     from types import SimpleNamespace
