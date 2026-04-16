@@ -167,7 +167,7 @@ class EasyCatConfig:
     noise_reduction: NoiseReducerConfig = field(default_factory=NoiseReducerConfig)
     echo_cancellation: EchoCancellationConfig | None = None
     enable_noise_reduction: bool = False
-    enable_echo_cancellation: bool = False
+    enable_echo_cancellation: bool | None = None
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
     smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
@@ -239,10 +239,17 @@ class EasyCatConfig:
         self._validate()
 
     def _default_echo_cancellation_for_transport(self) -> EchoCancellationConfig:
-        enable_aec = self.enable_echo_cancellation or isinstance(
-            self.transport,
-            (LocalTransportConfig, WebSocketTransportConfig, WebSocketConnectionTransport),
-        )
+        # ``enable_echo_cancellation`` is tri-state: None means "use the
+        # transport default" (auto-enable for transports that typically have
+        # a speaker loopback), while True/False explicitly force the flag
+        # on or off regardless of transport.
+        if self.enable_echo_cancellation is None:
+            enable_aec = isinstance(
+                self.transport,
+                (LocalTransportConfig, WebSocketTransportConfig, WebSocketConnectionTransport),
+            )
+        else:
+            enable_aec = self.enable_echo_cancellation
         return EchoCancellationConfig(enabled=enable_aec)
 
     def _apply_debug_defaults(self) -> None:
@@ -346,7 +353,7 @@ def create_session(config: EasyCatConfig) -> Session:
     # with enabled=True so the LiveKit backend is actually activated.
     echo_cfg = config.echo_cancellation
     if echo_cfg is None:
-        echo_cfg = EchoCancellationConfig(enabled=config.enable_echo_cancellation)
+        echo_cfg = EchoCancellationConfig(enabled=bool(config.enable_echo_cancellation))
     echo_canceller = create_echo_canceller(echo_cfg)
     transport = _create_transport(config.transport, event_bus)
 

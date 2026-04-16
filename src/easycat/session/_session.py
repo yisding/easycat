@@ -1011,7 +1011,38 @@ class Session:
 
     @agent.setter
     def agent(self, value: Agent) -> None:
-        self._agent = auto_adapt_agent(value) if value is not None else NoopAgent()
+        from easycat.integrations.agents._agent_runner import AgentRunner
+        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+
+        # Capture state from the outgoing agent so the swap preserves
+        # whatever ``create_session()`` / ``create_text_session()`` wired
+        # up at construction time: AgentRunner wrapping (timeouts, history,
+        # cancellation) and bridge-level MCP server context.
+        previous_agent = getattr(self, "_agent", None)
+        previous_runner: AgentRunner | None = (
+            previous_agent if isinstance(previous_agent, AgentRunner) else None
+        )
+        previous_inner = previous_runner._agent if previous_runner else previous_agent
+        previous_mcp_servers: tuple[str, ...] | None = None
+        if isinstance(previous_inner, BridgeAdapterShim):
+            previous_mcp_servers = getattr(previous_inner, "_mcp_servers", None)
+
+        if value is None:
+            self._agent = NoopAgent()
+        else:
+            adapted = auto_adapt_agent(value)
+            inner = adapted._agent if isinstance(adapted, AgentRunner) else adapted
+            if previous_mcp_servers and isinstance(inner, BridgeAdapterShim):
+                inner._mcp_servers = previous_mcp_servers
+                if hasattr(inner.bridge, "_mcp_servers"):
+                    inner.bridge._mcp_servers = list(previous_mcp_servers)
+            if previous_runner is not None and not isinstance(adapted, AgentRunner):
+                adapted = AgentRunner(adapted, previous_runner._config)
+            self._agent = adapted
+
+        # Re-inject journal/session-id into any bridge shim on the new agent.
+        self._backfill_bridge_context()
+
         stage = getattr(self, "_agent_stage", None)
         if stage is not None:
             stage._provider = self._agent  # keep the wrapper in sync
