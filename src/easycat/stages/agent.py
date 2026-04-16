@@ -131,6 +131,12 @@ class AgentStage:
                     )
                     if etype_name == "TEXT_DELTA":
                         accumulated.append(text)
+                    elif etype_name == "DONE":
+                        # DONE text is authoritative when present — adapters that
+                        # only emit a single DONE event with the full answer
+                        # would otherwise leave stage_complete.response empty.
+                        # Matches the precedence in consume_agent_stream().
+                        accumulated = [text]
                 yield event
         except Exception as exc:
             journal_append_event(

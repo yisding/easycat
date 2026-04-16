@@ -1032,7 +1032,10 @@ class Session:
         else:
             adapted = auto_adapt_agent(value)
             inner = adapted._agent if isinstance(adapted, AgentRunner) else adapted
-            if previous_mcp_servers and isinstance(inner, BridgeAdapterShim):
+            if previous_mcp_servers is not None and isinstance(inner, BridgeAdapterShim):
+                # Always overwrite (even with empty tuple) so a reused shim
+                # from a prior session can't leak old MCP servers into the
+                # new session that left MCP unset.  Matches create_session().
                 inner._mcp_servers = previous_mcp_servers
                 if hasattr(inner.bridge, "_mcp_servers"):
                     inner.bridge._mcp_servers = list(previous_mcp_servers)
@@ -1135,6 +1138,7 @@ class Session:
                     max_size=self._outbound_queue_max_size,
                     policy=self._outbound_queue_policy,
                     name=self._outbound_queue_name,
+                    on_drop=self._on_queue_drop,
                 )
                 self._tts_synth._outbound_queue = self._outbound_queue
 
