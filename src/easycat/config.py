@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import warnings
 from collections.abc import Sequence
@@ -460,9 +461,12 @@ def create_session(config: EasyCatConfig) -> Session:
     # Stash a snapshot of the original EasyCatConfig so debug bundle export
     # can snapshot user-facing settings (debug, journal_backend, turn_taking,
     # etc.) instead of serializing live provider instances from SessionConfig.
-    # We shallow-copy so that callers who reuse/mutate the same config object
-    # across sessions don't corrupt an earlier session's postmortem metadata.
-    session._easycat_config = replace(config)
+    # Deep-copy so that callers who reuse/mutate the same config object
+    # (including nested dataclasses like turn_taking or timeouts) across
+    # sessions don't corrupt an earlier session's postmortem metadata.
+    session._easycat_config = copy.deepcopy(config)
+    session._agent_model = config.agent_model
+    session._remote_agent_api_key = config.remote_agent_api_key
 
     if _outbound_sm is not None:
         _wire_outbound_pipeline(
@@ -617,6 +621,8 @@ def create_text_session(
         journal_backend=journal_backend,
         journal_retention=journal_retention,
     )
+    session._agent_model = agent_model
+    session._remote_agent_api_key = remote_agent_api_key
     return session
 
 

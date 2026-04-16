@@ -151,6 +151,10 @@ class Session:
         # Back-store for the ``agent`` property so late assignments
         # (``session.agent = X``) keep the AgentStage wrapper in sync.
         self._agent: Agent = auto_adapt_agent(cfg.agent) if cfg.agent else NoopAgent()
+        # Stashed by create_session/create_text_session so mid-session
+        # agent swaps to a URL-backed agent can forward model/key context.
+        self._agent_model: str | None = None
+        self._remote_agent_api_key: str | None = None
 
         # Skip noop validation in text_session mode — audio providers
         # are intentionally noop.
@@ -1028,8 +1032,18 @@ class Session:
         if value is None:
             self._agent = NoopAgent()
         else:
-            adapted = auto_adapt_agent(value)
+            adapted = auto_adapt_agent(value, model=self._agent_model)
             inner = adapted._agent if isinstance(adapted, AgentRunner) else adapted
+            if isinstance(inner, BridgeAdapterShim):
+                # Inject model/API key for URL-backed agents (mirrors
+                # create_session / create_text_session).
+                from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+
+                if isinstance(inner.bridge, RemoteResponsesAPIBridge):
+                    if self._agent_model:
+                        inner.bridge._model = self._agent_model
+                    if self._remote_agent_api_key:
+                        inner.bridge._api_key = self._remote_agent_api_key
             if previous_mcp_servers is not None and isinstance(inner, BridgeAdapterShim):
                 # Always overwrite (even with empty tuple) so a reused shim
                 # from a prior session can't leak old MCP servers into the
