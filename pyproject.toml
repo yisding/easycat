@@ -20,8 +20,15 @@ telephony = ["fastapi>=0.110.0", "python-multipart>=0.0.9", "twilio>=9.0.0", "uv
 aec = ["livekit>=1.0.0"]
 local = ["sounddevice>=0.4.6"]
 rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.31.0"]
-ten-vad = ["ten-vad>=1.0.6.8", "numpy>=1.24.0"]
-smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.16.0", "transformers>=4.36.0"]
+# TEN VAD has a non-permissive license, so we do not vendor its
+# binaries.  Users who accept the license can opt in here.
+ten-vad = ["numpy>=1.24.0", "onnxruntime>=1.16.0", "ten-vad>=1.0.6.8"]
+silero-vad = ["numpy>=1.24.0", "onnxruntime>=1.16.0"]
+smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.16.0"]
+# Interactive debugger UI (peripheral-eval-and-debugger-ui.md).
+debugger = [
+    "aiohttp>=3.9.0",
+]
 webrtc = ["aiortc>=1.9.0", "aiohttp>=3.9.0"]
 quickstart = [
     "sounddevice>=0.4.6",
@@ -29,8 +36,8 @@ quickstart = [
     "openai-agents>=0.6.2",
     "pyrnnoise>=0.3.0",
     "requests>=2.31.0",
-    "ten-vad>=1.0.6.8",
     "numpy>=1.24.0",
+    "onnxruntime>=1.16.0",
 ]
 all = [
     "aiortc>=1.9.0",
@@ -40,18 +47,15 @@ all = [
     "elevenlabs>=1.0.0",
     "fastapi>=0.110.0",
     "openai>=1.0.0",
+    "openai-agents>=0.6.2",
     "python-multipart>=0.0.9",
     "sounddevice>=0.4.6",
     "pyrnnoise>=0.3.0",
     "requests>=2.31.0",
     "twilio>=9.0.0",
     "uvicorn>=0.29.0",
-    "torch>=2.2.0",
-    "torchaudio>=2.2.0",
     "numpy>=1.24.0",
     "onnxruntime>=1.16.0",
-    "transformers>=4.36.0",
-    "ten-vad>=1.0.6.8",
 ]
 
 [build-system]
@@ -81,4 +85,5 @@ markers = [
     "integration_local: in-process end-to-end tests with fake providers",
     "integration_socket: tests requiring localhost socket bind/connect permissions",
     "integration_live: tests requiring live API keys and optional provider extras",
+    "slow: long-running end-to-end tests; opt in with '-m slow'",
 ]

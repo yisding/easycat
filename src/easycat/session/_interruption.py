@@ -8,6 +8,7 @@ before interrupting.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from easycat.session._text_utils import _truncate_partial_text_to_boundary
@@ -18,6 +19,15 @@ if TYPE_CHECKING:
     from easycat.session._turn_context import TurnContext
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class InterruptionNotification:
+    """Summary of an interruption notification sent to the agent."""
+
+    mode: str
+    text_spoken: str
+    notified: bool
 
 
 def _estimate_text_spoken(
@@ -222,7 +232,7 @@ def estimate_and_notify_interruption(
     latency_compensation_ms: int,
     ack_stale_ms: int,
     ack_tail_cap_ms: int,
-) -> None:
+) -> InterruptionNotification | None:
     """Estimate what the user heard and notify the agent of the interruption.
 
     Called after a streaming turn completes when the user barged in.
@@ -231,9 +241,9 @@ def estimate_and_notify_interruption(
     """
     cancelled_during_playback = bool(token and token.is_cancelled and tts_playback_started)
     if not (interrupted or cancelled_during_playback):
-        return
+        return None
     if not hasattr(agent, "notify_interruption"):
-        return
+        return None
 
     cutoff_time = token.cancelled_at if token is not None else None
     if cutoff_time is None:
@@ -256,7 +266,15 @@ def estimate_and_notify_interruption(
                 heard_bytes,
             )
         )
+        notified = True
         try:
             agent.notify_interruption(text_spoken, mode=interruption_mode)
         except Exception:
             logger.debug("Failed to notify agent of interruption", exc_info=True)
+            notified = False
+        return InterruptionNotification(
+            mode=interruption_mode,
+            text_spoken=text_spoken,
+            notified=notified,
+        )
+    return None

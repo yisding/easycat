@@ -1,4 +1,4 @@
-"""EasyCat — slim, batteries-included voice bot framework.
+"""EasyCat -- slim, batteries-included voice bot framework.
 
 Public API
 ----------
@@ -9,8 +9,6 @@ Internal plumbing remains importable from submodules for advanced use::
     from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
     from easycat.reconnecting_ws import ReconnectingWebSocket, ReconnectConfig
     from easycat.health_check import PeriodicHealthChecker, HealthCheckable
-    from easycat.tracing import Span, SpanStatus, TraceContext, InMemoryTraceExporter
-    from easycat.metrics import timed_metric, measure_latency, STT_LATENCY, ...
     from easycat.timeouts import with_stt_timeout, with_agent_timeout, with_tts_timeout
     from easycat.audio_utils import chunk_frames, resample, to_mono, ...
     from easycat.audio_utils import pcm_to_wav
@@ -26,17 +24,14 @@ Internal plumbing remains importable from submodules for advanced use::
 
 # ── Core session & agent ──────────────────────────────────────────
 
-from easycat.agent_runner import (  # noqa: I001
-    AgentRunner,
-    AgentRunnerConfig,
+from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig  # noqa: I001
+from easycat.integrations.agents._base_adapter import BaseAgentAdapter, serialize_output
+from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents._legacy_types import (
     AgentStreamEvent,
     AgentStreamEventType,
     StreamingAgent,
 )
-from easycat.agents.base import BaseAgentAdapter, serialize_output
-from easycat.agents.openai_agents import OpenAIAgentsAdapter, build_openai_agents_adapter
-from easycat.agents.pydantic_ai import PydanticAIAdapter
-from easycat.agents.pydantic_ai_workflow import PydanticAIWorkflowAdapter, WorkflowTurnResult
 from easycat.cancel import CancelToken
 from easycat.smart_turn import (
     SmartTurnConfig,
@@ -72,11 +67,15 @@ from easycat.llm_output_processing import (
 )
 from easycat.config import (
     EasyCatConfig,
-    EventLoggingConfig,
-    MetricsConfig,
     TelephonyConfig,
-    TracingConfig,
     create_session,
+    create_text_session,
+)
+from easycat.runtime import (
+    ExecutionJournal,
+    JournalRecord,
+    JournalRecordKind,
+    JournalView,
 )
 from easycat.helpers import (
     attach_runtime_feedback,
@@ -84,6 +83,13 @@ from easycat.helpers import (
     require_env,
     wait_for_shutdown_signal,
 )
+
+# ── Debug-first runtime ─────────────────────────────────────────
+
+from easycat.debug.bundle import RunBundle
+from easycat.debug.testing import load_bundle
+from easycat.integrations.agents.base import ExternalAgentBridge
+from easycat.stages.base import Stage
 
 # ── EasyCat-level events ─────────────────────────────────────────
 
@@ -103,6 +109,7 @@ from easycat.events import (
     VAD_EVENTS,
     AgentDelta,
     AgentFinal,
+    AgentRequestStarted,
     AudioIn,
     BotStartedSpeaking,
     BotStoppedSpeaking,
@@ -208,14 +215,12 @@ from easycat.transports.websocket import (
 
 # ── Configuration & errors ────────────────────────────────────────
 
-from easycat.metrics import InMemoryMetrics, LatencyStats, MetricsCollector
 from easycat.timeouts import (
     AgentTimeoutError,
     STTTimeoutError,
     TimeoutConfig,
     TTSTimeoutError,
 )
-from easycat.tracing import Tracer, TraceExporter
 
 __all__ = [
     # Core session & agent
@@ -237,24 +242,19 @@ __all__ = [
     "TurnMode",
     "SessionManager",
     "EasyCatConfig",
-    "EventLoggingConfig",
-    "MetricsConfig",
     "TelephonyConfig",
-    "TracingConfig",
     "create_session",
+    "create_text_session",
     "AgentRunner",
     "AgentRunnerConfig",
     "AgentStreamEvent",
     "AgentStreamEventType",
     "StreamingAgent",
-    # Agent adapters
+    # Agent adapters & bridges
     "BaseAgentAdapter",
-    "OpenAIAgentsAdapter",
-    "PydanticAIAdapter",
-    "PydanticAIWorkflowAdapter",
-    "WorkflowTurnResult",
-    "build_openai_agents_adapter",
+    "auto_adapt_agent",
     "serialize_output",
+    "ExternalAgentBridge",
     "CancelToken",
     "LLMOutputProcessor",
     "MarkdownStripProcessor",
@@ -284,6 +284,7 @@ __all__ = [
     # EasyCat-level events
     "AgentDelta",
     "AgentFinal",
+    "AgentRequestStarted",
     "AudioIn",
     "BotStartedSpeaking",
     "BotStoppedSpeaking",
@@ -381,14 +382,18 @@ __all__ = [
     "STTTimeoutError",
     "AgentTimeoutError",
     "TTSTimeoutError",
-    "MetricsCollector",
-    "InMemoryMetrics",
-    "LatencyStats",
-    "Tracer",
-    "TraceExporter",
     # Helpers
     "attach_runtime_feedback",
     "default_event_logging",
     "require_env",
     "wait_for_shutdown_signal",
+    # Debug-first runtime
+    "ExecutionJournal",
+    "ExternalAgentBridge",
+    "JournalRecord",
+    "JournalRecordKind",
+    "JournalView",
+    "RunBundle",
+    "Stage",
+    "load_bundle",
 ]

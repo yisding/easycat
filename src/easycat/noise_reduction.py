@@ -111,6 +111,14 @@ class RNNoiseReducer:
     def __del__(self) -> None:
         self.close()
 
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "rnnoise",
+            "model": "rnnoise",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }
+
 
 # ── Krisp integration (commercial) ─────────────────────────────────
 
@@ -175,6 +183,21 @@ class KrispNoiseReducer:
     def __del__(self) -> None:
         self.close()
 
+    def version_info(self) -> dict[str, str]:
+        sdk_ver = "unknown"
+        try:
+            from importlib.metadata import version
+
+            sdk_ver = version("krisp-audio")
+        except Exception:
+            pass
+        return {
+            "provider": "krisp",
+            "model": "krisp-nc",
+            "api_version": "unknown",
+            "sdk_version": sdk_ver,
+        }
+
 
 # ── Factory ────────────────────────────────────────────────────────
 
@@ -194,6 +217,14 @@ class PassthroughNoiseReducer:
 
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         return chunk
+
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "passthrough",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }
 
 
 def create_noise_reducer(config: NoiseReducerConfig | None = None) -> Any:

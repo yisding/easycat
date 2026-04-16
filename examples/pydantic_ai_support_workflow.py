@@ -21,11 +21,8 @@ from pydantic import BaseModel
 from easycat import (
     EasyCatConfig,
     LocalTransportConfig,
-    PydanticAIWorkflowAdapter,
-    WorkflowTurnResult,
     attach_runtime_feedback,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
@@ -86,7 +83,7 @@ class SupportWorkflow:
             ),
         )
 
-    async def on_user_turn(self, text: str) -> WorkflowTurnResult:
+    async def on_user_turn(self, text: str) -> str:
         if self.active_agent_id is None:
             route = await self.triage_agent.run(
                 text,
@@ -111,11 +108,7 @@ class SupportWorkflow:
         if reply.handoff_to is not None and reply.handoff_to != self.active_agent_id:
             self.active_agent_id = reply.handoff_to
 
-        return WorkflowTurnResult(
-            text=reply.spoken_response,
-            structured_output=reply,
-            active_agent_id=self.active_agent_id,
-        )
+        return reply.spoken_response
 
     def clear_history(self) -> None:
         self._triage_history = None
@@ -127,13 +120,11 @@ async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
 
     workflow = SupportWorkflow()
-    adapter = PydanticAIWorkflowAdapter(workflow)
 
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
-        agent=adapter,
-        event_logging=default_event_logging(),
+        agent=workflow,
     )
     session = create_session(config)
     attach_runtime_feedback(session)

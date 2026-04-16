@@ -1,6 +1,7 @@
 """Tests for Session lifecycle, cancellation, pipeline, and CancelToken."""
 
 import asyncio
+import zipfile
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, patch
 
@@ -38,11 +39,14 @@ from easycat.llm_output_processing import (
     PhoneticReplacementProcessor,
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
+from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
+from easycat.runtime.journal import InMemoryRingBuffer, SqliteJournal
+from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig, TurnState
+from easycat.session.actions import SessionActionResult
 from easycat.timeouts import AgentTimeoutError
-from easycat.tracing import InMemoryTraceExporter, SpanStatus, Tracer
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig, TurnManagerState
 
@@ -134,6 +138,48 @@ class FakeSTT:
             yield event
 
 
+class SegmentingSTT:
+    """STT that supports early segment commits within a single stream."""
+
+    def __init__(self, committed_segments: list[str], final_segment: str = "") -> None:
+        self._committed_segments = list(committed_segments)
+        self._final_segment = final_segment
+        self._queue: asyncio.Queue[STTEvent | None] = asyncio.Queue()
+        self.commit_calls = 0
+        self.start_calls = 0
+        self.end_calls = 0
+
+    async def start_stream(self) -> None:
+        self.start_calls += 1
+        self._queue = asyncio.Queue()
+
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        pass
+
+    async def commit_segment(self) -> bool:
+        if not self._committed_segments:
+            return False
+        self.commit_calls += 1
+        await self._queue.put(
+            STTEvent(type=STTEventType.FINAL, text=self._committed_segments.pop(0))
+        )
+        return True
+
+    async def end_stream(self) -> None:
+        self.end_calls += 1
+        if self._final_segment:
+            await self._queue.put(STTEvent(type=STTEventType.FINAL, text=self._final_segment))
+            self._final_segment = ""
+        await self._queue.put(None)
+
+    async def events(self) -> AsyncIterator[STTEvent]:
+        while True:
+            event = await self._queue.get()
+            if event is None:
+                break
+            yield event
+
+
 class AutoTurnSTT(FakeSTT):
     def __init__(self, transcript: str = "hello flux", *, final_after_chunks: int = 3) -> None:
         super().__init__(transcript=transcript)
@@ -176,6 +222,60 @@ class FakeTTS:
 
     async def cancel(self) -> None:
         pass
+
+
+class MarkerTTS(FakeTTS):
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+        yield TTSEvent(type=TTSEventType.MARKERS, markers=[{"word": payload.text, "start_ms": 0}])
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
+
+
+class TrackingJournal:
+    def __init__(self) -> None:
+        self.finalize_calls = 0
+        self.close_calls = 0
+
+    def append(
+        self,
+        kind: JournalRecordKind,
+        name: str,
+        session_id: str,
+        turn_id: str | None = None,
+        data: dict[str, object] | None = None,
+        error: object | None = None,
+        tags: frozenset[str] = frozenset(),
+        input_ref: str | None = None,
+        output_ref: str | None = None,
+    ) -> int:
+        return 1
+
+    def read(self, start: int = 0, limit: int | None = None) -> list[object]:
+        return []
+
+    def slice(
+        self,
+        *,
+        kind: JournalRecordKind | None = None,
+        session_id: str | None = None,
+    ) -> list[object]:
+        return []
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+    def flush(self) -> None:
+        pass
+
+    def finalize(self) -> None:
+        self.finalize_calls += 1
+
+    @property
+    def latest_sequence(self) -> int:
+        return 0
+
+    @property
+    def degraded(self) -> bool:
+        return False
 
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
@@ -276,6 +376,20 @@ async def test_session_shutdown():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method_name", ["stop", "shutdown"])
+async def test_session_teardown_finalizes_and_closes_journal(method_name: str):
+    transport = FakeTransport()
+    journal = TrackingJournal()
+    session = Session(_full_config(transport=transport, journal=journal, session_id="sess"))
+
+    await session.start()
+    await getattr(session, method_name)()
+
+    assert journal.finalize_calls == 1
+    assert journal.close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
 async def test_external_outbound_queue_survives_session_teardown(method_name: str):
     transport = FakeTransport()
     queue = BoundedAudioQueue()
@@ -356,6 +470,84 @@ async def test_session_stop_idempotent():
     assert not session.is_running
 
 
+@pytest.mark.asyncio
+async def test_stop_keeps_sqlite_journal_and_bundle_readable(tmp_path):
+    session_id = "sess"
+    transport = FakeTransport()
+    journal = SqliteJournal(session_id, data_dir=tmp_path)
+    artifact_store = FilesystemArtifactStore(session_id, data_dir=tmp_path)
+    ref = artifact_store.put(b"artifact-bytes")
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="before_stop",
+        session_id=session_id,
+        input_ref=ref,
+    )
+    session = Session(
+        _full_config(
+            transport=transport,
+            journal=journal,
+            artifact_store=artifact_store,
+            session_id=session_id,
+        )
+    )
+
+    await session.stop()
+
+    assert (
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="after_stop",
+            session_id=session_id,
+        )
+        == -1
+    )
+
+    assert session.journal is not None
+    records = session.journal.read()
+    assert [record.name for record in records] == ["before_stop"]
+
+    bundle_path = tmp_path / "after-stop-full.zip"
+    session.export_debug_bundle(str(bundle_path))
+    with zipfile.ZipFile(bundle_path) as zf:
+        assert "journal.ndjson" in zf.namelist()
+        assert f"artifacts/{ref}.bin" in zf.namelist()
+
+
+@pytest.mark.asyncio
+async def test_stop_keeps_in_memory_bundle_exportable(tmp_path):
+    session_id = "sess"
+    transport = FakeTransport()
+    artifact_store = InMemoryArtifactStore()
+    journal = InMemoryRingBuffer(artifact_store=artifact_store)
+    ref = artifact_store.put(b"artifact-bytes")
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="before_stop",
+        session_id=session_id,
+        input_ref=ref,
+    )
+    session = Session(
+        _full_config(
+            transport=transport,
+            journal=journal,
+            artifact_store=artifact_store,
+            session_id=session_id,
+        )
+    )
+
+    await session.stop()
+
+    assert artifact_store.get(ref) is None
+    assert session.journal is not None
+    assert [record.name for record in session.journal.read()] == ["before_stop"]
+
+    bundle_path = tmp_path / "after-stop-light.zip"
+    session.export_debug_bundle(str(bundle_path))
+    with zipfile.ZipFile(bundle_path) as zf:
+        assert f"artifacts/{ref}.bin" in zf.namelist()
+
+
 # ── Cancellation tests ─────────────────────────────────────────────
 
 
@@ -382,6 +574,245 @@ async def test_cancel_turn_barge_in_emits_interruption():
     await session.cancel_turn(barge_in=True)
     assert len(received) == 1
     assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_journaled_task_records_scheduled_and_completed():
+    """``_journaled_task`` must write ``task_scheduled`` at creation and
+    ``task_completed`` when the coroutine finishes cleanly."""
+    journal = InMemoryRingBuffer(capacity=32)
+    session = Session(_full_config(journal=journal))
+    session._turn = TurnContext("tj-1", CancelToken())
+
+    async def _ok() -> str:
+        return "ok"
+
+    task = session._journaled_task(_ok(), name="unit_test_task")
+    await task
+    # add_done_callback schedules the emit callback — let it run.
+    await asyncio.sleep(0)
+
+    names = [r.name for r in journal.read()]
+    assert "task_scheduled" in names
+    assert "task_completed" in names
+    scheduled = next(r for r in journal.read() if r.name == "task_scheduled")
+    completed = next(r for r in journal.read() if r.name == "task_completed")
+    assert scheduled.data["task_name"] == "unit_test_task"
+    assert completed.data["task_name"] == "unit_test_task"
+
+
+@pytest.mark.asyncio
+async def test_journaled_task_records_cancelled():
+    journal = InMemoryRingBuffer(capacity=32)
+    session = Session(_full_config(journal=journal))
+
+    async def _slow() -> None:
+        await asyncio.sleep(10.0)
+
+    task = session._journaled_task(_slow(), name="slow_task")
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    await asyncio.sleep(0)
+
+    names = [r.name for r in journal.read()]
+    assert "task_cancelled" in names
+
+
+@pytest.mark.asyncio
+async def test_journaled_task_records_raised():
+    journal = InMemoryRingBuffer(capacity=32)
+    session = Session(_full_config(journal=journal))
+
+    async def _boom() -> None:
+        raise ValueError("explosion")
+
+    task = session._journaled_task(_boom(), name="boom_task")
+    try:
+        await task
+    except ValueError:
+        pass
+    await asyncio.sleep(0)
+
+    recs = journal.read()
+    raised = [r for r in recs if r.name == "task_raised"]
+    assert len(raised) == 1
+    assert raised[0].data["exc_type"] == "ValueError"
+
+
+@pytest.mark.asyncio
+async def test_turn_state_changed_recorded_on_transition():
+    """Every TurnManager state change must land as a journal record —
+    no more "why did it go to PROCESSING" bugs that require a logger
+    dump to answer.
+
+    Drive the transition directly via start_turn() / end_turn() so the
+    test doesn't depend on VAD timing.
+    """
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(_full_config(journal=journal))
+    await session._turn_manager.start_turn()
+    await session._turn_manager.end_turn()
+
+    transitions = [r for r in journal.read() if r.name == "turn_state_changed"]
+    assert transitions, "expected at least one turn_state_changed record"
+    reasons = {r.data["reason"] for r in transitions}
+    assert "manual_start" in reasons
+    assert "manual_end" in reasons
+    # Idle → UserSpeaking then UserSpeaking → Processing.
+    pairs = {(r.data["from"], r.data["to"]) for r in transitions}
+    assert ("idle", "user_speaking") in pairs
+    assert ("user_speaking", "processing") in pairs
+
+
+@pytest.mark.asyncio
+async def test_audio_queue_drop_recorded_when_queue_overflows():
+    """BoundedAudioQueue drops must land in the journal via the
+    ``on_drop`` hook so backpressure is visible from a bundle."""
+    journal = InMemoryRingBuffer(capacity=32)
+    session = Session(_full_config(journal=journal))
+    # Shrink the outbound queue so we can overflow it deterministically.
+    q = session._outbound_queue
+    q._max_size = 2  # type: ignore[attr-defined]
+
+    chunk = _make_chunk(n_bytes=320)
+    await q.put(chunk)
+    await q.put(chunk)
+    # This one should be dropped (DROP_OLDEST policy).
+    await q.put(chunk)
+
+    drops = [r for r in journal.read() if r.name == "audio_queue_drop"]
+    assert len(drops) == 1
+    assert drops[0].data["queue"] == "outbound_audio"
+    assert drops[0].data["kind"] == "drop_oldest"
+    assert drops[0].data["total_drops"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_heartbeat_emits_records_at_interval():
+    """Drive ``_emit_heartbeats`` directly with a short interval and
+    verify each record carries the expected shape (loop_lag_ms,
+    queue len, drops)."""
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(_full_config(journal=journal))
+    session._is_running = True
+
+    task = asyncio.create_task(session._emit_heartbeats(interval_s=0.05))
+    try:
+        await asyncio.sleep(0.25)
+    finally:
+        session._is_running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    heartbeats = [r for r in journal.read() if r.name == "pipeline_heartbeat"]
+    assert len(heartbeats) >= 2, f"expected at least 2 heartbeats, got {len(heartbeats)}"
+    data = heartbeats[0].data
+    assert data["interval_ms"] == 50
+    assert "loop_lag_ms" in data
+    assert "outbound_queue_len" in data
+    assert "outbound_queue_drops" in data
+
+
+@pytest.mark.asyncio
+async def test_schedule_turn_ended_cancels_inflight_stt_commit():
+    """Regression test for plan-7 flakiness.
+
+    When VADStopSpeaking fires, ``_schedule_stt_segment_commit`` creates
+    a task that calls ``stt.commit_segment``.  If SmartTurn immediately
+    declares the turn complete, ``TurnEnded`` fires before the commit
+    task has a chance to cancel — and previously ``_schedule_turn_ended``
+    only cancelled the *scheduled* task, not the *in-flight* one.  That
+    left ``commit_segment`` racing with ``_handle_end_of_speech``'s
+    ``end_stream`` which issues its own commit: the first commit
+    cleared the STT server's buffer and the second commit failed with
+    "buffer too small".
+    """
+    config = _full_config()
+    session = Session(config)
+    session._is_running = True
+    session._turn_state = TurnState.LISTENING
+    session._turn = TurnContext("race-turn", CancelToken())
+    session._turn.stt_has_uncommitted_audio = True
+    session._stt_active = True
+    session._stt_segment_silence_ms = 0  # match plan-7's fast config
+
+    events = []
+
+    class _RaceSTT:
+        async def start_stream(self) -> None: ...
+        async def send_audio(self, chunk) -> None: ...
+
+        async def commit_segment(self) -> bool:
+            events.append("commit")
+            await asyncio.sleep(0.05)
+            events.append("commit_done")
+            return True
+
+        async def end_stream(self) -> None:
+            events.append("end_stream")
+
+        async def events(self):
+            return
+            yield
+
+    session.stt = _RaceSTT()
+    session._stt_stage = type(session._stt_stage)(session.stt, journal=session._journal)
+
+    session._schedule_stt_segment_commit(VADStopSpeaking())
+    await asyncio.sleep(0.001)
+    session._schedule_turn_ended(TurnEnded(turn_id="race-turn"))
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+
+    # Invariant: we never observe BOTH commit_done AND end_stream in
+    # the same run — the in-flight cancel closes the window.
+    assert not ("commit_done" in events and "end_stream" in events), (
+        f"in-flight commit was not cancelled on TurnEnded: events={events}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_turn_barge_in_propagates_signal_through_all_stages():
+    """WS3 T3.8: a barge-in must dispatch an InterruptSignal through
+    every stage, producing one ControlSignalRecord per stage in the
+    journal so replay can see who observed the signal and when.
+    """
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(_full_config(journal=journal))
+    session._turn_state = TurnState.BOT_SPEAKING
+    session._turn = TurnContext("test-turn-signal", CancelToken())
+
+    await session.cancel_turn(barge_in=True)
+
+    signal_records = [r for r in journal.read() if r.kind == JournalRecordKind.CONTROL]
+    # One per stage plus the trailing cause record.
+    stage_records = [r for r in signal_records if r.name == "control_signal"]
+    cause_records = [r for r in signal_records if r.name == "control_signal_cause"]
+    observed = {r.data["observed_stage"] for r in stage_records}
+    assert observed == {
+        "transport",
+        "tts",
+        "agent",
+        "turn",
+        "stt",
+        "vad",
+        "audio",
+        "telephony",
+    }
+    # Every stage record carries the same signal_id so a replay UI can
+    # group the upstream walk into one logical event.
+    signal_ids = {r.data["signal_id"] for r in stage_records}
+    assert len(signal_ids) == 1
+    # The cause record links the signal back to "barge_in".
+    assert len(cause_records) == 1
+    assert cause_records[0].data["cause"] == "barge_in"
+    assert cause_records[0].data["signal_id"] == next(iter(signal_ids))
 
 
 @pytest.mark.asyncio
@@ -517,68 +948,6 @@ async def test_pipeline_noise_reduction():
 
 
 @pytest.mark.asyncio
-async def test_pipeline_tracing_emits_noise_reduction_and_vad_spans():
-    chunk = _make_chunk()
-    transport = FakeTransport(chunks=[chunk])
-    exporter = InMemoryTraceExporter()
-    tracer = Tracer(exporter=exporter)
-
-    class TrackingNoiseReducer:
-        async def process(self, c: AudioChunk) -> AudioChunk:
-            return c
-
-    class SilentVAD:
-        async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
-            if False:
-                yield VADStartSpeaking()
-
-        def configure(self, **kwargs: object) -> None:
-            pass
-
-    config = _full_config(
-        transport=transport,
-        tracer=tracer,
-        noise_reducer=TrackingNoiseReducer(),
-        vad=SilentVAD(),
-        enable_noise_reduction=True,
-        enable_vad=True,
-    )
-    session = Session(config)
-    session._spans.begin_turn()
-    session._is_running = True
-
-    await session._run_pipeline()
-
-    span_names = [span.name for span in exporter.spans]
-    assert Tracer.NOISE_REDUCTION in span_names
-    assert Tracer.VAD in span_names
-
-
-@pytest.mark.asyncio
-async def test_run_basic_agent_cancellation_marks_agent_span_cancelled():
-    exporter = InMemoryTraceExporter()
-    tracer = Tracer(exporter=exporter)
-
-    class BlockingAgent:
-        async def run(self, text: str) -> str:
-            await asyncio.Event().wait()
-            return text
-
-    session = Session(_full_config(agent=BlockingAgent(), tracer=tracer))
-    session._spans.begin_turn()
-
-    task = asyncio.create_task(session._run_basic_agent("hello", token=None))
-    await asyncio.sleep(0)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    agent_spans = [span for span in exporter.spans if span.name == Tracer.AGENT]
-    assert len(agent_spans) == 1
-    assert agent_spans[0].status == SpanStatus.CANCELLED
-
-
-@pytest.mark.asyncio
 async def test_handle_end_of_speech_clears_turn_id_on_stt_timeout():
     session = Session(_full_config())
     session._turn = TurnContext("turn-stale", CancelToken())
@@ -603,6 +972,54 @@ async def test_handle_end_of_speech_clears_turn_id_on_empty_transcript():
 
     assert session._turn is None
     assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_pause_commit_keeps_turn_open_but_collects_segment_final():
+    stt = SegmentingSTT(["hello"])
+    session = Session(
+        _full_config(
+            stt=stt,
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=1000,
+                stt_segment_silence_ms=1,
+            ),
+        )
+    )
+    session._turn = TurnContext("turn-1", CancelToken())
+    session._turn.stt_has_uncommitted_audio = True
+    session._stt_active = True
+    session._turn_manager._state = TurnManagerState.USER_PAUSED
+    session._start_stt_event_task()
+
+    session._schedule_stt_segment_commit(VADStopSpeaking())
+    await asyncio.sleep(0.05)
+
+    assert stt.commit_calls == 1
+    assert session._turn is not None
+    assert session._turn_manager.state == TurnManagerState.USER_PAUSED
+    assert session._turn.transcript_text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_handle_end_of_speech_no_duplicate_stt_final():
+    """_handle_end_of_speech must not re-emit per-segment STTFinals."""
+    session = Session(_full_config())
+    session._turn = TurnContext("turn-stale", CancelToken())
+    session._turn.append_stt_segment("hello")
+    session._turn.append_stt_segment("world")
+
+    timeline: list[Event] = []
+    session.event_bus.subscribe(STTFinal, lambda e: timeline.append(e))
+    session.event_bus.subscribe(AgentFinal, lambda e: timeline.append(e))
+
+    await session._handle_end_of_speech()
+
+    stt_finals = [e for e in timeline if isinstance(e, STTFinal)]
+    assert len(stt_finals) == 0
+    agent_finals = [e for e in timeline if isinstance(e, AgentFinal)]
+    assert len(agent_finals) == 1
+    assert agent_finals[0].text == "HELLO WORLD"
 
 
 @pytest.mark.asyncio
@@ -631,6 +1048,153 @@ async def test_run_basic_agent_tts_error_cleans_turn_state_and_turn_id():
 
     # _synthesize_tts's finally block cleans up the turn when playback was started.
     assert session._turn is None
+
+
+@pytest.mark.asyncio
+async def test_run_basic_agent_strip_markdown_writes_journal_record():
+    class MarkdownAgent:
+        async def run(self, text: str) -> str:
+            return "Go to **Settings** first."
+
+    journal = InMemoryRingBuffer()
+    session = Session(_full_config(agent=MarkdownAgent(), journal=journal, strip_markdown=True))
+    session._turn = TurnContext("turn-markdown", CancelToken())
+    session._synthesize_tts = AsyncMock(return_value=SessionActionResult())
+
+    await session._run_basic_agent("help", token=None)
+
+    records = [record for record in journal.read() if record.name == "markdown_stripped"]
+    assert len(records) == 1
+    assert records[0].turn_id == "turn-markdown"
+    assert records[0].data == {
+        "phase": "basic_final",
+        "changed": True,
+        "original_text": "Go to **Settings** first.",
+        "stripped_text": "Go to Settings first.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_tts_payload_writes_journal_record():
+    class PrefixProcessor:
+        def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
+            return TTSInput(text=f"speak: {payload.text}", format=payload.format)
+
+    journal = InMemoryRingBuffer()
+    session = Session(
+        _full_config(
+            journal=journal,
+            output_processors=[PrefixProcessor()],
+        )
+    )
+    session._turn = TurnContext("turn-tts-prepared", CancelToken())
+
+    payload = session._prepare_tts_payload("hello", is_streaming=False, is_final=True)
+
+    assert payload.text == "speak: hello"
+    records = [record for record in journal.read() if record.name == "tts_payload_prepared"]
+    assert len(records) == 1
+    assert records[0].turn_id == "turn-tts-prepared"
+    assert records[0].data == {
+        "is_streaming": False,
+        "is_final": True,
+        "changed": True,
+        "original_text": "hello",
+        "original_format": "plain",
+        "prepared_text": "speak: hello",
+        "prepared_format": "plain",
+        "processors": ["PrefixProcessor"],
+        "ssml_downgraded": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_pause_commit_journals_segment_commit_and_final():
+    stt = SegmentingSTT(["hello"])
+    journal = InMemoryRingBuffer()
+    session = Session(
+        _full_config(
+            stt=stt,
+            journal=journal,
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=1000,
+                stt_segment_silence_ms=1,
+            ),
+        )
+    )
+    session._turn = TurnContext("turn-segment-journal", CancelToken())
+    session._turn.stt_has_uncommitted_audio = True
+    session._stt_active = True
+    session._turn_manager._state = TurnManagerState.USER_PAUSED
+    session._start_stt_event_task()
+
+    await session._start_stt_segment_commit()
+    await asyncio.sleep(0.05)
+
+    records = [record for record in journal.read() if record.name.startswith("stt_segment_")]
+    records_by_name = {record.name: record for record in records}
+    assert set(records_by_name) == {
+        "stt_segment_commit_requested",
+        "stt_segment_final",
+        "stt_segment_commit_result",
+    }
+    assert records_by_name["stt_segment_commit_requested"].data == {
+        "segment_index": 1,
+        "transcript_text": "",
+        "pending_commit_bytes": None,
+    }
+    assert records_by_name["stt_segment_final"].data == {
+        "segment_index": 1,
+        "text": "hello",
+        "track": None,
+        "transcript_text": "hello",
+    }
+    assert records_by_name["stt_segment_commit_result"].data == {
+        "segment_index": 1,
+        "committed": True,
+        "transcript_text": "",
+    }
+
+
+@pytest.mark.asyncio
+async def test_tts_audio_and_markers_are_journaled_with_artifact_ref():
+    artifact_store = InMemoryArtifactStore()
+    journal = InMemoryRingBuffer(artifact_store=artifact_store)
+    session = Session(
+        _full_config(
+            tts=MarkerTTS(),
+            journal=journal,
+            artifact_store=artifact_store,
+        )
+    )
+    session._turn = TurnContext("turn-tts-audio", CancelToken())
+
+    await session._synthesize_tts("hello", token=None)
+
+    audio_records = [record for record in journal.read() if record.name == "tts_audio"]
+    marker_records = [record for record in journal.read() if record.name == "tts_markers"]
+    tts_frame_records = [record for record in journal.read() if record.name == "tts_frame"]
+
+    assert len(audio_records) == 1
+    assert audio_records[0].turn_id == "turn-tts-audio"
+    # Session-level tts_audio record no longer carries output_ref — WS3
+    # T3.9 moved artifact capture into TTSStage, which emits one
+    # ``tts_frame`` record per chunk with ``output_ref`` set.
+    assert audio_records[0].data == {
+        "audio_bytes": 320,
+        "duration_ms": 10.0,
+        "sample_rate": 16000,
+        "channels": 1,
+        "sample_width": 2,
+        "encoding": "pcm",
+        "bypass_gate": False,
+    }
+    assert len(tts_frame_records) >= 1
+    assert tts_frame_records[0].turn_id == "turn-tts-audio"
+    assert tts_frame_records[0].output_ref is not None
+    assert artifact_store.has(tts_frame_records[0].output_ref)
+    assert len(marker_records) == 1
+    assert marker_records[0].data == {"markers": [{"word": "hello", "start_ms": 0}]}
 
 
 @pytest.mark.asyncio

@@ -238,7 +238,6 @@ async def test_basic_agent_path_stops_session_after_end_call_action() -> None:
     session = Session(_config(session_actions=actions))
     session.stop = AsyncMock()
     session._turn = TurnContext(turn_id="turn-1", cancel_token=CancelToken())
-    session._spans.begin_turn()
 
     await session._run_basic_agent("hello", CancelToken())
 

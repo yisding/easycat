@@ -4,26 +4,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Literal
+from uuid import uuid4
 
-from easycat.agent_runner import AgentRunner, AgentRunnerConfig
-from easycat.agents.factory import auto_adapt_agent
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
-from easycat.event_logging import EventLoggingConfig, EventTraceLogger
 from easycat.events import CallInitiated, CallScreening, EventBus, TTSAudio
+from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
+from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.llm_output_processing import LLMOutputProcessor
-from easycat.metrics import InMemoryMetrics, MetricsCollector
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.providers import Transport
+from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
+from easycat.runtime.journal import create_journal
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.factory import STTConfig, create_stt_provider_from_config
-from easycat.stt.openai_provider import OpenAISTTConfig
+from easycat.stt.openai_provider import OpenAISTTConfig  # noqa: F401  (public re-export)
+from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.stubs import NoopAgent
 from easycat.telephony.call_state import (
     CallStateChanged,
@@ -56,7 +59,6 @@ from easycat.telephony.voicemail import (
     VoicemailPolicyHandler,
 )
 from easycat.timeouts import TimeoutConfig
-from easycat.tracing import TraceExporter, Tracer
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
@@ -71,22 +73,6 @@ from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, create_vad
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class MetricsConfig:
-    """Configuration for metrics collection."""
-
-    enabled: bool = False
-    collector: MetricsCollector | None = None
-
-
-@dataclass
-class TracingConfig:
-    """Configuration for tracing."""
-
-    enabled: bool = False
-    exporter: TraceExporter | None = None
 
 
 @dataclass
@@ -156,9 +142,23 @@ _TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
 }
 
 
+class EasyCatConfigError(ValueError):
+    """Raised when ``EasyCatConfig`` validation fails."""
+
+
+_VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
+
+
 @dataclass
 class EasyCatConfig:
-    """Top-level configuration for EasyCat sessions."""
+    """Top-level configuration for EasyCat sessions.
+
+    Fields:
+        mcp_servers: Optional list of MCP server URIs to pass through to
+            agent bridges.  Accepted schemes: ``stdio://``, ``sse://``,
+            ``http://``, ``https://``.  Frozen per session — mid-session
+            changes are not supported.
+    """
 
     openai_api_key: str | None = None
     stt: STTConfig | None = None
@@ -166,27 +166,63 @@ class EasyCatConfig:
     vad: VADConfig = field(default_factory=VADConfig)
     noise_reduction: NoiseReducerConfig = field(default_factory=NoiseReducerConfig)
     echo_cancellation: EchoCancellationConfig | None = None
+    enable_noise_reduction: bool = False
+    enable_echo_cancellation: bool = False
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
     smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
     telephony: TelephonyConfig | None = None
-    event_logging: EventLoggingConfig = field(default_factory=EventLoggingConfig)
-    metrics: MetricsConfig | None = None
-    tracing: TracingConfig | None = None
     agent: Any = None
+    agent_model: str | None = None
+    remote_agent_api_key: str | None = None
     agent_runner: AgentRunnerConfig | None = None
     wrap_agent: bool = True
     strip_markdown: bool = False
     output_processors: Sequence[LLMOutputProcessor] = ()
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
-    debug: bool = False
+    debug: Literal["off", "light", "full"] = "off"
+    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
+    journal_retention: Literal["archive", "delete"] = "archive"
+    mcp_servers: list[str] | None = None
+    event_logging: Any = None
 
     def __post_init__(self) -> None:
+        # ── Ignored legacy field ────────────────────────────────
+        if self.event_logging is not None:
+            warnings.warn(
+                "EasyCatConfig(event_logging=...) is deprecated and ignored. "
+                "Observability is handled by the journal-based runtime.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        _VALID_DEBUG = {"off", "light", "full"}
+        if self.debug not in _VALID_DEBUG:
+            raise ValueError(
+                f"Invalid debug={self.debug!r}. Must be one of {sorted(_VALID_DEBUG)}."
+            )
+        _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
+        if self.journal_backend not in _VALID_JOURNAL_BACKEND:
+            raise ValueError(
+                f"Invalid journal_backend={self.journal_backend!r}. "
+                f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
+            )
+        _VALID_JOURNAL_RETENTION = {"archive", "delete"}
+        if self.journal_retention not in _VALID_JOURNAL_RETENTION:
+            raise ValueError(
+                f"Invalid journal_retention={self.journal_retention!r}. "
+                f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
+            )
+
         if self.openai_api_key:
             if self.stt is None:
-                self.stt = OpenAISTTConfig(api_key=self.openai_api_key)
+                # Default to the Realtime WebSocket STT: audio is streamed
+                # as it arrives (sub-second stop-to-final), versus the
+                # batch ``/v1/audio/transcriptions`` endpoint which waits
+                # for end-of-turn to upload the whole utterance.
+                self.stt = OpenAIRealtimeSTTConfig(api_key=self.openai_api_key)
             if self.tts is None:
                 # Match the TTS output format to the transport's audio format
                 # so that TTSBase._normalize_audio resamples correctly
@@ -198,41 +234,25 @@ class EasyCatConfig:
                 self.tts = OpenAITTSConfig(**tts_kwargs)
         if self.echo_cancellation is None:
             self.echo_cancellation = self._default_echo_cancellation_for_transport()
-        if self.debug:
+        if self.debug in ("light", "full"):
             self._apply_debug_defaults()
         self._validate()
 
     def _default_echo_cancellation_for_transport(self) -> EchoCancellationConfig:
-        enable_aec = isinstance(
+        enable_aec = self.enable_echo_cancellation or isinstance(
             self.transport,
             (LocalTransportConfig, WebSocketTransportConfig, WebSocketConnectionTransport),
         )
         return EchoCancellationConfig(enabled=enable_aec)
 
     def _apply_debug_defaults(self) -> None:
-        """Enable verbose logging, event tracing with partials, and metrics."""
-        # Ensure log output is visible — add a root handler if none exists.
+        """Enable verbose logging when debug mode is active."""
         if not logging.root.handlers:
             logging.basicConfig(
                 level=logging.DEBUG,
                 format="%(asctime)s %(name)s %(levelname)s %(message)s",
             )
-        # Set the easycat logger to DEBUG regardless of the root level.
         logging.getLogger("easycat").setLevel(logging.DEBUG)
-
-        # Enable event trace logging with partials so STT progress is visible,
-        # but only if the caller didn't supply an explicit config.
-        if self.event_logging == EventLoggingConfig():
-            self.event_logging = EventLoggingConfig(
-                enabled=True,
-                include_partials=True,
-                level=logging.DEBUG,
-            )
-
-        # Enable in-memory metrics so latency data is always collected.
-        if self.metrics is None:
-            self.metrics = MetricsConfig(enabled=True)
-
         logger.debug("EasyCat debug mode enabled")
 
     def _validate(self) -> None:
@@ -249,6 +269,24 @@ class EasyCatConfig:
                     .replace("TTS", " TTS")
                 )
                 raise ValueError(f"{name} requires an API key.")
+        if isinstance(self.agent, str):
+            from urllib.parse import urlparse
+
+            parsed = urlparse(self.agent)
+            if parsed.scheme in ("http", "https") and parsed.netloc:
+                if self.agent_model is None:
+                    raise EasyCatConfigError(
+                        "agent_model is required when agent is a URL string. "
+                        "Set agent_model to the model identifier the remote "
+                        "Responses API server should use."
+                    )
+        if self.mcp_servers is not None:
+            for uri in self.mcp_servers:
+                if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
+                    raise EasyCatConfigError(
+                        f"Invalid MCP server URI: {uri!r}. "
+                        f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
+                    )
 
 
 def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
@@ -264,28 +302,91 @@ def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
     return config.stt.is_flux
 
 
+def _create_artifact_store(
+    session_id: str, debug: str
+) -> InMemoryArtifactStore | FilesystemArtifactStore | None:
+    if debug == "off":
+        return None
+    if debug == "full":
+        return FilesystemArtifactStore(session_id)
+    return InMemoryArtifactStore()
+
+
 def create_session(config: EasyCatConfig) -> Session:
     """Create a fully wired Session from EasyCatConfig."""
+    session_id = f"session-{uuid4().hex[:12]}"
+    artifact_store = _create_artifact_store(session_id, config.debug)
+    journal = (
+        create_journal(
+            session_id,
+            debug=config.debug,
+            backend=config.journal_backend,
+            artifact_store=(
+                artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
+            ),
+            retention_mode=config.journal_retention,
+        )
+        if config.debug != "off"
+        else None
+    )
+
     event_bus = EventBus()
     stt = create_stt_provider_from_config(config.stt, event_bus)
     tts = create_tts_provider_from_config(config.tts, event_bus)
     auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
     enable_vad = not auto_turn_from_stt_final
     vad = create_vad(config.vad) if enable_vad else None
-    noise_reducer = create_noise_reducer(config.noise_reduction)
-    echo_canceller = create_echo_canceller(config.echo_cancellation or EchoCancellationConfig())
+    noise_reducer = (
+        create_noise_reducer(config.noise_reduction)
+        if config.enable_noise_reduction or config.noise_reduction != NoiseReducerConfig()
+        else None
+    )
+    # enable_echo_cancellation acts as a shortcut: when True and no
+    # explicit EchoCancellationConfig is provided, auto-construct one
+    # with enabled=True so the LiveKit backend is actually activated.
+    echo_cfg = config.echo_cancellation
+    if echo_cfg is None:
+        echo_cfg = EchoCancellationConfig(enabled=config.enable_echo_cancellation)
+    echo_canceller = create_echo_canceller(echo_cfg)
     transport = _create_transport(config.transport, event_bus)
 
+    mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
+
     if config.agent is not None:
-        agent = auto_adapt_agent(config.agent)
+        agent = auto_adapt_agent(config.agent, model=config.agent_model)
+        # Inject MCP servers and journal into the shim if it's a bridge adapter.
+        # Unwrap AgentRunner if the caller pre-wrapped the shim.
+        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+
+        shim = agent
+        if isinstance(shim, AgentRunner):
+            shim = shim._agent
+        if isinstance(shim, BridgeAdapterShim):
+            shim._journal = journal
+            shim._artifact_store = artifact_store
+            shim._session_id = session_id
+            # Always overwrite so a reused shim from a prior session doesn't
+            # leak old MCP servers into a new session that leaves MCP unset.
+            shim._mcp_servers = mcp_servers
+            if hasattr(shim.bridge, "_mcp_servers"):
+                shim.bridge._mcp_servers = list(mcp_servers)
+            # Inject model/API key for URL-backed agents.
+            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+
+            if isinstance(shim.bridge, RemoteResponsesAPIBridge):
+                if config.agent_model:
+                    shim.bridge._model = config.agent_model
+                if config.remote_agent_api_key:
+                    shim.bridge._api_key = config.remote_agent_api_key
         if config.wrap_agent and not isinstance(agent, AgentRunner):
             runner_cfg = config.agent_runner or AgentRunnerConfig()
             agent = AgentRunner(agent, runner_cfg)
     else:
         agent = NoopAgent()
 
-    metrics = _create_metrics(config.metrics)
-    tracer = _create_tracer(config.tracing)
+    # Emit provider versions into the journal at session start.
+    if journal is not None:
+        _emit_provider_versions(journal, session_id, stt=stt, tts=tts, transport=transport)
 
     turn_config = config.turn_taking
     smart_turn = create_smart_turn(config.smart_turn)
@@ -294,8 +395,6 @@ def create_session(config: EasyCatConfig) -> Session:
 
     telephony_helpers = _create_telephony_helpers(event_bus, config.telephony)
     action_executors = [*config.action_executors, *_create_action_executors(config.telephony)]
-    if config.event_logging.enabled:
-        telephony_helpers.append(EventTraceLogger(event_bus, config.event_logging))
 
     # Extract audio gate from the outbound call state machine, if present.
     audio_gate = None
@@ -322,10 +421,13 @@ def create_session(config: EasyCatConfig) -> Session:
             event_bus=event_bus,
             turn_manager_config=turn_config,
             timeout_config=config.timeouts,
-            metrics=metrics,
-            tracer=tracer,
+            journal=journal,
+            artifact_store=artifact_store,
+            session_id=session_id,
             telephony_helpers=telephony_helpers,
             enable_vad=enable_vad,
+            enable_noise_reduction=config.enable_noise_reduction,
+            enable_echo_cancellation=echo_cfg.enabled,
             auto_turn_from_stt_final=auto_turn_from_stt_final,
             strip_markdown=config.strip_markdown,
             output_processors=config.output_processors,
@@ -334,6 +436,10 @@ def create_session(config: EasyCatConfig) -> Session:
             audio_gate=audio_gate,
         )
     )
+    # Stash the original EasyCatConfig so debug bundle export can snapshot
+    # user-facing settings (debug, journal_backend, turn_taking, etc.)
+    # instead of serializing live provider instances from SessionConfig.
+    session._easycat_config = config
 
     if _outbound_sm is not None:
         _wire_outbound_pipeline(
@@ -344,6 +450,145 @@ def create_session(config: EasyCatConfig) -> Session:
             agent,
         )
 
+    return session
+
+
+def create_text_session(
+    *,
+    agent: Any,
+    session_id: str | None = None,
+    debug: Literal["off", "light", "full"] = "off",
+    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
+    journal_retention: Literal["archive", "delete"] = "archive",
+    wrap_agent: bool = True,
+    agent_runner: AgentRunnerConfig | None = None,
+    agent_model: str | None = None,
+    remote_agent_api_key: str | None = None,
+    mcp_servers: list[str] | None = None,
+) -> Session:
+    """Create a text-only Session (no audio pipeline).
+
+    The returned session supports :meth:`Session.send_text` for
+    request/response agent interaction without STT, TTS, VAD, or
+    transport.  Useful for testing agent logic and building text-based
+    UIs on the same agent adapter stack.
+
+    Raises :class:`RuntimeError` if the caller attempts to call
+    :meth:`Session.start` on a text session.
+    """
+    # Validate URL-backed agents early (mirrors EasyCatConfig._validate).
+    if isinstance(agent, str):
+        from urllib.parse import urlparse
+
+        parsed = urlparse(agent)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            if agent_model is None:
+                raise EasyCatConfigError(
+                    "agent_model is required when agent is a URL string. "
+                    "Set agent_model to the model identifier the remote "
+                    "Responses API server should use."
+                )
+
+    _VALID_DEBUG = {"off", "light", "full"}
+    if debug not in _VALID_DEBUG:
+        raise ValueError(f"Invalid debug={debug!r}. Must be one of {sorted(_VALID_DEBUG)}.")
+    _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
+    if journal_backend not in _VALID_JOURNAL_BACKEND:
+        raise ValueError(
+            f"Invalid journal_backend={journal_backend!r}. "
+            f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
+        )
+    _VALID_JOURNAL_RETENTION = {"archive", "delete"}
+    if journal_retention not in _VALID_JOURNAL_RETENTION:
+        raise ValueError(
+            f"Invalid journal_retention={journal_retention!r}. "
+            f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
+        )
+    if mcp_servers is not None:
+        for uri in mcp_servers:
+            if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
+                raise EasyCatConfigError(
+                    f"Invalid MCP server URI: {uri!r}. "
+                    f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
+                )
+
+    sid = session_id or f"session-{uuid4().hex[:12]}"
+    if session_id is not None and ("/" in session_id or "\\" in session_id or ".." in session_id):
+        raise EasyCatConfigError(
+            f"session_id must not contain path separators or '..': {session_id!r}"
+        )
+    artifact_store = _create_artifact_store(sid, debug)
+    journal = (
+        create_journal(
+            sid,
+            debug=debug,
+            backend=journal_backend,
+            artifact_store=(
+                artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
+            ),
+            retention_mode=journal_retention,
+        )
+        if debug != "off"
+        else None
+    )
+    event_bus = EventBus()
+
+    adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
+    # Backfill journal metadata into the bridge shim (mirrors create_session).
+    # Unwrap AgentRunner if the caller pre-wrapped the shim.
+    from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+
+    _inner = adapted
+    if isinstance(_inner, AgentRunner):
+        _inner = _inner._agent
+    if isinstance(_inner, BridgeAdapterShim):
+        _inner._journal = journal
+        _inner._artifact_store = artifact_store
+        _inner._session_id = sid
+        # Inject model/API key for URL-backed agents (mirrors create_session).
+        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+
+        if isinstance(_inner.bridge, RemoteResponsesAPIBridge):
+            if agent_model:
+                _inner.bridge._model = agent_model
+            if remote_agent_api_key:
+                _inner.bridge._api_key = remote_agent_api_key
+        if mcp_servers is not None:
+            _mcp = tuple(mcp_servers)
+            _inner._mcp_servers = _mcp
+            if hasattr(_inner.bridge, "_mcp_servers"):
+                _inner.bridge._mcp_servers = list(_mcp)
+    if wrap_agent and not isinstance(adapted, AgentRunner):
+        runner_cfg = agent_runner or AgentRunnerConfig()
+        adapted = AgentRunner(adapted, runner_cfg)
+
+    # Text sessions use noop providers — validation is skipped because
+    # runtime_mode="text_session" never enters the audio pipeline.
+    from easycat.stubs import NoopSTT, NoopTransport, NoopTTS, NoopVAD
+
+    session = Session(
+        SessionConfig(
+            stt=NoopSTT(),
+            tts=NoopTTS(),
+            vad=NoopVAD(),
+            transport=NoopTransport(),
+            agent=adapted,
+            event_bus=event_bus,
+            journal=journal,
+            artifact_store=artifact_store,
+            session_id=sid,
+            runtime_mode="text_session",
+        )
+    )
+    # Stash user-facing settings so debug bundle export can snapshot them
+    # instead of serializing live provider instances from SessionConfig.
+    from types import SimpleNamespace
+
+    session._easycat_config = SimpleNamespace(
+        debug=debug,
+        journal_backend=journal_backend,
+        journal_retention=journal_retention,
+    )
     return session
 
 
@@ -596,13 +841,24 @@ def _create_outbound_helpers(
             logger.warning("twilio package not installed — OutboundCallManager disabled")
 
 
-def _create_metrics(config: MetricsConfig | None) -> MetricsCollector | None:
-    if not config or not config.enabled:
-        return None
-    return config.collector or InMemoryMetrics()
+def _emit_provider_versions(
+    journal: Any,
+    session_id: str,
+    *,
+    stt: Any,
+    tts: Any,
+    transport: Any,
+) -> None:
+    """Write a single journal record with version info from all providers."""
+    from easycat.runtime.records import JournalRecordKind
 
-
-def _create_tracer(config: TracingConfig | None) -> Tracer | None:
-    if not config or not config.enabled:
-        return None
-    return Tracer(exporter=config.exporter)
+    versions: dict[str, dict[str, str]] = {}
+    for role, provider in [("stt", stt), ("tts", tts), ("transport", transport)]:
+        if hasattr(provider, "version_info"):
+            versions[role] = provider.version_info()
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="provider_versions",
+        session_id=session_id,
+        data=versions,
+    )

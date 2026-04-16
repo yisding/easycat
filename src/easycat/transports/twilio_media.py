@@ -256,6 +256,20 @@ class TwilioTransport(_ServerTransportBase):
     def call_sid(self) -> str | None:
         return self._call_sid
 
+    def version_info(self) -> dict[str, str]:
+        try:
+            from importlib.metadata import version
+
+            ws_ver = version("websockets")
+        except Exception:
+            ws_ver = "unknown"
+        return {
+            "provider": "twilio",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": ws_ver,
+        }
+
 
 # ── Audio conversion helpers ──────────────────────────────────────
 
@@ -497,6 +511,20 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         digit = dtmf_data.get("digit", "")
         if digit and self._event_bus is not None:
             await self._event_bus.emit(DTMF(digit=digit))
+
+    def version_info(self) -> dict[str, str]:
+        try:
+            from importlib.metadata import version
+
+            ws_ver = version("websockets")
+        except Exception:
+            ws_ver = "unknown"
+        return {
+            "provider": "twilio-connection",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": ws_ver,
+        }
 
 
 # ── TwiML helpers ─────────────────────────────────────────────────

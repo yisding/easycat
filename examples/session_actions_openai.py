@@ -21,14 +21,13 @@ from agents import Agent, RunContextWrapper, function_tool  # type: ignore[impor
 from easycat import (
     EasyCatConfig,
     LocalTransportConfig,
-    OpenAIAgentsAdapter,
     SessionActions,
     attach_runtime_feedback,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
+from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
 # ── Shared action queue ──────────────────────────────────────────
 # The same SessionActions instance is injected into the agent's
@@ -64,14 +63,13 @@ agent = Agent(
 async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
 
-    adapter = OpenAIAgentsAdapter(agent, context=actions)
+    bridge = OpenAIAgentsBridge(agent=agent, context=actions)
 
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
-        agent=adapter,
+        agent=bridge,
         session_actions=actions,
-        event_logging=default_event_logging(),
     )
     session = create_session(config)
     attach_runtime_feedback(session)

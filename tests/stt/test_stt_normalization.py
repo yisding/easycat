@@ -138,10 +138,11 @@ def _make_elevenlabs_realtime(
     confidence: float | None = None,
     words: list[dict] | None = None,
 ) -> ElevenLabsSTT:
-    msg_data: dict = {"type": "transcript", "text": text, "is_final": True}
+    msg_data: dict = {"message_type": "committed_transcript", "text": text}
     if confidence is not None:
         msg_data["confidence"] = confidence
     if words:
+        msg_data["message_type"] = "committed_transcript_with_timestamps"
         msg_data["words"] = words
     ws = _MockWS([json.dumps(msg_data)])
 
@@ -268,7 +269,7 @@ async def test_deepgram_word_timestamps():
 
 @pytest.mark.asyncio
 async def test_elevenlabs_realtime_word_timestamps():
-    words = [{"word": "test", "start": 0.1, "end": 0.5}]
+    words = [{"text": "test", "start": 0.1, "end": 0.5}]
     events = await collect_stt_events(_make_elevenlabs_realtime(words=words), _audio())
     assert events[0].word_timestamps is not None
     assert events[0].word_timestamps[0].word == "test"

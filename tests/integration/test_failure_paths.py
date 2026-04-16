@@ -210,6 +210,7 @@ async def test_noise_reducer_failure_stops_pipeline(monkeypatch: pytest.MonkeyPa
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad, noise_reducer=noise_reducer)
 
     config = make_test_config(transport=transport, agent=UpperAgent(), turn_taking=FAST_TURN)
+    config.enable_noise_reduction = True
     session = create_session(config)
     collector = EventCollector(session.event_bus)
     collector.subscribe(Error)

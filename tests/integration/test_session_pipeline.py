@@ -7,12 +7,6 @@ from collections.abc import AsyncIterator
 import pytest
 
 from easycat import create_session
-from easycat.agent_runner import (
-    AgentRunner,
-    AgentRunnerConfig,
-    AgentStreamEvent,
-    AgentStreamEventType,
-)
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -32,6 +26,11 @@ from easycat.events import (
     TTSEventType,
     TurnEnded,
     TurnStarted,
+)
+from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
+from easycat.integrations.agents._legacy_types import (
+    AgentStreamEvent,
+    AgentStreamEventType,
 )
 from easycat.turn_manager import TurnManagerConfig, TurnMode
 

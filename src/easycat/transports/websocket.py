@@ -158,6 +158,20 @@ class WebSocketTransport(_ServerTransportBase):
         else:
             logger.debug("Unknown control message type: %s", msg_type)
 
+    def version_info(self) -> dict[str, str]:
+        try:
+            from importlib.metadata import version
+
+            ws_ver = version("websockets")
+        except Exception:
+            ws_ver = "unknown"
+        return {
+            "provider": "websocket",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": ws_ver,
+        }
+
 
 class WebSocketConnectionTransport(_AudioQueueMixin):
     """Transport bound to a single existing WebSocket connection.
@@ -259,3 +273,17 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
                     sample_width=self._audio_format.sample_width,
                     encoding=self._audio_format.encoding,
                 )
+
+    def version_info(self) -> dict[str, str]:
+        try:
+            from importlib.metadata import version
+
+            ws_ver = version("websockets")
+        except Exception:
+            ws_ver = "unknown"
+        return {
+            "provider": "websocket-connection",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": ws_ver,
+        }

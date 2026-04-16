@@ -15,7 +15,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from easycat.agent_runner import AgentStreamEventType
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
@@ -25,7 +24,7 @@ from easycat.events import (
     ToolCallResult,
     ToolCallStarted,
 )
-from easycat.metrics import AGENT_LATENCY, MetricsCollector
+from easycat.integrations.agents._legacy_types import AgentStreamEventType
 from easycat.session._text_utils import (
     _has_unclosed_markdown_delimiters,
     _split_at_sentence_boundaries,
@@ -57,7 +56,7 @@ async def consume_agent_stream(
     prepare_tts_payload: Callable[..., TTSInput],
     strip_md: bool,
     turn: TurnContext,
-    metrics: MetricsCollector | None,
+    stream_factory: Callable[[], Any] | None = None,
 ) -> AgentStreamResult:
     """Consume a streaming agent and queue TTS payloads on sentence boundaries.
 
@@ -65,6 +64,13 @@ async def consume_agent_stream(
     payloads.  It accumulates text deltas, splits at sentence boundaries,
     handles markdown buffering, emits EasyCat events, and drains in-flight
     tool calls during cancellation.
+
+    ``stream_factory`` is an optional zero-argument callable returning
+    the async iterator to consume.  Session passes
+    ``lambda: agent_stage.execute_streaming(transcript, ctx, turn, cancel_token=token)``
+    so AgentStage can journal the stream while this function drives the
+    consumer.  Falls back to ``agent.run_streaming(transcript, cancel_token=token)``
+    when the factory is absent, preserving the legacy call path.
 
     Returns an :class:`AgentStreamResult` with the accumulated text,
     structured output, and any error that occurred.
@@ -85,7 +91,11 @@ async def consume_agent_stream(
         text_buffer = ""
 
     try:
-        async for event in agent.run_streaming(transcript, cancel_token=token):
+        if stream_factory is not None:
+            stream = stream_factory()
+        else:
+            stream = agent.run_streaming(transcript, cancel_token=token)
+        async for event in stream:
             if done_received:
                 continue
 
@@ -124,11 +134,6 @@ async def consume_agent_stream(
                 # Record first-token latency
                 if turn.first_agent_time is None:
                     turn.first_agent_time = time.monotonic()
-                    if metrics and turn.stt_final_time is not None:
-                        metrics.record_latency(
-                            AGENT_LATENCY,
-                            (turn.first_agent_time - turn.stt_final_time) * 1000,
-                        )
 
                 # Buffer text and queue complete sentences for TTS
                 if strip_md:
@@ -162,6 +167,8 @@ async def consume_agent_stream(
                 await emit(ToolCallResult(call_id=event.call_id, result=event.result))
             elif event.type == AgentStreamEventType.DONE:
                 if event.text:
+                    if not result.text:
+                        text_buffer = event.text
                     result.text = event.text
                 if event.structured_output is not None:
                     result.structured_output = event.structured_output

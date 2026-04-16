@@ -43,6 +43,17 @@ class STTBase:
         self._validate_audio(chunk)
         await self._on_audio(chunk)
 
+    async def commit_segment(self) -> bool:
+        """Finalize the current segment without closing the stream.
+
+        Returns ``True`` when the provider accepted the segment commit request.
+        The default implementation returns ``False`` for providers that only
+        support whole-stream finalization.
+        """
+        if not self._running:
+            return False
+        return await self._on_commit_segment()
+
     async def end_stream(self) -> None:
         """Signal that no more audio will be sent for the current stream."""
         if not self._running:
@@ -87,5 +98,24 @@ class STTBase:
     async def _on_audio(self, chunk: AudioChunk) -> None:
         """Called for each audio chunk. Override in subclass."""
 
+    async def _on_commit_segment(self) -> bool:
+        """Finalize the current segment without closing the stream."""
+        return False
+
     async def _on_end(self) -> None:
         """Called when the stream ends. Override in subclass."""
+
+    # -- Provider metadata ----------------------------------------------------
+
+    def version_info(self) -> dict[str, str]:
+        """Return stable-shape dict identifying this provider.
+
+        Keys: ``provider``, ``model``, ``api_version``, ``sdk_version``.
+        Unknown fields are ``"unknown"`` rather than omitted.
+        """
+        return {
+            "provider": "unknown",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }

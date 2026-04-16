@@ -65,6 +65,9 @@ class TurnManagerConfig:
 
     # End-of-turn silence timeout in milliseconds
     end_of_turn_silence_ms: int = 1000
+    # Silence budget, after VAD stop, before finalizing the current STT segment.
+    # 0 means commit the segment immediately when VAD reports a pause.
+    stt_segment_silence_ms: int = 0
     # Pre-roll buffer duration in milliseconds
     pre_roll_ms: int = 300
     # Turn detection mode
@@ -124,6 +127,19 @@ class TurnManager:
         # Optional endpoint detector (smart-turn model)
         self._endpoint_detector = self._config.endpoint_detector
 
+        # Optional TurnStage wrapper that journals each detection call.
+        # When bound, ``detect`` goes through ``stage.execute()`` so the
+        # decision + audio window land in the journal automatically.
+        self._endpoint_stage: Any = None
+        self._endpoint_ctx_getter: Any = None
+        # Optional journal hook for state-transition records.  Session
+        # calls :meth:`bind_journal` during wiring; TurnManager stays
+        # self-contained (no hard dep on Session) and the hook is a
+        # simple callable so downstream consumers can wire their own
+        # recorder without pulling in the Session machinery.
+        self._journal_state_change: Any = None
+        self._endpoint_turn_getter: Any = None
+
         # Correlation identifiers
         self._session_id: str | None = None
         self._turn_counter = 0
@@ -151,6 +167,60 @@ class TurnManager:
     def bind_session(self, session_id: str) -> None:
         """Bind a stable session identifier used for emitted events."""
         self._session_id = session_id
+
+    def bind_journal_hook(
+        self,
+        hook: Any,
+    ) -> None:
+        """Install a callable that journals each turn-state transition.
+
+        The hook is called as ``hook(from_state, to_state, reason, turn_id)``
+        at every state change.  Installed by Session during wiring.
+        Keeps TurnManager itself free of a hard journal dependency so
+        tests that drive it directly can skip the hook.
+        """
+        self._journal_state_change = hook
+
+    def _transition(
+        self,
+        to_state: TurnManagerState,
+        *,
+        reason: str,
+        log_msg: str,
+    ) -> None:
+        """Move to ``to_state``, log the transition, and journal it.
+
+        Centralises what used to be a scattered set of ``self._state = X``
+        + ``logger.debug(...)`` pairs.  Every transition now gets a
+        ``turn_state_changed`` record so bundles can answer "why did the
+        turn end when it did" from the journal alone.
+        """
+        from_state = self._state
+        self._state = to_state
+        logger.debug("%s", log_msg)
+        hook = self._journal_state_change
+        if hook is not None:
+            try:
+                hook(from_state, to_state, reason, self._current_turn_id)
+            except Exception:  # noqa: BLE001 - never break the state machine
+                logger.debug("journal state-change hook raised", exc_info=True)
+
+    def bind_endpoint_stage(
+        self,
+        stage: Any,
+        *,
+        run_ctx_getter: Any,
+        turn_getter: Any,
+    ) -> None:
+        """Route smart-turn ``detect`` calls through a TurnStage wrapper.
+
+        ``run_ctx_getter`` / ``turn_getter`` are called at detection time
+        so each decision lands in the journal under the right session +
+        turn id without holding stale references.
+        """
+        self._endpoint_stage = stage
+        self._endpoint_ctx_getter = run_ctx_getter
+        self._endpoint_turn_getter = turn_getter
 
     # ── Audio frame handling ────────────────────────────────────
 
@@ -205,14 +275,16 @@ class TurnManager:
         if self._state == TurnManagerState.USER_PAUSED:
             # Speech resumed before timeout — cancel silence timer
             self._cancel_silence_timer()
-            self._state = TurnManagerState.USER_SPEAKING
-            logger.debug("Turn: UserPaused -> UserSpeaking (speech resumed)")
+            self._transition(
+                TurnManagerState.USER_SPEAKING,
+                reason="speech_resumed",
+                log_msg="Turn: UserPaused -> UserSpeaking (speech resumed)",
+            )
             return
 
         if self._state == TurnManagerState.IDLE:
             # New turn starting
             self._cancel_token = CancelToken()
-            self._state = TurnManagerState.USER_SPEAKING
 
             # Flush pre-roll buffer into turn audio
             self._turn_audio = list(self._pre_roll_buffer)
@@ -221,19 +293,26 @@ class TurnManager:
 
             self._turn_counter += 1
             self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
+            self._transition(
+                TurnManagerState.USER_SPEAKING,
+                reason="vad_speech_start",
+                log_msg="Turn: Idle -> UserSpeaking (new turn, pre-roll flushed)",
+            )
             await self._event_bus.emit(
                 TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
             )
-            logger.debug("Turn: Idle -> UserSpeaking (new turn, pre-roll flushed)")
 
     async def _handle_speech_stop(self) -> None:
         """Handle VAD speech stop — transition to UserPaused and start timer."""
         if self._state != TurnManagerState.USER_SPEAKING:
             return
 
-        self._state = TurnManagerState.USER_PAUSED
         self._silence_start_time = time.monotonic()
-        logger.debug("Turn: UserSpeaking -> UserPaused (silence detected)")
+        self._transition(
+            TurnManagerState.USER_PAUSED,
+            reason="vad_silence",
+            log_msg="Turn: UserSpeaking -> UserPaused (silence detected)",
+        )
 
         # Start the end-of-turn silence timer
         self._cancel_silence_timer()
@@ -251,7 +330,18 @@ class TurnManager:
             if self._endpoint_detector is not None and self._turn_audio:
                 try:
                     t0 = time.monotonic()
-                    result = await self._endpoint_detector.detect(list(self._turn_audio))
+                    if (
+                        self._endpoint_stage is not None
+                        and self._endpoint_ctx_getter is not None
+                        and self._endpoint_turn_getter is not None
+                    ):
+                        result = await self._endpoint_stage.execute(
+                            list(self._turn_audio),
+                            self._endpoint_ctx_getter(),
+                            self._endpoint_turn_getter(),
+                        )
+                    else:
+                        result = await self._endpoint_detector.detect(list(self._turn_audio))
                     detector_elapsed = time.monotonic() - t0
                     logger.debug(
                         "Smart-turn prediction=%d probability=%.3f",
@@ -260,10 +350,13 @@ class TurnManager:
                     )
                     if result.prediction == 1:
                         if self._state == TurnManagerState.USER_PAUSED:
-                            self._state = TurnManagerState.PROCESSING
-                            logger.debug(
-                                "Turn: UserPaused -> Processing (smart-turn: complete, p=%.3f)",
-                                result.probability,
+                            self._transition(
+                                TurnManagerState.PROCESSING,
+                                reason="smart_turn_complete",
+                                log_msg=(
+                                    "Turn: UserPaused -> Processing "
+                                    f"(smart-turn: complete, p={result.probability:.3f})"
+                                ),
                             )
                             await self._event_bus.emit(
                                 TurnEnded(
@@ -282,8 +375,11 @@ class TurnManager:
             await asyncio.sleep(remaining)
 
             if self._state == TurnManagerState.USER_PAUSED:
-                self._state = TurnManagerState.PROCESSING
-                logger.debug("Turn: UserPaused -> Processing (silence timeout)")
+                self._transition(
+                    TurnManagerState.PROCESSING,
+                    reason="silence_timeout",
+                    log_msg="Turn: UserPaused -> Processing (silence timeout)",
+                )
                 await self._event_bus.emit(
                     TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
                 )
@@ -318,13 +414,15 @@ class TurnManager:
             if result is False:
                 return
 
-        logger.debug("Turn: BotSpeaking -> UserSpeaking (barge-in)")
-
         # Start new turn
         self._cancel_token = CancelToken()
-        self._state = TurnManagerState.USER_SPEAKING
         self._turn_counter += 1
         self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
+        self._transition(
+            TurnManagerState.USER_SPEAKING,
+            reason="barge_in",
+            log_msg="Turn: BotSpeaking -> UserSpeaking (barge-in)",
+        )
 
         # Flush pre-roll buffer into turn audio
         self._turn_audio = list(self._pre_roll_buffer)
@@ -350,9 +448,13 @@ class TurnManager:
             return
 
         self._cancel_token = CancelToken()
-        self._state = TurnManagerState.USER_SPEAKING
         self._turn_counter += 1
         self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
+        self._transition(
+            TurnManagerState.USER_SPEAKING,
+            reason="manual_start",
+            log_msg="Turn: Idle -> UserSpeaking (manual start)",
+        )
 
         # Flush pre-roll
         self._turn_audio = list(self._pre_roll_buffer)
@@ -362,7 +464,6 @@ class TurnManager:
         await self._event_bus.emit(
             TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
         )
-        logger.debug("Turn: Idle -> UserSpeaking (manual start)")
 
     async def end_turn(self) -> None:
         """Manually signal end of user turn (push-to-talk mode).
@@ -376,8 +477,11 @@ class TurnManager:
             return
 
         self._cancel_silence_timer()
-        self._state = TurnManagerState.PROCESSING
-        logger.debug("Turn: -> Processing (manual end)")
+        self._transition(
+            TurnManagerState.PROCESSING,
+            reason="manual_end",
+            log_msg="Turn: -> Processing (manual end)",
+        )
         await self._event_bus.emit(
             TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
         )
@@ -396,20 +500,26 @@ class TurnManager:
         # turn is complete, but cancel any stale timer to avoid cross-turn
         # races in non-standard/manual integrations.
         self._cancel_silence_timer()
-        self._state = TurnManagerState.BOT_SPEAKING
+        self._transition(
+            TurnManagerState.BOT_SPEAKING,
+            reason="bot_started",
+            log_msg="Turn: -> BotSpeaking",
+        )
         await self._event_bus.emit(
             BotStartedSpeaking(session_id=self._session_id, turn_id=self._current_turn_id)
         )
-        logger.debug("Turn: -> BotSpeaking")
 
     async def bot_stopped_speaking(self) -> None:
         """Called when TTS playback completes."""
         if self._state == TurnManagerState.BOT_SPEAKING:
-            self._state = TurnManagerState.IDLE
+            self._transition(
+                TurnManagerState.IDLE,
+                reason="bot_done",
+                log_msg="Turn: BotSpeaking -> Idle",
+            )
             await self._event_bus.emit(
                 BotStoppedSpeaking(session_id=self._session_id, turn_id=self._current_turn_id)
             )
-            logger.debug("Turn: BotSpeaking -> Idle")
 
     # ── State management ────────────────────────────────────────
 

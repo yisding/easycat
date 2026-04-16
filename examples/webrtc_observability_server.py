@@ -50,9 +50,7 @@ from easycat import (
     VADStopSpeaking,
     WebRTCTransportConfig,
     attach_runtime_feedback,
-    build_openai_agents_adapter,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
@@ -192,7 +190,7 @@ async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
 
     try:
-        from agents import function_tool  # type: ignore[import-untyped]
+        from agents import Agent, function_tool  # type: ignore[import-untyped]
     except ImportError as exc:
         raise SystemExit(
             "OpenAI Agents SDK is required. Install with: uv sync --extra openai-agents"
@@ -208,7 +206,8 @@ async def main() -> None:
         """Return a * b."""
         return a * b
 
-    adapter = build_openai_agents_adapter(
+    agent = Agent(
+        name="assistant",
         instructions=(
             "You are a helpful voice assistant. Keep responses concise. "
             "When a user asks math questions, use the available math tools."
@@ -238,8 +237,7 @@ async def main() -> None:
             ice_servers=_build_ice_servers(),
             static_dir=_STATIC_DIR,
         ),
-        agent=adapter,
-        event_logging=default_event_logging(),
+        agent=agent,
     )
     session = create_session(config)
     attach_runtime_feedback(session)

@@ -603,3 +603,17 @@ class WebRTCTransport(_AudioQueueMixin):
     @property
     def has_client(self) -> bool:
         return self._pc is not None and self._pc.connectionState == "connected"
+
+    def version_info(self) -> dict[str, str]:
+        try:
+            from importlib.metadata import version
+
+            rtc_ver = version("aiortc")
+        except Exception:
+            rtc_ver = "unknown"
+        return {
+            "provider": "webrtc",
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": rtc_ver,
+        }

@@ -71,6 +71,13 @@ def test_livekit_aec_fails_without_library():
             LiveKitAEC()
 
 
+def _fake_audio_frame(data: bytes, **_kwargs: object) -> MagicMock:
+    """Return a mock AudioFrame whose .data holds the raw bytes."""
+    frame = MagicMock()
+    frame.data = bytearray(data)
+    return frame
+
+
 @pytest.mark.asyncio
 async def test_livekit_aec_process_mocked():
     """LiveKitAEC.process with mocked APM should process and reassemble frames."""
@@ -83,6 +90,7 @@ async def test_livekit_aec_process_mocked():
 
     mock_apm.process_stream.side_effect = mock_process_stream
     mock_rtc.AudioProcessingModule.return_value = mock_apm
+    mock_rtc.AudioFrame.side_effect = _fake_audio_frame
 
     with patch("easycat.echo_cancellation.require_module", return_value=mock_rtc):
         aec = LiveKitAEC()
@@ -111,6 +119,7 @@ async def test_livekit_aec_process_trims_padding():
 
     mock_apm.process_stream.side_effect = mock_process_stream
     mock_rtc.AudioProcessingModule.return_value = mock_apm
+    mock_rtc.AudioFrame.side_effect = _fake_audio_frame
 
     with patch("easycat.echo_cancellation.require_module", return_value=mock_rtc):
         aec = LiveKitAEC()
@@ -132,6 +141,7 @@ def test_livekit_aec_feed_reference_mocked():
     mock_rtc = MagicMock()
     mock_apm = MagicMock()
     mock_rtc.AudioProcessingModule.return_value = mock_apm
+    mock_rtc.AudioFrame.side_effect = _fake_audio_frame
 
     with patch("easycat.echo_cancellation.require_module", return_value=mock_rtc):
         aec = LiveKitAEC()
@@ -151,6 +161,7 @@ def test_livekit_aec_feed_reference_multiple_frames():
     mock_rtc = MagicMock()
     mock_apm = MagicMock()
     mock_rtc.AudioProcessingModule.return_value = mock_apm
+    mock_rtc.AudioFrame.side_effect = _fake_audio_frame
 
     with patch("easycat.echo_cancellation.require_module", return_value=mock_rtc):
         aec = LiveKitAEC()

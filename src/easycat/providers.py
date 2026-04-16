@@ -37,6 +37,14 @@ class STTProvider(Protocol):
         """Send an audio chunk to the active STT stream."""
         ...
 
+    async def commit_segment(self) -> bool:
+        """Finalize the current STT segment without ending the stream.
+
+        Returns ``True`` when the provider accepted a segment commit request.
+        Providers that do not support segmented commits should return ``False``.
+        """
+        ...
+
     async def end_stream(self) -> None:
         """Signal that no more audio will be sent for the current stream."""
         ...
@@ -93,7 +101,7 @@ class VADProvider(Protocol):
         self,
         *,
         min_speech_duration_ms: int = 250,
-        min_silence_duration_ms: int = 300,
+        min_silence_duration_ms: int = 150,
         sensitivity: float = 0.5,
         pre_roll_ms: int = 100,
         post_roll_ms: int = 100,

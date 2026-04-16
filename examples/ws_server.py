@@ -22,27 +22,26 @@ from easycat import (
     SessionManager,
     WebSocketConnectionTransport,
     attach_runtime_feedback,
-    build_openai_agents_adapter,
     create_session,
-    default_event_logging,
     require_env,
 )
 
 
 async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
+    from agents import Agent  # type: ignore[import-untyped]
+
     manager: SessionManager[int] = SessionManager()
 
     async def handle_connection(ws: ServerConnection) -> None:
         transport = WebSocketConnectionTransport(ws)
 
-        adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
+        agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
         session = create_session(
             EasyCatConfig(
                 openai_api_key=api_key,
                 transport=transport,
-                agent=adapter,
-                event_logging=default_event_logging(),
+                agent=agent,
             )
         )
         attach_runtime_feedback(session)
