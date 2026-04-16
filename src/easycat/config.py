@@ -454,7 +454,6 @@ def create_session(config: EasyCatConfig) -> Session:
             _outbound_sm,
             telephony_helpers,
             event_bus,
-            agent,
         )
 
     return session
@@ -649,7 +648,6 @@ def _wire_outbound_pipeline(
     sm: OutboundCallStateMachine,
     helpers: list[Any],
     event_bus: EventBus,
-    agent: Any,
 ) -> None:
     """Connect the outbound call state machine to the session pipeline.
 
@@ -672,7 +670,7 @@ def _wire_outbound_pipeline(
         if event.mode == "agent" and _screening_detector is not None:
             try:
                 prompt = _screening_detector.accumulated_text
-                response_text = await agent.run(
+                response_text = await session.agent.run(
                     f"The callee's phone is screening this call. "
                     f'Their screening prompt says: "{prompt}". '
                     f"Identify yourself briefly."

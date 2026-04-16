@@ -138,6 +138,7 @@ class OpenAIRealtimeSTT(STTBase):
             if ws is not None:
                 task = asyncio.create_task(self._close_connection(ws, receive_task))
                 task.add_done_callback(self._log_close_task_exception)
+                self._close_task = task
             raise
         self._partial_text = ""
         self._audio_pending_commit = False
@@ -153,6 +154,7 @@ class OpenAIRealtimeSTT(STTBase):
             if ws is not None:
                 task = asyncio.create_task(self._close_connection(ws, receive_task))
                 task.add_done_callback(self._log_close_task_exception)
+                self._close_task = task
             raise TimeoutError("timed out waiting for OpenAI Realtime session.update") from exc
 
     async def _send_session_update(self) -> None:

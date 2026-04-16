@@ -386,10 +386,8 @@ class Session:
         if isinstance(shim, AgentRunner):
             shim = shim._agent
         if isinstance(shim, BridgeAdapterShim):
-            if self._journal is not None:
-                shim._journal = self._journal
-            if self._artifact_store is not None:
-                shim._artifact_store = self._artifact_store
+            shim._journal = self._journal
+            shim._artifact_store = self._artifact_store
             shim._session_id = self.session_id
 
     def _with_correlation(self, event: Any) -> Any:
