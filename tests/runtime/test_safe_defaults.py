@@ -20,7 +20,7 @@ from easycat.runtime.safe_defaults import (
 class _FakeConfig:
     """Mimics EasyCatConfig with a mix of safe and secret fields."""
 
-    debug: bool = True
+    debug: str = "full"
     stt: str = "openai"
     tts: str = "openai"
     openai_api_key: str = "sk-secret-12345"
@@ -46,14 +46,14 @@ class TestSafeConfigSnapshot:
     def test_values_are_repr(self):
         cfg = _FakeConfig()
         snap = safe_config_snapshot(cfg)
-        assert snap["debug"] == repr(True)
+        assert snap["debug"] == repr("full")
 
     def test_excludes_unknown_fields(self):
         """Fields not in the allowlist are excluded even if non-secret."""
 
         @dataclass
         class _Extended:
-            debug: bool = True
+            debug: str = "full"
             custom_field: str = "hello"
 
         snap = safe_config_snapshot(_Extended())

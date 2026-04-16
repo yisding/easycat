@@ -356,5 +356,5 @@ def test_create_session_keeps_vad_enabled_for_flux_when_voicemail_detector_enabl
 
 
 def test_debug_mode_sets_easycat_logger_to_debug():
-    EasyCatConfig(openai_api_key="test-key", debug=True)
+    EasyCatConfig(openai_api_key="test-key", debug="full")
     assert logging.getLogger("easycat").level == logging.DEBUG

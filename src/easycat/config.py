@@ -182,7 +182,7 @@ class EasyCatConfig:
     output_processors: Sequence[LLMOutputProcessor] = ()
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
-    debug: Literal["off", "light", "full"] | bool = "off"
+    debug: Literal["off", "light", "full"] = "off"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
     mcp_servers: list[str] | None = None
@@ -197,16 +197,6 @@ class EasyCatConfig:
                 DeprecationWarning,
                 stacklevel=2,
             )
-
-        # ── Bool → enum compat shim (one-release deprecation) ────
-        if isinstance(self.debug, bool):
-            warnings.warn(
-                "EasyCatConfig(debug=bool) is deprecated. "
-                'Use debug="off" | "light" | "full" instead.',
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            self.debug = "light" if self.debug else "off"
 
         _VALID_DEBUG = {"off", "light", "full"}
         if self.debug not in _VALID_DEBUG:
@@ -467,7 +457,7 @@ def create_text_session(
     *,
     agent: Any,
     session_id: str | None = None,
-    debug: Literal["off", "light", "full"] | bool = "off",
+    debug: Literal["off", "light", "full"] = "off",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     journal_retention: Literal["archive", "delete"] = "archive",
     wrap_agent: bool = True,
@@ -498,16 +488,6 @@ def create_text_session(
                     "Set agent_model to the model identifier the remote "
                     "Responses API server should use."
                 )
-
-    # ── Bool → enum compat shim (mirrors EasyCatConfig.__post_init__) ──
-    if isinstance(debug, bool):
-        warnings.warn(
-            "create_text_session(debug=bool) is deprecated. "
-            'Use debug="off" | "light" | "full" instead.',
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        debug = "light" if debug else "off"
 
     _VALID_DEBUG = {"off", "light", "full"}
     if debug not in _VALID_DEBUG:

@@ -11,7 +11,6 @@ import signal
 import subprocess
 import sys
 import textwrap
-import warnings
 
 import pytest
 
@@ -80,38 +79,32 @@ class TestDebugCapabilityMatrix:
         j.close()
 
 
-class TestDebugBoolCompatShim:
-    """AC1.3 — debug=True emits DeprecationWarning and routes to 'light'."""
+class TestDebugBoolRejected:
+    """``debug=bool`` was removed; it must now raise ``ValueError``."""
 
-    def test_true_emits_warning_and_maps_to_light(self):
+    def test_true_raises(self):
         from easycat.config import EasyCatConfig
         from easycat.stt.openai_provider import OpenAISTTConfig
         from easycat.tts.openai_tts import OpenAITTSConfig
 
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            cfg = EasyCatConfig(
+        with pytest.raises(ValueError, match="Invalid debug=True"):
+            EasyCatConfig(
                 stt=OpenAISTTConfig(api_key="test"),
                 tts=OpenAITTSConfig(api_key="test"),
                 debug=True,
             )
-        dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-        assert len(dep_warnings) >= 1
-        assert cfg.debug == "light"
 
-    def test_false_maps_to_off(self):
+    def test_false_raises(self):
         from easycat.config import EasyCatConfig
         from easycat.stt.openai_provider import OpenAISTTConfig
         from easycat.tts.openai_tts import OpenAITTSConfig
 
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            cfg = EasyCatConfig(
+        with pytest.raises(ValueError, match="Invalid debug=False"):
+            EasyCatConfig(
                 stt=OpenAISTTConfig(api_key="test"),
                 tts=OpenAITTSConfig(api_key="test"),
                 debug=False,
             )
-        assert cfg.debug == "off"
 
 
 # ── AC1.4: Monotonic sequence ────────────────────────────────────

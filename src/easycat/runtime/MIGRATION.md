@@ -82,9 +82,6 @@ config = EasyCatConfig(..., debug="light")
 
 # SQLite WAL — crash-durable, exportable, replayable.
 config = EasyCatConfig(..., debug="full")
-
-# Legacy compat: debug=True maps to "full", debug=False maps to "off".
-# Both emit a DeprecationWarning.
 ```
 
 ## Migrating from InMemoryMetrics
