@@ -159,8 +159,16 @@ class OpenAIRealtimeSTT(STTBase):
             raise TimeoutError("timed out waiting for OpenAI Realtime session.update") from exc
 
     async def _send_session_update(self) -> None:
-        """Configure a realtime session with input audio transcription enabled."""
+        """Configure a realtime session with input audio transcription enabled.
+
+        Also called by :class:`ReconnectingWebSocket` on transparent
+        reconnects, so reset local buffer-tracking state here — the
+        server-side ``input_audio_buffer`` is empty on a fresh socket.
+        """
         assert self._ws is not None
+        self._partial_text = ""
+        self._audio_pending_commit = False
+        self._bytes_since_last_commit = 0
         transcription: dict[str, Any] = {"model": self._config.model}
         if self._config.language:
             transcription["language"] = self._config.language

@@ -6,6 +6,7 @@ import inspect
 from typing import Any
 
 from easycat.integrations.agents._base_adapter import BaseAgentAdapter
+from easycat.integrations.agents._legacy_types import StreamingAgent
 
 
 def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
@@ -60,6 +61,19 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
     # 2. Already an adapter -- return as-is.
     if isinstance(agent, BaseAgentAdapter):
+        return agent
+
+    # 2b. AgentRunner wrapping a framework object — adapt the inner agent.
+    from easycat.integrations.agents._agent_runner import AgentRunner
+
+    if isinstance(agent, AgentRunner):
+        adapted_inner = auto_adapt_agent(agent._agent, model=model)
+        if adapted_inner is not agent._agent:
+            agent._agent = adapted_inner
+            agent._is_streaming = isinstance(adapted_inner, StreamingAgent)
+            agent._delegates_history = hasattr(adapted_inner, "message_history") and hasattr(
+                adapted_inner, "clear_history"
+            )
         return agent
 
     # 3. Workflow with on_user_turn(...) -> GenericWorkflowBridge.
