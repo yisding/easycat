@@ -577,6 +577,64 @@ async def test_cancel_turn_barge_in_emits_interruption():
 
 
 @pytest.mark.asyncio
+async def test_schedule_turn_ended_cancels_inflight_stt_commit():
+    """Regression test for plan-7 flakiness.
+
+    When VADStopSpeaking fires, ``_schedule_stt_segment_commit`` creates
+    a task that calls ``stt.commit_segment``.  If SmartTurn immediately
+    declares the turn complete, ``TurnEnded`` fires before the commit
+    task has a chance to cancel — and previously ``_schedule_turn_ended``
+    only cancelled the *scheduled* task, not the *in-flight* one.  That
+    left ``commit_segment`` racing with ``_handle_end_of_speech``'s
+    ``end_stream`` which issues its own commit: the first commit
+    cleared the STT server's buffer and the second commit failed with
+    "buffer too small".
+    """
+    config = _full_config()
+    session = Session(config)
+    session._is_running = True
+    session._turn_state = TurnState.LISTENING
+    session._turn = TurnContext("race-turn", CancelToken())
+    session._turn.stt_has_uncommitted_audio = True
+    session._stt_active = True
+    session._stt_segment_silence_ms = 0  # match plan-7's fast config
+
+    events = []
+
+    class _RaceSTT:
+        async def start_stream(self) -> None: ...
+        async def send_audio(self, chunk) -> None: ...
+
+        async def commit_segment(self) -> bool:
+            events.append("commit")
+            await asyncio.sleep(0.05)
+            events.append("commit_done")
+            return True
+
+        async def end_stream(self) -> None:
+            events.append("end_stream")
+
+        async def events(self):
+            return
+            yield
+
+    session.stt = _RaceSTT()
+    session._stt_stage = type(session._stt_stage)(session.stt, journal=session._journal)
+
+    session._schedule_stt_segment_commit(VADStopSpeaking())
+    await asyncio.sleep(0.001)
+    session._schedule_turn_ended(TurnEnded(turn_id="race-turn"))
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+
+    # Invariant: we never observe BOTH commit_done AND end_stream in
+    # the same run — the in-flight cancel closes the window.
+    assert not ("commit_done" in events and "end_stream" in events), (
+        f"in-flight commit was not cancelled on TurnEnded: events={events}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_cancel_turn_barge_in_propagates_signal_through_all_stages():
     """WS3 T3.8: a barge-in must dispatch an InterruptSignal through
     every stage, producing one ControlSignalRecord per stage in the
@@ -940,6 +998,7 @@ async def test_pause_commit_journals_segment_commit_and_final():
     assert records_by_name["stt_segment_commit_requested"].data == {
         "segment_index": 1,
         "transcript_text": "",
+        "pending_commit_bytes": None,
     }
     assert records_by_name["stt_segment_final"].data == {
         "segment_index": 1,

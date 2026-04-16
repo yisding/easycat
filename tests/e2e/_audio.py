@@ -101,10 +101,56 @@ async def decode_and_asr(pcm_bytes: bytes, *, sample_rate: int) -> str:
         return resp.text.strip().lower()
 
 
-async def render_tts_pcm(text: str, *, voice: str = "alloy") -> bytes:
+def trim_trailing_silence(
+    pcm: bytes,
+    *,
+    sample_rate: int,
+    window_ms: int = 20,
+    rms_threshold: float = 0.01,
+    keep_tail_ms: int = 60,
+) -> bytes:
+    """Trim trailing near-silent samples off a PCM16 buffer.
+
+    Walks the buffer from the end in ``window_ms`` steps until a window
+    with RMS above ``rms_threshold`` is found, then keeps ``keep_tail_ms``
+    of audio after it.  Used to stabilise TTS-rendered voice fixtures
+    so VAD doesn't cut off the "end of speech" *inside* the fixture
+    while the test client is still pacing chunks out — the
+    ``detection_ms < 0`` assertion in the latency probe becomes
+    flaky otherwise because different renders leave different amounts
+    of trailing silence.
+    """
+    if not pcm:
+        return pcm
+    sample_width = 2
+    frame_size = sample_rate * sample_width  # bytes per second
+    step = int(frame_size * (window_ms / 1000.0))
+    if step <= 0:
+        return pcm
+    # Walk from end in whole windows.
+    end = len(pcm) - (len(pcm) % step)
+    last_voiced_end = 0
+    for offset in range(end - step, -1, -step):
+        window = pcm[offset : offset + step]
+        if measure_rms(window) >= rms_threshold:
+            last_voiced_end = offset + step
+            break
+    if last_voiced_end == 0:
+        return pcm  # don't silence the whole buffer
+    tail = int(frame_size * (keep_tail_ms / 1000.0))
+    cutoff = min(len(pcm), last_voiced_end + tail)
+    return pcm[:cutoff]
+
+
+async def render_tts_pcm(text: str, *, voice: str = "alloy", trim_silence: bool = True) -> bytes:
     """Render text to PCM16 @ 24 kHz using OpenAI TTS (for voice fixtures).
 
-    Requires ``OPENAI_API_KEY``.
+    Requires ``OPENAI_API_KEY``.  By default, trailing near-silence is
+    trimmed down to a bounded tail so VAD doesn't see the fixture
+    ending mid-stream and fire ``VADStopSpeaking`` before the test
+    client has finished pacing chunks out (see
+    :func:`trim_trailing_silence`).  Pass ``trim_silence=False`` to get
+    the raw model output.
     """
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -124,7 +170,10 @@ async def render_tts_pcm(text: str, *, voice: str = "alloy") -> bytes:
             },
         )
         resp.raise_for_status()
-        return resp.content
+        pcm = resp.content
+    if trim_silence:
+        pcm = trim_trailing_silence(pcm, sample_rate=24000)
+    return pcm
 
 
 __all__ = [
@@ -138,4 +187,5 @@ __all__ = [
     "scale_pcm16",
     "silence_pcm16",
     "sine_pcm16",
+    "trim_trailing_silence",
 ]

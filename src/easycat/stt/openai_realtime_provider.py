@@ -85,6 +85,13 @@ class OpenAIRealtimeSTT(STTBase):
         self._partial_text: str = ""
         self._final_received: asyncio.Event | None = None
         self._audio_pending_commit: bool = False
+        # Bytes appended to the server's input_audio_buffer since the
+        # last commit.  OpenAI Realtime refuses commits with <100ms of
+        # audio (rate: 24 kHz mono 16-bit → 4800 B/100 ms).  We track
+        # locally so ``_send_commit`` can skip the server round-trip
+        # when the tail is too short — the previous code sent the
+        # doomed commit and surfaced it as a warning in the logs.
+        self._bytes_since_last_commit: int = 0
         self._session_ready: asyncio.Future[None] | None = None
 
     def _websocket_url(self) -> str:
@@ -186,6 +193,7 @@ class OpenAIRealtimeSTT(STTBase):
             )
             await self._ws.send(msg)
             self._audio_pending_commit = True
+            self._bytes_since_last_commit += len(chunk.data)
 
     async def _on_commit_segment(self) -> bool:
         return await self._send_commit(wait_for_final=False)
@@ -205,9 +213,29 @@ class OpenAIRealtimeSTT(STTBase):
             self._close_task = asyncio.create_task(self._close_connection(ws, receive_task))
             self._close_task.add_done_callback(self._log_close_task_exception)
 
+    # OpenAI Realtime requires commits to have at least 100ms of audio.
+    # At 24 kHz mono 16-bit that is 4800 bytes.  Skip the commit when
+    # the pending tail is shorter than this — the server would reject
+    # it anyway and we'd surface a spurious warning plus leave the
+    # downstream final_received event waiter hanging.
+    _COMMIT_MIN_BYTES = _REALTIME_SAMPLE_RATE * 2 // 10  # 100ms of PCM16 mono
+
     async def _send_commit(self, *, wait_for_final: bool) -> bool:
         ws = self._ws
         if ws is None or not self._audio_pending_commit:
+            return False
+        if self._bytes_since_last_commit < self._COMMIT_MIN_BYTES:
+            # Tail too short — nothing meaningful to commit.  Clear
+            # pending flag so ``_on_end`` doesn't try again, but resolve
+            # the final_received waiter if the caller expected one so
+            # it doesn't block on an event the server will never fire.
+            logger.debug(
+                "Skipping input_audio_buffer.commit: only %d bytes (<%d min)",
+                self._bytes_since_last_commit,
+                self._COMMIT_MIN_BYTES,
+            )
+            self._audio_pending_commit = False
+            self._bytes_since_last_commit = 0
             return False
 
         final_received = asyncio.Event()
@@ -221,6 +249,7 @@ class OpenAIRealtimeSTT(STTBase):
             return False
 
         self._audio_pending_commit = False
+        self._bytes_since_last_commit = 0
         if wait_for_final:
             try:
                 await asyncio.wait_for(final_received.wait(), timeout=5.0)
@@ -302,7 +331,18 @@ class OpenAIRealtimeSTT(STTBase):
         elif msg_type == "error":
             error = msg.get("error", {})
             error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            error_code = error.get("code") if isinstance(error, dict) else None
             logger.warning("OpenAI Realtime API error: %s", error_msg)
+            # Surface provider errors into the journal via an ``Error``
+            # event.  Without this, diagnosis-from-bundle for buffer-
+            # too-small / auth / rate-limit issues has to reach for the
+            # live log output.  Attach structured context (error code,
+            # buffer state) so the bundle shows everything a user sees.
+            self._emit_provider_error(
+                RuntimeError(error_msg),
+                code=error_code,
+                buffer_bytes=self._bytes_since_last_commit,
+            )
             if self._session_ready is not None and not self._session_ready.done():
                 self._session_ready.set_exception(RuntimeError(error_msg))
 
@@ -315,6 +355,45 @@ class OpenAIRealtimeSTT(STTBase):
             if msg_type in ("session.updated", "transcription_session.updated"):
                 if self._session_ready is not None and not self._session_ready.done():
                     self._session_ready.set_result(None)
+
+    def _emit_provider_error(
+        self,
+        exc: BaseException,
+        *,
+        code: str | None = None,
+        buffer_bytes: int | None = None,
+    ) -> None:
+        """Fire an ``Error`` event on the event bus when the server reports
+        an error.  Session's journal sink subscribes to ``Error`` events so
+        this lands as a journal record with the provider name, the error
+        message, and the attached buffer-state context.  Without this,
+        debugging from a recorded bundle is blind to provider-reported
+        errors — they previously went to ``logger.warning`` only.
+        """
+        bus = getattr(self._config, "event_bus", None)
+        if bus is None:
+            return
+        from easycat.events import Error, ErrorStage
+
+        # Attach diagnostic notes to the exception so the ``Error`` event
+        # keeps all the context without requiring a new Error subtype.
+        notes_parts: list[str] = []
+        if code:
+            notes_parts.append(f"code={code}")
+        if buffer_bytes is not None:
+            notes_parts.append(f"buffer_bytes={buffer_bytes}")
+        if notes_parts:
+            for note in notes_parts:
+                try:
+                    exc.add_note(note)  # type: ignore[attr-defined]
+                except Exception:  # pragma: no cover - pre-3.11
+                    pass
+        try:
+            asyncio.create_task(
+                bus.emit(Error(exception=exc, stage=ErrorStage.STT, provider="openai-realtime"))
+            )
+        except RuntimeError:  # no running loop
+            logger.debug("Could not emit provider error — no running loop", exc_info=True)
 
     def version_info(self) -> dict[str, str]:
         return {

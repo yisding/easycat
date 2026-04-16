@@ -103,7 +103,7 @@ class TestElevenLabsTTSConfig:
     def test_defaults(self):
         config = ElevenLabsTTSConfig(api_key="test-key")
         assert config.voice_id == "EXAVITQu4vr4xnSDxMaL"
-        assert config.model_id == "eleven_monolingual_v1"
+        assert config.model_id == "eleven_flash_v2_5"
         assert config.stability == 0.5
         assert config.similarity_boost == 0.75
         assert config.output_format == "pcm_24000"

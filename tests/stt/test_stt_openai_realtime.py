@@ -263,6 +263,84 @@ async def test_openai_realtime_sends_commit_on_end():
 
 
 @pytest.mark.asyncio
+async def test_openai_realtime_skips_commit_on_short_tail():
+    """OpenAI Realtime refuses commits with <100ms of buffered audio
+    (1008 policy violation).  The provider must skip the send locally
+    rather than surface that as a spurious warning — and must still
+    clear ``_audio_pending_commit`` so ``_on_end`` doesn't re-attempt.
+    """
+    factory = _MockWSFactory()
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    stt = OpenAIRealtimeSTT(config)
+
+    # ~20ms at 16 kHz → well below the 100ms OpenAI Realtime minimum
+    pcm = generate_pcm_sine(duration_ms=20)
+    await stt.start_stream()
+    for chunk in make_audio_chunks(pcm):
+        await stt.send_audio(chunk)
+    committed = await stt.commit_segment()
+    assert committed is False, "short tail must not be sent to the server"
+
+    commit_msgs = [
+        m
+        for m in factory.connection.sent
+        if isinstance(m, str) and "input_audio_buffer.commit" in m
+    ]
+    assert commit_msgs == [], "provider should not send a commit it knows will fail"
+    # State reset so end_stream below won't re-send.
+    assert stt._audio_pending_commit is False
+    assert stt._bytes_since_last_commit == 0
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_emits_error_event_on_server_error_message():
+    """When the server sends an ``error`` message, the provider must
+    emit a journal-visible ``Error`` event on the bus with the server's
+    message + buffer context, not only a logger.warning."""
+    from easycat.events import Error, ErrorStage, EventBus
+
+    class _BusCapture:
+        def __init__(self) -> None:
+            self.errors: list[Error] = []
+
+        def subscribe(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        async def emit(self, event: Any) -> None:
+            if isinstance(event, Error):
+                self.errors.append(event)
+
+    bus = EventBus()
+    captured: list[Error] = []
+    bus.subscribe(Error, captured.append)
+
+    error_msg = json.dumps(
+        {"type": "error", "error": {"message": "buffer too small", "code": "buffer_too_small"}}
+    )
+    factory = _MockWSFactory([error_msg])
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory, event_bus=bus)
+    stt = OpenAIRealtimeSTT(config)
+    await stt.start_stream()
+    # Give the receive loop a turn to process the error message and
+    # schedule the Error emission.
+    for _ in range(10):
+        if captured:
+            break
+        await asyncio.sleep(0.01)
+    await stt.end_stream()
+
+    assert captured, "expected one Error event on the bus"
+    err = captured[0]
+    assert err.stage is ErrorStage.STT
+    assert err.provider == "openai-realtime"
+    assert "buffer too small" in str(err.exception)
+    # Notes carry the code + buffer context for bundle replays.
+    notes = getattr(err.exception, "__notes__", [])
+    assert any("code=buffer_too_small" in n for n in notes)
+
+
+@pytest.mark.asyncio
 async def test_openai_realtime_commit_segment_keeps_stream_open_for_later_audio():
     factory = _MockWSFactory(
         [

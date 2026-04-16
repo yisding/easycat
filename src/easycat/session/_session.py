@@ -1383,8 +1383,19 @@ class Session:
                 logger.debug("Error stopping session helper", exc_info=True)
 
     def _schedule_turn_ended(self, event: TurnEnded) -> None:
-        """Schedule end-of-turn processing without blocking other handlers."""
+        """Schedule end-of-turn processing without blocking other handlers.
+
+        Cancels BOTH the scheduled pause-commit task and any in-flight
+        segment-commit task before running ``_on_turn_ended``.  The
+        in-flight cancel is the fix for the commit race that showed up
+        as OpenAI Realtime "buffer too small" errors on plan-7: without
+        it, ``_commit_stt_segment`` could race with ``_handle_end_of_speech``
+        — the pause commit clears the STT server buffer, a few trailing
+        audio frames sneak in after that, and ``end_stream``'s commit
+        then fails with < 100ms of audio.
+        """
         self._cancel_scheduled_stt_segment_commit()
+        self._cancel_inflight_stt_segment_commit()
         if self._current_tts_task and not self._current_tts_task.done():
             self._current_tts_task.cancel()
         gen = self._turn_generation
@@ -1472,12 +1483,21 @@ class Session:
             return
 
         next_segment_index = len(turn.stt_segments) + 1
+        # Pull the provider's pending-commit byte count (if exposed)
+        # into the journal so bundles show *why* a commit was skipped
+        # or accepted.  ``OpenAIRealtimeSTT`` tracks this precisely;
+        # providers without the attribute report None and the journal
+        # reader treats it as unknown.
+        pending_bytes = getattr(self.stt, "_bytes_since_last_commit", None)
         self._append_journal_record(
             name="stt_segment_commit_requested",
             turn_id=turn.id,
             data={
                 "segment_index": next_segment_index,
                 "transcript_text": turn.transcript_text,
+                "pending_commit_bytes": (
+                    int(pending_bytes) if isinstance(pending_bytes, int) else None
+                ),
             },
         )
         turn.stt_has_uncommitted_audio = False
