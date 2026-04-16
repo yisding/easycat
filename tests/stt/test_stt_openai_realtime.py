@@ -266,8 +266,10 @@ async def test_openai_realtime_sends_commit_on_end():
 async def test_openai_realtime_skips_commit_on_short_tail():
     """OpenAI Realtime refuses commits with <100ms of buffered audio
     (1008 policy violation).  The provider must skip the send locally
-    rather than surface that as a spurious warning — and must still
-    clear ``_audio_pending_commit`` so ``_on_end`` doesn't re-attempt.
+    rather than surface that as a spurious warning — but must keep
+    ``_audio_pending_commit`` / ``_bytes_since_last_commit`` intact so
+    a later commit that sees more audio still reflects the true server
+    buffer.
     """
     factory = _MockWSFactory()
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
@@ -278,6 +280,7 @@ async def test_openai_realtime_skips_commit_on_short_tail():
     await stt.start_stream()
     for chunk in make_audio_chunks(pcm):
         await stt.send_audio(chunk)
+    bytes_after_first = stt._bytes_since_last_commit
     committed = await stt.commit_segment()
     assert committed is False, "short tail must not be sent to the server"
 
@@ -287,9 +290,41 @@ async def test_openai_realtime_skips_commit_on_short_tail():
         if isinstance(m, str) and "input_audio_buffer.commit" in m
     ]
     assert commit_msgs == [], "provider should not send a commit it knows will fail"
-    # State reset so end_stream below won't re-send.
-    assert stt._audio_pending_commit is False
-    assert stt._bytes_since_last_commit == 0
+    # State preserved: the server still has those bytes buffered, so a
+    # subsequent append + commit must count them toward the 100 ms floor.
+    assert stt._audio_pending_commit is True
+    assert stt._bytes_since_last_commit == bytes_after_first
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_short_tail_then_more_audio_commits():
+    """A short commit attempt followed by more audio must eventually
+    cross the 100 ms floor and send a commit, since the server still
+    has the buffered bytes from the first (skipped) attempt.
+    """
+    factory = _MockWSFactory()
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    stt = OpenAIRealtimeSTT(config)
+
+    await stt.start_stream()
+    # First batch: 50 ms → below 100 ms floor.
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=50)):
+        await stt.send_audio(chunk)
+    assert await stt.commit_segment() is False
+
+    # Second batch: 60 ms.  Combined with the first, the server has
+    # 110 ms buffered, so this commit must be sent.
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=60)):
+        await stt.send_audio(chunk)
+    assert await stt.commit_segment() is True
+
+    commit_msgs = [
+        m
+        for m in factory.connection.sent
+        if isinstance(m, str) and "input_audio_buffer.commit" in m
+    ]
+    assert len(commit_msgs) == 1
     await stt.end_stream()
 
 

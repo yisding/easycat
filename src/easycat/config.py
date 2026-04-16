@@ -553,11 +553,12 @@ def create_text_session(
                 _inner.bridge._model = agent_model
             if remote_agent_api_key:
                 _inner.bridge._api_key = remote_agent_api_key
-        if mcp_servers is not None:
-            _mcp = tuple(mcp_servers)
-            _inner._mcp_servers = _mcp
-            if hasattr(_inner.bridge, "_mcp_servers"):
-                _inner.bridge._mcp_servers = list(_mcp)
+        # Always overwrite so a reused shim from a prior session doesn't
+        # leak old MCP servers into a new session that leaves MCP unset.
+        _mcp = tuple(mcp_servers) if mcp_servers else ()
+        _inner._mcp_servers = _mcp
+        if hasattr(_inner.bridge, "_mcp_servers"):
+            _inner.bridge._mcp_servers = list(_mcp)
     if wrap_agent and not isinstance(adapted, AgentRunner):
         runner_cfg = agent_runner or AgentRunnerConfig()
         adapted = AgentRunner(adapted, runner_cfg)

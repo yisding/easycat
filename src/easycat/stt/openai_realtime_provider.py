@@ -210,8 +210,12 @@ class OpenAIRealtimeSTT(STTBase):
         self._final_received = None
         self._session_ready = None
         if ws is not None:
-            self._close_task = asyncio.create_task(self._close_connection(ws, receive_task))
-            self._close_task.add_done_callback(self._log_close_task_exception)
+            try:
+                await self._close_connection(ws, receive_task)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("OpenAI Realtime close failed during end", exc_info=True)
 
     # OpenAI Realtime requires commits to have at least 100ms of audio.
     # At 24 kHz mono 16-bit that is 4800 bytes.  Skip the commit when
@@ -225,17 +229,17 @@ class OpenAIRealtimeSTT(STTBase):
         if ws is None or not self._audio_pending_commit:
             return False
         if self._bytes_since_last_commit < self._COMMIT_MIN_BYTES:
-            # Tail too short — nothing meaningful to commit.  Clear
-            # pending flag so ``_on_end`` doesn't try again, but resolve
-            # the final_received waiter if the caller expected one so
-            # it doesn't block on an event the server will never fire.
+            # Tail too short — skip the server round-trip (the server
+            # would reject the commit and surface a warning).  Keep
+            # ``_audio_pending_commit`` and ``_bytes_since_last_commit``
+            # intact so a later commit that sees more audio (locally
+            # small tail + fresh audio) still reflects the true server
+            # buffer and eventually reaches the 100 ms threshold.
             logger.debug(
                 "Skipping input_audio_buffer.commit: only %d bytes (<%d min)",
                 self._bytes_since_last_commit,
                 self._COMMIT_MIN_BYTES,
             )
-            self._audio_pending_commit = False
-            self._bytes_since_last_commit = 0
             return False
 
         final_received = asyncio.Event()

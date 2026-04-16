@@ -1270,12 +1270,16 @@ class Session:
             if self._outbound_task and not self._outbound_task.done():
                 self._outbound_task.cancel()
                 tasks.append(self._outbound_task)
+            if self._heartbeat_task and not self._heartbeat_task.done():
+                self._heartbeat_task.cancel()
+                tasks.append(self._heartbeat_task)
 
             for task in tasks:
                 try:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+            self._heartbeat_task = None
 
             for checker in self._health_checkers:
                 await checker.stop()

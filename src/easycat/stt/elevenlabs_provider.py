@@ -192,8 +192,12 @@ class ElevenLabsSTT(STTBase):
         self._receive_task = None
         self._final_received = None
         if ws is not None:
-            self._close_task = asyncio.create_task(self._close_connection(ws, receive_task))
-            self._close_task.add_done_callback(self._log_close_task_exception)
+            try:
+                await self._close_connection(ws, receive_task)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("ElevenLabs realtime close failed during end", exc_info=True)
 
     async def _send_commit(self, *, wait_for_final: bool) -> bool:
         ws = self._ws
