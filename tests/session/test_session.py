@@ -577,6 +577,149 @@ async def test_cancel_turn_barge_in_emits_interruption():
 
 
 @pytest.mark.asyncio
+async def test_journaled_task_records_scheduled_and_completed():
+    """``_journaled_task`` must write ``task_scheduled`` at creation and
+    ``task_completed`` when the coroutine finishes cleanly."""
+    journal = InMemoryRingBuffer(capacity=32)
+    session = Session(_full_config(journal=journal))
+    session._turn = TurnContext("tj-1", CancelToken())
+
+    async def _ok() -> str:
+        return "ok"
+
+    task = session._journaled_task(_ok(), name="unit_test_task")
+    await task
+    # add_done_callback schedules the emit callback — let it run.
+    await asyncio.sleep(0)
+
+    names = [r.name for r in journal.read()]
+    assert "task_scheduled" in names
+    assert "task_completed" in names
+    scheduled = next(r for r in journal.read() if r.name == "task_scheduled")
+    completed = next(r for r in journal.read() if r.name == "task_completed")
+    assert scheduled.data["task_name"] == "unit_test_task"
+    assert completed.data["task_name"] == "unit_test_task"
+
+
+@pytest.mark.asyncio
+async def test_journaled_task_records_cancelled():
+    journal = InMemoryRingBuffer(capacity=32)
+    session = Session(_full_config(journal=journal))
+
+    async def _slow() -> None:
+        await asyncio.sleep(10.0)
+
+    task = session._journaled_task(_slow(), name="slow_task")
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    await asyncio.sleep(0)
+
+    names = [r.name for r in journal.read()]
+    assert "task_cancelled" in names
+
+
+@pytest.mark.asyncio
+async def test_journaled_task_records_raised():
+    journal = InMemoryRingBuffer(capacity=32)
+    session = Session(_full_config(journal=journal))
+
+    async def _boom() -> None:
+        raise ValueError("explosion")
+
+    task = session._journaled_task(_boom(), name="boom_task")
+    try:
+        await task
+    except ValueError:
+        pass
+    await asyncio.sleep(0)
+
+    recs = journal.read()
+    raised = [r for r in recs if r.name == "task_raised"]
+    assert len(raised) == 1
+    assert raised[0].data["exc_type"] == "ValueError"
+
+
+@pytest.mark.asyncio
+async def test_turn_state_changed_recorded_on_transition():
+    """Every TurnManager state change must land as a journal record —
+    no more "why did it go to PROCESSING" bugs that require a logger
+    dump to answer.
+
+    Drive the transition directly via start_turn() / end_turn() so the
+    test doesn't depend on VAD timing.
+    """
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(_full_config(journal=journal))
+    await session._turn_manager.start_turn()
+    await session._turn_manager.end_turn()
+
+    transitions = [r for r in journal.read() if r.name == "turn_state_changed"]
+    assert transitions, "expected at least one turn_state_changed record"
+    reasons = {r.data["reason"] for r in transitions}
+    assert "manual_start" in reasons
+    assert "manual_end" in reasons
+    # Idle → UserSpeaking then UserSpeaking → Processing.
+    pairs = {(r.data["from"], r.data["to"]) for r in transitions}
+    assert ("idle", "user_speaking") in pairs
+    assert ("user_speaking", "processing") in pairs
+
+
+@pytest.mark.asyncio
+async def test_audio_queue_drop_recorded_when_queue_overflows():
+    """BoundedAudioQueue drops must land in the journal via the
+    ``on_drop`` hook so backpressure is visible from a bundle."""
+    journal = InMemoryRingBuffer(capacity=32)
+    session = Session(_full_config(journal=journal))
+    # Shrink the outbound queue so we can overflow it deterministically.
+    q = session._outbound_queue
+    q._max_size = 2  # type: ignore[attr-defined]
+
+    chunk = _make_chunk(n_bytes=320)
+    await q.put(chunk)
+    await q.put(chunk)
+    # This one should be dropped (DROP_OLDEST policy).
+    await q.put(chunk)
+
+    drops = [r for r in journal.read() if r.name == "audio_queue_drop"]
+    assert len(drops) == 1
+    assert drops[0].data["queue"] == "outbound_audio"
+    assert drops[0].data["kind"] == "drop_oldest"
+    assert drops[0].data["total_drops"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_heartbeat_emits_records_at_interval():
+    """Drive ``_emit_heartbeats`` directly with a short interval and
+    verify each record carries the expected shape (loop_lag_ms,
+    queue len, drops)."""
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(_full_config(journal=journal))
+    session._is_running = True
+
+    task = asyncio.create_task(session._emit_heartbeats(interval_s=0.05))
+    try:
+        await asyncio.sleep(0.25)
+    finally:
+        session._is_running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    heartbeats = [r for r in journal.read() if r.name == "pipeline_heartbeat"]
+    assert len(heartbeats) >= 2, f"expected at least 2 heartbeats, got {len(heartbeats)}"
+    data = heartbeats[0].data
+    assert data["interval_ms"] == 50
+    assert "loop_lag_ms" in data
+    assert "outbound_queue_len" in data
+    assert "outbound_queue_drops" in data
+
+
+@pytest.mark.asyncio
 async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     """Regression test for plan-7 flakiness.
 

@@ -31,6 +31,9 @@ from easycat.events import (
     EventHandler,
     Interruption,
     PlaybackMarkAck,
+    ReconnectAttempt,
+    ReconnectFailure,
+    ReconnectSuccess,
     SessionActionCompleted,
     SessionActionFailed,
     SessionActionRequested,
@@ -205,6 +208,10 @@ class Session:
             config=cfg.turn_manager_config,
             cancel_turn_callback=self._cancel_for_barge_in,
         )
+        # TurnManager emits a ``turn_state_changed`` journal record on
+        # every state transition so bundle readers can answer "why did
+        # it go to PROCESSING" from the journal alone.
+        self._turn_manager.bind_journal_hook(self._on_turn_state_changed)
         self.event_bus.subscribe(TurnStarted, self._on_turn_started)
         self.event_bus.subscribe(TurnEnded, self._schedule_turn_ended)
         self.event_bus.subscribe(VADStopSpeaking, self._schedule_stt_segment_commit)
@@ -232,6 +239,7 @@ class Session:
             max_size=self._outbound_queue_max_size,
             policy=self._outbound_queue_policy,
             name=self._outbound_queue_name,
+            on_drop=self._on_queue_drop,
         )
         self._outbound_task: asyncio.Task[None] | None = None
         self._tts_synth = TTSSynthesizer(
@@ -266,6 +274,7 @@ class Session:
         self._pipeline_task: asyncio.Task[None] | None = None
         self._stt_task: asyncio.Task[None] | None = None
         self._current_tts_task: asyncio.Task[None] | None = None
+        self._heartbeat_task: asyncio.Task[None] | None = None
         self._stt_final_future: asyncio.Future[str] | None = None
         self._stt_pending_segment_futures: list[asyncio.Future[str]] = []
         self._stt_pause_commit_task: asyncio.Task[None] | None = None
@@ -413,6 +422,147 @@ class Session:
         if self._turn is not None:
             return self._turn.id
         return None
+
+    def _on_turn_state_changed(
+        self,
+        from_state: Any,
+        to_state: Any,
+        reason: str,
+        turn_id: str | None,
+    ) -> None:
+        """TurnManager hook — journal each turn-state transition.
+
+        Wired up in ``__init__``.  ``from_state`` / ``to_state`` are
+        :class:`TurnManagerState` instances; we record their string
+        values so the record is JSON-serialisable without requiring
+        replay consumers to know the enum type.
+        """
+        self._append_journal_record(
+            name="turn_state_changed",
+            turn_id=turn_id,
+            data={
+                "from": getattr(from_state, "value", str(from_state)),
+                "to": getattr(to_state, "value", str(to_state)),
+                "reason": reason,
+            },
+        )
+
+    async def _emit_heartbeats(self, interval_s: float = 1.0) -> None:
+        """Emit a periodic ``pipeline_heartbeat`` record.
+
+        ``loop_lag_ms`` is the measured delta between the scheduled
+        wakeup time and the actual wakeup time.  Under healthy load
+        this is near zero; a number in the hundreds of ms means a sync
+        handler is blocking the asyncio loop and audio processing has
+        stalled.  Visible in the journal without live tracing or OS
+        profiler.
+        """
+        loop = asyncio.get_running_loop()
+        next_deadline = loop.time() + interval_s
+        try:
+            while self._is_running:
+                await asyncio.sleep(max(0.0, next_deadline - loop.time()))
+                now = loop.time()
+                loop_lag_ms = max(0.0, (now - next_deadline) * 1000.0)
+                self._append_journal_record(
+                    name="pipeline_heartbeat",
+                    data={
+                        "interval_ms": int(interval_s * 1000),
+                        "loop_lag_ms": round(loop_lag_ms, 3),
+                        "outbound_queue_len": self._outbound_queue.qsize(),
+                        "outbound_queue_drops": self._outbound_queue.drops,
+                    },
+                )
+                next_deadline = now + interval_s
+        except asyncio.CancelledError:
+            pass
+
+    def _on_queue_drop(
+        self,
+        queue_name: str,
+        kind: str,
+        queue_len: int,
+        total_drops: int,
+    ) -> None:
+        """BoundedAudioQueue hook — journal every drop.
+
+        Back-pressure / underflow is invisible from the journal
+        otherwise; the queue's internal ``drops`` counter can only be
+        read live.  One record per drop so bundle readers can correlate
+        audio gaps to queue pressure timing.
+        """
+        self._append_journal_record(
+            name="audio_queue_drop",
+            data={
+                "queue": queue_name,
+                "kind": kind,
+                "queue_len": queue_len,
+                "total_drops": total_drops,
+            },
+        )
+
+    def _journaled_task(
+        self,
+        coro: Any,
+        *,
+        name: str,
+        turn_id: str | None = None,
+    ) -> asyncio.Task[Any]:
+        """Create an asyncio task that journals its full lifecycle.
+
+        Emits ``task_scheduled`` at creation, then one of
+        ``task_completed`` / ``task_cancelled`` / ``task_raised`` when
+        the task finishes.  A bundle reader can reconstruct a Gantt
+        chart of concurrent awaits — enough to diagnose races like the
+        plan-7 STT-commit-vs-end-stream interleave without re-running
+        the live providers.
+
+        *name* is the stable label that survives replay (e.g.
+        ``"stt_pause_commit"``, ``"tts_synth"``, ``"on_turn_ended"``).
+        Use one per logical task — don't baseline it on Python object
+        ids, which don't survive serialisation.
+        """
+        resolved_turn = self._journal_turn_id(turn_id)
+        self._append_journal_record(
+            name="task_scheduled",
+            turn_id=resolved_turn,
+            data={"task_name": name},
+        )
+        task = asyncio.create_task(coro, name=name)
+
+        def _on_done(
+            t: asyncio.Task[Any],
+            label: str = name,
+            tid: str | None = resolved_turn,
+        ) -> None:
+            # Pick the right terminal record kind.  We look at exception
+            # first so a task that's both cancelled *and* had raised in
+            # finally-cleanup reports the raise (more actionable).
+            try:
+                if t.cancelled():
+                    self._append_journal_record(
+                        name="task_cancelled", turn_id=tid, data={"task_name": label}
+                    )
+                    return
+                exc = t.exception()
+            except asyncio.CancelledError:
+                self._append_journal_record(
+                    name="task_cancelled", turn_id=tid, data={"task_name": label}
+                )
+                return
+            if exc is not None:
+                self._append_journal_record(
+                    name="task_raised",
+                    turn_id=tid,
+                    data={"task_name": label, "exc_type": type(exc).__name__},
+                )
+            else:
+                self._append_journal_record(
+                    name="task_completed", turn_id=tid, data={"task_name": label}
+                )
+
+        task.add_done_callback(_on_done)
+        return task
 
     def _store_journal_artifact(
         self,
@@ -674,6 +824,16 @@ class Session:
         _sub(ToolCallStarted, _make(EVT, "tool_call_started"))
         _sub(ToolCallDelta, _make(EVT, "tool_call_delta"))
         _sub(ToolCallResult, _make(EVT, "tool_call_result"))
+        # ReconnectingWebSocket emits these on the bus; without a
+        # journal subscriber, "session died 40 min in" would only show
+        # up in logs.  Now a bundle shows the exact retry timeline.
+        _sub(ReconnectAttempt, _make(EVT, "ws_reconnect_attempt"))
+        _sub(ReconnectSuccess, _make(EVT, "ws_reconnect_success"))
+        _sub(ReconnectFailure, _make(EVT, "ws_reconnect_failure"))
+        # PlaybackMarkAck is subscribed elsewhere for state tracking;
+        # journal it separately so interruption postmortems have the
+        # actual ack timeline (what the client rendered when).
+        _sub(PlaybackMarkAck, _make(EVT, "playback_mark_ack"))
 
     def _reset_turn_state(self) -> None:
         """Clear turn correlation state and reset the turn manager."""
@@ -967,10 +1127,16 @@ class Session:
             self._is_running = True
             self._outbound_task = asyncio.create_task(self._drain_outbound_audio())
             self._pipeline_task = asyncio.create_task(self._run_pipeline())
+            # Heartbeat task detects asyncio event-loop stalls.  If a
+            # sync handler blocks the loop for >heartbeat_interval the
+            # gap between heartbeats widens — ``loop_lag_ns`` in the
+            # record makes that visible in a bundle without requiring
+            # live tracing.
+            self._heartbeat_task = asyncio.create_task(self._emit_heartbeats())
         except Exception:
             self._is_running = False
 
-            for task_name in ("_pipeline_task", "_outbound_task"):
+            for task_name in ("_pipeline_task", "_outbound_task", "_heartbeat_task"):
                 task = getattr(self, task_name)
                 if task is not None and not task.done():
                     task.cancel()
@@ -1049,6 +1215,13 @@ class Session:
                     await self._outbound_task
                 except (asyncio.CancelledError, Exception):
                     pass
+            if self._heartbeat_task and not self._heartbeat_task.done():
+                self._heartbeat_task.cancel()
+                try:
+                    await self._heartbeat_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self._heartbeat_task = None
             await self.transport.disconnect()
             await self._turn_manager.shutdown()
             if hasattr(self.agent, "aclose"):
@@ -1399,7 +1572,11 @@ class Session:
         if self._current_tts_task and not self._current_tts_task.done():
             self._current_tts_task.cancel()
         gen = self._turn_generation
-        self._current_tts_task = asyncio.create_task(self._on_turn_ended(event, gen))
+        self._current_tts_task = self._journaled_task(
+            self._on_turn_ended(event, gen),
+            name="on_turn_ended",
+            turn_id=event.turn_id,
+        )
         self._current_tts_task.add_done_callback(self._log_task_exception)
 
     async def _on_turn_ended(self, event: TurnEnded, generation: int) -> None:
@@ -1447,7 +1624,10 @@ class Session:
             return
         self._cancel_scheduled_stt_segment_commit()
         delay_s = self._stt_segment_silence_ms / 1000.0
-        self._stt_pause_commit_task = asyncio.create_task(self._commit_stt_segment_after(delay_s))
+        self._stt_pause_commit_task = self._journaled_task(
+            self._commit_stt_segment_after(delay_s),
+            name="stt_pause_commit",
+        )
         self._stt_pause_commit_task.add_done_callback(self._log_task_exception)
 
     async def _commit_stt_segment_after(self, delay_s: float) -> None:
@@ -1468,7 +1648,11 @@ class Session:
             return
         if self._stt_segment_commit_task is not None and not self._stt_segment_commit_task.done():
             return
-        self._stt_segment_commit_task = asyncio.create_task(self._commit_stt_segment())
+        self._stt_segment_commit_task = self._journaled_task(
+            self._commit_stt_segment(),
+            name="stt_segment_commit",
+            turn_id=turn.id if turn is not None else None,
+        )
         self._stt_segment_commit_task.add_done_callback(self._log_task_exception)
 
     async def _commit_stt_segment(self) -> None:
