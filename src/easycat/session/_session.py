@@ -2593,6 +2593,12 @@ class Session:
             else:
                 response = await self._agent_stage.execute(text, self._run_ctx, text_turn)
                 self._text_turn_accumulated = response
+                # Mirror _run_basic_agent: extract structured output from the
+                # underlying agent so non-streaming text sessions don't lose it.
+                agent_last_output = getattr(self.agent, "last_output", None)
+                agent_output_type = getattr(self.agent, "output_type", None)
+                if agent_output_type is not None or not isinstance(agent_last_output, str):
+                    structured_output = agent_last_output
             elapsed_ms = (time.monotonic() - t0) * 1000
             await self._emit(
                 AgentFinal(
