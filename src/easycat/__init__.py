@@ -250,6 +250,7 @@ _register("easycat.tts.openai_tts", "OpenAITTS", "OpenAITTSConfig")
 _register("easycat.tts.input", "TTSInput", "TTSInputFormat")
 _register(
     "easycat.vad",
+    "FunASROnnxVAD",
     "KrispVAD",
     "SileroVAD",
     "TenVAD",
@@ -491,7 +492,7 @@ if TYPE_CHECKING:
     from easycat.tts.input import TTSInput, TTSInputFormat
     from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
     from easycat.turn_manager import TurnMode
-    from easycat.vad import KrispVAD, SileroVAD, TenVAD, VADConfig, create_vad
+    from easycat.vad import FunASROnnxVAD, KrispVAD, SileroVAD, TenVAD, VADConfig, create_vad
 
 
 def __getattr__(name: str):  # PEP 562
