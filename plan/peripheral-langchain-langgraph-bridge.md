@@ -17,6 +17,7 @@
 > - `workstream-1-journal-foundation.md` through
 >   `workstream-5-legacy-removal.md`
 > - `peripheral-dx-onboarding.md`
+> - `peripheral-cli.md`
 > - `peripheral-redaction.md`
 > - `peripheral-provider-ecosystem.md`
 > - `peripheral-observability-and-cost.md`

@@ -7,6 +7,10 @@
 >
 > **Sibling peripheral docs:**
 >
+> - `peripheral-cli.md` — first-class `easycat` CLI design (Typer app,
+>   command surface, output contract, templates, error UX, `uvx`
+>   zero-install guarantee). This file owns the library DX the CLI
+>   wraps; that file owns the CLI product.
 > - `peripheral-redaction.md` — `RedactionPolicy` write filter, safe
 >   snapshots, export-time redaction pass, ready-to-use policies
 > - `peripheral-provider-ecosystem.md` — Deepgram Flux, Smart Turn v3.1
@@ -18,13 +22,16 @@
 >
 > **In scope (this file):** line-count budgets on canonical examples,
 > `easycat.run()` and `async with session` helpers, string-keyed provider
-> selection, env var auto-detection, `easycat` CLI (`init`, `doctor`,
-> `run`, `dev`, `explain`, `cost`, `test`, `bundles`, `bundle export`,
-> `replay` command surface), template catalog, config factory presets,
+> selection, env var auto-detection, template content (the CLI surface
+> that uses them lives in `peripheral-cli.md`), config factory presets,
 > offline preset, error diagnostics (stable codes, fix-suggesting
 > messages, `ExceptionGroup`, exception notes, traceback frame collapse,
 > dev vs prod log rendering), `EasyCatConfig` flattening, quickstart
 > guardrails.
+>
+> **Out of scope:** the `easycat` CLI command catalog, `--help`
+> taxonomy, exit-code contract, `uvx` packaging — all owned by
+> `peripheral-cli.md`.
 
 ## Context
 
@@ -146,71 +153,26 @@ Semantics:
 
 ## `easycat` CLI
 
-Beat the bar Pipecat (`uv tool install pipecat-ai-cli`) and LiveKit
-(`lk agent init`) set in 2026. The CLI is installed with the package,
-wraps the same `create_session()` API, and is invokable via `uvx` with
-**no prior install step**:
+The CLI design — command surface, Typer app structure, output contract,
+error UX, template discovery — lives in `peripheral-cli.md`. This file
+ensures the library DX underneath it (`run()`, string keys, env
+autodetect, error codes) exists so the CLI is a thin wrapper and not a
+parallel codepath.
 
-```bash
-# Zero to running in under 60 seconds — one command, no prior install
-uvx easycat init my-agent               # scaffold: one file, one .env, one README
-cd my-agent && uv sync
-uvx easycat doctor                      # verify env, providers, ONNX, mic
-uvx easycat run agent.py                # runs the agent, handles shutdown
-uvx easycat dev agent.py                # same + launches the debugger UI on :8765
-uvx easycat dev --reload agent.py       # auto-restart on file change
-uvx easycat replay bundle.zip           # local repro of a production failure
-uvx easycat replay bundle.zip --fork-at cp_87  # fork from checkpoint cp_87
-uvx easycat explain E012                # Rust-style error lookup
-uvx easycat cost --since yesterday      # cost rollup across recent sessions
-uvx easycat bundles list                # discover crash-recovered bundles
-uvx easycat bundle export --for=claude-code bundle.zip  # trace pack for coding agents
-uvx easycat test                        # run pytest with easycat.testing plugin loaded
-```
+The zero-install promise (`uvx easycat init my-agent` working on a
+clean machine) is owned by `peripheral-cli.md`. This file's
+contribution is keeping the library wheel small and free of
+build-from-source deps.
 
-Users who prefer a long-lived install get the same commands via `uv tool
-install easycat` → bare `easycat ...`. The promise is that the *first*
-invocation requires nothing but `uv`.
+## `easycat init` Template Content
 
-**Non-interactive scaffolding**: `easycat init` accepts a `--config` JSON
-flag so Claude Code, Cursor, and Codex can scaffold EasyCat projects
-without human prompts.
+The CLI-side template catalog (discovery, scaffolding, non-interactive
+`--config` schema) lives in `peripheral-cli.md`. This section owns the
+*content* each template generates — specifically, that every generated
+`agent.py` is short enough to serve as the visible proof of the
+library DX work in this file.
 
-```bash
-uvx easycat init my-agent --config '{"template":"openai-agents","provider":"deepgram-flux"}'
-```
-
-Three commands deserve special callouts:
-
-- **`easycat doctor`** runs the first-run diagnostic flight every FastAPI,
-  uv, and Pydantic user now expects. It verifies `OPENAI_API_KEY` /
-  `DEEPGRAM_API_KEY` / etc. are present, hits provider endpoints with a
-  200ms HEAD request, checks that `onnxruntime` is importable when Smart
-  Turn is requested, and probes the default microphone device when
-  transport is `local`. It prints a color-coded report with specific
-  fix suggestions tied to `EASYCAT_Exxx` codes. This is the single most
-  effective drop-off killer for voice-agent onboarding.
-
-- **`easycat dev --reload`** runs the agent under a file watcher and
-  reloads the agent module on change. LiveKit Agents 1.5 ships
-  `watchfiles`-based reload in `lk agent dev`, so reload itself is not
-  novel in 2026 — it is table stakes. What is distinctive is the *swap
-  semantics*: EasyCat's bridge boundary lets the reload happen **without
-  dropping the microphone, transport, debugger UI, or session journal**.
-  On file change: cancel any in-flight turn through the bridge's
-  cancellation contract, reimport the agent module, rebuild only the
-  bridge, leave every other stage running, write a `CodeReloaded`
-  checkpoint into the journal. Bridge boundary makes this ~100 lines.
-
-- **`easycat bundle export --for=claude-code`** packages a RunBundle into
-  a context pack that Claude Code, Cursor, or Codex can load directly —
-  a few plain-text files with the journal timeline, the failing turn's
-  artifacts, and suggested fix-code locations. Modeled on LangSmith Fetch
-  (Dec 2025). The interactive web debugger in
-  `peripheral-eval-and-debugger-ui.md` still exists for exploration, but
-  `--for=claude-code` is the path most users will actually take.
-
-## `easycat init` Templates
+Template set:
 
 - `openai-agents` (default)
 - `pydantic-ai`
@@ -224,11 +186,11 @@ Voice-to-voice / realtime speech-to-speech templates are explicitly
 out of scope — EasyCat is a chained voice runtime, see the "Chained
 Only" rationale in `essential-debug-first-runtime.md`.
 
-Every template ≤ 15 lines, ships with one MCP server wired up (the
-official `filesystem` server), runs with a single API key. CI regression-
-tests line count and startup success. `uvx easycat init my-agent && cd
-my-agent && uv sync && uvx easycat run agent.py` must succeed end-to-end
-under 60 seconds in CI.
+Every template's `agent.py` ≤ 15 lines, ships with one MCP server
+wired up (the official `filesystem` server), runs with a single API
+key. CI regression-tests line count and startup success. `uvx easycat
+init my-agent && cd my-agent && uv sync && uv run python agent.py`
+must succeed end-to-end under 60 seconds in CI.
 
 ## Config Factory Presets
 
@@ -374,28 +336,29 @@ Reject any redesign change that violates these:
 |---|---|
 | Line budgets, `run()`, `async with`, string keys, env autodetect | nothing |
 | Error codes, dev/prod log rendering, `EASYCAT_LOG_LEVEL` | nothing |
-| `easycat init`, `doctor`, `explain`, `run`, `test` | essential Phase 2 (bridge) for `init --config` correctness |
-| `easycat dev` (launcher + browser open) | essential Phase 3 (stage refactor) |
-| `easycat dev --reload` swap semantics | essential Phase 2 (bridge boundary) |
-| `easycat bundles list`, `bundle export --for=claude-code` | essential Phase 4 (`RunBundle` + crash-durable journal) |
-| `easycat replay --fork-at` | forked replay (see `peripheral-eval-and-debugger-ui.md`) |
+| Config factory presets, `EasyCatConfig` flattening | nothing |
+| Template content (what `agent.py` looks like) | `run()`, string keys (this file) |
 | Offline preset | Smart Turn promotion (see `peripheral-provider-ecosystem.md`), string-keyed providers, config factory presets |
+
+The CLI's own dependency table (init, doctor, explain, bundles,
+replay) lives in `peripheral-cli.md`. Library-wrapper commands
+(`run`, `dev`, `test`, `cost`) are deferred by that plan.
 
 ## Suggested Sequencing
 
-1. **In parallel with essential Phase 1-2**: quickstart helpers (`run()`,
-   `async with session`, string-keyed providers, env autodetect). These
-   don't touch the journal or bridge and deliver visible line-count wins
-   early. Also: error codes, log rendering, `EASYCAT_LOG_LEVEL`.
-2. **After essential Phase 2**: `easycat` CLI (`init`, `doctor`,
-   `explain`, `run`, `test`). Bridge is the dependency for `init
-   --config` scaffolding to produce a working project.
-3. **After essential Phase 3**: `easycat dev` with in-process swap
-   reload.
-4. **After essential Phase 4**: `easycat bundles list`, `bundle export
-   --for=claude-code`.
-5. **Last**: offline preset (gated on Smart Turn promotion in the
+1. **In parallel with essential Phase 1-2**: quickstart helpers
+   (`run()`, `async with session`, string-keyed providers, env
+   autodetect). These don't touch the journal or bridge and deliver
+   visible line-count wins early. Also: error codes, log rendering,
+   `EASYCAT_LOG_LEVEL`, config factory presets.
+2. **Template content**: lands in lockstep with `peripheral-cli.md`
+   M1 and M2, because each template's `agent.py` must import the
+   library DX helpers from this file.
+3. **Last**: offline preset (gated on Smart Turn promotion in the
    provider ecosystem file), final `EasyCatConfig` flattening pass.
+
+The CLI-facing sequencing (M1–M3 milestones for `init`, `doctor`,
+`explain`, `bundles`, `replay`) lives in `peripheral-cli.md`.
 
 ## Competitive Context
 

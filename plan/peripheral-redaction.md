@@ -12,8 +12,10 @@
 >
 > **Sibling peripheral docs:**
 >
-> - `peripheral-dx-onboarding.md` — line budgets, CLI, templates,
->   helpers, error diagnostics
+> - `peripheral-dx-onboarding.md` — line budgets, library helpers,
+>   template content, error diagnostics
+> - `peripheral-cli.md` — `easycat` CLI, including `bundles export
+>   --redaction ...` which applies the policies defined here
 > - `peripheral-provider-ecosystem.md` — Deepgram Flux, Smart Turn
 >   promotion, backchannel filter
 > - `peripheral-observability-and-cost.md` — OTel export, cost
@@ -58,7 +60,7 @@ This peripheral turns the journal from a local debugging tool into
 something users can legally share. It is a hard prerequisite for
 any production deployment and for every cross-file feature that
 exports data off-box (OTel spans, cost dashboards, CI bundle
-fixtures, `easycat bundle export --for=claude-code`).
+fixtures, `easycat bundles export --for=claude-code`).
 
 ## Essential Plan's Minimum Guarantee (Starting Point)
 
@@ -242,10 +244,11 @@ shipping the full thing once.
 
 ## Dependencies on Other Peripherals
 
-- **`peripheral-dx-onboarding.md`**: `easycat bundle export
-  --for=claude-code` is gated on this peripheral because Claude
-  Code context packs MUST use at least the `production` policy by
-  default.
+- **`peripheral-cli.md`**: `easycat bundles export --for=claude-code`
+  is gated on this peripheral because Claude Code context packs MUST
+  use at least the `production` policy by default. The CLI's
+  `--redaction` flag is the operator-facing surface; policy
+  implementation lives here.
 - **`peripheral-observability-and-cost.md`**: `JournalToOTelExporter`
   MUST apply the runtime `RedactionPolicy` before emitting spans;
   OTel backends are third-party systems and the same per-field

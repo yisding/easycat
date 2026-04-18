@@ -6,9 +6,14 @@ import asyncio
 import logging
 import os
 import signal
+import sys
+from typing import TYPE_CHECKING
 
 from easycat.events import AgentFinal, BotStoppedSpeaking, Interruption, STTFinal, TurnStarted
 from easycat.session._session import Session
+
+if TYPE_CHECKING:
+    from easycat.config import EasyCatConfig
 
 logger = logging.getLogger(__name__)
 
@@ -53,3 +58,37 @@ def attach_runtime_feedback(session: Session) -> None:
         BotStoppedSpeaking, lambda _e: print("\u2705 Your turn \u2014 you can speak now.")
     )
     session.subscribe_event(Interruption, lambda _e: print("\u26a1 Interruption detected."))
+
+
+def run(config: EasyCatConfig) -> None:
+    """Run a voice agent to completion from a synchronous entry point.
+
+    Replaces the ``asyncio.run(main())`` + ``await session.start()`` +
+    signal-handling + ``await session.shutdown()`` ceremony that every
+    example used to carry.  Runtime feedback (``Listening...``, user
+    transcripts, assistant replies) is auto-attached when stderr is a
+    TTY so `easycat init → run` feels alive out of the box; tests and
+    production pipelines that redirect stderr stay quiet.
+
+    Advanced users who need custom orchestration should reach for
+    :func:`easycat.create_session` directly and manage the lifecycle
+    themselves.
+    """
+    from easycat.config import create_session
+
+    session = create_session(config)
+    if sys.stderr.isatty() and not os.getenv("PYTEST_CURRENT_TEST"):
+        attach_runtime_feedback(session)
+
+    async def _run() -> None:
+        await session.start()
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop_event.set)
+        try:
+            await stop_event.wait()
+        finally:
+            await session.shutdown()
+
+    asyncio.run(_run())

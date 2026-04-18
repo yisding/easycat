@@ -20,7 +20,7 @@ import struct
 import pytest
 import websockets
 
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.audio_format import PCM16_MONO_24K, AudioChunk
 from easycat.events import DTMF, EventBus, PlaybackMarkAck
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import (
@@ -95,7 +95,7 @@ class TestLocalTransport:
     @pytest.mark.asyncio
     async def test_config_defaults(self):
         config = LocalTransportConfig()
-        assert config.audio_format == PCM16_MONO_16K
+        assert config.audio_format == PCM16_MONO_24K
         assert config.frame_duration_ms == 20
         assert config.input_device is None
         assert config.output_device is None

@@ -30,7 +30,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
-from easycat.stages.base import NONDETERMINISTIC_FIELDS
+from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS
 
 if TYPE_CHECKING:
     from easycat.debug.bundle import CommittableCheckpoint, RunBundle

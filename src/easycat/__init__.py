@@ -3,6 +3,15 @@
 Public API
 ----------
 This module exports the symbols intended for typical library consumers.
+Top-level ``from easycat import X`` keeps working; every symbol in
+:data:`__all__` is reachable.
+
+Internally, symbols are loaded lazily via PEP 562 ``__getattr__`` to
+keep CLI cold-start (``easycat --version``, ``easycat --help``) within
+the 300ms budget documented in ``plan/peripheral-cli.md``.  Heavy
+provider modules (transports, stages, telephony) only import when the
+symbol is actually touched.
+
 Internal plumbing remains importable from submodules for advanced use::
 
     from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
@@ -22,266 +31,133 @@ Internal plumbing remains importable from submodules for advanced use::
     from easycat.transports.twilio_media import mulaw_to_pcm16, pcm16_to_mulaw, ...
 """
 
+from __future__ import annotations
+
+import importlib
+from typing import TYPE_CHECKING
+
+# Mapping of public-name → (submodule-path, attribute-name).  Every
+# entry in ``__all__`` MUST appear here.  ``_alias`` lets us rename
+# ``REGISTRY`` → ``ERROR_REGISTRY`` and similar.
+_LAZY_ATTR: dict[str, tuple[str, str]] = {}
+
+
+def _register(module: str, *names: str, _alias: dict[str, str] | None = None) -> None:
+    for name in names:
+        _LAZY_ATTR[name] = (module, name)
+    if _alias:
+        for public, attr in _alias.items():
+            _LAZY_ATTR[public] = (module, attr)
+
+
 # ── Core session & agent ──────────────────────────────────────────
 
-from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig  # noqa: I001
-from easycat.integrations.agents._base_adapter import BaseAgentAdapter, serialize_output
-from easycat.integrations.agents._factory import auto_adapt_agent
-from easycat.integrations.agents._legacy_types import (
-    AgentStreamEvent,
-    AgentStreamEventType,
-    StreamingAgent,
-)
-from easycat.cancel import CancelToken
-from easycat.smart_turn import (
-    SmartTurnConfig,
-    SmartTurnONNX,
-    SmartTurnProvider,
-    SmartTurnResult,
-    create_smart_turn,
-)
-from easycat.session.action_executors import CoreSessionActionExecutor
-from easycat.session._session import Session
-from easycat.session._types import SessionConfig, TurnState
-from easycat.session.actions import (
-    CustomAction,
-    EndCallAction,
-    SendDTMFAction,
-    SendSMSAction,
-    SessionAction,
-    SessionActionExecutor,
-    SessionActionResult,
-    SessionActions,
-    SessionActionType,
-    TransferCallAction,
-    TransferPlan,
-)
-from easycat.session_manager import SessionManager
-from easycat.turn_manager import TurnMode
-from easycat.llm_output_processing import (
-    LLMOutputProcessor,
-    MarkdownStripProcessor,
-    PauseProcessor,
-    PhoneticReplacementProcessor,
-    default_pronunciation_processors,
-)
-from easycat.config import (
-    EasyCatConfig,
-    TelephonyConfig,
-    create_session,
-    create_text_session,
-)
-from easycat.runtime import (
-    ExecutionJournal,
-    JournalRecord,
-    JournalRecordKind,
-    JournalView,
-)
-from easycat.helpers import (
-    attach_runtime_feedback,
-    default_event_logging,
-    require_env,
-    wait_for_shutdown_signal,
-)
-
-# ── Debug-first runtime ─────────────────────────────────────────
-
-from easycat.debug.bundle import RunBundle
-from easycat.debug.testing import load_bundle
-from easycat.integrations.agents.base import ExternalAgentBridge
-from easycat.stages.base import Stage
-
-# ── EasyCat-level events ─────────────────────────────────────────
-
-from easycat.events import (
-    ACTION_EVENTS,
-    AGENT_EVENTS,
-    ALL_EVENTS,
-    AUDIO_EVENTS,
-    ERROR_EVENTS,
-    INTERRUPTION_EVENTS,
-    LIFECYCLE_EVENTS,
-    RECONNECT_EVENTS,
-    STT_EVENTS,
-    TELEPHONY_EVENTS,
-    TOOL_EVENTS,
-    TTS_EVENTS,
-    VAD_EVENTS,
-    AgentDelta,
-    AgentFinal,
-    AgentRequestStarted,
-    AudioIn,
-    BotStartedSpeaking,
-    BotStoppedSpeaking,
-    DTMF,
-    DTMFAggregated,
-    Error,
-    ErrorStage,
-    Event,
-    EventBus,
-    Interruption,
-    ReconnectAttempt,
-    ReconnectFailure,
-    ReconnectSuccess,
-    STTFinal,
-    STTPartial,
-    SessionActionCompleted,
-    SessionActionFailed,
-    SessionActionRequested,
-    SessionActionStarted,
-    ToolCallDelta,
-    ToolCallResult,
-    ToolCallStarted,
-    TTSAudio,
-    TTSMarkers,
-    TurnEnded,
-    TurnStarted,
-    VADStartSpeaking,
-    VADStopSpeaking,
-    VoicemailDetected,
-)
-
-# ── Provider protocols ────────────────────────────────────────────
-
-from easycat.providers import (
-    EchoCanceller,
-    NoiseReducer,
-    STTProvider,
-    Transport,
-    TTSProvider,
-    VADProvider,
-)
-
-# ── Audio format ──────────────────────────────────────────────────
-
-from easycat.audio_format import (
-    PCM16_MONO_8K,
-    PCM16_MONO_16K,
-    PCM16_MONO_24K,
-    PCM16_MONO_48K,
-    AudioChunk,
-    AudioFormat,
-)
-
-# ── Provider implementations ─────────────────────────────────────
-
-from easycat.echo_cancellation import (
-    EchoCancellationConfig,
-    LiveKitAEC,
-    PassthroughAEC,
-    create_echo_canceller,
-)
-from easycat.noise_reduction import (
-    KrispNoiseReducer,
-    NoiseReducerConfig,
-    PassthroughNoiseReducer,
-    RNNoiseReducer,
-    create_noise_reducer,
-)
-from easycat.stt import (
-    DeepgramSTT,
-    DeepgramSTTConfig,
-    ElevenLabsSTT,
-    ElevenLabsSTTConfig,
-    OpenAIRealtimeSTT,
-    OpenAIRealtimeSTTConfig,
-    OpenAISTT,
-    OpenAISTTConfig,
-)
-from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
-from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
-from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
-from easycat.tts.input import TTSInput, TTSInputFormat
-from easycat.vad import FunASROnnxVAD, KrispVAD, SileroVAD, TenVAD, VADConfig, create_vad
-
-# ── Transport implementations ────────────────────────────────────
-
-from easycat.transports.local import LocalTransport, LocalTransportConfig
-from easycat.transports.twilio_media import (
-    TwilioConnectionTransport,
-    TwilioTransport,
-    TwilioTransportConfig,
-)
-from easycat.telephony.session_actions import (
-    TwilioSessionActionConfig,
-    TwilioSessionActionExecutor,
-)
-from easycat.transports.webrtc import ICEServer, WebRTCTransport, WebRTCTransportConfig
-from easycat.transports.websocket import (
-    WebSocketConnectionTransport,
-    WebSocketTransport,
-    WebSocketTransportConfig,
-)
-
-# ── Configuration & errors ────────────────────────────────────────
-
-from easycat.timeouts import (
-    AgentTimeoutError,
-    STTTimeoutError,
-    TimeoutConfig,
-    TTSTimeoutError,
-)
-
-__all__ = [
-    # Core session & agent
-    "CoreSessionActionExecutor",
-    "CustomAction",
-    "EndCallAction",
-    "SendDTMFAction",
-    "SendSMSAction",
-    "Session",
-    "SessionAction",
-    "SessionActionExecutor",
-    "SessionActionResult",
-    "SessionActionType",
-    "SessionActions",
-    "SessionConfig",
-    "TurnState",
-    "TransferCallAction",
-    "TransferPlan",
-    "TurnMode",
-    "SessionManager",
-    "EasyCatConfig",
-    "TelephonyConfig",
-    "create_session",
-    "create_text_session",
+_register(
+    "easycat.integrations.agents._agent_runner",
     "AgentRunner",
     "AgentRunnerConfig",
+)
+_register(
+    "easycat.integrations.agents._base_adapter",
+    "BaseAgentAdapter",
+    "serialize_output",
+)
+_register("easycat.integrations.agents._factory", "auto_adapt_agent")
+_register(
+    "easycat.integrations.agents._legacy_types",
     "AgentStreamEvent",
     "AgentStreamEventType",
     "StreamingAgent",
-    # Agent adapters & bridges
-    "BaseAgentAdapter",
-    "auto_adapt_agent",
-    "serialize_output",
-    "ExternalAgentBridge",
-    "CancelToken",
-    "LLMOutputProcessor",
-    "MarkdownStripProcessor",
-    "PauseProcessor",
-    "PhoneticReplacementProcessor",
-    "default_pronunciation_processors",
-    # Smart turn
+)
+_register("easycat.cancel", "CancelToken")
+_register(
+    "easycat.smart_turn",
     "SmartTurnConfig",
     "SmartTurnONNX",
     "SmartTurnProvider",
     "SmartTurnResult",
     "create_smart_turn",
-    # Event groups
+)
+_register("easycat.session.action_executors", "CoreSessionActionExecutor")
+_register("easycat.session._session", "Session")
+_register("easycat.session._types", "SessionConfig", "TurnState")
+_register(
+    "easycat.session.actions",
+    "CustomAction",
+    "EndCallAction",
+    "SendDTMFAction",
+    "SendSMSAction",
+    "SessionAction",
+    "SessionActionExecutor",
+    "SessionActionResult",
+    "SessionActions",
+    "SessionActionType",
+    "TransferCallAction",
+    "TransferPlan",
+)
+_register("easycat.session_manager", "SessionManager")
+_register("easycat.turn_manager", "TurnMode")
+_register(
+    "easycat.llm_output_processing",
+    "LLMOutputProcessor",
+    "MarkdownStripProcessor",
+    "PauseProcessor",
+    "PhoneticReplacementProcessor",
+    "default_pronunciation_processors",
+)
+_register(
+    "easycat.config",
+    "EasyCatConfig",
+    "TelephonyConfig",
+    "create_session",
+    "create_text_session",
+)
+_register(
+    "easycat.runtime",
+    "ExecutionJournal",
+    "JournalRecord",
+    "JournalRecordKind",
+    "JournalView",
+)
+_register(
+    "easycat.errors",
+    "EasyCatError",
+    "ErrorEntry",
+    _alias={"ERROR_REGISTRY": "REGISTRY"},
+)
+_register(
+    "easycat.helpers",
+    "attach_runtime_feedback",
+    "default_event_logging",
+    "require_env",
+    "run",
+    "wait_for_shutdown_signal",
+)
+
+# ── Debug-first runtime ─────────────────────────────────────────
+
+_register("easycat.debug.bundle", "RunBundle")
+_register("easycat.debug.testing", "load_bundle")
+_register("easycat.integrations.agents.base", "ExternalAgentBridge")
+_register("easycat.stages.base", "Stage")
+
+# ── EasyCat-level events ─────────────────────────────────────────
+
+_register(
+    "easycat.events",
     "ACTION_EVENTS",
-    "AUDIO_EVENTS",
-    "VAD_EVENTS",
-    "STT_EVENTS",
     "AGENT_EVENTS",
-    "TTS_EVENTS",
-    "TOOL_EVENTS",
-    "LIFECYCLE_EVENTS",
-    "INTERRUPTION_EVENTS",
-    "RECONNECT_EVENTS",
-    "TELEPHONY_EVENTS",
-    "ERROR_EVENTS",
     "ALL_EVENTS",
-    # EasyCat-level events
+    "AUDIO_EVENTS",
+    "ERROR_EVENTS",
+    "INTERRUPTION_EVENTS",
+    "LIFECYCLE_EVENTS",
+    "RECONNECT_EVENTS",
+    "STT_EVENTS",
+    "TELEPHONY_EVENTS",
+    "TOOL_EVENTS",
+    "TTS_EVENTS",
+    "VAD_EVENTS",
     "AgentDelta",
     "AgentFinal",
     "AgentRequestStarted",
@@ -314,87 +190,325 @@ __all__ = [
     "VADStartSpeaking",
     "VADStopSpeaking",
     "VoicemailDetected",
-    # Provider protocols
+)
+
+# ── Provider protocols ────────────────────────────────────────────
+
+_register(
+    "easycat.providers",
     "EchoCanceller",
     "NoiseReducer",
     "STTProvider",
     "Transport",
     "TTSProvider",
-    "TTSInput",
-    "TTSInputFormat",
     "VADProvider",
-    # Audio format
-    "AudioChunk",
-    "AudioFormat",
+)
+
+# ── Audio format ──────────────────────────────────────────────────
+
+_register(
+    "easycat.audio_format",
     "PCM16_MONO_8K",
     "PCM16_MONO_16K",
     "PCM16_MONO_24K",
     "PCM16_MONO_48K",
-    # STT providers
-    "OpenAISTT",
-    "OpenAISTTConfig",
-    "OpenAIRealtimeSTT",
-    "OpenAIRealtimeSTTConfig",
-    "DeepgramSTT",
-    "DeepgramSTTConfig",
-    "ElevenLabsSTT",
-    "ElevenLabsSTTConfig",
-    # TTS providers
-    "OpenAITTS",
-    "OpenAITTSConfig",
-    "DeepgramTTS",
-    "DeepgramTTSConfig",
-    "ElevenLabsTTS",
-    "ElevenLabsTTSConfig",
-    # VAD
-    "SileroVAD",
-    "KrispVAD",
-    "TenVAD",
-    "FunASROnnxVAD",
-    "VADConfig",
-    "create_vad",
-    # Echo cancellation
+    "AudioChunk",
+    "AudioFormat",
+)
+
+# ── Provider implementations ─────────────────────────────────────
+
+_register(
+    "easycat.echo_cancellation",
     "EchoCancellationConfig",
     "LiveKitAEC",
     "PassthroughAEC",
     "create_echo_canceller",
-    # Noise reduction
-    "RNNoiseReducer",
+)
+_register(
+    "easycat.noise_reduction",
     "KrispNoiseReducer",
-    "PassthroughNoiseReducer",
     "NoiseReducerConfig",
+    "PassthroughNoiseReducer",
+    "RNNoiseReducer",
     "create_noise_reducer",
-    # Transports
-    "ICEServer",
-    "LocalTransport",
-    "LocalTransportConfig",
-    "WebRTCTransport",
-    "WebRTCTransportConfig",
-    "WebSocketTransport",
-    "WebSocketTransportConfig",
-    "WebSocketConnectionTransport",
+)
+_register(
+    "easycat.stt",
+    "DeepgramSTT",
+    "DeepgramSTTConfig",
+    "ElevenLabsSTT",
+    "ElevenLabsSTTConfig",
+    "OpenAIRealtimeSTT",
+    "OpenAIRealtimeSTTConfig",
+    "OpenAISTT",
+    "OpenAISTTConfig",
+)
+_register("easycat.tts.deepgram_tts", "DeepgramTTS", "DeepgramTTSConfig")
+_register("easycat.tts.elevenlabs_tts", "ElevenLabsTTS", "ElevenLabsTTSConfig")
+_register("easycat.tts.openai_tts", "OpenAITTS", "OpenAITTSConfig")
+_register("easycat.tts.input", "TTSInput", "TTSInputFormat")
+_register(
+    "easycat.vad",
+    "FunASROnnxVAD",
+    "KrispVAD",
+    "SileroVAD",
+    "TenVAD",
+    "VADConfig",
+    "create_vad",
+)
+
+# ── Transport implementations ────────────────────────────────────
+
+_register("easycat.transports.local", "LocalTransport", "LocalTransportConfig")
+_register(
+    "easycat.transports.twilio_media",
+    "TwilioConnectionTransport",
     "TwilioTransport",
     "TwilioTransportConfig",
+)
+_register(
+    "easycat.telephony.session_actions",
     "TwilioSessionActionConfig",
     "TwilioSessionActionExecutor",
-    "TwilioConnectionTransport",
-    # Configuration & errors
-    "TimeoutConfig",
-    "STTTimeoutError",
+)
+_register(
+    "easycat.transports.webrtc",
+    "ICEServer",
+    "WebRTCTransport",
+    "WebRTCTransportConfig",
+)
+_register(
+    "easycat.transports.websocket",
+    "WebSocketConnectionTransport",
+    "WebSocketTransport",
+    "WebSocketTransportConfig",
+)
+
+# ── Configuration & errors ────────────────────────────────────────
+
+_register(
+    "easycat.timeouts",
     "AgentTimeoutError",
+    "STTTimeoutError",
+    "TimeoutConfig",
     "TTSTimeoutError",
-    # Helpers
-    "attach_runtime_feedback",
-    "default_event_logging",
-    "require_env",
-    "wait_for_shutdown_signal",
-    # Debug-first runtime
-    "ExecutionJournal",
-    "ExternalAgentBridge",
-    "JournalRecord",
-    "JournalRecordKind",
-    "JournalView",
-    "RunBundle",
-    "Stage",
-    "load_bundle",
-]
+)
+
+
+if TYPE_CHECKING:
+    # Static-analysis view of every lazy export.  None of these imports
+    # run at runtime — ``__getattr__`` handles those.
+    from easycat.audio_format import (
+        PCM16_MONO_8K,
+        PCM16_MONO_16K,
+        PCM16_MONO_24K,
+        PCM16_MONO_48K,
+        AudioChunk,
+        AudioFormat,
+    )
+    from easycat.cancel import CancelToken
+    from easycat.config import (
+        EasyCatConfig,
+        TelephonyConfig,
+        create_session,
+        create_text_session,
+    )
+    from easycat.debug.bundle import RunBundle
+    from easycat.debug.testing import load_bundle
+    from easycat.echo_cancellation import (
+        EchoCancellationConfig,
+        LiveKitAEC,
+        PassthroughAEC,
+        create_echo_canceller,
+    )
+    from easycat.errors import (
+        REGISTRY as ERROR_REGISTRY,
+    )
+    from easycat.errors import (
+        EasyCatError,
+        ErrorEntry,
+    )
+    from easycat.events import (
+        ACTION_EVENTS,
+        AGENT_EVENTS,
+        ALL_EVENTS,
+        AUDIO_EVENTS,
+        DTMF,
+        ERROR_EVENTS,
+        INTERRUPTION_EVENTS,
+        LIFECYCLE_EVENTS,
+        RECONNECT_EVENTS,
+        STT_EVENTS,
+        TELEPHONY_EVENTS,
+        TOOL_EVENTS,
+        TTS_EVENTS,
+        VAD_EVENTS,
+        AgentDelta,
+        AgentFinal,
+        AgentRequestStarted,
+        AudioIn,
+        BotStartedSpeaking,
+        BotStoppedSpeaking,
+        DTMFAggregated,
+        Error,
+        ErrorStage,
+        Event,
+        EventBus,
+        Interruption,
+        ReconnectAttempt,
+        ReconnectFailure,
+        ReconnectSuccess,
+        SessionActionCompleted,
+        SessionActionFailed,
+        SessionActionRequested,
+        SessionActionStarted,
+        STTFinal,
+        STTPartial,
+        ToolCallDelta,
+        ToolCallResult,
+        ToolCallStarted,
+        TTSAudio,
+        TTSMarkers,
+        TurnEnded,
+        TurnStarted,
+        VADStartSpeaking,
+        VADStopSpeaking,
+        VoicemailDetected,
+    )
+    from easycat.helpers import (
+        attach_runtime_feedback,
+        default_event_logging,
+        require_env,
+        run,
+        wait_for_shutdown_signal,
+    )
+    from easycat.integrations.agents._agent_runner import (
+        AgentRunner,
+        AgentRunnerConfig,
+    )
+    from easycat.integrations.agents._base_adapter import (
+        BaseAgentAdapter,
+        serialize_output,
+    )
+    from easycat.integrations.agents._factory import auto_adapt_agent
+    from easycat.integrations.agents._legacy_types import (
+        AgentStreamEvent,
+        AgentStreamEventType,
+        StreamingAgent,
+    )
+    from easycat.integrations.agents.base import ExternalAgentBridge
+    from easycat.llm_output_processing import (
+        LLMOutputProcessor,
+        MarkdownStripProcessor,
+        PauseProcessor,
+        PhoneticReplacementProcessor,
+        default_pronunciation_processors,
+    )
+    from easycat.noise_reduction import (
+        KrispNoiseReducer,
+        NoiseReducerConfig,
+        PassthroughNoiseReducer,
+        RNNoiseReducer,
+        create_noise_reducer,
+    )
+    from easycat.providers import (
+        EchoCanceller,
+        NoiseReducer,
+        STTProvider,
+        Transport,
+        TTSProvider,
+        VADProvider,
+    )
+    from easycat.runtime import (
+        ExecutionJournal,
+        JournalRecord,
+        JournalRecordKind,
+        JournalView,
+    )
+    from easycat.session._session import Session
+    from easycat.session._types import SessionConfig, TurnState
+    from easycat.session.action_executors import CoreSessionActionExecutor
+    from easycat.session.actions import (
+        CustomAction,
+        EndCallAction,
+        SendDTMFAction,
+        SendSMSAction,
+        SessionAction,
+        SessionActionExecutor,
+        SessionActionResult,
+        SessionActions,
+        SessionActionType,
+        TransferCallAction,
+        TransferPlan,
+    )
+    from easycat.session_manager import SessionManager
+    from easycat.smart_turn import (
+        SmartTurnConfig,
+        SmartTurnONNX,
+        SmartTurnProvider,
+        SmartTurnResult,
+        create_smart_turn,
+    )
+    from easycat.stages.base import Stage
+    from easycat.stt import (
+        DeepgramSTT,
+        DeepgramSTTConfig,
+        ElevenLabsSTT,
+        ElevenLabsSTTConfig,
+        OpenAIRealtimeSTT,
+        OpenAIRealtimeSTTConfig,
+        OpenAISTT,
+        OpenAISTTConfig,
+    )
+    from easycat.telephony.session_actions import (
+        TwilioSessionActionConfig,
+        TwilioSessionActionExecutor,
+    )
+    from easycat.timeouts import (
+        AgentTimeoutError,
+        STTTimeoutError,
+        TimeoutConfig,
+        TTSTimeoutError,
+    )
+    from easycat.transports.local import LocalTransport, LocalTransportConfig
+    from easycat.transports.twilio_media import (
+        TwilioConnectionTransport,
+        TwilioTransport,
+        TwilioTransportConfig,
+    )
+    from easycat.transports.webrtc import (
+        ICEServer,
+        WebRTCTransport,
+        WebRTCTransportConfig,
+    )
+    from easycat.transports.websocket import (
+        WebSocketConnectionTransport,
+        WebSocketTransport,
+        WebSocketTransportConfig,
+    )
+    from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
+    from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
+    from easycat.tts.input import TTSInput, TTSInputFormat
+    from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
+    from easycat.turn_manager import TurnMode
+    from easycat.vad import FunASROnnxVAD, KrispVAD, SileroVAD, TenVAD, VADConfig, create_vad
+
+
+def __getattr__(name: str):  # PEP 562
+    """Lazy re-export dispatcher.  Runs once per attribute per session."""
+    try:
+        module_path, attr = _LAZY_ATTR[name]
+    except KeyError:
+        raise AttributeError(f"module 'easycat' has no attribute {name!r}") from None
+    module = importlib.import_module(module_path)
+    value = getattr(module, attr)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(list(globals()) + list(_LAZY_ATTR)))
+
+
+__all__ = sorted(_LAZY_ATTR)
