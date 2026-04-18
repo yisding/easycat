@@ -248,8 +248,9 @@ class EasyCatConfig:
                 self.stt = OpenAIRealtimeSTTConfig(api_key=self.openai_api_key)
             if self.tts is None:
                 # Match the TTS output format to the transport's audio format
-                # so that TTSBase._normalize_audio resamples correctly
-                # (e.g. OpenAI produces 24kHz but LocalTransport plays 16kHz).
+                # so TTSBase._normalize_audio resamples when they disagree
+                # (e.g. a WebSocketTransport left at 16 kHz while OpenAI
+                # TTS emits 24 kHz).
                 transport_fmt = getattr(self.transport, "audio_format", None)
                 tts_kwargs: dict[str, Any] = {"api_key": self.openai_api_key}
                 if transport_fmt is not None:
