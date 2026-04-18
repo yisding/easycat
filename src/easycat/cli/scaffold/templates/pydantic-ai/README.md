@@ -19,7 +19,7 @@ cp .env.example .env
 Edit `.env` and set `OPENAI_API_KEY`. Run `easycat doctor` to verify:
 
 ```bash
-uvx easycat doctor
+uv run easycat doctor
 ```
 
 ## Run

@@ -9,6 +9,7 @@ primary surface for coding-agent scaffolding).
 from __future__ import annotations
 
 import subprocess
+from difflib import get_close_matches
 from importlib.resources import files
 from pathlib import Path
 from string import Template
@@ -31,7 +32,10 @@ from easycat.cli.scaffold._schema import (
     available_templates,
     parse_config,
 )
-from easycat.errors import EASYCAT_E101, EASYCAT_E102, EASYCAT_E103
+from easycat.config import _VALID_MCP_SCHEMES
+from easycat.errors import EASYCAT_E101, EASYCAT_E102, EASYCAT_E103, EASYCAT_E104
+from easycat.stt.factory import available_providers as available_stt_providers
+from easycat.tts.factory import available_providers as available_tts_providers
 
 _SCAFFOLD_DEFAULTS: dict[str, str] = {
     "AGENT_NAME": "Support",
@@ -137,6 +141,46 @@ def _validate_for_template(cfg: InitConfig) -> None:
                     "'mcp_servers'; pick a voice template or remove the field."
                 )
             )
+        return
+
+    # Voice template — validate provider strings and MCP URIs up front so
+    # the scaffolded ``agent.py`` cannot fail on first run for values that
+    # ``easycat init`` accepted.  Without this, a typo like
+    # ``stt="deepgrm/flux"`` writes happily and explodes with
+    # ``EASYCAT_E104`` only when the user runs ``python agent.py``.
+    if cfg.stt:
+        _validate_provider_spec(cfg.stt, available_stt_providers(), kind="STT")
+    if cfg.tts:
+        _validate_provider_spec(cfg.tts, available_tts_providers(), kind="TTS")
+    if cfg.mcp_servers:
+        for uri in cfg.mcp_servers:
+            if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
+                raise EASYCAT_E102(
+                    problem=(
+                        f"invalid MCP server URI {uri!r}. Must start with one "
+                        f"of {', '.join(_VALID_MCP_SCHEMES)} (e.g. "
+                        "'stdio://npx -y @modelcontextprotocol/server-filesystem')."
+                    )
+                )
+
+
+def _validate_provider_spec(spec: str, available: list[str], *, kind: str) -> None:
+    """Ensure ``"provider/model"`` shortcuts use a known provider name.
+
+    Mirrors the registry/fuzzy-suggest behavior of ``parse_stt_string`` /
+    ``parse_tts_string`` without requiring an API key — which the user
+    typically has not exported yet at scaffold time.
+    """
+    provider = spec.partition("/")[0].strip().lower()
+    if provider in available:
+        return
+    suggestion = get_close_matches(provider, available, n=1, cutoff=0.5)
+    hint = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
+    raise EASYCAT_E104(
+        provider=f"{provider} ({kind})",
+        available=", ".join(available),
+        hint=hint,
+    )
 
 
 def _config_extra_kwargs(cfg: InitConfig) -> str:
@@ -384,7 +428,7 @@ def init(
     stderr_console.print(f"  cd {name}")
     stderr_console.print("  cp .env.example .env  [dim]# then fill in your API keys[/]")
     stderr_console.print("  uv sync")
-    stderr_console.print("  uvx easycat doctor    [dim]# verify your setup[/]")
+    stderr_console.print("  uv run easycat doctor [dim]# verify your setup[/]")
     stderr_console.print("  uv run --env-file .env python agent.py")
 
 

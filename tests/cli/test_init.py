@@ -291,3 +291,77 @@ def test_init_rejects_voice_fields_for_text_chat(
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     assert result.exit_code == 4
     assert "EASYCAT_E102" in result.stderr
+
+
+# ── Provider/MCP validation runs before scaffold writes ────────────────
+
+
+def test_init_rejects_unknown_stt_provider(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Typo in `stt` shortcut fails at scaffold time, not first run."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "stt": "deepgrm/flux",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 2
+    assert "EASYCAT_E104" in result.stderr
+    assert "Did you mean 'deepgram'" in result.stderr
+    # No project files written.
+    assert not (tmp_path / "demo").exists()
+
+
+def test_init_rejects_unknown_tts_provider(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "tts": "elevenlbs/eleven_flash_v2_5",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 2
+    assert "EASYCAT_E104" in result.stderr
+    assert "Did you mean 'elevenlabs'" in result.stderr
+    assert not (tmp_path / "demo").exists()
+
+
+def test_init_rejects_non_uri_mcp_server(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plain names like `'filesystem'` are not yet wired — reject at scaffold."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "mcp_servers": ["filesystem"],
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 4
+    assert "EASYCAT_E102" in result.stderr
+    assert "MCP server URI" in result.stderr
+    assert not (tmp_path / "demo").exists()
+
+
+# ── Doctor next-step uses the project env, not uvx ────────────────────
+
+
+def test_init_next_steps_use_uv_run_easycat_doctor(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    assert "uv run easycat doctor" in result.stderr
+    assert "uvx easycat doctor" not in result.stderr
