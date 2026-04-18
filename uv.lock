@@ -1033,7 +1033,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'telephony'", specifier = ">=0.29.0" },
     { name = "websockets", specifier = ">=16.0" },
 ]
-provides-extras = ["openai-agents", "pydantic-ai", "openai", "deepgram", "elevenlabs", "telephony", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "smart-turn", "debugger", "webrtc", "quickstart", "all"]
+provides-extras = ["openai-agents", "pydantic-ai", "openai", "deepgram", "elevenlabs", "cartesia", "telephony", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "smart-turn", "debugger", "webrtc", "quickstart", "all"]
 
 [package.metadata.requires-dev]
 dev = [
