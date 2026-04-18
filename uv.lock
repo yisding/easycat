@@ -886,6 +886,8 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "pysbd" },
+    { name = "rich" },
+    { name = "typer" },
     { name = "websockets" },
 ]
 
@@ -1019,12 +1021,14 @@ requires-dist = [
     { name = "requests", marker = "extra == 'all'", specifier = ">=2.31.0" },
     { name = "requests", marker = "extra == 'quickstart'", specifier = ">=2.31.0" },
     { name = "requests", marker = "extra == 'rnnoise'", specifier = ">=2.31.0" },
+    { name = "rich", specifier = ">=13.0" },
     { name = "sounddevice", marker = "extra == 'all'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'local'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'quickstart'", specifier = ">=0.4.6" },
     { name = "ten-vad", marker = "extra == 'ten-vad'", specifier = ">=1.0.6.8" },
     { name = "twilio", marker = "extra == 'all'", specifier = ">=9.0.0" },
     { name = "twilio", marker = "extra == 'telephony'", specifier = ">=9.0.0" },
+    { name = "typer", specifier = ">=0.16" },
     { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.29.0" },
     { name = "uvicorn", marker = "extra == 'telephony'", specifier = ">=0.29.0" },
     { name = "websockets", specifier = ">=16.0" },

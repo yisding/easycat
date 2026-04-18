@@ -18,11 +18,16 @@
 >   Modal, Cloud Run, Railway/Render/DO), SQLite tuning reference,
 >   Litestream vs LiteFS guidance, libSQL/Turso config, failure
 >   modes for Tier 3 platforms, and the concrete decision tree.
-> - `peripheral-dx-onboarding.md` — line budgets, `easycat.run()` /
->   `async with session`, string-keyed providers, env autodetect,
->   `easycat` CLI (`init`, `doctor`, `run`, `dev`, `explain`, `cost`,
->   `test`, `bundle export`), templates, config factory presets, offline
->   preset, error diagnostics, `EasyCatConfig` flattening.
+> - `peripheral-dx-onboarding.md` — library DX: line budgets,
+>   `easycat.run()` / `async with session`, string-keyed providers,
+>   env autodetect, template content, config factory presets,
+>   offline preset, error diagnostics, `EasyCatConfig` flattening.
+> - `peripheral-cli.md` — `easycat` CLI focused on scaffolding
+>   (`init` + template catalog + `--config` schema) and journal
+>   debugging (`bundles list|show|export`, `replay`). Supporting
+>   commands: `doctor`, `explain`. Typer app, `uvx` zero-install
+>   guarantee, output contract, error UX. Library-wrapper commands
+>   (`run`, `dev`, `test`, `cost`) are deferred.
 > - `peripheral-provider-ecosystem.md` — Deepgram Flux STT adapter,
 >   Smart Turn v3.1 promotion (Pipecat wrapper), backchannel filter.
 > - `peripheral-redaction.md` — `RedactionPolicy` write filter,
@@ -509,7 +514,9 @@ Out of scope for this plan (and some also out of scope for EasyCat entirely):
   out of bounds for EasyCat, not deferred to a follow-up.
 - New chained providers beyond the current set (Deepgram Flux and
   similar STT upgrades remain peripheral follow-ups)
-- CLI tooling (`easycat init`, `doctor`, `explain`, `cost`, `dev --reload`)
+- CLI tooling (`easycat init`, `doctor`, `explain`, `dev`, `run`,
+  `test`, `bundles`, `replay`, `cost` — entire command surface in
+  `peripheral-cli.md`)
 - Line-count budget enforcement on examples
 - `run()`, `async with session`, string-keyed provider selection, env autodetect
 - OTel export

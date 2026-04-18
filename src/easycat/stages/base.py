@@ -100,18 +100,6 @@ class Stage(Protocol):
 
 # ── Non-deterministic fields ─────────────────────────────────────
 
-NONDETERMINISTIC_FIELDS: frozenset[str] = frozenset(
-    {
-        "timing.wall_ns",
-        "timing.cpu_ns",
-        "timing.queue_ns",
-        "timing.mono_ns",
-        "recorded_at_monotonic_ns",
-        "recorded_at_utc",
-        "cursor.entered_at",
-        "cursor.exited_at",
-    }
-)
 
 # Extended in WS4 runtime/replay.py as REPLAY_IGNORE_FIELDS
 

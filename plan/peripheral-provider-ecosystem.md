@@ -6,8 +6,10 @@
 >
 > **Sibling peripheral docs:**
 >
-> - `peripheral-dx-onboarding.md` — line budgets, CLI, templates,
->   helpers, error diagnostics
+> - `peripheral-dx-onboarding.md` — line budgets, library helpers,
+>   template content, error diagnostics
+> - `peripheral-cli.md` — `easycat` CLI, including `doctor` which
+>   probes providers listed in this file
 > - `peripheral-redaction.md` — `RedactionPolicy` write filter, safe
 >   snapshots, export-time redaction pass, ready-to-use policies
 > - `peripheral-observability-and-cost.md` — OTel export, cost modeling,

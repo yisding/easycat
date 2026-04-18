@@ -10,8 +10,11 @@
 >
 > **Sibling peripheral docs:**
 >
-> - `peripheral-dx-onboarding.md` — line budgets, CLI, templates,
->   helpers, error diagnostics
+> - `peripheral-dx-onboarding.md` — line budgets, library helpers,
+>   template content, error diagnostics
+> - `peripheral-cli.md` — `easycat` CLI (scaffolding + journal
+>   debugging). `bundles show` surfaces `CostRecord` fields defined
+>   here; a dedicated `easycat cost` command is deferred.
 > - `peripheral-redaction.md` — `RedactionPolicy` write filter, safe
 >   snapshots, export-time redaction pass, ready-to-use policies
 > - `peripheral-provider-ecosystem.md` — Deepgram Flux, Smart Turn
@@ -87,7 +90,8 @@ provider version strings so replays compute costs at historical rates.
 
 - **Per turn**: inline in the dev waterfall (`$0.0042`)
 - **Per session**: printed when session ends (`Session cost: $0.23, 18 turns`)
-- **Per day**: `easycat cost --since yesterday` CLI and debugger UI
+- **Per day**: debugger UI rollup view; a dedicated `easycat cost`
+  CLI is deferred (see `peripheral-cli.md`)
 
 ### Budget Alerts
 
@@ -229,16 +233,17 @@ armed to emit turns:
 - `warmup=True` by default.
 - `EasyCatConfig(warmup=False)` skips for batch workloads where the
   first turn does not need to be fast.
-- `easycat dev` shows a single line of output while warmup runs so the
-  user knows why the first `Listening...` prompt is delayed by a few
-  hundred milliseconds.
+- When running with `debug="full"`, the library prints a single line
+  of output while warmup runs so the user knows why the first
+  `Listening...` prompt is delayed by a few hundred milliseconds.
 
 ### Budget Assertion
 
-First-turn latency must fall within 20% of steady state. `easycat test`
-(from `peripheral-eval-and-debugger-ui.md`) asserts this against
-fixture runs so regressions in warmup coverage (e.g., a new provider
-that forgets to pre-handshake) fail CI.
+First-turn latency must fall within 20% of steady state. A pytest
+assertion using the `easycat.testing` plugin (from
+`peripheral-eval-and-debugger-ui.md`) asserts this against fixture
+runs so regressions in warmup coverage (e.g., a new provider that
+forgets to pre-handshake) fail CI.
 
 ## Dependencies on the Essential Plan
 
