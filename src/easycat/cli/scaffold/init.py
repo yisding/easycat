@@ -57,6 +57,7 @@ _PROVIDER_TO_EXTRA: dict[str, str] = {
     "openai-realtime": "openai",
     "deepgram": "deepgram",
     "elevenlabs": "elevenlabs",
+    "cartesia": "cartesia",
 }
 
 # Provider name → env var that holds its API key.  Used to extend the
@@ -66,6 +67,7 @@ _PROVIDER_TO_ENV_VAR: dict[str, str] = {
     "openai-realtime": "OPENAI_API_KEY",
     "deepgram": "DEEPGRAM_API_KEY",
     "elevenlabs": "ELEVENLABS_API_KEY",
+    "cartesia": "CARTESIA_API_KEY",
 }
 
 # Per-template baseline extras that must always be present in the
@@ -327,6 +329,18 @@ def _is_non_empty_dir(path: Path) -> bool:
     return path.exists() and path.is_dir() and any(path.iterdir())
 
 
+def _is_existing_non_dir(path: Path) -> bool:
+    """True if ``path`` exists as something other than a directory.
+
+    Regular files, symlinks-to-files, and special nodes all collide
+    with ``mkdir(parents=True, exist_ok=True)`` (which only silences
+    the error when the existing target is a directory).  We refuse
+    these up front — even with ``--force`` — so ``easycat init foo``
+    raises a stable E101 instead of a raw ``FileExistsError``.
+    """
+    return path.exists() and not path.is_dir()
+
+
 @cli_command
 def init(
     name: str | None = typer.Argument(
@@ -389,7 +403,7 @@ def init(
     _validate_for_template(cfg)
 
     target = Path(name).resolve()
-    if not force and _is_non_empty_dir(target):
+    if _is_existing_non_dir(target) or (not force and _is_non_empty_dir(target)):
         raise EASYCAT_E101(target=str(target))
 
     target.mkdir(parents=True, exist_ok=True)

@@ -27,7 +27,12 @@ def typer_app():
 @pytest.fixture
 def empty_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Scrub API-key env vars so doctor reports deterministic state."""
-    for var in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
+    for var in (
+        "OPENAI_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "CARTESIA_API_KEY",
+    ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("NO_COLOR", "1")
     yield

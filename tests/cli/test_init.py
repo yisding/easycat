@@ -134,6 +134,19 @@ def test_init_target_exists_without_force(
     assert "already exists" in normalized
 
 
+def test_init_target_is_existing_file(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NAME already existing as a file must surface E101, not FileExistsError."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "demo").write_text("I'm a file.")
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    # --force must not silently overwrite a file-typed collision.
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git", "--force"])
+    assert result.exit_code == 101
+    assert "EASYCAT_E101" in result.stderr
+
+
 def test_init_bad_json(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = cli.invoke(app, ["init", "demo", "--config", "not json", "--no-git"])
@@ -198,6 +211,25 @@ def test_init_honors_stt_string(
     assert "deepgram" in pyproject
     env_example = (project / ".env.example").read_text()
     assert "DEEPGRAM_API_KEY" in env_example
+
+
+def test_init_honors_cartesia_provider(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cartesia STT/TTS must wire CARTESIA_API_KEY into .env.example."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "stt": "cartesia",
+            "tts": "cartesia",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    env_example = (tmp_path / "demo" / ".env.example").read_text()
+    assert "CARTESIA_API_KEY" in env_example
 
 
 def test_init_honors_tts_and_mcp_servers(

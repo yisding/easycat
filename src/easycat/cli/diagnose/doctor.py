@@ -100,6 +100,7 @@ _PROVIDER_ENV: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "deepgram": "DEEPGRAM_API_KEY",
     "elevenlabs": "ELEVENLABS_API_KEY",
+    "cartesia": "CARTESIA_API_KEY",
 }
 
 
@@ -148,7 +149,8 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
                 detail="no provider API keys set",
                 code="EASYCAT_E203",
                 fix=(
-                    "Set at least one of OPENAI_API_KEY, DEEPGRAM_API_KEY, or ELEVENLABS_API_KEY."
+                    "Set at least one of OPENAI_API_KEY, DEEPGRAM_API_KEY, "
+                    "ELEVENLABS_API_KEY, or CARTESIA_API_KEY."
                 ),
             )
         )
@@ -162,6 +164,7 @@ _PROVIDER_PROBE_URL: dict[str, str] = {
     "openai": "https://api.openai.com/v1",
     "deepgram": "https://api.deepgram.com",
     "elevenlabs": "https://api.elevenlabs.io/v1",
+    "cartesia": "https://api.cartesia.ai",
 }
 
 
