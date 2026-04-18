@@ -117,7 +117,7 @@ def parse_tts_string(spec: str) -> TTSConfig:
     Callers that want programmatic API-key injection (e.g. feeding
     ``EasyCatConfig.openai_api_key`` into a ``tts="openai"`` shortcut)
     should set the provider's env var in the process scope before
-    calling — see ``_tmp_env`` in ``easycat.config``.
+    calling — see ``_openai_env_override`` in ``easycat.config``.
 
     Raises:
         EasyCatError (EASYCAT_E104): Unknown provider, with fuzzy-match
