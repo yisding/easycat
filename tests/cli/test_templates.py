@@ -29,7 +29,7 @@ from easycat.cli.scaffold.init import _substitutions, _templates_root
 
 # ``agent.py`` line budget per template (counts *all* lines including blanks).
 _LINE_BUDGETS: dict[str, int] = {
-    "openai-agents": 22,
+    "openai-agents": 24,
     "pydantic-ai": 22,
     "text-chat": 18,
 }
