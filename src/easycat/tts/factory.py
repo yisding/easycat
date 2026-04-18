@@ -9,17 +9,19 @@ from typing import Any
 
 from easycat.events import EventBus
 from easycat.providers import TTSProvider
+from easycat.tts.cartesia_tts import CartesiaTTS, CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 
-TTSConfig = OpenAITTSConfig | DeepgramTTSConfig | ElevenLabsTTSConfig
+TTSConfig = OpenAITTSConfig | DeepgramTTSConfig | ElevenLabsTTSConfig | CartesiaTTSConfig
 
 # Registry of known provider names to their config/class pairs
 _PROVIDERS: dict[str, tuple[type[TTSProvider], type[TTSConfig]]] = {
     "openai": (OpenAITTS, OpenAITTSConfig),
     "deepgram": (DeepgramTTS, DeepgramTTSConfig),
     "elevenlabs": (ElevenLabsTTS, ElevenLabsTTSConfig),
+    "cartesia": (CartesiaTTS, CartesiaTTSConfig),
 }
 _CONFIG_TO_PROVIDER: dict[type[TTSConfig], type[TTSProvider]] = {
     cfg_cls: provider_cls for provider_cls, cfg_cls in _PROVIDERS.values()
@@ -75,6 +77,8 @@ def create_tts_provider_from_config(config: TTSConfig, event_bus: EventBus) -> T
         provider_config = replace(config, event_bus=event_bus)
     elif isinstance(config, ElevenLabsTTSConfig) and config.event_bus is None:
         provider_config = replace(config, event_bus=event_bus)
+    elif isinstance(config, CartesiaTTSConfig) and config.event_bus is None:
+        provider_config = replace(config, event_bus=event_bus)
     return provider_cls(provider_config)
 
 
@@ -92,13 +96,16 @@ _PROVIDER_ENV_VAR: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "deepgram": "DEEPGRAM_API_KEY",
     "elevenlabs": "ELEVENLABS_API_KEY",
+    "cartesia": "CARTESIA_API_KEY",
 }
 
-# ElevenLabs names its field ``model_id`` instead of ``model`` — bridge
-# the naming gap so users can write ``tts="elevenlabs/eleven_flash_v2_5"``
+# ElevenLabs and Cartesia both name the model field ``model_id`` rather
+# than ``model``. Bridge the naming gap so users can write
+# ``tts="elevenlabs/eleven_flash_v2_5"`` or ``tts="cartesia/sonic-turbo"``
 # without caring about the field-level quirk.
 _MODEL_FIELD_NAME: dict[str, str] = {
     "elevenlabs": "model_id",
+    "cartesia": "model_id",
 }
 
 
