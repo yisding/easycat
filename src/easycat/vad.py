@@ -557,10 +557,17 @@ class FunASROnnxVAD(_VADBase):
     """Voice activity detection via ``funasr_onnx.Fsmn_vad_online``.
 
     FunASR's streaming VAD emits absolute segment boundaries rather than
-    frame-level speech probabilities, so this adapter maps those
-    boundaries into EasyCat's ``VADStartSpeaking`` / ``VADStopSpeaking``
-    events.  The published FunASR FSMN-VAD models are 16 kHz; 8 kHz
-    telephony audio is upsampled before inference.
+    frame-level speech probabilities.  This adapter translates each
+    boundary into a per-frame active/inactive flag and then routes it
+    through ``_VADBase._evaluate_speech`` so ``min_speech_duration_ms``
+    is applied like the other backends.  The published FunASR FSMN-VAD
+    models are 16 kHz; 8 kHz telephony audio is upsampled before
+    inference.
+
+    ``sensitivity`` has no effect on this backend because FunASR does
+    not expose a probability threshold; ``min_silence_duration_ms`` is
+    applied inside the model via ``max_end_sil`` so the shared state
+    machine's silence gate is disabled to avoid double-waiting.
     """
 
     def __init__(
@@ -588,6 +595,7 @@ class FunASROnnxVAD(_VADBase):
             raise ValueError("chunk_size_ms produced an empty chunk")
 
         self._buffer: bytes = b""
+        self._funasr_active: bool = False
         self._numpy: Any = None
         self._model: Any = None
         self._param_dict: dict[str, Any] = {"in_cache": []}
@@ -635,9 +643,19 @@ class FunASROnnxVAD(_VADBase):
         )
         if self._model is not None and hasattr(self._model, "max_end_sil"):
             try:
-                self._model.max_end_sil = self._min_silence_duration_ms
+                self._model.max_end_sil = min_silence_duration_ms
             except Exception:
                 pass
+        # FunASR already applies the silence gate internally via
+        # max_end_sil, so disable the shared state machine's silence
+        # gate to avoid waiting for the same duration twice.  Speech is
+        # still gated by min_speech_duration_ms below.
+        self._min_silence_duration_ms = 0
+        # FunASR emits binary boundaries rather than probabilities, so
+        # any sensitivity value would behave identically.  Pin the
+        # threshold to 0.5 so the 1.0 / 0.0 flags we feed _evaluate_speech
+        # cross it cleanly.
+        self._threshold = 0.5
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process a chunk and yield translated FunASR boundary events."""
@@ -659,17 +677,21 @@ class FunASROnnxVAD(_VADBase):
             segments = self._model(audio_in=waveform, param_dict=self._param_dict)
 
             for beg_ms, end_ms in _iter_funasr_segment_pairs(segments):
-                if beg_ms >= 0 and not self._is_speaking:
-                    self._is_speaking = True
-                    yield VADStartSpeaking()
-                if end_ms >= 0 and self._is_speaking:
-                    self._is_speaking = False
-                    yield VADStopSpeaking()
+                if beg_ms >= 0:
+                    self._funasr_active = True
+                if end_ms >= 0:
+                    self._funasr_active = False
+
+            now = time.monotonic()
+            speech_prob = 1.0 if self._funasr_active else 0.0
+            for event in self._evaluate_speech(speech_prob, now):
+                yield event
 
     def reset(self) -> None:
         """Reset adapter state and FunASR streaming caches."""
         super().reset()
         self._buffer = b""
+        self._funasr_active = False
         self._param_dict = {"in_cache": []}
 
     def version_info(self) -> dict[str, str]:
@@ -694,8 +716,10 @@ def _load_funasr_onnx_vad_online_class() -> Any:
     ``funasr-onnx`` 0.4.1 imports unrelated modules like SenseVoice from the
     top-level package, which in turn pull in optional dependencies such as
     ``torch``.  The VAD runtime itself lives in ``funasr_onnx.vad_bin`` and
-    does not require those extras, so we seed a package stub and import the
-    submodule directly.
+    does not require those extras, so we seed a package stub, import the
+    submodule directly, then restore ``sys.modules`` so a later
+    ``import funasr_onnx`` from user code still resolves to the real
+    package rather than our shim.
     """
 
     spec = find_spec("funasr_onnx")
@@ -704,22 +728,35 @@ def _load_funasr_onnx_vad_online_class() -> Any:
             "FunASR VAD requires the funasr_onnx package. Install easycat[funasr-vad]."
         )
 
-    package = sys.modules.get("funasr_onnx")
-    if package is None or not hasattr(package, "__path__"):
-        package = ModuleType("funasr_onnx")
-        package.__path__ = list(spec.submodule_search_locations)
-        package.__spec__ = spec
-        sys.modules["funasr_onnx"] = package
+    existing_package = sys.modules.get("funasr_onnx")
+    stub_installed = False
+    if existing_package is None or not hasattr(existing_package, "__path__"):
+        stub = ModuleType("funasr_onnx")
+        stub.__path__ = list(spec.submodule_search_locations)
+        stub.__spec__ = spec
+        sys.modules["funasr_onnx"] = stub
+        stub_installed = True
 
     try:
         module = import_module("funasr_onnx.vad_bin")
     except Exception as exc:
         raise ImportError(f"Failed to import funasr_onnx.vad_bin: {exc}") from exc
+    finally:
+        if stub_installed:
+            _restore_funasr_package(existing_package)
 
     try:
         return getattr(module, "Fsmn_vad_online")
     except AttributeError as exc:
         raise ImportError("funasr_onnx.vad_bin does not export Fsmn_vad_online") from exc
+
+
+def _restore_funasr_package(previous: Any) -> None:
+    """Undo a temporary ``sys.modules['funasr_onnx']`` stub install."""
+    if previous is None:
+        sys.modules.pop("funasr_onnx", None)
+    else:
+        sys.modules["funasr_onnx"] = previous
 
 
 def _resolve_funasr_model_dir(model_dir: str) -> str:
@@ -740,7 +777,8 @@ def _resolve_funasr_model_dir(model_dir: str) -> str:
 class VADConfig:
     """Configuration for VAD factory."""
 
-    # "funasr", "krisp", "ten", "silero", or "auto" (try silero -> ten -> krisp)
+    # "funasr", "krisp", "ten", "silero", or "auto"
+    # (auto tries silero -> funasr -> ten -> krisp)
     backend: str = "auto"
     # FunASR-specific
     funasr_model_dir: str = _FUNASR_DEFAULT_MODEL
@@ -767,7 +805,7 @@ def create_vad(config: VADConfig | None = None) -> Any:
       2. If config.backend == "funasr": use FunASR ONNX VAD (fail if unavailable)
       3. If config.backend == "ten": use TEN VAD (fail if unavailable)
       4. If config.backend == "krisp": use Krisp (fail if unavailable)
-      4. If config.backend == "auto" (default):
+      5. If config.backend == "auto" (default):
          - Try Silero first (permissively-licensed, bundled ONNX model)
          - Fall back to FunASR ONNX VAD
          - Fall back to TEN VAD (PyPI ``ten-vad`` if user installed it)

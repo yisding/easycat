@@ -335,7 +335,11 @@ async def test_funasr_vad_process_streaming_segments(monkeypatch: pytest.MonkeyP
             assert audio_in.dtype == "float32"
             assert audio_in.divisor == 32768.0
             param_dict.setdefault("in_cache", [])
-            return [[0, -1]] if self.calls == 1 else [[-1, 240]]
+            if self.calls == 1:
+                return [[0, -1]]
+            if self.calls == 2:
+                return [[-1, 240]]
+            return []
 
     def _initialize(self: FunASROnnxVAD) -> None:
         self._numpy = _FakeNumpy()
@@ -351,6 +355,11 @@ async def test_funasr_vad_process_streaming_segments(monkeypatch: pytest.MonkeyP
     events = []
     async for event in vad.process(_make_chunk(1000)):
         events.append(event)
+    async for event in vad.process(_make_chunk(0)):
+        events.append(event)
+    # _evaluate_speech latches silence on the first silent frame and
+    # emits VADStopSpeaking on the next one, so feed an extra empty
+    # frame to drive the state machine past that latch.
     async for event in vad.process(_make_chunk(0)):
         events.append(event)
 
