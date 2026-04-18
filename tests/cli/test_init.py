@@ -15,7 +15,7 @@ from easycat.cli.scaffold._schema import available_templates
 
 
 def test_list_templates(cli: CliRunner) -> None:
-    result = cli.invoke(app, ["init", "_", "--list-templates"])
+    result = cli.invoke(app, ["init", "--list-templates"])
     assert result.exit_code == 0
     names = result.stdout.strip().splitlines()
     assert "openai-agents" in names
@@ -24,10 +24,17 @@ def test_list_templates(cli: CliRunner) -> None:
 
 
 def test_list_templates_json(cli: CliRunner) -> None:
-    result = cli.invoke(app, ["init", "_", "--list-templates", "--json"])
+    result = cli.invoke(app, ["init", "--list-templates", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert set(payload["templates"]) == set(available_templates())
+
+
+def test_missing_name_without_list_templates(cli: CliRunner) -> None:
+    """`easycat init` with no NAME and no --list-templates exits 2."""
+    result = cli.invoke(app, ["init"])
+    assert result.exit_code == 2
+    assert "Missing argument 'NAME'" in result.stderr
 
 
 # ── Scaffolding success paths ────────────────────────────────────────

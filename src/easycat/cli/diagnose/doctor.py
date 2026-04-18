@@ -103,7 +103,26 @@ _PROVIDER_ENV: dict[str, str] = {
 }
 
 
-def check_env_vars() -> list[CheckResult]:
+def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
+    # Scoped mode: user asked to verify a specific provider.  A missing
+    # key for *that* provider must fail — otherwise `doctor --provider X`
+    # can false-green when a different provider happens to be configured.
+    if only_provider is not None:
+        var = _PROVIDER_ENV.get(only_provider)
+        if var is None:
+            return []
+        if os.getenv(var, ""):
+            return [CheckResult(name=f"env_{only_provider}", status="ok", detail=f"{var} set")]
+        return [
+            CheckResult(
+                name=f"env_{only_provider}",
+                status="fail",
+                detail=f"{var} is not set",
+                code="EASYCAT_E203",
+                fix=f"Set {var}: `export {var}=...`.",
+            )
+        ]
+
     results: list[CheckResult] = []
     any_set = False
     for provider, var in _PROVIDER_ENV.items():
@@ -222,7 +241,7 @@ def _run_all_checks(only_provider: str | None) -> list[CheckResult]:
     results: list[CheckResult] = []
     results.append(check_python_version())
     results.append(check_easycat_version())
-    results.extend(check_env_vars())
+    results.extend(check_env_vars(only_provider=only_provider))
     results.extend(check_provider_reachability(only_provider=only_provider))
     results.append(check_onnxruntime())
     return results

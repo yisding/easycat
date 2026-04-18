@@ -137,7 +137,11 @@ def _is_non_empty_dir(path: Path) -> bool:
 
 @cli_command
 def init(
-    name: str = typer.Argument(..., metavar="NAME", help="Name of the project directory."),
+    name: str | None = typer.Argument(
+        None,
+        metavar="NAME",
+        help="Name of the project directory (omit with --list-templates).",
+    ),
     template: str = typer.Option(
         "openai-agents",
         "--template",
@@ -168,6 +172,12 @@ def init(
             for t in templates:
                 stdout_console.print(t)
         raise typer.Exit(0)
+
+    if name is None:
+        stderr_console.print("[red]✗[/] Missing argument 'NAME'.")
+        stderr_console.print("  [dim]Usage:[/] easycat init NAME [OPTIONS]")
+        stderr_console.print("  [dim]Or:[/]    easycat init --list-templates")
+        raise typer.Exit(2)
 
     # Resolve scaffolding config.  Priority: --config JSON > interactive
     # prompts (TTY only) > --template alone with defaults.

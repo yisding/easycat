@@ -83,6 +83,23 @@ def test_doctor_only_provider_filters_reachability(
     assert "reach_deepgram" not in result.stderr
 
 
+def test_doctor_only_provider_fails_when_its_key_missing(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    no_network: None,
+) -> None:
+    """--provider X must fail (not false-green) when X's key is unset,
+    even if a *different* provider's key happens to be set."""
+    for var in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+    result = cli.invoke(app, ["doctor", "--provider", "openai"])
+    assert result.exit_code == 1
+    assert "EASYCAT_E203" in result.stderr
+    assert "OPENAI_API_KEY" in result.stderr
+
+
 def test_doctor_reports_httpx_failure(cli: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ConnectError on the probe should surface as E204."""
     import httpx
