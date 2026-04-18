@@ -8,6 +8,7 @@ shared with teammates.
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
 import re
@@ -308,7 +309,13 @@ class RunBundle:
                         "Total artifact size exceeds 500MB cap",
                         reason_code="SIZE_EXCEEDED",
                     )
-                data = base64.b64decode(b64)
+                try:
+                    data = base64.b64decode(b64, validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    raise BundleValidationError(
+                        f"Invalid base64 for inline artifact {ref!r}: {exc}",
+                        reason_code="INVALID_BASE64",
+                    ) from exc
                 total_size += len(data)
                 if total_size > _ARTIFACT_SIZE_CAP:
                     raise BundleValidationError(

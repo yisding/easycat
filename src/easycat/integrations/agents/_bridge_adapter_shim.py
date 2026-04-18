@@ -16,7 +16,11 @@ from uuid import uuid4
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._base_adapter import BaseAgentAdapter
-from easycat.integrations.agents._legacy_types import AgentStreamEvent, AgentStreamEventType
+from easycat.integrations.agents._legacy_types import (
+    INTERRUPTION_NOTE,
+    AgentStreamEvent,
+    AgentStreamEventType,
+)
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -188,12 +192,11 @@ class BridgeAdapterShim(BaseAgentAdapter):
         ``PydanticAIBridge``) see the interruption signal on the next
         turn without losing what was actually said.
         """
-        note = "[The user interrupted the assistant's response.]"
-        self._message_history.append({"role": "system", "content": note})
+        self._message_history.append({"role": "system", "content": INTERRUPTION_NOTE})
         bridge_fn = getattr(self._bridge, "append_interruption_note", None)
         if callable(bridge_fn):
             try:
-                bridge_fn(note)
+                bridge_fn(INTERRUPTION_NOTE)
             except Exception:
                 logger.debug("Bridge append_interruption_note failed", exc_info=True)
 

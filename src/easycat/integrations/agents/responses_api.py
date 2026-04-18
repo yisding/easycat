@@ -125,6 +125,7 @@ class RemoteResponsesAPIBridge:
         accumulated = ""
         accumulated_items: list[dict[str, Any]] = []
         pending_tool_calls: set[str] = set()
+        pending_tool_names: dict[str, str] = {}
         interrupted = False
         response_id: str | None = None
 
@@ -158,7 +159,9 @@ class RemoteResponsesAPIBridge:
                         if cancel_token.is_cancelled:
                             if pending_tool_calls:
                                 # Drain: keep processing until tools complete.
-                                bridge_ev = translate_sse_event(event_type, data, recorder)
+                                bridge_ev = translate_sse_event(
+                                    event_type, data, recorder, pending_tool_names
+                                )
                                 if bridge_ev is not None:
                                     if bridge_ev.kind == "tool_result":
                                         pending_tool_calls.discard(bridge_ev.call_id)
@@ -190,7 +193,7 @@ class RemoteResponsesAPIBridge:
                         # The except blocks below handle unit_exited recording.
                         raise RuntimeError(f"Responses API failed: {error_msg}")
 
-                    bridge_ev = translate_sse_event(event_type, data, recorder)
+                    bridge_ev = translate_sse_event(event_type, data, recorder, pending_tool_names)
                     if bridge_ev is not None:
                         if bridge_ev.kind == "text_delta":
                             accumulated += bridge_ev.text
