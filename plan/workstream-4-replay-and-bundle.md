@@ -68,7 +68,7 @@ surprised by non-determinism.
   `peripheral-eval-and-debugger-ui.md`)
 - Full `easycat.testing` module with Simulator + Judge (peripheral)
 - `easycat replay` CLI command wrapper (peripheral —
-  `peripheral-dx-onboarding.md`)
+  `peripheral-cli.md`)
 - `bundle export --for=claude-code` context packs (peripheral)
 - Interactive debugger UI replay controls (peripheral)
 
@@ -643,8 +643,8 @@ Peripheral follow-ups also depend on this workstream:
 - `peripheral-eval-and-debugger-ui.md` adds `forked_replay` as a
   fourth fidelity class and builds the Simulator + Judge on top of
   the `load_bundle()` fixture helper
-- `peripheral-dx-onboarding.md` wraps `export_debug_bundle` and the
-  bundle discovery functions as `easycat bundle export` and
+- `peripheral-cli.md` wraps `export_debug_bundle` and the bundle
+  discovery functions as `easycat bundles export` and
   `easycat bundles list` CLI commands
 - `peripheral-observability-and-cost.md`'s `CostRecord` is included
   in bundles through the existing journal record path — nothing extra

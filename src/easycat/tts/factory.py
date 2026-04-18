@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
+from difflib import get_close_matches
 from typing import Any
 
 from easycat.events import EventBus
@@ -81,3 +83,66 @@ def _provider_for_config(config_type: type[TTSConfig]) -> type[TTSProvider]:
     if provider_cls is None:
         raise ValueError("Unsupported TTS configuration type.")
     return provider_cls
+
+
+# Provider name → env var that holds its API key. Used by string-keyed
+# provider selection (e.g. ``tts="openai"``) to auto-detect the API
+# key without explicit wiring.
+_PROVIDER_ENV_VAR: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "deepgram": "DEEPGRAM_API_KEY",
+    "elevenlabs": "ELEVENLABS_API_KEY",
+}
+
+# ElevenLabs names its field ``model_id`` instead of ``model`` — bridge
+# the naming gap so users can write ``tts="elevenlabs/eleven_flash_v2_5"``
+# without caring about the field-level quirk.
+_MODEL_FIELD_NAME: dict[str, str] = {
+    "elevenlabs": "model_id",
+}
+
+
+def available_providers() -> list[str]:
+    """Return every registered TTS provider name, sorted."""
+    return sorted(_PROVIDERS)
+
+
+def parse_tts_string(spec: str) -> TTSConfig:
+    """Parse a ``"provider/model"`` (or bare ``"provider"``) shortcut.
+
+    Looks up the provider in the registry, reads the corresponding API
+    key from the env var (:data:`_PROVIDER_ENV_VAR`), and returns a
+    concrete :class:`TTSConfig` with ``model`` set when supplied.
+
+    Raises:
+        EasyCatError (EASYCAT_E104): Unknown provider, with fuzzy-match
+            suggestion.
+        EasyCatError (EASYCAT_E203): Missing required API key env var.
+    """
+    from easycat.errors import EASYCAT_E104, EASYCAT_E203
+
+    provider, _, model = spec.partition("/")
+    provider = provider.strip().lower()
+    model = model.strip() or None
+
+    if provider not in _PROVIDERS:
+        available = available_providers()
+        suggestion = get_close_matches(provider, available, n=1, cutoff=0.5)
+        hint = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
+        raise EASYCAT_E104(
+            provider=provider,
+            available=", ".join(available),
+            hint=hint,
+        )
+
+    env_var = _PROVIDER_ENV_VAR[provider]
+    api_key = os.getenv(env_var, "")
+    if not api_key:
+        raise EASYCAT_E203(var=env_var)
+
+    _, config_cls = _PROVIDERS[provider]
+    kwargs: dict[str, Any] = {"api_key": api_key}
+    if model:
+        model_field = _MODEL_FIELD_NAME.get(provider, "model")
+        kwargs[model_field] = model
+    return config_cls(**kwargs)

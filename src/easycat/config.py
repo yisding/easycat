@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import os
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -25,7 +26,7 @@ from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
-from easycat.stt.factory import STTConfig, create_stt_provider_from_config
+from easycat.stt.factory import STTConfig, create_stt_provider_from_config, parse_stt_string
 from easycat.stt.openai_provider import OpenAISTTConfig  # noqa: F401  (public re-export)
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.stubs import NoopAgent
@@ -68,7 +69,7 @@ from easycat.transports.websocket import (
     WebSocketTransport,
     WebSocketTransportConfig,
 )
-from easycat.tts.factory import TTSConfig, create_tts_provider_from_config
+from easycat.tts.factory import TTSConfig, create_tts_provider_from_config, parse_tts_string
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, create_vad
@@ -162,8 +163,8 @@ class EasyCatConfig:
     """
 
     openai_api_key: str | None = None
-    stt: STTConfig | None = None
-    tts: TTSConfig | None = None
+    stt: STTConfig | str | None = None
+    tts: TTSConfig | str | None = None
     vad: VADConfig = field(default_factory=VADConfig)
     noise_reduction: NoiseReducerConfig | None = None
     echo_cancellation: EchoCancellationConfig | None = None
@@ -216,6 +217,27 @@ class EasyCatConfig:
                 f"Invalid journal_retention={self.journal_retention!r}. "
                 f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
             )
+
+        # Resolve string-keyed provider shortcuts ("deepgram/flux" →
+        # DeepgramSTTConfig(...)) before any downstream validation.  Typed
+        # configs still take precedence — users can pass a concrete
+        # DeepgramSTTConfig and keep full control.
+        if isinstance(self.stt, str):
+            self.stt = parse_stt_string(self.stt)
+        if isinstance(self.tts, str):
+            self.tts = parse_tts_string(self.tts)
+
+        # Env-var autodetect for the zero-config case: bare
+        # ``EasyCatConfig(agent=...)`` with ``OPENAI_API_KEY`` set picks up
+        # the OpenAI chain automatically — keeping the scaffolded
+        # ``agent.py`` templates under their line budget.
+        if (
+            self.stt is None
+            and self.tts is None
+            and self.openai_api_key is None
+            and (env_key := os.getenv("OPENAI_API_KEY"))
+        ):
+            self.openai_api_key = env_key
 
         if self.openai_api_key:
             if self.stt is None:

@@ -9,8 +9,14 @@
 >
 > **Sibling peripheral docs:**
 >
-> - `peripheral-dx-onboarding.md` — line budgets, CLI, templates,
->   helpers, error diagnostics
+> - `peripheral-dx-onboarding.md` — library DX: line budgets, `run()`,
+>   `async with`, string-keyed providers, env autodetect, template
+>   content, error diagnostics
+> - `peripheral-cli.md` — `easycat` CLI (scaffolding + journal
+>   debugging). Exposes `bundles export` and `replay` as entry points
+>   into features in this file. `easycat test` (pytest wrapper) and
+>   `easycat dev` (dev loop) are deferred by that plan; the pytest
+>   plugin and debugger UI below still ship and are driven directly.
 > - `peripheral-redaction.md` — `RedactionPolicy` write filter, safe
 >   snapshots, export-time redaction pass, ready-to-use policies
 > - `peripheral-provider-ecosystem.md` — Deepgram Flux, Smart Turn
@@ -41,10 +47,10 @@ can I replay it" locally. It is not enough to:
   replay classes rewind from a captured input; they do not fork and
   continue live from an arbitrary point in history.
 - **Give developers an interactive view of a session as it happens.**
-  The CLI surface in `peripheral-dx-onboarding.md` and the
-  `--for=claude-code` bundle export cover the "I'm already in a coding
-  agent" flow. Some debugging is genuinely exploratory and wants a
-  timeline visualization.
+  The CLI surface in `peripheral-cli.md` and the `--for=claude-code`
+  bundle export cover the "I'm already in a coding agent" flow. Some
+  debugging is genuinely exploratory and wants a timeline
+  visualization.
 
 This file owns all three.
 
@@ -104,11 +110,13 @@ running live providers (Coval pattern). Ties together the essential
 plan's `artifact_replay` fidelity class with the latency budget
 assertions in `peripheral-observability-and-cost.md`.
 
-### `easycat test` CLI
+### `easycat.testing` pytest plugin
 
-`easycat test` runs the pytest suite with the `easycat.testing` plugin
-pre-loaded. Listed in the CLI catalog in `peripheral-dx-onboarding.md`;
-implementation lives here.
+The pytest plugin is the primary surface. Users register it in their
+`pyproject.toml` under `[tool.pytest.ini_options]` (scaffolded
+templates do this for the user) and run `pytest` directly. A
+dedicated `easycat test` CLI wrapper is deferred by
+`peripheral-cli.md` — the plugin carries its own weight without one.
 
 ## Forked Replay / Time-Travel
 
@@ -144,7 +152,7 @@ A checkpoint is a committable boundary in the bridge execution cursor
 ### CLI and UI Surfaces
 
 - `easycat replay bundle.zip --fork-at cp_87` from the terminal (CLI
-  catalog lives in `peripheral-dx-onboarding.md`; this file owns the
+  command surface lives in `peripheral-cli.md`; this file owns the
   fork semantics).
 - "Fork from here" button in the interactive debugger UI below.
 
@@ -169,10 +177,9 @@ the journal is one store, so the debugger is just a reader, not a
 separate telemetry pipeline. The 2026 reality is that the CLI surface
 is used far more than the GUI:
 
-1. **`easycat bundle export --for=claude-code`** is the primary
+1. **`easycat bundles export --for=claude-code`** is the primary
    debugging flow. Most users in 2026 debug by piping trace data into
-   their coding agent. Ships as part of
-   `peripheral-dx-onboarding.md`.
+   their coding agent. CLI command lives in `peripheral-cli.md`.
 2. **Interactive web debugger** is secondary, for exploratory
    debugging. Ships here.
 
@@ -220,8 +227,9 @@ than ad hoc event subscriptions.
   LiveKit both require media infra — real differentiator).
 - WebSocket-first, with optional WebRTC upgrade path for production.
 - Opens the browser to the debugger automatically on first run.
-- `debug=True` in config auto-launches the debugger UI when running via
-  `easycat dev`.
+- `debug="full"` in config auto-launches the debugger UI. No `easycat
+  dev` wrapper is required; any agent invoked via `easycat.run(...,
+  debug="full")` gets the UI for free.
 
 ## Dev Waterfall Output
 
@@ -257,19 +265,23 @@ Critical details:
 The waterfall is derived entirely from the journal — same records as
 the web debugger, rendered for the terminal.
 
-## `easycat dev` Runtime Options
+## Dev Loop Features
 
-Building on the CLI listing in `peripheral-dx-onboarding.md`:
+A dedicated `easycat dev` command is deferred by `peripheral-cli.md`.
+The two library-level features below surface debugger-UI behavior
+from this file, both driven by `EasyCatConfig` rather than a
+dedicated CLI command:
 
-- **`easycat dev --reload`** — auto-restart on file change with
-  in-process agent swap. See the DX file for swap semantics; mentioned
-  here because the debugger timeline writes a `CodeReloaded` checkpoint
+- **Auto-reload** — a library helper (`easycat.run(..., reload=True)`
+  or an `async with session.autoreload():` block) watches for file
+  changes and swaps the agent module in-process via the bridge
+  boundary. The debugger timeline writes a `CodeReloaded` checkpoint
   that shows up as a visual divider in the UI.
-- **`easycat dev --record`** — automatically capture every session as a
-  bundle to `.easycat/recordings/`, timestamped, retained for seven
-  days. Makes "wait, what just happened?" debugging one command away —
-  no more losing a surprising behavior because the session ended before
-  the developer thought to export.
+- **Session recording** — `EasyCatConfig(record_to=".easycat/recordings/")`
+  automatically captures every session as a timestamped bundle,
+  retained for seven days. Makes "wait, what just happened?"
+  debugging one command away — no more losing a surprising behavior
+  because the session ended before the developer thought to export.
 
 ## Dependencies on the Essential Plan
 
@@ -285,8 +297,8 @@ Building on the CLI listing in `peripheral-dx-onboarding.md`:
 | Interactive debugger UI | essential Phase 3 (stages) + Phase 4 (bundle/replay) |
 | Dev waterfall output | essential Phase 1 (journal records) + `CostRecord` + `LatencyBudget` from observability file |
 | "Fork from here" button | `forked_replay` + UI |
-| `--record` session capture | Phase 4 (`RunBundle`) |
-| `CodeReloaded` checkpoint in UI timeline | `--reload` swap semantics from DX file |
+| Session recording (`record_to=...`) | Phase 4 (`RunBundle`) |
+| `CodeReloaded` checkpoint in UI timeline | auto-reload swap semantics from `peripheral-dx-onboarding.md` |
 
 ## Suggested Sequencing
 
@@ -299,9 +311,10 @@ Building on the CLI listing in `peripheral-dx-onboarding.md`:
 3. **After essential Phase 4**: `easycat.testing` module, Simulator +
    Judge, simulation-first mode, `forked_replay` fidelity class. All
    four depend on the replay contract being stable.
-4. **Last**: "fork from here" button in the debugger UI, `easycat dev
-   --record` bundle auto-capture, `CodeReloaded` timeline divider
-   integration with the `--reload` swap semantics from the DX file.
+4. **Last**: "fork from here" button in the debugger UI, `record_to=`
+   session auto-capture, `CodeReloaded` timeline divider integration
+   with the library-level auto-reload swap semantics from the DX
+   file.
 
 ## Competitive Context
 

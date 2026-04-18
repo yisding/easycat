@@ -12,13 +12,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from easycat.runtime.context import RunContext
+from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS  # noqa: F401  (re-export)
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._turn_context import TurnContext
 
 if TYPE_CHECKING:
     # Annotation-only import.  At runtime ``ReplaySpec`` resolves via
     # ``__getattr__`` below so we stay clear of the import cycle with
-    # ``runtime.replay`` (which imports NONDETERMINISTIC_FIELDS from here).
+    # ``runtime.replay``.
     from easycat.runtime.replay import ReplaySpec
 
 # ── Control signals ──────────────────────────────────────────────
@@ -99,28 +100,15 @@ class Stage(Protocol):
 
 
 # ── Non-deterministic fields ─────────────────────────────────────
-
-NONDETERMINISTIC_FIELDS: frozenset[str] = frozenset(
-    {
-        "timing.wall_ns",
-        "timing.cpu_ns",
-        "timing.queue_ns",
-        "timing.mono_ns",
-        "recorded_at_monotonic_ns",
-        "recorded_at_utc",
-        "cursor.entered_at",
-        "cursor.exited_at",
-    }
-)
-
-# Extended in WS4 runtime/replay.py as REPLAY_IGNORE_FIELDS
+# Re-exported from ``runtime.nondeterministic`` (canonical home).
+# Extended in ``runtime.replay`` as ``REPLAY_IGNORE_FIELDS``.
 
 
 # ── Lazy re-export: ReplaySpec lives in runtime.replay ──────────
-# ``runtime.replay`` imports :data:`NONDETERMINISTIC_FIELDS` from this
-# module, so a top-level ``from easycat.runtime.replay import
-# ReplaySpec`` would deadlock during initial module load.  We defer
-# the lookup to attribute access time instead.
+# ``runtime.replay`` imports from this package, so a top-level
+# ``from easycat.runtime.replay import ReplaySpec`` would deadlock
+# during initial module load.  We defer the lookup to attribute
+# access time instead.
 
 
 def __getattr__(name: str) -> Any:  # pragma: no cover - trivial forwarder

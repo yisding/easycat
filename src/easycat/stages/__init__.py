@@ -3,6 +3,14 @@
 Each stage wraps an existing provider with a uniform ``execute`` /
 ``snapshot_state`` / ``handle_upstream`` surface and optional journal
 recording.
+
+**Import order matters.** The ``ReplaySpec`` re-export below must come
+*before* the stage-module imports, because those modules import
+``ReplayCassette``/``ReplayFidelity``/``ReplaySpec`` from
+``easycat.runtime.replay``, and ``replay.py`` imports
+``NONDETERMINISTIC_FIELDS`` from ``stages.base``.  Loading replay
+first breaks the cycle cleanly — replay defines everything it needs
+before any stage module tries to pull it.
 """
 
 from easycat.runtime.replay import ReplaySpec
@@ -46,3 +54,7 @@ __all__ = [
     "TurnStage",
     "VADStage",
 ]
+
+
+# ``ReplaySpec`` is re-exported at import time (see module docstring).
+# No PEP 562 ``__getattr__`` hook is needed.

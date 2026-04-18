@@ -14,6 +14,7 @@
 > **Sibling peripherals:**
 >
 > - `peripheral-dx-onboarding.md`
+> - `peripheral-cli.md`
 > - `peripheral-eval-and-debugger-ui.md`
 > - `peripheral-observability-and-cost.md`
 > - `peripheral-provider-ecosystem.md`
@@ -447,10 +448,10 @@ round-trip via `RunBundle.from_partial_journal()` (WS4 T4.5.5).
 
 ## Dependencies on other peripherals
 
-- `peripheral-dx-onboarding.md` wraps `easycat doctor` with per-
-  platform health checks (Fly Machine detection, Modal container
-  detection, Cloud Run env detection) and adjusts its suggestions
-  based on the detected host.
+- `peripheral-cli.md` wraps `easycat doctor` with per-platform health
+  checks (Fly Machine detection, Modal container detection, Cloud Run
+  env detection) and adjusts its suggestions based on the detected
+  host. `doctor --environment=production` is the relevant surface.
 - `peripheral-observability-and-cost.md` exports OTel/metrics to
   cloud providers' native monitoring (CloudWatch, Stackdriver,
   Azure Monitor) where appropriate; per-platform exporter config

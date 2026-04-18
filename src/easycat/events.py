@@ -9,10 +9,20 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from easycat.audio_format import AudioChunk
-from easycat.session.actions import SessionAction, SessionActionResult
+
+if TYPE_CHECKING:
+    from easycat.session.actions import SessionAction, SessionActionResult
+
+
+def _default_session_action_result() -> SessionActionResult:
+    """Late-bound default factory — breaks the events ↔ session cycle."""
+    from easycat.session.actions import SessionActionResult
+
+    return SessionActionResult()
+
 
 logger = logging.getLogger(__name__)
 
@@ -345,7 +355,7 @@ class SessionActionCompleted(Event):
 
     action: SessionAction
     executor: str
-    result: SessionActionResult = field(default_factory=SessionActionResult)
+    result: SessionActionResult = field(default_factory=_default_session_action_result)
 
 
 @dataclass(frozen=True)
