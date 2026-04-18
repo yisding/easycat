@@ -5,7 +5,6 @@ import os
 import shutil
 import subprocess
 import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -42,88 +41,6 @@ def test_webrtc_observability_example_imports():
     import examples.webrtc_observability_server as webrtc_observability
 
     assert callable(webrtc_observability.main)
-
-
-def test_build_openai_agents_adapter_prefers_responses_websocket(monkeypatch: pytest.MonkeyPatch):
-    from easycat import build_openai_agents_adapter
-
-    class DummyAgent:
-        def __init__(self, name: str, instructions: str) -> None:
-            self.name = name
-            self.instructions = instructions
-
-    class DummyOpenAIProvider:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    class DummyModelSettings:
-        def __init__(self, *, reasoning=None, verbosity=None):
-            self.reasoning = reasoning
-            self.verbosity = verbosity
-
-    class DummyRunConfig:
-        def __init__(self, *, model_provider, model_settings=None):
-            self.model_provider = model_provider
-            self.model_settings = model_settings
-
-    fake_agents = types.SimpleNamespace(
-        Agent=DummyAgent,
-        OpenAIProvider=DummyOpenAIProvider,
-        RunConfig=DummyRunConfig,
-        ModelSettings=DummyModelSettings,
-    )
-    monkeypatch.setitem(sys.modules, "agents", fake_agents)
-
-    adapter = build_openai_agents_adapter(instructions="hello")
-    provider_kwargs = adapter._run_config.model_provider.kwargs
-    assert provider_kwargs["use_responses"] is True
-    assert provider_kwargs["use_responses_websocket"] is True
-    assert adapter._run_config.model_settings.verbosity == "low"
-    reasoning = adapter._run_config.model_settings.reasoning
-    effort = (
-        reasoning.get("effort")
-        if isinstance(reasoning, dict)
-        else getattr(reasoning, "effort", None)
-    )
-    assert effort == "none"
-
-
-def test_build_openai_agents_adapter_falls_back_to_responses_api_toggle(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from easycat import build_openai_agents_adapter
-
-    class DummyAgent:
-        def __init__(self, name: str, instructions: str) -> None:
-            self.name = name
-            self.instructions = instructions
-
-    class FailingProvider:
-        def __init__(self, **kwargs):
-            raise TypeError("unsupported")
-
-    class DummyRunConfig:
-        def __init__(self, *, model_provider, model_settings=None):
-            self.model_provider = model_provider
-            self.model_settings = model_settings
-
-    called: list[str] = []
-
-    def set_default_openai_api(api: str) -> None:
-        called.append(api)
-
-    fake_agents = types.SimpleNamespace(
-        Agent=DummyAgent,
-        OpenAIProvider=FailingProvider,
-        RunConfig=DummyRunConfig,
-        ModelSettings=lambda **kwargs: kwargs,
-        set_default_openai_api=set_default_openai_api,
-    )
-    monkeypatch.setitem(sys.modules, "agents", fake_agents)
-
-    adapter = build_openai_agents_adapter(instructions="hello")
-    assert adapter._run_config is None
-    assert called == ["responses"]
 
 
 def _python_executable() -> str:

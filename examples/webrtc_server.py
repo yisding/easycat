@@ -38,9 +38,7 @@ from easycat import (
     ICEServer,
     WebRTCTransportConfig,
     attach_runtime_feedback,
-    build_openai_agents_adapter,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
@@ -68,8 +66,11 @@ def _build_ice_servers() -> list[ICEServer]:
 
 async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
-    adapter = build_openai_agents_adapter(
-        instructions="You are a helpful voice assistant. Keep responses concise."
+    from agents import Agent  # type: ignore[import-untyped]
+
+    agent = Agent(
+        name="assistant",
+        instructions="You are a helpful voice assistant. Keep responses concise.",
     )
 
     signaling_host = os.getenv("SIGNALING_HOST", "0.0.0.0")
@@ -84,8 +85,7 @@ async def main() -> None:
             port=signaling_port,
             ice_servers=ice_servers,
         ),
-        agent=adapter,
-        event_logging=default_event_logging(),
+        agent=agent,
     )
     session = create_session(config)
     attach_runtime_feedback(session)

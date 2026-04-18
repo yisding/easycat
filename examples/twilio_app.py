@@ -26,9 +26,7 @@ from easycat import (
     TwilioConnectionTransport,
     TwilioSessionActionConfig,
     attach_runtime_feedback,
-    build_openai_agents_adapter,
     create_session,
-    default_event_logging,
 )
 from easycat.transports.twilio_media import twiml_connect_stream
 
@@ -45,7 +43,9 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
     manager: SessionManager[int] = SessionManager()
 
     async def handle_twilio_connection(ws: ServerConnection) -> None:
-        adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
+        from agents import Agent  # type: ignore[import-untyped]
+
+        agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
         transport = TwilioConnectionTransport(ws)
         telephony = TelephonyConfig(
             enable_dtmf_aggregator=True,
@@ -62,8 +62,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
                 openai_api_key=api_key,
                 transport=transport,
                 telephony=telephony,
-                agent=adapter,
-                event_logging=default_event_logging(),
+                agent=agent,
             )
         )
         attach_runtime_feedback(session)

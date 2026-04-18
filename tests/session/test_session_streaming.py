@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from unittest.mock import AsyncMock
 
 import pytest
 
-from easycat.agent_runner import (
-    AgentRunner,
-    AgentStreamEvent,
-    AgentStreamEventType,
-)
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -36,6 +32,12 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
+from easycat.integrations.agents._agent_runner import AgentRunner
+from easycat.integrations.agents._legacy_types import (
+    AgentStreamEvent,
+    AgentStreamEventType,
+)
+from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._interruption import (
     _all_tts_audio_delivered,
     _audio_bytes_acknowledged,
@@ -55,6 +57,7 @@ from easycat.session._tts_helpers import (
 )
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig
+from easycat.session.actions import SessionActionResult
 from easycat.timeouts import AgentTimeoutError, TimeoutConfig, TTSTimeoutError
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
@@ -317,6 +320,25 @@ class StructuredOnlyStreamingAgent:
             type=AgentStreamEventType.DONE,
             text="",
             structured_output={"answer": 42},
+        )
+
+
+class DoneOnlyStreamingAgent:
+    """Agent that emits only a DONE event with full text (no TEXT_DELTA events)."""
+
+    async def run(self, text: str) -> str:
+        return "Hello from done-only bridge."
+
+    async def run_streaming(
+        self,
+        text: str,
+        *,
+        context: list[dict[str, str]] | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        yield AgentStreamEvent(
+            type=AgentStreamEventType.DONE,
+            text="Hello from done-only bridge.",
         )
 
 
@@ -950,6 +972,34 @@ async def test_streaming_structured_only_done_emits_final_without_tts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_streaming_done_only_bridge_synthesizes_audio() -> None:
+    """A bridge that emits only a DONE event with text should still produce TTS audio."""
+
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="ignored"),
+            agent=DoneOnlyStreamingAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    session._turn = TurnContext("test-turn", CancelToken())
+    await session._run_streaming_agent("hello", token=None)
+
+    assert len(finals) == 1
+    assert finals[0].text == "Hello from done-only bridge."
+    assert tts.synthesized_texts == ["Hello from done-only bridge."]
+
+
+@pytest.mark.asyncio
 async def test_streaming_agent_timeout_does_not_poison_next_turn() -> None:
     """A timed-out streaming turn should not prevent the next turn from succeeding."""
 
@@ -1179,12 +1229,6 @@ async def test_session_with_agent_runner_streaming():
     # Verify AgentRunner recorded history
     assert len(runner.history) == 2
     assert runner.history[0]["content"] == "hello"
-
-    # Verify tracing spans were created
-    assert len(runner.spans) > 0
-    span_names = [s.name for s in runner.spans]
-    assert "stt_to_agent" in span_names
-    assert "agent_execution" in span_names
 
 
 @pytest.mark.asyncio
@@ -1570,6 +1614,49 @@ async def test_session_barge_in_after_agent_done_calls_notify_interruption():
     assert agent.interruption_notified
     assert agent.interruption_text_spoken == ""
     assert agent.interruption_mode == "truncate"
+
+
+@pytest.mark.asyncio
+async def test_session_barge_in_writes_interruption_journal_record():
+    agent = FastDoneAgent()
+    tts = SlowStartTTS()
+    journal = InMemoryRingBuffer()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="test"),
+            agent=agent,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            journal=journal,
+        )
+    )
+    token = CancelToken()
+    session._turn = TurnContext("turn-interruption-journal", token)
+
+    async def _cancel_during_tts_playback() -> None:
+        await agent.finished.wait()
+        await tts.started.wait()
+        token.cancel()
+
+    cancel_task = asyncio.create_task(_cancel_during_tts_playback())
+    await session._run_streaming_agent("test", token=token)
+    await cancel_task
+
+    records = [
+        record for record in journal.read() if record.name == "assistant_interruption_notified"
+    ]
+    assert len(records) == 1
+    assert records[0].turn_id == "turn-interruption-journal"
+    assert records[0].data == {
+        "source": "streaming_turn",
+        "mode": "truncate",
+        "text_spoken": "",
+        "notified": True,
+        "replacement_text": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -2203,6 +2290,57 @@ async def test_streaming_strip_markdown_tts_receives_clean_text():
     assert len(finals) == 1
     assert "**" not in finals[0].text
     assert "Settings" in finals[0].text
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_writes_journal_record():
+    class MarkdownStreamingAgent:
+        async def run(self, text: str) -> str:
+            return "Go to **Settings** first."
+
+        async def run_streaming(
+            self,
+            text: str,
+            *,
+            context: list[dict[str, str]] | None = None,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentStreamEvent]:
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Go to **Settings")
+            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="** first.")
+            yield AgentStreamEvent(
+                type=AgentStreamEventType.DONE,
+                text="Go to **Settings** first.",
+            )
+
+    journal = InMemoryRingBuffer()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="help"),
+            agent=MarkdownStreamingAgent(),
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            enable_noise_reduction=False,
+            turn_manager_config=_FAST_TURN,
+            strip_markdown=True,
+            journal=journal,
+        )
+    )
+    session._turn = TurnContext("turn-stream-markdown", CancelToken())
+    session._drain_session_actions = AsyncMock(return_value=SessionActionResult())
+
+    await session._run_streaming_agent("help", token=None)
+
+    records = [record for record in journal.read() if record.name == "markdown_stripped"]
+    assert len(records) == 1
+    assert records[0].turn_id == "turn-stream-markdown"
+    assert records[0].data == {
+        "phase": "streaming_final",
+        "changed": True,
+        "original_text": "Go to **Settings** first.",
+        "stripped_text": "Go to Settings first.",
+    }
 
 
 @pytest.mark.asyncio

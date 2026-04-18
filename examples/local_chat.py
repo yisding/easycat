@@ -15,9 +15,7 @@ from easycat import (
     EchoCancellationConfig,
     LocalTransportConfig,
     attach_runtime_feedback,
-    build_openai_agents_adapter,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
@@ -25,14 +23,15 @@ from easycat import (
 
 async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
-    adapter = build_openai_agents_adapter(instructions="You are a helpful voice assistant.")
+    from agents import Agent  # type: ignore[import-untyped]
+
+    agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
         echo_cancellation=EchoCancellationConfig(enabled=True),
-        agent=adapter,
-        event_logging=default_event_logging(),
+        agent=agent,
     )
     session = create_session(config)
 

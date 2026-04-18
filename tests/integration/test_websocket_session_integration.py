@@ -34,13 +34,19 @@ class TwoSentenceStreamingAgent:
 
     @staticmethod
     def _event(text: str):
-        from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
+        from easycat.integrations.agents._legacy_types import (
+            AgentStreamEvent,
+            AgentStreamEventType,
+        )
 
         return AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=text)
 
     @staticmethod
     def _done(text: str):
-        from easycat.agent_runner import AgentStreamEvent, AgentStreamEventType
+        from easycat.integrations.agents._legacy_types import (
+            AgentStreamEvent,
+            AgentStreamEventType,
+        )
 
         return AgentStreamEvent(type=AgentStreamEventType.DONE, text=text)
 

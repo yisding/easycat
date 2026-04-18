@@ -51,7 +51,7 @@ class FakeStreamResponse:
 class TestOpenAITTSConfig:
     def test_defaults(self):
         config = OpenAITTSConfig(api_key="test-key")
-        assert config.model == "tts-1"
+        assert config.model == "gpt-4o-mini-tts"
         assert config.voice == "alloy"
         assert config.speed == 1.0
         assert config.output_format == PCM16_MONO_24K

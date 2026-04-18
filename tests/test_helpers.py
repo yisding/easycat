@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from easycat.event_logging import EventLoggingConfig
 from easycat.events import AgentFinal, BotStoppedSpeaking, Interruption, STTFinal, TurnStarted
 from easycat.helpers import (
     attach_runtime_feedback,
@@ -33,9 +32,9 @@ def test_require_env_raises_on_missing(monkeypatch: pytest.MonkeyPatch):
 
 def test_default_event_logging_returns_config():
     cfg = default_event_logging()
-    assert isinstance(cfg, EventLoggingConfig)
-    assert cfg.enabled is True
-    assert cfg.include_partials is False
+    assert isinstance(cfg, dict)
+    assert cfg["enabled"] is True
+    assert cfg["include_partials"] is False
 
 
 # ── attach_runtime_feedback ─────────────────────────────────────

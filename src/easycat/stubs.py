@@ -8,6 +8,13 @@ from easycat.audio_format import AudioChunk
 from easycat.events import Event, STTEvent, TTSEvent
 from easycat.tts.input import TTSInput, coerce_tts_input
 
+_NOOP_VERSION = {
+    "provider": "noop",
+    "model": "unknown",
+    "api_version": "unknown",
+    "sdk_version": "unknown",
+}
+
 
 class NoopSTT:
     """STT provider that does nothing — used as default."""
@@ -18,12 +25,18 @@ class NoopSTT:
     async def send_audio(self, chunk: AudioChunk) -> None:
         pass
 
+    async def commit_segment(self) -> bool:
+        return False
+
     async def end_stream(self) -> None:
         pass
 
     async def events(self) -> AsyncIterator[STTEvent]:
         return
         yield  # make this an async generator
+
+    def version_info(self) -> dict[str, str]:
+        return {**_NOOP_VERSION, "provider": "noop-stt"}
 
 
 class NoopTTS:
@@ -44,6 +57,9 @@ class NoopTTS:
     async def cancel(self) -> None:
         pass
 
+    def version_info(self) -> dict[str, str]:
+        return {**_NOOP_VERSION, "provider": "noop-tts"}
+
 
 class NoopVAD:
     """VAD provider that does nothing — used as default."""
@@ -56,12 +72,15 @@ class NoopVAD:
         self,
         *,
         min_speech_duration_ms: int = 250,
-        min_silence_duration_ms: int = 300,
+        min_silence_duration_ms: int = 150,
         sensitivity: float = 0.5,
         pre_roll_ms: int = 100,
         post_roll_ms: int = 100,
     ) -> None:
         pass
+
+    def version_info(self) -> dict[str, str]:
+        return {**_NOOP_VERSION, "provider": "noop-vad"}
 
 
 class NoopTransport:
@@ -82,6 +101,9 @@ class NoopTransport:
 
     async def clear_audio(self) -> None:
         pass
+
+    def version_info(self) -> dict[str, str]:
+        return {**_NOOP_VERSION, "provider": "noop-transport"}
 
 
 class NoopAgent:

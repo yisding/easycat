@@ -5,12 +5,11 @@ from __future__ import annotations
 import enum
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from easycat.bounded_queue import BoundedAudioQueue
 from easycat.events import EventBus
 from easycat.llm_output_processing import LLMOutputProcessor
-from easycat.metrics import MetricsCollector
 from easycat.providers import (
     EchoCanceller,
     NoiseReducer,
@@ -21,8 +20,11 @@ from easycat.providers import (
 )
 from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.timeouts import TimeoutConfig
-from easycat.tracing import Tracer
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
+
+if TYPE_CHECKING:
+    from easycat.runtime.artifacts import ArtifactStore
+    from easycat.runtime.journal import ExecutionJournal
 
 # ── Agent protocol (lightweight — agent adapters provide real implementations) ──
 
@@ -81,15 +83,16 @@ class SessionConfig:
     turn_manager: TurnManager | None = None
     turn_manager_config: TurnManagerConfig | None = None
     timeout_config: TimeoutConfig | None = None
-    metrics: MetricsCollector | None = None
-    tracer: Tracer | None = None
+    journal: ExecutionJournal | None = None
+    artifact_store: ArtifactStore | None = None
+    session_id: str | None = None
     outbound_queue: BoundedAudioQueue | None = None
     telephony_helpers: Sequence[SessionHelper] = ()
     audio_gate: Callable[[], bool] | None = None
 
     # Pipeline flags
-    enable_noise_reduction: bool = True
-    enable_echo_cancellation: bool = True
+    enable_noise_reduction: bool = False
+    enable_echo_cancellation: bool = False
     enable_vad: bool = True
     auto_turn_from_stt_final: bool = False
     strip_markdown: bool = False
@@ -116,3 +119,8 @@ class SessionConfig:
     # Agent-initiated session actions.
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
+
+    # Runtime mode for the session.
+    runtime_mode: Literal["chained_pipeline", "text_session"] = "chained_pipeline"
+    # Text-mode context to pass through to stages (optional, set by create_text_session).
+    text_mode_context: dict[str, Any] | None = None

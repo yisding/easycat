@@ -21,14 +21,13 @@ from dataclasses import dataclass
 from easycat import (
     EasyCatConfig,
     LocalTransportConfig,
-    PydanticAIAdapter,
     SessionActions,
     attach_runtime_feedback,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
+from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
 # ── Dependencies ─────────────────────────────────────────────────
 # PydanticAI tools access SessionActions through the deps object.
@@ -74,14 +73,13 @@ async def main() -> None:
         ctx.deps.actions.end_call(reason=reason)
         return "Ending the call now."
 
-    adapter = PydanticAIAdapter(voice_agent, deps=deps)
+    bridge = PydanticAIBridge(agent=voice_agent, deps=deps)
 
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
-        agent=adapter,
+        agent=bridge,
         session_actions=actions,
-        event_logging=default_event_logging(),
     )
     session = create_session(config)
     attach_runtime_feedback(session)

@@ -33,9 +33,7 @@ from easycat import (
     EasyCatConfig,
     WebSocketTransportConfig,
     attach_runtime_feedback,
-    build_openai_agents_adapter,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
@@ -61,15 +59,17 @@ def _run_http_server() -> None:
 
 async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
-    adapter = build_openai_agents_adapter(
-        instructions="You are a helpful voice assistant. Keep responses concise."
+    from agents import Agent  # type: ignore[import-untyped]
+
+    agent = Agent(
+        name="assistant",
+        instructions="You are a helpful voice assistant. Keep responses concise.",
     )
 
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=WebSocketTransportConfig(port=WS_PORT),
-        agent=adapter,
-        event_logging=default_event_logging(),
+        agent=agent,
     )
     session = create_session(config)
     attach_runtime_feedback(session)

@@ -1,0 +1,1357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>EasyCat Debugger</title>
+<style>
+  :root {
+    --bg: #0c0f14;
+    --bg-2: #11151c;
+    --panel: #161a22;
+    --panel-2: #1d2330;
+    --panel-3: #232a37;
+    --text: #e1e4eb;
+    --muted: #7d8597;
+    --accent: #6ea8fe;
+    --green: #44d18a;
+    --orange: #e8a64b;
+    --red: #e0635a;
+    --purple: #b78dff;
+    --pink: #f08fad;
+    --border: #232a37;
+    --row-hover: #1f2531;
+    --row-selected: #2a3550;
+    --mono: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+    font-size: 13px;
+    height: 100vh;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select {
+    font-family: inherit;
+    font-size: 12px;
+  }
+  button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 5px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  button:hover:not(:disabled) { background: var(--row-hover); border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: #0c0f14; border-color: var(--accent); font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: #5497ea; }
+  input, select {
+    background: var(--bg-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-family: var(--mono);
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    height: 44px;
+  }
+  header h1 {
+    font-size: 13px;
+    margin: 0;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.02em;
+  }
+  header .source {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  header .live-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 11px;
+    font-family: var(--mono);
+  }
+  .live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  .live-dot.connected {
+    background: var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  header .spacer { flex: 1; }
+
+  /* Tab bar */
+  .tabbar {
+    display: flex;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 0 14px;
+  }
+  .tab {
+    padding: 8px 14px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 500;
+    transition: color 0.1s, border-color 0.1s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-color: var(--accent); }
+
+  main {
+    height: calc(100vh - 44px - 37px);
+    overflow: hidden;
+  }
+  .view { display: none; height: 100%; overflow: hidden; }
+  .view.active { display: flex; flex-direction: column; }
+
+  /* Empty / error states */
+  .empty, .error-msg {
+    color: var(--muted);
+    padding: 40px;
+    text-align: center;
+    font-style: italic;
+  }
+  .error-msg { color: var(--red); font-style: normal; }
+
+  /* Records view */
+  #records-view {
+    flex-direction: row;
+  }
+  #records-table-pane {
+    flex: 1;
+    overflow: auto;
+    padding: 12px;
+    border-right: 1px solid var(--border);
+  }
+  #records-filters {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  #records-filters input, #records-filters select {
+    height: 28px;
+  }
+  #records-filters .count {
+    color: var(--muted);
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  th {
+    text-align: left;
+    color: var(--muted);
+    font-weight: 500;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    background: var(--panel);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  td {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--panel);
+    cursor: pointer;
+    vertical-align: top;
+  }
+  tr:hover td { background: var(--row-hover); }
+  tr.selected td { background: var(--row-selected); }
+  .stage-tag {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-size: 10px;
+    background: var(--panel-2);
+    color: var(--text);
+    font-weight: 500;
+    text-transform: uppercase;
+  }
+  .stage-tag.tts { background: rgba(224,99,90,0.2); color: #e0635a; }
+  .stage-tag.stt { background: rgba(68,209,138,0.2); color: var(--green); }
+  .stage-tag.agent { background: rgba(110,168,254,0.2); color: var(--accent); }
+  .stage-tag.vad { background: rgba(183,141,255,0.2); color: var(--purple); }
+  .stage-tag.audio { background: rgba(125,133,151,0.2); color: var(--muted); }
+  .stage-tag.transport { background: rgba(232,166,75,0.2); color: var(--orange); }
+  .stage-tag.turn { background: rgba(240,143,173,0.2); color: var(--pink); }
+  .stage-tag.telephony { background: rgba(232,166,75,0.2); color: var(--orange); }
+  .kind-control { color: var(--orange); }
+  .has-error { color: var(--red); }
+  .ref { color: var(--accent); font-size: 10px; opacity: 0.85; margin-right: 4px; }
+
+  /* Inspector */
+  #inspector-pane {
+    width: 420px;
+    flex-shrink: 0;
+    overflow: auto;
+    padding: 14px;
+    background: var(--panel);
+  }
+  h3 {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  pre {
+    background: var(--bg-2);
+    padding: 10px;
+    border-radius: 4px;
+    overflow: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text);
+    margin: 0 0 14px;
+    border: 1px solid var(--border);
+    max-height: 350px;
+  }
+  .field-grid {
+    display: grid;
+    grid-template-columns: 100px 1fr;
+    gap: 6px 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    margin-bottom: 14px;
+  }
+  .field-grid .label { color: var(--muted); }
+  .field-grid .value { word-break: break-all; }
+
+  /* Timeline view */
+  #timeline-view { padding: 14px; overflow: auto; }
+  .timeline-turn {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .timeline-turn-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .timeline-turn-header .turn-id {
+    font-family: var(--mono);
+    color: var(--accent);
+    font-size: 12px;
+  }
+  .timeline-turn-header .wall-ms {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .timeline-turn-header .turn-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+  }
+  .timeline-turn-header .turn-actions button {
+    padding: 3px 10px;
+    font-size: 11px;
+  }
+  .badge {
+    font-family: var(--mono);
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 500;
+  }
+  .badge.err { background: rgba(224,99,90,0.2); color: var(--red); }
+  .badge.intr { background: rgba(232,166,75,0.2); color: var(--orange); }
+  .waterfall-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .waterfall-row .stage-name {
+    width: 80px;
+    color: var(--muted);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+  }
+  .waterfall-track {
+    flex: 1;
+    height: 20px;
+    background: var(--bg-2);
+    border-radius: 3px;
+    position: relative;
+  }
+  .waterfall-bar {
+    position: absolute;
+    height: 100%;
+    border-radius: 3px;
+    color: var(--bg);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 20px;
+    padding: 0 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 20px;
+  }
+  .waterfall-bar.tts { background: var(--red); }
+  .waterfall-bar.stt { background: var(--green); }
+  .waterfall-bar.agent { background: var(--accent); }
+  .waterfall-bar.vad { background: var(--purple); }
+  .waterfall-bar.audio { background: var(--muted); }
+  .waterfall-bar.transport { background: var(--orange); }
+  .waterfall-bar.turn { background: var(--pink); }
+  .waterfall-bar.telephony { background: var(--orange); opacity: 0.7; }
+  .waterfall-row .stage-ms {
+    width: 60px;
+    text-align: right;
+    color: var(--muted);
+    font-size: 10px;
+  }
+
+  /* Pipeline view */
+  #pipeline-view { padding: 14px; overflow: auto; }
+  #pipeline-svg {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    width: 100%;
+    height: 300px;
+  }
+  .pipeline-stage rect {
+    fill: var(--panel-2);
+    stroke: var(--border);
+    stroke-width: 1;
+    transition: stroke 0.2s, fill 0.2s;
+  }
+  .pipeline-stage.active rect {
+    fill: var(--row-selected);
+    stroke: var(--accent);
+    stroke-width: 2;
+  }
+  .pipeline-stage text {
+    fill: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    text-anchor: middle;
+  }
+  .pipeline-stage .stage-count {
+    fill: var(--muted);
+    font-size: 9px;
+  }
+  .pipeline-edge {
+    stroke: var(--border);
+    stroke-width: 1.5;
+    fill: none;
+    marker-end: url(#arrow);
+  }
+  .pipeline-edge.active { stroke: var(--accent); stroke-width: 2; }
+
+  /* Transcript view */
+  #transcript-view { padding: 14px; overflow: auto; }
+  .transcript-turn {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 14px 18px;
+    margin-bottom: 10px;
+  }
+  .transcript-turn .turn-id {
+    font-family: var(--mono);
+    color: var(--accent);
+    font-size: 11px;
+    margin-bottom: 8px;
+  }
+  .transcript-turn .speaker {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  .transcript-turn .speaker.user { color: var(--green); }
+  .transcript-turn .speaker.agent { color: var(--accent); }
+  .transcript-turn .text {
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    margin-bottom: 12px;
+    white-space: pre-wrap;
+  }
+  .transcript-turn audio {
+    width: 100%;
+    height: 32px;
+    margin-top: 6px;
+  }
+
+  /* Cost view */
+  #cost-view { padding: 14px; overflow: auto; }
+  .cost-totals {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .cost-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 14px;
+  }
+  .cost-card .label {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+  }
+  .cost-card .value {
+    font-family: var(--mono);
+    font-size: 22px;
+    color: var(--accent);
+  }
+
+  /* Replay view */
+  #replay-view { padding: 14px; overflow: auto; }
+  .replay-form {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 16px;
+    margin-bottom: 14px;
+    max-width: 700px;
+  }
+  .replay-form .row {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+    align-items: center;
+  }
+  .replay-form label {
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .replay-result {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 16px;
+    max-width: 700px;
+  }
+
+  /* Status bar */
+  footer {
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    padding: 4px 14px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    height: 22px;
+  }
+  footer .right { margin-left: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>EasyCat Debugger</h1>
+  <span class="source" id="source-label">loading…</span>
+  <span class="live-indicator">
+    <span class="live-dot" id="ws-dot"></span>
+    <span id="ws-label">disconnected</span>
+  </span>
+  <span class="spacer"></span>
+  <button id="export-btn" hidden>↓ Export bundle</button>
+  <button id="refresh-btn">⟳ Refresh</button>
+</header>
+<nav class="tabbar" role="tablist">
+  <div class="tab active" data-tab="timeline" role="tab">Timeline</div>
+  <div class="tab" data-tab="pipeline" role="tab">Pipeline</div>
+  <div class="tab" data-tab="records" role="tab">Records</div>
+  <div class="tab" data-tab="transcript" role="tab">Transcript</div>
+  <div class="tab" data-tab="cost" role="tab">Cost</div>
+  <div class="tab" data-tab="replay" role="tab">Replay</div>
+</nav>
+<main>
+  <section id="timeline-view" class="view active"></section>
+
+  <section id="pipeline-view" class="view">
+    <svg id="pipeline-svg" viewBox="0 0 900 280" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6"
+          markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#7d8597" />
+        </marker>
+      </defs>
+      <g id="pipeline-edges"></g>
+      <g id="pipeline-nodes"></g>
+    </svg>
+    <p style="color: var(--muted); margin-top: 14px; font-size: 11px;">
+      Click a stage to filter the Records tab to that stage's events.
+    </p>
+  </section>
+
+  <section id="records-view" class="view">
+    <div id="records-table-pane">
+      <div id="records-filters">
+        <select id="stage-filter"><option value="">all stages</option></select>
+        <input id="name-filter" placeholder="name…" style="width: 180px;" />
+        <input id="from-seq" placeholder="from seq" style="width: 100px;" />
+        <input id="to-seq" placeholder="to seq" style="width: 100px;" />
+        <label style="color: var(--muted); display: flex; align-items: center; gap: 4px;">
+          <input type="checkbox" id="errors-only-toggle" /> errors only
+        </label>
+        <span class="count" id="record-count"></span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>seq</th>
+            <th>kind</th>
+            <th>name</th>
+            <th>stage</th>
+            <th>turn</th>
+            <th>refs</th>
+          </tr>
+        </thead>
+        <tbody id="records-body"></tbody>
+      </table>
+    </div>
+    <aside id="inspector-pane">
+      <div class="empty" id="inspector-empty">Select a record to inspect.</div>
+      <div id="inspector-content" hidden></div>
+    </aside>
+  </section>
+
+  <section id="transcript-view" class="view"></section>
+  <section id="cost-view" class="view"></section>
+
+  <section id="replay-view" class="view">
+    <div class="replay-form">
+      <h3>Run replay</h3>
+      <div class="row">
+        <label for="replay-fidelity">Fidelity</label>
+        <select id="replay-fidelity">
+          <option value="artifact">ARTIFACT (deterministic)</option>
+          <option value="simulated">SIMULATED (stages only)</option>
+          <option value="live">LIVE (re-execute providers)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="replay-tool-policy">Tool policy</label>
+        <select id="replay-tool-policy">
+          <option value="deny">DENY (block side effects)</option>
+          <option value="stub">STUB (substitute from journal)</option>
+          <option value="allow">ALLOW (permit live side effects)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="replay-timing">Timing</label>
+        <select id="replay-timing">
+          <option value="fast">fast (mask non-deterministic fields)</option>
+          <option value="wall">wall (preserve original timing)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label></label>
+        <button class="primary" id="run-replay-btn">▶ Run replay</button>
+      </div>
+    </div>
+    <div class="replay-result" id="replay-result-block" hidden>
+      <h3>Result</h3>
+      <pre id="replay-result-pre"></pre>
+    </div>
+    <div class="replay-result" id="replay-unsupported" hidden>
+      <p style="color: var(--muted);">
+        Replay is only available for bundle sources.  Live sessions can export
+        a bundle from the header to enable replay.
+      </p>
+    </div>
+  </section>
+</main>
+<footer>
+  <span id="status-source"></span>
+  <span id="status-records"></span>
+  <span id="status-turns"></span>
+  <span class="right" id="status-time"></span>
+</footer>
+
+<script>
+"use strict";
+
+// ── Pure DOM safety helpers ──────────────────────────────────────
+// Never touch innerHTML.  Build elements programmatically and set
+// textContent so escape rules are obvious.  ``href``/``src``/etc. go
+// through a scheme allowlist so a future caller can't accidentally
+// inject ``javascript:`` URLs from journal data.
+const _UNSAFE_URL_ATTRS = new Set([
+  "href", "src", "srcdoc", "xlink:href", "action", "formaction",
+]);
+function _sanitiseUrl(value) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.replace(/^[\s\u0000-\u001f]+/, "");
+  if (!trimmed) return "";
+  // Reject anything that could load script.
+  if (/^(javascript|vbscript|file):/i.test(trimmed)) return "";
+  if (/^data:text\/html/i.test(trimmed)) return "";
+  // Reject protocol-relative URLs: ``//evil.com`` is interpreted as
+  // same-protocol cross-origin, which the sanitiser must not bless.
+  if (/^\/\//.test(trimmed)) return "";
+  // Allow same-origin paths (single leading /), fragments, queries,
+  // relative refs, and explicit safe schemes.
+  if (/^(https?:|blob:|data:audio\/|data:image\/|\/[^/]|#|\?|\.)/i.test(trimmed)) {
+    return trimmed;
+  }
+  // No scheme separator at all → relative path, safe.
+  if (!trimmed.includes(":")) return trimmed;
+  return "";
+}
+function el(tag, attrs, children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === null || v === undefined) continue;
+      if (k === "class") node.className = v;
+      else if (k.startsWith("on") && typeof v === "function") {
+        node.addEventListener(k.slice(2).toLowerCase(), v);
+      } else if (k === "dataset") {
+        for (const [dk, dv] of Object.entries(v)) node.dataset[dk] = dv;
+      } else if (_UNSAFE_URL_ATTRS.has(k)) {
+        const safe = _sanitiseUrl(v);
+        if (safe) node.setAttribute(k, safe);
+      } else {
+        node.setAttribute(k, v);
+      }
+    }
+  }
+  if (children) {
+    if (!Array.isArray(children)) children = [children];
+    for (const c of children) {
+      if (c == null) continue;
+      node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    }
+  }
+  return node;
+}
+const svgNS = "http://www.w3.org/2000/svg";
+function svg(tag, attrs, children) {
+  const node = document.createElementNS(svgNS, tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === null || v === undefined) continue;
+      if (k === "class") node.setAttribute("class", v);
+      else if (k.startsWith("on") && typeof v === "function") {
+        node.addEventListener(k.slice(2).toLowerCase(), v);
+      } else node.setAttribute(k, v);
+    }
+  }
+  if (children) {
+    if (!Array.isArray(children)) children = [children];
+    for (const c of children) {
+      if (c == null) continue;
+      node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    }
+  }
+  return node;
+}
+const $ = sel => document.querySelector(sel);
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+// ── State ────────────────────────────────────────────────────────
+const state = {
+  manifest: null,
+  records: [],
+  turns: [],
+  timeline: [],
+  transcripts: [],
+  cost: null,
+  filters: { stage: "", turn: null, name: "", from: null, to: null, errorsOnly: false },
+  selectedSeq: null,
+  ws: null,
+  wsConnected: false,
+};
+
+const TAB_LOADERS = {
+  timeline: renderTimelineView,
+  pipeline: renderPipelineView,
+  records: () => { renderRecordsView(); loadAndRenderRecords(); },
+  transcript: renderTranscriptView,
+  cost: renderCostView,
+  replay: renderReplayView,
+};
+
+// ── HTTP helpers ────────────────────────────────────────────────
+async function getJSON(url) {
+  const r = await fetch(url, { credentials: "same-origin" });
+  if (!r.ok) throw new Error(`${url}: ${r.status} ${r.statusText}`);
+  return r.json();
+}
+async function postJSON(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(body || {}),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `${url}: ${r.status}`);
+  return data;
+}
+
+async function refreshAll() {
+  const m = await getJSON("/api/manifest");
+  state.manifest = m;
+  document.title = m.source === "bundle"
+    ? `Debugger — ${m.name}`
+    : `Debugger — ${m.session_id}`;
+  $("#source-label").textContent = m.source === "bundle"
+    ? `bundle ${m.name} · ${m.record_count} records · ${m.artifact_count} artifacts`
+    : `live session ${m.session_id} · running=${m.is_running}`;
+  $("#export-btn").hidden = !m.supports_export;
+  $("#status-source").textContent = m.source === "bundle"
+    ? `source: bundle "${m.name}"`
+    : `source: live session ${m.session_id}`;
+  $("#status-records").textContent = `${m.record_count ?? state.records.length} records`;
+  // Always reload the data the active tab needs.
+  await loadAllSnapshots();
+  rerenderActiveTab();
+}
+
+async function loadAllSnapshots() {
+  // Cap the snapshot record fetch — the records table re-fetches with
+  // its own filters/limit when the user interacts.  This snapshot is
+  // only used for stage-filter population and pipeline counts.
+  const [recsResp, turnsResp, timelineResp, transcriptResp, costResp] = await Promise.all([
+    getJSON("/api/records?limit=1000"),
+    getJSON("/api/turns"),
+    getJSON("/api/timeline"),
+    getJSON("/api/transcript"),
+    getJSON("/api/cost").catch(() => ({ per_turn: {}, totals: {} })),
+  ]);
+  state.records = recsResp.records;
+  state.recordsTotal = recsResp.total ?? recsResp.records.length;
+  state.turns = turnsResp.turns;
+  state.timeline = timelineResp.timeline;
+  state.transcripts = transcriptResp.transcripts;
+  state.cost = costResp;
+  $("#status-turns").textContent = `${state.turns.length} turns`;
+  populateStageFilter();
+}
+
+function populateStageFilter() {
+  const select = $("#stage-filter");
+  const have = new Set([...select.options].map(o => o.value));
+  const stages = new Set();
+  for (const r of state.records) {
+    const data = r.data || {};
+    if (data.stage) stages.add(data.stage);
+    if (data.observed_stage) stages.add(data.observed_stage);
+  }
+  for (const s of [...stages].sort()) {
+    if (have.has(s)) continue;
+    select.appendChild(el("option", { value: s }, s));
+  }
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────
+function activateTab(name) {
+  for (const t of document.querySelectorAll(".tab")) {
+    t.classList.toggle("active", t.dataset.tab === name);
+  }
+  for (const v of document.querySelectorAll(".view")) {
+    v.classList.toggle("active", v.id === `${name}-view`);
+  }
+  state.activeTab = name;
+  TAB_LOADERS[name]?.();
+}
+
+function rerenderActiveTab() {
+  const fn = TAB_LOADERS[state.activeTab || "timeline"];
+  fn?.();
+}
+
+// ── Timeline view ────────────────────────────────────────────────
+function renderTimelineView() {
+  const root = $("#timeline-view");
+  clear(root);
+  if (state.timeline.length === 0) {
+    root.appendChild(el("div", { class: "empty" }, "No turn-scoped records yet."));
+    return;
+  }
+  const maxWall = Math.max(...state.timeline.map(t => t.wall_ms || 0)) || 1;
+  for (const turn of state.timeline) {
+    const turnNode = el("div", { class: "timeline-turn" });
+    const turnSummary = state.turns.find(t => t.turn_id === turn.turn_id) || {};
+    const header = el("div", { class: "timeline-turn-header" });
+    header.appendChild(el("span", { class: "turn-id" }, turn.turn_id));
+    header.appendChild(el("span", { class: "wall-ms" },
+      `${(turn.wall_ms || 0).toFixed(0)}ms · ${turn.spans.length} stages`));
+    if (turnSummary.error_count) {
+      header.appendChild(el("span", { class: "badge err" }, `${turnSummary.error_count} err`));
+    }
+    if (turnSummary.interruption_count) {
+      header.appendChild(el("span", { class: "badge intr" }, "interrupted"));
+    }
+    const actions = el("div", { class: "turn-actions" });
+    actions.appendChild(el("button", {
+      onclick: () => filterRecordsByTurn(turn.turn_id),
+    }, "Records"));
+    actions.appendChild(el("button", {
+      onclick: () => playConcatAudio(turn.turn_id),
+    }, "▶ Audio"));
+    header.appendChild(actions);
+    turnNode.appendChild(header);
+
+    if (turn.spans.length === 0) {
+      turnNode.appendChild(el("div", { class: "empty" }, "No stage spans recorded."));
+    } else {
+      const turnWall = turn.wall_ms || 1;
+      for (const span of turn.spans) {
+        const row = el("div", { class: "waterfall-row" });
+        row.appendChild(el("span", { class: "stage-name" }, span.stage));
+        const track = el("div", { class: "waterfall-track" });
+        const offsetPct = Math.min(99, (span.offset_ms / turnWall) * 100);
+        const widthPct = Math.max(0.5, Math.min(100 - offsetPct, (span.duration_ms / turnWall) * 100));
+        const bar = el("div", {
+          class: `waterfall-bar ${span.stage}`,
+          style: `left: ${offsetPct}%; width: ${widthPct}%`,
+        }, `${span.duration_ms.toFixed(0)}ms`);
+        track.appendChild(bar);
+        row.appendChild(track);
+        row.appendChild(el("span", { class: "stage-ms" }, `${span.record_count} rec`));
+        turnNode.appendChild(row);
+      }
+    }
+    root.appendChild(turnNode);
+  }
+}
+
+async function playConcatAudio(turnId) {
+  try {
+    const resp = await fetch(`/api/audio/concat/${encodeURIComponent(turnId)}`);
+    if (!resp.ok) {
+      alert(`No audio for turn ${turnId}`);
+      return;
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    new Audio(url).play();
+  } catch (e) {
+    alert(`Audio playback failed: ${e.message}`);
+  }
+}
+
+function filterRecordsByTurn(turnId) {
+  state.filters.turn = turnId;
+  $("#stage-filter").value = "";
+  activateTab("records");
+}
+
+// ── Pipeline view ────────────────────────────────────────────────
+// Eight stages in the order audio + control flow through them.  The
+// ``turn`` stage runs SmartTurn endpointing between STT and Agent;
+// previously this list omitted it and the SVG hid SmartTurn entirely.
+const PIPELINE_STAGES = [
+  { id: "transport", x: 60, label: "Transport" },
+  { id: "audio", x: 170, label: "Audio (NR/AEC)" },
+  { id: "vad", x: 280, label: "VAD" },
+  { id: "stt", x: 390, label: "STT" },
+  { id: "turn", x: 500, label: "Turn" },
+  { id: "agent", x: 610, label: "Agent" },
+  { id: "tts", x: 720, label: "TTS" },
+  { id: "telephony", x: 830, label: "Telephony" },
+];
+
+function renderPipelineView() {
+  const nodes = $("#pipeline-nodes");
+  const edges = $("#pipeline-edges");
+  clear(nodes);
+  clear(edges);
+  const counts = {};
+  for (const r of state.records) {
+    const stage = (r.data || {}).stage || (r.data || {}).observed_stage;
+    if (stage) counts[stage] = (counts[stage] || 0) + 1;
+  }
+  // edges connecting stage chain in order
+  for (let i = 0; i < PIPELINE_STAGES.length - 1; i++) {
+    const a = PIPELINE_STAGES[i];
+    const b = PIPELINE_STAGES[i + 1];
+    const active = (counts[a.id] || 0) > 0 && (counts[b.id] || 0) > 0;
+    edges.appendChild(svg("line", {
+      class: `pipeline-edge ${active ? "active" : ""}`,
+      x1: a.x + 50, y1: 140, x2: b.x - 50, y2: 140,
+    }));
+  }
+  for (const stage of PIPELINE_STAGES) {
+    const c = counts[stage.id] || 0;
+    const g = svg("g", {
+      class: `pipeline-stage ${c > 0 ? "active" : ""}`,
+      onclick: () => { state.filters.stage = stage.id; activateTab("records"); },
+    });
+    g.appendChild(svg("rect", {
+      x: stage.x - 50, y: 110, width: 100, height: 60, rx: 6,
+    }));
+    g.appendChild(svg("text", { x: stage.x, y: 142 }, stage.label));
+    g.appendChild(svg("text", {
+      x: stage.x, y: 162, class: "stage-count",
+    }, `${c} record${c === 1 ? "" : "s"}`));
+    nodes.appendChild(g);
+  }
+}
+
+// ── Records view ─────────────────────────────────────────────────
+function renderRecordsView() {
+  // Restore filters into UI when the view is reopened.
+  $("#stage-filter").value = state.filters.stage || "";
+  $("#name-filter").value = state.filters.name || "";
+  $("#from-seq").value = state.filters.from ?? "";
+  $("#to-seq").value = state.filters.to ?? "";
+  $("#errors-only-toggle").checked = !!state.filters.errorsOnly;
+}
+
+async function loadAndRenderRecords() {
+  const params = new URLSearchParams();
+  if (state.filters.stage) params.set("stage", state.filters.stage);
+  if (state.filters.turn) params.set("turn", state.filters.turn);
+  if (state.filters.name) params.set("name", state.filters.name);
+  if (state.filters.from) params.set("from", state.filters.from);
+  if (state.filters.to) params.set("to", state.filters.to);
+  if (state.filters.errorsOnly) params.set("errors", "1");
+  // Cap at 500 rows for the table; pager controls below would let the
+  // user step through bigger result sets if we needed to expose more.
+  params.set("limit", "500");
+  const r = await getJSON(`/api/records?${params}`);
+  const shown = r.records.length;
+  const total = r.total ?? shown;
+  $("#record-count").textContent = shown === total
+    ? `${total} record${total === 1 ? "" : "s"}`
+    : `showing ${shown} of ${total} records`;
+  renderRecordRows(r.records);
+}
+
+function renderRecordRows(records) {
+  const body = $("#records-body");
+  clear(body);
+  for (const r of records) {
+    const data = r.data || {};
+    const stage = data.stage || data.observed_stage || "";
+    const refs = [];
+    if (r.input_ref) refs.push({ label: `in:${r.input_ref.slice(0, 8)}`, ref: r.input_ref });
+    if (r.output_ref) refs.push({ label: `out:${r.output_ref.slice(0, 8)}`, ref: r.output_ref });
+
+    const refSpans = [];
+    for (const ref of refs) {
+      refSpans.push(el("span", { class: "ref" }, ref.label));
+    }
+    const stageCell = stage
+      ? el("td", null, el("span", { class: `stage-tag ${stage}` }, stage))
+      : el("td");
+
+    const tr = el("tr", { dataset: { seq: String(r.sequence) } }, [
+      el("td", null, String(r.sequence)),
+      el("td", { class: r.kind === "control" ? "kind-control" : "" }, r.kind || ""),
+      el("td", { class: r.error ? "has-error" : "" }, r.name || ""),
+      stageCell,
+      el("td", null, (r.turn_id || "").slice(-12)),
+      el("td", null, refSpans.length ? refSpans : ""),
+    ]);
+    if (r.sequence === state.selectedSeq) tr.classList.add("selected");
+    tr.addEventListener("click", () => selectRecord(r));
+    body.appendChild(tr);
+  }
+}
+
+function selectRecord(record) {
+  state.selectedSeq = record.sequence;
+  for (const row of document.querySelectorAll("#records-body tr")) {
+    row.classList.toggle("selected", row.dataset.seq === String(record.sequence));
+  }
+  const empty = $("#inspector-empty");
+  const content = $("#inspector-content");
+  empty.hidden = true;
+  content.hidden = false;
+  clear(content);
+
+  const data = record.data || {};
+  content.appendChild(el("h3", null, "Record"));
+  const grid = el("div", { class: "field-grid" });
+  const addRow = (label, value) => {
+    grid.appendChild(el("div", { class: "label" }, label));
+    grid.appendChild(el("div", { class: "value" }, value || ""));
+  };
+  addRow("sequence", String(record.sequence));
+  addRow("kind", record.kind || "");
+  addRow("name", record.name || "");
+  addRow("turn_id", record.turn_id || "");
+  if (record.input_ref) addRow("input_ref", record.input_ref);
+  if (record.output_ref) addRow("output_ref", record.output_ref);
+  content.appendChild(grid);
+
+  content.appendChild(el("h3", null, "Data"));
+  content.appendChild(el("pre", null, JSON.stringify(data, null, 2)));
+
+  if (record.error) {
+    content.appendChild(el("h3", { class: "has-error" }, "Error"));
+    content.appendChild(el("pre", null, JSON.stringify(record.error, null, 2)));
+  }
+
+  if (record.output_ref && record.name === "tts_frame" && data.encoding === "pcm") {
+    content.appendChild(el("h3", null,
+      `Audio (PCM ${data.sample_rate}Hz, ${data.channels}ch, ${data.sample_width * 8}-bit)`));
+    content.appendChild(el("button", {
+      class: "primary",
+      onclick: () => playPCM(record.output_ref, data.sample_rate, data.channels, data.sample_width),
+    }, "▶ Play frame"));
+  }
+}
+
+// Convert raw PCM bytes to a WAV blob the browser can play.
+async function playPCM(ref, sampleRate, channels, sampleWidth) {
+  const resp = await fetch(`/api/artifact/${encodeURIComponent(ref)}`);
+  if (!resp.ok) { alert("Artifact not found"); return; }
+  const pcm = new Uint8Array(await resp.arrayBuffer());
+  const wav = pcmToWav(pcm, sampleRate, channels, sampleWidth);
+  const blob = new Blob([wav], { type: "audio/wav" });
+  const url = URL.createObjectURL(blob);
+  new Audio(url).play();
+}
+
+function pcmToWav(pcm, sampleRate, channels, sampleWidth) {
+  const bitsPerSample = sampleWidth * 8;
+  const byteRate = sampleRate * channels * sampleWidth;
+  const blockAlign = channels * sampleWidth;
+  const dataSize = pcm.length;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  function writeStr(off, s) { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); }
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+  new Uint8Array(buffer, 44).set(pcm);
+  return buffer;
+}
+
+// ── Transcript view ──────────────────────────────────────────────
+function renderTranscriptView() {
+  const root = $("#transcript-view");
+  clear(root);
+  if (state.transcripts.length === 0) {
+    root.appendChild(el("div", { class: "empty" }, "No transcript content captured yet."));
+    return;
+  }
+  for (const turn of state.transcripts) {
+    const node = el("div", { class: "transcript-turn" });
+    node.appendChild(el("div", { class: "turn-id" }, turn.turn_id));
+    if (turn.user) {
+      node.appendChild(el("div", { class: "speaker user" }, "User"));
+      node.appendChild(el("div", { class: "text" }, turn.user));
+    }
+    if (turn.agent) {
+      node.appendChild(el("div", { class: "speaker agent" }, "Agent"));
+      node.appendChild(el("div", { class: "text" }, turn.agent));
+      // Only render the audio element when the rollup says this turn
+      // produced TTS bytes — otherwise the browser shows a broken
+      // player when /api/audio/concat 404s.
+      const turnSummary = state.turns.find(t => t.turn_id === turn.turn_id);
+      if (turnSummary && (turnSummary.tts_audio_bytes || 0) > 0) {
+        node.appendChild(el("audio", {
+          controls: "",
+          src: `/api/audio/concat/${encodeURIComponent(turn.turn_id)}`,
+          preload: "none",
+        }));
+      }
+    }
+    root.appendChild(node);
+  }
+}
+
+// ── Cost view ────────────────────────────────────────────────────
+function renderCostView() {
+  const root = $("#cost-view");
+  clear(root);
+  if (!state.cost) return;
+  const totals = state.cost.totals || {};
+  const totalsRow = el("div", { class: "cost-totals" });
+  const cards = [
+    { label: "Spend (USD)", value: `$${(totals.usd || 0).toFixed(4)}` },
+    { label: "STT seconds", value: (totals.stt_seconds || 0).toFixed(2) },
+    { label: "TTS chars", value: String(totals.tts_chars || 0) },
+    { label: "LLM tokens", value: String(totals.llm_tokens || 0) },
+  ];
+  for (const c of cards) {
+    totalsRow.appendChild(el("div", { class: "cost-card" }, [
+      el("div", { class: "label" }, c.label),
+      el("div", { class: "value" }, c.value),
+    ]));
+  }
+  root.appendChild(totalsRow);
+
+  const perTurn = state.cost.per_turn || {};
+  if (Object.keys(perTurn).length === 0) {
+    root.appendChild(el("div", { class: "empty" },
+      "No CostRecord events captured.  Add CostRecord emission to your providers " +
+      "(see peripheral-observability-and-cost.md) to populate this view."));
+    return;
+  }
+  root.appendChild(el("h3", null, "Per turn"));
+  const table = el("table");
+  const thead = el("thead");
+  thead.appendChild(el("tr", null, [
+    el("th", null, "turn_id"),
+    el("th", null, "USD"),
+    el("th", null, "STT s"),
+    el("th", null, "TTS chars"),
+    el("th", null, "LLM tokens"),
+  ]));
+  const tbody = el("tbody");
+  for (const [turnId, costs] of Object.entries(perTurn)) {
+    tbody.appendChild(el("tr", null, [
+      el("td", null, turnId),
+      el("td", null, `$${(costs.usd || 0).toFixed(4)}`),
+      el("td", null, (costs.stt_seconds || 0).toFixed(2)),
+      el("td", null, String(costs.tts_chars || 0)),
+      el("td", null, String(costs.llm_tokens || 0)),
+    ]));
+  }
+  table.appendChild(thead); table.appendChild(tbody);
+  root.appendChild(table);
+}
+
+// ── Replay view ──────────────────────────────────────────────────
+function renderReplayView() {
+  const supports = state.manifest?.supports_replay;
+  $("#replay-unsupported").hidden = !!supports;
+  document.querySelector(".replay-form").style.display = supports ? "" : "none";
+}
+
+async function runReplay(opts) {
+  const btn = $("#run-replay-btn");
+  btn.disabled = true;
+  btn.textContent = "…running";
+  const block = $("#replay-result-block");
+  const pre = $("#replay-result-pre");
+  block.hidden = true;
+  const fidelity = $("#replay-fidelity").value;
+  const toolPolicy = $("#replay-tool-policy").value;
+  const timing = $("#replay-timing").value;
+  // Destructive iff: LIVE fidelity, ALLOW tool policy, or force=true.
+  // Mirror the server-side rule exactly so a future ``force`` toggle
+  // can't silently bypass the confirm dialog.
+  const force = !!(opts && opts.force);
+  const isDestructive = fidelity === "live" || toolPolicy === "allow" || force;
+  // The server enforces a confirm flag for destructive combos so a
+  // CSRF / drive-by from another tab can't fire LIVE/ALLOW silently.
+  // Surface that in the UI with a real warning instead of waiting for
+  // the 409 to come back as a JSON error.
+  if (isDestructive && !(opts && opts.confirmed)) {
+    const ok = window.confirm(
+      `Replay fidelity "${fidelity}" with tool policy "${toolPolicy}" will ` +
+      "re-execute against live providers and may incur cost or trigger real " +
+      "tool side-effects.\n\nProceed?"
+    );
+    if (!ok) {
+      btn.disabled = false;
+      btn.textContent = "▶ Run replay";
+      return;
+    }
+  }
+  try {
+    const result = await postJSON("/api/replay", {
+      fidelity,
+      tool_policy: toolPolicy,
+      timing,
+      confirm: isDestructive,
+    });
+    pre.textContent = JSON.stringify(result, null, 2);
+    block.hidden = false;
+  } catch (e) {
+    pre.textContent = `Error: ${e.message}`;
+    block.hidden = false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "▶ Run replay";
+  }
+}
+
+// ── WebSocket live updates ───────────────────────────────────────
+let _wsBackoffMs = 1000;
+const _WS_BACKOFF_MAX_MS = 30000;
+let _snapshotPending = false;
+
+function _scheduleSnapshotRefresh() {
+  // Coalesce bursty snapshot notifications into one fan-out so the
+  // UI doesn't fire 5×N parallel GETs when a chatty live session
+  // reports new records every 500 ms.
+  if (_snapshotPending) return;
+  _snapshotPending = true;
+  setTimeout(() => {
+    _snapshotPending = false;
+    loadAllSnapshots().then(rerenderActiveTab).catch(() => { /* swallow */ });
+  }, 750);
+}
+
+function connectWS() {
+  // Pause reconnects when the tab is hidden so a backgrounded UI
+  // doesn't peg the loop forever.
+  if (document.visibilityState === "hidden") {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") connectWS();
+    }, { once: true });
+    return;
+  }
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = `${proto}//${location.host}/ws`;
+  let ws;
+  try { ws = new WebSocket(url); }
+  catch (e) { setWSStatus(false); _scheduleReconnect(); return; }
+  state.ws = ws;
+  ws.addEventListener("open", () => {
+    setWSStatus(true);
+    _wsBackoffMs = 1000;  // reset on success
+  });
+  ws.addEventListener("close", () => {
+    setWSStatus(false);
+    _scheduleReconnect();
+  });
+  ws.addEventListener("error", () => setWSStatus(false));
+  ws.addEventListener("message", (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "snapshot") {
+        _scheduleSnapshotRefresh();
+      }
+    } catch { /* ignore malformed */ }
+  });
+}
+function setWSStatus(connected) {
+  state.wsConnected = connected;
+  $("#ws-dot").classList.toggle("connected", connected);
+  $("#ws-label").textContent = connected ? "live" : "disconnected";
+}
+
+function _scheduleReconnect() {
+  // Exponential back-off capped at 30s — protects against thrashing
+  // a downed server and avoids holding a busy loop on hostile networks.
+  const delay = _wsBackoffMs;
+  _wsBackoffMs = Math.min(_WS_BACKOFF_MAX_MS, _wsBackoffMs * 2);
+  setTimeout(connectWS, delay);
+}
+
+// ── Wire-up ──────────────────────────────────────────────────────
+document.querySelectorAll(".tab").forEach(t => {
+  t.addEventListener("click", () => activateTab(t.dataset.tab));
+});
+$("#refresh-btn").addEventListener("click", () => refreshAll());
+$("#stage-filter").addEventListener("change", () => {
+  state.filters.stage = $("#stage-filter").value;
+  loadAndRenderRecords();
+});
+$("#name-filter").addEventListener("input", () => {
+  clearTimeout(window._nameDebounce);
+  window._nameDebounce = setTimeout(() => {
+    state.filters.name = $("#name-filter").value.trim();
+    loadAndRenderRecords();
+  }, 200);
+});
+for (const id of ["from-seq", "to-seq"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    const v = document.getElementById(id).value;
+    state.filters[id === "from-seq" ? "from" : "to"] = v ? Number(v) : null;
+    loadAndRenderRecords();
+  });
+}
+$("#errors-only-toggle").addEventListener("change", () => {
+  state.filters.errorsOnly = $("#errors-only-toggle").checked;
+  loadAndRenderRecords();
+});
+$("#run-replay-btn").addEventListener("click", runReplay);
+$("#export-btn").addEventListener("click", async () => {
+  try {
+    const r = await fetch("/api/export", { method: "POST" });
+    if (!r.ok) { alert(`Export failed: ${r.status}`); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = el("a", { href: url, download: "session.zip" });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (e) { alert(`Export failed: ${e.message}`); }
+});
+
+// Periodic time tick in footer.
+setInterval(() => {
+  $("#status-time").textContent = new Date().toLocaleTimeString();
+}, 1000);
+
+// Boot.
+state.activeTab = "timeline";
+refreshAll().catch(e => {
+  $("#timeline-view").appendChild(el("div", { class: "error-msg" }, e.message));
+});
+connectWS();
+</script>
+</body>
+</html>

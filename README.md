@@ -44,6 +44,13 @@ session = create_session(config)
 > users, `EasyCatConfig` + `create_session` is the fastest way to get a working
 > pipeline.
 
+## Session lifecycle
+
+- `await session.stop()` performs graceful shutdown and releases live backend resources.
+- `await session.shutdown()` force-cancels in-flight work, then releases the same live backend resources.
+- `Session.close()` is lower-level and only finalizes the journal's clean-close marker.
+- After a clean `stop()` or `shutdown()`, postmortem inspection is still supported: `session.journal.read()` and `session.export_debug_bundle(...)` continue to work.
+
 
 ## Pre-TTS output processors (easy mode)
 If you want to change how the assistant is spoken (for example phone-number pacing
@@ -347,6 +354,7 @@ uv pip install torch
 Optional dependencies you may need depending on providers/transports:
 - sounddevice (LocalTransport)
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
+- numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
 - ten-vad + numpy (TEN VAD; use latest ten-vad for macOS/Windows ONNX support)
 - torch (Silero VAD)
 - pyrnnoise + requests (RNNoise noise reduction backend)

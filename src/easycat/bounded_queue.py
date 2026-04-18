@@ -10,6 +10,7 @@ import asyncio
 import enum
 import logging
 from collections import deque
+from typing import Any
 
 from easycat.audio_format import AudioChunk
 
@@ -38,6 +39,7 @@ class BoundedAudioQueue:
         policy: DropPolicy = DropPolicy.DROP_OLDEST,
         block_timeout: float = 5.0,
         name: str = "audio_queue",
+        on_drop: Any = None,
     ) -> None:
         self._max_size = max_size
         self._policy = policy
@@ -51,6 +53,21 @@ class BoundedAudioQueue:
         self._closed = False
         self._drops = 0
         self._turn_id: int = 0
+        # ``on_drop(name, kind, queue_len, total_drops)`` is called when
+        # a chunk is dropped so Session can journal backpressure events
+        # without polling ``drops`` — useful for bundle readers that
+        # need to correlate audio gaps to queue pressure.
+        self._on_drop = on_drop
+
+    def _note_drop(self, kind: str) -> None:
+        """Increment the drop counter and notify the hook (if any)."""
+        self._drops += 1
+        hook = self._on_drop
+        if hook is not None:
+            try:
+                hook(self._name, kind, len(self._queue), self._drops)
+            except Exception:  # noqa: BLE001 - drop hook must never break the queue
+                logger.debug("on_drop hook raised", exc_info=True)
 
     @property
     def max_size(self) -> int:
@@ -94,7 +111,7 @@ class BoundedAudioQueue:
         if self._policy == DropPolicy.DROP_OLDEST:
             self._queue.popleft()
             self._queue.append(chunk)
-            self._drops += 1
+            self._note_drop("drop_oldest")
             logger.debug(
                 "Queue '%s' dropped oldest chunk (total drops: %d)",
                 self._name,
@@ -104,7 +121,7 @@ class BoundedAudioQueue:
             return True
 
         elif self._policy == DropPolicy.DROP_NEWEST:
-            self._drops += 1
+            self._note_drop("drop_newest")
             logger.debug(
                 "Queue '%s' dropped newest chunk (total drops: %d)", self._name, self._drops
             )
@@ -114,7 +131,7 @@ class BoundedAudioQueue:
             try:
                 await asyncio.wait_for(self._not_full.wait(), timeout=self._block_timeout)
             except TimeoutError:
-                self._drops += 1
+                self._note_drop("block_timeout")
                 logger.debug(
                     "Queue '%s' block timed out, dropping (total drops: %d)",
                     self._name,
@@ -126,7 +143,7 @@ class BoundedAudioQueue:
             # so only the first to acquire the lock should append.
             async with self._put_lock:
                 if self.full():
-                    self._drops += 1
+                    self._note_drop("block_lost_race")
                     logger.debug(
                         "Queue '%s' lost race after BLOCK wait, dropping (total drops: %d)",
                         self._name,

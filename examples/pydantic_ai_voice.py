@@ -19,10 +19,8 @@ import asyncio
 from easycat import (
     EasyCatConfig,
     LocalTransportConfig,
-    PydanticAIAdapter,
     attach_runtime_feedback,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
@@ -42,13 +40,11 @@ async def main() -> None:
         "openai:gpt-5.2",
         system_prompt="You are a helpful voice assistant.",
     )
-    adapter = PydanticAIAdapter(voice_agent)
 
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
-        agent=adapter,
-        event_logging=default_event_logging(),
+        agent=voice_agent,
     )
     session = create_session(config)
     attach_runtime_feedback(session)

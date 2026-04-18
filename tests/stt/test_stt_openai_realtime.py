@@ -63,7 +63,17 @@ class _MockWSFactory:
     """Factory that returns a mock connection and records the URL/headers."""
 
     def __init__(self, messages: list[str] | None = None) -> None:
-        self.connection = _MockWSConnection(messages)
+        scripted = list(messages or [])
+        if not any('"type": "session.created"' in msg for msg in scripted):
+            scripted.insert(0, _make_session_created())
+        if not any(
+            event in msg
+            for msg in scripted
+            for event in ('"type": "session.updated"', '"type": "transcription_session.updated"')
+        ):
+            insert_at = 1 if scripted and '"type": "session.created"' in scripted[0] else 0
+            scripted.insert(insert_at, _make_transcription_session_updated())
+        self.connection = _MockWSConnection(scripted)
         self.call_url: str | None = None
         self.call_headers: dict[str, str] | None = None
 
@@ -99,6 +109,10 @@ def _make_session_updated() -> str:
     return json.dumps({"type": "session.updated", "session": {}})
 
 
+def _make_transcription_session_updated() -> str:
+    return json.dumps({"type": "transcription_session.updated", "session": {}})
+
+
 # ── Protocol conformance ────────────────────────────────────────
 
 
@@ -128,9 +142,11 @@ async def test_openai_realtime_sends_session_update_on_start():
     assert len(factory.connection.sent) >= 1
     session_msg = json.loads(factory.connection.sent[0])
     assert session_msg["type"] == "session.update"
-    assert session_msg["session"]["turn_detection"] is None
-    assert "input_audio_transcription" in session_msg["session"]
-    assert session_msg["session"]["input_audio_transcription"]["model"] == "gpt-4o-transcribe"
+    session = session_msg["session"]
+    assert session["type"] == "realtime"
+    assert session["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24000}
+    assert session["audio"]["input"]["turn_detection"] is None
+    assert session["audio"]["input"]["transcription"]["model"] == "gpt-4o-transcribe"
 
 
 @pytest.mark.asyncio
@@ -146,7 +162,7 @@ async def test_openai_realtime_sends_language_in_session_update():
     await collect_stt_events(stt, [])
 
     session_msg = json.loads(factory.connection.sent[0])
-    assert session_msg["session"]["input_audio_transcription"]["language"] == "es"
+    assert session_msg["session"]["audio"]["input"]["transcription"]["language"] == "es"
 
 
 @pytest.mark.asyncio
@@ -159,11 +175,12 @@ async def test_openai_realtime_auth_headers():
 
     assert factory.call_headers is not None
     assert factory.call_headers["Authorization"] == "Bearer sk-secret-123"
-    assert factory.call_headers["OpenAI-Beta"] == "realtime=v1"
+    assert "OpenAI-Beta" not in factory.call_headers
 
 
 @pytest.mark.asyncio
-async def test_openai_realtime_url_includes_model():
+async def test_openai_realtime_model_is_set_via_session_update():
+    """The connection model and transcription model are distinct."""
     factory = _MockWSFactory([_make_transcription_completed("hi")])
     config = OpenAIRealtimeSTTConfig(
         api_key="sk-test", model="gpt-4o-mini-transcribe", ws_connect=factory
@@ -173,7 +190,31 @@ async def test_openai_realtime_url_includes_model():
     await collect_stt_events(stt, [])
 
     assert factory.call_url is not None
-    assert "model=gpt-4o-mini-transcribe" in factory.call_url
+    assert "model=gpt-realtime-mini" in factory.call_url
+    # The transcription model also belongs in the session.update payload.
+    session_msg = json.loads(factory.connection.sent[0])
+    assert (
+        session_msg["session"]["audio"]["input"]["transcription"]["model"]
+        == "gpt-4o-mini-transcribe"
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_merges_explicit_connection_model_into_existing_query_string():
+    factory = _MockWSFactory([_make_transcription_completed("hi")])
+    config = OpenAIRealtimeSTTConfig(
+        api_key="sk-test",
+        ws_url="wss://api.openai.com/v1/realtime?foo=bar",
+        connection_model="gpt-realtime-mini",
+        ws_connect=factory,
+    )
+    stt = OpenAIRealtimeSTT(config)
+
+    await collect_stt_events(stt, [])
+
+    assert factory.call_url is not None
+    assert "foo=bar" in factory.call_url
+    assert "model=gpt-realtime-mini" in factory.call_url
 
 
 # ── Audio sending ───────────────────────────────────────────────
@@ -219,6 +260,158 @@ async def test_openai_realtime_sends_commit_on_end():
         if isinstance(m, str) and "input_audio_buffer.commit" in m
     ]
     assert len(commit_msgs) == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_skips_commit_on_short_tail():
+    """OpenAI Realtime refuses commits with <100ms of buffered audio
+    (1008 policy violation).  The provider must skip the send locally
+    rather than surface that as a spurious warning — but must keep
+    ``_audio_pending_commit`` / ``_bytes_since_last_commit`` intact so
+    a later commit that sees more audio still reflects the true server
+    buffer.
+    """
+    factory = _MockWSFactory()
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    stt = OpenAIRealtimeSTT(config)
+
+    # ~20ms at 16 kHz → well below the 100ms OpenAI Realtime minimum
+    pcm = generate_pcm_sine(duration_ms=20)
+    await stt.start_stream()
+    for chunk in make_audio_chunks(pcm):
+        await stt.send_audio(chunk)
+    bytes_after_first = stt._bytes_since_last_commit
+    committed = await stt.commit_segment()
+    assert committed is False, "short tail must not be sent to the server"
+
+    commit_msgs = [
+        m
+        for m in factory.connection.sent
+        if isinstance(m, str) and "input_audio_buffer.commit" in m
+    ]
+    assert commit_msgs == [], "provider should not send a commit it knows will fail"
+    # State preserved: the server still has those bytes buffered, so a
+    # subsequent append + commit must count them toward the 100 ms floor.
+    assert stt._audio_pending_commit is True
+    assert stt._bytes_since_last_commit == bytes_after_first
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_short_tail_then_more_audio_commits():
+    """A short commit attempt followed by more audio must eventually
+    cross the 100 ms floor and send a commit, since the server still
+    has the buffered bytes from the first (skipped) attempt.
+    """
+    factory = _MockWSFactory()
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    stt = OpenAIRealtimeSTT(config)
+
+    await stt.start_stream()
+    # First batch: 50 ms → below 100 ms floor.
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=50)):
+        await stt.send_audio(chunk)
+    assert await stt.commit_segment() is False
+
+    # Second batch: 60 ms.  Combined with the first, the server has
+    # 110 ms buffered, so this commit must be sent.
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=60)):
+        await stt.send_audio(chunk)
+    assert await stt.commit_segment() is True
+
+    commit_msgs = [
+        m
+        for m in factory.connection.sent
+        if isinstance(m, str) and "input_audio_buffer.commit" in m
+    ]
+    assert len(commit_msgs) == 1
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_emits_error_event_on_server_error_message():
+    """When the server sends an ``error`` message, the provider must
+    emit a journal-visible ``Error`` event on the bus with the server's
+    message + buffer context, not only a logger.warning."""
+    from easycat.events import Error, ErrorStage, EventBus
+
+    class _BusCapture:
+        def __init__(self) -> None:
+            self.errors: list[Error] = []
+
+        def subscribe(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        async def emit(self, event: Any) -> None:
+            if isinstance(event, Error):
+                self.errors.append(event)
+
+    bus = EventBus()
+    captured: list[Error] = []
+    bus.subscribe(Error, captured.append)
+
+    error_msg = json.dumps(
+        {"type": "error", "error": {"message": "buffer too small", "code": "buffer_too_small"}}
+    )
+    factory = _MockWSFactory([error_msg])
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory, event_bus=bus)
+    stt = OpenAIRealtimeSTT(config)
+    await stt.start_stream()
+    # Give the receive loop a turn to process the error message and
+    # schedule the Error emission.
+    for _ in range(10):
+        if captured:
+            break
+        await asyncio.sleep(0.01)
+    await stt.end_stream()
+
+    assert captured, "expected one Error event on the bus"
+    err = captured[0]
+    assert err.stage is ErrorStage.STT
+    assert err.provider == "openai-realtime"
+    assert "buffer too small" in str(err.exception)
+    # Notes carry the code + buffer context for bundle replays.
+    notes = getattr(err.exception, "__notes__", [])
+    assert any("code=buffer_too_small" in n for n in notes)
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_commit_segment_keeps_stream_open_for_later_audio():
+    factory = _MockWSFactory(
+        [
+            _make_transcription_completed("hello"),
+            _make_transcription_completed("world"),
+        ]
+    )
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    stt = OpenAIRealtimeSTT(config)
+
+    collected = []
+    await stt.start_stream()
+
+    async def _collect() -> None:
+        async for event in stt.events():
+            collected.append(event)
+
+    collect_task = asyncio.create_task(_collect())
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100))[0]
+
+    await stt.send_audio(chunk)
+    assert await stt.commit_segment() is True
+    await asyncio.sleep(0)
+    await stt.send_audio(chunk)
+    await stt.end_stream()
+    await collect_task
+
+    finals = [event.text for event in collected if event.type == STTEventType.FINAL]
+    assert finals == ["hello", "world"]
+
+    commit_msgs = [
+        json.loads(m)
+        for m in factory.connection.sent
+        if isinstance(m, str) and "input_audio_buffer.commit" in m
+    ]
+    assert len(commit_msgs) == 2
     assert commit_msgs[0]["type"] == "input_audio_buffer.commit"
 
 

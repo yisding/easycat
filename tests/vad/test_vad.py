@@ -1,11 +1,12 @@
 """VAD tests: Silero, Krisp, factory, and configuration."""
 
-import importlib.util
 import struct
+import types
 from unittest.mock import MagicMock
 
 import pytest
 
+from easycat import vad as vad_module
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import VADStartSpeaking
 from easycat.vad import (
@@ -26,19 +27,47 @@ def _make_chunk(value: int = 0, n_samples: int = 512) -> AudioChunk:
 # ── SileroVAD tests ─────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("torch") is not None,
-    reason="torch is installed; cannot test missing-torch path",
-)
-def test_silero_fails_without_torch():
-    """SileroVAD should raise RuntimeError if torch is missing."""
+def test_silero_backend_candidates_prefer_onnx_on_arm64(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("EASYCAT_SILERO_BACKEND", raising=False)
+    monkeypatch.setattr(vad_module.platform, "machine", lambda: "aarch64")
+    assert vad_module._silero_backend_candidates() == ("onnx",)
+
+
+def test_silero_backend_candidates_prefer_torch_elsewhere(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("EASYCAT_SILERO_BACKEND", raising=False)
+    monkeypatch.setattr(vad_module.platform, "machine", lambda: "x86_64")
+    assert vad_module._silero_backend_candidates() == ("torch", "onnx")
+
+
+def test_silero_backend_candidates_respect_override(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("EASYCAT_SILERO_BACKEND", "torch")
+    monkeypatch.setattr(vad_module.platform, "machine", lambda: "aarch64")
+    assert vad_module._silero_backend_candidates() == ("torch",)
+
+
+def test_silero_onnx_model_path_uses_bundled_asset():
+    model_path = vad_module._silero_onnx_model_path()
+    assert model_path.endswith("src/easycat/models/silero_vad.onnx")
+
+
+def test_silero_fails_when_only_torch_backend_is_allowed(monkeypatch: pytest.MonkeyPatch):
+    """SileroVAD should raise RuntimeError if torch is unavailable and ONNX is disabled."""
+    monkeypatch.setattr(vad_module, "_silero_backend_candidates", lambda: ("torch",))
+
+    def _require_module(module_name: str, **_: object) -> object:
+        if module_name == "torch":
+            raise ImportError("Silero VAD requires the torch package.")
+        raise AssertionError(f"unexpected module load: {module_name}")
+
+    monkeypatch.setattr(vad_module, "require_module", _require_module)
+
     with pytest.raises(RuntimeError, match="torch|PyTorch|Silero"):
         SileroVAD()
 
 
 @pytest.mark.asyncio
-async def test_silero_process_mocked():
-    """SileroVAD with mocked model should detect speech/silence."""
+async def test_silero_process_mocked_torch(monkeypatch: pytest.MonkeyPatch):
+    """SileroVAD should still work with the torch backend when it loads."""
     # Create a mock model that returns configurable probabilities
     mock_model = MagicMock()
     call_count = [0]
@@ -56,37 +85,103 @@ async def test_silero_process_mocked():
     mock_model.side_effect = model_call
     mock_model.reset_states = MagicMock()
 
-    # Manually construct SileroVAD with mocked model
-    import sys
-
     mock_torch = MagicMock()
     mock_torch.hub.load.return_value = (mock_model, None)
     mock_torch.FloatTensor = lambda x: MagicMock()
-    sys.modules["torch"] = mock_torch
 
-    try:
-        vad = SileroVAD()
-        # Configure with 0ms min durations for easier testing
-        vad._min_speech_duration_ms = 0
-        vad._min_silence_duration_ms = 0
-        vad._threshold = 0.5
+    def _require_module(module_name: str, **_: object) -> object:
+        if module_name == "torch":
+            return mock_torch
+        raise AssertionError(f"unexpected module load: {module_name}")
 
-        # Feed speech chunk - should get VADStartSpeaking
-        speech_chunk = _make_chunk(1000)
-        events = []
-        async for event in vad.process(speech_chunk):
-            events.append(event)
+    monkeypatch.setattr(vad_module, "_silero_backend_candidates", lambda: ("torch",))
+    monkeypatch.setattr(vad_module, "require_module", _require_module)
 
-        assert any(isinstance(e, VADStartSpeaking) for e in events)
-    finally:
-        del sys.modules["torch"]
+    vad = SileroVAD()
+    vad._min_speech_duration_ms = 0
+    vad._min_silence_duration_ms = 0
+    vad._threshold = 0.5
+
+    speech_chunk = _make_chunk(1000)
+    events = []
+    async for event in vad.process(speech_chunk):
+        events.append(event)
+
+    assert any(isinstance(e, VADStartSpeaking) for e in events)
+    assert vad._backend == "torch"
+
+
+@pytest.mark.asyncio
+async def test_silero_process_mocked_onnx(monkeypatch: pytest.MonkeyPatch):
+    """SileroVAD should detect speech with the ONNX fallback backend."""
+
+    class _FakeOnnxModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def predict(self, samples: list[float], sample_rate: int) -> float:
+            assert sample_rate == 16000
+            assert len(samples) == 512
+            self.calls += 1
+            return 0.9 if self.calls <= 3 else 0.1
+
+        def reset_states(self) -> None:
+            pass
+
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = _FakeOnnxModel()
+        self._backend = "onnx"
+        self._torch = None
+
+    monkeypatch.setattr(vad_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+
+    vad = SileroVAD()
+    vad._min_speech_duration_ms = 0
+    vad._min_silence_duration_ms = 0
+    vad._threshold = 0.5
+
+    events = []
+    async for event in vad.process(_make_chunk(1000)):
+        events.append(event)
+
+    assert any(isinstance(e, VADStartSpeaking) for e in events)
+    assert vad._backend == "onnx"
+
+
+def test_silero_falls_back_to_onnx_after_torch_failure(monkeypatch: pytest.MonkeyPatch):
+    """SileroVAD should use ONNX if the torch loader fails on safe architectures."""
+    monkeypatch.setattr(vad_module, "_silero_backend_candidates", lambda: ("torch", "onnx"))
+
+    def _load_torch_model(self: SileroVAD) -> None:
+        raise RuntimeError("torch loader failed")
+
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = MagicMock()
+        self._backend = "onnx"
+        self._torch = None
+
+    monkeypatch.setattr(SileroVAD, "_load_torch_model", _load_torch_model)
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+
+    vad = SileroVAD()
+    assert vad._backend == "onnx"
 
 
 # ── KrispVAD tests ──────────────────────────────────────────────────
 
 
-def test_krisp_vad_fails_without_sdk():
+def test_krisp_vad_fails_without_sdk(monkeypatch: pytest.MonkeyPatch):
     """KrispVAD should raise RuntimeError if SDK is missing."""
+
+    def _require_module(_module_name: str, **_: object) -> object:
+        raise ImportError("Krisp VAD requires krisp_audio")
+
+    monkeypatch.setattr(
+        vad_module,
+        "require_module",
+        _require_module,
+    )
     with pytest.raises(RuntimeError, match="Krisp"):
         KrispVAD()
 
@@ -122,18 +217,23 @@ async def test_krisp_vad_process_mocked():
 # ── TenVAD tests ────────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("ten_vad") is not None,
-    reason="ten_vad is installed; cannot test missing-ten_vad path",
-)
-def test_ten_vad_fails_without_sdk():
+def test_ten_vad_fails_without_sdk(monkeypatch: pytest.MonkeyPatch):
     """TenVAD should raise RuntimeError if ten_vad package is missing."""
+
+    def _require_module(module_name: str, **_: object) -> object:
+        if module_name == "ten_vad":
+            raise ImportError("TEN VAD requires ten_vad")
+        if module_name == "numpy":
+            return types.SimpleNamespace()
+        raise AssertionError(f"unexpected module load: {module_name}")
+
+    monkeypatch.setattr(vad_module, "require_module", _require_module)
     with pytest.raises(RuntimeError, match="TEN VAD|ten_vad"):
         TenVAD()
 
 
 @pytest.mark.asyncio
-async def test_ten_vad_process_mocked():
+async def test_ten_vad_process_mocked(monkeypatch: pytest.MonkeyPatch):
     """TenVAD with mocked SDK should process audio."""
     mock_ten_vad = MagicMock()
     mock_instance = MagicMock()
@@ -232,22 +332,37 @@ async def test_krisp_vad_configure():
 # ── Factory tests ────────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(
-    any(importlib.util.find_spec(m) is not None for m in ("torch", "ten_vad", "krisp_audio")),
-    reason="A VAD backend is installed; cannot test no-backends path",
-)
-def test_vad_factory_no_backends():
+def test_vad_factory_no_backends(monkeypatch: pytest.MonkeyPatch):
     """Factory should raise RuntimeError when no backends are available."""
+
+    class _BrokenKrisp:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("krisp missing")
+
+    class _BrokenTen:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("ten missing")
+
+    class _BrokenSilero:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("silero missing")
+
+    monkeypatch.setattr(vad_module, "KrispVAD", _BrokenKrisp)
+    monkeypatch.setattr(vad_module, "TenVAD", _BrokenTen)
+    monkeypatch.setattr(vad_module, "SileroVAD", _BrokenSilero)
+
     with pytest.raises(RuntimeError, match="No VAD backend"):
         create_vad(VADConfig(backend="auto"))
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("torch") is not None,
-    reason="torch is installed; cannot test missing-torch path",
-)
-def test_vad_factory_explicit_silero_fails():
+def test_vad_factory_explicit_silero_fails(monkeypatch: pytest.MonkeyPatch):
     """Explicitly requesting silero without torch should raise."""
+
+    class _BrokenSilero:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("Silero missing")
+
+    monkeypatch.setattr(vad_module, "SileroVAD", _BrokenSilero)
     with pytest.raises(RuntimeError, match="torch|PyTorch|Silero"):
         create_vad(VADConfig(backend="silero"))
 
@@ -258,34 +373,42 @@ def test_vad_factory_explicit_krisp_fails():
         create_vad(VADConfig(backend="krisp"))
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("ten_vad") is not None,
-    reason="ten_vad is installed; cannot test missing-ten_vad path",
-)
-def test_vad_factory_explicit_ten_fails():
+def test_vad_factory_explicit_ten_fails(monkeypatch: pytest.MonkeyPatch):
     """Explicitly requesting TEN without package should raise."""
+
+    class _BrokenTen:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("TEN VAD missing")
+
+    monkeypatch.setattr(vad_module, "TenVAD", _BrokenTen)
     with pytest.raises(RuntimeError, match="TEN VAD|ten_vad"):
         create_vad(VADConfig(backend="ten"))
 
 
-def test_vad_factory_krisp_preferred():
-    """In auto mode, Krisp should be tried first."""
-    mock_module = MagicMock()
-    mock_module.create_vad_session.return_value = MagicMock()
+def test_vad_factory_silero_preferred(monkeypatch: pytest.MonkeyPatch):
+    """In auto mode Silero is tried first (permissively licensed, bundled)."""
 
-    import sys
+    class _FakeSilero:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
 
-    sys.modules["krisp_audio"] = mock_module
+        def configure(self, **_kwargs: object) -> None:
+            pass
 
-    try:
-        vad = create_vad(VADConfig(backend="auto"))
-        assert isinstance(vad, KrispVAD)
-    finally:
-        del sys.modules["krisp_audio"]
+    monkeypatch.setattr(vad_module, "SileroVAD", _FakeSilero)
+    vad = create_vad(VADConfig(backend="auto"))
+    assert isinstance(vad, _FakeSilero)
 
 
-def test_vad_factory_ten_fallback_before_silero():
-    """In auto mode, TEN should be used when Krisp is unavailable."""
+def test_vad_factory_ten_fallback_before_krisp(monkeypatch: pytest.MonkeyPatch):
+    """In auto mode, TEN is used when Silero is unavailable but ten_vad is installed."""
+
+    class _BrokenSilero:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("silero missing")
+
+    monkeypatch.setattr(vad_module, "SileroVAD", _BrokenSilero)
+
     mock_ten_vad = MagicMock()
     mock_ten_vad.TenVad.return_value = MagicMock()
 

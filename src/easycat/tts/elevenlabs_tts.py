@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
@@ -17,6 +19,15 @@ from easycat.tts.base import TTSBase
 from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
 
 logger = logging.getLogger(__name__)
+
+
+def _get_package_version(pkg: str) -> str:
+    try:
+        from importlib.metadata import version
+
+        return version(pkg)
+    except Exception:
+        return "unknown"
 
 
 class ElevenLabsStreamMode(enum.StrEnum):
@@ -42,8 +53,13 @@ class ElevenLabsTTSConfig:
     """Configuration for the ElevenLabs TTS provider."""
 
     api_key: str = ""
-    voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel (default)
-    model_id: str = "eleven_monolingual_v1"
+    voice_id: str = "EXAVITQu4vr4xnSDxMaL"  # Sarah (default)
+    # ``eleven_monolingual_v1`` / ``eleven_multilingual_v1`` are deprecated
+    # and rejected on newer accounts (free tier refuses with 1008 policy
+    # violation).  ``eleven_flash_v2_5`` is the low-latency option
+    # ElevenLabs recommends for voice bots today — keeps first-byte
+    # latency near 75ms.
+    model_id: str = "eleven_flash_v2_5"
     stability: float = 0.5
     similarity_boost: float = 0.75
     output_format: str = "pcm_24000"
@@ -148,10 +164,14 @@ class ElevenLabsTTS(TTSBase):
                 exc.response.status_code,
                 exc.response.text,
             )
+            self._emit_provider_error(
+                exc, http_status=exc.response.status_code, body=exc.response.text[:400]
+            )
             raise
         except httpx.HTTPError as exc:
             if not self._cancelled:
                 logger.error("ElevenLabs TTS HTTP error: %s", exc)
+                self._emit_provider_error(exc)
                 raise
         finally:
             self._response = None
@@ -189,6 +209,12 @@ class ElevenLabsTTS(TTSBase):
             await self._close_ws()
             if not self._cancelled:
                 logger.error("ElevenLabs TTS WebSocket error: %s", exc)
+                # WebSocket close codes (e.g. 1008 "policy violation" for
+                # deprecated models on free tier) go in so replaying a
+                # bundle shows the server's rejection reason, not just
+                # "synthesis failed".
+                close_code = getattr(exc, "code", None)
+                self._emit_provider_error(exc, ws_close_code=close_code)
                 raise
         except BaseException:
             # CancelledError is a BaseException; close the ws since it's mid-stream
@@ -289,3 +315,39 @@ class ElevenLabsTTS(TTSBase):
             await self._client.aclose()
             self._client = None
         await self._close_ws()
+
+    def _emit_provider_error(self, exc: BaseException, **context: Any) -> None:
+        """Fire a journal-visible ``Error`` event on the bus.
+
+        Without this, WS close codes, HTTP status, and response bodies
+        only land in the logger — a bundle recorded by a user can't
+        explain *why* TTS failed.  Notes are attached to the exception
+        so the existing ``Error`` event shape carries the context
+        without requiring a new event type.
+        """
+        bus = getattr(self._config, "event_bus", None)
+        if bus is None:
+            return
+        from easycat.events import Error, ErrorStage
+
+        for key, value in context.items():
+            if value is None:
+                continue
+            try:
+                exc.add_note(f"{key}={value}")  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - pre-3.11
+                pass
+        try:
+            asyncio.create_task(
+                bus.emit(Error(exception=exc, stage=ErrorStage.TTS, provider="elevenlabs"))
+            )
+        except RuntimeError:  # no running loop
+            logger.debug("Could not emit provider error — no running loop", exc_info=True)
+
+    def version_info(self) -> dict[str, str]:
+        return {
+            "provider": "elevenlabs",
+            "model": self._config.model_id,
+            "api_version": "v1",
+            "sdk_version": _get_package_version("httpx"),
+        }

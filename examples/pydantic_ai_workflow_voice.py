@@ -23,11 +23,8 @@ from pydantic import BaseModel
 from easycat import (
     EasyCatConfig,
     LocalTransportConfig,
-    PydanticAIWorkflowAdapter,
-    WorkflowTurnResult,
     attach_runtime_feedback,
     create_session,
-    default_event_logging,
     require_env,
     wait_for_shutdown_signal,
 )
@@ -83,7 +80,7 @@ class FlightBookingWorkflow:
             ),
         )
 
-    async def on_user_turn(self, text: str) -> WorkflowTurnResult:
+    async def on_user_turn(self, text: str) -> str:
         if self.flight_details is None:
             result = await self.search_agent.run(
                 text,
@@ -93,22 +90,14 @@ class FlightBookingWorkflow:
             self._search_history = result.new_messages()
             output = result.output
             if isinstance(output, FlightSearchFailed):
-                return WorkflowTurnResult(
-                    text=(
-                        "I still need the route or date before I can search. "
-                        "Please say where you want to go and when."
-                    ),
-                    structured_output=output,
-                    active_agent_id="flight_search",
+                return (
+                    "I still need the route or date before I can search. "
+                    "Please say where you want to go and when."
                 )
 
             self.flight_details = output
             self.active_agent_id = "seat_selection"
-            return WorkflowTurnResult(
-                text=(f"I found flight {output.flight_number}. What seat would you like?"),
-                structured_output=output,
-                active_agent_id=self.active_agent_id,
-            )
+            return f"I found flight {output.flight_number}. What seat would you like?"
 
         result = await self.seat_agent.run(
             text,
@@ -118,13 +107,9 @@ class FlightBookingWorkflow:
         self._seat_history = result.new_messages()
         choice = result.output
         assert self.flight_details is not None
-        return WorkflowTurnResult(
-            text=(
-                f"Got it. I saved seat {choice.row}{choice.seat} "
-                f"for flight {self.flight_details.flight_number}."
-            ),
-            structured_output=choice,
-            active_agent_id=self.active_agent_id,
+        return (
+            f"Got it. I saved seat {choice.row}{choice.seat} "
+            f"for flight {self.flight_details.flight_number}."
         )
 
     def clear_history(self) -> None:
@@ -138,13 +123,11 @@ async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
 
     workflow = FlightBookingWorkflow()
-    adapter = PydanticAIWorkflowAdapter(workflow)
 
     config = EasyCatConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
-        agent=adapter,
-        event_logging=default_event_logging(),
+        agent=workflow,
     )
     session = create_session(config)
     attach_runtime_feedback(session)
