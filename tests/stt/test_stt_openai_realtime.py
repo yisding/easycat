@@ -10,8 +10,9 @@ from typing import Any
 
 import pytest
 
-from easycat.events import STTEventType
+from easycat.events import STTEvent, STTEventType
 from easycat.providers import STTProvider
+from easycat.stt import openai_realtime_provider as realtime_provider
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
@@ -422,6 +423,103 @@ async def test_openai_realtime_emits_partial_then_final():
 
     assert len(finals) == 1
     assert finals[0].text == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_promotes_partial_on_final_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If ``.completed`` stalls past the timeout, the accumulated
+    partial is promoted to ``STTFinal`` so the session can drive the
+    LLM without waiting on OpenAI's long-tail response."""
+    monkeypatch.setattr(realtime_provider, "_FINAL_TRANSCRIPT_TIMEOUT_S", 0.05)
+
+    class _StubWS:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, data: str) -> None:
+            self.sent.append(data)
+
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt._ws = _StubWS()  # type: ignore[assignment]
+    stt._audio_pending_commit = True
+    stt._bytes_since_last_commit = stt._COMMIT_MIN_BYTES
+    stt._partial_text = "hello"
+    emitted: list[STTEvent] = []
+    stt._emit_event = emitted.append  # type: ignore[method-assign]
+
+    result = await stt._send_commit(wait_for_final=True)
+
+    assert result is True, "commit should still report a successful send"
+    finals = [e for e in emitted if e.type == STTEventType.FINAL]
+    assert [f.text for f in finals] == ["hello"], (
+        "timeout must promote accumulated partial to FINAL"
+    )
+    assert stt._dropping_pending_final is True, (
+        "drop flag should be armed to discard the late .completed"
+    )
+    assert stt._partial_text == ""
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_drops_late_completed_after_timeout() -> None:
+    """Once the timeout has promoted the partial to FINAL, a late
+    ``.completed`` for the same commit is swallowed rather than
+    producing a second ``STTFinal`` for the turn."""
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt._dropping_pending_final = True
+    stt._partial_text = "lingering partial"
+    emitted: list[STTEvent] = []
+    stt._emit_event = emitted.append  # type: ignore[method-assign]
+
+    stt._handle_message(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "revised transcript",
+        }
+    )
+
+    assert emitted == [], "late .completed must not produce a second STTFinal"
+    assert stt._dropping_pending_final is False, (
+        "drop flag should self-clear so the next commit behaves normally"
+    )
+    assert stt._partial_text == "", "partial text should be cleared alongside the drop"
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_next_commit_reemits_after_drop() -> None:
+    """After a drop, the following ``.completed`` for a new commit
+    flows through normally.  Guards against the flag accidentally
+    suppressing transcripts on subsequent turns."""
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt._dropping_pending_final = True  # simulate a prior drop
+    emitted: list[STTEvent] = []
+    stt._emit_event = emitted.append  # type: ignore[method-assign]
+
+    # First message: the late .completed from the previous turn — dropped.
+    stt._handle_message(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "stale",
+        }
+    )
+    # Next turn's delta + .completed — must emit normally.
+    stt._handle_message(
+        {
+            "type": "conversation.item.input_audio_transcription.delta",
+            "delta": "fresh transcript",
+        }
+    )
+    stt._handle_message(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "fresh transcript",
+        }
+    )
+
+    finals = [e for e in emitted if e.type == STTEventType.FINAL]
+    assert [f.text for f in finals] == ["fresh transcript"]
 
 
 @pytest.mark.asyncio
