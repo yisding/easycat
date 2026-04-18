@@ -209,3 +209,37 @@ def test_easycatconfig_typed_config_takes_precedence(
     typed = DeepgramSTTConfig(api_key="dg-manual", model="nova-2")
     cfg = EasyCatConfig(stt=typed, tts="openai", agent=object())
     assert cfg.stt is typed
+
+
+def test_easycatconfig_programmatic_openai_key_for_string_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`openai_api_key="sk..."` works without OPENAI_API_KEY also exported."""
+    for var in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    cfg = EasyCatConfig(
+        openai_api_key="sk-programmatic",
+        stt="openai-realtime",
+        tts="openai",
+        agent=object(),
+    )
+    assert isinstance(cfg.stt, OpenAIRealtimeSTTConfig)
+    assert cfg.stt.api_key == "sk-programmatic"
+    assert isinstance(cfg.tts, OpenAITTSConfig)
+    assert cfg.tts.api_key == "sk-programmatic"
+
+
+def test_easycatconfig_swap_just_stt_keeps_openai_tts_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`stt="deepgram/flux"` + OPENAI_API_KEY autofills the OpenAI TTS chain."""
+    for var in ("ELEVENLABS_API_KEY",):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    cfg = EasyCatConfig(stt="deepgram/flux", agent=object())
+    assert isinstance(cfg.stt, DeepgramSTTConfig)
+    assert cfg.stt.model == "flux"
+    # The autodetect path should still fill in OpenAI TTS even though stt
+    # is no longer None when the OpenAI defaults block runs.
+    assert isinstance(cfg.tts, OpenAITTSConfig)

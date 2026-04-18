@@ -107,12 +107,17 @@ def available_providers() -> list[str]:
     return sorted(_PROVIDERS)
 
 
-def parse_tts_string(spec: str) -> TTSConfig:
+def parse_tts_string(spec: str, *, openai_api_key: str | None = None) -> TTSConfig:
     """Parse a ``"provider/model"`` (or bare ``"provider"``) shortcut.
 
     Looks up the provider in the registry, reads the corresponding API
     key from the env var (:data:`_PROVIDER_ENV_VAR`), and returns a
     concrete :class:`TTSConfig` with ``model`` set when supplied.
+
+    ``openai_api_key`` overrides env-var lookup for the ``openai``
+    provider so callers that pass the key programmatically
+    (``EasyCatConfig(openai_api_key="sk...", tts="openai")``) do not
+    also have to export ``OPENAI_API_KEY``.
 
     Raises:
         EasyCatError (EASYCAT_E104): Unknown provider, with fuzzy-match
@@ -136,7 +141,11 @@ def parse_tts_string(spec: str) -> TTSConfig:
         )
 
     env_var = _PROVIDER_ENV_VAR[provider]
-    api_key = os.getenv(env_var, "")
+    api_key = ""
+    if openai_api_key and provider == "openai":
+        api_key = openai_api_key
+    if not api_key:
+        api_key = os.getenv(env_var, "")
     if not api_key:
         raise EASYCAT_E203(var=env_var)
 

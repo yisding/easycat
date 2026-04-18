@@ -45,5 +45,5 @@ Ctrl-C to quit.
 - **Try a different TTS voice:** pass `tts="openai"` with a specific voice via
   a typed `OpenAITTSConfig(voice="shimmer")`.
 - **Debug a session:** pass `debug="full"` to `EasyCatConfig(...)`. EasyCat
-  writes a RunBundle journal you can export with
-  `easycat bundles export --for=claude-code` and pipe into your coding agent.
+  writes a RunBundle journal under `~/.cache/easycat/journals/` that you can
+  inspect via `RunBundle.load(...)` or load into a coding agent for analysis.

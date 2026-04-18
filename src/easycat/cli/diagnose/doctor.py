@@ -315,6 +315,17 @@ def doctor(
         )
         raise typer.Exit(2)
 
+    if only_provider is not None and only_provider not in _PROVIDER_ENV:
+        # A typo or mis-cased provider must fail loudly rather than fall
+        # through to the generic checks and exit 0 — automation that
+        # scopes doctor to one provider would otherwise treat the typo as
+        # a green run.
+        supported = ", ".join(sorted(_PROVIDER_ENV))
+        stderr_console.print(
+            f"  [red]✗[/] Unknown --provider {only_provider!r}. Supported: {supported}."
+        )
+        raise typer.Exit(2)
+
     results = _run_all_checks(only_provider=only_provider)
 
     if fix:

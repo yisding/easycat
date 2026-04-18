@@ -31,7 +31,7 @@ from easycat.cli.scaffold._schema import (
     available_templates,
     parse_config,
 )
-from easycat.errors import EASYCAT_E101, EASYCAT_E103
+from easycat.errors import EASYCAT_E101, EASYCAT_E102, EASYCAT_E103
 
 _SCAFFOLD_DEFAULTS: dict[str, str] = {
     "AGENT_NAME": "Support",
@@ -45,10 +45,155 @@ _SCAFFOLD_DEFAULTS: dict[str, str] = {
 # else is copied byte-for-byte.
 _TEMPLATED_SUFFIXES: frozenset[str] = frozenset({".py", ".toml", ".md", ".txt", ".example"})
 
+# Provider name → optional extra that ships its SDK.  Used to keep the
+# scaffolded ``pyproject.toml`` in sync with the requested providers
+# (e.g. ``stt="deepgram/flux"`` adds ``deepgram`` to the extras list).
+_PROVIDER_TO_EXTRA: dict[str, str] = {
+    "openai": "openai",
+    "openai-realtime": "openai",
+    "deepgram": "deepgram",
+    "elevenlabs": "elevenlabs",
+}
+
+# Provider name → env var that holds its API key.  Used to extend the
+# scaffolded ``.env.example`` so the developer sees every key they need.
+_PROVIDER_TO_ENV_VAR: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "openai-realtime": "OPENAI_API_KEY",
+    "deepgram": "DEEPGRAM_API_KEY",
+    "elevenlabs": "ELEVENLABS_API_KEY",
+}
+
+# Per-template baseline extras that must always be present in the
+# generated ``pyproject.toml`` regardless of provider choices.
+_TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
+    "openai-agents": ("openai-agents", "local"),
+    "pydantic-ai": ("pydantic-ai", "local"),
+    "text-chat": ("openai-agents",),
+}
+
+# Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
+# instantiate :class:`EasyCatConfig`.  Text-only templates (REPLs) bypass
+# the audio pipeline entirely, so those fields are rejected up front.
+_VOICE_TEMPLATES: frozenset[str] = frozenset({"openai-agents", "pydantic-ai"})
+
 
 def _templates_root() -> Path:
     """Filesystem path to the bundled templates directory."""
     return Path(str(files("easycat.cli.scaffold").joinpath("templates")))
+
+
+def _provider_name(spec: str) -> str:
+    """Extract the provider name from a ``"provider/model"`` spec."""
+    return spec.partition("/")[0].strip().lower()
+
+
+def _validate_for_template(cfg: InitConfig) -> None:
+    """Reject fields that the scaffold cannot wire for the chosen template.
+
+    The schema accepts ``stt`` / ``tts`` / ``llm`` / ``transport`` /
+    ``tools`` / ``mcp_servers`` so coding agents can describe a full
+    project, but only a subset is wired in this release.  Rather than
+    silently dropping the caller's intent, reject unsupported requests
+    with a stable error code.
+    """
+    if cfg.llm is not None:
+        raise EASYCAT_E102(
+            problem=(
+                "'llm' is not yet supported by `easycat init` — wire the "
+                "LLM directly in the generated `agent.py` for now."
+            )
+        )
+    if cfg.tools:
+        raise EASYCAT_E102(
+            problem=(
+                "'tools' is not yet supported by `easycat init` — add "
+                "`@function_tool` (or framework equivalent) decorators in "
+                "the generated `agent.py` for now."
+            )
+        )
+    if cfg.transport != "local":
+        raise EASYCAT_E102(
+            problem=(
+                f"transport={cfg.transport!r} is not yet supported by "
+                "`easycat init` — only the default 'local' transport is "
+                "scaffolded in this release."
+            )
+        )
+    if cfg.template not in _VOICE_TEMPLATES:
+        for field_name in ("stt", "tts"):
+            if getattr(cfg, field_name) is not None:
+                raise EASYCAT_E102(
+                    problem=(
+                        f"template {cfg.template!r} does not use the audio "
+                        f"pipeline; remove {field_name!r} from --config or "
+                        "pick a voice template (e.g. 'openai-agents')."
+                    )
+                )
+        if cfg.mcp_servers:
+            raise EASYCAT_E102(
+                problem=(
+                    f"template {cfg.template!r} does not yet wire "
+                    "'mcp_servers'; pick a voice template or remove the field."
+                )
+            )
+
+
+def _config_extra_kwargs(cfg: InitConfig) -> str:
+    """Render extra ``EasyCatConfig(...)`` kwargs (or empty string).
+
+    Comma-prefixed inline form so a single placeholder works in both the
+    multi-line ``openai-agents`` template and the single-line
+    ``pydantic-ai`` template; ruff format will reflow long lines after
+    the developer runs it.
+    """
+    if cfg.template not in _VOICE_TEMPLATES:
+        return ""
+    parts: list[str] = []
+    if cfg.stt:
+        parts.append(f'stt="{cfg.stt}"')
+    if cfg.tts:
+        parts.append(f'tts="{cfg.tts}"')
+    if cfg.mcp_servers:
+        parts.append(f"mcp_servers={cfg.mcp_servers!r}")
+    if not parts:
+        return ""
+    return ", " + ", ".join(parts)
+
+
+def _extras_for(cfg: InitConfig) -> str:
+    """Render the comma-separated extras list for ``pyproject.toml``."""
+    extras = list(_TEMPLATE_BASE_EXTRAS.get(cfg.template, ()))
+    seen = set(extras)
+    for spec in (cfg.stt, cfg.tts):
+        if not spec:
+            continue
+        extra = _PROVIDER_TO_EXTRA.get(_provider_name(spec))
+        if extra and extra not in seen:
+            extras.append(extra)
+            seen.add(extra)
+    return ",".join(extras)
+
+
+def _extra_env_vars(cfg: InitConfig) -> str:
+    """Render extra ``KEY=`` lines beyond the template's baseline.
+
+    ``OPENAI_API_KEY`` is in every template's ``.env.example`` already;
+    only non-OpenAI keys need to be added here.  Returned with a leading
+    newline when non-empty so it appends cleanly to the existing file.
+    """
+    seen: set[str] = {"OPENAI_API_KEY"}
+    extra: list[str] = []
+    for spec in (cfg.stt, cfg.tts):
+        if not spec:
+            continue
+        var = _PROVIDER_TO_ENV_VAR.get(_provider_name(spec))
+        if var and var not in seen:
+            extra.append(f"{var}=")
+            seen.add(var)
+    if not extra:
+        return ""
+    return "\n" + "\n".join(extra) + "\n"
 
 
 def _substitutions(cfg: InitConfig, project_name: str) -> dict[str, str]:
@@ -56,6 +201,9 @@ def _substitutions(cfg: InitConfig, project_name: str) -> dict[str, str]:
         "AGENT_NAME": cfg.agent_name or _SCAFFOLD_DEFAULTS["AGENT_NAME"],
         "AGENT_INSTRUCTIONS": (cfg.agent_instructions or _SCAFFOLD_DEFAULTS["AGENT_INSTRUCTIONS"]),
         "PROJECT_NAME": project_name,
+        "EASYCAT_CONFIG_EXTRA": _config_extra_kwargs(cfg),
+        "EXTRAS": _extras_for(cfg),
+        "EXTRA_ENV_VARS": _extra_env_vars(cfg),
     }
 
 
@@ -193,6 +341,8 @@ def init(
             template=cfg.template,
             available=", ".join(available_templates()),
         )
+
+    _validate_for_template(cfg)
 
     target = Path(name).resolve()
     if not force and _is_non_empty_dir(target):

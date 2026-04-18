@@ -100,6 +100,19 @@ def test_doctor_only_provider_fails_when_its_key_missing(
     assert "OPENAI_API_KEY" in result.stderr
 
 
+def test_doctor_unknown_provider_is_usage_error(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    no_network: None,
+) -> None:
+    """A typo or mis-cased --provider exits 2, not 0 (false-green guard)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+    result = cli.invoke(app, ["doctor", "--provider", "OpenAI"])
+    assert result.exit_code == 2
+    assert "Unknown --provider" in result.stderr
+
+
 def test_doctor_reports_httpx_failure(cli: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ConnectError on the probe should surface as E204."""
     import httpx

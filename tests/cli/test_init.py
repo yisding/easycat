@@ -172,3 +172,122 @@ def test_init_missing_schema_version(
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     assert result.exit_code == 4
     assert "schema_version" in result.stderr
+
+
+# ── Optional-field honoring (stt / tts / mcp_servers) ──────────────────
+
+
+def test_init_honors_stt_string(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`stt="deepgram/flux"` lands in agent.py, .env.example, and pyproject."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "stt": "deepgram/flux",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+    agent_py = (project / "agent.py").read_text()
+    assert 'stt="deepgram/flux"' in agent_py
+    pyproject = (project / "pyproject.toml").read_text()
+    assert "deepgram" in pyproject
+    env_example = (project / ".env.example").read_text()
+    assert "DEEPGRAM_API_KEY" in env_example
+
+
+def test_init_honors_tts_and_mcp_servers(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "tts": "elevenlabs/eleven_flash_v2_5",
+            "mcp_servers": ["stdio:///bin/echo"],
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+    agent_py = (project / "agent.py").read_text()
+    assert 'tts="elevenlabs/eleven_flash_v2_5"' in agent_py
+    assert "mcp_servers=" in agent_py
+    pyproject = (project / "pyproject.toml").read_text()
+    assert "elevenlabs" in pyproject
+    env_example = (project / ".env.example").read_text()
+    assert "ELEVENLABS_API_KEY" in env_example
+
+
+def test_init_default_omits_extra_kwargs(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No stt/tts requested → no extra kwargs (no $-leak in scaffolded files)."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "openai-agents"})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+    for fname in ("agent.py", "pyproject.toml", ".env.example"):
+        assert "$" not in (project / fname).read_text(), f"{fname} leaked a placeholder"
+
+
+# ── Not-yet-wired fields are rejected loudly ──────────────────────────
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("llm", "openai/gpt-4o"),
+        ("transport", "webrtc"),
+    ],
+)
+def test_init_rejects_not_yet_wired_string_fields(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "openai-agents", field: value})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 4
+    assert "EASYCAT_E102" in result.stderr
+
+
+def test_init_rejects_tools_field(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "tools": ["weather"],
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 4
+    assert "EASYCAT_E102" in result.stderr
+
+
+def test_init_rejects_voice_fields_for_text_chat(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "text-chat",
+            "stt": "deepgram/flux",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 4
+    assert "EASYCAT_E102" in result.stderr

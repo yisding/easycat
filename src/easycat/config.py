@@ -217,26 +217,28 @@ class EasyCatConfig:
                 f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
             )
 
-        # Resolve string-keyed provider shortcuts ("deepgram/flux" →
-        # DeepgramSTTConfig(...)) before any downstream validation.  Typed
-        # configs still take precedence — users can pass a concrete
-        # DeepgramSTTConfig and keep full control.
-        if isinstance(self.stt, str):
-            self.stt = parse_stt_string(self.stt)
-        if isinstance(self.tts, str):
-            self.tts = parse_tts_string(self.tts)
-
         # Env-var autodetect for the zero-config case: bare
         # ``EasyCatConfig(agent=...)`` with ``OPENAI_API_KEY`` set picks up
         # the OpenAI chain automatically — keeping the scaffolded
-        # ``agent.py`` templates under their line budget.
-        if (
-            self.stt is None
-            and self.tts is None
-            and self.openai_api_key is None
-            and (env_key := os.getenv("OPENAI_API_KEY"))
-        ):
+        # ``agent.py`` templates under their line budget.  Resolved before
+        # string parsing so ``stt="openai-realtime"`` honors the env var
+        # without needing to be passed explicitly, and before the OpenAI
+        # default-fill below so the "swap just the STT" flow
+        # (``stt="deepgram/flux"`` + ``OPENAI_API_KEY``) gets a default
+        # OpenAI TTS without the user spelling it out.
+        if self.openai_api_key is None and (env_key := os.getenv("OPENAI_API_KEY")):
             self.openai_api_key = env_key
+
+        # Resolve string-keyed provider shortcuts ("deepgram/flux" →
+        # DeepgramSTTConfig(...)) before any downstream validation.  Typed
+        # configs still take precedence — users can pass a concrete
+        # DeepgramSTTConfig and keep full control.  ``openai_api_key`` is
+        # forwarded so programmatic key injection works without the env
+        # var also being exported.
+        if isinstance(self.stt, str):
+            self.stt = parse_stt_string(self.stt, openai_api_key=self.openai_api_key)
+        if isinstance(self.tts, str):
+            self.tts = parse_tts_string(self.tts, openai_api_key=self.openai_api_key)
 
         if self.openai_api_key:
             if self.stt is None:

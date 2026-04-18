@@ -78,6 +78,7 @@ dev = [
 [tool.ruff]
 line-length = 99
 target-version = "py311"
+extend-exclude = ["src/easycat/cli/scaffold/templates"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP"]
