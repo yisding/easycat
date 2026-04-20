@@ -6,8 +6,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28.1",
-    "pysbd>=0.3.4",
     "rich>=13.0",
+    "sentencesplit>=0.0.3",
     "typer>=0.16",
     "websockets>=16.0",
 ]

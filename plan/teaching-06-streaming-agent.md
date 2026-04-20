@@ -66,10 +66,10 @@ production version.
    custom payload envelope; markdown in agent output).
 6. **Walk the sentence splitter.** Open
    `src/easycat/session/text_utils.py` and read
-   `split_at_sentence_boundaries`. It wraps `pysbd` and handles
+   `split_at_sentence_boundaries`. It wraps `sentencesplit` and handles
    the real edge cases — trailing abbreviations, unclosed
    markdown, incomplete final sentence — but the *core idea* is
-   one pySBD call plus a "don't flush an unfinished sentence"
+   one sentencesplit call plus a "don't flush an unfinished sentence"
    guard. Why not a bespoke NLP module? Latency, and the fact
    that perfect splitting doesn't matter when TTS prosody forgives
    most seams.
