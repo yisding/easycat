@@ -7,8 +7,12 @@
 
 - Chapter 7 (the starting-point code copies from there; the
   tool-call wiring carries forward unused for now)
-- The smart-turn ONNX model (downloadable via the existing
-  `smart_turn.py` setup path)
+- The `smart-turn` extra installed (`uv sync --extra smart-turn`
+  or one of the umbrella extras like `easycat[quickstart]` /
+  `easycat[all]`). The 8 MB quantized ONNX model is bundled with
+  the package — there is no separate download step — but
+  `SmartTurnONNX` lazy-imports `numpy` and `onnxruntime`, so a
+  plain `uv sync --group dev` will raise at first inference.
 
 ## Learning objectives
 
@@ -81,8 +85,13 @@
 
 ## Journal highlights
 
-- `smart_turn.prediction` events with confidence scores and the
-  audio window used
+- Smart-turn runs inside `TurnStage` (see `src/easycat/stages/turn.py`),
+  which journals the classification as a regular
+  `stage_start` / `stage_complete` pair with `stage="turn"`. The
+  `stage_complete` record carries `prediction` / `probability` /
+  `decision` fields in its data — that's where to read the
+  confidence score. The input audio window for the call is captured
+  as the `input_ref` artifact on `stage_start`.
 - Gap from last speech frame to `speech_ended` event (should be
   <300ms vs ~800ms from chapter 7)
 - Side-by-side: chapter 7 bundle's VAD-timeout vs this chapter's

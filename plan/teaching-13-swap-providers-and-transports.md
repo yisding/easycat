@@ -75,11 +75,19 @@ exercises rather than core presets, to keep the chapter focused.)
    choice swings *jitter and codec quality*.
 5. **Why some providers need EventBus.** Walk through
    `easycat.config.create_session` —
-   `create_stt_provider_from_config` injects EventBus for
-   Deepgram, ElevenLabs, OpenAIRealtime; not for OpenAI. The
-   reason: those providers emit provider-scoped `STTEvent` /
-   `TTSEvent` records that Session maps to EasyCat-level events
-   (`STTFinal`, `TTSAudio`, etc.).
+   `create_stt_provider_from_config` injects the EventBus for
+   Deepgram, ElevenLabs, OpenAIRealtime, and Cartesia; not for
+   the non-realtime OpenAI provider. This is *not* how `STTEvent`
+   / `TTSEvent` get mapped to EasyCat-level events — those flow
+   out of every provider's async iterator (`STTBase.events()` /
+   the TTS equivalent) regardless of whether an EventBus was
+   injected. The real reason is side-channel telemetry: these
+   providers wrap a long-lived WebSocket via
+   `ReconnectingWebSocket`, which emits `ReconnectAttempt` /
+   `ReconnectSuccess` / `ReconnectFailure` onto the bus so the
+   session journal (and any external listener) can see the retry
+   timeline. OpenAI's HTTP-based STT/TTS don't have that failure
+   mode, so they don't need the bus.
 6. **A decision matrix.** Latency / cost / offline / quality /
    telephony — pick any three. Concrete table populated from the
    six bundles' measured numbers.
@@ -132,8 +140,12 @@ exercises rather than core presets, to keep the chapter focused.)
 - Provider-scoped events present only in Deepgram / ElevenLabs
   presets — cross-reference `events.py` to see the event mapping
 - Transport-specific events: `DTMFAggregated`,
-  `VoicemailDetected` only on Twilio; ICE-related events on
-  WebRTC
+  `VoicemailDetected` only on Twilio. WebRTC has no corresponding
+  transport-specific EventBus or journal events today — ICE
+  servers are config-only (`ICEServer`, `RTCConfiguration`), and
+  the chapter's WebRTC preset should rely on the shared
+  `stage.*` records plus the aiortc peer-connection logs for its
+  comparison, not promise ICE journal artifacts that don't exist.
 
 ## Files created
 

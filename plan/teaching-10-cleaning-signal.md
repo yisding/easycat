@@ -36,6 +36,19 @@
   `PassthroughAEC` — call this out in the chapter so the reader
   doesn't accidentally run a no-op AEC and wonder why nothing
   changes on `speakerphone_loop.wav`.
+- **Install the extras.** Both factories silently return a
+  passthrough when their optional deps are missing:
+  `create_noise_reducer()` falls back Krisp → RNNoise → passthrough,
+  and `create_echo_canceller()` falls back LiveKit APM → passthrough.
+  On a plain `uv sync --group dev` both land on passthrough, so
+  the before/after recordings come out identical and the
+  chapter's main experiment fails silently. Install
+  `easycat[rnnoise]` (open-source RNNoise, permissive license) or
+  Krisp per its own SDK instructions for NR, and `easycat[aec]`
+  (LiveKit APM) for AEC before running the demos. The chapter
+  should verify the active backend by reading the journal's
+  `audio` stage `noise_reducer` / `echo_canceller` fields (not by
+  trusting config).
 - A replay mode runs three recordings through the pipeline:
   - Noisy mic + no bot speech (`noisy_alone.wav`) — exercises NR.
   - Quiet mic + bot speech bleeding through speaker

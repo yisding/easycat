@@ -114,8 +114,12 @@
   `tool_call_result` — this is the "filler window"
 - `tool_call_delta` records between the two for providers that
   stream partial tool output
-- `tool_call_result` records (data redacted by default in the
-  journal — read `peripheral-redaction.md` for the full story)
+- `tool_call_result` records — the raw `result` payload is copied
+  straight into the journal event data (see
+  `Session._subscribe_journal_sink`). Tool outputs are *not*
+  redacted by default, so anything the tool returns lands verbatim
+  in the bundle. Treat bundles as sensitive and read
+  `peripheral-redaction.md` for the planned policy layer.
 - **Heads-up for `SessionAction` flows:** `SessionActionRequested`
   / `SessionActionStarted` / `SessionActionCompleted` /
   `SessionActionFailed` are emitted on the `EventBus` but are
