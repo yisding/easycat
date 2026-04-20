@@ -2398,10 +2398,16 @@ class Session:
             replayed_chunk = self._replay_chunks_pending > 0
             turn = self._turn
             try:
-                await self._transport_stage.execute(
-                    chunk, self._run_ctx, self._turn or self._no_turn
+                delivered = await self._transport_stage.execute(
+                    chunk, self._run_ctx, turn or self._no_turn
                 )
-                await self._emit(AudioOut(chunk=chunk))
+                if delivered:
+                    # Stamp turn_id from the turn that owned this chunk — by
+                    # the time send_audio() returns, self._turn may point at
+                    # a newer turn (or None) under transport backpressure.
+                    await self._emit(
+                        AudioOut(chunk=chunk, turn_id=turn.id if turn is not None else None)
+                    )
                 if self._enable_aec:
                     self.echo_canceller.feed_reference(chunk)
                 sent_size = len(chunk.data)

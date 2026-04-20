@@ -363,10 +363,10 @@ class WebRTCTransport(_AudioQueueMixin):
         self._connected = False
         self._client_connected.clear()
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
+    async def send_audio(self, chunk: AudioChunk) -> bool:
         """Send an audio chunk to the remote WebRTC peer."""
         if self._pc is None or self._outbound_track is None:
-            return
+            return False
 
         from easycat.audio_utils import resample
 
@@ -377,6 +377,7 @@ class WebRTCTransport(_AudioQueueMixin):
             pcm_data = chunk.data
 
         self._outbound.enqueue(pcm_data)
+        return True
 
     async def clear_audio(self) -> None:
         """Discard queued outbound audio (useful during barge-in)."""

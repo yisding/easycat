@@ -66,7 +66,7 @@ class WebSocketTransport(_ServerTransportBase):
 
     # ── Transport protocol ────────────────────────────────────────
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
+    async def send_audio(self, chunk: AudioChunk) -> bool:
         """Send an audio chunk to the connected WebSocket client as a binary frame.
 
         When the outbound sample rate changes (e.g. TTS provider switch), an
@@ -75,15 +75,19 @@ class WebSocketTransport(_ServerTransportBase):
         """
         ws = self._ws
         if ws is None:
-            return
+            return False
         try:
             rate = chunk.format.sample_rate
             if rate != self._outbound_rate:
                 await ws.send(json.dumps({"type": "audio_format", "sample_rate": rate}))
                 self._outbound_rate = rate
             await ws.send(chunk.data)
+            return True
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot send audio: client disconnected")
+            self._ws = None
+            self._client_connected.clear()
+            return False
 
     async def clear_audio(self) -> None:
         """No-op — WebSocket sends frames immediately without buffering."""
@@ -225,15 +229,21 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
             logger.debug("Error closing WebSocket connection", exc_info=True)
         self._enqueue_sentinel()
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        if not self._connected:
+            return False
         try:
             rate = chunk.format.sample_rate
             if rate != self._outbound_rate:
                 await self._ws.send(json.dumps({"type": "audio_format", "sample_rate": rate}))
                 self._outbound_rate = rate
             await self._ws.send(chunk.data)
+            return True
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot send audio: client disconnected")
+            self._connected = False
+            self._client_connected.clear()
+            return False
 
     async def clear_audio(self) -> None:
         """No-op — WebSocket sends frames immediately without buffering."""
