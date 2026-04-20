@@ -88,10 +88,11 @@
 - Smart-turn runs inside `TurnStage` (see `src/easycat/stages/turn.py`),
   which journals the classification as a regular
   `stage_start` / `stage_complete` pair with `stage="turn"`. The
-  `stage_complete` record carries `prediction` / `probability` /
-  `decision` fields in its data — that's where to read the
-  confidence score. The input audio window for the call is captured
-  as the `input_ref` artifact on `stage_start`.
+  `stage_complete` record carries the `prediction` and
+  `probability` fields from `SmartTurnResult` in its data —
+  that's where to read the confidence score. The input audio
+  window for the call is captured as the `input_ref` artifact on
+  `stage_start`.
 - Gap from last speech frame to `speech_ended` event (should be
   <300ms vs ~800ms from chapter 7)
 - Side-by-side: chapter 7 bundle's VAD-timeout vs this chapter's

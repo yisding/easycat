@@ -1,8 +1,13 @@
 # Chapter 12 — Evals and the Latency Budget
 
 > Now that you can read the journal, you can measure. The
-> difference between *building* a voice bot and *operating* one is
-> measurement: P95 latency, WER, MOS, barge-in F1, task completion.
+> difference between *building* a voice bot and *operating* one
+> is measurement. This chapter produces four concrete numbers:
+> P50/P95 latency, WER, barge-in F1, and an LLM-as-judge
+> conversational-quality score. MOS and task-completion are
+> adjacent metrics worth knowing about, but require human raters
+> or task-specific scaffolding and live in
+> `peripheral-eval-and-debugger-ui.md` rather than this chapter.
 
 ## Prerequisites
 

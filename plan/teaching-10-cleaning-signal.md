@@ -49,11 +49,23 @@
   should verify the active backend by reading the journal's
   `audio` stage `noise_reducer` / `echo_canceller` fields (not by
   trusting config).
-- A replay mode runs three recordings through the pipeline:
-  - Noisy mic + no bot speech (`noisy_alone.wav`) — exercises NR.
-  - Quiet mic + bot speech bleeding through speaker
-    (`speakerphone_loop.wav`) — exercises AEC.
-  - Both at once (`hard_mode.wav`) — exercises both.
+- A replay mode runs three recordings through the pipeline.
+  Crucially, **AEC is dual-input**: the live pipeline feeds the
+  clean outbound (TTS) audio into `echo_canceller.feed_reference()`
+  from `Session._drain_outbound_audio()`. If replay only plays a
+  single recorded mic track back in, the canceller never sees the
+  reference it needs and AEC-on / AEC-off runs come out identical.
+  So every AEC-exercising recording is stored as a **pair**: the
+  mic capture *and* the far-end reference that was playing at the
+  same time (synchronised sample counts), with the replay harness
+  pushing the reference into `feed_reference()` in lockstep.
+  - Noisy mic + no bot speech (`noisy_alone.wav`, single track)
+    — exercises NR. No reference needed (no bot audio played).
+  - Quiet mic + bot speech bleeding through the speaker
+    (`speakerphone_loop.mic.wav` + `speakerphone_loop.ref.wav`)
+    — exercises AEC.
+  - Both at once (`hard_mode.mic.wav` + `hard_mode.ref.wav`)
+    — exercises both.
 - Auto-generated comparison table from the dumped bundles.
 
 ## Narrative arc
@@ -153,8 +165,10 @@
 - `docs/teaching/10-cleaning-signal/main.py`
 - `docs/teaching/10-cleaning-signal/README.md`
 - `docs/teaching/10-cleaning-signal/recordings/noisy_alone.wav`
-- `docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.wav`
-- `docs/teaching/10-cleaning-signal/recordings/hard_mode.wav`
+- `docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.mic.wav`
+- `docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.ref.wav`
+- `docs/teaching/10-cleaning-signal/recordings/hard_mode.mic.wav`
+- `docs/teaching/10-cleaning-signal/recordings/hard_mode.ref.wav`
 
 ## Success criteria
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from typing import Any
 
@@ -67,9 +68,14 @@ class TurnStage:
         state_after = self.snapshot_state()
         complete_extra: dict[str, Any] = {}
         if isinstance(result, dict):
-            for key in ("prediction", "probability", "decision"):
-                if key in result:
-                    complete_extra[key] = result[key]
+            source: dict[str, Any] = result
+        elif dataclasses.is_dataclass(result) and not isinstance(result, type):
+            source = dataclasses.asdict(result)
+        else:
+            source = {}
+        for key in ("prediction", "probability", "decision"):
+            if key in source:
+                complete_extra[key] = source[key]
         journal_append_event(
             ctx,
             stage=self.name,

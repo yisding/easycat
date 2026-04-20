@@ -64,7 +64,7 @@ repositories we surveyed. Every chapter must honor all five.
 |---|---|---|---|
 | 10 | Cleaning the signal | NR + AEC + half-duplex | contrast |
 | 11 | The journal as mental model | Observability mastery | — |
-| 12 | Evals + the latency budget | Percentiles, WER, MOS, LLM-as-judge | — |
+| 12 | Evals + the latency budget | Percentiles, WER, barge-in F1, LLM-as-judge | — |
 
 **Generalise:**
 
@@ -157,7 +157,7 @@ voice-pipeline guide also needs to teach **tools**, **AEC vs NR**
   signal)** which now covers NR, AEC, half-duplex, and pipeline
   ordering
 - adds **ch 12 (Evals + the latency budget)** to teach
-  percentiles, WER, MOS, barge-in F1, and LLM-as-judge
+  percentiles, WER, barge-in F1, and LLM-as-judge
 - expands the original ch 11 into **ch 13 (Swap providers AND
   transports)** so the Protocol payoff lands on both axes
   (provider mix × transport)

@@ -69,10 +69,13 @@ exercises rather than core presets, to keep the chapter focused.)
      real input modality here — show how `DTMFAggregated` events
      flow through the same EventBus.
 4. **The 2×3 matrix.** Run all six combinations on the same
-   prompt. Print the latency, cost-per-turn, and barge-in F1
-   for each (using chapter 12 scripts). The shape of the data
-   is the lesson: provider choice swings *latency*; transport
-   choice swings *jitter and codec quality*.
+   prompt. Print the metrics chapter 12 actually produced —
+   P50/P95 latency (from `latency_budget.py`), WER and barge-in
+   F1 (from `evals.py`) — for each combination. The shape of the
+   data is the lesson: provider choice swings *latency*; transport
+   choice swings *jitter and codec quality*. Cost per turn is a
+   natural follow-on but is out of scope for the ladder; see
+   `peripheral-observability-and-cost.md` for the planned surface.
 5. **Why some providers need EventBus.** Walk through
    `easycat.config.create_session` —
    `create_stt_provider_from_config` injects the EventBus for
@@ -88,9 +91,13 @@ exercises rather than core presets, to keep the chapter focused.)
    session journal (and any external listener) can see the retry
    timeline. OpenAI's HTTP-based STT/TTS don't have that failure
    mode, so they don't need the bus.
-6. **A decision matrix.** Latency / cost / offline / quality /
+6. **A decision matrix.** Latency / offline / quality /
    telephony — pick any three. Concrete table populated from the
-   six bundles' measured numbers.
+   six bundles' measured numbers. Cost is a real axis but not a
+   measured one here; treat it as an annotation from provider
+   pricing pages, and promote it to a measured column only after
+   the cost surface in `peripheral-observability-and-cost.md`
+   lands.
 
 ## Key concepts
 
