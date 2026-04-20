@@ -40,9 +40,11 @@ async def main() -> None:
 
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
-    # Deepgram's default sample rate is 16 kHz; align the transport so mic
-    # frames reach STT without rate mismatch. ElevenLabs will resample its
-    # 24 kHz PCM output to the transport format via TTSBase.
+    # Deepgram STT defaults to 16 kHz and ElevenLabs TTS defaults to 24 kHz.
+    # Pin both stages and the transport to 16 kHz so mic frames reach STT
+    # and TTS output reaches the speaker at matching rates — the local
+    # transport plays PCM verbatim without resampling, so a TTS/transport
+    # mismatch would garble playback pitch.
     config = EasyCatConfig(
         openai_api_key=api_key,
         stt="deepgram/nova-2",
@@ -50,6 +52,8 @@ async def main() -> None:
             api_key=elevenlabs_key,
             voice_id="EXAVITQu4vr4xnSDxMaL",  # Sarah — override for production
             model_id="eleven_flash_v2_5",
+            output_format="pcm_16000",
+            audio_format=PCM16_MONO_16K,
         ),
         transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
         agent=agent,

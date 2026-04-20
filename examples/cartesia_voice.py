@@ -35,13 +35,20 @@ async def main() -> None:
 
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
-    # Cartesia STT defaults to 16 kHz; align the transport so mic frames
-    # reach STT without rate mismatch. Cartesia TTS will resample its PCM
-    # output to the transport format via TTSBase.
+    # Cartesia STT defaults to 16 kHz and Cartesia TTS defaults to 24 kHz.
+    # Pin both stages and the transport to 16 kHz so mic frames reach STT
+    # and TTS output reaches the speaker at matching rates — the local
+    # transport plays PCM verbatim without resampling, so a TTS/transport
+    # mismatch would garble playback pitch.
     config = EasyCatConfig(
         openai_api_key=api_key,
         stt=CartesiaSTTConfig(api_key=cartesia_key, model="ink-whisper"),
-        tts=CartesiaTTSConfig(api_key=cartesia_key, model_id="sonic-3"),
+        tts=CartesiaTTSConfig(
+            api_key=cartesia_key,
+            model_id="sonic-3",
+            sample_rate=16000,
+            output_format=PCM16_MONO_16K,
+        ),
         transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
         agent=agent,
     )
