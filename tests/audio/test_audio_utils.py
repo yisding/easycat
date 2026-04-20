@@ -44,11 +44,18 @@ def test_resample_16k_to_8k_halves_samples():
 
 
 def test_resample_preserves_dc_signal():
+    # FIR-based resamplers (soxr, scipy.resample_poly) ring at the
+    # boundaries; only the steady-state body should preserve DC to
+    # ±1 LSB.  Use a long input and trim the settling region from
+    # each end before comparing.
     value = 1234
-    data = struct.pack("<100h", *([value] * 100))
+    n_input = 2048
+    data = struct.pack(f"<{n_input}h", *([value] * n_input))
     result = resample(data, 8000, 16000)
     samples = struct.unpack(f"<{len(result) // 2}h", result)
-    for s in samples:
+    trim = (len(samples) * 15) // 100
+    body = samples[trim : len(samples) - trim]
+    for s in body:
         assert abs(s - value) <= 1
 
 
@@ -97,13 +104,17 @@ def test_resample_rate_pairs_sample_count(from_rate: int, to_rate: int):
 
 @pytest.mark.parametrize("from_rate,to_rate", RATE_PAIRS)
 def test_resample_rate_pairs_dc_preservation(from_rate: int, to_rate: int):
-    """DC signal should be preserved across all rate pairs."""
+    """DC signal should be preserved across all rate pairs in the
+    steady-state body.  Boundary samples ring (FIR edge artifact)
+    and are excluded by trimming 15% from each end."""
     value = 2000
-    n_input = 480
+    n_input = 2048
     data = struct.pack(f"<{n_input}h", *([value] * n_input))
     result = resample(data, from_rate, to_rate)
     samples = struct.unpack(f"<{len(result) // 2}h", result)
-    for s in samples:
+    trim = (len(samples) * 15) // 100
+    body = samples[trim : len(samples) - trim]
+    for s in body:
         assert abs(s - value) <= 1
 
 
