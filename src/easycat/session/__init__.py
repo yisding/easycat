@@ -30,6 +30,19 @@ _LAZY: dict[str, tuple[str, str]] = {
     "SessionConfig": ("easycat.session._types", "SessionConfig"),
     "SessionHelper": ("easycat.session._types", "SessionHelper"),
     "TurnState": ("easycat.session._types", "TurnState"),
+    # Text / interruption helpers (promoted from underscore-private modules)
+    "estimate_and_notify_interruption": (
+        "easycat.session.interruption",
+        "estimate_and_notify_interruption",
+    ),
+    "has_unclosed_markdown_delimiters": (
+        "easycat.session.text_utils",
+        "has_unclosed_markdown_delimiters",
+    ),
+    "split_at_sentence_boundaries": (
+        "easycat.session.text_utils",
+        "split_at_sentence_boundaries",
+    ),
     # Action executor + actions
     "CoreSessionActionExecutor": (
         "easycat.session.action_executors",
@@ -71,6 +84,11 @@ if TYPE_CHECKING:
         SessionActionType,
         TransferCallAction,
         TransferPlan,
+    )
+    from easycat.session.interruption import estimate_and_notify_interruption
+    from easycat.session.text_utils import (
+        has_unclosed_markdown_delimiters,
+        split_at_sentence_boundaries,
     )
 
 

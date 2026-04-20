@@ -38,26 +38,26 @@ from easycat.integrations.agents._legacy_types import (
     AgentStreamEventType,
 )
 from easycat.runtime.journal import InMemoryRingBuffer
-from easycat.session._interruption import (
+from easycat.session._session import Session
+from easycat.session._turn_context import TurnContext
+from easycat.session._types import SessionConfig
+from easycat.session.actions import SessionActionResult
+from easycat.session.interruption import (
     _all_tts_audio_delivered,
     _audio_bytes_acknowledged,
     _audio_bytes_likely_heard,
     _audio_bytes_likely_heard_hybrid,
     _estimate_text_spoken,
 )
-from easycat.session._session import Session
-from easycat.session._text_utils import (
-    _has_unclosed_markdown_delimiters,
-    _split_at_sentence_boundaries,
+from easycat.session.text_utils import (
+    has_unclosed_markdown_delimiters,
+    split_at_sentence_boundaries,
 )
-from easycat.session._tts_helpers import (
+from easycat.session.tts_helpers import (
     _cleanup_estimation_text,
     _text_for_estimation_timeline,
     _text_for_spoken_estimation,
 )
-from easycat.session._turn_context import TurnContext
-from easycat.session._types import SessionConfig
-from easycat.session.actions import SessionActionResult
 from easycat.timeouts import AgentTimeoutError, TimeoutConfig, TTSTimeoutError
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
@@ -386,13 +386,13 @@ class TimeoutThenRecoverTTS(FakeTTS):
 
 
 def test_split_no_boundary():
-    ready, remaining = _split_at_sentence_boundaries("hello world")
+    ready, remaining = split_at_sentence_boundaries("hello world")
     assert ready == ""
     assert remaining == "hello world"
 
 
 def test_split_single_sentence():
-    ready, remaining = _split_at_sentence_boundaries("Hello world. ")
+    ready, remaining = split_at_sentence_boundaries("Hello world. ")
     # Single sentence is buffered; the caller flushes when the LLM finishes.
     assert ready == ""
     assert remaining == "Hello world. "
@@ -400,7 +400,7 @@ def test_split_single_sentence():
 
 def test_split_multiple_sentences():
     text = "Hello. How are you? Fine"
-    ready, remaining = _split_at_sentence_boundaries(text)
+    ready, remaining = split_at_sentence_boundaries(text)
     # Should split at last boundary (after "you? ")
     assert "Hello" in ready
     assert "How are you" in ready
@@ -408,34 +408,34 @@ def test_split_multiple_sentences():
 
 
 def test_split_incomplete_sentence():
-    ready, remaining = _split_at_sentence_boundaries("Hello world. How are")
+    ready, remaining = split_at_sentence_boundaries("Hello world. How are")
     assert "Hello world" in ready
     assert remaining == "How are"
 
 
 def test_split_abbreviation_sentence():
     text = "Dr. Smith went home. Next"
-    ready, remaining = _split_at_sentence_boundaries(text)
+    ready, remaining = split_at_sentence_boundaries(text)
     assert ready.strip() == "Dr. Smith went home."
     assert remaining == "Next"
 
 
 def test_split_trailing_abbreviation():
-    ready, remaining = _split_at_sentence_boundaries("Nice to meet you Mr. ")
+    ready, remaining = split_at_sentence_boundaries("Nice to meet you Mr. ")
     assert ready == ""
     assert remaining == "Nice to meet you Mr. "
 
 
 def test_split_newline_sentence():
     text = "Hello world!\nHow are you"
-    ready, remaining = _split_at_sentence_boundaries(text)
+    ready, remaining = split_at_sentence_boundaries(text)
     assert ready.strip() == "Hello world!"
     assert remaining == "How are you"
 
 
 def test_split_spanish_sentence():
     text = "Hola mundo. ¿Cómo estás? Bien"
-    ready, remaining = _split_at_sentence_boundaries(text)
+    ready, remaining = split_at_sentence_boundaries(text)
     assert "Hola mundo." in ready
     assert "¿Cómo estás?" in ready
     assert remaining == "Bien"
@@ -443,7 +443,7 @@ def test_split_spanish_sentence():
 
 def test_split_chinese_sentence():
     text = "你好。今天天气不错。继续"
-    ready, remaining = _split_at_sentence_boundaries(text)
+    ready, remaining = split_at_sentence_boundaries(text)
     assert ready == "你好。今天天气不错。"
     assert remaining == "继续"
 
@@ -649,32 +649,32 @@ def test_audio_bytes_likely_heard_hybrid_tail_cap_zero_keeps_ack_cap():
 
 
 def test_markdown_unclosed_single_italic_asterisk():
-    assert _has_unclosed_markdown_delimiters("*First sentence. Second sentence")
-    assert not _has_unclosed_markdown_delimiters("*First sentence. Second sentence*")
+    assert has_unclosed_markdown_delimiters("*First sentence. Second sentence")
+    assert not has_unclosed_markdown_delimiters("*First sentence. Second sentence*")
 
 
 def test_markdown_unclosed_single_italic_underscore():
-    assert _has_unclosed_markdown_delimiters("_First sentence. Second sentence")
-    assert not _has_unclosed_markdown_delimiters("_First sentence. Second sentence_")
-    assert not _has_unclosed_markdown_delimiters("Use my_variable_name here.")
+    assert has_unclosed_markdown_delimiters("_First sentence. Second sentence")
+    assert not has_unclosed_markdown_delimiters("_First sentence. Second sentence_")
+    assert not has_unclosed_markdown_delimiters("Use my_variable_name here.")
 
 
 def test_markdown_unclosed_link_or_image_delimiters():
-    assert _has_unclosed_markdown_delimiters("See [OpenAI")
-    assert _has_unclosed_markdown_delimiters("See [OpenAI]")
-    assert _has_unclosed_markdown_delimiters("See [OpenAI](https://openai.com/docs")
-    assert _has_unclosed_markdown_delimiters("See ![diagram](https://img.example.com/plot")
-    assert not _has_unclosed_markdown_delimiters("See [OpenAI](https://openai.com/docs).")
-    assert not _has_unclosed_markdown_delimiters(
+    assert has_unclosed_markdown_delimiters("See [OpenAI")
+    assert has_unclosed_markdown_delimiters("See [OpenAI]")
+    assert has_unclosed_markdown_delimiters("See [OpenAI](https://openai.com/docs")
+    assert has_unclosed_markdown_delimiters("See ![diagram](https://img.example.com/plot")
+    assert not has_unclosed_markdown_delimiters("See [OpenAI](https://openai.com/docs).")
+    assert not has_unclosed_markdown_delimiters(
         "See [Function](https://en.wikipedia.org/wiki/Function_(mathematics))."
     )
 
 
 def test_markdown_delimiters_inside_inline_code_do_not_block_streaming():
-    assert not _has_unclosed_markdown_delimiters("Literal `**` should not block.")
-    assert not _has_unclosed_markdown_delimiters("Literal `__` should not block.")
-    assert not _has_unclosed_markdown_delimiters("Literal `~~` should not block.")
-    assert _has_unclosed_markdown_delimiters("Literal `**` and **still open")
+    assert not has_unclosed_markdown_delimiters("Literal `**` should not block.")
+    assert not has_unclosed_markdown_delimiters("Literal `__` should not block.")
+    assert not has_unclosed_markdown_delimiters("Literal `~~` should not block.")
+    assert has_unclosed_markdown_delimiters("Literal `**` and **still open")
 
 
 # ── Session with basic agent (backward compatibility) ──────────────
@@ -2033,10 +2033,10 @@ async def test_session_barge_in_drain_records_timeline_strings(monkeypatch: pyte
         return ""
 
     monkeypatch.setattr(
-        "easycat.session._interruption._audio_bytes_likely_heard_hybrid", _fake_heard_bytes
+        "easycat.session.interruption._audio_bytes_likely_heard_hybrid", _fake_heard_bytes
     )
     monkeypatch.setattr(
-        "easycat.session._interruption._estimate_text_spoken", _assert_string_chunks
+        "easycat.session.interruption._estimate_text_spoken", _assert_string_chunks
     )
 
     session = Session(
@@ -2771,7 +2771,7 @@ async def test_streaming_interruption_prefers_cancel_token_timestamp(
         return 0
 
     monkeypatch.setattr(
-        "easycat.session._interruption._audio_bytes_likely_heard_hybrid", _capture_cutoff
+        "easycat.session.interruption._audio_bytes_likely_heard_hybrid", _capture_cutoff
     )
 
     agent = CapturingAgent()

@@ -69,13 +69,7 @@ from easycat.runtime.journal import (
     ReadonlySqliteJournal,
 )
 from easycat.runtime.records import JournalRecordKind
-from easycat.session._interruption import estimate_and_notify_interruption
 from easycat.session._streaming import consume_agent_stream
-from easycat.session._text_utils import (
-    _chunk_has_speech_energy,
-    _replace_last_assistant_text,
-)
-from easycat.session._tts_helpers import _text_for_estimation_timeline
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import (
     _TM_TO_TURN_STATE,
@@ -86,6 +80,12 @@ from easycat.session._types import (
 )
 from easycat.session.action_executors import CoreSessionActionExecutor
 from easycat.session.actions import SessionAction, SessionActionExecutor
+from easycat.session.interruption import estimate_and_notify_interruption
+from easycat.session.text_utils import (
+    _chunk_has_speech_energy,
+    _replace_last_assistant_text,
+)
+from easycat.session.tts_helpers import _text_for_estimation_timeline
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
 from easycat.stages.base import (

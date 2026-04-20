@@ -129,6 +129,31 @@ class JournalView:
     ) -> list[JournalRecord]:
         return self._journal.slice(kind=kind, session_id=session_id)
 
+    def filter_by_stage(self, stage_name: str) -> list[JournalRecord]:
+        """Return records whose ``data['stage']`` or ``data['observed_stage']``
+        matches *stage_name*.  Mirrors :meth:`RunBundle.filter_by_stage`.
+        """
+        results: list[JournalRecord] = []
+        for r in self._journal.read():
+            stage = r.data.get("stage")
+            observed = r.data.get("observed_stage")
+            if stage == stage_name or observed == stage_name:
+                results.append(r)
+        return results
+
+    def filter_by_turn(self, turn_id: str) -> list[JournalRecord]:
+        """Return records whose ``turn_id`` matches.  Mirrors
+        :meth:`RunBundle.filter_by_turn`."""
+        return [r for r in self._journal.read() if r.turn_id == turn_id]
+
+    def lookup_by_sequence(self, seq: int) -> JournalRecord | None:
+        """Return the record with the given sequence number, or ``None``.
+        Mirrors :meth:`RunBundle.lookup_by_sequence`."""
+        for r in self._journal.read():
+            if r.sequence == seq:
+                return r
+        return None
+
     async def follow(
         self,
         *,

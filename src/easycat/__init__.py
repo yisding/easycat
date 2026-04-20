@@ -96,7 +96,15 @@ _register(
     "TransferPlan",
 )
 _register("easycat.session_manager", "SessionManager")
-_register("easycat.turn_manager", "TurnMode")
+_register(
+    "easycat.turn_manager",
+    "TurnManager",
+    "TurnManagerConfig",
+    "TurnManagerState",
+    "TurnMode",
+)
+_register("easycat.session._types", "Agent")
+_register("easycat.quick", "speak", "transcribe_file")
 _register(
     "easycat.llm_output_processing",
     "LLMOutputProcessor",
@@ -137,6 +145,7 @@ _register(
 # ── Debug-first runtime ─────────────────────────────────────────
 
 _register("easycat.debug.bundle", "RunBundle")
+_register("easycat.debug.export", "export_debug_bundle")
 _register("easycat.debug.testing", "load_bundle")
 _register("easycat.integrations.agents.base", "ExternalAgentBridge")
 _register("easycat.stages.base", "Stage")
@@ -244,6 +253,18 @@ _register(
     "OpenAISTT",
     "OpenAISTTConfig",
 )
+_register(
+    "easycat.stt.factory",
+    "STTProviderConfig",
+    "create_stt_provider",
+    "parse_stt_string",
+)
+_register(
+    "easycat.tts.factory",
+    "TTSProviderConfig",
+    "create_tts_provider",
+    "parse_tts_string",
+)
 _register("easycat.tts.deepgram_tts", "DeepgramTTS", "DeepgramTTSConfig")
 _register("easycat.tts.elevenlabs_tts", "ElevenLabsTTS", "ElevenLabsTTSConfig")
 _register("easycat.tts.openai_tts", "OpenAITTS", "OpenAITTSConfig")
@@ -315,6 +336,7 @@ if TYPE_CHECKING:
         create_text_session,
     )
     from easycat.debug.bundle import RunBundle
+    from easycat.debug.export import export_debug_bundle
     from easycat.debug.testing import load_bundle
     from easycat.echo_cancellation import (
         EchoCancellationConfig,
@@ -420,6 +442,7 @@ if TYPE_CHECKING:
         TTSProvider,
         VADProvider,
     )
+    from easycat.quick import speak, transcribe_file
     from easycat.runtime import (
         ExecutionJournal,
         JournalRecord,
@@ -427,7 +450,7 @@ if TYPE_CHECKING:
         JournalView,
     )
     from easycat.session._session import Session
-    from easycat.session._types import SessionConfig, TurnState
+    from easycat.session._types import Agent, SessionConfig, TurnState
     from easycat.session.action_executors import CoreSessionActionExecutor
     from easycat.session.actions import (
         CustomAction,
@@ -461,6 +484,11 @@ if TYPE_CHECKING:
         OpenAISTT,
         OpenAISTTConfig,
     )
+    from easycat.stt.factory import (
+        STTProviderConfig,
+        create_stt_provider,
+        parse_stt_string,
+    )
     from easycat.telephony.session_actions import (
         TwilioSessionActionConfig,
         TwilioSessionActionExecutor,
@@ -489,9 +517,19 @@ if TYPE_CHECKING:
     )
     from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
     from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
+    from easycat.tts.factory import (
+        TTSProviderConfig,
+        create_tts_provider,
+        parse_tts_string,
+    )
     from easycat.tts.input import TTSInput, TTSInputFormat
     from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
-    from easycat.turn_manager import TurnMode
+    from easycat.turn_manager import (
+        TurnManager,
+        TurnManagerConfig,
+        TurnManagerState,
+        TurnMode,
+    )
     from easycat.vad import FunASROnnxVAD, KrispVAD, SileroVAD, TenVAD, VADConfig, create_vad
 
 

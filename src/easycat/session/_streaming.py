@@ -25,11 +25,11 @@ from easycat.events import (
     ToolCallStarted,
 )
 from easycat.integrations.agents._legacy_types import AgentStreamEventType
-from easycat.session._text_utils import (
-    _has_unclosed_markdown_delimiters,
-    _split_at_sentence_boundaries,
-)
 from easycat.session._turn_context import TurnContext
+from easycat.session.text_utils import (
+    has_unclosed_markdown_delimiters,
+    split_at_sentence_boundaries,
+)
 from easycat.strip_markdown import strip_markdown
 from easycat.tts.input import TTSInput
 
@@ -138,12 +138,12 @@ async def consume_agent_stream(
                 # Buffer text and queue complete sentences for TTS
                 if strip_md:
                     text_buffer += event.text
-                    if _has_unclosed_markdown_delimiters(text_buffer):
+                    if has_unclosed_markdown_delimiters(text_buffer):
                         continue
                     stripped_window = strip_markdown(
                         text_buffer, trim=False, normalize_code_spans=True
                     )
-                    ready, remaining = _split_at_sentence_boundaries(stripped_window)
+                    ready, remaining = split_at_sentence_boundaries(stripped_window)
                     if ready:
                         payload = prepare_tts_payload(ready, is_streaming=True, is_final=False)
                         if payload.text.strip():
@@ -151,7 +151,7 @@ async def consume_agent_stream(
                     text_buffer = remaining
                 else:
                     text_buffer += event.text
-                    ready, text_buffer = _split_at_sentence_boundaries(text_buffer)
+                    ready, text_buffer = split_at_sentence_boundaries(text_buffer)
                     if ready:
                         payload = prepare_tts_payload(ready, is_streaming=True, is_final=False)
                         if payload.text.strip():

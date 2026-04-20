@@ -1,15 +1,15 @@
 """Unit tests for session helper functions.
 
-Tests for _estimate_text_spoken, _split_at_sentence_boundaries,
-and _has_unclosed_markdown_delimiters.
+Tests for _estimate_text_spoken, split_at_sentence_boundaries,
+and has_unclosed_markdown_delimiters.
 """
 
 from __future__ import annotations
 
-from easycat.session._interruption import _estimate_text_spoken
-from easycat.session._text_utils import (
-    _has_unclosed_markdown_delimiters,
-    _split_at_sentence_boundaries,
+from easycat.session.interruption import _estimate_text_spoken
+from easycat.session.text_utils import (
+    has_unclosed_markdown_delimiters,
+    split_at_sentence_boundaries,
 )
 
 
@@ -54,73 +54,73 @@ class TestEstimateTextSpoken:
 
 
 class TestSentenceSplitting:
-    """Tests for _split_at_sentence_boundaries edge cases."""
+    """Tests for split_at_sentence_boundaries edge cases."""
 
     def test_empty_string(self) -> None:
-        ready, remaining = _split_at_sentence_boundaries("")
+        ready, remaining = split_at_sentence_boundaries("")
         assert ready == ""
         assert remaining == ""
 
     def test_single_sentence(self) -> None:
-        ready, remaining = _split_at_sentence_boundaries("Hello world.")
+        ready, remaining = split_at_sentence_boundaries("Hello world.")
         assert ready == ""
         assert remaining == "Hello world."
 
     def test_two_sentences(self) -> None:
-        ready, remaining = _split_at_sentence_boundaries("First sentence. Second sentence.")
+        ready, remaining = split_at_sentence_boundaries("First sentence. Second sentence.")
         assert "First sentence." in ready
         assert "Second" in remaining
 
     def test_no_punctuation(self) -> None:
-        ready, remaining = _split_at_sentence_boundaries("Hello world")
+        ready, remaining = split_at_sentence_boundaries("Hello world")
         assert ready == ""
         assert remaining == "Hello world"
 
     def test_only_whitespace(self) -> None:
-        ready, remaining = _split_at_sentence_boundaries("   ")
+        ready, remaining = split_at_sentence_boundaries("   ")
         assert ready == ""
         assert remaining == "   "
 
 
 class TestMarkdownDelimiters:
-    """Tests for _has_unclosed_markdown_delimiters edge cases."""
+    """Tests for has_unclosed_markdown_delimiters edge cases."""
 
     def test_empty_string(self) -> None:
-        assert not _has_unclosed_markdown_delimiters("")
+        assert not has_unclosed_markdown_delimiters("")
 
     def test_no_markdown(self) -> None:
-        assert not _has_unclosed_markdown_delimiters("Hello world")
+        assert not has_unclosed_markdown_delimiters("Hello world")
 
     def test_unclosed_backtick(self) -> None:
-        assert _has_unclosed_markdown_delimiters("Hello `world")
+        assert has_unclosed_markdown_delimiters("Hello `world")
 
     def test_closed_backtick(self) -> None:
-        assert not _has_unclosed_markdown_delimiters("Hello `world`")
+        assert not has_unclosed_markdown_delimiters("Hello `world`")
 
     def test_unclosed_triple_backtick(self) -> None:
-        assert _has_unclosed_markdown_delimiters("```python\nprint('hi')")
+        assert has_unclosed_markdown_delimiters("```python\nprint('hi')")
 
     def test_closed_triple_backtick(self) -> None:
-        assert not _has_unclosed_markdown_delimiters("```python\nprint('hi')\n```")
+        assert not has_unclosed_markdown_delimiters("```python\nprint('hi')\n```")
 
     def test_unclosed_bold(self) -> None:
-        assert _has_unclosed_markdown_delimiters("Hello **world")
+        assert has_unclosed_markdown_delimiters("Hello **world")
 
     def test_closed_bold(self) -> None:
-        assert not _has_unclosed_markdown_delimiters("Hello **world**")
+        assert not has_unclosed_markdown_delimiters("Hello **world**")
 
     def test_unclosed_link(self) -> None:
-        assert _has_unclosed_markdown_delimiters("Click [here")
+        assert has_unclosed_markdown_delimiters("Click [here")
 
     def test_closed_link(self) -> None:
-        assert not _has_unclosed_markdown_delimiters("Click [here](http://example.com)")
+        assert not has_unclosed_markdown_delimiters("Click [here](http://example.com)")
 
     def test_unclosed_strikethrough(self) -> None:
-        assert _has_unclosed_markdown_delimiters("Hello ~~world")
+        assert has_unclosed_markdown_delimiters("Hello ~~world")
 
     def test_nested_backticks_in_fenced(self) -> None:
         text = "```\nHello `world`\n```"
-        assert not _has_unclosed_markdown_delimiters(text)
+        assert not has_unclosed_markdown_delimiters(text)
 
     def test_unclosed_image(self) -> None:
-        assert _has_unclosed_markdown_delimiters("![alt text")
+        assert has_unclosed_markdown_delimiters("![alt text")
