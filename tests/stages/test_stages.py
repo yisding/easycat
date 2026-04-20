@@ -467,6 +467,40 @@ class TestStageExecuteRecording:
         result = await stage.execute("hello", ctx, turn)
         assert result == "reply:hello"
 
+    async def test_transport_stage_returns_true_when_send_audio_returns_none(self):
+        """Transports that return None (backward-compat) are treated as delivered."""
+        ctx = _make_ctx(journal=None)
+        turn = _make_turn()
+        stage = TransportStage(_StubTransport())
+        delivered = await stage.execute(b"chunk", ctx, turn)
+        assert delivered is True
+
+    async def test_transport_stage_returns_true_when_send_audio_returns_true(self):
+        class _DeliveringTransport:
+            async def send_audio(self, chunk):
+                return True
+
+        ctx = _make_ctx(journal=None)
+        turn = _make_turn()
+        stage = TransportStage(_DeliveringTransport())
+        delivered = await stage.execute(b"chunk", ctx, turn)
+        assert delivered is True
+
+    async def test_transport_stage_returns_false_when_send_audio_returns_false(self):
+        class _DisconnectedTransport:
+            async def send_audio(self, chunk):
+                return False
+
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        stage = TransportStage(_DisconnectedTransport(), journal=journal)
+        delivered = await stage.execute(b"chunk", ctx, turn)
+        assert delivered is False
+        records = journal.read()
+        complete = next(r for r in records if r.name == "stage_complete")
+        assert complete.data.get("delivered") is False
+
 
 # ── VAD and Turn replay_decision stubs ───────────────────────────
 

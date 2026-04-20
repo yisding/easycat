@@ -86,11 +86,11 @@ class TwilioTransport(_ServerTransportBase):
         self._stream_sid = None
         self._call_sid = None
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
+    async def send_audio(self, chunk: AudioChunk) -> bool:
         """Convert a PCM16 chunk to mulaw 8 kHz and send to Twilio."""
         ws = self._ws
         if ws is None or self._stream_sid is None:
-            return
+            return False
 
         mulaw_data = pcm16_to_mulaw(chunk.data, chunk.format.sample_rate)
         payload = base64.b64encode(mulaw_data).decode("ascii")
@@ -104,8 +104,10 @@ class TwilioTransport(_ServerTransportBase):
         )
         try:
             await ws.send(message)
+            return True
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot send audio: Twilio disconnected")
+            return False
 
     # ── Mark support ──────────────────────────────────────────────
 
@@ -394,9 +396,9 @@ class TwilioConnectionTransport(_AudioQueueMixin):
             logger.debug("Error closing Twilio WebSocket", exc_info=True)
         self._enqueue_sentinel()
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
+    async def send_audio(self, chunk: AudioChunk) -> bool:
         if self._stream_sid is None:
-            return
+            return False
         mulaw_data = pcm16_to_mulaw(chunk.data, chunk.format.sample_rate)
         payload = base64.b64encode(mulaw_data).decode("ascii")
         message = json.dumps(
@@ -408,8 +410,13 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         )
         try:
             await self._ws.send(message)
+            return True
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot send audio: Twilio disconnected")
+            self._stream_sid = None
+            self._connected = False
+            self._client_connected.clear()
+            return False
 
     async def clear_audio(self) -> None:
         if self._stream_sid is None:
