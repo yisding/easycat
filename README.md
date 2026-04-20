@@ -300,15 +300,37 @@ specialist pinning, or programmatic hand-offs between turns.
 
 ## Examples
 Runnable examples live in the `examples/` directory:
-- `local_chat.py`: local microphone/speaker loop
-- `ws_server.py`: WebSocket server example
+
+**Transports**
+- `openai_agents_voice.py`: local microphone/speaker loop with OpenAI Agents SDK
+- `ws_server.py`: WebSocket server (multi-session)
 - `ws_supervisor_server.py`: browser caller + passive supervisor listen-in over WebSocket
 - `ws_browser_example.py`: browser mic/speaker over WebSocket + static web client
 - `webrtc_server.py`: WebRTC voice chat with browser client
+- `webrtc_observability_server.py`: WebRTC + FastAPI dashboard streaming live events
 - `twilio_app.py`: Twilio Media Streams example
+
+**Agents**
 - `pydantic_ai_voice.py`: single-agent PydanticAI example
-- `pydantic_ai_workflow_voice.py`: workflow-level PydanticAI example
-- `pydantic_ai_support_workflow.py`: pinned-specialist support workflow example
+- `pydantic_ai_workflow_voice.py`: workflow-level PydanticAI example (multi-agent hand-off)
+- `function_tools_openai.py` / `function_tools_pydantic.py`: agent function-calling tools
+- `session_actions_openai.py` / `session_actions_pydantic.py`: agent-initiated session actions (end-call)
+
+**Provider swaps**
+- `deepgram_stt.py`: Deepgram STT + OpenAI TTS
+- `elevenlabs_tts.py`: OpenAI STT + ElevenLabs TTS (typed config with voice customization)
+- `cartesia_voice.py`: Cartesia STT + Cartesia TTS
+- `combined_providers.py`: Deepgram STT + ElevenLabs TTS together (stages compose)
+
+**Turn-taking**
+- `push_to_talk.py`: manual `start_turn`/`end_turn` instead of VAD
+- `smart_turn_demo.py`: ONNX-based endpoint detection for faster turn transitions
+
+**Advanced**
+- `custom_stt_provider.py` / `custom_tts_provider.py` / `custom_vad_provider.py`: inject a
+  user-written provider via `SessionConfig`
+- `debug_bundle.py`: record with `debug="light"`, export a `RunBundle`, inspect it
+- `journal_demo.py`: one-turn synthetic session that dumps journal records (no API keys)
 
 ### Quickstart: WebRTC in browser (fast path)
 1. Install extras:
@@ -341,7 +363,7 @@ The fastest path to a working end-to-end pipeline on your machine:
 ```
 uv sync --extra quickstart
 export OPENAI_API_KEY="your-api-key"
-uv run python examples/local_chat.py
+uv run python examples/openai_agents_voice.py
 ```
 
 The `quickstart` extra bundles local audio, OpenAI providers, noise reduction,
