@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 import websockets
 from websockets.asyncio.server import Server, ServerConnection
 
-from easycat.audio_format import AudioChunk
+from easycat.audio_format import AudioChunk, AudioFormat
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +114,14 @@ class _AudioQueueMixin:
             "api_version": "unknown",
             "sdk_version": "unknown",
         }
+
+    @property
+    def audio_format(self) -> AudioFormat:
+        """Expose the transport's internal PCM contract when available."""
+        try:
+            return self._audio_format  # type: ignore[attr-defined]
+        except AttributeError as exc:  # pragma: no cover - defensive guard
+            raise AttributeError(f"{type(self).__name__} does not expose an audio_format") from exc
 
 
 # ── WebSocket server base ─────────────────────────────────────────
