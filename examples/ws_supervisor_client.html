@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyCat Supervisor Listen</title>
+  <style>
+    :root {
+      --bg: #f2efe7;
+      --panel: rgba(255, 255, 255, 0.88);
+      --ink: #1e1c1a;
+      --muted: #645d55;
+      --accent: #0e7c66;
+      --accent-2: #d97706;
+      --danger: #c2410c;
+      --border: rgba(30, 28, 26, 0.12);
+      --shadow: 0 24px 60px rgba(30, 28, 26, 0.10);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(217, 119, 6, 0.18), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(14, 124, 102, 0.16), transparent 30%),
+        var(--bg);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .shell {
+      width: min(720px, 100%);
+      background: var(--panel);
+      backdrop-filter: blur(14px);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .hero {
+      padding: 28px 28px 18px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(135deg, rgba(14, 124, 102, 0.10), rgba(217, 119, 6, 0.08));
+    }
+
+    .eyebrow {
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 5vw, 40px);
+      line-height: 1.0;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 56ch;
+      line-height: 1.5;
+    }
+
+    .body {
+      padding: 24px 28px 28px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
+    }
+
+    label {
+      font-size: 13px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    input {
+      width: 100%;
+      padding: 14px 16px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.96);
+      font-size: 15px;
+      color: var(--ink);
+    }
+
+    .actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: none;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    #connectBtn {
+      background: var(--accent);
+      color: white;
+    }
+
+    #disconnectBtn {
+      background: rgba(194, 65, 12, 0.12);
+      color: var(--danger);
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      width: fit-content;
+      background: rgba(100, 93, 85, 0.10);
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .connected { color: var(--accent); background: rgba(14, 124, 102, 0.12); }
+    .error { color: var(--danger); background: rgba(194, 65, 12, 0.12); }
+    .idle { color: var(--muted); }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 14px 16px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .card .label {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.10em;
+      margin-bottom: 8px;
+    }
+
+    .card .value {
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .log {
+      min-height: 132px;
+      max-height: 220px;
+      overflow: auto;
+      border-radius: 18px;
+      border: 1px solid var(--border);
+      background: rgba(30, 28, 26, 0.94);
+      color: #f7f2eb;
+      padding: 14px 16px;
+      font-family: "SFMono-Regular", "Menlo", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 640px) {
+      .stats { grid-template-columns: 1fr; }
+      .body, .hero { padding-inline: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="hero">
+      <div class="eyebrow">Passive Supervisor</div>
+      <h1>Listen Without Joining</h1>
+      <p>Connect to a live EasyCat session by <code>session_id</code>. The supervisor socket receives caller and assistant PCM frames only. No microphone is captured and nothing is injected back into the call.</p>
+    </div>
+
+    <div class="body">
+      <div class="field">
+        <label for="sessionId">Session ID</label>
+        <input id="sessionId" type="text" placeholder="session-abc123" autocomplete="off">
+      </div>
+
+      <div class="actions">
+        <button id="connectBtn">Start Monitoring</button>
+        <button id="disconnectBtn" disabled>Disconnect</button>
+      </div>
+
+      <div id="status" class="status idle">
+        <span class="dot"></span>
+        <span>Idle</span>
+      </div>
+
+      <div class="stats">
+        <div class="card">
+          <div class="label">Caller Frames</div>
+          <div class="value" id="callerFrames">0</div>
+        </div>
+        <div class="card">
+          <div class="label">Assistant Frames</div>
+          <div class="value" id="assistantFrames">0</div>
+        </div>
+        <div class="card">
+          <div class="label">Attached Session</div>
+          <div class="value" id="attachedSession" style="font-size:16px;">none</div>
+        </div>
+      </div>
+
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+
+<script>
+var SUPERVISOR_WS_URL = "ws://" + location.hostname + ":8766";
+var ws = null;
+var playCtx = null;
+var trackState = Object.create(null);
+
+var sessionIdInput = document.getElementById("sessionId");
+var connectBtn = document.getElementById("connectBtn");
+var disconnectBtn = document.getElementById("disconnectBtn");
+var statusEl = document.getElementById("status");
+var logEl = document.getElementById("log");
+var callerFramesEl = document.getElementById("callerFrames");
+var assistantFramesEl = document.getElementById("assistantFrames");
+var attachedSessionEl = document.getElementById("attachedSession");
+
+function setStatus(text, kind) {
+  statusEl.className = "status " + kind;
+  statusEl.lastElementChild.textContent = text;
+}
+
+function logLine(text) {
+  var stamp = new Date().toLocaleTimeString();
+  logEl.textContent += "[" + stamp + "] " + text + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function resetStats() {
+  callerFramesEl.textContent = "0";
+  assistantFramesEl.textContent = "0";
+  attachedSessionEl.textContent = "none";
+}
+
+function nextTrackState(track, timestamp) {
+  if (!trackState[track]) {
+    trackState[track] = {
+      baseTimestamp: timestamp,
+      basePlayTime: playCtx.currentTime + 0.12,
+      lastScheduledTime: 0
+    };
+  }
+  return trackState[track];
+}
+
+function base64ToInt16(base64Data) {
+  var binary = atob(base64Data);
+  var bytes = new Uint8Array(binary.length);
+  for (var i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Int16Array(bytes.buffer);
+}
+
+function playFrame(msg) {
+  if (!playCtx || msg.channels !== 1 || msg.sample_width !== 2) {
+    return;
+  }
+
+  var samples = base64ToInt16(msg.data);
+  var buffer = playCtx.createBuffer(1, samples.length, msg.sample_rate);
+  var channel = buffer.getChannelData(0);
+  for (var i = 0; i < samples.length; i++) {
+    channel[i] = samples[i] / 32768.0;
+  }
+
+  var state = nextTrackState(msg.track, msg.timestamp);
+  var now = playCtx.currentTime;
+  var alignedTime = state.basePlayTime + Math.max(0, msg.timestamp - state.baseTimestamp);
+  var startTime = Math.max(now + 0.02, alignedTime, state.lastScheduledTime);
+
+  var source = playCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(playCtx.destination);
+  source.start(startTime);
+
+  state.lastScheduledTime = startTime + buffer.duration;
+}
+
+async function connectSupervisor() {
+  var sessionId = sessionIdInput.value.trim() || location.hash.replace(/^#/, "").trim();
+  if (!sessionId) {
+    setStatus("Enter a session ID first", "error");
+    return;
+  }
+
+  connectBtn.disabled = true;
+  disconnectBtn.disabled = false;
+  setStatus("Connecting…", "idle");
+  resetStats();
+  attachedSessionEl.textContent = sessionId;
+
+  playCtx = new (window.AudioContext || window.webkitAudioContext)();
+  await playCtx.resume();
+  trackState = Object.create(null);
+
+  ws = new WebSocket(SUPERVISOR_WS_URL);
+  ws.onopen = function () {
+    logLine("Supervisor socket opened");
+  };
+
+  ws.onmessage = function (event) {
+    var msg = JSON.parse(event.data);
+    if (msg.type === "hello") {
+      ws.send(JSON.stringify({ type: "subscribe", session_id: sessionId }));
+      return;
+    }
+    if (msg.type === "subscribed") {
+      setStatus("Monitoring " + msg.session_id, "connected");
+      attachedSessionEl.textContent = msg.session_id;
+      logLine("Subscribed to " + msg.session_id);
+      location.hash = msg.session_id;
+      return;
+    }
+    if (msg.type === "audio") {
+      if (msg.track === "caller") {
+        callerFramesEl.textContent = String(Number(callerFramesEl.textContent) + 1);
+      } else if (msg.track === "assistant") {
+        assistantFramesEl.textContent = String(Number(assistantFramesEl.textContent) + 1);
+      }
+      playFrame(msg);
+      return;
+    }
+    if (msg.type === "error") {
+      setStatus(msg.message || "Supervisor error", "error");
+      logLine("Error: " + (msg.message || "unknown"));
+    }
+  };
+
+  ws.onclose = function () {
+    setStatus("Disconnected", "idle");
+    logLine("Supervisor socket closed");
+    disconnectBtn.disabled = true;
+    connectBtn.disabled = false;
+    if (playCtx) {
+      playCtx.close();
+      playCtx = null;
+    }
+    ws = null;
+  };
+
+  ws.onerror = function () {
+    setStatus("WebSocket error", "error");
+    logLine("WebSocket error");
+  };
+}
+
+function disconnectSupervisor() {
+  if (ws) {
+    ws.close();
+  }
+}
+
+connectBtn.addEventListener("click", function () {
+  connectSupervisor().catch(function (err) {
+    setStatus(err.message, "error");
+    logLine("Failed to connect: " + err.message);
+    connectBtn.disabled = false;
+    disconnectBtn.disabled = true;
+  });
+});
+
+disconnectBtn.addEventListener("click", disconnectSupervisor);
+
+if (location.hash.length > 1) {
+  sessionIdInput.value = location.hash.slice(1);
+}
+
+logLine("Ready. Copy a session ID from the caller client and start monitoring.");
+</script>
+</body>
+</html>

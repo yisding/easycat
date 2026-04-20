@@ -25,6 +25,12 @@
     }
     h1 { font-size: 24px; margin-bottom: 8px; }
     .subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
+    .meta {
+      margin: 10px 0 0;
+      font-size: 12px;
+      color: #666;
+      word-break: break-all;
+    }
     #status {
       margin: 16px 0;
       padding: 6px 16px;
@@ -64,6 +70,7 @@
     <h1>EasyCat Voice Chat</h1>
     <p class="subtitle">Talk to an AI voice assistant</p>
     <div><span id="status" class="status-idle">Ready</span></div>
+    <div class="meta">Session ID: <span id="sessionId">pending</span></div>
     <div class="level-bar"><div class="level-fill" id="levelFill"></div></div>
     <div>
       <button id="startBtn">Start</button>
@@ -99,6 +106,7 @@ var startBtn  = document.getElementById("startBtn");
 var stopBtn   = document.getElementById("stopBtn");
 var statusEl  = document.getElementById("status");
 var levelFill = document.getElementById("levelFill");
+var sessionIdEl = document.getElementById("sessionId");
 
 function setStatus(text, type) {
   statusEl.textContent = text;
@@ -245,6 +253,8 @@ async function start() {
         if (msg.type === "audio_format" && msg.sample_rate) {
           serverPlaybackRate = msg.sample_rate;
           console.log("Server playback rate:", serverPlaybackRate, "Hz");
+        } else if (msg.type === "session" && msg.session_id) {
+          sessionIdEl.textContent = msg.session_id;
         }
       }
     };
@@ -284,6 +294,7 @@ function cleanup() {
   ws = null;
   workletNode = null;
   analyser = null;
+  sessionIdEl.textContent = "pending";
   startBtn.disabled = false;
   stopBtn.disabled = true;
 }
