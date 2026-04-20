@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 
 from easycat import (
+    PCM16_MONO_16K,
     EasyCatConfig,
     LocalTransportConfig,
     attach_runtime_feedback,
@@ -39,6 +40,9 @@ async def main() -> None:
 
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
+    # Deepgram's default sample rate is 16 kHz; align the transport so mic
+    # frames reach STT without rate mismatch. ElevenLabs will resample its
+    # 24 kHz PCM output to the transport format via TTSBase.
     config = EasyCatConfig(
         openai_api_key=api_key,
         stt="deepgram/nova-2",
@@ -47,7 +51,7 @@ async def main() -> None:
             voice_id="EXAVITQu4vr4xnSDxMaL",  # Sarah — override for production
             model_id="eleven_flash_v2_5",
         ),
-        transport=LocalTransportConfig(),
+        transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
         agent=agent,
     )
     session = create_session(config)

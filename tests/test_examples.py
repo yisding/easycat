@@ -85,6 +85,56 @@ def test_custom_vad_provider_example_imports():
     assert callable(custom_vad_provider.main)
 
 
+def test_custom_stt_provider_example_imports():
+    import examples.custom_stt_provider as custom_stt_provider
+
+    assert callable(custom_stt_provider.main)
+
+
+def test_deepgram_stt_example_imports():
+    import examples.deepgram_stt as deepgram_stt
+
+    assert callable(deepgram_stt.main)
+
+
+def test_elevenlabs_tts_example_imports():
+    import examples.elevenlabs_tts as elevenlabs_tts
+
+    assert callable(elevenlabs_tts.main)
+
+
+def test_cartesia_voice_example_imports():
+    import examples.cartesia_voice as cartesia_voice
+
+    assert callable(cartesia_voice.main)
+
+
+def test_debug_bundle_example_imports():
+    import examples.debug_bundle as debug_bundle
+
+    assert callable(debug_bundle.main)
+
+
+def test_pydantic_ai_workflow_voice_example_imports():
+    pytest.importorskip("pydantic")
+    import examples.pydantic_ai_workflow_voice as pydantic_workflow
+
+    assert callable(pydantic_workflow.main)
+
+
+def test_session_actions_openai_example_imports():
+    pytest.importorskip("agents")
+    import examples.session_actions_openai as session_actions_openai
+
+    assert callable(session_actions_openai.main)
+
+
+def test_session_actions_pydantic_example_imports():
+    import examples.session_actions_pydantic as session_actions_pydantic
+
+    assert callable(session_actions_pydantic.main)
+
+
 def _python_executable() -> str:
     candidate = sys.executable or ""
     if candidate:
@@ -107,9 +157,15 @@ def _python_executable() -> str:
         "examples/pydantic_ai_voice.py",
         "examples/function_tools_openai.py",
         "examples/function_tools_pydantic.py",
+        "examples/session_actions_pydantic.py",
         "examples/push_to_talk.py",
         "examples/smart_turn_demo.py",
         "examples/combined_providers.py",
+        "examples/cartesia_voice.py",
+        "examples/deepgram_stt.py",
+        "examples/elevenlabs_tts.py",
+        "examples/debug_bundle.py",
+        "examples/custom_stt_provider.py",
         "examples/custom_tts_provider.py",
         "examples/custom_vad_provider.py",
     ],

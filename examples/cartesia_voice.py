@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 
 from easycat import (
+    PCM16_MONO_16K,
     EasyCatConfig,
     LocalTransportConfig,
     attach_runtime_feedback,
@@ -34,11 +35,14 @@ async def main() -> None:
 
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
+    # Cartesia STT defaults to 16 kHz; align the transport so mic frames
+    # reach STT without rate mismatch. Cartesia TTS will resample its PCM
+    # output to the transport format via TTSBase.
     config = EasyCatConfig(
         openai_api_key=api_key,
         stt=CartesiaSTTConfig(api_key=cartesia_key, model="ink-whisper"),
         tts=CartesiaTTSConfig(api_key=cartesia_key, model_id="sonic-3"),
-        transport=LocalTransportConfig(),
+        transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
         agent=agent,
     )
     session = create_session(config)

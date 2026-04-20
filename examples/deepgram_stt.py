@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 
 from easycat import (
+    PCM16_MONO_16K,
     EasyCatConfig,
     LocalTransportConfig,
     attach_runtime_feedback,
@@ -34,10 +35,13 @@ async def main() -> None:
 
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
+    # Deepgram's default sample rate is 16 kHz; align the transport so mic
+    # frames reach STT without rate mismatch. OpenAI TTS adopts the
+    # transport format automatically.
     config = EasyCatConfig(
         openai_api_key=api_key,
         stt="deepgram/nova-2",
-        transport=LocalTransportConfig(),
+        transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
         agent=agent,
     )
     session = create_session(config)

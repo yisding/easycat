@@ -22,6 +22,8 @@ from collections.abc import AsyncIterator
 from easycat import (
     AgentRunner,
     AgentRunnerConfig,
+    Session,
+    SessionConfig,
     attach_runtime_feedback,
     require_env,
     wait_for_shutdown_signal,
@@ -30,8 +32,6 @@ from easycat.audio_format import AudioChunk
 from easycat.events import Event, EventBus
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.providers import VADProvider
-from easycat.session._session import Session
-from easycat.session._types import SessionConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
