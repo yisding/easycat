@@ -62,7 +62,7 @@ Sample-rate mismatches are a real bug (mic captures at 48 kHz,
 pipeline expects 16 kHz). Mention it, show what it sounds like
 if the reader forces a mismatch, but don't solve it here — the
 Transport handles resampling internally. This plants a seed for
-chapter 11 when we swap transports.
+chapter 13 when we swap transports.
 
 ## Exercises
 

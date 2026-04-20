@@ -1,11 +1,11 @@
-# Chapter 10 — The Journal as Mental Model
+# Chapter 11 — The Journal as Mental Model
 
 > You will not write new pipeline code. You will read three
 > `RunBundle`s with planted bugs and find them.
 
 ## Prerequisites
 
-- Chapters 0-9. This chapter consolidates rather than introduces.
+- Chapters 0-10. This chapter consolidates rather than introduces.
 
 ## Learning objectives
 
@@ -19,7 +19,7 @@
 
 Not new pipeline code — **investigations**. The chapter ships
 three pre-recorded bundles with planted bugs in
-`docs/teaching/10-journal/bundles/` (these are the one exception
+`docs/teaching/11-journal/bundles/` (these are the one exception
 to the gitignored-`runs/` convention — they are intentionally
 checked in because the chapter cannot work without them):
 
@@ -30,7 +30,7 @@ checked in because the chapter cannot work without them):
 - `bug_03_ghost_interruption.bundle` — bot believes it was
   interrupted but the user never spoke.
 
-Plus a helper: `docs/teaching/10-journal/investigate.py` that
+Plus a helper: `docs/teaching/11-journal/investigate.py` that
 loads and queries bundles.
 
 ## Narrative arc
@@ -54,8 +54,8 @@ loads and queries bundles.
      span durations; some are 3-5× normal. Retry events confirm.
    Reader follows with lighter prompting.
 4. **Bug 3, unguided.** Reader finds it alone using
-   `chapter_10_investigate.py`, writes up their evidence trail,
-   and only *then* reads the solution.
+   `investigate.py`, writes up their evidence trail, and only
+   *then* reads the solution.
 
 ## Key concepts
 
@@ -71,9 +71,9 @@ loads and queries bundles.
 
 1. Write a `JournalView` query that finds every turn where
    `stage.agent.execute` exceeded 1500ms.
-2. Plant your own bug in chapter 8c's code. Dump a bundle. Send it
+2. Plant your own bug in chapter 9c's code. Dump a bundle. Send it
    to a classmate. Can they find it from the bundle alone?
-3. Pick any bundle from chapters 2-9. Propose three hypotheses for
+3. Pick any bundle from chapters 2-10. Propose three hypotheses for
    how a flaky test using that bundle would fail. For each
    hypothesis, name the journal record you'd check.
 
@@ -90,10 +90,10 @@ intent that code can't.
 
 ## Files created
 
-- `docs/teaching/10-journal/investigate.py`
-- `docs/teaching/10-journal/README.md`
-- Three planted-bug bundles in `docs/teaching/10-journal/bundles/`
-- `docs/teaching/10-journal/solutions.md` (spoilers, separated
+- `docs/teaching/11-journal/investigate.py`
+- `docs/teaching/11-journal/README.md`
+- Three planted-bug bundles in `docs/teaching/11-journal/bundles/`
+- `docs/teaching/11-journal/solutions.md` (spoilers, separated
   by deliberate scroll distance)
 
 ## Success criteria
@@ -105,5 +105,7 @@ intent that code can't.
 
 ## Links forward
 
-Chapter 11 is the finale: the Protocol design finally earns its
-keep as we swap every provider.
+Chapter 12 is the *operate-it* chapter: now that you can read the
+journal, you can measure. Latency budgets, P95 vs P50, WER, MOS,
+barge-in F1, and the difference between "my bot is fast" and "my
+bot is fast 95% of the time."

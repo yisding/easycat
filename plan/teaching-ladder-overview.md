@@ -1,8 +1,19 @@
 # Teaching Ladder: Voice Pipelines from Scratch
 
-A 12-chapter progressive ladder for learning voice-AI pipelines through
-EasyCat. Modeled after *Crafting Interpreters*, *Ray Tracer in One
-Weekend*, and the Karpathy `micrograd`/`nanoGPT` tradition.
+A 14-chapter progressive ladder for learning voice-AI pipelines
+through EasyCat. Modeled after *Crafting Interpreters*, *Ray
+Tracer in One Weekend*, and the Karpathy `micrograd`/`nanoGPT`
+tradition.
+
+The ladder splits cleanly into three movements:
+
+- **Build** (ch 0-9): assemble the pipeline one stage at a time,
+  ending at a bot that can hold a conversation with interruption.
+- **Operate** (ch 10-12): the things that make the difference
+  between a demo and a deployment — cleaning the signal,
+  observability, evaluation.
+- **Generalise** (ch 13): swap providers *and* transports, with
+  measured tradeoffs.
 
 > **Status**: planning. No teaching code has been written yet. Each
 > file in this ladder is a per-chapter plan; the chapters themselves
@@ -31,20 +42,34 @@ repositories we surveyed. Every chapter must honor all five.
 
 ## The ladder
 
+**Build:**
+
 | # | Title | New concept | Wrong-version-first? |
 |---|---|---|---|
 | 0 | Hello, Audio | PCM, sample rates, chunks | — |
 | 1 | Echo | Transport protocol, async streams | — |
-| 2 | Transcribe | STT; batch vs streaming | contrast |
+| 2 | Transcribe | STT; batch vs streaming; partials can flap | contrast |
 | 3 | Parrot, the naive way | Turn-taking by silence timeout | ✓ |
 | 4 | VAD + pre-roll | Real speech detection | — |
 | 5 | The blocking agent | LLM latency pain | ✓ |
-| 6 | Streaming agent + sentence TTS | Pipeline overlap | — |
-| 7 | Smart-turn | Endpoint classification | — |
-| 8 | Interruption / barge-in | Cancel + heard-estimation | ✓ (three versions) |
-| 9 | Noise reduction | Why NR lives before VAD | contrast |
-| 10 | The journal as mental model | Observability mastery | — |
-| 11 | Swap providers | Protocol design payoff | — |
+| 6 | Streaming agent + sentence TTS | Pipeline overlap; SSML sidebar; backpressure sidebar | — |
+| 7 | Tools, mid-stream | Tool calls, fillers, session actions | — |
+| 8 | Smart-turn | Endpoint classification | — |
+| 9 | Interruption / barge-in | Cancel + heard-estimation | ✓ (three versions) |
+
+**Operate:**
+
+| # | Title | New concept | Wrong-version-first? |
+|---|---|---|---|
+| 10 | Cleaning the signal | NR + AEC + half-duplex | contrast |
+| 11 | The journal as mental model | Observability mastery | — |
+| 12 | Evals + the latency budget | Percentiles, WER, MOS, LLM-as-judge | — |
+
+**Generalise:**
+
+| # | Title | New concept | Wrong-version-first? |
+|---|---|---|---|
+| 13 | Swap providers AND transports | Protocol design payoff on both axes | — |
 
 ## Repo conventions
 
@@ -54,8 +79,9 @@ repositories we surveyed. Every chapter must honor all five.
 - Each chapter is a **self-contained folder**:
   `docs/teaching/NN-name/` containing at minimum a `README.md`
   (the narrative) and a `main.py` (the runnable example).
-  Chapters that ship multiple scripts (2, 8, 11) follow the same
-  convention — every file they need lives inside their folder.
+  Chapters that ship multiple scripts (2, 9, 12, 13) follow the
+  same convention — every file they need lives inside their
+  folder.
 - Chapter N+1 **copies** chapter N's code as its starting point
   rather than modifying it in place. This is the whole point of
   dropping git tags: each chapter folder is a frozen, runnable
@@ -67,8 +93,9 @@ repositories we surveyed. Every chapter must honor all five.
 - No chapter may introduce a concept already covered by a prior
   chapter. Strict ladder discipline, Nand2Tetris-style.
 - Chapters 2+ always emit a `RunBundle` to
-  `docs/teaching/NN-name/runs/` (gitignored except for the planted
-  bundles chapter 10 ships intentionally).
+  `docs/teaching/NN-name/runs/` (gitignored except for the
+  planted bundles chapter 11 ships intentionally and the
+  evaluation bundles chapter 12 ships).
 - A top-level `docs/teaching/README.md` is the landing page: the
   table from this plan, plus a "start here" pointer to chapter 0.
 
@@ -98,7 +125,7 @@ specifically to keep teaching code small:
   methods so chapter 10 can teach one query surface.
 
 Two session helpers were promoted from private to public modules
-to support chapter 6 and chapter 8 walk-throughs:
+to support chapter 6 and chapter 9 walk-throughs:
 
 - `easycat.session.interruption` (was `_interruption`)
 - `easycat.session.text_utils` (was `_text_utils`) — exports
@@ -107,16 +134,41 @@ to support chapter 6 and chapter 8 walk-throughs:
 - `easycat.session.tts_helpers` (was `_tts_helpers`)
 
 Chapters 4 and 6 deliberately **do not** use `TurnManager` or
-`consume_agent_stream` directly. Each chapter builds its own small
-version (~40-60 lines) to teach the concept, then reads the
+`consume_agent_stream` directly. Each chapter builds its own
+small version (~40-60 lines) to teach the concept, then reads the
 production code as reference material. This is the Nand2Tetris /
 Crafting-Interpreters pattern: understand by building, then study
 the battle-tested version.
 
+## How this revision differs from the original 12-chapter sketch
+
+The first draft ran 12 chapters, all in the *Build* movement, with
+provider-swap as a finale. Audit feedback flagged that a serious
+voice-pipeline guide also needs to teach **tools**, **AEC vs NR**
+(distinct from each other), and the **operate-it** layer
+(observability + evaluation). The revised 14-chapter ladder:
+
+- adds **ch 7 (Tools, mid-stream)** to address tool-call UX,
+  filler utterances, and `SessionAction`s
+- merges the original ch 9 (NR alone) into **ch 10 (Cleaning the
+  signal)** which now covers NR, AEC, half-duplex, and pipeline
+  ordering
+- adds **ch 12 (Evals + the latency budget)** to teach
+  percentiles, WER, MOS, barge-in F1, and LLM-as-judge
+- expands the original ch 11 into **ch 13 (Swap providers AND
+  transports)** so the Protocol payoff lands on both axes
+  (provider mix × transport)
+- adds three sidebars to existing chapters: SSML / pronunciation
+  in ch 6, backpressure (`BoundedAudioQueue`) in ch 6, and
+  "partials can flap; never act on them" in ch 2.
+
+The wrong-version-first chapters (3, 5, 9) and the build-your-own
+chapters (4, 6) are unchanged.
+
 ## Budget
 
-- Narrative prose: ~40-60 pages total (3-5 per chapter).
-- New example code: ~2000 lines total (~150-200 per chapter).
+- Narrative prose: ~50-75 pages total (3-5 per chapter).
+- New example code: ~2400 lines total (~150-200 per chapter).
 - Reader time per chapter: 10-30 minutes.
 
 ## Per-chapter plan structure

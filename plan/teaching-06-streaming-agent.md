@@ -128,7 +128,54 @@ production version.
 - The reader can name three responsibilities `consume_agent_stream`
   handles that their toy ducks.
 
+## Sidebar — Speech-friendly output
+
+Three things that bite every voice agent the moment it shells out
+to a real LLM. Cover them before chapter 7 lands tools:
+
+- **Markdown stripping.** The agent says `**bold**`; without
+  stripping, TTS reads "asterisks bold asterisks." We already use
+  `easycat.strip_markdown` in this chapter; show the before/after
+  audibly.
+- **Number and date normalisation.** `2024` reads four ways:
+  "twenty twenty-four", "two thousand twenty-four", "two oh
+  twenty-four", "two zero two four." The TTS provider picks one,
+  and it's often wrong. Mention `LLMOutputProcessor` /
+  `PhoneticReplacementProcessor` in `easycat.llm_output_processing`
+  for fixed corrections.
+- **SSML for fine control.** `TTSInput(text=..., format="ssml")`
+  accepts `<break time="500ms"/>` and `<phoneme>` tags. Use it
+  sparingly — most providers support a subset and prosody is
+  brittle across vendors.
+
+## Sidebar — Backpressure when the TTS queue grows
+
+When the agent streams faster than the TTS+playback can drain
+(common with a fast model and a slow voice), the queue grows
+unboundedly. Production uses `easycat.bounded_queue.BoundedAudioQueue`
+with a `DropPolicy`:
+
+- `DropPolicy.OLDEST` — drop stale audio first. Good for live
+  conversation: the user wants the latest, not the backlog.
+- `DropPolicy.NEWEST` — refuse new audio until queue drains. Good
+  for transactional flows where every word matters.
+- `DropPolicy.BLOCK` — apply backpressure to the producer. Safest,
+  but if the producer can't slow down (e.g., LLM stream), it stalls.
+
+In the toy code we use an unbounded `asyncio.Queue` and ignore
+this. Name it explicitly so the reader knows the choice exists.
+
+## Sidebar — Partials can flap; never act on them
+
+Chapter 2 introduced partials but didn't name the trap: STT
+partials can revise themselves, sometimes dramatically. A naive
+agent that fires on a partial commits to a guess that may turn out
+wrong. The rule: agents fire on `STTFinal`, never on `STTPartial`.
+The journal in this chapter shows several partials per turn —
+inspect them and convince yourself.
+
 ## Links forward
 
-Chapter 7 attacks the *other* latency axis: detecting end-of-turn
-faster than VAD silence can.
+Chapter 7 takes a sharp left turn: real agents don't just talk,
+they *call tools*. Wiring a tool call into a streaming voice
+pipeline raises questions the chat-only world doesn't have.

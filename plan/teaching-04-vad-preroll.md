@@ -75,7 +75,7 @@ minimum that shows it, then point at the real thing.
   *read-only reference material* in this chapter
 - Pre-roll buffer: deque of recent frames, flushed on VAD-on
 - VAD is *still* a threshold — it has its own false triggers on
-  mouth clicks, keyboard noise, etc. (Chapter 9 is the real fix.)
+  mouth clicks, keyboard noise, etc. (Chapter 10 is the real fix.)
 
 ## Exercises
 

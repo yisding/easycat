@@ -45,7 +45,7 @@
    an order of magnitude worse. This is why voice LLM products
    feel off when they do.
 5. **Two axes we'll attack.** We can start the agent *sooner*
-   (smart-turn, chapter 7) and start TTS on *partial* agent output
+   (smart-turn, chapter 8) and start TTS on *partial* agent output
    (streaming, chapter 6).
 
 ## Key concepts

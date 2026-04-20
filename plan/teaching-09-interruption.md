@@ -1,4 +1,4 @@
-# Chapter 8 — Interruption / Barge-in
+# Chapter 9 — Interruption / Barge-in
 
 > Three versions of the same feature, each one better — and each
 > one teaching something the previous one didn't.
@@ -7,7 +7,7 @@
 
 ## Prerequisites
 
-- Chapter 7
+- Chapter 8
 
 ## Learning objectives
 
@@ -20,11 +20,11 @@
 
 ## What you build
 
-Three scripts in `docs/teaching/08-interruption/`, each a small
+Three scripts in `docs/teaching/09-interruption/`, each a small
 diff off the previous:
 
 - `ignore.py` — bot ignores user mid-speech. (Starting point: copy
-  of `docs/teaching/07-smart-turn/main.py`.)
+  of `docs/teaching/08-smart-turn/main.py`.)
 - `cancel.py` — bot cuts off immediately on user speech.
 - `estimate.py` — bot cuts off AND adjusts its memory to match
   what the user actually heard.
@@ -73,7 +73,7 @@ The chapter README includes the A/B/C transcript drift.
 
 ## Exercises
 
-1. Run chapter 8c and interrupt the bot after exactly one word.
+1. Run chapter 9c and interrupt the bot after exactly one word.
    Inspect the memory in the bundle — did it record just that one
    word?
 2. Break the estimator deliberately: send the bot a response full
@@ -81,8 +81,10 @@ The chapter README includes the A/B/C transcript drift.
    which direction?
 3. Play TTS through speakers far from the mic vs close. Does the
    bot interrupt itself on its own audio? Why or why not?
-   (Hint: VAD + NR + echo cancellation in Transport. Chapter 9
-   revisits NR; true AEC is beyond the ladder.)
+   (Hint: VAD + NR + echo cancellation. Chapter 10 covers NR
+   *and* AEC; this chapter's "ignore" version often self-triggers
+   on speakerphone setups precisely because AEC isn't wired in
+   yet.)
 
 ## Journal highlights
 
@@ -94,10 +96,10 @@ The chapter README includes the A/B/C transcript drift.
 
 ## Files created
 
-- `docs/teaching/08-interruption/ignore.py`
-- `docs/teaching/08-interruption/cancel.py`
-- `docs/teaching/08-interruption/estimate.py`
-- `docs/teaching/08-interruption/README.md`
+- `docs/teaching/09-interruption/ignore.py`
+- `docs/teaching/09-interruption/cancel.py`
+- `docs/teaching/09-interruption/estimate.py`
+- `docs/teaching/09-interruption/README.md`
 
 ## Success criteria
 
@@ -108,6 +110,7 @@ The chapter README includes the A/B/C transcript drift.
 
 ## Links forward
 
-Chapter 9 fills in the one remaining pipeline stage we've skipped:
-noise reduction. Short chapter, but it explains a load-bearing
-ordering decision.
+Chapter 10 widens the lens to *cleaning the signal* — noise
+reduction *and* echo cancellation, plus why their pipeline order
+matters and why "the bot heard itself" is a different problem from
+"there's a fan in the room."

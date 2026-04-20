@@ -1,4 +1,4 @@
-# Chapter 7 — Smart-turn
+# Chapter 8 — Smart-turn
 
 > A tiny ML model that knows you're done talking before the silence
 > confirms it.
@@ -20,13 +20,15 @@
 
 ## What you build
 
-`docs/teaching/07-smart-turn/main.py`:
+`docs/teaching/08-smart-turn/main.py`:
 
-- Starts from a copy of `docs/teaching/06-streaming-agent/main.py`.
+- Starts from a copy of `docs/teaching/07-tools/main.py` (the
+  tool-call wiring carries forward unused; future chapters will
+  exercise it again).
 - Wires `smart_turn.py` into the turn-detection path.
 - A sibling script `replay_and_compare.py` runs a saved recording
-  through both chapter 6 and chapter 7 pipelines and prints a
-  timing table.
+  through both chapter 6's VAD-silence pipeline and this chapter's
+  smart-turn pipeline and prints a timing table.
 
 ## Narrative arc
 
@@ -73,14 +75,14 @@
   audio window used
 - Gap from last speech frame to turn-committed event (should be
   <300ms vs ~800ms from chapter 6)
-- Side-by-side: chapter 6 bundle's VAD-timeout vs chapter 7
-  bundle's smart-turn commits on the same recording
+- Side-by-side: chapter 6 bundle's VAD-timeout vs this chapter's
+  smart-turn commits on the same recording
 
 ## Files created
 
-- `docs/teaching/07-smart-turn/main.py`
-- `docs/teaching/07-smart-turn/replay_and_compare.py`
-- `docs/teaching/07-smart-turn/README.md`
+- `docs/teaching/08-smart-turn/main.py`
+- `docs/teaching/08-smart-turn/replay_and_compare.py`
+- `docs/teaching/08-smart-turn/README.md`
 
 ## Success criteria
 
@@ -91,5 +93,5 @@
 
 ## Links forward
 
-Chapter 8 is the hardest chapter: what if the user *starts talking
+Chapter 9 is the hardest chapter: what if the user *starts talking
 while the bot is talking*?
