@@ -101,8 +101,12 @@
 
 - The chapter doesn't introduce new journal record types; it
   *consumes* them across many bundles.
-- Per-stage span timings (`stage.stt.execute`, `stage.agent.execute`,
-  `stage.tts.execute`) are the primary reads.
+- Per-stage span timings, derived by pairing `stage_start` with
+  `stage_complete` records (filtered by `data.stage` = `"stt"`,
+  `"agent"`, `"tts"`, etc.) on the same `turn_id` and subtracting
+  timestamps — the same pattern chapter 11 teaches. The journal
+  does *not* emit single `stage.<name>.execute` records; don't
+  query for them.
 - Tags applied during the run (e.g., `was_interrupted`,
   `tool_used`) become filterable axes in the eval scripts.
 

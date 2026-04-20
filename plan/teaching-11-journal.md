@@ -23,8 +23,8 @@ three pre-recorded bundles with planted bugs in
 to the gitignored-`runs/` convention — they are intentionally
 checked in because the chapter cannot work without them):
 
-- `bug_01_missing_final.bundle` — turn starts, STT never emits a
-  final.
+- `bug_01_empty_final.bundle` — turn starts, STT emits a final
+  with `text=""`, and the agent stage never fires.
 - `bug_02_tts_stutter.bundle` — TTS output has audible gaps
   between sentences.
 - `bug_03_ghost_interruption.bundle` — bot believes it was

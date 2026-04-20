@@ -30,7 +30,12 @@
 
 - Starts from a copy of `docs/teaching/09-interruption/estimate.py`.
 - Adds NR via `easycat.create_noise_reducer()`.
-- Adds AEC via `easycat.create_echo_canceller()`.
+- Adds AEC via
+  `easycat.create_echo_canceller(EchoCancellationConfig(enabled=True))`.
+  The default `EchoCancellationConfig(enabled=False)` returns a
+  `PassthroughAEC` — call this out in the chapter so the reader
+  doesn't accidentally run a no-op AEC and wonder why nothing
+  changes on `speakerphone_loop.wav`.
 - A replay mode runs three recordings through the pipeline:
   - Noisy mic + no bot speech (`noisy_alone.wav`) — exercises NR.
   - Quiet mic + bot speech bleeding through speaker
