@@ -18,6 +18,7 @@ Setup:
 from __future__ import annotations
 
 import asyncio
+import sys
 
 from easycat import (
     EasyCatConfig,
@@ -36,16 +37,29 @@ async def _stdin_loop(session) -> None:  # type: ignore[no-untyped-def]
     print("Press Ctrl+C to quit.\n")
 
     loop = asyncio.get_running_loop()
+    # Use add_reader instead of run_in_executor(input): a blocked input()
+    # would keep its executor thread alive and stall asyncio.run() shutdown
+    # when the user hits Ctrl+C at the prompt.
+    queue: asyncio.Queue[None] = asyncio.Queue()
+
+    def _on_stdin() -> None:
+        sys.stdin.readline()
+        queue.put_nowait(None)
+
+    loop.add_reader(sys.stdin.fileno(), _on_stdin)
     speaking = False
-    while True:
-        await loop.run_in_executor(None, input)
-        if not speaking:
-            await session.start_turn()
-            print("  [turn started — speak now]")
-        else:
-            await session.end_turn()
-            print("  [turn ended — agent is replying]")
-        speaking = not speaking
+    try:
+        while True:
+            await queue.get()
+            if not speaking:
+                await session.start_turn()
+                print("  [turn started — speak now]")
+            else:
+                await session.end_turn()
+                print("  [turn ended — agent is replying]")
+            speaking = not speaking
+    finally:
+        loop.remove_reader(sys.stdin.fileno())
 
 
 async def main() -> None:

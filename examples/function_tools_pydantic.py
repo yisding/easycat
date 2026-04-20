@@ -15,7 +15,8 @@ Setup:
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from easycat import (
     EasyCatConfig,
@@ -54,7 +55,11 @@ async def main() -> None:
     @voice_agent.tool_plain
     def get_time(timezone_name: str = "UTC") -> str:
         """Return the current wall-clock time in the named IANA timezone."""
-        now = datetime.now(UTC).strftime("%H:%M")
+        try:
+            tz = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            return f"Unknown timezone: {timezone_name}."
+        now = datetime.now(tz).strftime("%H:%M")
         return f"It is {now} {timezone_name}."
 
     config = EasyCatConfig(
