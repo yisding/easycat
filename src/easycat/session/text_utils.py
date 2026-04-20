@@ -27,7 +27,7 @@ def _span_bounds(span: object) -> tuple[int, int]:
     return int(start), int(end)
 
 
-def _split_at_sentence_boundaries(text: str) -> tuple[str, str]:
+def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     """Split text at the last sentence boundary.
 
     Returns (ready_text, remaining_buffer). ``ready_text`` contains complete
@@ -200,7 +200,7 @@ def _has_unclosed_markdown_link_or_image(text: str) -> bool:
     return label_depth > 0 or awaiting_destination or destination_depth > 0
 
 
-def _has_unclosed_markdown_delimiters(text: str) -> bool:
+def has_unclosed_markdown_delimiters(text: str) -> bool:
     """Best-effort check for unfinished markdown spans in a rolling buffer.
 
     The streaming path defers sentence emission while markdown delimiters are

@@ -52,11 +52,17 @@ def translate_sse_event(
     event_type: str,
     data: dict[str, Any],
     recorder: AgentRecorder,
+    pending: dict[str, str] | None = None,
 ) -> AgentBridgeEvent | None:
     """Map a Responses API SSE event to an :class:`AgentBridgeEvent`.
 
     Returns ``None`` for events handled by the caller (``response.completed``,
     ``response.failed``) or events that have no bridge-level equivalent.
+
+    *pending* is an optional ``call_id -> tool_name`` map supplied by the
+    caller so the tool name captured on ``output_item.added`` can be reused
+    when recording ``delta`` and ``result`` phases.  When ``None``, tool
+    name is omitted from those records.
     """
     if event_type == "response.output_text.delta":
         delta = data.get("delta", "")
@@ -69,6 +75,8 @@ def translate_sse_event(
         if item.get("type") == "function_call":
             name = item.get("name", "")
             call_id = item.get("call_id", "") or item.get("id", "") or ""
+            if pending is not None and call_id:
+                pending[call_id] = name
             recorder.record_tool_call(phase="start", name=name, call_id=call_id)
             return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
         return None
@@ -77,6 +85,8 @@ def translate_sse_event(
         delta = data.get("delta", "")
         call_id = data.get("call_id", "") or data.get("item_id", "") or ""
         if delta:
+            name = pending.get(call_id, "") if pending is not None else ""
+            recorder.record_tool_call(phase="delta", name=name, call_id=call_id)
             return AgentBridgeEvent(kind="tool_delta", text=delta, call_id=call_id)
         return None
 
@@ -91,7 +101,8 @@ def translate_sse_event(
         if item_type == "function_call_output":
             call_id = item.get("call_id", "") or item.get("id", "") or ""
             result_str = str(item.get("output", ""))
-            recorder.record_tool_call(phase="result", name="", call_id=call_id)
+            name = pending.pop(call_id, "") if pending is not None else ""
+            recorder.record_tool_call(phase="result", name=name, call_id=call_id)
             return AgentBridgeEvent(kind="tool_result", call_id=call_id, result=result_str)
 
         return None

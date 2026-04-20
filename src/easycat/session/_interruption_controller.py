@@ -24,8 +24,9 @@ class InterruptionController:
         7. transition — update turn state.
     """
 
-    def __init__(self, *, journal: Any = None) -> None:
+    def __init__(self, *, journal: Any = None, session_id: str = "") -> None:
         self._journal = journal
+        self._session_id = session_id
         self._pending_downgrade = False
 
     def signal_interrupt(
@@ -109,6 +110,6 @@ class InterruptionController:
             self._journal.append(
                 kind=JournalRecordKind.CONTROL,
                 name="interruption_signal",
-                session_id="",
+                session_id=self._session_id,
                 data={"cause": cause},
             )

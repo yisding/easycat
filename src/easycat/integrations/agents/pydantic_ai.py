@@ -337,7 +337,7 @@ class PydanticAIBridge:
 
         saved_mcp_servers = getattr(self._agent, "mcp_servers", None)
         try:
-            if self._mcp_servers and hasattr(self._agent, "mcp_servers"):
+            if self._mcp_servers is not None and hasattr(self._agent, "mcp_servers"):
                 self._agent.mcp_servers = list(self._mcp_servers)
             if hasattr(self._agent, "iter"):
                 async for ev in self._stream_via_iter(turn_input.text, recorder, cancel_token):
@@ -464,7 +464,7 @@ class PydanticAIBridge:
 
         # Inject MCP servers into graph agents (same save/restore pattern).
         saved_mcp: list[tuple[Any, Any]] = []
-        if self._mcp_servers and self._agents:
+        if self._mcp_servers is not None and self._agents:
             for ag in self._agents:
                 if hasattr(ag, "mcp_servers"):
                     saved_mcp.append((ag, getattr(ag, "mcp_servers", None)))

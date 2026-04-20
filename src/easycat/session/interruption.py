@@ -11,8 +11,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from easycat.session._text_utils import _truncate_partial_text_to_boundary
-from easycat.session._tts_helpers import _cleanup_estimation_text
+from easycat.session.text_utils import _truncate_partial_text_to_boundary
+from easycat.session.tts_helpers import _cleanup_estimation_text
 
 if TYPE_CHECKING:
     from easycat.cancel import CancelToken

@@ -10,8 +10,9 @@ from typing import Any
 
 import pytest
 
-from easycat.events import STTEventType
+from easycat.events import STTEvent, STTEventType
 from easycat.providers import STTProvider
+from easycat.stt import openai_realtime_provider as realtime_provider
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
@@ -266,8 +267,10 @@ async def test_openai_realtime_sends_commit_on_end():
 async def test_openai_realtime_skips_commit_on_short_tail():
     """OpenAI Realtime refuses commits with <100ms of buffered audio
     (1008 policy violation).  The provider must skip the send locally
-    rather than surface that as a spurious warning — and must still
-    clear ``_audio_pending_commit`` so ``_on_end`` doesn't re-attempt.
+    rather than surface that as a spurious warning — but must keep
+    ``_audio_pending_commit`` / ``_bytes_since_last_commit`` intact so
+    a later commit that sees more audio still reflects the true server
+    buffer.
     """
     factory = _MockWSFactory()
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
@@ -278,6 +281,7 @@ async def test_openai_realtime_skips_commit_on_short_tail():
     await stt.start_stream()
     for chunk in make_audio_chunks(pcm):
         await stt.send_audio(chunk)
+    bytes_after_first = stt._bytes_since_last_commit
     committed = await stt.commit_segment()
     assert committed is False, "short tail must not be sent to the server"
 
@@ -287,9 +291,41 @@ async def test_openai_realtime_skips_commit_on_short_tail():
         if isinstance(m, str) and "input_audio_buffer.commit" in m
     ]
     assert commit_msgs == [], "provider should not send a commit it knows will fail"
-    # State reset so end_stream below won't re-send.
-    assert stt._audio_pending_commit is False
-    assert stt._bytes_since_last_commit == 0
+    # State preserved: the server still has those bytes buffered, so a
+    # subsequent append + commit must count them toward the 100 ms floor.
+    assert stt._audio_pending_commit is True
+    assert stt._bytes_since_last_commit == bytes_after_first
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_short_tail_then_more_audio_commits():
+    """A short commit attempt followed by more audio must eventually
+    cross the 100 ms floor and send a commit, since the server still
+    has the buffered bytes from the first (skipped) attempt.
+    """
+    factory = _MockWSFactory()
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    stt = OpenAIRealtimeSTT(config)
+
+    await stt.start_stream()
+    # First batch: 50 ms → below 100 ms floor.
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=50)):
+        await stt.send_audio(chunk)
+    assert await stt.commit_segment() is False
+
+    # Second batch: 60 ms.  Combined with the first, the server has
+    # 110 ms buffered, so this commit must be sent.
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=60)):
+        await stt.send_audio(chunk)
+    assert await stt.commit_segment() is True
+
+    commit_msgs = [
+        m
+        for m in factory.connection.sent
+        if isinstance(m, str) and "input_audio_buffer.commit" in m
+    ]
+    assert len(commit_msgs) == 1
     await stt.end_stream()
 
 
@@ -422,6 +458,103 @@ async def test_openai_realtime_emits_partial_then_final():
 
     assert len(finals) == 1
     assert finals[0].text == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_promotes_partial_on_final_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If ``.completed`` stalls past the timeout, the accumulated
+    partial is promoted to ``STTFinal`` so the session can drive the
+    LLM without waiting on OpenAI's long-tail response."""
+    monkeypatch.setattr(realtime_provider, "_FINAL_TRANSCRIPT_TIMEOUT_S", 0.05)
+
+    class _StubWS:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, data: str) -> None:
+            self.sent.append(data)
+
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt._ws = _StubWS()  # type: ignore[assignment]
+    stt._audio_pending_commit = True
+    stt._bytes_since_last_commit = stt._COMMIT_MIN_BYTES
+    stt._partial_text = "hello"
+    emitted: list[STTEvent] = []
+    stt._emit_event = emitted.append  # type: ignore[method-assign]
+
+    result = await stt._send_commit(wait_for_final=True)
+
+    assert result is True, "commit should still report a successful send"
+    finals = [e for e in emitted if e.type == STTEventType.FINAL]
+    assert [f.text for f in finals] == ["hello"], (
+        "timeout must promote accumulated partial to FINAL"
+    )
+    assert stt._dropping_pending_final is True, (
+        "drop flag should be armed to discard the late .completed"
+    )
+    assert stt._partial_text == ""
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_drops_late_completed_after_timeout() -> None:
+    """Once the timeout has promoted the partial to FINAL, a late
+    ``.completed`` for the same commit is swallowed rather than
+    producing a second ``STTFinal`` for the turn."""
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt._dropping_pending_final = True
+    stt._partial_text = "lingering partial"
+    emitted: list[STTEvent] = []
+    stt._emit_event = emitted.append  # type: ignore[method-assign]
+
+    stt._handle_message(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "revised transcript",
+        }
+    )
+
+    assert emitted == [], "late .completed must not produce a second STTFinal"
+    assert stt._dropping_pending_final is False, (
+        "drop flag should self-clear so the next commit behaves normally"
+    )
+    assert stt._partial_text == "", "partial text should be cleared alongside the drop"
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_next_commit_reemits_after_drop() -> None:
+    """After a drop, the following ``.completed`` for a new commit
+    flows through normally.  Guards against the flag accidentally
+    suppressing transcripts on subsequent turns."""
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt._dropping_pending_final = True  # simulate a prior drop
+    emitted: list[STTEvent] = []
+    stt._emit_event = emitted.append  # type: ignore[method-assign]
+
+    # First message: the late .completed from the previous turn — dropped.
+    stt._handle_message(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "stale",
+        }
+    )
+    # Next turn's delta + .completed — must emit normally.
+    stt._handle_message(
+        {
+            "type": "conversation.item.input_audio_transcription.delta",
+            "delta": "fresh transcript",
+        }
+    )
+    stt._handle_message(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "fresh transcript",
+        }
+    )
+
+    finals = [e for e in emitted if e.type == STTEventType.FINAL]
+    assert [f.text for f in finals] == ["fresh transcript"]
 
 
 @pytest.mark.asyncio

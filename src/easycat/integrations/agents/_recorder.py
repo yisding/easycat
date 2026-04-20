@@ -150,6 +150,12 @@ class JournalAgentRecorder:
             result = self._artifact_store.put(payload)
             stored_ref = result if result else None
         else:
+            if payload is not None and self._artifact_store is None:
+                logger.warning(
+                    "record_state_snapshot: payload dropped (no artifact store); "
+                    "ref %r will not resolve to stored bytes",
+                    ref,
+                )
             stored_ref = None
         actual_ref = stored_ref or ref
         self._append(

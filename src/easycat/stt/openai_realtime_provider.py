@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -34,6 +35,16 @@ from easycat.stt.base import STTBase
 
 # OpenAI Realtime API expects 24 kHz PCM16 mono input by default.
 _REALTIME_SAMPLE_RATE = 24000
+
+# How long to wait for ``...transcription.completed`` after an
+# end-of-turn commit before we give up and fall back to the most recent
+# delta-accumulated partial.  OpenAI occasionally stalls for several
+# seconds on this event; waiting it out shows up as a multi-second
+# user-visible pause, so we'd rather ship slightly-less-corrected text
+# quickly than sit on a perfect transcript.  The ``.completed`` message
+# for this commit is still expected to arrive; we discard it so the
+# session doesn't see two ``STTFinal`` events for one turn.
+_FINAL_TRANSCRIPT_TIMEOUT_S = 2.0
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +104,12 @@ class OpenAIRealtimeSTT(STTBase):
         # doomed commit and surfaced it as a warning in the logs.
         self._bytes_since_last_commit: int = 0
         self._session_ready: asyncio.Future[None] | None = None
+        # Set when ``_send_commit`` gave up waiting for the current
+        # commit's ``.completed`` and already promoted ``_partial_text``
+        # to a ``STTFinal``.  The flag causes the first subsequent
+        # ``.completed`` to be dropped instead of producing a second
+        # ``STTFinal`` for the same turn.  Cleared on the next commit.
+        self._dropping_pending_final: bool = False
 
     def _websocket_url(self) -> str:
         """Build the Realtime WebSocket URL with the required realtime model."""
@@ -126,6 +143,14 @@ class OpenAIRealtimeSTT(STTBase):
         await self._ws.connect()
         loop = asyncio.get_running_loop()
         self._session_ready = loop.create_future()
+        # Reset per-stream state BEFORE starting the receive loop so
+        # early messages on the new socket (including any late
+        # ``.completed`` from the previous stream that slipped through
+        # before close) can't observe stale flags from the prior run.
+        self._partial_text = ""
+        self._audio_pending_commit = False
+        self._final_received = None
+        self._dropping_pending_final = False
         self._receive_task = asyncio.create_task(self._receive_loop())
         try:
             await self._send_session_update()
@@ -138,10 +163,8 @@ class OpenAIRealtimeSTT(STTBase):
             if ws is not None:
                 task = asyncio.create_task(self._close_connection(ws, receive_task))
                 task.add_done_callback(self._log_close_task_exception)
+                self._close_task = task
             raise
-        self._partial_text = ""
-        self._audio_pending_commit = False
-        self._final_received = None
         try:
             await asyncio.wait_for(self._session_ready, timeout=5.0)
         except TimeoutError as exc:
@@ -153,11 +176,20 @@ class OpenAIRealtimeSTT(STTBase):
             if ws is not None:
                 task = asyncio.create_task(self._close_connection(ws, receive_task))
                 task.add_done_callback(self._log_close_task_exception)
+                self._close_task = task
             raise TimeoutError("timed out waiting for OpenAI Realtime session.update") from exc
 
     async def _send_session_update(self) -> None:
-        """Configure a realtime session with input audio transcription enabled."""
+        """Configure a realtime session with input audio transcription enabled.
+
+        Also called by :class:`ReconnectingWebSocket` on transparent
+        reconnects, so reset local buffer-tracking state here — the
+        server-side ``input_audio_buffer`` is empty on a fresh socket.
+        """
         assert self._ws is not None
+        self._partial_text = ""
+        self._audio_pending_commit = False
+        self._bytes_since_last_commit = 0
         transcription: dict[str, Any] = {"model": self._config.model}
         if self._config.language:
             transcription["language"] = self._config.language
@@ -210,8 +242,12 @@ class OpenAIRealtimeSTT(STTBase):
         self._final_received = None
         self._session_ready = None
         if ws is not None:
-            self._close_task = asyncio.create_task(self._close_connection(ws, receive_task))
-            self._close_task.add_done_callback(self._log_close_task_exception)
+            try:
+                await self._close_connection(ws, receive_task)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("OpenAI Realtime close failed during end", exc_info=True)
 
     # OpenAI Realtime requires commits to have at least 100ms of audio.
     # At 24 kHz mono 16-bit that is 4800 bytes.  Skip the commit when
@@ -225,21 +261,25 @@ class OpenAIRealtimeSTT(STTBase):
         if ws is None or not self._audio_pending_commit:
             return False
         if self._bytes_since_last_commit < self._COMMIT_MIN_BYTES:
-            # Tail too short — nothing meaningful to commit.  Clear
-            # pending flag so ``_on_end`` doesn't try again, but resolve
-            # the final_received waiter if the caller expected one so
-            # it doesn't block on an event the server will never fire.
+            # Tail too short — skip the server round-trip (the server
+            # would reject the commit and surface a warning).  Keep
+            # ``_audio_pending_commit`` and ``_bytes_since_last_commit``
+            # intact so a later commit that sees more audio (locally
+            # small tail + fresh audio) still reflects the true server
+            # buffer and eventually reaches the 100 ms threshold.
             logger.debug(
                 "Skipping input_audio_buffer.commit: only %d bytes (<%d min)",
                 self._bytes_since_last_commit,
                 self._COMMIT_MIN_BYTES,
             )
-            self._audio_pending_commit = False
-            self._bytes_since_last_commit = 0
             return False
 
         final_received = asyncio.Event()
         self._final_received = final_received
+        # Each fresh commit starts a clean slate — any stale drop flag
+        # from a previous commit (e.g. one whose timed-out ``.completed``
+        # never arrived) should not suppress this commit's final.
+        self._dropping_pending_final = False
         try:
             await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
         except Exception:
@@ -252,9 +292,24 @@ class OpenAIRealtimeSTT(STTBase):
         self._bytes_since_last_commit = 0
         if wait_for_final:
             try:
-                await asyncio.wait_for(final_received.wait(), timeout=5.0)
+                await asyncio.wait_for(final_received.wait(), timeout=_FINAL_TRANSCRIPT_TIMEOUT_S)
             except TimeoutError:
-                logger.warning("Timed out waiting for final transcript from OpenAI Realtime")
+                # Give up on OpenAI's final and promote whatever we've
+                # streamed via ``...transcription.delta`` so the session
+                # can drive the LLM with the best partial.  The real
+                # ``.completed``, if it arrives later, will be dropped
+                # via ``_dropping_pending_final`` so the turn doesn't
+                # receive two ``STTFinal`` events.
+                logger.warning(
+                    "Timed out after %.1fs waiting for OpenAI Realtime final; "
+                    "promoting %d-char partial to FINAL",
+                    _FINAL_TRANSCRIPT_TIMEOUT_S,
+                    len(self._partial_text),
+                )
+                if self._partial_text:
+                    self._emit_event(STTEvent(type=STTEventType.FINAL, text=self._partial_text))
+                    self._partial_text = ""
+                self._dropping_pending_final = True
         return True
 
     async def _close_connection(
@@ -268,6 +323,8 @@ class OpenAIRealtimeSTT(STTBase):
                 await asyncio.wait_for(receive_task, timeout=2.0)
             except TimeoutError:
                 receive_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await receive_task
                 logger.warning("OpenAI Realtime receive loop timed out on close")
             except asyncio.CancelledError:
                 raise
@@ -319,14 +376,25 @@ class OpenAIRealtimeSTT(STTBase):
                 self._emit_event(STTEvent(type=STTEventType.PARTIAL, text=self._partial_text))
 
         elif msg_type == "conversation.item.input_audio_transcription.completed":
-            transcript = msg.get("transcript", "")
-            if transcript:
-                self._emit_event(STTEvent(type=STTEventType.FINAL, text=transcript))
-            elif self._partial_text:
-                self._emit_event(STTEvent(type=STTEventType.FINAL, text=self._partial_text))
-            self._partial_text = ""
-            if self._final_received is not None:
-                self._final_received.set()
+            if self._dropping_pending_final:
+                # A previous ``_send_commit`` already gave up on this
+                # ``.completed`` and promoted the accumulated partial to
+                # a FINAL, so silently discard this late revision to
+                # avoid emitting a second STTFinal for the same turn.
+                logger.debug("Dropping late OpenAI Realtime .completed (already promoted partial)")
+                self._dropping_pending_final = False
+                self._partial_text = ""
+                if self._final_received is not None:
+                    self._final_received.set()
+            else:
+                transcript = msg.get("transcript", "")
+                if transcript:
+                    self._emit_event(STTEvent(type=STTEventType.FINAL, text=transcript))
+                elif self._partial_text:
+                    self._emit_event(STTEvent(type=STTEventType.FINAL, text=self._partial_text))
+                self._partial_text = ""
+                if self._final_received is not None:
+                    self._final_received.set()
 
         elif msg_type == "error":
             error = msg.get("error", {})

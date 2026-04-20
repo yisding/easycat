@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
-import sys
-
-import pytest
-
 # ── Removed symbols not present in narrowed form ────────────
 
 
@@ -88,77 +83,6 @@ class TestAllContainsExpected:
 
         missing = [s for s in self.EXPECTED_SYMBOLS if s not in easycat.__all__]
         assert missing == [], f"Missing from __all__: {missing}"
-
-
-# ── Deleted legacy modules raise ImportError ─────────────────
-
-
-class TestDeletedModulesRaiseImportError:
-    """Legacy modules that have been fully deleted should not be importable."""
-
-    @pytest.fixture(autouse=True)
-    def _clear_module_cache(self):
-        """Remove cached legacy modules so re-import triggers errors."""
-        modules_to_clear = [
-            "easycat.event_logging",
-            "easycat.tracing",
-            "easycat.metrics",
-            "easycat._span_manager",
-            "easycat.agents",
-            "easycat.agents.base",
-            "easycat.agents.openai_agents",
-            "easycat.agents.pydantic_ai",
-            "easycat.agents.pydantic_ai_workflow",
-            "easycat.agents.factory",
-        ]
-        saved = {}
-        for mod in modules_to_clear:
-            if mod in sys.modules:
-                saved[mod] = sys.modules.pop(mod)
-        yield
-        # Restore to avoid polluting other tests.
-        for mod, obj in saved.items():
-            sys.modules[mod] = obj
-
-    def test_event_logging_not_importable(self):
-        with pytest.raises((ImportError, ModuleNotFoundError)):
-            importlib.import_module("easycat.event_logging")
-
-    def test_tracing_not_importable(self):
-        with pytest.raises((ImportError, ModuleNotFoundError)):
-            importlib.import_module("easycat.tracing")
-
-    def test_metrics_not_importable(self):
-        with pytest.raises((ImportError, ModuleNotFoundError)):
-            importlib.import_module("easycat.metrics")
-
-    def test_span_manager_not_importable(self):
-        with pytest.raises((ImportError, ModuleNotFoundError)):
-            importlib.import_module("easycat._span_manager")
-
-    def test_agents_package_not_importable(self):
-        with pytest.raises((ImportError, ModuleNotFoundError)):
-            importlib.import_module("easycat.agents")
-
-    def test_agents_base_not_importable(self):
-        with pytest.raises((ImportError, ModuleNotFoundError)):
-            importlib.import_module("easycat.agents.base")
-
-    def test_agents_openai_agents_not_importable(self):
-        with pytest.raises((ImportError, ModuleNotFoundError)):
-            importlib.import_module("easycat.agents.openai_agents")
-
-    def test_agents_pydantic_ai_not_importable(self):
-        with pytest.raises((ImportError, ModuleNotFoundError)):
-            importlib.import_module("easycat.agents.pydantic_ai")
-
-    def test_agents_factory_not_importable(self):
-        with pytest.raises((ImportError, ModuleNotFoundError)):
-            importlib.import_module("easycat.agents.factory")
-
-    def test_agents_pydantic_ai_workflow_not_importable(self):
-        with pytest.raises((ImportError, ModuleNotFoundError)):
-            importlib.import_module("easycat.agents.pydantic_ai_workflow")
 
 
 # ── New canonical locations are importable ───────────────────

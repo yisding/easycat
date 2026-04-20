@@ -69,13 +69,7 @@ from easycat.runtime.journal import (
     ReadonlySqliteJournal,
 )
 from easycat.runtime.records import JournalRecordKind
-from easycat.session._interruption import estimate_and_notify_interruption
 from easycat.session._streaming import consume_agent_stream
-from easycat.session._text_utils import (
-    _chunk_has_speech_energy,
-    _replace_last_assistant_text,
-)
-from easycat.session._tts_helpers import _text_for_estimation_timeline
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import (
     _TM_TO_TURN_STATE,
@@ -86,6 +80,12 @@ from easycat.session._types import (
 )
 from easycat.session.action_executors import CoreSessionActionExecutor
 from easycat.session.actions import SessionAction, SessionActionExecutor
+from easycat.session.interruption import estimate_and_notify_interruption
+from easycat.session.text_utils import (
+    _chunk_has_speech_energy,
+    _replace_last_assistant_text,
+)
+from easycat.session.tts_helpers import _text_for_estimation_timeline
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
 from easycat.stages.base import (
@@ -151,6 +151,10 @@ class Session:
         # Back-store for the ``agent`` property so late assignments
         # (``session.agent = X``) keep the AgentStage wrapper in sync.
         self._agent: Agent = auto_adapt_agent(cfg.agent) if cfg.agent else NoopAgent()
+        # Stashed by create_session/create_text_session so mid-session
+        # agent swaps to a URL-backed agent can forward model/key context.
+        self._agent_model: str | None = None
+        self._remote_agent_api_key: str | None = None
 
         # Skip noop validation in text_session mode — audio providers
         # are intentionally noop.
@@ -224,6 +228,9 @@ class Session:
         self._timeout_config = cfg.timeout_config or self._default_timeout_config()
         self._metrics = None  # Legacy field, retained for attribute access only
         self._journal = cfg.journal
+        self._journal_view: JournalView | None = (
+            JournalView(self._journal) if self._journal is not None else None
+        )
         self._artifact_store = cfg.artifact_store
 
         # Wire journal to event bus so session activity is recorded.
@@ -386,10 +393,8 @@ class Session:
         if isinstance(shim, AgentRunner):
             shim = shim._agent
         if isinstance(shim, BridgeAdapterShim):
-            if self._journal is not None:
-                shim._journal = self._journal
-            if self._artifact_store is not None:
-                shim._artifact_store = self._artifact_store
+            shim._journal = self._journal
+            shim._artifact_store = self._artifact_store
             shim._session_id = self.session_id
 
     def _with_correlation(self, event: Any) -> Any:
@@ -1011,7 +1016,51 @@ class Session:
 
     @agent.setter
     def agent(self, value: Agent) -> None:
-        self._agent = auto_adapt_agent(value) if value is not None else NoopAgent()
+        from easycat.integrations.agents._agent_runner import AgentRunner
+        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+
+        # Capture state from the outgoing agent so the swap preserves
+        # whatever ``create_session()`` / ``create_text_session()`` wired
+        # up at construction time: AgentRunner wrapping (timeouts, history,
+        # cancellation) and bridge-level MCP server context.
+        previous_agent = getattr(self, "_agent", None)
+        previous_runner: AgentRunner | None = (
+            previous_agent if isinstance(previous_agent, AgentRunner) else None
+        )
+        previous_inner = previous_runner._agent if previous_runner else previous_agent
+        previous_mcp_servers: tuple[str, ...] | None = None
+        if isinstance(previous_inner, BridgeAdapterShim):
+            previous_mcp_servers = getattr(previous_inner, "_mcp_servers", None)
+
+        if value is None:
+            self._agent = NoopAgent()
+        else:
+            adapted = auto_adapt_agent(value, model=self._agent_model)
+            inner = adapted._agent if isinstance(adapted, AgentRunner) else adapted
+            if isinstance(inner, BridgeAdapterShim):
+                # Inject model/API key for URL-backed agents (mirrors
+                # create_session / create_text_session).
+                from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+
+                if isinstance(inner.bridge, RemoteResponsesAPIBridge):
+                    if self._agent_model:
+                        inner.bridge._model = self._agent_model
+                    if self._remote_agent_api_key:
+                        inner.bridge._api_key = self._remote_agent_api_key
+            if previous_mcp_servers is not None and isinstance(inner, BridgeAdapterShim):
+                # Always overwrite (even with empty tuple) so a reused shim
+                # from a prior session can't leak old MCP servers into the
+                # new session that left MCP unset.  Matches create_session().
+                inner._mcp_servers = previous_mcp_servers
+                if hasattr(inner.bridge, "_mcp_servers"):
+                    inner.bridge._mcp_servers = list(previous_mcp_servers)
+            if previous_runner is not None and not isinstance(adapted, AgentRunner):
+                adapted = AgentRunner(adapted, previous_runner._config)
+            self._agent = adapted
+
+        # Re-inject journal/session-id into any bridge shim on the new agent.
+        self._backfill_bridge_context()
+
         stage = getattr(self, "_agent_stage", None)
         if stage is not None:
             stage._provider = self._agent  # keep the wrapper in sync
@@ -1038,10 +1087,13 @@ class Session:
 
     @property
     def journal(self) -> JournalView | None:
-        """Read-only journal view, including after a clean stop/shutdown."""
-        if self._journal is None:
-            return None
-        return JournalView(self._journal)
+        """Read-only journal view, including after a clean stop/shutdown.
+
+        Returns a stable view — callers may cache the result and it will
+        remain valid even after :meth:`stop` / :meth:`shutdown` replace
+        the underlying journal backend with a read-only snapshot.
+        """
+        return self._journal_view
 
     @property
     def cancel_token(self) -> CancelToken | None:
@@ -1104,6 +1156,7 @@ class Session:
                     max_size=self._outbound_queue_max_size,
                     policy=self._outbound_queue_policy,
                     name=self._outbound_queue_name,
+                    on_drop=self._on_queue_drop,
                 )
                 self._tts_synth._outbound_queue = self._outbound_queue
 
@@ -1264,18 +1317,33 @@ class Session:
             if self._stt_task and not self._stt_task.done():
                 self._stt_task.cancel()
                 tasks.append(self._stt_task)
+            # STT segment-commit work runs on background tasks that outlive
+            # _stt_task. Cancel them here so shutdown() does not return while
+            # commit_segment() is still sleeping or awaiting the provider.
+            if self._stt_pause_commit_task and not self._stt_pause_commit_task.done():
+                self._stt_pause_commit_task.cancel()
+                tasks.append(self._stt_pause_commit_task)
+            if self._stt_segment_commit_task and not self._stt_segment_commit_task.done():
+                self._stt_segment_commit_task.cancel()
+                tasks.append(self._stt_segment_commit_task)
             if self._current_tts_task and not self._current_tts_task.done():
                 self._current_tts_task.cancel()
                 tasks.append(self._current_tts_task)
             if self._outbound_task and not self._outbound_task.done():
                 self._outbound_task.cancel()
                 tasks.append(self._outbound_task)
+            if self._heartbeat_task and not self._heartbeat_task.done():
+                self._heartbeat_task.cancel()
+                tasks.append(self._heartbeat_task)
 
             for task in tasks:
                 try:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+            self._stt_pause_commit_task = None
+            self._stt_segment_commit_task = None
+            self._heartbeat_task = None
 
             for checker in self._health_checkers:
                 await checker.stop()
@@ -1332,6 +1400,11 @@ class Session:
             replacement = self._preserve_journal_after_destroy(live_journal)
             live_journal.close()
             self._journal = replacement
+            # Update the cached JournalView so previously-cached references
+            # (e.g. ``view = session.journal``) transparently delegate to
+            # the read-only snapshot instead of the now-closed backend.
+            if self._journal_view is not None:
+                self._journal_view._journal = replacement
 
         if self._artifact_store:
             live_store = self._artifact_store
@@ -2545,6 +2618,12 @@ class Session:
             else:
                 response = await self._agent_stage.execute(text, self._run_ctx, text_turn)
                 self._text_turn_accumulated = response
+                # Mirror _run_basic_agent: extract structured output from the
+                # underlying agent so non-streaming text sessions don't lose it.
+                agent_last_output = getattr(self.agent, "last_output", None)
+                agent_output_type = getattr(self.agent, "output_type", None)
+                if agent_output_type is not None or not isinstance(agent_last_output, str):
+                    structured_output = agent_last_output
             elapsed_ms = (time.monotonic() - t0) * 1000
             await self._emit(
                 AgentFinal(

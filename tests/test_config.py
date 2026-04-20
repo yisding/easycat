@@ -31,7 +31,8 @@ class _DummyAgent:
         return text
 
 
-def test_easycat_config_requires_stt_tts():
+def test_easycat_config_requires_stt_tts(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ValueError):
         EasyCatConfig()
 

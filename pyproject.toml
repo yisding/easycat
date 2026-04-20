@@ -35,6 +35,7 @@ rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.31.0"]
 # binaries.  Users who accept the license can opt in here.
 ten-vad = ["numpy>=1.24.0", "onnxruntime>=1.16.0", "ten-vad>=1.0.6.8"]
 silero-vad = ["numpy>=1.24.0", "onnxruntime>=1.16.0"]
+funasr-vad = ["numpy>=1.24.0", "onnxruntime>=1.16.0", "funasr-onnx>=0.4.1", "jieba>=0.42.1", "modelscope>=1.17.1"]
 smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.16.0"]
 # Interactive debugger UI (peripheral-eval-and-debugger-ui.md).
 debugger = [

@@ -129,6 +129,31 @@ class JournalView:
     ) -> list[JournalRecord]:
         return self._journal.slice(kind=kind, session_id=session_id)
 
+    def filter_by_stage(self, stage_name: str) -> list[JournalRecord]:
+        """Return records whose ``data['stage']`` or ``data['observed_stage']``
+        matches *stage_name*.  Mirrors :meth:`RunBundle.filter_by_stage`.
+        """
+        results: list[JournalRecord] = []
+        for r in self._journal.read():
+            stage = r.data.get("stage")
+            observed = r.data.get("observed_stage")
+            if stage == stage_name or observed == stage_name:
+                results.append(r)
+        return results
+
+    def filter_by_turn(self, turn_id: str) -> list[JournalRecord]:
+        """Return records whose ``turn_id`` matches.  Mirrors
+        :meth:`RunBundle.filter_by_turn`."""
+        return [r for r in self._journal.read() if r.turn_id == turn_id]
+
+    def lookup_by_sequence(self, seq: int) -> JournalRecord | None:
+        """Return the record with the given sequence number, or ``None``.
+        Mirrors :meth:`RunBundle.lookup_by_sequence`."""
+        for r in self._journal.read():
+            if r.sequence == seq:
+                return r
+        return None
+
     async def follow(
         self,
         *,
@@ -1428,12 +1453,26 @@ def run_retention(
     if not files:
         return 0
 
-    total_bytes = sum(f.stat().st_size for f in files)
+    artifacts_root = root / "artifacts"
+
+    def _session_bytes(db_path: Path) -> int:
+        """Total bytes for a session: DB + WAL/SHM sidecars + artifacts."""
+        size = db_path.stat().st_size
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(db_path) + suffix)
+            if sidecar.exists():
+                size += sidecar.stat().st_size
+        art_dir = artifacts_root / db_path.stem
+        if art_dir.is_dir():
+            size += sum(f.stat().st_size for f in art_dir.rglob("*") if f.is_file())
+        return size
+
+    total_bytes = sum(_session_bytes(f) for f in files)
     removed = 0
 
     while files and (len(files) > max_sessions or total_bytes > max_bytes):
         oldest = files.pop(0)
-        fsize = oldest.stat().st_size
+        fsize = _session_bytes(oldest)
 
         if mode == "archive":
             archive_dir = root / "archive"
