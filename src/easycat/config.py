@@ -7,7 +7,8 @@ import copy
 import logging
 import os
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from uuid import uuid4
@@ -75,6 +76,30 @@ from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, create_vad
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _openai_env_override(api_key: str | None) -> Iterator[None]:
+    """Project a programmatic OpenAI key into ``OPENAI_API_KEY``.
+
+    Lets :func:`parse_stt_string` / :func:`parse_tts_string` stay
+    provider-agnostic: they read ``OPENAI_API_KEY`` like any other
+    provider's env var, while this helper owns the
+    ``EasyCatConfig.openai_api_key`` → env-var policy. The override is
+    unwound on exit.
+    """
+    if not api_key:
+        yield
+        return
+    prev = os.environ.get("OPENAI_API_KEY")
+    os.environ["OPENAI_API_KEY"] = api_key
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("OPENAI_API_KEY", None)
+        else:
+            os.environ["OPENAI_API_KEY"] = prev
 
 
 @dataclass
@@ -218,26 +243,31 @@ class EasyCatConfig:
                 f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
             )
 
-        # Resolve string-keyed provider shortcuts ("deepgram/flux" →
-        # DeepgramSTTConfig(...)) before any downstream validation.  Typed
-        # configs still take precedence — users can pass a concrete
-        # DeepgramSTTConfig and keep full control.
-        if isinstance(self.stt, str):
-            self.stt = parse_stt_string(self.stt)
-        if isinstance(self.tts, str):
-            self.tts = parse_tts_string(self.tts)
-
         # Env-var autodetect for the zero-config case: bare
         # ``EasyCatConfig(agent=...)`` with ``OPENAI_API_KEY`` set picks up
         # the OpenAI chain automatically — keeping the scaffolded
-        # ``agent.py`` templates under their line budget.
-        if (
-            self.stt is None
-            and self.tts is None
-            and self.openai_api_key is None
-            and (env_key := os.getenv("OPENAI_API_KEY"))
-        ):
+        # ``agent.py`` templates under their line budget.  Resolved before
+        # string parsing so ``stt="openai-realtime"`` honors the env var
+        # without needing to be passed explicitly, and before the OpenAI
+        # default-fill below so the "swap just the STT" flow
+        # (``stt="deepgram/flux"`` + ``OPENAI_API_KEY``) gets a default
+        # OpenAI TTS without the user spelling it out.
+        if self.openai_api_key is None and (env_key := os.getenv("OPENAI_API_KEY")):
             self.openai_api_key = env_key
+
+        # Resolve string-keyed provider shortcuts ("deepgram/flux" →
+        # DeepgramSTTConfig(...)) before any downstream validation. Typed
+        # configs still take precedence — users can pass a concrete
+        # DeepgramSTTConfig and keep full control. A programmatic
+        # ``openai_api_key`` is projected into the OpenAI env vars for
+        # the duration of parsing so ``stt="openai"`` works without the
+        # env var also being exported; the factory itself stays
+        # provider-agnostic.
+        with _openai_env_override(self.openai_api_key):
+            if isinstance(self.stt, str):
+                self.stt = parse_stt_string(self.stt)
+            if isinstance(self.tts, str):
+                self.tts = parse_tts_string(self.tts)
 
         if self.openai_api_key:
             if self.stt is None:

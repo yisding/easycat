@@ -39,13 +39,40 @@ def test_doctor_passes_with_one_key(
     monkeypatch: pytest.MonkeyPatch,
     no_network: None,
 ) -> None:
-    for var in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
+    for var in (
+        "OPENAI_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "CARTESIA_API_KEY",
+    ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.setenv("NO_COLOR", "1")
     result = cli.invoke(app, ["doctor"])
     assert result.exit_code == 0, result.stderr
     assert "openai reachable" in result.stderr
+
+
+def test_doctor_passes_with_cartesia_only(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    no_network: None,
+) -> None:
+    """Cartesia-only setups must not trip env_any/E203 or `--provider cartesia`."""
+    for var in (
+        "OPENAI_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "CARTESIA_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CARTESIA_API_KEY", "ck-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+    result = cli.invoke(app, ["doctor"])
+    assert result.exit_code == 0, result.stderr
+    assert "cartesia reachable" in result.stderr
+    scoped = cli.invoke(app, ["doctor", "--provider", "cartesia"])
+    assert scoped.exit_code == 0, scoped.stderr
 
 
 def test_doctor_json_envelope(cli: CliRunner, empty_env: None, no_network: None) -> None:
@@ -72,7 +99,12 @@ def test_doctor_only_provider_filters_reachability(
     monkeypatch: pytest.MonkeyPatch,
     no_network: None,
 ) -> None:
-    for var in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
+    for var in (
+        "OPENAI_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "CARTESIA_API_KEY",
+    ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-stub")
@@ -90,7 +122,12 @@ def test_doctor_only_provider_fails_when_its_key_missing(
 ) -> None:
     """--provider X must fail (not false-green) when X's key is unset,
     even if a *different* provider's key happens to be set."""
-    for var in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
+    for var in (
+        "OPENAI_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "CARTESIA_API_KEY",
+    ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-stub")
     monkeypatch.setenv("NO_COLOR", "1")
@@ -100,11 +137,24 @@ def test_doctor_only_provider_fails_when_its_key_missing(
     assert "OPENAI_API_KEY" in result.stderr
 
 
+def test_doctor_unknown_provider_is_usage_error(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    no_network: None,
+) -> None:
+    """A typo or mis-cased --provider exits 2, not 0 (false-green guard)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+    result = cli.invoke(app, ["doctor", "--provider", "OpenAI"])
+    assert result.exit_code == 2
+    assert "Unknown --provider" in result.stderr
+
+
 def test_doctor_reports_httpx_failure(cli: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ConnectError on the probe should surface as E204."""
     import httpx
 
-    for var in ("DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
+    for var in ("DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY", "CARTESIA_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.setenv("NO_COLOR", "1")

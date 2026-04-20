@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from easycat.stt.cartesia_provider import CartesiaSTT
 from easycat.stt.deepgram_provider import DeepgramSTT
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
@@ -28,6 +29,25 @@ def test_factory_creates_elevenlabs():
     config = STTProviderConfig(provider="elevenlabs", api_key="test-key")
     provider = create_stt_provider(config)
     assert isinstance(provider, ElevenLabsSTT)
+
+
+def test_factory_creates_cartesia():
+    config = STTProviderConfig(provider="cartesia", api_key="test-key")
+    provider = create_stt_provider(config)
+    assert isinstance(provider, CartesiaSTT)
+
+
+def test_factory_passes_cartesia_params():
+    config = STTProviderConfig(
+        provider="cartesia",
+        api_key="c-key",
+        params={"model": "ink-whisper", "language": "fr", "sample_rate": 8000},
+    )
+    provider = create_stt_provider(config)
+    assert isinstance(provider, CartesiaSTT)
+    assert provider._config.model == "ink-whisper"
+    assert provider._config.language == "fr"
+    assert provider._config.sample_rate == 8000
 
 
 # ── Provider-specific params ─────────────────────────────────────
@@ -102,7 +122,7 @@ def test_factory_error_message_lists_providers():
 def test_factory_produced_providers_are_stt_providers():
     from easycat.providers import STTProvider
 
-    for name in ("openai", "deepgram", "elevenlabs"):
+    for name in ("openai", "deepgram", "elevenlabs", "cartesia"):
         config = STTProviderConfig(provider=name, api_key="test-key")
         provider = create_stt_provider(config)
         assert isinstance(provider, STTProvider), f"{name} not an STTProvider"
