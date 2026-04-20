@@ -23,6 +23,7 @@ from easycat.events import (
     AgentFinal,
     AgentRequestStarted,
     AudioIn,
+    AudioOut,
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
@@ -2400,6 +2401,7 @@ class Session:
                 await self._transport_stage.execute(
                     chunk, self._run_ctx, self._turn or self._no_turn
                 )
+                await self._emit(AudioOut(chunk=chunk))
                 if self._enable_aec:
                     self.echo_canceller.feed_reference(chunk)
                 sent_size = len(chunk.data)

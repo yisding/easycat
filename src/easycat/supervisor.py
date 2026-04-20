@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from easycat.audio_format import AudioChunk
-from easycat.events import AudioIn, TTSAudio
+from easycat.events import AudioIn, AudioOut
 
 if TYPE_CHECKING:
     from easycat.session._session import Session
@@ -56,7 +56,7 @@ class SessionAudioBroadcaster:
         self._dropped_frames = 0
 
         self._session.subscribe_event(AudioIn, self._on_audio_in)
-        self._session.subscribe_event(TTSAudio, self._on_tts_audio)
+        self._session.subscribe_event(AudioOut, self._on_audio_out)
 
     @property
     def listener_count(self) -> int:
@@ -96,7 +96,7 @@ class SessionAudioBroadcaster:
         self._closed = True
 
         self._session.unsubscribe_event(AudioIn, self._on_audio_in)
-        self._session.unsubscribe_event(TTSAudio, self._on_tts_audio)
+        self._session.unsubscribe_event(AudioOut, self._on_audio_out)
 
         listeners = list(self._listeners.values())
         self._listeners.clear()
@@ -114,7 +114,7 @@ class SessionAudioBroadcaster:
             )
         )
 
-    def _on_tts_audio(self, event: TTSAudio) -> None:
+    def _on_audio_out(self, event: AudioOut) -> None:
         self._broadcast(
             SupervisorAudioFrame(
                 session_id=getattr(event, "session_id", None) or self._session.session_id,

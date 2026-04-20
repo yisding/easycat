@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import functools
 import json
 import logging
@@ -194,6 +195,17 @@ async def main() -> None:
         listener_id, queue = broadcaster.subscribe()
         logger.info("Supervisor attached to %s", session_id)
 
+        async def _drain_inbound() -> None:
+            # Supervisors are listen-only, but we still need to read from
+            # the socket so a disconnect during caller silence surfaces
+            # promptly instead of blocking on queue.get() forever.
+            try:
+                async for _ in ws:
+                    pass
+            except websockets.exceptions.ConnectionClosed:
+                return
+
+        recv_task = asyncio.create_task(_drain_inbound())
         try:
             await ws.send(
                 json.dumps(
@@ -205,13 +217,26 @@ async def main() -> None:
                 )
             )
             while True:
-                frame = await queue.get()
+                get_task = asyncio.create_task(queue.get())
+                done, _pending = await asyncio.wait(
+                    {get_task, recv_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if recv_task in done:
+                    get_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await get_task
+                    break
+                frame = get_task.result()
                 if frame is None:
                     break
                 await ws.send(_serialize_audio_frame(frame))
         except websockets.exceptions.ConnectionClosed:
             logger.info("Supervisor disconnected from %s", session_id)
         finally:
+            recv_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await recv_task
             broadcaster.unsubscribe(listener_id)
 
     caller_server = await websockets.serve(handle_caller, "0.0.0.0", CALLER_WS_PORT)
