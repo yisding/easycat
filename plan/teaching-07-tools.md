@@ -106,14 +106,24 @@
 
 ## Journal highlights
 
-- `agent.tool_call.started` records with the tool name and args
-- A measurable gap between `tool_call.started` and
-  `tool_call.result` — this is the "filler window"
-- `agent.tool_call.result` records (data redacted by default in
-  the journal — read `peripheral-redaction.md` for the full story)
-- For `SessionAction` flows: `session.action.requested` →
-  `session.action.started` → `session.action.completed` /
-  `session.action.failed`
+- `tool_call_started` records with the tool name and args — the
+  names match the EventBus subscriptions in `session/_session.py`
+  (`_sub(ToolCallStarted, ...)`, `_sub(ToolCallDelta, ...)`,
+  `_sub(ToolCallResult, ...)`)
+- A measurable gap between `tool_call_started` and
+  `tool_call_result` — this is the "filler window"
+- `tool_call_delta` records between the two for providers that
+  stream partial tool output
+- `tool_call_result` records (data redacted by default in the
+  journal — read `peripheral-redaction.md` for the full story)
+- **Heads-up for `SessionAction` flows:** `SessionActionRequested`
+  / `SessionActionStarted` / `SessionActionCompleted` /
+  `SessionActionFailed` are emitted on the `EventBus` but are
+  *not* currently journaled. To inspect the action timeline, wire
+  a bus listener in the chapter script, or wait until the
+  journaling surface gains these subscriptions (same pattern as
+  the tool-call ones above). The chapter should call this gap out
+  rather than assume journal records that do not yet exist.
 - Filler-utterance TTS spans, distinguishable from the main
   response by a tag on the journal record
 

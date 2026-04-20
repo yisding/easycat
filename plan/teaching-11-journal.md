@@ -41,17 +41,25 @@ loads and queries bundles.
    - The journal is structured events with causal ordering and
      stable schemas. You query it.
 2. **A guided investigation: bug 1.** The journal shows the turn
-   entered `PROCESSING` but no `stage.agent.execute` record
-   followed. Trace back: STT emitted a final but `text=""`. Why?
-   Pre-roll off-by-one caused the first frame of speech to be
-   dropped and the STT committed before real speech arrived.
-   Reader is walked through the evidence step by step.
+   entered `PROCESSING` (via a `turn_state_changed` record) but
+   no `stage_start` with `stage="agent"` followed. Trace back: STT
+   emitted a final but `text=""`. Why? Pre-roll off-by-one caused
+   the first frame of speech to be dropped and the STT committed
+   before real speech arrived. Reader is walked through the
+   evidence step by step — including the query shape
+   (`journal.filter_by_stage("agent")` returns the
+   `stage_start`/`stage_complete` pairs stages currently emit; the
+   debugger derives span durations from those pairs).
 3. **Bug 2, semi-guided.** Gaps in TTS output. Hypothesis
    checklist:
    - Sentence splitter? Check — spans look reasonable.
    - Agent stream stalls? Check — tokens arriving steadily.
-   - TTS network retries? **Yes** — look at `stage.tts.execute`
-     span durations; some are 3-5× normal. Retry events confirm.
+   - TTS network retries? **Yes** — pair up
+     `filter_by_stage("tts")` records
+     (`stage_start`/`stage_complete`) and compute their durations;
+     some are 3-5× normal. The `ws_reconnect_attempt` /
+     `ws_reconnect_success` / `ws_reconnect_failure` records
+     confirm.
    Reader follows with lighter prompting.
 4. **Bug 3, unguided.** Reader finds it alone using
    `investigate.py`, writes up their evidence trail, and only
@@ -69,8 +77,14 @@ loads and queries bundles.
 
 ## Exercises
 
-1. Write a `JournalView` query that finds every turn where
-   `stage.agent.execute` exceeded 1500ms.
+1. Write a `JournalView` query that finds every turn whose agent
+   stage took longer than 1500ms. Use
+   `view.filter_by_stage("agent")`, pair up each `stage_start`
+   with its matching `stage_complete` on the same `turn_id`, and
+   compute the duration from their timestamps (stages currently
+   journal `stage_start` / `stage_complete`, not a single
+   `stage.agent.execute` record — the debugger derives spans from
+   those pairs).
 2. Plant your own bug in chapter 9c's code. Dump a bundle. Send it
    to a classmate. Can they find it from the bundle alone?
 3. Pick any bundle from chapters 2-10. Propose three hypotheses for
