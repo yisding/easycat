@@ -134,6 +134,19 @@ def test_init_target_exists_without_force(
     assert "already exists" in normalized
 
 
+def test_init_target_is_existing_file(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NAME already existing as a file must surface E101, not FileExistsError."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "demo").write_text("I'm a file.")
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    # --force must not silently overwrite a file-typed collision.
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git", "--force"])
+    assert result.exit_code == 101
+    assert "EASYCAT_E101" in result.stderr
+
+
 def test_init_bad_json(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = cli.invoke(app, ["init", "demo", "--config", "not json", "--no-git"])
@@ -172,3 +185,215 @@ def test_init_missing_schema_version(
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     assert result.exit_code == 4
     assert "schema_version" in result.stderr
+
+
+# ── Optional-field honoring (stt / tts / mcp_servers) ──────────────────
+
+
+def test_init_honors_stt_string(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`stt="deepgram/flux"` lands in agent.py, .env.example, and pyproject."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "stt": "deepgram/flux",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+    agent_py = (project / "agent.py").read_text()
+    assert 'stt="deepgram/flux"' in agent_py
+    pyproject = (project / "pyproject.toml").read_text()
+    assert "deepgram" in pyproject
+    env_example = (project / ".env.example").read_text()
+    assert "DEEPGRAM_API_KEY" in env_example
+
+
+def test_init_honors_cartesia_provider(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cartesia STT/TTS must wire CARTESIA_API_KEY into .env.example."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "stt": "cartesia",
+            "tts": "cartesia",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    env_example = (tmp_path / "demo" / ".env.example").read_text()
+    assert "CARTESIA_API_KEY" in env_example
+
+
+def test_init_honors_tts_and_mcp_servers(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "tts": "elevenlabs/eleven_flash_v2_5",
+            "mcp_servers": ["stdio:///bin/echo"],
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+    agent_py = (project / "agent.py").read_text()
+    assert 'tts="elevenlabs/eleven_flash_v2_5"' in agent_py
+    assert "mcp_servers=" in agent_py
+    pyproject = (project / "pyproject.toml").read_text()
+    assert "elevenlabs" in pyproject
+    env_example = (project / ".env.example").read_text()
+    assert "ELEVENLABS_API_KEY" in env_example
+
+
+def test_init_default_omits_extra_kwargs(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No stt/tts requested → no extra kwargs (no $-leak in scaffolded files)."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "openai-agents"})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+    for fname in ("agent.py", "pyproject.toml", ".env.example"):
+        assert "$" not in (project / fname).read_text(), f"{fname} leaked a placeholder"
+
+
+# ── Not-yet-wired fields are rejected loudly ──────────────────────────
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("llm", "openai/gpt-4o"),
+        ("transport", "webrtc"),
+    ],
+)
+def test_init_rejects_not_yet_wired_string_fields(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "openai-agents", field: value})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 4
+    assert "EASYCAT_E102" in result.stderr
+
+
+def test_init_rejects_tools_field(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "tools": ["weather"],
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 4
+    assert "EASYCAT_E102" in result.stderr
+
+
+def test_init_rejects_voice_fields_for_text_chat(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "text-chat",
+            "stt": "deepgram/flux",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 4
+    assert "EASYCAT_E102" in result.stderr
+
+
+# ── Provider/MCP validation runs before scaffold writes ────────────────
+
+
+def test_init_rejects_unknown_stt_provider(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Typo in `stt` shortcut fails at scaffold time, not first run."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "stt": "deepgrm/flux",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 2
+    assert "EASYCAT_E104" in result.stderr
+    assert "Did you mean 'deepgram'" in result.stderr
+    # No project files written.
+    assert not (tmp_path / "demo").exists()
+
+
+def test_init_rejects_unknown_tts_provider(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "tts": "elevenlbs/eleven_flash_v2_5",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 2
+    assert "EASYCAT_E104" in result.stderr
+    assert "Did you mean 'elevenlabs'" in result.stderr
+    assert not (tmp_path / "demo").exists()
+
+
+def test_init_rejects_non_uri_mcp_server(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plain names like `'filesystem'` are not yet wired — reject at scaffold."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "mcp_servers": ["filesystem"],
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 4
+    assert "EASYCAT_E102" in result.stderr
+    assert "MCP server URI" in result.stderr
+    assert not (tmp_path / "demo").exists()
+
+
+# ── Doctor next-step uses the project env, not uvx ────────────────────
+
+
+def test_init_next_steps_use_uv_run_easycat_doctor(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    assert "uv run easycat doctor" in result.stderr
+    assert "uvx easycat doctor" not in result.stderr

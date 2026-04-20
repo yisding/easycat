@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from easycat.events import EventBus
+from easycat.tts.cartesia_tts import CartesiaTTS, CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode, ElevenLabsTTS, ElevenLabsTTSConfig
 from easycat.tts.factory import (
@@ -53,6 +54,30 @@ class TestCreateTTSProvider:
         )
         provider = create_tts_provider(config)
         assert isinstance(provider, ElevenLabsTTS)
+
+    def test_create_cartesia(self):
+        config = TTSProviderConfig(
+            provider="cartesia",
+            settings={"api_key": "test-key"},
+        )
+        provider = create_tts_provider(config)
+        assert isinstance(provider, CartesiaTTS)
+
+    def test_cartesia_with_custom_settings(self):
+        config = TTSProviderConfig(
+            provider="cartesia",
+            settings={
+                "api_key": "c-test",
+                "model_id": "sonic-turbo",
+                "voice_id": "voice-custom",
+                "sample_rate": 16000,
+            },
+        )
+        provider = create_tts_provider(config)
+        assert isinstance(provider, CartesiaTTS)
+        assert provider._config.model_id == "sonic-turbo"
+        assert provider._config.voice_id == "voice-custom"
+        assert provider._config.sample_rate == 16000
 
     def test_case_insensitive_provider_name(self):
         config = TTSProviderConfig(
@@ -169,4 +194,23 @@ class TestCreateTTSProviderFromConfig:
         provider = create_tts_provider_from_config(config, session_event_bus)
 
         assert isinstance(provider, ElevenLabsTTS)
+        assert provider._config.event_bus is existing_event_bus
+
+    def test_injects_event_bus_for_cartesia_when_missing(self):
+        config = CartesiaTTSConfig(api_key="test")
+        event_bus = EventBus()
+
+        provider = create_tts_provider_from_config(config, event_bus)
+
+        assert isinstance(provider, CartesiaTTS)
+        assert provider._config.event_bus is event_bus
+
+    def test_keeps_existing_event_bus_for_cartesia(self):
+        existing_event_bus = EventBus()
+        config = CartesiaTTSConfig(api_key="test", event_bus=existing_event_bus)
+        session_event_bus = EventBus()
+
+        provider = create_tts_provider_from_config(config, session_event_bus)
+
+        assert isinstance(provider, CartesiaTTS)
         assert provider._config.event_bus is existing_event_bus
