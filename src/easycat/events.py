@@ -69,6 +69,18 @@ class AudioIn(Event):
     chunk: AudioChunk
 
 
+@dataclass(frozen=True)
+class AudioOut(Event):
+    """Audio chunk delivered to the transport (what the caller actually hears).
+
+    Emitted after a chunk has been drained from the outbound queue and
+    handed to the transport stage, so barge-in flushes and gated audio
+    that is never replayed do not produce spurious events.
+    """
+
+    chunk: AudioChunk
+
+
 # VAD
 @dataclass(frozen=True)
 class VADStartSpeaking(Event):
@@ -370,7 +382,7 @@ class SessionActionFailed(Event):
 # ── Event groups ─────────────────────────────────────────────────────
 # Semantic groupings of EasyCat-level events for bulk subscription.
 
-AUDIO_EVENTS: tuple[type[Event], ...] = (AudioIn,)
+AUDIO_EVENTS: tuple[type[Event], ...] = (AudioIn, AudioOut)
 VAD_EVENTS: tuple[type[Event], ...] = (VADStartSpeaking, VADStopSpeaking)
 STT_EVENTS: tuple[type[Event], ...] = (STTPartial, STTFinal)
 AGENT_EVENTS: tuple[type[Event], ...] = (AgentRequestStarted, AgentDelta, AgentFinal)

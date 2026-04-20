@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.events import AudioIn, EventBus, TTSAudio
+from easycat.events import AudioIn, AudioOut, EventBus
 from easycat.supervisor import SessionAudioBroadcaster
 
 
@@ -39,7 +39,7 @@ async def test_session_audio_broadcaster_fans_out_caller_and_assistant_audio() -
         AudioIn(chunk=caller, session_id=session.session_id, turn_id="turn-1")
     )
     await session.event_bus.emit(
-        TTSAudio(chunk=assistant, session_id=session.session_id, turn_id="turn-1")
+        AudioOut(chunk=assistant, session_id=session.session_id, turn_id="turn-1")
     )
 
     frame_a1 = await asyncio.wait_for(queue_a.get(), timeout=1.0)
@@ -88,7 +88,7 @@ async def test_session_audio_broadcaster_drops_slow_listener_frames_and_closes_c
     sentinel = queue.get_nowait()
     assert sentinel is None
 
-    await session.event_bus.emit(TTSAudio(chunk=_chunk(5), session_id=session.session_id))
+    await session.event_bus.emit(AudioOut(chunk=_chunk(5), session_id=session.session_id))
 
     with pytest.raises(asyncio.QueueEmpty):
         queue.get_nowait()
