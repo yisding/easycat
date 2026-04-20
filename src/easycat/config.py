@@ -102,6 +102,62 @@ def _openai_env_override(api_key: str | None) -> Iterator[None]:
             os.environ["OPENAI_API_KEY"] = prev
 
 
+_EASYCAT_LOG_LEVELS: dict[str, int] = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "warn": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+}
+
+
+def _resolve_easycat_log_level(*, default: int) -> int:
+    """Read ``EASYCAT_LOG_LEVEL`` and map it to a logging level.
+
+    Unknown values fall back to the caller-supplied default so a typo
+    doesn't silence the logger entirely.  Exposed at module scope so
+    both ``EasyCatConfig._apply_debug_defaults`` and
+    ``easycat.run`` converge on the same policy.
+    """
+    raw = os.getenv("EASYCAT_LOG_LEVEL", "").strip().lower()
+    if not raw:
+        return default
+    return _EASYCAT_LOG_LEVELS.get(raw, default)
+
+
+def _autodetect_stt_string() -> str | None:
+    """Pick a provider string based on which STT env var is set.
+
+    OpenAI is the ecosystem's default and gets its own dedicated branch
+    later in ``__post_init__`` so this helper only fires for the
+    non-OpenAI providers where the user opted in by exporting an API
+    key. Order reflects 2026 market share for voice STT.
+    """
+    if os.getenv("DEEPGRAM_API_KEY"):
+        return "deepgram/flux"
+    if os.getenv("ELEVENLABS_API_KEY"):
+        return "elevenlabs"
+    if os.getenv("CARTESIA_API_KEY"):
+        return "cartesia"
+    return None
+
+
+def _autodetect_tts_string() -> str | None:
+    """Pick a TTS provider string based on which env var is set.
+
+    Only dedicated TTS vendors are picked up automatically — Deepgram
+    also offers TTS but the key is usually exported for STT, so we
+    leave the final TTS default to the OpenAI fallback further down in
+    ``__post_init__`` when ``OPENAI_API_KEY`` is also present.
+    """
+    if os.getenv("ELEVENLABS_API_KEY"):
+        return "elevenlabs"
+    if os.getenv("CARTESIA_API_KEY"):
+        return "cartesia/sonic-turbo"
+    return None
+
+
 @dataclass
 class OutboundCallConfig:
     """Configuration for outbound call manager."""
@@ -269,6 +325,24 @@ class EasyCatConfig:
             if isinstance(self.tts, str):
                 self.tts = parse_tts_string(self.tts)
 
+        # Auto-detect a non-OpenAI provider when its env var is set and
+        # the user left the slot empty.  Users can still override by
+        # passing ``stt=...`` / ``tts=...`` explicitly; typed configs
+        # always take precedence over string keys, and string keys take
+        # precedence over this autodetect.  Matches the plan's
+        # "simplest working config has zero provider strings — just an
+        # agent and an env var" principle.
+        if self.stt is None:
+            self.stt = _autodetect_stt_string()
+            if isinstance(self.stt, str):
+                with _openai_env_override(self.openai_api_key):
+                    self.stt = parse_stt_string(self.stt)
+        if self.tts is None:
+            self.tts = _autodetect_tts_string()
+            if isinstance(self.tts, str):
+                with _openai_env_override(self.openai_api_key):
+                    self.tts = parse_tts_string(self.tts)
+
         if self.openai_api_key:
             if self.stt is None:
                 # Default to the Realtime WebSocket STT: audio is streamed
@@ -307,14 +381,21 @@ class EasyCatConfig:
         return EchoCancellationConfig(enabled=enable_aec)
 
     def _apply_debug_defaults(self) -> None:
-        """Enable verbose logging when debug mode is active."""
+        """Enable verbose logging when debug mode is active.
+
+        ``EASYCAT_LOG_LEVEL`` (``debug|info|warning|error``) overrides
+        the default level so users can keep ``debug="light"`` wiring on
+        while dialling the log verbosity up or down without code
+        changes — mirrors ``LIVEKIT_LOG_LEVEL`` / ``UVICORN_LOG_LEVEL``.
+        """
         if not logging.root.handlers:
             logging.basicConfig(
                 level=logging.DEBUG,
                 format="%(asctime)s %(name)s %(levelname)s %(message)s",
             )
-        logging.getLogger("easycat").setLevel(logging.DEBUG)
-        logger.debug("EasyCat debug mode enabled")
+        level = _resolve_easycat_log_level(default=logging.DEBUG)
+        logging.getLogger("easycat").setLevel(level)
+        logger.debug("EasyCat debug mode enabled (level=%s)", logging.getLevelName(level))
 
     def _validate(self) -> None:
         if self.stt is None:
@@ -348,6 +429,48 @@ class EasyCatConfig:
                         f"Invalid MCP server URI: {uri!r}. "
                         f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
                     )
+
+    # ── Factory presets ──────────────────────────────────────────
+    #
+    # Classmethod shortcuts that pick sensible transport defaults for
+    # the three canonical deployment surfaces (local mic / browser /
+    # phone) and the text REPL used for agent iteration.  Users can
+    # still override any field via keyword argument — the preset only
+    # fills the transport default when the caller didn't supply one.
+    # Documented in ``peripheral-dx-onboarding.md``.
+
+    @classmethod
+    def mic(cls, **kwargs: Any) -> EasyCatConfig:
+        """Local-microphone preset — the default developer setup."""
+        kwargs.setdefault("transport", LocalTransportConfig())
+        return cls(**kwargs)
+
+    @classmethod
+    def browser(cls, **kwargs: Any) -> EasyCatConfig:
+        """WebRTC-in-the-browser preset.
+
+        Enables echo cancellation by default because browser clients
+        loop transport audio back through the mic.
+        """
+        kwargs.setdefault("transport", WebRTCTransportConfig())
+        kwargs.setdefault("enable_echo_cancellation", True)
+        return cls(**kwargs)
+
+    @classmethod
+    def phone(cls, **kwargs: Any) -> EasyCatConfig:
+        """Inbound telephony preset.
+
+        Uses the Twilio Media Streams transport and leaves echo-cancel
+        on its tri-state default (off for PSTN, which has no loopback).
+        """
+        kwargs.setdefault("transport", TwilioTransportConfig())
+        return cls(**kwargs)
+
+    # Text-mode sessions flow through :func:`create_text_session`
+    # because they skip audio provider construction entirely; a
+    # ``EasyCatConfig.text()`` classmethod would be misleading since the
+    # config itself requires STT and TTS providers.  Document the text
+    # entry point in ``peripheral-dx-onboarding.md``.
 
 
 def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
@@ -551,7 +674,62 @@ def create_session(config: EasyCatConfig) -> Session:
             event_bus,
         )
 
+    if config.debug == "full":
+        _maybe_launch_debugger_ui(session)
+
     return session
+
+
+def _maybe_launch_debugger_ui(session: Session) -> None:
+    """Spin up the interactive debugger on localhost when debug="full".
+
+    The debugger is an optional extra (``easycat[debugger]`` → aiohttp);
+    when it isn't installed we log once and keep the session usable
+    rather than crashing.  Pytest and CI runs are detected via
+    ``PYTEST_CURRENT_TEST`` so the auto-launch never fights a test
+    harness that already has the port or the loop.  Host/port
+    overrides come from ``EASYCAT_DEBUGGER_PORT`` because the debugger
+    UI is a local-dev convenience, not a production surface.
+    """
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("EASYCAT_DEBUGGER_DISABLE"):
+        return
+    # aiohttp is the real gate — the debugger module imports fine
+    # without it, but the server fails the moment ``web.run_app`` is
+    # called.  Probe explicitly so we log a clean skip message instead
+    # of crashing a background thread.
+    try:
+        import aiohttp  # noqa: F401
+    except ImportError:
+        logger.info(
+            "debug='full' requested but easycat[debugger] is not installed; "
+            "skipping auto-launch. `pip install easycat[debugger]` to enable."
+        )
+        return
+
+    try:
+        from easycat.debugger import serve_session
+    except ImportError:
+        logger.info(
+            "debug='full' requested but the debugger module is unavailable; skipping auto-launch."
+        )
+        return
+
+    try:
+        port = int(os.getenv("EASYCAT_DEBUGGER_PORT", "8765"))
+    except ValueError:
+        port = 8765
+    open_browser = os.getenv("EASYCAT_DEBUGGER_OPEN_BROWSER", "1") != "0"
+    try:
+        serve_session(
+            session,
+            port=port,
+            open_browser=open_browser,
+            in_thread=True,
+        )
+    except OSError as exc:
+        logger.warning("Could not start debugger UI on port %s: %s", port, exc)
+    except Exception:
+        logger.exception("Debugger UI failed to start; continuing without it.")
 
 
 def create_text_session(

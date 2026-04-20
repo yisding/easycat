@@ -19,10 +19,19 @@ class _DummyAgent:
         return text
 
 
-def test_openai_agents_voice_example_imports():
+def test_openai_agents_voice_example_imports(monkeypatch: pytest.MonkeyPatch):
+    pytest.importorskip("agents")
+    # The example uses ``easycat.run(...)`` at module scope; stub it so
+    # importing the module doesn't block on a real voice session.
+    import easycat
+
+    monkeypatch.setattr(easycat, "run", lambda config: None)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    import importlib
+
     import examples.openai_agents_voice as openai_agents_voice
 
-    assert callable(openai_agents_voice.main)
+    importlib.reload(openai_agents_voice)
 
 
 def test_ws_server_example_imports():
@@ -31,10 +40,17 @@ def test_ws_server_example_imports():
     assert callable(ws_server.main)
 
 
-def test_pydantic_ai_example_imports():
+def test_pydantic_ai_example_imports(monkeypatch: pytest.MonkeyPatch):
+    pytest.importorskip("pydantic_ai")
+    import easycat
+
+    monkeypatch.setattr(easycat, "run", lambda config: None)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    import importlib
+
     import examples.pydantic_ai_voice as pydantic_example
 
-    assert callable(pydantic_example.main)
+    importlib.reload(pydantic_example)
 
 
 def test_webrtc_observability_example_imports():
@@ -171,6 +187,16 @@ def _python_executable() -> str:
     ],
 )
 def test_examples_can_run_as_scripts_without_package_import_errors(script_path: str):
+    # Skip examples whose optional agent framework isn't installed —
+    # this test is about EasyCat's own import graph, not the agent
+    # framework's availability.
+    if "openai_agents" in script_path or "function_tools_openai" in script_path:
+        pytest.importorskip("agents")
+    if "pydantic_ai" in script_path or "function_tools_pydantic" in script_path:
+        pytest.importorskip("pydantic_ai")
+    if "session_actions_pydantic" in script_path:
+        pytest.importorskip("pydantic_ai")
+
     env = dict(os.environ)
     env.pop("OPENAI_API_KEY", None)
 
@@ -185,7 +211,15 @@ def test_examples_can_run_as_scripts_without_package_import_errors(script_path: 
 
     assert completed.returncode != 0
     assert "ModuleNotFoundError" not in completed.stderr
-    assert "OPENAI_API_KEY is required." in completed.stderr
+    # Examples using ``easycat.run(...)`` / ``EasyCatConfig.*()`` fail at
+    # config validation with "STT configuration is required." when no
+    # provider env var is set; older examples still call ``require_env``
+    # and emit "OPENAI_API_KEY is required." — accept either so the
+    # smoke test stays meaningful while examples migrate to ``run()``.
+    assert (
+        "OPENAI_API_KEY is required." in completed.stderr
+        or "STT configuration is required." in completed.stderr
+    )
 
 
 def test_twilio_example_factory():

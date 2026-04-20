@@ -4,6 +4,49 @@
 > debug-first thesis in `essential-debug-first-runtime.md`. It is,
 > however, the most visible user-facing work in the overall redesign, and
 > the one the outside world will judge EasyCat on first.
+
+## Status (2026-04)
+
+Shipped:
+
+- `easycat.run(config)` with auto-attached runtime feedback
+  (`helpers.py:63`).
+- String-keyed provider selection (`stt="deepgram/flux"`,
+  `tts="cartesia/sonic-3"`) with fuzzy suggestions on typos
+  (`stt/factory.py`, `tts/factory.py`).
+- `OPENAI_API_KEY` auto-detection → OpenAI chain default
+  (`config.py:255`).
+- Stable `EASYCAT_Exxx` error codes with headline / cause / fix / example /
+  related (`errors.py`).
+- Third-party traceback frame collapse (`runtime/records.py:50`).
+- `debug="light" | "full"`, `export_debug_bundle()` (`config.py:212`,
+  `session/_session.py:987`).
+- `async with session:` context-manager support (`session/_session.py`).
+- `EasyCatConfig.mic() / .browser() / .phone() / .text()` factory
+  presets (`config.py`).
+- Deepgram / ElevenLabs / Cartesia env-var auto-detection when a
+  provider string is omitted (`config.py`).
+- `EASYCAT_LOG_LEVEL` env var honoured by `run()` (`helpers.py`).
+
+Still remaining:
+
+- Example line-count budgets (pydantic_ai_voice.py is 57 lines against
+  an ≤8 target; openai_agents_voice.py is 49 against ≤7). No CI
+  enforcement yet.
+- `EasyCatConfig.offline()` preset (depends on Kyutai Pocket TTS +
+  Whisper-small + Smart Turn v3.1 wiring).
+- `ExceptionGroup` + PEP 678 `__notes__` across the pipeline.
+- Full structlog dev/prod renderer split; today the logger is stdlib-
+  only.
+- Config flattening pass: currently 27 top-level fields, target ≤22.
+- Advanced knobs promised by the plan that aren't yet config fields:
+  `record_to=`, `warmup=`, `max_session_cost_usd=`,
+  `smart_turn_sensitivity=`, `latency_budget=`.
+
+The high-leverage DX wins are shipped; the remaining work is either
+ecosystem-gated (offline preset on Kyutai) or mechanical cleanup
+(line budgets, structlog, field flattening).
+
 >
 > **Sibling peripheral docs:**
 >

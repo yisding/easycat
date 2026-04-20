@@ -6,6 +6,53 @@
 > fidelity classes (artifact / simulated / live). This file is about
 > everything that builds on top of those primitives: automated evals,
 > time-travel forking, and interactive debugging surfaces.
+
+## Status (2026-04)
+
+Shipped:
+
+- Interactive debugger UI — journal-driven aiohttp server on port 8765
+  with live pipeline graph, record inspector, per-stage latency
+  waterfall, cost panel, synchronized audio playback, transcript view,
+  and Replay from UI (`src/easycat/debugger/server.py`,
+  `src/easycat/debugger/static/index.html`). Browser auto-launches on
+  server start.
+- Bundle-as-fixture loading for pytest (`load_bundle()` in
+  `src/easycat/debug/testing.py`).
+- `CommittableCheckpoint` metadata (`debug/bundle.py`) — the data
+  structure for forked replay exists even though the fourth fidelity
+  class does not yet consume it.
+- Three replay fidelity classes: `ARTIFACT`, `SIMULATED`, `LIVE`
+  (`runtime/replay.py`).
+- Low-level testing assertion helpers on journal records:
+  `assert_exact_match`, `assert_regex`, `assert_turn_completed`,
+  `assert_no_error` (`src/easycat/debug/testing.py`).
+- Pytest plugin registration under `[project.entry-points."pytest11"]`
+  exposing the bundle fixture out of the box.
+- Auto-launch of the debugger UI when `debug="full"` is set
+  (`config.py` glue into `debugger.server.serve_in_background()`).
+
+Not started:
+
+- Persona-driven Simulator + Judge (Vapi Evals / Hamming / Coval
+  pattern). LLM-as-judge helper (`assert_llm_judge`) is not wired.
+- `forked_replay` fourth fidelity class and the matching "Fork from
+  here" UI button. Depends on the bridge execution cursor work in the
+  essential plan.
+- `checkpoint_id` (`cp_87`) vocabulary in user-facing APIs — internally
+  the journal still exposes monotonic `sequence`.
+- Terminal ASCII dev waterfall (`[vad 12ms][stt 340ms…]`) with
+  Rich `Live` in-flight rendering and budget markers.
+- Auto-reload via `easycat.run(..., reload=True)` and the
+  `CodeReloaded` checkpoint divider it would write.
+- `EasyCatConfig(record_to=".easycat/recordings/")` — session
+  auto-capture to a timestamped bundle directory.
+
+The interactive debugger is the headline piece that landed early; the
+testing surface is the obvious next priority because it unblocks the
+"ship a fix with a regression test in one PR" flow the bundle-as-
+fixture design was built for.
+
 >
 > **Sibling peripheral docs:**
 >

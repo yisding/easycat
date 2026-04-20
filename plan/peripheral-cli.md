@@ -5,6 +5,52 @@
 > surface that turns the essential plan's journal from an internal
 > design win into something a developer actually uses on their first
 > hour with EasyCat and on their worst hour with EasyCat.
+
+## Status (2026-04)
+
+M1 (scaffolding) is effectively done:
+
+- Typer entry point registered in `pyproject.toml`; `easycat --version`
+  and the journey-ordered help menu work.
+- `easycat init` — full `-t/--template`, `-c/--config`, `--list-templates`,
+  `--force`, `--no-git`, `--json` surface with interactive prompts
+  guarded by a TTY check and schema-v1 validator with fuzzy key
+  suggestions.
+- `easycat doctor` — checks 1–5 (Python version, extras, env vars,
+  provider reachability, onnxruntime).
+- `easycat explain` — error code registry with `exit-codes`,
+  `init-schema`, `json-schema` meta-entries and fuzzy suggestions on
+  unknown codes.
+- Output contract (`--json`, stdout/stderr split, exit-code mapping)
+  and top-level `EasyCatError` handler.
+- Three templates: `openai-agents`, `pydantic-ai`, `text-chat`.
+
+M2 gaps:
+
+- Templates `pydantic-ai-workflow`, `twilio-phone`, `webrtc-browser`
+  not shipped.
+- Doctor checks 6–8 (microphone, journal writable, disk space) and the
+  `--fix` auto-remediation path still TODO.
+- Template `agent.py` line budgets overshoot: `openai-agents` 24 lines
+  (target ≤15), `pydantic-ai` 21 lines (target ≤12), `text-chat` 18
+  lines (target ≤8). Templates currently wire a `current_time` tool
+  instead of the plan's `calculator` + `filesystem` MCP; the tool is
+  working, but the plan text should be updated to match the shipped
+  content or vice-versa.
+
+M3 (journal debugging) is not started:
+
+- `easycat bundles list | show | export` — `src/easycat/cli/debug/`
+  does not exist; no journal debugging commands are wired into the
+  Typer app or the help menu.
+- `easycat replay` — same. The library-level `RunBundle` + replay
+  fidelity classes exist (`debug/bundle.py`, `runtime/replay.py`), so
+  this is pure CLI-shell work, but it is the biggest remaining chunk.
+
+The `uvx` zero-install guarantee, `[project.scripts]` entry, and
+error-code registry-backed `explain` surface all meet the plan's
+guardrails today.
+
 >
 > **Sibling peripheral docs:**
 >
