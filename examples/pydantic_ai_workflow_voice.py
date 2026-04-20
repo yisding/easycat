@@ -7,8 +7,7 @@ and persists that state across turns.
 
 Setup:
   export OPENAI_API_KEY="..."
-  uv add easycat[local]
-  uv add easycat[openai]
+  uv sync --extra quickstart
   uv add easycat[pydantic-ai]
   uv run python examples/pydantic_ai_workflow_voice.py
 """

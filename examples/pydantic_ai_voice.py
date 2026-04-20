@@ -1,13 +1,12 @@
 """Local voice bot demo using a single PydanticAI agent.
 
-If your app needs multiple specialists or step-based control flow, prefer:
-  - examples/pydantic_ai_workflow_voice.py
-  - examples/pydantic_ai_support_workflow.py
+If your app needs multiple specialists or step-based control flow, see
+``examples/pydantic_ai_workflow_voice.py``.  For function tools, see
+``examples/function_tools_pydantic.py``.
 
 Setup:
   export OPENAI_API_KEY="..."
-  uv add easycat[local]
-  uv add easycat[openai]
+  uv sync --extra quickstart
   uv add easycat[pydantic-ai]
   uv run python examples/pydantic_ai_voice.py
 """

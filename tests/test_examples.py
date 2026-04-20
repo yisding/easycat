@@ -19,10 +19,10 @@ class _DummyAgent:
         return text
 
 
-def test_local_chat_example_imports():
-    import examples.local_chat as local_chat
+def test_openai_agents_voice_example_imports():
+    import examples.openai_agents_voice as openai_agents_voice
 
-    assert callable(local_chat.main)
+    assert callable(openai_agents_voice.main)
 
 
 def test_ws_server_example_imports():
@@ -43,6 +43,98 @@ def test_webrtc_observability_example_imports():
     assert callable(webrtc_observability.main)
 
 
+def test_function_tools_openai_example_imports():
+    import examples.function_tools_openai as function_tools_openai
+
+    assert callable(function_tools_openai.main)
+
+
+def test_function_tools_pydantic_example_imports():
+    import examples.function_tools_pydantic as function_tools_pydantic
+
+    assert callable(function_tools_pydantic.main)
+
+
+def test_push_to_talk_example_imports():
+    import examples.push_to_talk as push_to_talk
+
+    assert callable(push_to_talk.main)
+
+
+def test_smart_turn_example_imports():
+    import examples.smart_turn_demo as smart_turn_demo
+
+    assert callable(smart_turn_demo.main)
+
+
+def test_combined_providers_example_imports():
+    import examples.combined_providers as combined_providers
+
+    assert callable(combined_providers.main)
+
+
+def test_custom_tts_provider_example_imports():
+    import examples.custom_tts_provider as custom_tts_provider
+
+    assert callable(custom_tts_provider.main)
+
+
+def test_custom_vad_provider_example_imports():
+    import examples.custom_vad_provider as custom_vad_provider
+
+    assert callable(custom_vad_provider.main)
+
+
+def test_custom_stt_provider_example_imports():
+    import examples.custom_stt_provider as custom_stt_provider
+
+    assert callable(custom_stt_provider.main)
+
+
+def test_deepgram_stt_example_imports():
+    import examples.deepgram_stt as deepgram_stt
+
+    assert callable(deepgram_stt.main)
+
+
+def test_elevenlabs_tts_example_imports():
+    import examples.elevenlabs_tts as elevenlabs_tts
+
+    assert callable(elevenlabs_tts.main)
+
+
+def test_cartesia_voice_example_imports():
+    import examples.cartesia_voice as cartesia_voice
+
+    assert callable(cartesia_voice.main)
+
+
+def test_debug_bundle_example_imports():
+    import examples.debug_bundle as debug_bundle
+
+    assert callable(debug_bundle.main)
+
+
+def test_pydantic_ai_workflow_voice_example_imports():
+    pytest.importorskip("pydantic")
+    import examples.pydantic_ai_workflow_voice as pydantic_workflow
+
+    assert callable(pydantic_workflow.main)
+
+
+def test_session_actions_openai_example_imports():
+    pytest.importorskip("agents")
+    import examples.session_actions_openai as session_actions_openai
+
+    assert callable(session_actions_openai.main)
+
+
+def test_session_actions_pydantic_example_imports():
+    import examples.session_actions_pydantic as session_actions_pydantic
+
+    assert callable(session_actions_pydantic.main)
+
+
 def _python_executable() -> str:
     candidate = sys.executable or ""
     if candidate:
@@ -57,12 +149,25 @@ def _python_executable() -> str:
 @pytest.mark.parametrize(
     "script_path",
     [
-        "examples/local_chat.py",
+        "examples/openai_agents_voice.py",
         "examples/ws_server.py",
         "examples/ws_browser_example.py",
         "examples/webrtc_server.py",
         "examples/webrtc_observability_server.py",
         "examples/pydantic_ai_voice.py",
+        "examples/function_tools_openai.py",
+        "examples/function_tools_pydantic.py",
+        "examples/session_actions_pydantic.py",
+        "examples/push_to_talk.py",
+        "examples/smart_turn_demo.py",
+        "examples/combined_providers.py",
+        "examples/cartesia_voice.py",
+        "examples/deepgram_stt.py",
+        "examples/elevenlabs_tts.py",
+        "examples/debug_bundle.py",
+        "examples/custom_stt_provider.py",
+        "examples/custom_tts_provider.py",
+        "examples/custom_vad_provider.py",
     ],
 )
 def test_examples_can_run_as_scripts_without_package_import_errors(script_path: str):
