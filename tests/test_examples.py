@@ -31,6 +31,12 @@ def test_ws_server_example_imports():
     assert callable(ws_server.main)
 
 
+def test_ws_supervisor_server_example_imports():
+    import examples.ws_supervisor_server as ws_supervisor_server
+
+    assert callable(ws_supervisor_server.main)
+
+
 def test_pydantic_ai_example_imports():
     import examples.pydantic_ai_voice as pydantic_example
 
@@ -59,6 +65,7 @@ def _python_executable() -> str:
     [
         "examples/local_chat.py",
         "examples/ws_server.py",
+        "examples/ws_supervisor_server.py",
         "examples/ws_browser_example.py",
         "examples/webrtc_server.py",
         "examples/webrtc_observability_server.py",

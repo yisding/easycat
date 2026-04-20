@@ -96,6 +96,7 @@ _register(
     "TransferPlan",
 )
 _register("easycat.session_manager", "SessionManager")
+_register("easycat.supervisor", "SessionAudioBroadcaster", "SupervisorAudioFrame")
 _register(
     "easycat.turn_manager",
     "TurnManager",
@@ -489,6 +490,7 @@ if TYPE_CHECKING:
         create_stt_provider,
         parse_stt_string,
     )
+    from easycat.supervisor import SessionAudioBroadcaster, SupervisorAudioFrame
     from easycat.telephony.session_actions import (
         TwilioSessionActionConfig,
         TwilioSessionActionExecutor,
