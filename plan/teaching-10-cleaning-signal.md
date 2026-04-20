@@ -59,10 +59,19 @@
    itself. Walk through `easycat.echo_cancellation` —
    `EchoCanceller` protocol, `LiveKitAEC`, `PassthroughAEC`.
 5. **Pipeline order matters.**
-   `transport → AEC → NR → VAD → STT`. If NR runs first, AEC's
-   subtraction math is off (NR may have already attenuated parts
-   of the reference signal). If VAD runs before either, both miss
-   their job. Demonstrate by reordering and showing it breaks.
+   Production order is `transport → NR → AEC → VAD → STT`. Two
+   things to notice:
+   - NR runs before AEC. AEC's adaptive filter still converges
+     because it sees the *unprocessed* reference signal on one
+     side and the NR-processed mic on the other — it learns the
+     combined (echo-path ∘ NR) mapping and subtracts accordingly.
+     Swapping to AEC → NR is also a defensible design; the
+     framework picks NR-first so NR sees the rawest possible
+     noise spectrum.
+   - VAD must run *after* both. If VAD ran before NR it would
+     false-trigger on stationary noise; if it ran before AEC it
+     would false-trigger on the bot's own voice. Demonstrate each
+     reorder and show what breaks.
 6. **Half-duplex vs full-duplex.** Phones (especially cellular)
    and speakerphones often operate half-duplex by hardware: only
    one direction transmits audio at a time. AEC is what makes a
@@ -87,7 +96,10 @@
 - The **reference signal**: what AEC needs that NR doesn't, and
   why session wires it from the TTS output side
 - Pipeline order:
-  `transport → AEC → NR → VAD → STT → agent → TTS → transport`
+  `transport → NR → AEC → VAD → STT → agent → TTS → transport`
+  (matches the production flow documented in
+  `src/easycat/session/_session.py::_run_pipeline` and the
+  `AudioStage` chain in `src/easycat/stages/audio.py`)
 - Half-duplex vs full-duplex; speakerphone vs headset
 - **Double-talk** as the AEC failure mode that maps onto chapter
   9's barge-in scenario — these are the same physical problem
@@ -110,11 +122,13 @@
 
 ## Journal highlights
 
-- `stage.noise_reducer.execute` records, one per frame
-- `stage.echo_canceller.execute` records, one per frame
+- `audio` stage records, one `stage_start`/`stage_complete` pair
+  per frame (NR + AEC run inside a single `AudioStage`; the
+  snapshot's `noise_reducer` and `echo_canceller` fields on each
+  record name the live backends)
 - VAD activation counts under each combination, presented as a
   before/after table
-- Per-backend latency in each cleaning span
+- Per-backend latency derived from the `audio` stage spans
 
 ## Files created
 

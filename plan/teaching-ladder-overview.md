@@ -17,7 +17,7 @@ The ladder splits cleanly into three movements:
 
 > **Status**: planning. No teaching code has been written yet. Each
 > file in this ladder is a per-chapter plan; the chapters themselves
-> will live in `examples/teaching/` once written.
+> will live in `docs/teaching/` once written.
 
 ## Pedagogical principles
 
@@ -30,11 +30,12 @@ repositories we surveyed. Every chapter must honor all five.
 2. **Runnable at every checkpoint.** Every chapter ends with a
    program the reader can invoke and hear. No "it'll work once we
    add three more files."
-3. **Wrong version first.** Chapters 3, 5, and 8 deliberately ship
+3. **Wrong version first.** Chapters 3, 5, and 9 deliberately ship
    broken or naive implementations to motivate the fix. Do not
    collapse them with the next chapter.
 4. **Observable internal state.** Starting at chapter 2, every
-   chapter dumps a `RunBundle` the reader can scrub. The journal
+   chapter either dumps a `RunBundle` the reader can scrub or
+   consumes pre-recorded ones (chapters 11 and 12). The journal
    is the single source of truth for "what just happened."
 5. **One axis of complexity per step.** No chapter may introduce
    two new concepts. If a chapter is about VAD, it is not also
@@ -92,10 +93,10 @@ repositories we surveyed. Every chapter must honor all five.
   it" exercise. Longer than one page = too long.
 - No chapter may introduce a concept already covered by a prior
   chapter. Strict ladder discipline, Nand2Tetris-style.
-- Chapters 2+ always emit a `RunBundle` to
-  `docs/teaching/NN-name/runs/` (gitignored except for the
-  planted bundles chapter 11 ships intentionally and the
-  evaluation bundles chapter 12 ships).
+- Chapters 2-10 and 13 emit a `RunBundle` per run to
+  `docs/teaching/NN-name/runs/` (gitignored). Chapters 11 and 12
+  don't emit; they ship pre-recorded bundles in
+  `docs/teaching/NN-name/bundles/` that are checked in.
 - A top-level `docs/teaching/README.md` is the landing page: the
   table from this plan, plus a "start here" pointer to chapter 0.
 
@@ -121,8 +122,10 @@ specifically to keep teaching code small:
   `export_debug_bundle` are all reachable as `easycat.*` so no
   chapter needs a submodule import for a core concept.
 - **`JournalView.filter_by_stage` / `filter_by_turn` /
-  `lookup_by_sequence`** — mirror the existing `RunBundle`
-  methods so chapter 10 can teach one query surface.
+  `lookup_by_sequence`** — already present in
+  `src/easycat/runtime/journal.py`; they mirror the `RunBundle`
+  methods so chapter 11 teaches one query surface across live
+  journals and serialized bundles.
 
 Two session helpers were promoted from private to public modules
 to support chapter 6 and chapter 9 walk-throughs:
@@ -181,7 +184,7 @@ Each `teaching-NN-title.md` follows this template:
 4. **What you build** (concrete deliverables)
 5. **Narrative arc** (the walk-through)
 6. **(If applicable) The naive version** — the wrong-version-first
-   payload. Chapters 3, 5, 8 center on this.
+   payload. Chapters 3, 5, 9 center on this.
 7. **Key concepts** (with pointers to existing EasyCat source files)
 8. **Exercises** (1-3 "try breaking it" prompts)
 9. **Journal highlights** (what records should appear in the bundle)

@@ -100,8 +100,9 @@ intent that code can't.
 
 - The reader solves bug 3 unassisted.
 - The reader can explain, in a sentence, *why* observability is a
-  first-class feature of EasyCat and not an afterthought — and can
-  point to the specific commits or plans that encoded that decision.
+  first-class feature of EasyCat and not an afterthought, citing
+  the design rationale in
+  `plan/essential-debug-first-runtime.md`.
 
 ## Links forward
 

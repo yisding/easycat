@@ -48,7 +48,7 @@ Both write a `RunBundle` to
 5. **First journal dump.** Open the bundle with `load_bundle()`.
    Read the STT records. Every partial and final is recorded with
    a timestamp. This is your first look at the substrate chapter
-   10 will fully expose.
+   11 will fully expose.
 
 ## Key concepts
 

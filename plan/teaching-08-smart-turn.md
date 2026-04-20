@@ -5,7 +5,8 @@
 
 ## Prerequisites
 
-- Chapter 6
+- Chapter 7 (the starting-point code copies from there; the
+  tool-call wiring carries forward unused for now)
 - The smart-turn ONNX model (downloadable via the existing
   `smart_turn.py` setup path)
 
@@ -27,8 +28,9 @@
   exercise it again).
 - Wires `smart_turn.py` into the turn-detection path.
 - A sibling script `replay_and_compare.py` runs a saved recording
-  through both chapter 6's VAD-silence pipeline and this chapter's
-  smart-turn pipeline and prints a timing table.
+  through both chapter 7's VAD-silence pipeline (the
+  timeout-based turn detector inherited from chapter 4) and this
+  chapter's smart-turn pipeline and prints a timing table.
 
 ## Narrative arc
 
@@ -42,8 +44,16 @@
 3. **Smart-turn classifies.** Input: recent audio + transcript.
    Output: P(end-of-turn). When confident, fire the turn end
    immediately — skip most of the silence wait.
-4. **Integration.** Where in the `turn_manager` FSM does the
-   smart-turn call fire? Walk through `src/easycat/smart_turn.py`.
+4. **Integration — in the toy detector first.** Extend the
+   `MiniTurnDetector` you built in chapter 4 to call smart-turn
+   whenever it sees a short pause *inside* a speech segment. If
+   smart-turn says "end-of-turn", emit `speech_ended` immediately
+   instead of waiting out the full silence timeout. ~20 new lines.
+   Then, as reference reading, open
+   `src/easycat/turn_manager.py` and find where the production
+   FSM fires smart-turn — the same idea, wired through the
+   5-state machine so it cooperates with barge-in (chapter 9) and
+   cancel tokens.
 5. **Async inference.** `run_in_executor` so ONNX doesn't block
    the event loop. Measure the inference time — should be <50ms
    per call on modern hardware.
@@ -73,9 +83,9 @@
 
 - `smart_turn.prediction` events with confidence scores and the
   audio window used
-- Gap from last speech frame to turn-committed event (should be
-  <300ms vs ~800ms from chapter 6)
-- Side-by-side: chapter 6 bundle's VAD-timeout vs this chapter's
+- Gap from last speech frame to `speech_ended` event (should be
+  <300ms vs ~800ms from chapter 7)
+- Side-by-side: chapter 7 bundle's VAD-timeout vs this chapter's
   smart-turn commits on the same recording
 
 ## Files created
@@ -87,7 +97,7 @@
 ## Success criteria
 
 - The reader has halved (or better) end-of-turn latency vs chapter
-  6 on a real recording, measured by journal.
+  7 on a real recording, measured by journal.
 - The reader has seen smart-turn misfire at least once and can
   describe *why* in terms of the input signal.
 

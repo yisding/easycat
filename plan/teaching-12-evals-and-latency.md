@@ -76,8 +76,9 @@
 - **Multiple metrics, not a single score.** No one number captures
   voice quality. WER + latency P95 + LLM-judge + manual spot
   checks.
-- **`JournalView.filter_by_stage`** (added in chapter 11) — the
-  query primitive for budget reads.
+- **`JournalView.filter_by_stage`** (introduced in chapter 11;
+  lives in `src/easycat/runtime/journal.py`) — the query
+  primitive for budget reads.
 - The peripheral plans `peripheral-eval-and-debugger-ui.md` and
   `peripheral-observability-and-cost.md` codify what this chapter
   hand-rolls.

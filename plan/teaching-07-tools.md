@@ -20,7 +20,8 @@
 3. Distinguish between **inline tools** (run during the turn,
    result fed back to the LLM) and **session actions** (run *after*
    the turn — `EndCallAction`, `TransferCallAction`, `SendDTMFAction`,
-   `SendSMSAction` in `easycat.session.actions`).
+   `SendSMSAction`, plus the escape-hatch `CustomAction` in
+   `easycat.session.actions`).
 4. Read the journal to understand the timeline of a tool-bearing
    turn: agent → tool start → tool result → agent (resumed) → TTS.
 
@@ -64,12 +65,18 @@
    hands off to a human. These are not tools — they are
    side-effects the agent requests *after* its turn. Show the
    action queue (`SessionActions`) and the executor surface.
-5. **Streaming events for tools.** Walk through
-   `AgentStreamEventType.TOOL_CALL_STARTED`,
-   `TOOL_CALL_DELTA`, `TOOL_CALL_RESULT` in
-   `src/easycat/integrations/agents/_legacy_types.py`. Show how
+5. **Streaming events for tools.** Two parallel vocabularies,
+   easy to conflate:
+   - Internal enum in
+     `src/easycat/integrations/agents/_legacy_types.py`:
+     `AgentStreamEventType.TOOL_STARTED`, `TOOL_DELTA`,
+     `TOOL_RESULT` (no `_CALL_` infix).
+   - EventBus events in `easycat.events`: `ToolCallStarted`,
+     `ToolCallDelta`, `ToolCallResult` (with `Call`).
+   The adapter layer translates between them. Show how
    `consume_agent_stream` (chapter 6's reference reading) handles
-   each.
+   each branch of the enum and emits the corresponding EventBus
+   event.
 6. **A common bug: speaking the tool result text.** Some agents
    leak the JSON back into the response stream. Demo it.
    Filter rule: tool deltas go to the journal, not to TTS.
@@ -79,10 +86,10 @@
 - `easycat.events.ToolCallStarted` / `ToolCallDelta` /
   `ToolCallResult`
 - `easycat.integrations.agents._legacy_types.AgentStreamEventType`
-  — the `TOOL_*` branch
+  — the `TOOL_STARTED` / `TOOL_DELTA` / `TOOL_RESULT` branch
 - `easycat.session.actions` — `SessionAction`, `EndCallAction`,
   `TransferCallAction`, `SendDTMFAction`, `SendSMSAction`,
-  `SessionActions`
+  `CustomAction`, `SessionActions`
 - The filler-vs-silence decision as a UX choice, not a technical
   one
 - Tool latency budget: the user only tolerates so much silence
@@ -121,8 +128,10 @@
 - The reader has heard the difference between "tool with filler"
   and "tool without filler" on the same prompt and can defend the
   choice for each.
-- The reader can name the four `SessionAction` types and explain
-  why each one is a session action rather than a tool.
+- The reader can name the five `SessionAction` types
+  (`EndCallAction`, `TransferCallAction`, `SendDTMFAction`,
+  `SendSMSAction`, `CustomAction`) and explain why each one is a
+  session action rather than a tool.
 - The reader has caught and fixed at least one "tool result leaks
   to TTS" bug — either induced by an exercise or in their own
   implementation.

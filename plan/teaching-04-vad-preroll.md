@@ -69,8 +69,9 @@ minimum that shows it, then point at the real thing.
 
 ## Key concepts
 
-- `src/easycat/vad.py::create_vad()`; fallback order
-  Krisp → Silero → passthrough
+- `src/easycat/vad.py::create_vad()`; auto-backend fallback order
+  Silero → FunASR → TEN → Krisp (no passthrough — at least one
+  backend must load, and Silero's bundled ONNX model always does)
 - `src/easycat/turn_manager.py` — the production version, used as
   *read-only reference material* in this chapter
 - Pre-roll buffer: deque of recent frames, flushed on VAD-on

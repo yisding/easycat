@@ -40,9 +40,8 @@
 | `openai-stack` | ✓ | ✓ | ✓ |
 | `deepgram-eleven` | ✓ | ✓ | ✓ |
 
-(The `local-offline` and `pydanticai-mixed` mixes from the
-original ch 11 plan are exercises, not core presets, to keep the
-chapter focused.)
+(The `local-offline` and `pydanticai-mixed` mixes are left as
+exercises rather than core presets, to keep the chapter focused.)
 
 - Each preset dumps its own `RunBundle`, all with matching
   timestamps so `latency_budget.py` from chapter 12 can diff them
@@ -54,8 +53,8 @@ chapter focused.)
    context, the Protocols now *feel* like they're earning their
    keep.
 2. **Axis 1, swap providers (familiar territory).**
-   - `openai-stack` on Local — the chapter-11 baseline (now from
-     `latency_budget.py`).
+   - `openai-stack` on Local — the baseline, measured with
+     chapter 12's `latency_budget.py`.
    - `deepgram-eleven` on Local — same shape, different latency
      distribution. Show the journal diff.
 3. **Axis 2, swap transport (the new payoff).**
@@ -105,15 +104,22 @@ chapter focused.)
 
 ## Exercises
 
-1. Add a fifth preset of your own (e.g.,
+1. Add an additional preset of your own (e.g.,
    `pydanticai-mixed` or `local-offline`) and document the
    tradeoff using chapter 12's `latency_budget.py`.
 2. Measure first-audio latency across all six presets on the same
    recording. Is the ranking stable across short vs long prompts?
-3. The Protocol `_ServerTransportBase` has a WebSocket subclass.
-   Wire a **browser** preset that uses `WebRTCTransport` and
-   serve it from `examples/ws_server.py`. What is the minimum
-   diff to swap from your laptop's mic to a browser tab?
+3. The base class `_ServerTransportBase` has a `WebSocketTransport`
+   subclass that isn't in the 2×3 preset matrix. Wire an additional
+   **browser** preset that uses `WebSocketTransport` and serve it
+   from `examples/ws_server.py`. What is the minimum diff to swap
+   from your laptop's mic to a browser tab? Compare against the
+   existing WebRTC preset: same browser endpoint, different
+   transport protocol — where does the latency differ? (Note:
+   `_ServerTransportBase` is a shared plumbing base class, not a
+   `typing.Protocol` — the Protocol abstraction earns its keep at
+   the `Transport` surface that both the server-backed transports
+   and `LocalTransport` implement.)
 4. Add a tool from chapter 7 that calls
    `SendDTMFAction`. Run on the Twilio preset. What does the
    journal record? What does the user hear?
