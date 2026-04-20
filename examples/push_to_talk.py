@@ -5,7 +5,7 @@ to start or end turns: the application calls ``session.start_turn()`` and
 ``session.end_turn()`` itself.  Useful for hardware push-to-talk buttons,
 walkie-talkie UX, or mocked turns in tests.
 
-This example reads a single keypress from stdin: hold ``Enter`` to mark
+This example reads Enter presses from stdin: press ``Enter`` to mark
 the start of a turn, then ``Enter`` again to mark the end.  Real
 deployments would wire this to a GPIO pin, a UI button, or a hotkey.
 
