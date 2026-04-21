@@ -4,7 +4,12 @@ Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
 Run:   uv run python examples/openai_agents_voice.py
 """
 
-from agents import Agent  # type: ignore[import-untyped]
+try:
+    from agents import Agent  # type: ignore[import-untyped]
+except ImportError as exc:
+    raise SystemExit(
+        "openai-agents is required. Install with: uv sync --extra quickstart"
+    ) from exc
 
 from easycat import EasyCatConfig, run
 

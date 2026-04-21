@@ -150,3 +150,75 @@ def test_debug_full_skips_auto_launch_under_pytest(monkeypatch: pytest.MonkeyPat
 
     _maybe_launch_debugger_ui(session=object())
     assert calls == []
+
+
+def test_debug_full_auto_launches_happy_path(monkeypatch: pytest.MonkeyPatch):
+    """``_maybe_launch_debugger_ui`` forwards to ``serve_session`` when aiohttp is available."""
+    pytest.importorskip("aiohttp")
+
+    from easycat.config import _maybe_launch_debugger_ui
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_serve(session, **kwargs):
+        calls.append({"session": session, **kwargs})
+
+    monkeypatch.setattr("easycat.debugger.serve_session", _fake_serve, raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_PORT", raising=False)
+    monkeypatch.setenv("EASYCAT_DEBUGGER_OPEN_BROWSER", "0")
+
+    sentinel = object()
+    _maybe_launch_debugger_ui(session=sentinel)
+
+    assert len(calls) == 1
+    assert calls[0]["session"] is sentinel
+    assert calls[0]["port"] == 8765
+    assert calls[0]["open_browser"] is False
+    assert calls[0]["in_thread"] is True
+
+
+def test_debug_full_bad_port_env_falls_back_to_default(monkeypatch: pytest.MonkeyPatch):
+    """A non-integer ``EASYCAT_DEBUGGER_PORT`` must not crash the launch."""
+    pytest.importorskip("aiohttp")
+
+    from easycat.config import _maybe_launch_debugger_ui
+
+    captured: dict[str, object] = {}
+
+    def _fake_serve(session, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("easycat.debugger.serve_session", _fake_serve, raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    monkeypatch.setenv("EASYCAT_DEBUGGER_PORT", "not-a-number")
+
+    _maybe_launch_debugger_ui(session=object())
+
+    assert captured["port"] == 8765
+
+
+def test_debug_full_skips_when_aiohttp_missing(monkeypatch: pytest.MonkeyPatch):
+    """Missing aiohttp logs a hint and does not attempt to start the server."""
+    import sys
+
+    from easycat.config import _maybe_launch_debugger_ui
+
+    calls: list[object] = []
+
+    def _fake_serve(session, **kwargs):
+        calls.append(session)
+
+    monkeypatch.setattr("easycat.debugger.serve_session", _fake_serve, raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    # Block ``import aiohttp`` even if the debugger extra is installed —
+    # ``sys.modules[name] = None`` is the documented way to force a
+    # future ``import`` to raise ``ImportError``.
+    monkeypatch.setitem(sys.modules, "aiohttp", None)
+
+    _maybe_launch_debugger_ui(session=object())
+
+    assert calls == []

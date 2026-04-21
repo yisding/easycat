@@ -7,7 +7,10 @@ Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart; uv add easycat[pyd
 Run:   uv run python examples/pydantic_ai_voice.py
 """
 
-from pydantic_ai import Agent  # type: ignore[import-untyped]
+try:
+    from pydantic_ai import Agent  # type: ignore[import-untyped]
+except ImportError as exc:
+    raise SystemExit("PydanticAI is required. Install with: uv add easycat[pydantic-ai]") from exc
 
 from easycat import EasyCatConfig, run
 

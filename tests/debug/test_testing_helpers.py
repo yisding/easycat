@@ -72,6 +72,15 @@ def test_assert_exact_match_fails(tmp_path: Path):
         assert_exact_match(bundle, expected="Goodbye")
 
 
+def test_assert_exact_match_reads_top_level_text(tmp_path: Path):
+    """Some bundle variants stash the reply text on the record root rather than under ``data``."""
+    records = [
+        {"sequence": 1, "name": "AgentFinal", "text": "Hello from root!"},
+    ]
+    bundle = load_bundle(_make_bundle(tmp_path, records))
+    assert_exact_match(bundle, expected="Hello from root!")
+
+
 def test_assert_regex_matches(tmp_path: Path):
     records = [
         {"sequence": 1, "name": "AgentFinal", "data": {"text": "The weather is 72F."}},

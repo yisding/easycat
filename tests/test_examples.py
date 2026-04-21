@@ -22,16 +22,17 @@ class _DummyAgent:
 def test_openai_agents_voice_example_imports(monkeypatch: pytest.MonkeyPatch):
     pytest.importorskip("agents")
     # The example uses ``easycat.run(...)`` at module scope; stub it so
-    # importing the module doesn't block on a real voice session.
+    # importing the module doesn't block on a real voice session.  Evict
+    # any cached copy first so the fresh import always runs under the
+    # monkeypatched ``run`` — otherwise a prior test that imported the
+    # example would leave a stale module object behind.
     import easycat
 
     monkeypatch.setattr(easycat, "run", lambda config: None)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    import importlib
+    sys.modules.pop("examples.openai_agents_voice", None)
 
-    import examples.openai_agents_voice as openai_agents_voice
-
-    importlib.reload(openai_agents_voice)
+    import examples.openai_agents_voice  # noqa: F401
 
 
 def test_ws_server_example_imports():
@@ -46,11 +47,9 @@ def test_pydantic_ai_example_imports(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(easycat, "run", lambda config: None)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    import importlib
+    sys.modules.pop("examples.pydantic_ai_voice", None)
 
-    import examples.pydantic_ai_voice as pydantic_example
-
-    importlib.reload(pydantic_example)
+    import examples.pydantic_ai_voice  # noqa: F401
 
 
 def test_webrtc_observability_example_imports():

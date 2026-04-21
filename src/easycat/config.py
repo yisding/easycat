@@ -466,12 +466,6 @@ class EasyCatConfig:
         kwargs.setdefault("transport", TwilioTransportConfig())
         return cls(**kwargs)
 
-    # Text-mode sessions flow through :func:`create_text_session`
-    # because they skip audio provider construction entirely; a
-    # ``EasyCatConfig.text()`` classmethod would be misleading since the
-    # config itself requires STT and TTS providers.  Document the text
-    # entry point in ``peripheral-dx-onboarding.md``.
-
 
 def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
     """Whether this session should derive turn boundaries from STT finals."""

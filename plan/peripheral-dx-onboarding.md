@@ -22,8 +22,10 @@ Shipped:
 - `debug="light" | "full"`, `export_debug_bundle()` (`config.py:212`,
   `session/_session.py:987`).
 - `async with session:` context-manager support (`session/_session.py`).
-- `EasyCatConfig.mic() / .browser() / .phone() / .text()` factory
-  presets (`config.py`).
+- `EasyCatConfig.mic() / .browser() / .phone()` factory presets
+  (`config.py`). Text-mode sessions go through `create_text_session()`
+  instead of a `.text()` classmethod because the config itself
+  requires STT/TTS providers that a text session skips.
 - Deepgram / ElevenLabs / Cartesia env-var auto-detection when a
   provider string is omitted (`config.py`).
 - `EASYCAT_LOG_LEVEL` env var honoured by `run()` (`helpers.py`).

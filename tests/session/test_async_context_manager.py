@@ -69,3 +69,53 @@ async def test_wait_closed_wakes_when_session_shuts_down():
     await session.shutdown()
     await asyncio.wait_for(waiter, timeout=0.5)
     assert waiter.done()
+
+
+@pytest.mark.asyncio
+async def test_aenter_is_noop_when_session_already_running():
+    """Entering the context twice must not call ``start()`` a second time."""
+    session = Session(_config())
+    await session.start()
+    assert session.is_running is True
+
+    start_calls = 0
+    original_start = session.start
+
+    async def _counting_start() -> None:
+        nonlocal start_calls
+        start_calls += 1
+        await original_start()
+
+    session.start = _counting_start  # type: ignore[method-assign]
+    try:
+        async with session:
+            assert session.is_running is True
+    finally:
+        # Restore before the test tears down so shutdown() uses the real path.
+        session.start = original_start  # type: ignore[method-assign]
+
+    assert start_calls == 0
+    # __aexit__ always tears down, so the session should now be closed.
+    assert session._closed is True
+
+
+@pytest.mark.asyncio
+async def test_aenter_is_noop_when_session_already_closed():
+    """A session that has been shut down must not try to restart on re-entry."""
+    session = Session(_config())
+    await session.start()
+    await session.shutdown()
+    assert session._closed is True
+
+    start_calls = 0
+
+    async def _counting_start() -> None:
+        nonlocal start_calls
+        start_calls += 1
+
+    session.start = _counting_start  # type: ignore[method-assign]
+
+    async with session:
+        pass
+
+    assert start_calls == 0
