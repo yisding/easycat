@@ -124,3 +124,7 @@ class SessionConfig:
     runtime_mode: Literal["chained_pipeline", "text_session"] = "chained_pipeline"
     # Text-mode context to pass through to stages (optional, set by create_text_session).
     text_mode_context: dict[str, Any] | None = None
+
+    # MCP servers surfaced to the agent stage recorder so bridges can
+    # read them from ``RecorderContext.mcp_servers``.
+    mcp_servers: tuple[str, ...] = ()

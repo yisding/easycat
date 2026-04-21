@@ -359,6 +359,7 @@ class Session:
             journal=self._journal,
             artifact_store=self._artifact_store,
             session_id=self.session_id,
+            mcp_servers=tuple(cfg.mcp_servers),
         )
         self._turn_stage = TurnStage(
             self._turn_manager._config.endpoint_detector  # type: ignore[attr-defined]
@@ -2357,27 +2358,27 @@ class Session:
                     await self._emit(
                         AudioOut(chunk=chunk, turn_id=turn.id if turn is not None else None)
                     )
-                if self._enable_aec:
-                    self.echo_canceller.feed_reference(chunk)
-                sent_size = len(chunk.data)
-                if turn:
-                    turn.record_audio_sent(sent_size, chunk.duration_ms)
-                    if (
-                        sent_size > 0
-                        and self._playback_ack_transport is not None
-                        and turn.bytes_since_last_mark >= self._playback_mark_bytes_interval
-                    ):
-                        turn.bytes_since_last_mark = 0
-                        await self._send_playback_mark(turn)
-                    elif (
-                        sent_size > 0
-                        and turn.bytes_since_last_mark > 0
-                        and self._playback_ack_transport is not None
-                        and self._turn_manager.state != TurnManagerState.BOT_SPEAKING
-                        and self._outbound_queue.empty()
-                    ):
-                        turn.bytes_since_last_mark = 0
-                        await self._send_playback_mark(turn)
+                    if self._enable_aec:
+                        self.echo_canceller.feed_reference(chunk)
+                    sent_size = len(chunk.data)
+                    if turn:
+                        turn.record_audio_sent(sent_size, chunk.duration_ms)
+                        if (
+                            sent_size > 0
+                            and self._playback_ack_transport is not None
+                            and turn.bytes_since_last_mark >= self._playback_mark_bytes_interval
+                        ):
+                            turn.bytes_since_last_mark = 0
+                            await self._send_playback_mark(turn)
+                        elif (
+                            sent_size > 0
+                            and turn.bytes_since_last_mark > 0
+                            and self._playback_ack_transport is not None
+                            and self._turn_manager.state != TurnManagerState.BOT_SPEAKING
+                            and self._outbound_queue.empty()
+                        ):
+                            turn.bytes_since_last_mark = 0
+                            await self._send_playback_mark(turn)
             except Exception:
                 logger.exception("Failed to send audio to transport")
             finally:

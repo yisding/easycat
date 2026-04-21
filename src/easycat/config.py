@@ -16,6 +16,7 @@ from easycat.echo_cancellation import EchoCancellationConfig, create_echo_cancel
 from easycat.events import CallInitiated, CallScreening, EventBus, TTSAudio
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents.base import NULL_RECORDER, AgentTurnInput
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.providers import Transport
@@ -488,6 +489,7 @@ def create_session(config: EasyCatConfig) -> Session:
                 session_actions=config.session_actions,
                 action_executors=action_executors,
                 audio_gate=audio_gate,
+                mcp_servers=mcp_servers,
             )
         )
     except Exception:
@@ -629,6 +631,7 @@ def create_text_session(
                 artifact_store=artifact_store,
                 session_id=sid,
                 runtime_mode="text_session",
+                mcp_servers=tuple(_mcp),
             )
         )
     except Exception:
@@ -693,6 +696,25 @@ class _OutboundPipelineWiring:
         self._hold_audio_task = loop.create_task(_synthesize_hold())
 
 
+async def _run_agent_once(agent: Any, prompt: str) -> str:
+    """Drive the agent once and return its final text response.
+
+    Works whether ``agent`` is an :class:`AgentRunner` (has ``run()``) or
+    a raw :class:`ExternalAgentBridge` (only implements ``invoke()``), so
+    ``wrap_agent=False`` sessions still support agent-mode screening.
+    """
+    run_fn = getattr(agent, "run", None)
+    if callable(run_fn):
+        return await run_fn(prompt)
+    accumulated = ""
+    async for event in agent.invoke(AgentTurnInput.from_text(prompt), NULL_RECORDER):
+        if event.kind == "text_delta" and event.text:
+            accumulated += event.text
+        elif event.kind == "done" and event.text:
+            accumulated = event.text
+    return accumulated
+
+
 def _wire_outbound_pipeline(
     session: Session,
     sm: OutboundCallStateMachine,
@@ -720,10 +742,11 @@ def _wire_outbound_pipeline(
         if event.mode == "agent" and _screening_detector is not None:
             try:
                 prompt = _screening_detector.accumulated_text
-                response_text = await session.agent.run(
+                response_text = await _run_agent_once(
+                    session.agent,
                     f"The callee's phone is screening this call. "
                     f'Their screening prompt says: "{prompt}". '
-                    f"Identify yourself briefly."
+                    f"Identify yourself briefly.",
                 )
                 in_time = _screening_detector.notify_agent_responded()
                 fallback_spoken = not in_time and _screening_detector.screening_response
