@@ -173,3 +173,85 @@ def test_doctor_check_functions_are_pure() -> None:
     py_check = doctor_module.check_python_version()
     assert py_check.status == "ok"
     assert "Python" in py_check.detail
+
+
+# ── Checks 6–8 (microphone / journal writable / disk space) ──────────
+
+
+def test_check_microphone_skips_when_sounddevice_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skip — not fail — when ``sounddevice`` isn't installed."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "sounddevice", None)
+    result = doctor_module.check_microphone()
+    assert result.status == "skip"
+    assert "sounddevice" in result.detail
+
+
+def test_check_journal_writable_ok(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
+) -> None:
+    """Pointing XDG_CACHE_HOME at a writable tmp dir yields ok."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    result = doctor_module.check_journal_writable()
+    assert result.status == "ok", result.detail
+    assert str(tmp_path) in result.detail
+
+
+def test_check_journal_writable_fails_on_readonly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
+) -> None:
+    """If the journal dir can't be created, surface E207."""
+    # Point at a path that collides with a regular file, so mkdir() fails.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a dir")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(blocker))
+    result = doctor_module.check_journal_writable()
+    assert result.status == "fail"
+    assert result.code == "EASYCAT_E207"
+
+
+def test_check_disk_space_reports_free_megabytes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    result = doctor_module.check_disk_space()
+    assert result.status in {"ok", "fail"}
+    assert "MB free" in result.detail
+
+
+def test_check_disk_space_fails_under_threshold(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
+) -> None:
+    """Force the threshold higher than any realistic free space."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    result = doctor_module.check_disk_space(min_free_mb=10**12)
+    assert result.status == "fail"
+    assert result.code == "EASYCAT_E208"
+
+
+def test_doctor_fix_creates_journal_dir(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    no_network: None,
+    empty_env: None,
+) -> None:
+    """``--fix`` mkdirs the journal directory when E207 is reported."""
+    # Stage 1: block the default mkdir by pointing XDG_CACHE_HOME at a
+    # non-existent nested path, then remove any previously-created dir.
+    cache = tmp_path / "never-created"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+
+    # Pre-condition: the dir doesn't exist yet.
+    journal_dir = cache / "easycat" / "journals"
+    assert not journal_dir.exists()
+
+    # Running doctor once with --fix should create it.
+    result = cli.invoke(app, ["doctor", "--fix"])
+    assert journal_dir.exists(), "journal dir should have been auto-created by --fix"
+    # Exit code should be 0 after remediation, since all other checks pass.
+    assert result.exit_code == 0, result.stderr

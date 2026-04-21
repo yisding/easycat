@@ -42,6 +42,9 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
     [green]doctor[/]      Check environment and provider reachability
     [green]explain[/]     Look up an error code (like `cargo --explain`)
 
+  [cyan]Debug with the journal[/]
+    [green]bundles[/]     List and inspect captured debug bundles
+
 Run [cyan]easycat <command> --help[/] for command-specific options.
 Run [cyan]easycat explain <code>[/] to understand an error.
 """
@@ -78,6 +81,7 @@ def _root(
 
 
 def _register_commands() -> None:
+    from easycat.cli.debug.bundles import bundles_app
     from easycat.cli.diagnose.doctor import doctor as doctor_cmd
     from easycat.cli.diagnose.explain import explain as explain_cmd
     from easycat.cli.scaffold.init import init as init_cmd
@@ -85,6 +89,7 @@ def _register_commands() -> None:
     app.command(name="init", help="Scaffold a new project from a template.")(init_cmd)
     app.command(name="doctor", help="Check environment and provider reachability.")(doctor_cmd)
     app.command(name="explain", help="Look up an error code.")(explain_cmd)
+    app.add_typer(bundles_app, name="bundles")
 
 
 def main() -> None:

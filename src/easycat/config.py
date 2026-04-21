@@ -10,6 +10,8 @@ import warnings
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -270,6 +272,12 @@ class EasyCatConfig:
     journal_retention: Literal["archive", "delete"] = "archive"
     mcp_servers: list[str] | None = None
     event_logging: Any = None
+    # When set, every session exports a timestamped debug bundle to this
+    # directory on stop/shutdown — the "always be recording" flow from
+    # ``peripheral-eval-and-debugger-ui.md`` so a user who hits a real
+    # failure already has the bundle saved to disk without flipping any
+    # switch.  Requires ``debug != "off"`` so the journal actually exists.
+    record_to: str | Path | None = None
 
     def __post_init__(self) -> None:
         # ── Ignored legacy field ────────────────────────────────
@@ -668,10 +676,70 @@ def create_session(config: EasyCatConfig) -> Session:
             event_bus,
         )
 
+    if config.record_to is not None:
+        _install_record_to_hook(session, Path(config.record_to), debug_mode=config.debug)
+
     if config.debug == "full":
         _maybe_launch_debugger_ui(session)
 
     return session
+
+
+def _install_record_to_hook(
+    session: Session,
+    record_to: Path,
+    *,
+    debug_mode: Literal["off", "light", "full"],
+) -> None:
+    """Wire session stop/shutdown to auto-export a timestamped bundle.
+
+    ``record_to`` is a no-op when ``debug="off"`` because the journal
+    isn't created in that mode — we warn once and skip rather than
+    silently export an empty bundle.  The export runs *after* the
+    normal shutdown completes (so the journal already has the final
+    records) and is wrapped in a broad try/except so a bundle-write
+    failure never masks the real shutdown outcome.
+    """
+    if debug_mode == "off":
+        logger.warning(
+            "EasyCatConfig(record_to=%r) requested but debug='off' — no journal will "
+            "be captured. Set debug='light' or 'full' to enable recording.",
+            str(record_to),
+        )
+        return
+
+    original_stop = session.stop
+    original_shutdown = session.shutdown
+    already_exported = False
+
+    async def _export_bundle() -> None:
+        nonlocal already_exported
+        if already_exported:
+            return
+        already_exported = True
+        try:
+            record_to.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            path = record_to / f"{session.session_id}-{stamp}.zip"
+            session.export_debug_bundle(str(path))
+            logger.info("Recorded debug bundle to %s", path)
+        except Exception:
+            logger.exception("Failed to record debug bundle to %s", record_to)
+
+    async def _wrapped_stop() -> None:
+        try:
+            await original_stop()
+        finally:
+            await _export_bundle()
+
+    async def _wrapped_shutdown() -> None:
+        try:
+            await original_shutdown()
+        finally:
+            await _export_bundle()
+
+    session.stop = _wrapped_stop  # type: ignore[method-assign]
+    session.shutdown = _wrapped_shutdown  # type: ignore[method-assign]
 
 
 def _maybe_launch_debugger_ui(session: Session) -> None:

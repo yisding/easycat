@@ -31,6 +31,14 @@ Shipped:
   exposing the bundle fixture out of the box.
 - Auto-launch of the debugger UI when `debug="full"` is set
   (`config.py` glue into `debugger.server.serve_in_background()`).
+- `EasyCatConfig(record_to=".easycat/recordings/")` — session
+  auto-captures a timestamped bundle on stop/shutdown (`config.py`
+  `_install_record_to_hook`).
+- `checkpoint_id` (`cp_<sequence>`) vocabulary helpers —
+  `easycat.debug.bundle.checkpoint_id`, `parse_checkpoint_id`,
+  `CommittableCheckpoint.checkpoint_id`, and
+  `RunBundle.lookup_by_checkpoint_id`. The debugger UI and
+  `easycat bundles show` both render the new id.
 
 Not started:
 
@@ -39,14 +47,10 @@ Not started:
 - `forked_replay` fourth fidelity class and the matching "Fork from
   here" UI button. Depends on the bridge execution cursor work in the
   essential plan.
-- `checkpoint_id` (`cp_87`) vocabulary in user-facing APIs — internally
-  the journal still exposes monotonic `sequence`.
 - Terminal ASCII dev waterfall (`[vad 12ms][stt 340ms…]`) with
   Rich `Live` in-flight rendering and budget markers.
 - Auto-reload via `easycat.run(..., reload=True)` and the
   `CodeReloaded` checkpoint divider it would write.
-- `EasyCatConfig(record_to=".easycat/recordings/")` — session
-  auto-capture to a timestamped bundle directory.
 
 The interactive debugger is the headline piece that landed early; the
 testing surface is the obvious next priority because it unblocks the
