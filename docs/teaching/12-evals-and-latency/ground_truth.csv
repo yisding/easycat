@@ -1,0 +1,6 @@
+bundle,reference_transcript,had_real_barge_in
+turn_01_fast.bundle,what time is it,0
+turn_02_slow_agent.bundle,tell me a joke,0
+turn_03_ghost_interrupt.bundle,whats the weather,0
+turn_04_real_interrupt.bundle,stop,1
+turn_05_medium.bundle,remind me to buy milk,0
