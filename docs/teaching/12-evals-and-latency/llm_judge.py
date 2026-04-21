@@ -65,7 +65,13 @@ async def judge(bundle_path: Path) -> dict:
         ],
         response_format={"type": "json_object"},
     )
-    return json.loads(resp.choices[0].message.content or "{}")
+    raw = resp.choices[0].message.content or "{}"
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # response_format=json_object makes this rare, not impossible.
+        # Surface the raw text so a reader can still see what the judge said.
+        return {"error": "judge returned non-JSON", "raw": raw}
 
 
 def main() -> None:

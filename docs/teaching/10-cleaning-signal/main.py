@@ -78,6 +78,23 @@ PREROLL_FRAMES = 15
 RUNS_DIR = Path(__file__).parent / "runs"
 
 
+class _Passthrough:
+    """Stand-in for --nr off / --aec off paths: no-op both directions.
+
+    Matches ``replay.py``'s passthrough so both entry points take the
+    same shape when a stage is disabled.
+    """
+
+    async def process(self, chunk):
+        return chunk
+
+    def feed_reference(self, chunk):
+        pass
+
+    def version_info(self):
+        return {"provider": "off"}
+
+
 class MiniTurnDetector:
     """Unchanged from chapter 4."""
 
@@ -250,7 +267,7 @@ async def main() -> None:
         aec = create_echo_canceller(EchoCancellationConfig(enabled=True))
         aec_backend = aec.version_info().get("provider", "unknown")
     else:
-        aec = create_echo_canceller(EchoCancellationConfig(enabled=False))
+        aec = _Passthrough()
         aec_backend = "off"
 
     print(f"NR backend: {nr_backend}    AEC backend: {aec_backend}")
@@ -298,19 +315,6 @@ async def main() -> None:
     session_stub = types.SimpleNamespace(journal=journal)
     export_debug_bundle(session_stub, bundle_path, overwrite=True)
     print(f"\nWrote bundle → {bundle_path.relative_to(Path.cwd())}")
-
-
-class _Passthrough:
-    """Stand-in for --nr off / --aec off paths: no-op both directions."""
-
-    async def process(self, chunk):
-        return chunk
-
-    def feed_reference(self, chunk):
-        pass
-
-    def version_info(self):
-        return {"provider": "off"}
 
 
 if __name__ == "__main__":

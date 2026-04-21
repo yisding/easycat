@@ -212,8 +212,18 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
                 active_cancel.cancel()
                 await transport.clear_audio()
 
-                # Let the bot task unwind so the ledger is final.
-                await bot_task
+                # Let the bot task unwind so the ledger is final. A
+                # transient agent/TTS error here shouldn't take the
+                # whole session down mid-barge-in; log it and move on.
+                try:
+                    await bot_task
+                except Exception as exc:
+                    journal.append(
+                        kind=JournalRecordKind.EVENT,
+                        name="bot_task.error",
+                        session_id=SESSION_ID,
+                        data={"stage": "coordinator", "error": repr(exc)},
+                    )
 
                 heard = active_ledger.heard_text()
                 full = " ".join(active_ledger.sentences_sent)

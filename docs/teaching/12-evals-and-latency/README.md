@@ -28,6 +28,10 @@ uv run python docs/teaching/12-evals-and-latency/generate_bundles.py
 `ground_truth.csv` ties each bundle to its reference transcript
 and whether the interruption (if any) was real.
 
+> **Bundle safety.** These scripts load bundles via `load_bundle`,
+> which uses `pickle` under the hood — only feed them bundles you
+> generated or trust. See ch 11's README for the full note.
+
 ## 1 — Latency budget, per bundle
 
 Read one bundle's gap against a per-stage budget:

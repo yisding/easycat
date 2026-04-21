@@ -65,8 +65,12 @@ def _read_wav(path: Path) -> tuple[bytes, AudioFormat]:
 
 
 def _chunks(data: bytes, fmt: AudioFormat):
+    # AEC + VAD want whole frames. Drop any trailing short tail so a
+    # reader-supplied WAV that isn't an even multiple of 20 ms doesn't
+    # hand Silero/LiveKit a misaligned chunk.
     frame_bytes = fmt.sample_rate * FRAME_MS // 1000 * fmt.frame_size
-    for offset in range(0, len(data), frame_bytes):
+    usable = (len(data) // frame_bytes) * frame_bytes
+    for offset in range(0, usable, frame_bytes):
         yield AudioChunk(data=data[offset : offset + frame_bytes], format=fmt)
 
 
