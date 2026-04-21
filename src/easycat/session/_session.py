@@ -170,7 +170,15 @@ class Session:
         self.transport = cfg.transport or NoopTransport()
         # Back-store for the ``agent`` property so late assignments
         # (``session.agent = X``) keep the AgentStage wrapper in sync.
-        self._agent: Agent = auto_adapt_agent(cfg.agent) if cfg.agent else NoopAgent()
+        # ``auto_adapt_agent`` returns plain ``async run(text)`` agents
+        # unchanged so factories can apply ``config.agent_runner`` /
+        # ``wrap_agent`` explicitly.  For direct ``Session(...)`` callers
+        # and ``wrap_agent=False`` with a plain agent, wrap here as a
+        # safety net so the bridge interface Session relies on
+        # (``reset``, ``replace_last_assistant_text``) is always present.
+        self._agent: Agent = (
+            _ensure_bridge(auto_adapt_agent(cfg.agent)) if cfg.agent else NoopAgent()
+        )
         # Stashed by create_session/create_text_session so mid-session
         # agent swaps to a URL-backed agent can forward model/key context.
         self._agent_model: str | None = None
@@ -1033,6 +1041,10 @@ class Session:
             adapted = auto_adapt_agent(value, model=self._agent_model)
             if previous_runner is not None and not isinstance(adapted, AgentRunner):
                 adapted = AgentRunner(adapted, previous_runner._config)
+            elif not isinstance(adapted, ExternalAgentBridge):
+                # Plain ``async run(text)`` agent swapped in — wrap so the
+                # bridge-facing Session APIs keep working.
+                adapted = AgentRunner(adapted)
             self._agent = adapted
             self._inject_agent_runtime_config(self._agent)
 

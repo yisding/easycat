@@ -20,7 +20,13 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
       (requires explicit ``PydanticAIBridge(graph=..., ...)`` construction)
     - ``pydantic_ai.Agent`` -> :class:`PydanticAIBridge` (Agent mode)
     - ``agents.Agent`` (OpenAI Agents SDK) -> :class:`OpenAIAgentsBridge`
-    - any object with ``async run(text) -> str`` -> :class:`AgentRunner`
+
+    Plain objects with ``async run(text) -> str`` but no framework match
+    are returned unchanged — the caller (``create_session`` /
+    ``AgentStage``) is responsible for wrapping them in
+    :class:`AgentRunner` so that user-supplied ``agent_runner`` settings
+    (timeout, history, etc.) are honored rather than silently replaced
+    with defaults.
 
     Unknown agent types are returned unchanged.
     """
@@ -145,9 +151,9 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
             "for realtime speech-to-speech."
         )
 
-    # 8. Simple object with async run(text) -> wrap in AgentRunner so it's a bridge.
-    run_fn = getattr(agent, "run", None)
-    if callable(run_fn) and not isinstance(agent, type):
-        return AgentRunner(agent)
-
+    # Plain ``async run(text)`` agents are returned unchanged.  The
+    # factory (create_session / create_text_session) decides whether to
+    # wrap them in :class:`AgentRunner` and with what
+    # :class:`AgentRunnerConfig`; ``AgentStage`` provides a default-config
+    # safety wrap for callers that construct ``Session`` directly.
     return agent

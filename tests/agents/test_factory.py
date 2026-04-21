@@ -15,13 +15,13 @@ class _Workflow:
         return text
 
 
-def test_auto_adapt_agent_wraps_simple_run_agents_in_agent_runner():
-    from easycat.integrations.agents._agent_runner import AgentRunner
-
+def test_auto_adapt_agent_returns_plain_run_agents_unchanged():
+    # Plain ``async run(text)`` agents are returned as-is so that
+    # ``create_session`` can apply ``config.agent_runner`` / ``wrap_agent``
+    # rather than being silently pre-wrapped with default config.
     agent = _CustomAgent()
     adapted = auto_adapt_agent(agent)
-    assert isinstance(adapted, AgentRunner)
-    assert adapted._agent is agent
+    assert adapted is agent
 
 
 def test_auto_adapt_agent_wraps_workflow_objects():

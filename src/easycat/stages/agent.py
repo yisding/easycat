@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
+from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
@@ -56,17 +57,35 @@ class AgentStage:
     ) -> None:
         adapted = auto_adapt_agent(provider)
         if not isinstance(adapted, ExternalAgentBridge):
-            raise TypeError(
-                "AgentStage.provider must implement ExternalAgentBridge "
-                f"after auto_adapt_agent() (got {type(provider).__name__}). "
-                "Wrap it in AgentRunner or implement the bridge protocol."
-            )
+            # Safety net: plain objects with ``async run(text) -> str`` are
+            # wrapped in a default-config AgentRunner so direct Session or
+            # AgentStage construction keeps working.  ``create_session`` /
+            # ``create_text_session`` wrap earlier with the user's
+            # ``agent_runner`` config, so this fallback only applies to
+            # ``wrap_agent=False`` paths and direct AgentStage users.
+            run_fn = getattr(adapted, "run", None)
+            if callable(run_fn) and not isinstance(adapted, type):
+                adapted = AgentRunner(adapted)
+            else:
+                raise TypeError(
+                    "AgentStage.provider must implement ExternalAgentBridge "
+                    f"after auto_adapt_agent() (got {type(provider).__name__}). "
+                    "Wrap it in AgentRunner or implement the bridge protocol."
+                )
         self._provider: ExternalAgentBridge = adapted
         self._journal = journal
         self._artifact_store = artifact_store
         self._session_id = session_id
         self._mcp_servers = mcp_servers
         self._last_snapshot = StageStateSnapshot(stage_name=self.name)
+        # Shadow history forwarded as ``turn_input.context`` when the
+        # provider is a raw bridge (not wrapped in :class:`AgentRunner`).
+        # AgentRunner already tracks its own history and forwards it, so
+        # we avoid double-tracking when wrap_agent=True.  With
+        # wrap_agent=False, the bridge would otherwise see ``context=[]``
+        # on every turn.
+        self._tracks_history = not isinstance(self._provider, AgentRunner)
+        self._history: list[dict[str, str]] = []
 
     # ── Recorder construction ───────────────────────────────────
 
@@ -117,12 +136,15 @@ class AgentStage:
         )
 
         recorder = self._make_recorder(turn.id)
+        input_text = input if isinstance(input, str) else str(input)
         turn_input = AgentTurnInput.from_text(
-            input if isinstance(input, str) else str(input),
+            input_text,
+            context=list(self._history) if self._tracks_history else None,
             turn_id=turn.id,
         )
 
         accumulated: list[str] = []
+        errored = False
         try:
             async for event in bridge.invoke(turn_input, recorder, cancel_token):
                 kind = getattr(event, "kind", None)
@@ -172,6 +194,7 @@ class AgentStage:
                     )
                 yield event
         except Exception as exc:
+            errored = True
             journal_append_event(
                 ctx,
                 stage=self.name,
@@ -181,16 +204,30 @@ class AgentStage:
                 error=str(exc),
             )
             raise
-        state_after = self.snapshot_state()
-        journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_complete",
-            turn_id=turn.id,
-            state_before=state_before,
-            state_after=state_after,
-            data_extra={"response": "".join(accumulated)},
-        )
+        finally:
+            # Use a finally block so shadow history is updated even when
+            # the consumer breaks out of the stream early (e.g. send_text
+            # stops iterating on the ``done`` event — triggering
+            # ``GeneratorExit`` at the yield above).
+            if not errored:
+                final_text = "".join(accumulated)
+                if self._tracks_history and final_text:
+                    # Record the turn in shadow history so the next
+                    # ``invoke()`` forwards it as ``turn_input.context``
+                    # for raw bridges that rely on explicit conversation
+                    # state.
+                    self._history.append({"role": "user", "content": input_text})
+                    self._history.append({"role": "assistant", "content": final_text})
+                state_after = self.snapshot_state()
+                journal_append_event(
+                    ctx,
+                    stage=self.name,
+                    name="stage_complete",
+                    turn_id=turn.id,
+                    state_before=state_before,
+                    state_after=state_after,
+                    data_extra={"response": final_text},
+                )
 
     def snapshot_state(self) -> StageStateSnapshot:
         return StageStateSnapshot(
