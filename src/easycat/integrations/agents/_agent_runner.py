@@ -99,11 +99,41 @@ class AgentRunner:
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Run one turn, yielding bridge events as they occur."""
         if self._is_bridge:
+            # Forward runner-managed history so multi-turn bridges that rely
+            # on turn_input.context stay stateful across turns.  Any context
+            # the caller already set takes precedence.
+            bridge_input = turn_input
+            if not turn_input.context and self._history:
+                bridge_input = AgentTurnInput(
+                    text=turn_input.text,
+                    context=list(self._history),
+                    turn_id=turn_input.turn_id,
+                )
             self._history.append({"role": "user", "content": turn_input.text})
             accumulated = ""
             done_text = ""
+            timeout = self._config.timeout
+            deadline = time.monotonic() + timeout if timeout is not None else None
+            inner_iter = self._agent.invoke(bridge_input, recorder, cancel_token)
+            timed_out = False
             try:
-                async for event in self._agent.invoke(turn_input, recorder, cancel_token):
+                while True:
+                    try:
+                        if deadline is not None:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                timed_out = True
+                                break
+                            event = await asyncio.wait_for(
+                                inner_iter.__anext__(), timeout=remaining
+                            )
+                        else:
+                            event = await inner_iter.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError:
+                        timed_out = True
+                        break
                     kind = getattr(event, "kind", None)
                     text = getattr(event, "text", "") or ""
                     if kind == "text_delta":
@@ -112,8 +142,19 @@ class AgentRunner:
                         done_text = text
                     yield event
             except Exception:
-                self._history.pop()
+                if self._history and self._history[-1].get("role") == "user":
+                    self._history.pop()
                 raise
+            if timed_out:
+                if self._history and self._history[-1].get("role") == "user":
+                    self._history.pop()
+                aclose = getattr(inner_iter, "aclose", None)
+                if aclose is not None:
+                    try:
+                        await aclose()
+                    except Exception:
+                        pass
+                raise AgentTimeoutError(timeout or 0)
             final_text = done_text or accumulated
             if final_text:
                 self._history.append({"role": "assistant", "content": final_text})

@@ -58,3 +58,16 @@ def test_auto_adapt_agent_bridge_passthrough():
     bridge = GenericWorkflowBridge(workflow=_Workflow())
     assert isinstance(bridge, ExternalAgentBridge)
     assert auto_adapt_agent(bridge) is bridge
+
+
+def test_auto_adapt_agent_runner_wrapping_raw_framework_adapts_inner():
+    from easycat.integrations.agents._agent_runner import AgentRunner
+    from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
+
+    inner = _Workflow()
+    runner = AgentRunner(inner)
+    assert runner._agent is inner
+    adapted = auto_adapt_agent(runner)
+    assert adapted is runner
+    assert isinstance(runner._agent, GenericWorkflowBridge)
+    assert runner._is_bridge is True

@@ -40,11 +40,11 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
             return RemoteResponsesAPIBridge(base_url=agent, model=model)
 
-    # 1. Already a bridge -- pass through (including AgentRunner wrapping a bridge).
-    if isinstance(agent, ExternalAgentBridge):
-        return agent
-
-    # 2. AgentRunner wrapping a framework object — adapt the inner agent.
+    # 1. AgentRunner wrapping a framework object — adapt the inner agent.
+    # This must run before the generic ExternalAgentBridge passthrough
+    # because AgentRunner itself satisfies ExternalAgentBridge; otherwise
+    # AgentRunner(raw_framework_agent) would bypass adaptation and fail
+    # on the first turn when AgentRunner tries to call inner.run().
     from easycat.integrations.agents._agent_runner import AgentRunner
 
     if isinstance(agent, AgentRunner):
@@ -52,6 +52,10 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
         if adapted_inner is not agent._agent:
             agent._agent = adapted_inner
             agent._is_bridge = isinstance(adapted_inner, ExternalAgentBridge)
+        return agent
+
+    # 2. Already a bridge -- pass through.
+    if isinstance(agent, ExternalAgentBridge):
         return agent
 
     # 3. Workflow with on_user_turn(...) -> GenericWorkflowBridge.

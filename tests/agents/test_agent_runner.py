@@ -256,3 +256,81 @@ def test_agent_runner_wrapping_a_bridge_delegates_history_ops():
     assert inner.replaced_text == "clean"
     assert inner.appended_note == INTERRUPTION_NOTE
     assert inner.reset_called
+
+
+class _HangingBridge:
+    COMMITTABLE_BOUNDARIES: dict = {}
+
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        await asyncio.sleep(999)
+        yield AgentBridgeEvent(kind="done", text="never")  # pragma: no cover
+
+    def snapshot_state(self):
+        from easycat.integrations.agents.base import FrameworkStateSnapshot
+
+        return FrameworkStateSnapshot(fields={}, kind="hanging")
+
+    def apply_interruption(self, delivered_text, mode, recorder=None, caused_by_signal_id=None):
+        pass
+
+    def replace_last_assistant_text(self, text):
+        pass
+
+    def append_interruption_note(self, note):
+        pass
+
+    def reset(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_bridge_delegation_honors_configured_timeout():
+    runner = AgentRunner(_HangingBridge(), AgentRunnerConfig(timeout=0.05))
+    with pytest.raises(AgentTimeoutError) as exc:
+        await _drain(runner, "hello")
+    assert exc.value.timeout == 0.05
+    assert runner.history == []
+
+
+class _ContextCapturingBridge:
+    COMMITTABLE_BOUNDARIES: dict = {}
+
+    def __init__(self):
+        self.seen_contexts: list[list[dict[str, str]]] = []
+
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        self.seen_contexts.append(list(turn_input.context))
+        yield AgentBridgeEvent(kind="text_delta", text=f"reply-{len(self.seen_contexts)}")
+        yield AgentBridgeEvent(kind="done", text=f"reply-{len(self.seen_contexts)}")
+
+    def snapshot_state(self):
+        from easycat.integrations.agents.base import FrameworkStateSnapshot
+
+        return FrameworkStateSnapshot(fields={}, kind="ctx")
+
+    def apply_interruption(self, delivered_text, mode, recorder=None, caused_by_signal_id=None):
+        pass
+
+    def replace_last_assistant_text(self, text):
+        pass
+
+    def append_interruption_note(self, note):
+        pass
+
+    def reset(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_bridge_delegation_forwards_runner_history_as_context():
+    inner = _ContextCapturingBridge()
+    runner = AgentRunner(inner)
+    await _drain(runner, "first")
+    await _drain(runner, "second")
+    # First turn: no prior history -> empty context.
+    assert inner.seen_contexts[0] == []
+    # Second turn: prior user+assistant from turn 1 flow through as context.
+    assert inner.seen_contexts[1] == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "reply-1"},
+    ]
