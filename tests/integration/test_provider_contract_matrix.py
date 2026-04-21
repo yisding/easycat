@@ -7,26 +7,29 @@ changes how ``Session`` plumbs providers into the pipeline, which
 ``(STT, TTS)`` pair silently breaks?
 
 This test parametrizes over every registered STT config × TTS config
-pair from ``stt/factory.py`` and ``tts/factory.py``, builds a real
-``Session`` via ``create_session()``, and runs one scripted turn. The
-actual provider instances are replaced with the harness scripted
-stubs so no real API call is made — what we're exercising is:
+pair from ``stt/factory.py`` and ``tts/factory.py`` and exercises the
+seam in two phases per pair:
 
-  - every config dataclass constructs with minimal args;
-  - ``create_stt_provider_from_config`` / ``create_tts_provider_from_config``
-    dispatch for every registered type;
-  - the event_bus-injection branch in each ``from_config`` function
-    is reached for providers that require it (Deepgram, ElevenLabs,
-    OpenAI Realtime, Cartesia);
-  - ``Session`` drives a full turn to ``BotStoppedSpeaking`` regardless
-    of the config variant;
-  - no stage holds a reference to a config field that exists on one
-    provider but not another.
+1. **Real factory dispatch + injection.** Calls the real
+   ``create_stt_provider_from_config`` / ``create_tts_provider_from_config``
+   with the config and a fresh ``EventBus``, asserts the returned
+   provider's class matches the registry's ``_CONFIG_TO_PROVIDER`` map,
+   and asserts the ``EventBus`` was injected into the provider's stored
+   config for every type listed in the ``needs_event_bus`` branch.
+   Without this phase, a regression like "new provider added but its
+   config was forgotten in the ``needs_event_bus`` tuple" would ship
+   silently — the patched lifecycle phase below would still pass.
 
-A regression here typically means: a new provider was added to the
-registry without the corresponding ``event_bus`` injection branch, or
-a config field was renamed on one provider and the session path reads
-it by attribute.
+2. **Session lifecycle smoke.** Builds a real ``Session`` via
+   ``create_session()`` and runs one scripted turn. The factory
+   functions are monkeypatched to scripted stubs only for *this*
+   phase, so no real network call is made. This catches per-config
+   regressions that only manifest when the session drives the
+   pipeline (e.g. a config field renamed on one provider that some
+   downstream stage reads by attribute).
+
+Together: phase 1 verifies registry/injection correctness; phase 2
+verifies that the dispatched config flows through the pipeline.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from easycat import create_session
 from easycat.events import (
     AgentFinal,
     BotStoppedSpeaking,
+    EventBus,
     STTFinal,
     TTSAudio,
     TurnEnded,
@@ -48,13 +52,17 @@ from easycat.events import (
 from easycat.stt.cartesia_provider import CartesiaSTTConfig
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
+from easycat.stt.factory import _CONFIG_TO_PROVIDER as _STT_CONFIG_TO_PROVIDER
 from easycat.stt.factory import _PROVIDER_TO_CONFIG as _STT_REGISTRY
+from easycat.stt.factory import create_stt_provider_from_config
 from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.tts.cartesia_tts import CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
+from easycat.tts.factory import _CONFIG_TO_PROVIDER as _TTS_CONFIG_TO_PROVIDER
 from easycat.tts.factory import _PROVIDERS as _TTS_REGISTRY
+from easycat.tts.factory import create_tts_provider_from_config
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig
 
@@ -106,6 +114,24 @@ _STT_CONFIG_CLASSES = [cfg_cls for _provider_cls, cfg_cls in _STT_REGISTRY.value
 _TTS_CONFIG_CLASSES = [cfg_cls for _provider_cls, cfg_cls in _TTS_REGISTRY.values()]
 
 
+# Configs whose ``create_*_provider_from_config`` branch must inject
+# the session's EventBus. Mirrors the ``needs_event_bus`` tuple in
+# ``stt/factory.py`` and the per-type branches in ``tts/factory.py``.
+# Drift between this set and the factory branches is exactly the kind
+# of regression phase 1 below catches.
+_STT_REQUIRES_EVENT_BUS: set[type] = {
+    DeepgramSTTConfig,
+    ElevenLabsSTTConfig,
+    OpenAIRealtimeSTTConfig,
+    CartesiaSTTConfig,
+}
+_TTS_REQUIRES_EVENT_BUS: set[type] = {
+    DeepgramTTSConfig,
+    ElevenLabsTTSConfig,
+    CartesiaTTSConfig,
+}
+
+
 class _UpperAgent:
     async def run(self, text: str) -> str:
         return text.upper()
@@ -139,17 +165,57 @@ async def test_session_wiring_for_every_provider_pair(
     stt_config_cls: type,
     tts_config_cls: type,
 ) -> None:
-    """One scripted turn must complete cleanly for every (STT, TTS) pair.
+    """Two-phase wiring check for every (STT, TTS) config pair.
 
-    Asserts the canonical event sequence: TurnStarted → STTFinal →
-    AgentFinal → TTSAudio → BotStoppedSpeaking → TurnEnded. The
-    scripted providers replace the real ones after ``create_session``
-    dispatches, so what's really verified is config construction,
-    factory dispatch, event-bus injection, and Session lifecycle.
+    Phase 1 calls the *real* factory functions (registry dispatch +
+    EventBus injection). Phase 2 patches them to scripted stubs and
+    drives a turn through the lifecycle to BotStoppedSpeaking. See
+    the module docstring for why both phases are needed.
     """
     stt_cfg = _build_stt_config(stt_config_cls)
     tts_cfg = _build_tts_config(tts_config_cls)
 
+    # ── Phase 1: real factory dispatch + EventBus injection ──────────
+    # All provider __init__ methods are network-free; OpenAITTS opens
+    # an httpx.AsyncClient pool but issues no requests.
+    bus = EventBus()
+    real_stt = create_stt_provider_from_config(stt_cfg, bus)
+    real_tts = create_tts_provider_from_config(tts_cfg, bus)
+    try:
+        # Registry dispatch returned the right concrete class. Strict
+        # `type(...) is X` rather than isinstance to catch subclass drift.
+        assert type(real_stt) is _STT_CONFIG_TO_PROVIDER[stt_config_cls], (
+            f"STT factory returned {type(real_stt).__name__}, "
+            f"expected {_STT_CONFIG_TO_PROVIDER[stt_config_cls].__name__}"
+        )
+        assert type(real_tts) is _TTS_CONFIG_TO_PROVIDER[tts_config_cls], (
+            f"TTS factory returned {type(real_tts).__name__}, "
+            f"expected {_TTS_CONFIG_TO_PROVIDER[tts_config_cls].__name__}"
+        )
+
+        # EventBus was injected into the provider's stored config for
+        # every type that requires it. The factory uses
+        # ``dataclasses.replace`` to set ``event_bus`` on a *copy* of
+        # the config, then passes that copy to the provider. Reading
+        # ``provider._config.event_bus`` is the only way to verify the
+        # copy actually carried the bus through to the provider.
+        if stt_config_cls in _STT_REQUIRES_EVENT_BUS:
+            assert real_stt._config.event_bus is bus, (
+                f"{stt_config_cls.__name__}: EventBus not injected by factory"
+            )
+        if tts_config_cls in _TTS_REQUIRES_EVENT_BUS:
+            assert real_tts._config.event_bus is bus, (
+                f"{tts_config_cls.__name__}: EventBus not injected by factory"
+            )
+    finally:
+        # OpenAITTS allocates an httpx.AsyncClient in __init__; close
+        # it to avoid a leaked-connection warning. Other providers'
+        # __init__ is pure dataclass storage so no cleanup needed.
+        close = getattr(real_tts, "close", None)
+        if close is not None:
+            await close()
+
+    # ── Phase 2: session lifecycle smoke with scripted providers ─────
     transport = QueueTransport()
     stt = ScriptedSTT(["hello"])
     tts = RecordingTTS(chunk_sizes=(640,))
