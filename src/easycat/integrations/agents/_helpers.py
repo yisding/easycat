@@ -55,6 +55,12 @@ def split_replacement_by_original_parts(
     This keeps history part granularity when post-processing modifies the
     concatenated assistant text (e.g. Markdown stripping). The returned
     parts always concatenate back to ``replacement``.
+
+    Assumes the replacement is derived by *deletion only* — characters
+    may be removed but not substituted or inserted. The greedy
+    subsequence mapping below can't recover boundaries across
+    substitutions; Markdown stripping (the current caller) satisfies
+    this.
     """
     if not original_parts:
         return []

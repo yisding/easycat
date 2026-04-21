@@ -2351,9 +2351,9 @@ class Session:
                     chunk, self._run_ctx, turn or self._no_turn
                 )
                 if delivered:
-                    # Stamp turn_id from the turn that owned this chunk — by
-                    # the time send_audio() returns, self._turn may point at
-                    # a newer turn (or None) under transport backpressure.
+                    # Stamp turn_id from self._turn at dequeue time (captured
+                    # before send_audio awaits) so a slow send under
+                    # backpressure doesn't inherit a newer turn's id.
                     await self._emit(
                         AudioOut(chunk=chunk, turn_id=turn.id if turn is not None else None)
                     )

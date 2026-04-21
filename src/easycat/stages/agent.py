@@ -54,7 +54,14 @@ class AgentStage:
         session_id: str = "",
         mcp_servers: tuple[str, ...] = (),
     ) -> None:
-        self._provider = auto_adapt_agent(provider)
+        adapted = auto_adapt_agent(provider)
+        if not isinstance(adapted, ExternalAgentBridge):
+            raise TypeError(
+                "AgentStage.provider must implement ExternalAgentBridge "
+                f"after auto_adapt_agent() (got {type(provider).__name__}). "
+                "Wrap it in AgentRunner or implement the bridge protocol."
+            )
+        self._provider: ExternalAgentBridge = adapted
         self._journal = journal
         self._artifact_store = artifact_store
         self._session_id = session_id
@@ -74,14 +81,6 @@ class AgentStage:
                 mcp_servers=self._mcp_servers,
             ),
         )
-
-    def _ensure_bridge(self) -> ExternalAgentBridge:
-        if not isinstance(self._provider, ExternalAgentBridge):
-            raise TypeError(
-                "AgentStage.provider must implement ExternalAgentBridge. "
-                "Wrap it in AgentRunner or use auto_adapt_agent()."
-            )
-        return self._provider
 
     # ── Execution ───────────────────────────────────────────────
 
@@ -106,7 +105,7 @@ class AgentStage:
         cancel_token: Any | None = None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Drive ``bridge.invoke()`` while journaling a stage_start/complete."""
-        bridge = self._ensure_bridge()
+        bridge = self._provider
         state_before = self.snapshot_state()
         journal_append_event(
             ctx,

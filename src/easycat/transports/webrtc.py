@@ -470,6 +470,10 @@ class WebRTCTransport(_AudioQueueMixin):
                     self._client_connected.set()
                 elif state in ("disconnected", "failed", "closed"):
                     self._client_connected.clear()
+                    # Null the outbound track so send_audio() reports the
+                    # drop (via bool False) instead of silently queueing into
+                    # a source that nothing is draining any more.
+                    self._outbound_track = None
                     self._enqueue_sentinel()
 
             # Set remote offer and create answer.
