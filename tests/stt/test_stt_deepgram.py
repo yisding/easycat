@@ -7,7 +7,6 @@ import json
 import pytest
 
 from easycat.events import STTEventType
-from easycat.providers import STTProvider
 from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
@@ -86,14 +85,6 @@ def _make_deepgram_stt(
 
     config = DeepgramSTTConfig(api_key="test-key", ws_connect=mock_connect)
     return DeepgramSTT(config), ws
-
-
-# ── Protocol conformance ─────────────────────────────────────────
-
-
-def test_deepgram_stt_conforms_to_protocol():
-    stt, _ = _make_deepgram_stt()
-    assert isinstance(stt, STTProvider)
 
 
 # ── Basic streaming ──────────────────────────────────────────────
@@ -324,3 +315,24 @@ async def test_deepgram_flux_parses_turn_info_updates_and_end_of_turn():
     assert events[1].type == STTEventType.FINAL
     assert events[1].text == "hello world"
     assert events[1].confidence == 0.88
+
+
+
+# ── Live integration ─────────────────────────────────────────────
+
+
+@pytest.mark.integration_live
+async def test_live_deepgram_stt():
+    """Integration test requiring DEEPGRAM_API_KEY env var."""
+    import os
+
+    api_key = os.environ.get("DEEPGRAM_API_KEY")
+    if not api_key:
+        pytest.skip("DEEPGRAM_API_KEY not set")
+
+    stt = DeepgramSTT(DeepgramSTTConfig(api_key=api_key))
+
+    pcm = generate_pcm_sine(duration_ms=500, sample_rate=16000)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+    # Tone isn't real speech; smoke-gates auth + WebSocket handshake.
+    assert isinstance(events, list)

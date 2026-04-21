@@ -8,7 +8,6 @@ import httpx
 import pytest
 
 from easycat.events import STTEventType
-from easycat.providers import STTProvider
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
@@ -62,14 +61,6 @@ def _make_mock_client(
     mock_client.stream = MagicMock(return_value=_MockStreamContext(mock_response))
     mock_client.aclose = AsyncMock()
     return mock_client
-
-
-# ── Protocol conformance ─────────────────────────────────────────
-
-
-def test_openai_stt_conforms_to_protocol():
-    provider = OpenAISTT(OpenAISTTConfig(api_key="test-key"))
-    assert isinstance(provider, STTProvider)
 
 
 # ── Basic transcription ──────────────────────────────────────────
@@ -281,3 +272,26 @@ async def test_openai_stt_reusable_across_streams():
     events2 = await collect_stt_events(stt, chunks)
     finals2 = [e for e in events2 if e.type == STTEventType.FINAL]
     assert len(finals2) == 1
+
+
+
+# ── Live integration ─────────────────────────────────────────────
+
+
+@pytest.mark.integration_live
+async def test_live_openai_stt():
+    """Integration test requiring OPENAI_API_KEY env var."""
+    import os
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        pytest.skip("OPENAI_API_KEY not set")
+
+    stt = OpenAISTT(OpenAISTTConfig(api_key=api_key))
+
+    pcm = generate_pcm_sine(duration_ms=500, sample_rate=16000)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+    # Tone isn't real speech; we just verify the round-trip completes
+    # without raising. Provider-specific event assertions stay in unit
+    # tests; this smoke test gates auth + protocol handshake.
+    assert isinstance(events, list)

@@ -995,7 +995,7 @@ class TestInterruptionPlan:
 class TestIntegration:
     """AC2C.13 -- gated integration test against a live endpoint."""
 
-    @pytest.mark.integration
+    @pytest.mark.integration_live
     @pytest.mark.asyncio
     async def test_live_responses_api(self):
         base_url = os.environ.get("RESPONSES_API_BASE_URL")
