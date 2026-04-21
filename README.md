@@ -6,6 +6,7 @@ OpenAI Agents SDK, PydanticAI agents, or PydanticAI workflows.
 ## Current capabilities
 - Session runtime that wires the audio pipeline (noise reduction -> VAD -> STT -> agent -> TTS)
 - Typed event system with an EventBus for streaming-first voice events
+- Passive supervisor listen-in via session audio fan-out on the EventBus
 - STT providers: OpenAI, Deepgram, ElevenLabs
 - TTS providers: OpenAI, Deepgram, ElevenLabs
 - VAD providers: Silero (open-source), TEN VAD (open-source), and Krisp (commercial)
@@ -304,6 +305,7 @@ Runnable examples live in the `examples/` directory:
 - `openai_agents_voice.py`: local microphone/speaker loop with OpenAI Agents SDK
 - `ws_server.py`: WebSocket server (multi-session)
 - `ws_browser_example.py`: browser mic/speaker over WebSocket + static web client
+- `ws_supervisor_server.py`: browser caller + passive supervisor listen-in over WebSocket
 - `webrtc_server.py`: WebRTC voice chat with browser client
 - `webrtc_observability_server.py`: WebRTC + FastAPI dashboard streaming live events
 - `twilio_app.py`: Twilio Media Streams example

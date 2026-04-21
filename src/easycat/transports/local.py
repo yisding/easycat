@@ -184,23 +184,26 @@ class LocalTransport(_AudioQueueMixin):
         self._enqueue_sentinel()
         self._connected = False
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
+    async def send_audio(self, chunk: AudioChunk) -> bool:
         """Queue an audio chunk for speaker playback.
 
         Chunks larger than one callback frame are split so each enqueued
         piece fits exactly into the output buffer without truncation.
         """
         if not self._connected:
-            return
+            return False
         frame_bytes = self._frame_samples * self._audio_format.frame_size
         data = chunk.data
         offset = 0
+        delivered = True
         while offset < len(data):
             try:
                 self._out_queue.put_nowait(data[offset : offset + frame_bytes])
             except thread_queue.Full:
                 logger.warning("Output audio queue full — dropping frame")
+                delivered = False
             offset += frame_bytes
+        return delivered
 
     async def clear_audio(self) -> None:
         """Discard queued outbound audio awaiting speaker playback."""
