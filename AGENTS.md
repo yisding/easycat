@@ -7,7 +7,7 @@
 - Provider interfaces are centralized in `providers.py`; STT/TTS provider factory registries are in `stt/factory.py` and `tts/factory.py`.
 - `src/easycat/models/`: runtime model assets (for example ONNX smart-turn model).
 - `tests/`: pytest suite mirroring domains (for example `tests/stt/`, `tests/tts/`, `tests/session/`, `tests/turns/`, `tests/transports/`, `tests/websocket/`, `tests/agents/`).
-- `examples/`: runnable reference apps (`local_chat.py`, `ws_server.py`, `ws_browser_example.py`, `webrtc_server.py`, `twilio_app.py`, `pydantic_ai_voice.py`) plus browser/deployment assets in `webrtc_static/` and `ec2_webrtc/`.
+- `examples/`: runnable reference apps (`openai_agents_voice.py`, `ws_server.py`, `ws_browser_example.py`, `webrtc_server.py`, `webrtc_observability_server.py`, `twilio_app.py`, `pydantic_ai_voice.py`, `pydantic_ai_workflow_voice.py`, `function_tools_openai.py`, `function_tools_pydantic.py`, `deepgram_stt.py`, `elevenlabs_tts.py`, `cartesia_voice.py`, `combined_providers.py`, `push_to_talk.py`, `smart_turn_demo.py`, `custom_stt_provider.py`, `custom_tts_provider.py`, `custom_vad_provider.py`, `debug_bundle.py`, `session_actions_openai.py`, `session_actions_pydantic.py`, `journal_demo.py`) plus browser/deployment assets in `webrtc_static/` and `ec2_webrtc/`.
 
 ## Build, Test, and Development Commands
 - `uv sync --group dev`: install project + dev tools.

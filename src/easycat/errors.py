@@ -120,14 +120,16 @@ def suggest_codes(query: str, n: int = 3) -> list[str]:
 
 EASYCAT_E101 = register(
     "EASYCAT_E101",
-    "Target directory {target!r} already exists and is not empty.",
+    "Target {target!r} already exists and would be clobbered by scaffolding.",
     cause=(
         "`easycat init` refuses to write into an existing non-empty "
-        "directory to avoid clobbering work in progress."
+        "directory, regular file, or symlink to avoid clobbering work "
+        "in progress."
     ),
     fix=(
-        "Pass `--force` to overwrite, remove the directory first "
-        "(`rm -rf <target>`), or choose a new name."
+        "Choose a new name, or remove the target first (`rm -rf "
+        "<target>`). For non-empty directories only, `--force` will "
+        "write into the existing directory without removing its files."
     ),
     example="easycat init my-agent --force",
     related=["EASYCAT_E102"],
