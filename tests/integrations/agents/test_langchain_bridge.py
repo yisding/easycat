@@ -15,10 +15,7 @@ from typing import Any
 import pytest
 
 from easycat.cancel import CancelToken
-from easycat.integrations.agents._langchain_events import (
-    translate_message_chunk,
-    translate_stream_event,
-)
+from easycat.integrations.agents._langchain_events import translate_stream_event
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
     AgentTurnInput,
@@ -58,8 +55,8 @@ class _MockRunnable:
         self._events = events
         self.invoked_with: Any = None
 
-    async def astream_events(self, input: Any, *, version: str) -> AsyncIterator[dict[str, Any]]:
-        self.invoked_with = (input, version)
+    async def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        self.invoked_with = (input, kwargs)
         for event in self._events:
             yield event
 
@@ -178,11 +175,6 @@ class TestStreamEventTranslator:
     def test_unknown_event_is_ignored(self):
         out = list(translate_stream_event({"event": "on_retriever_start", "data": {}}))
         assert out == []
-
-    def test_message_chunk_wrapper_reuses_chat_stream_path(self):
-        chunk = _MockAIMessageChunk(content="hi")
-        out = list(translate_message_chunk(chunk))
-        assert out and out[0].text == "hi"
 
 
 # ── LangChainBridge tests ────────────────────────────────────────

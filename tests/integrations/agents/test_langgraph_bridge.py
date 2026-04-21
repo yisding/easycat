@@ -1,9 +1,12 @@
 """Tests for :class:`LangGraphBridge`.
 
 Uses duck-typed mocks so the real ``langgraph`` package is not required
-at test time.  The mock reproduces the tuple shape yielded by
-``graph.astream(stream_mode=[...], subgraphs=True)`` and a simplified
-``get_state`` / ``update_state`` surface.
+at test time.  The mock reproduces the event shape yielded by
+``graph.astream_events(..., version="v2")`` — a compiled LangGraph
+graph is itself a LangChain ``Runnable``, so the bridge consumes the
+same dict-shaped events as ``LangChainBridge`` plus the LangGraph
+``metadata`` fields (``langgraph_node``, ``langgraph_step``,
+``langgraph_checkpoint_ns``, ``checkpoint_id``).
 """
 
 from __future__ import annotations
@@ -60,38 +63,35 @@ class _MockState:
 
 
 class _MockCheckpointer:
-    """Marker object — LangGraphBridge only probes ``graph.checkpointer``."""
+    """Marker — LangGraphBridge only probes ``graph.checkpointer``."""
 
 
 class _MockCompiledGraph:
     """Duck-types ``langgraph.graph.state.CompiledStateGraph``.
 
-    Yields a scripted sequence of tuples matching the
-    ``subgraphs=True`` + multi-mode stream shape.
+    Emits scripted ``astream_events(version="v2")`` dicts.  Tests build
+    the script directly; helpers below make the common shapes easy.
     """
 
     def __init__(
         self,
-        scripted: list[tuple[tuple[str, ...], str, Any]],
+        scripted: list[dict[str, Any]] | None = None,
         *,
         state: _MockState | None = None,
     ) -> None:
-        self._scripted = scripted
+        self._scripted = scripted or []
         self.checkpointer = _MockCheckpointer()
         self._state = state or _MockState(values={"messages": []})
         self.update_state_calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
-    def astream(
+    def astream_events(
         self,
         input: Any,
-        config: dict[str, Any] | None = None,
-        *,
-        stream_mode: Any,
-        subgraphs: bool = False,
-    ) -> AsyncIterator[tuple[tuple[str, ...], str, Any]]:
-        async def _gen() -> AsyncIterator[tuple[tuple[str, ...], str, Any]]:
-            for item in self._scripted:
-                yield item
+        **kwargs: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        async def _gen() -> AsyncIterator[dict[str, Any]]:
+            for event in self._scripted:
+                yield event
 
         return _gen()
 
@@ -124,6 +124,59 @@ class _MockCompiledGraph:
         return {"configurable": {"thread_id": "t-1", "checkpoint_id": "cp-2"}}
 
 
+def _node_start(node: str, run_id: str, checkpoint_id: str = "cp-1") -> dict[str, Any]:
+    return {
+        "event": "on_chain_start",
+        "name": node,
+        "run_id": run_id,
+        "parent_ids": [],
+        "data": {},
+        "metadata": {
+            "langgraph_node": node,
+            "langgraph_step": 1,
+            "langgraph_checkpoint_ns": "",
+            "checkpoint_id": checkpoint_id,
+            "thread_id": "t-1",
+        },
+    }
+
+
+def _node_end(node: str, run_id: str, checkpoint_id: str = "cp-1") -> dict[str, Any]:
+    return {
+        "event": "on_chain_end",
+        "name": node,
+        "run_id": run_id,
+        "parent_ids": [],
+        "data": {},
+        "metadata": {
+            "langgraph_node": node,
+            "langgraph_checkpoint_ns": "",
+            "checkpoint_id": checkpoint_id,
+        },
+    }
+
+
+def _model_stream(
+    text: str,
+    *,
+    run_id: str = "m",
+    parent: str = "",
+    node: str | None = None,
+    checkpoint_id: str = "cp-1",
+) -> dict[str, Any]:
+    meta: dict[str, Any] = {"checkpoint_id": checkpoint_id}
+    if node is not None:
+        meta["langgraph_node"] = node
+    return {
+        "event": "on_chat_model_stream",
+        "name": "ChatOpenAI",
+        "run_id": run_id,
+        "parent_ids": [parent] if parent else [],
+        "data": {"chunk": _MockAIMessageChunk(content=text)},
+        "metadata": meta,
+    }
+
+
 def _recorder(journal: InMemoryRingBuffer | None = None) -> JournalAgentRecorder:
     return JournalAgentRecorder(
         journal=journal or InMemoryRingBuffer(capacity=1000),
@@ -140,7 +193,7 @@ class TestLangGraphBridgeConstruction:
         with pytest.raises(BridgeInputError):
             LangGraphBridge(None)  # type: ignore[arg-type]
 
-    def test_rejects_graph_without_astream(self):
+    def test_rejects_graph_without_astream_events(self):
         class NotAGraph:
             pass
 
@@ -151,7 +204,7 @@ class TestLangGraphBridgeConstruction:
         class GraphNoCP:
             checkpointer = None
 
-            def astream(self, *args: Any, **kwargs: Any) -> Any:
+            def astream_events(self, *args: Any, **kwargs: Any) -> Any:
                 return iter(())
 
         with pytest.raises(BridgeInputError):
@@ -171,12 +224,14 @@ class TestLangGraphBridgeInvoke:
     @pytest.mark.asyncio
     async def test_nodes_produce_workflow_node_cursors_and_handoff(self):
         scripted = [
-            ((), "updates", {"research": {"messages": [_MockMessage("assistant", "R")]}}),
-            ((), "messages", (_MockAIMessageChunk(content="R text "), {})),
-            ((), "updates", {"write": {"messages": [_MockMessage("assistant", "W")]}}),
-            ((), "messages", (_MockAIMessageChunk(content="W text"), {})),
+            _node_start("research", "n1"),
+            _model_stream("R text ", run_id="m1", parent="n1", node="research"),
+            _node_end("research", "n1"),
+            _node_start("write", "n2", checkpoint_id="cp-2"),
+            _model_stream("W text", run_id="m2", parent="n2", node="write"),
+            _node_end("write", "n2", checkpoint_id="cp-2"),
         ]
-        graph = _MockCompiledGraph(scripted)
+        graph = _MockCompiledGraph(scripted, state=_MockState(checkpoint_id="cp-2"))
         bridge = LangGraphBridge(graph)
 
         journal = InMemoryRingBuffer(capacity=1000)
@@ -200,11 +255,17 @@ class TestLangGraphBridgeInvoke:
             "unit_exited"
         )
 
+        # Workflow nodes created.
+        workflow_nodes = [
+            r
+            for r in records
+            if r.name == "unit_entered" and r.data["unit_kind"] == "workflow_node"
+        ]
+        assert {r.data["display_name"] for r in workflow_nodes} == {"research", "write"}
+
     @pytest.mark.asyncio
     async def test_cancel_token_short_circuits(self):
-        scripted = [
-            ((), "messages", (_MockAIMessageChunk(content="suppressed"), {})),
-        ]
+        scripted = [_model_stream("suppressed", run_id="m")]
         graph = _MockCompiledGraph(scripted)
         bridge = LangGraphBridge(graph)
 
@@ -222,15 +283,12 @@ class TestLangGraphBridgeInvoke:
         assert any(r.name == "cancellation_boundary" for r in records)
 
     @pytest.mark.asyncio
-    async def test_checkpoint_snapshot_recorded(self):
-        debug_payload = {
-            "type": "checkpoint",
-            "payload": {
-                "config": {"configurable": {"checkpoint_id": "cp-42"}},
-            },
-        }
+    async def test_checkpoint_snapshot_recorded_from_event_metadata(self):
+        """Checkpoint ids arrive inline on event metadata; the final
+        ``get_state`` snapshot adds the post-turn checkpoint once."""
         scripted = [
-            ((), "debug", debug_payload),
+            _node_start("planner", "n1", checkpoint_id="cp-mid"),
+            _node_end("planner", "n1", checkpoint_id="cp-mid"),
         ]
         graph = _MockCompiledGraph(scripted, state=_MockState(checkpoint_id="cp-final"))
         bridge = LangGraphBridge(graph)
@@ -241,22 +299,44 @@ class TestLangGraphBridgeInvoke:
             pass
 
         refs = [r.data["state_ref"] for r in journal.read() if r.name == "state_snapshot"]
-        assert "langgraph:cp-42" in refs
-        # Final-state snapshot also recorded.
-        assert any("langgraph:cp-final" == ref for ref in refs)
+        assert "langgraph:cp-mid" in refs
+        assert "langgraph:cp-final" in refs
+        # Dedupe: cp-mid appears on both node_start and node_end events
+        # but is recorded only once.
+        assert refs.count("langgraph:cp-mid") == 1
 
     @pytest.mark.asyncio
-    async def test_internal_sentinel_nodes_filtered(self):
+    async def test_non_node_chain_events_ignored(self):
+        """``on_chain_start`` without a matching ``langgraph_node`` (e.g.
+        internal runnables inside a node) shouldn't open a cursor."""
         scripted = [
-            ((), "updates", {"__start__": None}),
-            ((), "updates", {"planner": {}}),
+            # Internal RunnableSequence inside a node — name ≠ langgraph_node.
+            {
+                "event": "on_chain_start",
+                "name": "RunnableSequence",
+                "run_id": "r1",
+                "parent_ids": [],
+                "data": {},
+                "metadata": {"langgraph_node": "planner"},
+            },
+            _node_start("planner", "n1"),
+            _node_end("planner", "n1"),
         ]
         graph = _MockCompiledGraph(scripted)
         bridge = LangGraphBridge(graph)
-        rec = _recorder()
+
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
         async for _ in bridge.invoke(AgentTurnInput.from_text("x"), rec):
             pass
-        # Only the planner cursor should be created.
+
+        workflow_nodes = [
+            r
+            for r in journal.read()
+            if r.name == "unit_entered" and r.data["unit_kind"] == "workflow_node"
+        ]
+        assert len(workflow_nodes) == 1
+        assert workflow_nodes[0].data["display_name"] == "planner"
 
 
 # ── State / interruption ─────────────────────────────────────────
@@ -264,7 +344,7 @@ class TestLangGraphBridgeInvoke:
 
 class TestLangGraphBridgeState:
     def test_snapshot_includes_checkpoint_id(self):
-        graph = _MockCompiledGraph([], state=_MockState(checkpoint_id="cp-snap"))
+        graph = _MockCompiledGraph(state=_MockState(checkpoint_id="cp-snap"))
         bridge = LangGraphBridge(graph)
         snap = bridge.snapshot_state()
         assert snap.fields["framework"] == "langgraph"
@@ -274,7 +354,7 @@ class TestLangGraphBridgeState:
     def test_apply_interruption_rewrites_last_ai_via_update_state(self):
         ai_msg = _MockMessage("assistant", "the full reply", message_id="m-ai-1")
         state = _MockState(values={"messages": [_MockMessage("user", "hi"), ai_msg]})
-        graph = _MockCompiledGraph([], state=state)
+        graph = _MockCompiledGraph(state=state)
         bridge = LangGraphBridge(graph)
 
         bridge.apply_interruption("the full", CancellationMode.IMMEDIATE_STOP)
@@ -286,21 +366,20 @@ class TestLangGraphBridgeState:
 
     def test_apply_interruption_no_ai_message_is_noop(self):
         state = _MockState(values={"messages": [_MockMessage("user", "hi")]})
-        graph = _MockCompiledGraph([], state=state)
+        graph = _MockCompiledGraph(state=state)
         bridge = LangGraphBridge(graph)
-        # Should not raise.
         bridge.apply_interruption("something", CancellationMode.IMMEDIATE_STOP)
         assert not graph.update_state_calls
 
     def test_reset_rotates_thread_id(self):
-        graph = _MockCompiledGraph([], state=_MockState())
+        graph = _MockCompiledGraph(state=_MockState())
         bridge = LangGraphBridge(graph, thread_id="original")
         assert bridge._thread_id == "original"
         bridge.reset()
         assert bridge._thread_id != "original"
 
     def test_append_interruption_note(self):
-        graph = _MockCompiledGraph([], state=_MockState(values={"messages": []}))
+        graph = _MockCompiledGraph(state=_MockState(values={"messages": []}))
         bridge = LangGraphBridge(graph)
         bridge.append_interruption_note("user interrupted")
         assert graph.update_state_calls

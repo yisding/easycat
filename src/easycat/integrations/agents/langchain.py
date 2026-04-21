@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 from uuid import uuid4
 
@@ -37,22 +37,11 @@ from easycat.runtime.records import ErrorInfo
 logger = logging.getLogger(__name__)
 
 
-_LC_UNIT_KINDS: dict[str, UnitKind] = {
-    "on_chain_start": UnitKind.SPECIALIST,
-    "on_chat_model_start": UnitKind.MODEL_NODE,
-    "on_llm_start": UnitKind.MODEL_NODE,
-    "on_prompt_start": UnitKind.SPECIALIST,
-    "on_parser_start": UnitKind.SPECIALIST,
-    "on_retriever_start": UnitKind.SPECIALIST,
-}
-_LC_EXIT_EVENTS = {
-    "on_chain_end",
-    "on_chat_model_end",
-    "on_llm_end",
-    "on_prompt_end",
-    "on_parser_end",
-    "on_retriever_end",
-}
+# Default event filter for ``astream_events(include_types=...)``.  ``chat_model``
+# covers token streams + tool_call_chunks; ``tool`` covers ``@tool``-decorated
+# functions.  Together they give token + tool visibility without the cursor
+# noise from every RunnableSequence / ChatPromptTemplate / output parser.
+_DEFAULT_INCLUDE_TYPES: tuple[str, ...] = ("chat_model", "tool")
 
 
 class LangChainBridge:
@@ -77,11 +66,16 @@ class LangChainBridge:
     history_key:
         Key under which the prior turn messages are placed.  Defaults
         to ``"history"``.  Set to ``None`` to disable history passing.
+    include_types:
+        Runnable types to surface as ``astream_events(include_types=...)``.
+        Defaults to ``("chat_model", "tool")`` which gives LLM token +
+        tool-call visibility without paired cursors for every
+        RunnableSequence / prompt / parser.  Pass ``None`` to surface
+        every event (useful when debugging a chain's internal structure).
     """
 
     COMMITTABLE_BOUNDARIES = {
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,
-        UnitKind.SPECIALIST: CommitRule.BETWEEN_NODES,
         UnitKind.MODEL_NODE: CommitRule.NON_COMMITTABLE,
         UnitKind.TOOL_CALL: CommitRule.BETWEEN_PHASES,
     }
@@ -93,6 +87,7 @@ class LangChainBridge:
         display_name: str | None = None,
         input_key: str | None = "input",
         history_key: str | None = "history",
+        include_types: Sequence[str] | None = _DEFAULT_INCLUDE_TYPES,
     ) -> None:
         if runnable is None:
             raise BridgeInputError("LangChainBridge requires a non-None runnable=")
@@ -109,6 +104,7 @@ class LangChainBridge:
         self._display_name = display_name or type(runnable).__name__
         self._input_key = input_key
         self._history_key = history_key
+        self._include_types = list(include_types) if include_types is not None else None
         self._message_history: list[Any] = []
         self._last_output: Any = None
 
@@ -130,15 +126,18 @@ class LangChainBridge:
         recorder.record_unit_entered(agent_cursor)
 
         accumulated = ""
-        # Track open nested cursors keyed by LangChain ``run_id`` so we
-        # can pair ``on_*_start`` / ``on_*_end`` reliably without relying
-        # on event ordering.
+        # Open ``model_node`` cursors for ``on_chat_model_*`` events, keyed
+        # by LangChain ``run_id`` so start/end always pair even when the
+        # runnable interleaves multiple model calls.
         open_cursors: dict[str, ExecutionCursor] = {}
 
         input_payload = self._build_input(turn_input.text)
+        stream_kwargs: dict[str, Any] = {"version": "v2"}
+        if self._include_types is not None:
+            stream_kwargs["include_types"] = self._include_types
 
         try:
-            stream = self._runnable.astream_events(input_payload, version="v2")
+            stream = self._runnable.astream_events(input_payload, **stream_kwargs)
             async for event in stream:
                 if cancel_token and cancel_token.is_cancelled:
                     recorder.record_cancellation_boundary(
@@ -147,23 +146,12 @@ class LangChainBridge:
                     )
                     break
 
-                self._maybe_enter_cursor(event, recorder, open_cursors, agent_cursor)
+                self._handle_cursor_lifecycle(event, recorder, agent_cursor, open_cursors)
                 for bridge_event in translate_stream_event(event, recorder):
                     if bridge_event.kind == "text_delta":
                         accumulated += bridge_event.text
                     yield bridge_event
-                self._maybe_exit_cursor(event, recorder, open_cursors)
-
-                # Capture final output from ``on_chain_end`` on the
-                # top-level runnable.
-                if (
-                    event.get("event") == "on_chain_end"
-                    and not event.get("parent_ids")
-                    and isinstance(event.get("data"), dict)
-                ):
-                    self._last_output = event["data"].get("output")
         except Exception as exc:
-            # Close any still-open nested cursors before bubbling.
             for cursor in reversed(list(open_cursors.values())):
                 try:
                     recorder.record_unit_exited(cursor, reason="error")
@@ -173,11 +161,11 @@ class LangChainBridge:
             recorder.record_unit_exited(agent_cursor, reason="error")
             raise
 
-        # Close any cursors still open after the stream drains.
         for cursor in reversed(list(open_cursors.values())):
             recorder.record_unit_exited(cursor.with_committable(True), reason=None)
         open_cursors.clear()
 
+        self._last_output = accumulated
         self._append_to_history(turn_input.text, accumulated)
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(
@@ -349,54 +337,40 @@ class LangChainBridge:
         replacement = plan.framework_instructions["replacement"]
         self._rewrite_last_ai_content(replacement)
 
-    def _maybe_enter_cursor(
+    def _handle_cursor_lifecycle(
         self,
-        event: Mapping[str, Any],
+        event: dict[str, Any],
         recorder: AgentRecorder,
-        open_cursors: dict[str, ExecutionCursor],
         agent_cursor: ExecutionCursor,
-    ) -> None:
-        event_type = event.get("event")
-        if not isinstance(event_type, str):
-            return
-        unit_kind = _LC_UNIT_KINDS.get(event_type)
-        if unit_kind is None:
-            return
-        run_id = str(event.get("run_id") or uuid4().hex[:8])
-        if run_id in open_cursors:
-            return
-        parent_ids = event.get("parent_ids") or []
-        parent_unit_id: str | None = agent_cursor.unit_id
-        for pid in reversed(parent_ids):
-            if pid in open_cursors:
-                parent_unit_id = open_cursors[pid].unit_id
-                break
-        display_name = event.get("name") or unit_kind.value
-        cursor = ExecutionCursor(
-            unit_id=f"{unit_kind.value}-{run_id[:8]}",
-            unit_kind=unit_kind,
-            display_name=str(display_name),
-            parent_unit_id=parent_unit_id,
-            entered_at=time.monotonic_ns(),
-            committable=False,
-        )
-        recorder.record_unit_entered(cursor)
-        open_cursors[run_id] = cursor
-
-    def _maybe_exit_cursor(
-        self,
-        event: Mapping[str, Any],
-        recorder: AgentRecorder,
         open_cursors: dict[str, ExecutionCursor],
     ) -> None:
+        """Open / close ``model_node`` cursors from chat-model events.
+
+        Tool calls are recorded as ``tool_phase_changed`` records by the
+        translator; they don't open a cursor.  With the default
+        ``include_types=("chat_model", "tool")`` filter these are the only
+        events we see, so the whole lifecycle fits in a dozen lines.
+        """
         event_type = event.get("event")
-        if event_type not in _LC_EXIT_EVENTS:
-            return
-        run_id = str(event.get("run_id") or "")
-        cursor = open_cursors.pop(run_id, None)
-        if cursor is None:
-            return
-        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+        if event_type in ("on_chat_model_start", "on_llm_start"):
+            run_id = str(event.get("run_id") or uuid4().hex[:8])
+            if run_id in open_cursors:
+                return
+            cursor = ExecutionCursor(
+                unit_id=f"model-{run_id[:8]}",
+                unit_kind=UnitKind.MODEL_NODE,
+                display_name=str(event.get("name") or "model"),
+                parent_unit_id=agent_cursor.unit_id,
+                entered_at=time.monotonic_ns(),
+                committable=False,
+            )
+            recorder.record_unit_entered(cursor)
+            open_cursors[run_id] = cursor
+        elif event_type in ("on_chat_model_end", "on_llm_end"):
+            run_id = str(event.get("run_id") or "")
+            cursor = open_cursors.pop(run_id, None)
+            if cursor is not None:
+                recorder.record_unit_exited(cursor.with_committable(True), reason=None)
 
 
 # ── Helpers ──────────────────────────────────────────────────────

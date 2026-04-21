@@ -1,10 +1,10 @@
 """Shared LangChain/LangGraph event translator.
 
-Maps LangChain ``astream_events(version="v2")`` dicts and LangGraph
-``astream(stream_mode="messages")`` message chunks to
-``AgentBridgeEvent`` instances, and records tool phases on the
-``AgentRecorder``.  Used by both ``LangChainBridge`` and
-``LangGraphBridge`` so the two bridges share one event mapping.
+Maps LangChain ``astream_events(version="v2")`` dicts to
+``AgentBridgeEvent`` instances and records tool phases on the
+``AgentRecorder``.  Used by both ``LangChainBridge`` (wrapping any
+``Runnable``) and ``LangGraphBridge`` (wrapping a ``CompiledStateGraph``
+— which is itself a ``Runnable``).
 
 Uses duck typing — the ``langchain_core`` package is not imported here
 so tests can run without it installed.
@@ -181,25 +181,3 @@ def translate_stream_event(
             call_id=call_id,
             reason="tool_error",
         )
-
-
-def translate_message_chunk(
-    chunk: Any,
-    recorder: AgentRecorder | None = None,
-) -> Iterator[AgentBridgeEvent]:
-    """Translate a LangGraph ``stream_mode="messages"`` chunk.
-
-    The tuple from LangGraph is ``(message_chunk, metadata)``; pass the
-    message_chunk here.  Emits the same shape as ``on_chat_model_stream``
-    from ``astream_events`` for uniformity.
-    """
-    if chunk is None:
-        return
-    # Reuse the chat-model-stream path.
-    wrapped = {
-        "event": "on_chat_model_stream",
-        "data": {"chunk": chunk},
-        "name": getattr(chunk, "name", "") or "",
-        "run_id": getattr(chunk, "id", "") or "",
-    }
-    yield from translate_stream_event(wrapped, recorder)

@@ -1,17 +1,19 @@
 """LangGraph bridge — wraps a ``CompiledStateGraph`` with checkpointer support.
 
-Deep integration via ``graph.astream(stream_mode=["updates", "messages",
-"custom", "debug"], subgraphs=True)``.  Node transitions become
-``workflow_node`` cursors; LLM tokens feed through the shared
-``_langchain_events.translate_message_chunk`` translator.  Checkpoint
-IDs flow from ``graph.get_state(config)`` into the journal so
-LangGraph's native ``checkpoint_id`` vocabulary is preserved alongside
-EasyCat's own monotonic ``sequence`` numbers.
+A compiled LangGraph graph is itself a LangChain ``Runnable``, so the
+bridge drives it via ``graph.astream_events(input, version="v2")``
+exactly the way :class:`LangChainBridge` does.  The per-event
+``metadata`` dict carries ``langgraph_node``, ``langgraph_step``,
+``thread_id`` and ``checkpoint_id`` fields that we hoist into
+``workflow_node`` cursors and ``state_snapshot`` records.  This keeps
+both bridges on one event vocabulary and drops the four-shape tuple
+normalizer, the node-key diff tracking, and the separate ``debug``
+stream-mode branch the earlier implementation required.
 
 Interruption patches the last AI message via LangGraph's native
-``update_state(config, values, as_node=None)``.  Because LangGraph's
-``add_messages`` reducer dedupes by message ``id``, we re-send the
-edited message under the same id so it replaces instead of appending.
+``update_state``.  Because LangGraph's ``add_messages`` reducer dedupes
+by message ``id``, we re-send the edited message under the same id so
+it replaces instead of appending.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from uuid import uuid4
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._base_adapter import split_replacement_by_original_parts
-from easycat.integrations.agents._langchain_events import translate_message_chunk
+from easycat.integrations.agents._langchain_events import translate_stream_event
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -42,6 +44,12 @@ from easycat.integrations.agents.base import (
 from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
+
+
+# ``chain`` is needed so every node execution emits ``on_chain_start`` /
+# ``on_chain_end`` events from which we build workflow_node cursors.
+# ``chat_model`` and ``tool`` give token + tool visibility.
+_DEFAULT_INCLUDE_TYPES: tuple[str, ...] = ("chat_model", "tool", "chain")
 
 
 class LangGraphBridge:
@@ -64,6 +72,11 @@ class LangGraphBridge:
     display_name:
         Optional label for the outer ``agent`` cursor (defaults to
         ``type(graph).__name__``).
+    include_types:
+        Runnable types to surface via ``astream_events(include_types=
+        ...)``.  Defaults to ``("chat_model", "tool", "chain")`` —
+        ``chain`` is needed so every node entry is observable for
+        workflow_node cursors.  Pass ``None`` to surface every event.
     """
 
     COMMITTABLE_BOUNDARIES = {
@@ -80,13 +93,14 @@ class LangGraphBridge:
         thread_id: str | None = None,
         messages_key: str | None = "messages",
         display_name: str | None = None,
+        include_types: Sequence[str] | None = _DEFAULT_INCLUDE_TYPES,
     ) -> None:
         if graph is None:
             raise BridgeInputError("LangGraphBridge requires a non-None graph=")
-        if not hasattr(graph, "astream"):
+        if not hasattr(graph, "astream_events"):
             raise BridgeInputError(
                 "LangGraphBridge requires a compiled LangGraph graph with "
-                "astream() — got: " + type(graph).__name__
+                "astream_events() — got: " + type(graph).__name__
             )
         checkpointer = getattr(graph, "checkpointer", None)
         if checkpointer is None:
@@ -99,6 +113,7 @@ class LangGraphBridge:
         self._thread_id = thread_id or str(uuid.uuid4())
         self._messages_key = messages_key
         self._display_name = display_name or type(graph).__name__
+        self._include_types = list(include_types) if include_types is not None else None
         self._last_output: Any = None
 
     # ── ExternalAgentBridge interface ─────────────────────────────
@@ -122,20 +137,28 @@ class LangGraphBridge:
         recorder.record_unit_entered(agent_cursor)
 
         accumulated = ""
-        open_node_cursors: dict[tuple[str, ...], dict[str, ExecutionCursor]] = {}
+        # Cursors open inside this turn, keyed by LangChain ``run_id``.
+        # Each node entry opens a workflow_node cursor; each chat_model
+        # call opens a model_node cursor.  Closing is driven by the
+        # matching ``_end`` event for the same run_id.
+        open_cursors: dict[str, ExecutionCursor] = {}
+        # Previously seen node at each subgraph namespace depth, so we
+        # can emit handoff triples when a node changes at the same level.
         last_node_by_ns: dict[tuple[str, ...], str] = {}
+        # Checkpoint ids we've already emitted state_snapshot records
+        # for, to avoid duplicates when the same id appears on multiple
+        # events within a super-step.
+        seen_checkpoints: set[str] = set()
 
         config = self._config()
         input_payload = self._build_input(turn_input.text)
+        stream_kwargs: dict[str, Any] = {"version": "v2", "config": config}
+        if self._include_types is not None:
+            stream_kwargs["include_types"] = self._include_types
 
         try:
-            stream = self._graph.astream(
-                input_payload,
-                config=config,
-                stream_mode=["updates", "messages", "custom", "debug"],
-                subgraphs=True,
-            )
-            async for item in stream:
+            stream = self._graph.astream_events(input_payload, **stream_kwargs)
+            async for event in stream:
                 if cancel_token and cancel_token.is_cancelled:
                     recorder.record_cancellation_boundary(
                         mode=CancellationMode.IMMEDIATE_STOP,
@@ -143,72 +166,39 @@ class LangGraphBridge:
                     )
                     break
 
-                ns, stream_mode, payload = _unpack_stream_item(item)
+                for bridge_event in self._handle_cursor_lifecycle(
+                    event, recorder, agent_cursor, open_cursors, last_node_by_ns
+                ):
+                    yield bridge_event
 
-                if stream_mode == "updates" and isinstance(payload, dict):
-                    for bridge_event in self._handle_updates(
-                        ns,
-                        payload,
-                        recorder,
-                        agent_cursor,
-                        open_node_cursors,
-                        last_node_by_ns,
-                    ):
-                        yield bridge_event
-                elif stream_mode == "messages":
-                    chunk = payload[0] if isinstance(payload, tuple) else payload
-                    for bridge_event in translate_message_chunk(chunk, recorder):
-                        if bridge_event.kind == "text_delta":
-                            accumulated += bridge_event.text
-                        yield bridge_event
-                elif stream_mode == "custom":
-                    # User-emitted data from `get_stream_writer()`;
-                    # surface as a tool_delta so the UI can observe it
-                    # without it being fed to TTS.
-                    yield AgentBridgeEvent(
-                        kind="tool_delta",
-                        tool_name="custom",
-                        text=_safe_repr(payload),
-                    )
-                elif stream_mode == "debug" and isinstance(payload, dict):
-                    # Debug payloads carry ``{"type": "task"|"task_result"|
-                    # "checkpoint", "payload": {...}}`` entries; we only
-                    # care about checkpoints for state snapshot records.
-                    if payload.get("type") == "checkpoint":
-                        inner = payload.get("payload") or {}
-                        cfg = inner.get("config") or {}
-                        checkpoint_id = (
-                            cfg.get("configurable", {}).get("checkpoint_id")
-                            if isinstance(cfg, dict)
-                            else None
-                        )
-                        if checkpoint_id:
-                            recorder.record_state_snapshot(ref=f"langgraph:{checkpoint_id}")
+                for bridge_event in translate_stream_event(event, recorder):
+                    if bridge_event.kind == "text_delta":
+                        accumulated += bridge_event.text
+                    yield bridge_event
+
+                self._maybe_record_checkpoint(event, recorder, seen_checkpoints)
         except Exception as exc:
-            # Close any still-open node cursors (deepest-last per ns).
-            for ns_key, cursors in list(open_node_cursors.items()):
-                for cursor in reversed(list(cursors.values())):
-                    try:
-                        recorder.record_unit_exited(cursor, reason="error")
-                    except Exception:
-                        logger.debug("Failed to close node cursor on error", exc_info=True)
-                open_node_cursors.pop(ns_key, None)
+            for cursor in reversed(list(open_cursors.values())):
+                try:
+                    recorder.record_unit_exited(cursor, reason="error")
+                except Exception:
+                    logger.debug("Failed to close cursor during error cleanup", exc_info=True)
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
             raise
 
-        # Close any remaining open node cursors after the stream drains.
-        for ns_key, cursors in list(open_node_cursors.items()):
-            for cursor in reversed(list(cursors.values())):
-                recorder.record_unit_exited(cursor.with_committable(True), reason=None)
-            open_node_cursors.pop(ns_key, None)
+        for cursor in reversed(list(open_cursors.values())):
+            recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+        open_cursors.clear()
 
-        # Surface the final checkpoint as a state snapshot + record the
-        # committable agent exit.
+        # Surface the final checkpoint + capture the last message for
+        # ``structured_output``.  Best-effort: a graph compiled without
+        # a checkpointer would have been rejected at construction, but
+        # ``get_state`` can still fail on transient checkpointer errors.
         try:
             final_state = self._graph.get_state(config)
             checkpoint_id = _get_checkpoint_id(final_state)
-            if checkpoint_id:
+            if checkpoint_id and checkpoint_id not in seen_checkpoints:
                 recorder.record_state_snapshot(ref=f"langgraph:{checkpoint_id}")
             self._last_output = _messages_tail(final_state)
         except Exception:  # pragma: no cover — best-effort.
@@ -329,71 +319,132 @@ class LangGraphBridge:
             return text
         return {self._messages_key: [("user", text)]}
 
-    def _handle_updates(
+    def _handle_cursor_lifecycle(
         self,
-        ns: tuple[str, ...],
-        payload: dict[str, Any],
+        event: dict[str, Any],
         recorder: AgentRecorder,
         agent_cursor: ExecutionCursor,
-        open_node_cursors: dict[tuple[str, ...], dict[str, ExecutionCursor]],
+        open_cursors: dict[str, ExecutionCursor],
         last_node_by_ns: dict[tuple[str, ...], str],
     ) -> list[AgentBridgeEvent]:
-        """Translate one ``stream_mode="updates"`` payload into cursors.
+        """Open / close workflow_node + model_node cursors for one event.
 
-        LangGraph emits ``{node_name: state_delta}`` dicts per
-        super-step.  We treat each key as a ``workflow_node`` cursor
-        and emit handoff triples whenever the node changes within the
-        same namespace.
+        Each node invocation in a LangGraph run appears as an
+        ``on_chain_start`` event whose ``metadata`` carries
+        ``langgraph_node``, ``langgraph_checkpoint_ns`` and
+        ``langgraph_step``.  We open a workflow_node cursor keyed by
+        ``run_id`` and emit a handoff triple whenever the active node
+        at a given checkpoint_ns changes.
+
+        Chat-model calls open a ``model_node`` cursor nested inside the
+        enclosing workflow_node (or the outer agent_cursor for
+        plain-runnable events).  ``_end`` events close the matching
+        cursor by ``run_id``.
         """
         events: list[AgentBridgeEvent] = []
-        cursors = open_node_cursors.setdefault(ns, {})
-        for node_name, _delta in payload.items():
-            if not isinstance(node_name, str):
-                continue
-            # Skip sentinel/internal keys.
-            if node_name in ("__start__", "__end__"):
-                continue
+        event_type = event.get("event")
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        node_name = metadata.get("langgraph_node")
+        ns_raw = metadata.get("langgraph_checkpoint_ns", "")
+        ns: tuple[str, ...] = tuple(ns_raw.split("|")) if ns_raw else ()
 
-            prev = last_node_by_ns.get(ns)
-            if prev and prev != node_name and prev in cursors:
-                prev_cursor = cursors.pop(prev)
-                recorder.record_unit_exited(prev_cursor.with_committable(True), reason=None)
-                recorder.record_framework_handoff(
-                    from_unit=prev,
-                    to_unit=node_name,
-                    reason="langgraph_edge",
-                )
-                events.append(
-                    AgentBridgeEvent(
-                        kind="handoff",
+        if event_type == "on_chain_start":
+            # Only node-entry chain_starts have langgraph_node set AND a
+            # name that matches the node name (other chain_starts are
+            # internal runnables inside the node).
+            if (
+                isinstance(node_name, str)
+                and node_name
+                and event.get("name") == node_name
+                and node_name not in ("__start__", "__end__")
+            ):
+                run_id = str(event.get("run_id") or uuid4().hex[:8])
+                if run_id in open_cursors:
+                    return events
+
+                prev = last_node_by_ns.get(ns)
+                if prev and prev != node_name:
+                    recorder.record_framework_handoff(
                         from_unit=prev,
                         to_unit=node_name,
                         reason="langgraph_edge",
                     )
-                )
+                    events.append(
+                        AgentBridgeEvent(
+                            kind="handoff",
+                            from_unit=prev,
+                            to_unit=node_name,
+                            reason="langgraph_edge",
+                        )
+                    )
 
-            if node_name not in cursors:
-                parent_id = agent_cursor.unit_id
-                # Nested subgraphs: attach to the innermost still-open
-                # parent cursor in the enclosing namespace.
-                for depth in range(len(ns) - 1, -1, -1):
-                    parent_ns = ns[: depth + 1]
-                    parent_map = open_node_cursors.get(parent_ns)
-                    if parent_map:
-                        parent_id = next(reversed(parent_map.values())).unit_id
-                        break
                 cursor = ExecutionCursor(
-                    unit_id=f"node-{uuid4().hex[:8]}",
+                    unit_id=f"node-{run_id[:8]}",
                     unit_kind=UnitKind.WORKFLOW_NODE,
                     display_name=node_name,
-                    parent_unit_id=parent_id,
+                    parent_unit_id=self._nearest_parent_id(open_cursors, ns, agent_cursor.unit_id),
                     entered_at=time.monotonic_ns(),
                     committable=False,
                 )
                 recorder.record_unit_entered(cursor)
-                cursors[node_name] = cursor
-            last_node_by_ns[ns] = node_name
+                open_cursors[run_id] = cursor
+                last_node_by_ns[ns] = node_name
+
+        elif event_type in ("on_chat_model_start", "on_llm_start"):
+            run_id = str(event.get("run_id") or uuid4().hex[:8])
+            if run_id in open_cursors:
+                return events
+            cursor = ExecutionCursor(
+                unit_id=f"model-{run_id[:8]}",
+                unit_kind=UnitKind.MODEL_NODE,
+                display_name=str(event.get("name") or "model"),
+                parent_unit_id=self._nearest_parent_id(open_cursors, ns, agent_cursor.unit_id),
+                entered_at=time.monotonic_ns(),
+                committable=False,
+            )
+            recorder.record_unit_entered(cursor)
+            open_cursors[run_id] = cursor
+
+        elif event_type in ("on_chain_end", "on_chat_model_end", "on_llm_end"):
+            run_id = str(event.get("run_id") or "")
+            cursor = open_cursors.pop(run_id, None)
+            if cursor is not None:
+                recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+
         return events
+
+    def _nearest_parent_id(
+        self,
+        open_cursors: dict[str, ExecutionCursor],
+        _ns: tuple[str, ...],
+        default: str,
+    ) -> str:
+        """Parent for a new cursor = the most recent open workflow_node, else agent."""
+        for cursor in reversed(open_cursors.values()):
+            if cursor.unit_kind == UnitKind.WORKFLOW_NODE:
+                return cursor.unit_id
+        return default
+
+    def _maybe_record_checkpoint(
+        self,
+        event: dict[str, Any],
+        recorder: AgentRecorder,
+        seen: set[str],
+    ) -> None:
+        """Emit a ``state_snapshot`` record when a new checkpoint_id appears.
+
+        Each LangGraph event's ``metadata`` dict carries the current
+        ``checkpoint_id`` (populated when a checkpointer is configured,
+        which the bridge enforces at construction).  We dedupe against
+        ids we've already recorded so each checkpoint shows up once.
+        """
+        metadata = event.get("metadata")
+        if not isinstance(metadata, dict):
+            return
+        checkpoint_id = metadata.get("checkpoint_id")
+        if isinstance(checkpoint_id, str) and checkpoint_id and checkpoint_id not in seen:
+            seen.add(checkpoint_id)
+            recorder.record_state_snapshot(ref=f"langgraph:{checkpoint_id}")
 
     def _serialize_framework_state(self) -> bytes:
         try:
@@ -469,33 +520,6 @@ class LangGraphBridge:
 
 
 # ── Helpers ──────────────────────────────────────────────────────
-
-
-def _unpack_stream_item(item: Any) -> tuple[tuple[str, ...], str, Any]:
-    """Normalise a chunk from ``astream(stream_mode=[...], subgraphs=True)``.
-
-    With ``subgraphs=True`` + multiple stream modes, LangGraph yields
-    ``(ns_tuple, stream_mode, payload)``.  With only subgraphs,
-    ``(ns_tuple, payload)``.  This helper smooths over the difference
-    so callers always get ``(ns, mode, payload)``.
-    """
-    if isinstance(item, tuple):
-        if len(item) == 3:
-            ns, mode, payload = item
-            if isinstance(ns, tuple) and isinstance(mode, str):
-                return ns, mode, payload
-        if len(item) == 2:
-            first, second = item
-            if isinstance(first, tuple) and isinstance(second, str):
-                # (ns, mode) — no payload, unusual but tolerated.
-                return first, second, None
-            if isinstance(first, str):
-                # (mode, payload) — subgraphs=False path.
-                return (), first, second
-            if isinstance(first, tuple):
-                # (ns, payload) — single mode + subgraphs=True.
-                return first, "", second
-    return (), "", item
 
 
 def _get_checkpoint_id(state: Any) -> str | None:
@@ -576,15 +600,6 @@ def _message_summary(msg: Any) -> dict[str, Any]:
         role = msg.get("role") or msg.get("type") or ""
     content = _content_of(msg)
     return {"role": role, "content": content}
-
-
-def _safe_repr(value: Any) -> str:
-    try:
-        if isinstance(value, (str, int, float, bool)):
-            return str(value)
-        return json.dumps(value, default=str)
-    except (TypeError, ValueError):
-        return repr(value)
 
 
 __all__: Sequence[str] = ["LangGraphBridge"]

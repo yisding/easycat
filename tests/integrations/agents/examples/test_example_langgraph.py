@@ -4,6 +4,9 @@ Mirrors plan appendix Example L2 — a two-node ``StateGraph`` with an
 ``InMemorySaver`` checkpointer, wrapped via :class:`LangGraphBridge`.
 Uses duck-typed mocks so the real ``langgraph`` SDK is not required at
 test time.
+
+Events follow the ``astream_events(version="v2")`` shape emitted by a
+compiled LangGraph (the graph is itself a LangChain ``Runnable``).
 """
 
 from __future__ import annotations
@@ -34,8 +37,32 @@ class _MockStateSnapshot:
         self.next: tuple[str, ...] = ()
 
 
+def _evt(
+    event: str,
+    *,
+    name: str,
+    run_id: str,
+    parent: str = "",
+    node: str | None = None,
+    checkpoint_id: str = "cp-step-1",
+    data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    meta: dict[str, Any] = {"checkpoint_id": checkpoint_id}
+    if node is not None:
+        meta["langgraph_node"] = node
+        meta["langgraph_checkpoint_ns"] = ""
+    return {
+        "event": event,
+        "name": name,
+        "run_id": run_id,
+        "parent_ids": [parent] if parent else [],
+        "data": data or {},
+        "metadata": meta,
+    }
+
+
 class _MockTwoNodeGraph:
-    """Duck-types a LangGraph ``CompiledStateGraph``.
+    """Duck-types a LangGraph ``CompiledStateGraph`` via ``astream_events``.
 
     Represents a simple ``research → write`` pipeline.
     """
@@ -45,41 +72,52 @@ class _MockTwoNodeGraph:
         self._state = _MockStateSnapshot("cp-final", [])
         self.update_state_calls: list[Any] = []
 
-    def astream(
+    def astream_events(
         self,
         input: Any,
-        config: dict[str, Any] | None = None,
-        *,
-        stream_mode: Any,
-        subgraphs: bool = False,
-    ) -> AsyncIterator[tuple[tuple[str, ...], str, Any]]:
-        async def _gen() -> AsyncIterator[tuple[tuple[str, ...], str, Any]]:
-            yield ((), "updates", {"research": {}})
-            yield (
-                (),
-                "messages",
-                (_MockAIMessageChunk(content="Research summary: "), {}),
+        **kwargs: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        async def _gen() -> AsyncIterator[dict[str, Any]]:
+            yield _evt("on_chain_start", name="research", run_id="n1", node="research")
+            yield _evt(
+                "on_chat_model_stream",
+                name="ChatOpenAI",
+                run_id="m1",
+                parent="n1",
+                node="research",
+                data={"chunk": _MockAIMessageChunk(content="Research summary: ")},
             )
-            yield (
-                (),
-                "messages",
-                (_MockAIMessageChunk(content="Paris is the capital."), {}),
+            yield _evt(
+                "on_chat_model_stream",
+                name="ChatOpenAI",
+                run_id="m1",
+                parent="n1",
+                node="research",
+                data={"chunk": _MockAIMessageChunk(content="Paris is the capital.")},
             )
-            yield ((), "updates", {"write": {}})
-            yield (
-                (),
-                "messages",
-                (_MockAIMessageChunk(content=" Final write-up complete."), {}),
+            yield _evt("on_chain_end", name="research", run_id="n1", node="research")
+            yield _evt(
+                "on_chain_start",
+                name="write",
+                run_id="n2",
+                node="write",
+                checkpoint_id="cp-step-2",
             )
-            yield (
-                (),
-                "debug",
-                {
-                    "type": "checkpoint",
-                    "payload": {
-                        "config": {"configurable": {"checkpoint_id": "cp-step-1"}},
-                    },
-                },
+            yield _evt(
+                "on_chat_model_stream",
+                name="ChatOpenAI",
+                run_id="m2",
+                parent="n2",
+                node="write",
+                checkpoint_id="cp-step-2",
+                data={"chunk": _MockAIMessageChunk(content=" Final write-up complete.")},
+            )
+            yield _evt(
+                "on_chain_end",
+                name="write",
+                run_id="n2",
+                node="write",
+                checkpoint_id="cp-step-2",
             )
 
         return _gen()
@@ -126,8 +164,8 @@ class TestLangGraphExample:
         records = journal.read()
         state_refs = [r.data["state_ref"] for r in records if r.name == "state_snapshot"]
         assert "langgraph:cp-step-1" in state_refs
-        # Final state snapshot also captured.
-        assert any("langgraph:cp-final" == ref for ref in state_refs)
+        assert "langgraph:cp-step-2" in state_refs
+        assert "langgraph:cp-final" in state_refs
 
     def test_committable_boundaries_published(self):
         assert LangGraphBridge.COMMITTABLE_BOUNDARIES

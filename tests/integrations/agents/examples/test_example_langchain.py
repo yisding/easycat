@@ -36,7 +36,7 @@ class _MockLCELChain:
     def __init__(self, tokens: list[str]) -> None:
         self._tokens = tokens
 
-    async def astream_events(self, input: Any, *, version: str) -> AsyncIterator[dict[str, Any]]:
+    async def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         yield {
             "event": "on_chain_start",
             "name": "RunnableSequence",
@@ -116,9 +116,13 @@ class TestLangChainExample:
 
         records = journal.read()
         names = [r.name for r in records]
-        # Outer agent cursor plus prompt + chat + chain nested cursors.
+        # Default filter surfaces only chat_model + tool events, so the
+        # cursor tree is outer agent + one nested model_node — a pair of
+        # enter/exit for each.
         assert names.count("unit_entered") == names.count("unit_exited")
-        assert names.count("unit_entered") >= 4
+        assert names.count("unit_entered") == 2
+        kinds = {r.data["unit_kind"] for r in records if r.name == "unit_entered"}
+        assert kinds == {"agent", "model_node"}
 
     def test_committable_boundaries_published(self):
         assert LangChainBridge.COMMITTABLE_BOUNDARIES
