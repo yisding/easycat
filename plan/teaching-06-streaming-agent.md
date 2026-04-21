@@ -67,7 +67,7 @@ production version.
 6. **Walk the sentence splitter.** Open
    `src/easycat/session/text_utils.py` and read
    `split_at_sentence_boundaries` end-to-end. Note it's a
-   ~15-line pySBD wrapper, not a 500-line NLP module. Why: latency
+   ~15-line sentencesplit wrapper, not a 500-line NLP module. Why: latency
    and the fact that perfect splitting doesn't matter when TTS
    prosody forgives most seams.
 7. **Journal comparison.** Side-by-side chapter 5 and chapter 6

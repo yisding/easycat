@@ -9,39 +9,39 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import pysbd
+import sentencesplit
 
 from easycat.audio_format import AudioChunk
 
-# Sentence boundary detection via pySBD.
-_SENTENCE_SEGMENTER = pysbd.Segmenter(language="en", clean=False, char_span=True)
-
-
-def _span_bounds(span: object) -> tuple[int, int]:
-    if isinstance(span, tuple) and len(span) == 2:
-        return span
-    start = getattr(span, "start", None)
-    end = getattr(span, "end", None)
-    if start is None or end is None:
-        raise TypeError(f"Unexpected span type from pySBD: {span!r}")
-    return int(start), int(end)
+# Sentence boundary detection via sentencesplit. The lookahead mode probes
+# tiny suffixes to detect whether the final boundary could still shift once
+# more streaming text arrives (e.g. "GPT 3." might become "GPT 3.5").
+# char_span=True makes segment_with_lookahead return TextSpan objects with
+# start/end offsets, so we can slice without a second segmentation pass.
+_SENTENCE_SEGMENTER = sentencesplit.Segmenter(language="en", clean=False, char_span=True)
 
 
 def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
-    """Split text at the last sentence boundary.
+    """Split text at the last stable sentence boundary.
 
     Returns (ready_text, remaining_buffer). ``ready_text`` contains complete
-    sentences to send to TTS; ``remaining_buffer`` holds any trailing text
-    that hasn't reached a sentence boundary yet.
+    sentences safe to send to TTS; ``remaining_buffer`` holds trailing text
+    whose sentence boundary could still shift as more streaming text arrives.
 
-    Only splits when pySBD detects multiple sentences — all but the last are
-    returned as ready.  Single-span text is always buffered; the caller is
-    responsible for flushing the final buffer when the LLM stream finishes.
+    Uses :meth:`sentencesplit.Segmenter.segment_with_lookahead`, which probes
+    likely suffixes to determine if the final boundary is stable. When the
+    lookahead signals the last boundary could shift, the last segment is
+    withheld; otherwise all detected sentences are emitted. The caller is
+    responsible for flushing the final buffer when the stream finishes.
     """
-    spans = _SENTENCE_SEGMENTER.segment(text)
-    if len(spans) <= 1:
+    result = _SENTENCE_SEGMENTER.segment_with_lookahead(text)
+    if not result.segments:
         return "", text
-    last_start, _ = _span_bounds(spans[-1])
+    if not result.should_wait_for_more:
+        return text, ""
+    if len(result.segments) == 1:
+        return "", text
+    last_start = result.segments[-1].start
     return text[:last_start], text[last_start:]
 
 
