@@ -24,6 +24,9 @@ uv run python docs/teaching/12-evals-and-latency/generate_bundles.py
 - `turn_04_real_interrupt.bundle` — the user legitimately
   interrupted.
 - `turn_05_medium.bundle` — middle of the pack.
+- `tools_01_weather.bundle` — two chapter-7-style tool calls
+  (`get_weather`, `set_timer`) plus three TTS sentences. Use this
+  one for exercise 2.
 
 `ground_truth.csv` ties each bundle to its reference transcript
 and whether the interruption (if any) was real.

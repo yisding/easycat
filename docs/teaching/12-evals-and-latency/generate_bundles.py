@@ -45,8 +45,15 @@ def _turn(
     tts_spans_ms: list[float],
     total_gap_ms: float,
     interruption_t_ms: float | None = None,
+    tool_calls: list[dict] | None = None,
 ) -> None:
-    """Emit a canonical turn's worth of records."""
+    """Emit a canonical turn's worth of records.
+
+    ``tool_calls`` is an optional list of ``{"name", "args", "result",
+    "elapsed_ms"}`` dicts; each becomes a paired
+    ``tool.call.started`` / ``tool.call.result`` following the same
+    shape chapter 7 emits.
+    """
     _emit(j, "turn.started", sid, {"stage": "turn", "t_ms": t_start})
     _emit(
         j,
@@ -60,6 +67,24 @@ def _turn(
         sid,
         {"stage": "agent", "t_ms": t_start + 1000 + agent_first_token_delay_ms},
     )
+    for tc in tool_calls or ():
+        _emit(
+            j,
+            "tool.call.started",
+            sid,
+            {"stage": "tool", "name": tc["name"], "args": tc.get("args", {})},
+        )
+        _emit(
+            j,
+            "tool.call.result",
+            sid,
+            {
+                "stage": "tool",
+                "name": tc["name"],
+                "elapsed_ms": tc["elapsed_ms"],
+                "result": tc["result"],
+            },
+        )
     for i, ms in enumerate(tts_spans_ms):
         _emit(
             j,
@@ -136,6 +161,33 @@ def build_all() -> list[dict[str, str]]:
                 total_gap_ms=1700,
             ),
         ),
+        # Turn with two tool calls — exercises the chapter-7 tool
+        # shape so exercise 2's "run on tool-bearing bundles" has
+        # something to consume.
+        (
+            "tools_01_weather.bundle",
+            dict(
+                t_start=1_500_000.0,
+                stt_text="whats the weather in paris and set a timer for five minutes",
+                agent_first_token_delay_ms=820,
+                tts_spans_ms=[340, 310, 290],
+                total_gap_ms=2200,
+                tool_calls=[
+                    {
+                        "name": "get_weather",
+                        "args": {"city": "paris"},
+                        "result": "18C, light rain",
+                        "elapsed_ms": 1480,
+                    },
+                    {
+                        "name": "set_timer",
+                        "args": {"seconds": 300},
+                        "result": "ok",
+                        "elapsed_ms": 42,
+                    },
+                ],
+            ),
+        ),
     ]
 
     rows = []
@@ -149,13 +201,19 @@ def build_all() -> list[dict[str, str]]:
                 "bundle": filename,
                 "reference_transcript": kwargs["stt_text"],
                 "had_real_barge_in": "1" if filename == "turn_04_real_interrupt.bundle" else "0",
+                "had_tool_call": "1" if kwargs.get("tool_calls") else "0",
             }
         )
 
     with GROUND_TRUTH.open("w", newline="") as f:
         w = csv.DictWriter(
             f,
-            fieldnames=["bundle", "reference_transcript", "had_real_barge_in"],
+            fieldnames=[
+                "bundle",
+                "reference_transcript",
+                "had_real_barge_in",
+                "had_tool_call",
+            ],
         )
         w.writeheader()
         w.writerows(rows)

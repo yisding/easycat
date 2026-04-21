@@ -1,6 +1,6 @@
 # Teaching: Voice Pipelines from Scratch
 
-A progressive 14-chapter ladder for learning voice-AI pipelines
+A progressive 16-chapter ladder for learning voice-AI pipelines
 through EasyCat. Modeled after *Crafting Interpreters*, *Ray
 Tracer in One Weekend*, and the `nanoGPT` tradition.
 
@@ -42,6 +42,13 @@ runnable artifact you can visit independently.
 | # | Folder | What you add |
 |---|---|---|
 | 13 | [`13-swap-providers-and-transports`](./13-swap-providers-and-transports/) | Swap providers *and* transports; measure the tradeoffs. |
+| 14 | [`14-bring-your-own-agent`](./14-bring-your-own-agent/) | Drop the agent framework. Bridge, session actions, pronunciation pipeline. |
+
+### Ship — from demo to production
+
+| # | Folder | What you add |
+|---|---|---|
+| 15 | [`15-operate-in-production`](./15-operate-in-production/) | `SessionManager`, lifecycle discipline, the debugger UI, the CLI. |
 
 ## Prerequisites
 

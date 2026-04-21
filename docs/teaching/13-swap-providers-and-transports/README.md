@@ -145,27 +145,16 @@ promotes it to a measured column.
    asks for "press 1 to continue"). What does the journal show
    on the Twilio preset? What does a user on the phone hear?
 
-## The ladder, complete
+## What's next
 
-You have:
+You have swapped both halves of the STT / agent / TTS / transport
+abstraction and measured the result. Two chapters remain:
 
-- Built each pipeline stage from scratch (chapters 0-9).
-- Operated the pipeline with real signal hygiene, observability,
-  and evaluation (chapters 10-12).
-- Swapped both halves of the abstraction and measured the result
-  (this chapter).
-
-Every remaining EasyCat surface — telephony deep-cuts, MCP
-integration, LangGraph bridges, advanced redaction, CLI/DX — is
-plugging another provider into the same Protocols. The map is no
-longer the territory; you have walked the territory.
-
-## Suggested next reading
-
-- `plan/peripheral-cli.md` — the CLI surface
-- `plan/peripheral-deployment.md` — production hosting and ops
-- `plan/peripheral-provider-ecosystem.md` — adding a new provider
-- `plan/peripheral-langchain-langgraph-bridge.md` — richer agent bridges
-- `plan/peripheral-eval-and-debugger-ui.md` — what chapter 12 prototypes, productionised
-- `plan/peripheral-redaction.md` — what to keep out of journals
-- `plan/peripheral-observability-and-cost.md` — cost-per-turn in production
+- [Chapter 14 — Bring your own agent](../14-bring-your-own-agent/)
+  drops the OpenAI Agents SDK itself and shows the bridge layer
+  that sits under every `agent=` value. Also session actions and
+  the pronunciation pipeline.
+- [Chapter 15 — Operate in production](../15-operate-in-production/)
+  takes the single-session demo you've been running since chapter
+  0 and shows `SessionManager` / lifecycle / debugger UI / CLI —
+  what it takes to run N of these at once.
