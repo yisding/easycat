@@ -175,6 +175,13 @@ class Session:
         # agent swaps to a URL-backed agent can forward model/key context.
         self._agent_model: str | None = None
         self._remote_agent_api_key: str | None = None
+        # Session-wide MCP server list — re-applied to any agent swapped
+        # in via ``session.agent = ...`` so tool access survives the swap.
+        self._mcp_servers: tuple[str, ...] = tuple(cfg.mcp_servers)
+        # Inject MCP servers into the bridge so direct
+        # ``Session(SessionConfig(agent=..., mcp_servers=...))`` callers
+        # (not going through ``create_session``) also get tool access.
+        self._inject_agent_runtime_config(self._agent)
 
         # Skip noop validation in text_session mode — audio providers
         # are intentionally noop.
@@ -1011,7 +1018,6 @@ class Session:
     @agent.setter
     def agent(self, value: Agent) -> None:
         from easycat.integrations.agents._agent_runner import AgentRunner
-        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
         previous_agent = getattr(self, "_agent", None)
         previous_runner: AgentRunner | None = (
@@ -1019,22 +1025,41 @@ class Session:
         )
 
         if value is None:
-            self._agent = NoopAgent()
+            # Wrap NoopAgent so it satisfies ExternalAgentBridge; AgentStage
+            # calls ``bridge.invoke()`` unconditionally and crashes on a bare
+            # NoopAgent.
+            self._agent = AgentRunner(NoopAgent())
         else:
             adapted = auto_adapt_agent(value, model=self._agent_model)
-            inner = adapted._agent if isinstance(adapted, AgentRunner) else adapted
-            if isinstance(inner, RemoteResponsesAPIBridge):
-                if self._agent_model:
-                    inner._model = self._agent_model
-                if self._remote_agent_api_key:
-                    inner._api_key = self._remote_agent_api_key
             if previous_runner is not None and not isinstance(adapted, AgentRunner):
                 adapted = AgentRunner(adapted, previous_runner._config)
             self._agent = adapted
+            self._inject_agent_runtime_config(self._agent)
 
         stage = getattr(self, "_agent_stage", None)
         if stage is not None:
             stage._provider = self._agent  # keep the wrapper in sync
+
+    def _inject_agent_runtime_config(self, agent: Any) -> None:
+        """Apply session MCP servers, remote model, and API key to ``agent``.
+
+        The framework bridges (``OpenAIAgentsBridge``, ``PydanticAIBridge``)
+        install MCP tools from ``self._mcp_servers`` at ``invoke()`` time, so
+        the session has to push its list into the bridge whenever the agent
+        is created or swapped.  Remote model / API key follow the same
+        pattern for :class:`RemoteResponsesAPIBridge`.
+        """
+        from easycat.integrations.agents._agent_runner import AgentRunner
+        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+
+        inner = agent._agent if isinstance(agent, AgentRunner) else agent
+        if hasattr(inner, "_mcp_servers"):
+            inner._mcp_servers = list(self._mcp_servers)
+        if isinstance(inner, RemoteResponsesAPIBridge):
+            if self._agent_model:
+                inner._model = self._agent_model
+            if self._remote_agent_api_key:
+                inner._api_key = self._remote_agent_api_key
 
     @property
     def turn_state(self) -> TurnState:
