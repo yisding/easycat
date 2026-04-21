@@ -632,7 +632,6 @@ def test_factory_rejects_unknown_provider():
         create_stt_provider(STTProviderConfig(provider="nonexistent", api_key="k"))
 
 
-
 # ── Live integration ─────────────────────────────────────────────
 
 

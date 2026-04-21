@@ -806,8 +806,7 @@ async def test_latency_benchmark_by_pipeline_flags(
         baseline = by_id["B"]
         if baseline.median_ms > _SLO_BASELINE_P50_MS:
             slo_violations.append(
-                f"baseline p50 {baseline.median_ms:.0f} ms > "
-                f"SLO {_SLO_BASELINE_P50_MS:.0f} ms"
+                f"baseline p50 {baseline.median_ms:.0f} ms > SLO {_SLO_BASELINE_P50_MS:.0f} ms"
             )
         if baseline.p90_ms > _SLO_BASELINE_P90_MS:
             slo_violations.append(
@@ -875,6 +874,4 @@ async def test_latency_benchmark_by_pipeline_flags(
             )
 
     if slo_violations:
-        raise AssertionError(
-            "latency SLO violations:\n  - " + "\n  - ".join(slo_violations)
-        )
+        raise AssertionError("latency SLO violations:\n  - " + "\n  - ".join(slo_violations))

@@ -274,7 +274,6 @@ async def test_openai_stt_reusable_across_streams():
     assert len(finals2) == 1
 
 
-
 # ── Live integration ─────────────────────────────────────────────
 
 

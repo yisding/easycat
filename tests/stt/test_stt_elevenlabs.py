@@ -388,7 +388,6 @@ async def test_elevenlabs_realtime_reusable():
     assert events2[0].text == "stream 2"
 
 
-
 # ── Live integration ─────────────────────────────────────────────
 
 

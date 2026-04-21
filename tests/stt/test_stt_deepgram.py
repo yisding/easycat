@@ -317,7 +317,6 @@ async def test_deepgram_flux_parses_turn_info_updates_and_end_of_turn():
     assert events[1].confidence == 0.88
 
 
-
 # ── Live integration ─────────────────────────────────────────────
 
 
