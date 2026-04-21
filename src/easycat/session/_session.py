@@ -53,8 +53,9 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.health_check import PeriodicHealthChecker
+from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents._factory import auto_adapt_agent
-from easycat.integrations.agents._legacy_types import AgentStreamEventType
+from easycat.integrations.agents.base import ExternalAgentBridge
 from easycat.llm_output_processing import (
     LLMOutputProcessor,
     apply_output_processors,
@@ -81,10 +82,14 @@ from easycat.session._types import (
 )
 from easycat.session.action_executors import CoreSessionActionExecutor
 from easycat.session.actions import SessionAction, SessionActionExecutor
-from easycat.session.interruption import estimate_and_notify_interruption
+from easycat.session.interruption import (
+    estimate_and_notify_interruption,
+)
+from easycat.session.interruption import (
+    notify_bridge_interruption as _notify_bridge_interruption,
+)
 from easycat.session.text_utils import (
     _chunk_has_speech_energy,
-    _replace_last_assistant_text,
 )
 from easycat.session.tts_helpers import _text_for_estimation_timeline
 from easycat.stages.agent import AgentStage
@@ -127,15 +132,29 @@ class _ActionDrainOutcome:
     stop_session: bool = False
 
 
+def _ensure_bridge(agent: Any) -> ExternalAgentBridge:
+    """Guarantee ``agent`` implements :class:`ExternalAgentBridge`.
+
+    Bare ``Agent``-protocol objects (``async run(text) -> str``) and the
+    no-op stub get wrapped in :class:`AgentRunner` so Session only ever
+    speaks the bridge protocol downstream.
+    """
+    if isinstance(agent, ExternalAgentBridge):
+        return agent
+    return AgentRunner(agent)
+
+
 class Session:
     """One voice session (per call / per websocket client).
 
     Manages the full pipeline: Audio In -> Noise Reduction -> VAD -> STT ->
     Agent -> TTS -> Audio Out. Each stage is a pluggable provider.
 
-    When the configured agent supports streaming (has a ``run_streaming``
-    method), the session consumes text deltas incrementally and begins
-    TTS synthesis on sentence boundaries for lower latency.
+    All agents reach Session as :class:`ExternalAgentBridge` instances —
+    simple ``Agent``-protocol objects are wrapped in :class:`AgentRunner`
+    at construction time.  Session consumes ``AgentBridgeEvent`` text
+    deltas incrementally and begins TTS synthesis on sentence boundaries
+    for lower latency.
     """
 
     def __init__(self, config: SessionConfig | None = None) -> None:
@@ -335,7 +354,12 @@ class Session:
             journal=self._journal,
         )
         self._transport_stage = TransportStage(self.transport, journal=self._journal)
-        self._agent_stage = AgentStage(self.agent, journal=self._journal)
+        self._agent_stage = AgentStage(
+            self.agent,
+            journal=self._journal,
+            artifact_store=self._artifact_store,
+            session_id=self.session_id,
+        )
         self._turn_stage = TurnStage(
             self._turn_manager._config.endpoint_detector  # type: ignore[attr-defined]
             if self._turn_manager._config is not None  # type: ignore[attr-defined]
@@ -367,36 +391,11 @@ class Session:
                     turn_getter=lambda: self._turn or self._no_turn,
                 )
 
-        # Backfill journal/session-id into bridge adapter shims so that the
-        # direct Session(SessionConfig(...)) construction path produces the
-        # same observability data as create_session().
-        self._backfill_bridge_context()
-
     @staticmethod
     def _default_timeout_config():
         from easycat.timeouts import TimeoutConfig
 
         return TimeoutConfig()
-
-    def _backfill_bridge_context(self) -> None:
-        """Inject journal/session-id into bridge shims attached to this session.
-
-        ``create_session()`` already does this, but callers using the direct
-        ``Session(SessionConfig(...))`` path would otherwise get shims with
-        ``_journal=None`` / ``_session_id=""``, producing no bridge-level
-        journal records.  This method is idempotent — re-injecting the same
-        values is harmless.
-        """
-        from easycat.integrations.agents._agent_runner import AgentRunner
-        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
-
-        shim = self.agent
-        if isinstance(shim, AgentRunner):
-            shim = shim._agent
-        if isinstance(shim, BridgeAdapterShim):
-            shim._journal = self._journal
-            shim._artifact_store = self._artifact_store
-            shim._session_id = self.session_id
 
     def _with_correlation(self, event: Any) -> Any:
         """Attach session/turn identifiers to events when supported."""
@@ -723,13 +722,6 @@ class Session:
         turn_id: str | None = None,
     ) -> None:
         replacement_text = None
-        if mode == "truncate":
-            replacement_fn = getattr(self.agent, "interruption_replacement_text", None)
-            if callable(replacement_fn):
-                try:
-                    replacement_text = replacement_fn(text_spoken)
-                except Exception:
-                    logger.debug("Failed to compute interruption replacement text", exc_info=True)
         self._append_journal_record(
             name="assistant_interruption_notified",
             turn_id=turn_id,
@@ -1018,49 +1010,26 @@ class Session:
     @agent.setter
     def agent(self, value: Agent) -> None:
         from easycat.integrations.agents._agent_runner import AgentRunner
-        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
-        # Capture state from the outgoing agent so the swap preserves
-        # whatever ``create_session()`` / ``create_text_session()`` wired
-        # up at construction time: AgentRunner wrapping (timeouts, history,
-        # cancellation) and bridge-level MCP server context.
         previous_agent = getattr(self, "_agent", None)
         previous_runner: AgentRunner | None = (
             previous_agent if isinstance(previous_agent, AgentRunner) else None
         )
-        previous_inner = previous_runner._agent if previous_runner else previous_agent
-        previous_mcp_servers: tuple[str, ...] | None = None
-        if isinstance(previous_inner, BridgeAdapterShim):
-            previous_mcp_servers = getattr(previous_inner, "_mcp_servers", None)
 
         if value is None:
             self._agent = NoopAgent()
         else:
             adapted = auto_adapt_agent(value, model=self._agent_model)
             inner = adapted._agent if isinstance(adapted, AgentRunner) else adapted
-            if isinstance(inner, BridgeAdapterShim):
-                # Inject model/API key for URL-backed agents (mirrors
-                # create_session / create_text_session).
-                from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-                if isinstance(inner.bridge, RemoteResponsesAPIBridge):
-                    if self._agent_model:
-                        inner.bridge._model = self._agent_model
-                    if self._remote_agent_api_key:
-                        inner.bridge._api_key = self._remote_agent_api_key
-            if previous_mcp_servers is not None and isinstance(inner, BridgeAdapterShim):
-                # Always overwrite (even with empty tuple) so a reused shim
-                # from a prior session can't leak old MCP servers into the
-                # new session that left MCP unset.  Matches create_session().
-                inner._mcp_servers = previous_mcp_servers
-                if hasattr(inner.bridge, "_mcp_servers"):
-                    inner.bridge._mcp_servers = list(previous_mcp_servers)
+            if isinstance(inner, RemoteResponsesAPIBridge):
+                if self._agent_model:
+                    inner._model = self._agent_model
+                if self._remote_agent_api_key:
+                    inner._api_key = self._remote_agent_api_key
             if previous_runner is not None and not isinstance(adapted, AgentRunner):
                 adapted = AgentRunner(adapted, previous_runner._config)
             self._agent = adapted
-
-        # Re-inject journal/session-id into any bridge shim on the new agent.
-        self._backfill_bridge_context()
 
         stage = getattr(self, "_agent_stage", None)
         if stage is not None:
@@ -1491,8 +1460,7 @@ class Session:
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
 
-        if hasattr(self.agent, "clear_history"):
-            self.agent.clear_history()
+        self.agent.reset()
 
         self._reset_turn_state()
 
@@ -1999,20 +1967,8 @@ class Session:
                 self._reset_turn_state()
             return
 
-        # Pass the active turn ID to bridge-backed agents so their journal
-        # records share the same turn_id as the rest of the session.
-        turn_id = turn.id if turn else None
-        _set_fn = getattr(self.agent, "set_active_turn_id", None)
-        if callable(_set_fn) and turn_id:
-            _set_fn(turn_id)
-
         await self._emit(AgentRequestStarted())
-
-        # Route to streaming or basic agent path
-        if hasattr(self.agent, "run_streaming"):
-            await self._run_streaming_agent(transcript, token)
-        else:
-            await self._run_basic_agent(transcript, token)
+        await self._run_streaming_agent(transcript, token)
 
     # ── Agent invocation helper ────────────────────────────────
 
@@ -2063,15 +2019,10 @@ class Session:
             )
             if stripped != original_response:
                 agent_response = stripped
-                _replace_last_assistant_text(self.agent, stripped)
+                self.agent.replace_last_assistant_text(stripped)
 
         await self._emit(AgentDelta(text=agent_response))
-        agent_structured = None
-        agent_last_output = getattr(self.agent, "last_output", None)
-        agent_output_type = getattr(self.agent, "output_type", None)
-        if agent_output_type is not None or not isinstance(agent_last_output, str):
-            agent_structured = agent_last_output
-        await self._emit(AgentFinal(text=agent_response, structured_output=agent_structured))
+        await self._emit(AgentFinal(text=agent_response, structured_output=None))
 
         action_outcome = await self._synthesize_tts(
             self._prepare_tts_payload(agent_response, is_streaming=False, is_final=True), token
@@ -2183,17 +2134,15 @@ class Session:
         async def _run_agent_consumer() -> None:
             nonlocal agent_result
             agent_result = await consume_agent_stream(
-                self.agent,
-                transcript,
-                token=token,
+                stream_factory=lambda: self._agent_stage.execute_streaming(
+                    transcript, self._run_ctx, turn, cancel_token=token
+                ),
+                cancel_token=token,
                 tts_queue=tts_queue,
                 emit=self._emit,
                 prepare_tts_payload=self._prepare_tts_payload,
                 strip_md=self._strip_markdown,
                 turn=turn,
-                stream_factory=lambda: self._agent_stage.execute_streaming(
-                    transcript, self._run_ctx, turn, cancel_token=token
-                ),
             )
 
         agent_task = asyncio.create_task(_run_agent_consumer())
@@ -2247,7 +2196,7 @@ class Session:
             )
             if stripped != original_text:
                 accumulated_text = stripped
-                _replace_last_assistant_text(self.agent, stripped)
+                self.agent.replace_last_assistant_text(stripped)
 
         if (accumulated_text or structured_output is not None) and stream_succeeded:
             await self._emit(
@@ -2531,22 +2480,15 @@ class Session:
                     await prev
                 except (asyncio.CancelledError, Exception):
                     pass
-                if hasattr(self.agent, "notify_interruption"):
-                    notified = True
-                    try:
-                        self.agent.notify_interruption(delivered, mode=self._interruption_mode)
-                    except Exception:
-                        notified = False
-                        logger.debug(
-                            "Failed to notify agent of text-turn interruption",
-                            exc_info=True,
-                        )
-                    self._record_interruption_notification(
-                        source="text_session",
-                        mode=self._interruption_mode,
-                        text_spoken=delivered,
-                        notified=notified,
-                    )
+                notified = _notify_bridge_interruption(
+                    self.agent, delivered, self._interruption_mode
+                )
+                self._record_interruption_notification(
+                    source="text_session",
+                    mode=self._interruption_mode,
+                    text_spoken=delivered,
+                    notified=notified,
+                )
 
             token = CancelToken()
             self._text_turn_cancel_token = token
@@ -2559,79 +2501,63 @@ class Session:
         await self._emit(TurnStarted(session_id=self.session_id, turn_id=turn_id))
         try:
             t0 = time.monotonic()
-            _set_fn = getattr(self.agent, "set_active_turn_id", None)
-            if callable(_set_fn):
-                _set_fn(turn_id)
             await self._emit(AgentRequestStarted(session_id=self.session_id, turn_id=turn_id))
             structured_output = None
             self._text_turn_accumulated = ""
             # Build a turn context for this text turn so AgentStage can
             # stamp records with the right turn_id.
             text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
-            if hasattr(self.agent, "run_streaming"):
-                accumulated = ""
-                async for event in self._agent_stage.execute_streaming(
-                    text, self._run_ctx, text_turn, cancel_token=cancel_token
-                ):
-                    if not hasattr(event, "type"):
-                        continue
-                    if event.type == AgentStreamEventType.DONE:
-                        if hasattr(event, "text") and event.text:
-                            accumulated = event.text
-                        if getattr(event, "structured_output", None) is not None:
-                            structured_output = event.structured_output
-                        break
-                    if (
-                        event.type == AgentStreamEventType.TEXT_DELTA
-                        and hasattr(event, "text")
-                        and event.text
-                    ):
-                        accumulated += event.text
-                        self._text_turn_accumulated = accumulated
-                        await self._emit(
-                            AgentDelta(
-                                text=event.text,
-                                session_id=self.session_id,
-                                turn_id=turn_id,
-                            )
+            accumulated = ""
+            async for event in self._agent_stage.execute_streaming(
+                text, self._run_ctx, text_turn, cancel_token=cancel_token
+            ):
+                kind = getattr(event, "kind", None)
+                if kind is None:
+                    continue
+                if kind == "done":
+                    if event.text:
+                        accumulated = event.text
+                    if getattr(event, "structured_output", None) is not None:
+                        structured_output = event.structured_output
+                    break
+                if kind == "text_delta" and event.text:
+                    accumulated += event.text
+                    self._text_turn_accumulated = accumulated
+                    await self._emit(
+                        AgentDelta(
+                            text=event.text,
+                            session_id=self.session_id,
+                            turn_id=turn_id,
                         )
-                    elif event.type == AgentStreamEventType.TOOL_STARTED:
-                        await self._emit(
-                            ToolCallStarted(
-                                tool_name=getattr(event, "tool_name", ""),
-                                call_id=getattr(event, "call_id", ""),
-                                session_id=self.session_id,
-                                turn_id=turn_id,
-                            )
+                    )
+                elif kind == "tool_started":
+                    await self._emit(
+                        ToolCallStarted(
+                            tool_name=event.tool_name,
+                            call_id=event.call_id,
+                            session_id=self.session_id,
+                            turn_id=turn_id,
                         )
-                    elif event.type == AgentStreamEventType.TOOL_DELTA:
-                        await self._emit(
-                            ToolCallDelta(
-                                call_id=getattr(event, "call_id", ""),
-                                delta=getattr(event, "text", ""),
-                                session_id=self.session_id,
-                                turn_id=turn_id,
-                            )
+                    )
+                elif kind == "tool_delta":
+                    await self._emit(
+                        ToolCallDelta(
+                            call_id=event.call_id,
+                            delta=event.text,
+                            session_id=self.session_id,
+                            turn_id=turn_id,
                         )
-                    elif event.type == AgentStreamEventType.TOOL_RESULT:
-                        await self._emit(
-                            ToolCallResult(
-                                call_id=getattr(event, "call_id", ""),
-                                result=getattr(event, "result", ""),
-                                session_id=self.session_id,
-                                turn_id=turn_id,
-                            )
+                    )
+                elif kind == "tool_result":
+                    await self._emit(
+                        ToolCallResult(
+                            call_id=event.call_id,
+                            result=event.result,
+                            session_id=self.session_id,
+                            turn_id=turn_id,
                         )
-                response = accumulated
-            else:
-                response = await self._agent_stage.execute(text, self._run_ctx, text_turn)
-                self._text_turn_accumulated = response
-                # Mirror _run_basic_agent: extract structured output from the
-                # underlying agent so non-streaming text sessions don't lose it.
-                agent_last_output = getattr(self.agent, "last_output", None)
-                agent_output_type = getattr(self.agent, "output_type", None)
-                if agent_output_type is not None or not isinstance(agent_last_output, str):
-                    structured_output = agent_last_output
+                    )
+            response = accumulated
             elapsed_ms = (time.monotonic() - t0) * 1000
             await self._emit(
                 AgentFinal(

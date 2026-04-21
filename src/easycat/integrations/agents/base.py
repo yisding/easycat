@@ -1,9 +1,8 @@
 """ExternalAgentBridge protocol, shared types, and error classes.
 
-This module defines the bridge-side contract that all agent framework
-integrations implement.  The voice-side contract (Session, TurnManager)
-is unchanged — bridges integrate via the ``BridgeAdapterShim`` that
-translates between the two surfaces.
+This module defines the contract that all agent framework integrations
+implement.  Session speaks this protocol directly — there is no
+intermediate adapter layer.
 """
 
 from __future__ import annotations
@@ -113,16 +112,24 @@ class AgentTurnInput:
         )
 
 
+AgentEventKind = Literal[
+    "text_delta",
+    "tool_started",
+    "tool_delta",
+    "tool_result",
+    "done",
+    "cursor_entered",
+    "cursor_exited",
+    "handoff",
+    "state_snapshot",
+]
+
+
 @dataclass(frozen=True)
 class AgentBridgeEvent:
-    """Event yielded by ``ExternalAgentBridge.invoke()``.
+    """Event yielded by ``ExternalAgentBridge.invoke()``."""
 
-    ``kind`` values: ``text_delta``, ``tool_started``, ``tool_delta``,
-    ``tool_result``, ``done``, ``cursor_entered``, ``cursor_exited``,
-    ``handoff``, ``state_snapshot``.
-    """
-
-    kind: str
+    kind: AgentEventKind
     text: str = ""
     tool_name: str = ""
     call_id: str = ""
@@ -228,6 +235,81 @@ class AgentRecorder(Protocol):
         ...
 
 
+class NullAgentRecorder:
+    """No-op :class:`AgentRecorder` for driving bridges outside a Session.
+
+    Used by :meth:`AgentRunner.run` and similar standalone-invocation helpers
+    so callers don't have to construct a full journal just to satisfy
+    :meth:`ExternalAgentBridge.invoke`.
+    """
+
+    context: RecorderContext = RecorderContext(run_id="null", session_id="")
+
+    def record_unit_entered(self, cursor: ExecutionCursor) -> None:
+        pass
+
+    def record_unit_exited(self, cursor: ExecutionCursor, reason: str | None = None) -> None:
+        pass
+
+    @contextmanager
+    def unit(
+        self, cursor: ExecutionCursor, *, commit_on_exit: bool = True
+    ) -> Iterator[ExecutionCursor]:
+        yield cursor
+
+    def record_tool_call(
+        self,
+        phase: Literal["start", "delta", "result", "error"],
+        name: str,
+        args_ref: str | None = None,
+        result_ref: str | None = None,
+        call_id: str | None = None,
+    ) -> None:
+        pass
+
+    def record_state_snapshot(self, ref: str, *, payload: bytes | None = None) -> str:
+        return ref
+
+    def record_framework_handoff(
+        self,
+        from_unit: str | None,
+        to_unit: str,
+        reason: str | None = None,
+    ) -> None:
+        pass
+
+    def record_cancellation_boundary(
+        self,
+        mode: CancellationMode,
+        reason: str | None = None,
+        caused_by_signal_id: str | None = None,
+    ) -> None:
+        pass
+
+    def record_framework_error(self, error: ErrorInfo) -> None:
+        pass
+
+    def record_state_committed(
+        self,
+        mutation_kind: str,
+        pre_state_ref: str | None = None,
+        post_state_ref: str | None = None,
+    ) -> None:
+        pass
+
+    def record_interruption_apply_failed(
+        self,
+        mutation_kind: str,
+        pre_state_ref: str | None = None,
+        post_state_ref: str | None = None,
+        failure_error: ErrorInfo | None = None,
+    ) -> None:
+        pass
+
+
+NULL_RECORDER: AgentRecorder = NullAgentRecorder()
+
+
 # ── Bridge protocol ──────────────────────────────────────────────
 
 
@@ -265,6 +347,25 @@ class ExternalAgentBridge(Protocol):
 
         Uses four-step atomic write ordering when ``recorder`` is provided:
         plan → ``FrameworkStateCommitted`` → apply → paired success/failure.
+        """
+        ...
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Rewrite the last assistant entry in the bridge's history.
+
+        Called by Session after post-processing (e.g. Markdown stripping)
+        so that subsequent turns condition on the cleaned text rather
+        than the raw LLM output.  Bridges that do not maintain their
+        own message history may no-op.
+        """
+        ...
+
+    def append_interruption_note(self, note: str) -> None:
+        """Append an interruption note so the next turn sees it.
+
+        Called by Session when the configured ``interruption_mode`` is
+        ``"message"`` (append a system/developer message rather than
+        truncate the assistant response).
         """
         ...
 

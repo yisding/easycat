@@ -89,7 +89,6 @@ def test_easycat_config_wraps_agent():
 
 def test_create_session_auto_adapts_openai_agents():
     agents_mod = pytest.importorskip("agents")
-    from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
     from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
     raw = agents_mod.Agent(name="test", instructions="hi")
@@ -102,13 +101,11 @@ def test_create_session_auto_adapts_openai_agents():
         raise
 
     assert isinstance(session.agent, AgentRunner)
-    assert isinstance(session.agent._agent, BridgeAdapterShim)
-    assert isinstance(session.agent._agent.bridge, OpenAIAgentsBridge)
+    assert isinstance(session.agent._agent, OpenAIAgentsBridge)
 
 
 def test_create_session_auto_adapts_pydantic_agents():
     pydantic_ai_mod = pytest.importorskip("pydantic_ai")
-    from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
     from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
     raw = pydantic_ai_mod.Agent("openai:gpt-4o-mini")
@@ -121,8 +118,7 @@ def test_create_session_auto_adapts_pydantic_agents():
         raise
 
     assert isinstance(session.agent, AgentRunner)
-    assert isinstance(session.agent._agent, BridgeAdapterShim)
-    assert isinstance(session.agent._agent.bridge, PydanticAIBridge)
+    assert isinstance(session.agent._agent, PydanticAIBridge)
 
 
 def test_create_session_does_not_mutate_turn_taking_config():

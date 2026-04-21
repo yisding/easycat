@@ -20,6 +20,7 @@ from uuid import uuid4
 import httpx
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._helpers import INTERRUPTION_NOTE
 from easycat.integrations.agents._responses_api_events import (
     parse_sse_line,
     translate_sse_event,
@@ -38,10 +39,6 @@ from easycat.integrations.agents.base import (
 from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
-
-_INTERRUPTION_NOTE = (
-    "[The user interrupted the assistant's response and may not have heard all of it.]"
-)
 
 
 class RemoteResponsesAPIBridge:
@@ -402,7 +399,7 @@ class RemoteResponsesAPIBridge:
             )
 
         self._replay_items = replay if replay else None
-        self._pending_interruption_note = _INTERRUPTION_NOTE
+        self._pending_interruption_note = INTERRUPTION_NOTE
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client, releasing connection pools."""
@@ -425,6 +422,34 @@ class RemoteResponsesAPIBridge:
         self._last_user_text = None
         self._interrupted_response_id = None
         self._pending_turn_metadata = None
+
+    # ── History post-processing ───────────────────────────────────
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Queue a developer note describing the post-processed text.
+
+        The Responses API chains by ``previous_response_id`` — local state
+        cannot rewrite an already-committed response.  Instead we queue a
+        developer message so the next turn sees what the user actually
+        heard.  No-op when there is no prior completed response.
+        """
+        if self._last_completed_response_id is None:
+            return
+        note = (
+            "[The assistant's last response was post-processed before delivery. "
+            f'The user heard: "{text}"]'
+        )
+        if self._pending_interruption_note is not None:
+            self._pending_interruption_note += "\n" + note
+        else:
+            self._pending_interruption_note = note
+
+    def append_interruption_note(self, note: str) -> None:
+        """Queue an interruption note for the next request."""
+        if self._pending_interruption_note is not None:
+            self._pending_interruption_note += "\n" + note
+        else:
+            self._pending_interruption_note = note
 
     # ── Internal helpers ─────────────────────────────────────────
 

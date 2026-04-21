@@ -409,30 +409,20 @@ def create_session(config: EasyCatConfig) -> Session:
 
         if config.agent is not None:
             agent = auto_adapt_agent(config.agent, model=config.agent_model)
-            # Inject MCP servers and journal into the shim if it's a bridge adapter.
-            # Unwrap AgentRunner if the caller pre-wrapped the shim.
-            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+            # Unwrap AgentRunner to reach the underlying bridge for MCP /
+            # model / API-key injection.
+            bridge = agent._agent if isinstance(agent, AgentRunner) else agent
+            if hasattr(bridge, "_mcp_servers"):
+                # Always overwrite (even with empty tuple) so a reused bridge
+                # from a prior session doesn't leak old MCP servers.
+                bridge._mcp_servers = list(mcp_servers)
+            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
-            shim = agent
-            if isinstance(shim, AgentRunner):
-                shim = shim._agent
-            if isinstance(shim, BridgeAdapterShim):
-                shim._journal = journal
-                shim._artifact_store = artifact_store
-                shim._session_id = session_id
-                # Always overwrite so a reused shim from a prior session doesn't
-                # leak old MCP servers into a new session that leaves MCP unset.
-                shim._mcp_servers = mcp_servers
-                if hasattr(shim.bridge, "_mcp_servers"):
-                    shim.bridge._mcp_servers = list(mcp_servers)
-                # Inject model/API key for URL-backed agents.
-                from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-                if isinstance(shim.bridge, RemoteResponsesAPIBridge):
-                    if config.agent_model:
-                        shim.bridge._model = config.agent_model
-                    if config.remote_agent_api_key:
-                        shim.bridge._api_key = config.remote_agent_api_key
+            if isinstance(bridge, RemoteResponsesAPIBridge):
+                if config.agent_model:
+                    bridge._model = config.agent_model
+                if config.remote_agent_api_key:
+                    bridge._api_key = config.remote_agent_api_key
             if config.wrap_agent and not isinstance(agent, AgentRunner):
                 runner_cfg = config.agent_runner or AgentRunnerConfig()
                 agent = AgentRunner(agent, runner_cfg)
@@ -606,31 +596,19 @@ def create_text_session(
         event_bus = EventBus()
 
         adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
-        # Backfill journal metadata into the bridge shim (mirrors create_session).
-        # Unwrap AgentRunner if the caller pre-wrapped the shim.
-        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+        # Unwrap AgentRunner to reach the underlying bridge for MCP /
+        # model / API-key injection (mirrors create_session).
+        _bridge = adapted._agent if isinstance(adapted, AgentRunner) else adapted
+        _mcp = list(mcp_servers) if mcp_servers else []
+        if hasattr(_bridge, "_mcp_servers"):
+            _bridge._mcp_servers = _mcp
+        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
-        _inner = adapted
-        if isinstance(_inner, AgentRunner):
-            _inner = _inner._agent
-        if isinstance(_inner, BridgeAdapterShim):
-            _inner._journal = journal
-            _inner._artifact_store = artifact_store
-            _inner._session_id = sid
-            # Inject model/API key for URL-backed agents (mirrors create_session).
-            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-            if isinstance(_inner.bridge, RemoteResponsesAPIBridge):
-                if agent_model:
-                    _inner.bridge._model = agent_model
-                if remote_agent_api_key:
-                    _inner.bridge._api_key = remote_agent_api_key
-            # Always overwrite so a reused shim from a prior session doesn't
-            # leak old MCP servers into a new session that leaves MCP unset.
-            _mcp = tuple(mcp_servers) if mcp_servers else ()
-            _inner._mcp_servers = _mcp
-            if hasattr(_inner.bridge, "_mcp_servers"):
-                _inner.bridge._mcp_servers = list(_mcp)
+        if isinstance(_bridge, RemoteResponsesAPIBridge):
+            if agent_model:
+                _bridge._model = agent_model
+            if remote_agent_api_key:
+                _bridge._api_key = remote_agent_api_key
         if wrap_agent and not isinstance(adapted, AgentRunner):
             runner_cfg = agent_runner or AgentRunnerConfig()
             adapted = AgentRunner(adapted, runner_cfg)
