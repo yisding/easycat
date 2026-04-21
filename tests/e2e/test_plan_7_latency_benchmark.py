@@ -49,9 +49,30 @@ STT effectively negligible.
 ## Reading the output
 
 Latency is logged per condition at the end as ``[latency] <id>:
-<ms> ms``.  CI assertions enforce only the outermost sanity bound
-(< 8000 ms) — the goal of the test is to track / compare /
-instrument, not to gate on a hard SLO.
+<ms> ms``.
+
+## SLO assertions
+
+In addition to the outer sanity bound (< 8000 ms), the sweep enforces
+per-stage SLOs so regressions fail the test instead of silently
+widening the histogram:
+
+- Baseline (``B``) p50 < ``EASYCAT_BENCHMARK_SLO_BASELINE_P50_MS``
+  (default 3000 ms) and p90 < ``_P90_MS`` (default 4500 ms).
+- Full stack (``X``) p50 < ``EASYCAT_BENCHMARK_SLO_FULL_STACK_P50_MS``
+  (default 4500 ms).
+- Per-feature median overhead versus baseline:
+  - ``debug=light`` journal: < 400 ms
+  - ``debug=full`` journal: < 800 ms
+  - noise reduction: < 500 ms
+  - echo cancellation: < 500 ms
+- Smart turn is logged but only fails if it is *dramatically* slower
+  than baseline (> 800 ms), since a given fixture may not trigger
+  early termination.
+
+All thresholds are overridable via env vars (see ``_SLO_*`` module
+constants) so slow hardware or known regressions can loosen them
+without editing the test.
 
 Run with the usual ``OPENAI_API_KEY`` env var:
 
@@ -620,6 +641,28 @@ _WARMUP_SAMPLES = 1
 _SAMPLE_ATTEMPTS = 2
 
 
+def _slo(env_var: str, default: float) -> float:
+    raw = os.environ.get(env_var)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+# SLO thresholds (ms). Overridable via env var so slow hardware / known
+# regressions can loosen without editing the test.
+_SLO_BASELINE_P50_MS = _slo("EASYCAT_BENCHMARK_SLO_BASELINE_P50_MS", 3000.0)
+_SLO_BASELINE_P90_MS = _slo("EASYCAT_BENCHMARK_SLO_BASELINE_P90_MS", 4500.0)
+_SLO_FULL_STACK_P50_MS = _slo("EASYCAT_BENCHMARK_SLO_FULL_STACK_P50_MS", 4500.0)
+_SLO_LIGHT_JOURNAL_OVERHEAD_MS = _slo("EASYCAT_BENCHMARK_SLO_LIGHT_OVERHEAD_MS", 400.0)
+_SLO_FULL_JOURNAL_OVERHEAD_MS = _slo("EASYCAT_BENCHMARK_SLO_FULL_OVERHEAD_MS", 800.0)
+_SLO_NR_OVERHEAD_MS = _slo("EASYCAT_BENCHMARK_SLO_NR_OVERHEAD_MS", 500.0)
+_SLO_AEC_OVERHEAD_MS = _slo("EASYCAT_BENCHMARK_SLO_AEC_OVERHEAD_MS", 500.0)
+_SLO_SMART_TURN_SLOWDOWN_MS = _slo("EASYCAT_BENCHMARK_SLO_SMART_TURN_SLOWDOWN_MS", 800.0)
+
+
 def _format_ms(value: float | None) -> str:
     if value is None:
         return "n/a"
@@ -748,32 +791,90 @@ async def test_latency_benchmark_by_pipeline_flags(
     any_ran = [r for r in results if r.samples_ms]
     assert any_ran, "no latency samples collected"
     for r in any_ran:
-        # Outer bound only; don't gate on specific SLOs.
+        # Outer sanity bound: anything over this is a broken pipeline.
         assert r.p90_ms < 8000.0, f"{r.name} p90={r.p90_ms:.0f} ms exceeds 8000 ms sanity bound"
 
-    # ── Relative comparisons ──────────────────────────────────────
+    # ── Relative comparisons + SLO assertions ─────────────────────
+    # Each `_SLO_*` threshold is overridable via env var — see module
+    # docstring. We collect violations first and raise one combined
+    # AssertionError so an engineer triaging a regression sees every
+    # stage that got worse, not just the first.
     by_id = {r.name.split(":", 1)[0]: r for r in results if r.samples_ms}
+    slo_violations: list[str] = []
+
+    if "B" in by_id:
+        baseline = by_id["B"]
+        if baseline.median_ms > _SLO_BASELINE_P50_MS:
+            slo_violations.append(
+                f"baseline p50 {baseline.median_ms:.0f} ms > "
+                f"SLO {_SLO_BASELINE_P50_MS:.0f} ms"
+            )
+        if baseline.p90_ms > _SLO_BASELINE_P90_MS:
+            slo_violations.append(
+                f"baseline p90 {baseline.p90_ms:.0f} ms > SLO {_SLO_BASELINE_P90_MS:.0f} ms"
+            )
+
+    if "X" in by_id:
+        full_stack = by_id["X"]
+        if full_stack.median_ms > _SLO_FULL_STACK_P50_MS:
+            slo_violations.append(
+                f"full-stack (X) p50 {full_stack.median_ms:.0f} ms > "
+                f"SLO {_SLO_FULL_STACK_P50_MS:.0f} ms"
+            )
+
     if "B" in by_id and "F" in by_id:
         full_overhead = by_id["F"].median_ms - by_id["B"].median_ms
         print(
             f"[latency] debug=full journal overhead vs baseline: {full_overhead:+.0f} ms (median)"
         )
+        if full_overhead > _SLO_FULL_JOURNAL_OVERHEAD_MS:
+            slo_violations.append(
+                f"debug=full journal overhead {full_overhead:+.0f} ms > "
+                f"SLO {_SLO_FULL_JOURNAL_OVERHEAD_MS:.0f} ms"
+            )
     if "B" in by_id and "L" in by_id:
         light_overhead = by_id["L"].median_ms - by_id["B"].median_ms
         print(
             f"[latency] debug=light journal overhead vs baseline: "
             f"{light_overhead:+.0f} ms (median)"
         )
+        if light_overhead > _SLO_LIGHT_JOURNAL_OVERHEAD_MS:
+            slo_violations.append(
+                f"debug=light journal overhead {light_overhead:+.0f} ms > "
+                f"SLO {_SLO_LIGHT_JOURNAL_OVERHEAD_MS:.0f} ms"
+            )
     if "B" in by_id and "N" in by_id:
         nr_overhead = by_id["N"].median_ms - by_id["B"].median_ms
         print(f"[latency] noise-reduction overhead vs baseline: {nr_overhead:+.0f} ms (median)")
+        if nr_overhead > _SLO_NR_OVERHEAD_MS:
+            slo_violations.append(
+                f"noise-reduction overhead {nr_overhead:+.0f} ms > "
+                f"SLO {_SLO_NR_OVERHEAD_MS:.0f} ms"
+            )
     if "B" in by_id and "A" in by_id:
         aec_overhead = by_id["A"].median_ms - by_id["B"].median_ms
         print(f"[latency] echo-cancellation overhead vs baseline: {aec_overhead:+.0f} ms (median)")
+        if aec_overhead > _SLO_AEC_OVERHEAD_MS:
+            slo_violations.append(
+                f"echo-cancellation overhead {aec_overhead:+.0f} ms > "
+                f"SLO {_SLO_AEC_OVERHEAD_MS:.0f} ms"
+            )
     if "B" in by_id and "S" in by_id:
         smart_delta = by_id["S"].median_ms - by_id["B"].median_ms
-        # Smart turn SHOULD reduce latency (earlier end-of-speech detection).
+        # Smart turn SHOULD reduce latency; tolerate moderate slowdown
+        # because the fixture may not hit early termination, but a
+        # large slowdown indicates a real regression.
         print(
             f"[latency] smart-turn delta vs baseline: {smart_delta:+.0f} ms (median) "
             f"{'(faster)' if smart_delta < 0 else '(slower — unexpected)'}"
+        )
+        if smart_delta > _SLO_SMART_TURN_SLOWDOWN_MS:
+            slo_violations.append(
+                f"smart-turn slowdown {smart_delta:+.0f} ms > "
+                f"SLO {_SLO_SMART_TURN_SLOWDOWN_MS:.0f} ms"
+            )
+
+    if slo_violations:
+        raise AssertionError(
+            "latency SLO violations:\n  - " + "\n  - ".join(slo_violations)
         )
