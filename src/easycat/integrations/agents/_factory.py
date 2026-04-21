@@ -24,6 +24,8 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
       (requires explicit ``PydanticAIBridge(graph=..., ...)`` construction)
     - ``pydantic_ai.Agent`` -> :class:`PydanticAIBridge` (Agent mode)
     - ``agents.Agent`` (OpenAI Agents SDK) -> :class:`OpenAIAgentsBridge`
+    - ``langgraph.graph.state.CompiledStateGraph`` -> :class:`LangGraphBridge`
+    - ``langchain_core.runnables.Runnable`` -> :class:`LangChainBridge`
 
     Unknown agent types are returned unchanged.
     """
@@ -163,6 +165,40 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
             from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
             return BridgeAdapterShim(OpenAIAgentsBridge(agent=agent))
+    except ImportError:
+        pass
+
+    # 6b. LangGraph compiled graph -> LangGraphBridge (check before
+    # plain LangChain Runnable since CompiledStateGraph *is* a Runnable).
+    try:
+        from langgraph.graph.state import CompiledStateGraph  # type: ignore[import-untyped]
+
+        if isinstance(agent, CompiledStateGraph):
+            if getattr(agent, "checkpointer", None) is None:
+                from easycat.integrations.agents.base import BridgeInputError
+
+                raise BridgeInputError(
+                    "LangGraph graphs must be compiled with a checkpointer "
+                    "to be auto-adapted. Call graph.compile("
+                    "checkpointer=InMemorySaver()) or construct "
+                    "LangGraphBridge(graph=..., ...) explicitly."
+                )
+            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+            from easycat.integrations.agents.langgraph import LangGraphBridge
+
+            return BridgeAdapterShim(LangGraphBridge(graph=agent))
+    except ImportError:
+        pass
+
+    # 6c. LangChain Runnable -> LangChainBridge.
+    try:
+        from langchain_core.runnables import Runnable  # type: ignore[import-untyped]
+
+        if isinstance(agent, Runnable):
+            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+            from easycat.integrations.agents.langchain import LangChainBridge
+
+            return BridgeAdapterShim(LangChainBridge(runnable=agent))
     except ImportError:
         pass
 
