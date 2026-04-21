@@ -16,7 +16,9 @@ from easycat.audio_format import AudioChunk
 # Sentence boundary detection via sentencesplit. The lookahead mode probes
 # tiny suffixes to detect whether the final boundary could still shift once
 # more streaming text arrives (e.g. "GPT 3." might become "GPT 3.5").
-_SENTENCE_SEGMENTER = sentencesplit.Segmenter(language="en", clean=False)
+# char_span=True makes segment_with_lookahead return TextSpan objects with
+# start/end offsets, so we can slice without a second segmentation pass.
+_SENTENCE_SEGMENTER = sentencesplit.Segmenter(language="en", clean=False, char_span=True)
 
 
 def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
@@ -39,8 +41,7 @@ def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
         return text, ""
     if len(result.segments) == 1:
         return "", text
-    spans = _SENTENCE_SEGMENTER.segment_spans(text)
-    last_start = spans[-1].start
+    last_start = result.segments[-1].start
     return text[:last_start], text[last_start:]
 
 
