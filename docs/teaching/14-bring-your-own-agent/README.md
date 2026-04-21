@@ -104,6 +104,12 @@ Twilio transport. The core executor is provider-neutral and handles
 
 ### 3. Output processors (the pronunciation pipeline)
 
+> **Name note.** The source module is `llm_output_processing.py`
+> and the stack is called *output processors* — we call it the
+> *pronunciation pipeline* because phonetic replacement and pauses
+> are what the feature buys you for voice. Grep for
+> `LLMOutputProcessor` / `output_processors`, not "pronunciation."
+
 Every committed assistant utterance runs through
 `config.output_processors` before reaching TTS. Four first-class
 processors live in `src/easycat/llm_output_processing.py`:

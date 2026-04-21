@@ -1,23 +1,24 @@
 # Teaching Ladder: Voice Pipelines from Scratch
 
-A 14-chapter progressive ladder for learning voice-AI pipelines
-through EasyCat. Modeled after *Crafting Interpreters*, *Ray
-Tracer in One Weekend*, and the Karpathy `micrograd`/`nanoGPT`
-tradition.
+A 16-chapter progressive ladder (chapters 0-15) for learning
+voice-AI pipelines through EasyCat. Modeled after *Crafting
+Interpreters*, *Ray Tracer in One Weekend*, and the Karpathy
+`micrograd`/`nanoGPT` tradition.
 
-The ladder splits cleanly into three movements:
+The ladder splits cleanly into four movements:
 
 - **Build** (ch 0-9): assemble the pipeline one stage at a time,
   ending at a bot that can hold a conversation with interruption.
 - **Operate** (ch 10-12): the things that make the difference
   between a demo and a deployment — cleaning the signal,
   observability, evaluation.
-- **Generalise** (ch 13): swap providers *and* transports, with
-  measured tradeoffs.
+- **Generalise** (ch 13-14): swap providers *and* transports, then
+  swap the agent framework itself.
+- **Ship** (ch 15): `SessionManager`, lifecycle discipline, the
+  debugger UI, the CLI.
 
-> **Status**: planning. No teaching code has been written yet. Each
-> file in this ladder is a per-chapter plan; the chapters themselves
-> will live in `docs/teaching/` once written.
+> **Status**: shipped. Every chapter listed here has a runnable
+> counterpart under `docs/teaching/`.
 
 ## Pedagogical principles
 
@@ -71,6 +72,13 @@ repositories we surveyed. Every chapter must honor all five.
 | # | Title | New concept | Wrong-version-first? |
 |---|---|---|---|
 | 13 | Swap providers AND transports | Protocol design payoff on both axes | — |
+| 14 | Bring your own agent | Bridge layer; session actions; pronunciation pipeline | — |
+
+**Ship:**
+
+| # | Title | New concept | Wrong-version-first? |
+|---|---|---|---|
+| 15 | Operate in production | `SessionManager`, lifecycle, debugger UI, CLI | — |
 
 ## Repo conventions
 
@@ -148,8 +156,10 @@ the battle-tested version.
 The first draft ran 12 chapters, all in the *Build* movement, with
 provider-swap as a finale. Audit feedback flagged that a serious
 voice-pipeline guide also needs to teach **tools**, **AEC vs NR**
-(distinct from each other), and the **operate-it** layer
-(observability + evaluation). The revised 14-chapter ladder:
+(distinct from each other), the **operate-it** layer (observability
++ evaluation), the **bridge layer** that makes agent frameworks
+swappable, and the **ship-it** layer (multi-session, lifecycle,
+debugger, CLI). The shipped 16-chapter ladder:
 
 - adds **ch 7 (Tools, mid-stream)** to address tool-call UX,
   filler utterances, and `SessionAction`s
@@ -161,6 +171,11 @@ voice-pipeline guide also needs to teach **tools**, **AEC vs NR**
 - expands the original ch 11 into **ch 13 (Swap providers AND
   transports)** so the Protocol payoff lands on both axes
   (provider mix × transport)
+- adds **ch 14 (Bring your own agent)** for the bridge layer,
+  session-action dispatch, and the pronunciation / output-processor
+  stack
+- adds **ch 15 (Operate in production)** for `SessionManager`,
+  lifecycle discipline, the debugger UI, and the CLI
 - adds three sidebars to existing chapters: SSML / pronunciation
   in ch 6, backpressure (`BoundedAudioQueue`) in ch 6, and
   "partials can flap; never act on them" in ch 2.

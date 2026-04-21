@@ -68,8 +68,8 @@ class TurnStage:
         state_after = self.snapshot_state()
         complete_extra: dict[str, Any] = {}
         if isinstance(result, dict):
-            source: dict[str, Any] = result
-        elif dataclasses.is_dataclass(result) and not isinstance(result, type):
+            source: dict[str, Any] = dict(result)
+        elif dataclasses.is_dataclass(result):
             source = dataclasses.asdict(result)
         else:
             source = {}

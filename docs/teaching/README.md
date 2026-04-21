@@ -85,6 +85,12 @@ Each chapter's README lists its own prerequisites up front.
 - **Production code stays in `src/easycat/`.** These folders are
   teaching artifacts; they import from EasyCat but do not ship
   anything back.
+- **Bundles use `pickle`.** `load_bundle` deserialises Python
+  objects, so loading a hostile `.bundle` can execute arbitrary
+  code. Only open bundles you generated yourself or got from a
+  source you trust. Every chapter that calls `load_bundle` assumes
+  this rule; chapters 11 and 12 repeat it inline because the
+  checked-in fixtures are the first ones most readers open.
 
 ## Pedagogical principles
 

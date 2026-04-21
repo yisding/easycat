@@ -44,7 +44,7 @@ uv run python examples/ws_server.py  # Run an example
 
 **Agent bridges** (`integrations/agents/`): `ExternalAgentBridge` protocol with implementations `OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, and `RemoteResponsesAPIBridge`. `BridgeAdapterShim` adapts a bridge to the legacy streaming-adapter surface that `Session` consumes. `AgentRunner` (in `integrations/agents/_agent_runner.py`) wraps any agent with timeout, cancellation, and in-memory history for simple non-bridge agents.
 
-**Dual-backend fallback:** VAD (Krisp → Silero → passthrough) and noise reduction (Krisp → RNNoise → passthrough) both try commercial backends first, then fall back to open-source, then no-op.
+**Dual-backend fallback:** VAD (`create_vad` auto: Silero → FunASR → TEN → Krisp; raises if none resolve) and noise reduction (`create_noise_reducer` auto: Krisp → RNNoise → passthrough). Each can be forced to a single backend via `VADConfig.backend` / `NoiseReducerConfig.backend`.
 
 ## Key Patterns
 
