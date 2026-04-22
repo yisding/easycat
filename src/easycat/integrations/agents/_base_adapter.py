@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any, Literal
 
 from easycat.cancel import CancelToken
-from easycat.integrations.agents._legacy_types import AgentStreamEvent, AgentStreamEventType
+from easycat.integrations.agents._stream_types import AgentStreamEvent, AgentStreamEventType
 
 logger = logging.getLogger(__name__)
 

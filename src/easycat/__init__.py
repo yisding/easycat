@@ -8,9 +8,8 @@ Top-level ``from easycat import X`` keeps working; every symbol in
 
 Internally, symbols are loaded lazily via PEP 562 ``__getattr__`` to
 keep CLI cold-start (``easycat --version``, ``easycat --help``) within
-the 300ms budget documented in ``plan/peripheral-cli.md``.  Heavy
-provider modules (transports, stages, telephony) only import when the
-symbol is actually touched.
+a 300ms budget.  Heavy provider modules (transports, stages, telephony)
+only import when the symbol is actually touched.
 
 Internal plumbing remains importable from submodules for advanced use::
 
@@ -64,7 +63,7 @@ _register(
 )
 _register("easycat.integrations.agents._factory", "auto_adapt_agent")
 _register(
-    "easycat.integrations.agents._legacy_types",
+    "easycat.integrations.agents._stream_types",
     "AgentStreamEvent",
     "AgentStreamEventType",
     "StreamingAgent",
@@ -137,7 +136,6 @@ _register(
 _register(
     "easycat.helpers",
     "attach_runtime_feedback",
-    "default_event_logging",
     "require_env",
     "run",
     "wait_for_shutdown_signal",
@@ -403,7 +401,6 @@ if TYPE_CHECKING:
     )
     from easycat.helpers import (
         attach_runtime_feedback,
-        default_event_logging,
         require_env,
         run,
         wait_for_shutdown_signal,
@@ -417,7 +414,7 @@ if TYPE_CHECKING:
         serialize_output,
     )
     from easycat.integrations.agents._factory import auto_adapt_agent
-    from easycat.integrations.agents._legacy_types import (
+    from easycat.integrations.agents._stream_types import (
         AgentStreamEvent,
         AgentStreamEventType,
         StreamingAgent,

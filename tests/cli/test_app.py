@@ -1,8 +1,7 @@
 """Top-level CLI surface: --version, --help, journey menu.
 
 Also guards the ``--version`` fast path in ``easycat/cli/__init__.py``
-that short-circuits before importing Typer/Rich.  See
-``plan/peripheral-cli.md`` (Typer + lazy imports).
+that short-circuits before importing Typer/Rich.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Legacy agent stream types migrated from agent_runner.py.
+"""Agent stream types.
 
 Defines the streaming event protocol, event types, and constants used
 by AgentRunner, BaseAgentAdapter, and Session's streaming pipeline.

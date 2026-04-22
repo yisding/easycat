@@ -153,48 +153,30 @@ session = Session(
 This keeps the pipeline (VAD → STT → agent → TTS) identical while letting you
 swap in open-source models for fully local operation.
 
-## Event-by-event logging (barge-in, ASR, TTS)
-EasyCat can now attach a built-in event trace logger that prints one log line
-per EventBus event so it is easy to inspect conversation flow (including
-`Interruption` / barge-in, `STTPartial` / `STTFinal`, and TTS events).
+## Inspecting conversation flow
+
+Observability is handled by the journal runtime. Enable it via `debug="light"`
+(in-memory) or `debug="full"` (SQLite WAL, crash-durable) and tail records
+live or read them after the session ends:
 
 ```python
-import logging
+import asyncio
 
-from easycat import EasyCatConfig, EventLoggingConfig, create_session
+from easycat import EasyCatConfig, JournalRecordKind, create_session
 
-logging.basicConfig(level=logging.INFO)
-
-config = EasyCatConfig(
-    openai_api_key="your-api-key",
-    event_logging=EventLoggingConfig(
-        enabled=True,
-        include_partials=True,
-        include_audio_events=False,  # set True to log every TTSAudio chunk
-        include_text=True,          # set False to log only text lengths
-    ),
-)
+config = EasyCatConfig(openai_api_key="your-api-key", debug="light")
 session = create_session(config)
+
+async def tail(session):
+    async for record in session.journal.follow():
+        if record.kind == JournalRecordKind.EVENT:
+            print(f"[{record.name}] {record.data}")
+
+asyncio.create_task(tail(session))
 ```
 
-By default, logs are emitted to logger name `easycat.event_trace` and include
-a per-session event index + relative timestamp for easier debugging.
-
-For production ingestion, you can enable JSON logs + event throttling and inspect
-a small in-memory ring buffer for "last N events" snapshots:
-
-```python
-event_logging=EventLoggingConfig(
-    enabled=True,
-    json_mode=True,
-    sample_rates={"STTPartial": 0.25},   # keep every 4th partial
-    min_interval_s={"TTSAudio": 0.25},   # max 4 audio logs/second
-    ring_buffer_size=500,
-)
-```
-
-Events now carry `session_id` and `turn_id` correlation fields, and tool events
-also include `call_id`, making cross-system traces easier to join.
+Records carry `session_id`, `turn_id`, and monotonic sequence numbers so
+cross-system traces join cleanly.
 
 ### Hook directly into agent/tool events
 You can subscribe to agent stream events (including tool calls) via the session:

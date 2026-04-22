@@ -34,7 +34,7 @@ class TwoSentenceStreamingAgent:
 
     @staticmethod
     def _event(text: str):
-        from easycat.integrations.agents._legacy_types import (
+        from easycat.integrations.agents._stream_types import (
             AgentStreamEvent,
             AgentStreamEventType,
         )
@@ -43,7 +43,7 @@ class TwoSentenceStreamingAgent:
 
     @staticmethod
     def _done(text: str):
-        from easycat.integrations.agents._legacy_types import (
+        from easycat.integrations.agents._stream_types import (
             AgentStreamEvent,
             AgentStreamEventType,
         )

@@ -16,12 +16,12 @@ from uuid import uuid4
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._base_adapter import BaseAgentAdapter
-from easycat.integrations.agents._legacy_types import (
+from easycat.integrations.agents._recorder import JournalAgentRecorder
+from easycat.integrations.agents._stream_types import (
     INTERRUPTION_NOTE,
     AgentStreamEvent,
     AgentStreamEventType,
 )
-from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentTurnInput,

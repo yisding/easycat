@@ -8,7 +8,7 @@ from easycat.integrations.agents._bridge_adapter_shim import (
     BridgeAdapterShim,
     _translate_bridge_to_stream,
 )
-from easycat.integrations.agents._legacy_types import AgentStreamEventType
+from easycat.integrations.agents._stream_types import AgentStreamEventType
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     CancellationMode,

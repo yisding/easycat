@@ -1,10 +1,9 @@
 """`easycat` command-line interface.
 
 Entry point for the scripted ``easycat`` command.  Import-time work is
-kept deliberately trivial so cold startup stays within the 300ms
-budget documented in ``plan/peripheral-cli.md``.  Heavy dependencies
-(Typer, Rich, template rendering, journal I/O, HTTP probes) are
-imported only inside the command that needs them.
+kept deliberately trivial so cold startup stays within a 300ms budget.
+Heavy dependencies (Typer, Rich, template rendering, journal I/O, HTTP
+probes) are imported only inside the command that needs them.
 
 The ``--version`` and ``-V`` flags short-circuit *before* importing
 Typer/Rich at all — they're the most-hit cold-start path and paying

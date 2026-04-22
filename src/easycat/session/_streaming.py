@@ -24,7 +24,7 @@ from easycat.events import (
     ToolCallResult,
     ToolCallStarted,
 )
-from easycat.integrations.agents._legacy_types import AgentStreamEventType
+from easycat.integrations.agents._stream_types import AgentStreamEventType
 from easycat.session._turn_context import TurnContext
 from easycat.session.text_utils import (
     has_unclosed_markdown_delimiters,

@@ -10,7 +10,7 @@ from easycat.integrations.agents._base_adapter import (
     split_replacement_by_original_parts,
 )
 from easycat.integrations.agents._factory import auto_adapt_agent
-from easycat.integrations.agents._legacy_types import (
+from easycat.integrations.agents._stream_types import (
     INTERRUPTION_NOTE,
     AgentStreamEvent,
     AgentStreamEventType,

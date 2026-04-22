@@ -166,8 +166,7 @@ class JournalView:
         start after the current ``latest_sequence`` — i.e. only future records.
         Pass ``0`` to replay the full history then live-tail.
 
-        Polls ``latest_sequence`` on *poll_interval* seconds.  Designed as
-        the migration seam replacing ``EventTraceLogger`` subscriber flows.
+        Polls ``latest_sequence`` on *poll_interval* seconds.
         """
         if from_sequence is not None:
             cursor = from_sequence

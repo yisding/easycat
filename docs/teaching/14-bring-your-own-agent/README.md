@@ -149,8 +149,7 @@ each bridge injects it into its framework's agent object
 (`agent.mcp_servers = [...]` before `run_streamed()`). Shallow-mode
 `GenericWorkflowBridge` logs a warning because it has no way to
 wire MCP into your hand-rolled workflow — deep mode makes it your
-responsibility. See `plan/workstream-2b-interruption-and-mcp.md`
-for the full spec.
+responsibility.
 
 ## Try breaking it
 

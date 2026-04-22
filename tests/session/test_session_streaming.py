@@ -33,7 +33,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.integrations.agents._agent_runner import AgentRunner
-from easycat.integrations.agents._legacy_types import (
+from easycat.integrations.agents._stream_types import (
     AgentStreamEvent,
     AgentStreamEventType,
 )

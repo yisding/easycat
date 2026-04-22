@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import sqlite3
+import subprocess
+import sys
+import textwrap
 from unittest import mock
 
 import pytest
@@ -244,6 +248,59 @@ class TestCrashRecovery:
         recovery = [r for r in records if r.kind == JournalRecordKind.RECOVERY]
         assert len(recovery) == 0
         j2.close()
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="SIGKILL not available on Windows",
+    )
+    def test_sigkill_preserves_committed_records(self, tmp_path):
+        """A child process writes records, parent SIGKILLs it, reopening the
+        journal recovers every committed record and emits a RECOVERY marker."""
+        n_records = 50
+        script = textwrap.dedent(f"""\
+            import sys, time
+            sys.path.insert(0, "src")
+            from easycat.runtime.journal import SqliteJournal
+            from easycat.runtime.records import JournalRecordKind
+
+            j = SqliteJournal("crash-sess", data_dir="{tmp_path}")
+            for i in range({n_records}):
+                j.append(
+                    kind=JournalRecordKind.EVENT,
+                    name=f"event_{{i}}",
+                    session_id="crash-sess",
+                )
+            j.flush()
+            print("READY", flush=True)
+            time.sleep(60)
+        """)
+
+        proc = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        line = proc.stdout.readline().strip()
+        assert line == "READY", f"Child did not signal ready: {line}"
+
+        proc.send_signal(signal.SIGKILL)
+        proc.wait()
+
+        j2 = SqliteJournal("crash-sess", data_dir=tmp_path)
+        assert j2._recovered is True
+
+        records = j2.read(start=0)
+        recovery = [r for r in records if r.kind == JournalRecordKind.RECOVERY]
+        assert len(recovery) == 1
+        assert recovery[0].sequence == 0
+
+        event_records = [r for r in records if r.kind == JournalRecordKind.EVENT]
+        assert len(event_records) == n_records
+
+        j2.close()
+
+        assert (tmp_path / "crash-dumps" / "crash-sess.sqlite").exists()
 
 
 class TestRetention:

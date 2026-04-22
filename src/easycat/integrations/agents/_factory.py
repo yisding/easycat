@@ -6,7 +6,7 @@ import inspect
 from typing import Any
 
 from easycat.integrations.agents._base_adapter import BaseAgentAdapter
-from easycat.integrations.agents._legacy_types import StreamingAgent
+from easycat.integrations.agents._stream_types import StreamingAgent
 
 
 def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:

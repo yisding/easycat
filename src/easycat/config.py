@@ -6,7 +6,6 @@ import asyncio
 import copy
 import logging
 import os
-import warnings
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -286,18 +285,8 @@ class EasyCatConfig:
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
     mcp_servers: list[str] | None = None
-    event_logging: Any = None
 
     def __post_init__(self) -> None:
-        # ── Ignored legacy field ────────────────────────────────
-        if self.event_logging is not None:
-            warnings.warn(
-                "EasyCatConfig(event_logging=...) is deprecated and ignored. "
-                "Observability is handled by the journal-based runtime.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
         _VALID_DEBUG = {"off", "light", "full"}
         if self.debug not in _VALID_DEBUG:
             raise ValueError(

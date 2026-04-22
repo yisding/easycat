@@ -1,9 +1,8 @@
 """``easycat init`` — scaffold a new EasyCat project from a template.
 
-Implements the first-contact developer surface described in
-``plan/peripheral-cli.md``.  Two paths: interactive (TTY prompts with
-sensible defaults) and non-interactive (``--config '{...}'`` JSON, the
-primary surface for coding-agent scaffolding).
+Two paths: interactive (TTY prompts with sensible defaults) and
+non-interactive (``--config '{...}'`` JSON, the primary surface for
+coding-agent scaffolding).
 """
 
 from __future__ import annotations

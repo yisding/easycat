@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from easycat.cancel import CancelToken
-from easycat.integrations.agents._legacy_types import (
+from easycat.integrations.agents._stream_types import (
     INTERRUPTION_NOTE,
     AgentStreamEvent,
     AgentStreamEventType,

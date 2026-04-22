@@ -54,7 +54,7 @@ from easycat.events import (
 )
 from easycat.health_check import PeriodicHealthChecker
 from easycat.integrations.agents._factory import auto_adapt_agent
-from easycat.integrations.agents._legacy_types import AgentStreamEventType
+from easycat.integrations.agents._stream_types import AgentStreamEventType
 from easycat.llm_output_processing import (
     LLMOutputProcessor,
     apply_output_processors,
@@ -2123,13 +2123,11 @@ class Session:
                     result = await self._tts_synth.synthesize(
                         payload,
                         token,
-                        turn_end_time=turn.end_time,
                         is_active=(
                             None
                             if self._is_gated
                             else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
                         ),
-                        record_latency=turn.first_tts_audio_time is None,
                     )
                     tts_chunks.append(
                         (
@@ -2326,7 +2324,6 @@ class Session:
             result = await self._tts_synth.synthesize(
                 payload,
                 token,
-                turn_end_time=turn.end_time if turn else None,
                 is_active=(
                     None
                     if gated
