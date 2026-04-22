@@ -22,11 +22,13 @@ import fractions
 import json
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.events import EventBus, TransportAudioDelivered
 from easycat.extras import require_module
 from easycat.transports._base import _AudioQueueMixin
 
@@ -102,6 +104,16 @@ class WebRTCTransportConfig:
 # ── Outbound audio track ─────────────────────────────────────────
 
 
+@dataclass
+class _QueuedOutboundChunk:
+    transport_data: bytes
+    original_chunk: AudioChunk
+    turn_id: str | None = None
+    turn_ref: object | None = None
+    transport_offset: int = 0
+    original_reported: int = 0
+
+
 class _OutboundAudioSource:
     """Custom audio source that reads PCM16 data from a queue.
 
@@ -113,10 +125,11 @@ class _OutboundAudioSource:
     """
 
     def __init__(self) -> None:
-        self._queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=100)
-        self._remainder = b""
+        self._queue: asyncio.Queue[_QueuedOutboundChunk] = asyncio.Queue(maxsize=100)
+        self._pending: deque[_QueuedOutboundChunk] = deque()
         self._pts = 0
         self._start: float | None = None
+        self._event_bus: EventBus | None = None
         # Cache the av.AudioFrame class to avoid per-frame import overhead.
         self._AudioFrame: type | None = None
 
@@ -133,14 +146,30 @@ class _OutboundAudioSource:
 
         return _Track()
 
-    def enqueue(self, pcm_s16_48k: bytes) -> bool:
+    def enqueue(
+        self,
+        pcm_s16_48k: bytes,
+        *,
+        original_chunk: AudioChunk,
+        turn_id: str | None = None,
+        turn_ref: object | None = None,
+    ) -> bool:
         """Enqueue a chunk of 48 kHz PCM16 mono data for sending.
 
         Returns ``True`` when the chunk was accepted and ``False`` when
         the outbound queue was full and the frame was dropped.
         """
+        if not pcm_s16_48k:
+            return True
         try:
-            self._queue.put_nowait(pcm_s16_48k)
+            self._queue.put_nowait(
+                _QueuedOutboundChunk(
+                    transport_data=pcm_s16_48k,
+                    original_chunk=original_chunk,
+                    turn_id=turn_id,
+                    turn_ref=turn_ref,
+                )
+            )
         except asyncio.QueueFull:
             logger.debug("Outbound WebRTC audio queue full — dropping frame")
             return False
@@ -164,24 +193,59 @@ class _OutboundAudioSource:
 
         frame_bytes = _FRAME_SAMPLES * 2  # 16-bit mono
 
-        # Start with any leftover data from the previous frame to preserve
-        # audio ordering (instead of putting remainders back on the queue).
-        buf = bytearray(self._remainder)
-        self._remainder = b""
+        buf = bytearray()
+        delivered_chunks: list[tuple[AudioChunk, str | None, object | None]] = []
 
         while len(buf) < frame_bytes:
-            try:
-                chunk = self._queue.get_nowait()
-                buf.extend(chunk)
-            except asyncio.QueueEmpty:
+            if not self._pending:
+                try:
+                    self._pending.append(self._queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+
+            queued = self._pending[0]
+            remaining = queued.transport_data[queued.transport_offset :]
+            if not remaining:
+                self._pending.popleft()
+                continue
+
+            take = min(frame_bytes - len(buf), len(remaining))
+            if take <= 0:
                 break
+
+            buf.extend(remaining[:take])
+            queued.transport_offset += take
+
+            original_size = len(queued.original_chunk.data)
+            if queued.transport_offset >= len(queued.transport_data):
+                reported = original_size
+            else:
+                reported = min(
+                    original_size,
+                    int((queued.transport_offset / len(queued.transport_data)) * original_size),
+                )
+            if reported > queued.original_reported:
+                delivered_chunks.append(
+                    (
+                        AudioChunk(
+                            data=queued.original_chunk.data[queued.original_reported : reported],
+                            format=queued.original_chunk.format,
+                            timestamp=queued.original_chunk.timestamp,
+                        ),
+                        queued.turn_id,
+                        queued.turn_ref,
+                    )
+                )
+                queued.original_reported = reported
+
+            if queued.transport_offset >= len(queued.transport_data):
+                self._pending.popleft()
 
         if len(buf) < frame_bytes:
             # Pad with silence.
             buf.extend(bytes(frame_bytes - len(buf)))
 
-        pcm_data = bytes(buf[:frame_bytes])
-        self._remainder = bytes(buf[frame_bytes:])
+        pcm_data = bytes(buf)
 
         frame = self._AudioFrame(format="s16", layout="mono", samples=_FRAME_SAMPLES)
         frame.sample_rate = _WEBRTC_SAMPLE_RATE
@@ -190,6 +254,16 @@ class _OutboundAudioSource:
         frame.planes[0].update(pcm_data)
 
         self._pts += _FRAME_SAMPLES
+        if self._event_bus is not None:
+            for delivered_chunk, turn_id, turn_ref in delivered_chunks:
+                if delivered_chunk.data:
+                    await self._event_bus.emit(
+                        TransportAudioDelivered(
+                            chunk=delivered_chunk,
+                            turn_id=turn_id,
+                            turn_ref=turn_ref,
+                        )
+                    )
         return frame
 
     def clear(self) -> None:
@@ -199,7 +273,7 @@ class _OutboundAudioSource:
                 self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-        self._remainder = b""
+        self._pending.clear()
 
     def stop(self) -> None:
         """Signal that no more data will be enqueued.
@@ -235,6 +309,7 @@ class WebRTCTransport(_AudioQueueMixin):
     """
 
     _transport_name = "WebRTC"
+    reports_audio_delivery = True
 
     def __init__(self, config: WebRTCTransportConfig | None = None) -> None:
         self._config = config or WebRTCTransportConfig()
@@ -244,6 +319,7 @@ class WebRTCTransport(_AudioQueueMixin):
         self._pc: Any | None = None
         self._outbound: _OutboundAudioSource = _OutboundAudioSource()
         self._outbound_track: Any | None = None
+        self._event_bus: EventBus | None = None
 
         # HTTP signaling server (aiohttp).
         self._web: Any | None = None  # cached aiohttp.web module
@@ -382,7 +458,13 @@ class WebRTCTransport(_AudioQueueMixin):
         else:
             pcm_data = chunk.data
 
-        return self._outbound.enqueue(pcm_data)
+        self._outbound._event_bus = self._event_bus
+        return self._outbound.enqueue(
+            pcm_data,
+            original_chunk=chunk,
+            turn_id=getattr(chunk, "_easycat_turn_id", None),
+            turn_ref=getattr(chunk, "_easycat_turn_ref", None),
+        )
 
     async def clear_audio(self) -> None:
         """Discard queued outbound audio (useful during barge-in)."""

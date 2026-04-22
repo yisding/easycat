@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
+from easycat.audio_format import AudioChunk
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -45,6 +46,7 @@ from easycat.events import (
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
+    TransportAudioDelivered,
     TTSAudio,
     TTSMarkers,
     TurnEnded,
@@ -222,6 +224,7 @@ class Session:
         self.event_bus.subscribe(VADStopSpeaking, self._schedule_stt_segment_commit)
         self.event_bus.subscribe(VADStartSpeaking, self._cancel_scheduled_stt_segment_commit)
         self.event_bus.subscribe(PlaybackMarkAck, self._on_playback_mark_ack)
+        self.event_bus.subscribe(TransportAudioDelivered, self._on_transport_audio_delivered)
         tm_config = getattr(self._turn_manager, "_config", None)
         self._stt_segment_silence_ms = max(0, getattr(tm_config, "stt_segment_silence_ms", 0))
 
@@ -305,6 +308,9 @@ class Session:
         self._playback_ack_transport: PlaybackAckTransport | None = None
         if isinstance(self.transport, PlaybackAckTransport):
             self._playback_ack_transport = self.transport
+        self._transport_reports_audio_delivery = bool(
+            getattr(self.transport, "reports_audio_delivery", False)
+        )
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
@@ -2398,37 +2404,15 @@ class Session:
             replayed_chunk = self._replay_chunks_pending > 0
             turn = self._turn
             try:
+                self._stamp_outbound_chunk(chunk, turn)
                 delivered = await self._transport_stage.execute(
                     chunk, self._run_ctx, turn or self._no_turn
                 )
-                if delivered:
-                    # Stamp turn_id from the turn that owned this chunk — by
-                    # the time send_audio() returns, self._turn may point at
-                    # a newer turn (or None) under transport backpressure.
+                if delivered and not self._transport_reports_audio_delivery:
+                    await self._handle_audio_delivery(chunk, turn)
                     await self._emit(
                         AudioOut(chunk=chunk, turn_id=turn.id if turn is not None else None)
                     )
-                if self._enable_aec:
-                    self.echo_canceller.feed_reference(chunk)
-                sent_size = len(chunk.data)
-                if turn:
-                    turn.record_audio_sent(sent_size, chunk.duration_ms)
-                    if (
-                        sent_size > 0
-                        and self._playback_ack_transport is not None
-                        and turn.bytes_since_last_mark >= self._playback_mark_bytes_interval
-                    ):
-                        turn.bytes_since_last_mark = 0
-                        await self._send_playback_mark(turn)
-                    elif (
-                        sent_size > 0
-                        and turn.bytes_since_last_mark > 0
-                        and self._playback_ack_transport is not None
-                        and self._turn_manager.state != TurnManagerState.BOT_SPEAKING
-                        and self._outbound_queue.empty()
-                    ):
-                        turn.bytes_since_last_mark = 0
-                        await self._send_playback_mark(turn)
             except Exception:
                 logger.exception("Failed to send audio to transport")
             finally:
@@ -2443,6 +2427,41 @@ class Session:
         # Send a final mark for any trailing bytes
         turn = self._turn
         if turn and turn.bytes_since_last_mark > 0 and self._playback_ack_transport is not None:
+            turn.bytes_since_last_mark = 0
+            await self._send_playback_mark(turn)
+
+    def _stamp_outbound_chunk(self, chunk: AudioChunk, turn: TurnContext | None) -> None:
+        """Attach turn ownership so buffered transports can report later delivery."""
+        try:
+            setattr(chunk, "_easycat_turn_id", turn.id if turn is not None else None)
+            setattr(chunk, "_easycat_turn_ref", turn)
+        except Exception:
+            logger.debug("Failed to stamp outbound audio chunk metadata", exc_info=True)
+
+    async def _handle_audio_delivery(
+        self,
+        chunk: AudioChunk,
+        turn: TurnContext | None,
+    ) -> None:
+        if self._enable_aec:
+            self.echo_canceller.feed_reference(chunk)
+
+        sent_size = len(chunk.data)
+        if turn is None:
+            return
+
+        turn.record_audio_sent(sent_size, chunk.duration_ms)
+        if sent_size <= 0 or self._playback_ack_transport is None:
+            return
+
+        if turn.bytes_since_last_mark >= self._playback_mark_bytes_interval:
+            turn.bytes_since_last_mark = 0
+            await self._send_playback_mark(turn)
+        elif (
+            turn.bytes_since_last_mark > 0
+            and self._turn_manager.state != TurnManagerState.BOT_SPEAKING
+            and self._outbound_queue.empty()
+        ):
             turn.bytes_since_last_mark = 0
             await self._send_playback_mark(turn)
 
@@ -2476,6 +2495,17 @@ class Session:
         if turn.playback_ack_log and acked_bytes < turn.playback_ack_log[-1][1]:
             acked_bytes = turn.playback_ack_log[-1][1]
         turn.playback_ack_log.append((event.timestamp, acked_bytes))
+
+    async def _on_transport_audio_delivered(self, event: TransportAudioDelivered) -> None:
+        """Finalize accounting for buffered transports at their no-clear point."""
+        turn = event.turn_ref if isinstance(event.turn_ref, TurnContext) else None
+        if turn is None and self._turn is not None:
+            if event.turn_id is None or self._turn.id == event.turn_id:
+                turn = self._turn
+
+        turn_id = event.turn_id or (turn.id if turn is not None else None)
+        await self._handle_audio_delivery(event.chunk, turn)
+        await self._emit(AudioOut(chunk=event.chunk, turn_id=turn_id))
 
     def _maybe_attach_event_bus(self, provider: Any) -> None:
         """Attach the session EventBus to provider configs that support it."""
