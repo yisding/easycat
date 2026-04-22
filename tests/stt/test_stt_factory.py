@@ -122,7 +122,7 @@ def test_factory_error_message_lists_providers():
 def test_factory_produced_providers_are_stt_providers():
     from easycat.providers import STTProvider
 
-    for name in ("openai", "deepgram", "elevenlabs", "cartesia"):
+    for name in ("openai", "openai-realtime", "deepgram", "elevenlabs", "cartesia"):
         config = STTProviderConfig(provider=name, api_key="test-key")
         provider = create_stt_provider(config)
         assert isinstance(provider, STTProvider), f"{name} not an STTProvider"

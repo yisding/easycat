@@ -8,7 +8,6 @@ import json
 import pytest
 
 from easycat.events import Error, ErrorStage, EventBus, STTEventType
-from easycat.providers import STTProvider
 from easycat.stt.cartesia_provider import CartesiaSTT, CartesiaSTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
@@ -94,14 +93,6 @@ def _make_cartesia_stt(
         event_bus=event_bus,
     )
     return CartesiaSTT(config), ws
-
-
-# ── Protocol conformance ─────────────────────────────────────────
-
-
-def test_cartesia_stt_conforms_to_protocol():
-    stt, _ = _make_cartesia_stt()
-    assert isinstance(stt, STTProvider)
 
 
 # ── Basic streaming ──────────────────────────────────────────────

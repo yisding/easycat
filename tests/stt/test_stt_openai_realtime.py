@@ -11,7 +11,6 @@ from typing import Any
 import pytest
 
 from easycat.events import STTEvent, STTEventType
-from easycat.providers import STTProvider
 from easycat.stt import openai_realtime_provider as realtime_provider
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
@@ -112,14 +111,6 @@ def _make_session_updated() -> str:
 
 def _make_transcription_session_updated() -> str:
     return json.dumps({"type": "transcription_session.updated", "session": {}})
-
-
-# ── Protocol conformance ────────────────────────────────────────
-
-
-def test_openai_realtime_stt_conforms_to_protocol():
-    provider = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="test-key"))
-    assert isinstance(provider, STTProvider)
 
 
 # ── Session setup ───────────────────────────────────────────────
@@ -639,3 +630,24 @@ def test_factory_rejects_unknown_provider():
 
     with pytest.raises(ValueError, match="Unknown STT provider"):
         create_stt_provider(STTProviderConfig(provider="nonexistent", api_key="k"))
+
+
+# ── Live integration ─────────────────────────────────────────────
+
+
+@pytest.mark.integration_live
+async def test_live_openai_realtime_stt():
+    """Integration test requiring OPENAI_API_KEY env var."""
+    import os
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        pytest.skip("OPENAI_API_KEY not set")
+
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key=api_key))
+
+    pcm = generate_pcm_sine(duration_ms=500, sample_rate=16000)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+    # Tone isn't real speech; smoke-gates auth + Realtime WebSocket
+    # session negotiation.
+    assert isinstance(events, list)

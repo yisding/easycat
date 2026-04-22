@@ -10,7 +10,6 @@ import httpx
 import pytest
 
 from easycat.events import STTEventType
-from easycat.providers import STTProvider
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
@@ -92,21 +91,6 @@ def _make_mock_http_client(
     mock_client.post = AsyncMock(return_value=mock_response)
     mock_client.aclose = AsyncMock()
     return mock_client
-
-
-# ── Protocol conformance ─────────────────────────────────────────
-
-
-def test_elevenlabs_stt_conforms_to_protocol():
-    stt, _, _ = _make_el_stt_realtime()
-    assert isinstance(stt, STTProvider)
-
-
-def test_elevenlabs_batch_conforms_to_protocol():
-    mock_client = _make_mock_http_client()
-    config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client)
-    stt = ElevenLabsSTT(config)
-    assert isinstance(stt, STTProvider)
 
 
 # ── Realtime mode ────────────────────────────────────────────────
@@ -402,3 +386,24 @@ async def test_elevenlabs_realtime_reusable():
 
     events2 = await collect_stt_events(stt, chunks)
     assert events2[0].text == "stream 2"
+
+
+# ── Live integration ─────────────────────────────────────────────
+
+
+@pytest.mark.integration_live
+async def test_live_elevenlabs_stt_realtime():
+    """Integration test requiring ELEVENLABS_API_KEY env var."""
+    import os
+
+    api_key = os.environ.get("ELEVENLABS_API_KEY")
+    if not api_key:
+        pytest.skip("ELEVENLABS_API_KEY not set")
+
+    stt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key=api_key, mode="realtime"))
+
+    pcm = generate_pcm_sine(duration_ms=500, sample_rate=16000)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+    # Tone isn't real speech; smoke-gates auth + realtime WebSocket
+    # session negotiation.
+    assert isinstance(events, list)
