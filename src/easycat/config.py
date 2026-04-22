@@ -10,6 +10,8 @@ import warnings
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -105,6 +107,30 @@ def _openai_env_override(api_key: str | None) -> Iterator[None]:
             os.environ.pop("OPENAI_API_KEY", None)
         else:
             os.environ["OPENAI_API_KEY"] = prev
+
+
+_EASYCAT_LOG_LEVELS: dict[str, int] = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "warn": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+}
+
+
+def _resolve_easycat_log_level(*, default: int) -> int:
+    """Read ``EASYCAT_LOG_LEVEL`` and map it to a logging level.
+
+    Unknown values fall back to the caller-supplied default so a typo
+    doesn't silence the logger entirely.  Exposed at module scope so
+    both ``EasyCatConfig._apply_debug_defaults`` and
+    ``easycat.run`` converge on the same policy.
+    """
+    raw = os.getenv("EASYCAT_LOG_LEVEL", "").strip().lower()
+    if not raw:
+        return default
+    return _EASYCAT_LOG_LEVELS.get(raw, default)
 
 
 _ELEVENLABS_PCM_OUTPUT_RATES = (16000, 22050, 24000, 44100)
@@ -288,6 +314,12 @@ class EasyCatConfig:
     journal_retention: Literal["archive", "delete"] = "archive"
     mcp_servers: list[str] | None = None
     event_logging: Any = None
+    # When set, every session exports a timestamped debug bundle to this
+    # directory on stop/shutdown — the "always be recording" flow from
+    # ``peripheral-eval-and-debugger-ui.md`` so a user who hits a real
+    # failure already has the bundle saved to disk without flipping any
+    # switch.  Requires ``debug != "off"`` so the journal actually exists.
+    record_to: str | Path | None = None
 
     def __post_init__(self) -> None:
         # ── Ignored legacy field ────────────────────────────────
@@ -317,15 +349,11 @@ class EasyCatConfig:
                 f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
             )
 
-        # Env-var autodetect for the zero-config case: bare
-        # ``EasyCatConfig(agent=...)`` with ``OPENAI_API_KEY`` set picks up
-        # the OpenAI chain automatically — keeping the scaffolded
-        # ``agent.py`` templates under their line budget.  Resolved before
-        # string parsing so ``stt="openai-realtime"`` honors the env var
-        # without needing to be passed explicitly, and before the OpenAI
-        # default-fill below so the "swap just the STT" flow
-        # (``stt="deepgram/flux"`` + ``OPENAI_API_KEY``) gets a default
-        # OpenAI TTS without the user spelling it out.
+        # Pick up OPENAI_API_KEY for the zero-config case so a bare
+        # ``EasyCatConfig(agent=...)`` works when the env var is set —
+        # the standard OpenAI SDK convention.  Resolved before string
+        # parsing so ``stt="openai-realtime"`` honors the env var
+        # without needing to be passed explicitly.
         if self.openai_api_key is None and (env_key := os.getenv("OPENAI_API_KEY")):
             self.openai_api_key = env_key
 
@@ -375,14 +403,21 @@ class EasyCatConfig:
         return EchoCancellationConfig(enabled=enable_aec)
 
     def _apply_debug_defaults(self) -> None:
-        """Enable verbose logging when debug mode is active."""
+        """Enable verbose logging when debug mode is active.
+
+        ``EASYCAT_LOG_LEVEL`` (``debug|info|warning|error``) overrides
+        the default level so users can keep ``debug="light"`` wiring on
+        while dialling the log verbosity up or down without code
+        changes — mirrors ``LIVEKIT_LOG_LEVEL`` / ``UVICORN_LOG_LEVEL``.
+        """
         if not logging.root.handlers:
             logging.basicConfig(
                 level=logging.DEBUG,
                 format="%(asctime)s %(name)s %(levelname)s %(message)s",
             )
-        logging.getLogger("easycat").setLevel(logging.DEBUG)
-        logger.debug("EasyCat debug mode enabled")
+        level = _resolve_easycat_log_level(default=logging.DEBUG)
+        logging.getLogger("easycat").setLevel(level)
+        logger.debug("EasyCat debug mode enabled (level=%s)", logging.getLevelName(level))
 
     def _validate(self) -> None:
         if self.stt is None:
@@ -416,6 +451,42 @@ class EasyCatConfig:
                         f"Invalid MCP server URI: {uri!r}. "
                         f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
                     )
+
+    # ── Factory presets ──────────────────────────────────────────
+    #
+    # Classmethod shortcuts that pick sensible transport defaults for
+    # the three canonical deployment surfaces (local mic / browser /
+    # phone) and the text REPL used for agent iteration.  Users can
+    # still override any field via keyword argument — the preset only
+    # fills the transport default when the caller didn't supply one.
+    # Documented in ``peripheral-dx-onboarding.md``.
+
+    @classmethod
+    def mic(cls, **kwargs: Any) -> EasyCatConfig:
+        """Local-microphone preset — the default developer setup."""
+        kwargs.setdefault("transport", LocalTransportConfig())
+        return cls(**kwargs)
+
+    @classmethod
+    def browser(cls, **kwargs: Any) -> EasyCatConfig:
+        """WebRTC-in-the-browser preset.
+
+        Enables echo cancellation by default because browser clients
+        loop transport audio back through the mic.
+        """
+        kwargs.setdefault("transport", WebRTCTransportConfig())
+        kwargs.setdefault("enable_echo_cancellation", True)
+        return cls(**kwargs)
+
+    @classmethod
+    def phone(cls, **kwargs: Any) -> EasyCatConfig:
+        """Inbound telephony preset.
+
+        Uses the Twilio Media Streams transport and leaves echo-cancel
+        on its tri-state default (off for PSTN, which has no loopback).
+        """
+        kwargs.setdefault("transport", TwilioTransportConfig())
+        return cls(**kwargs)
 
 
 def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
@@ -610,7 +681,122 @@ def create_session(config: EasyCatConfig) -> Session:
             event_bus,
         )
 
+    if config.record_to is not None:
+        _install_record_to_hook(session, Path(config.record_to), debug_mode=config.debug)
+
+    if config.debug == "full":
+        _maybe_launch_debugger_ui(session)
+
     return session
+
+
+def _install_record_to_hook(
+    session: Session,
+    record_to: Path,
+    *,
+    debug_mode: Literal["off", "light", "full"],
+) -> None:
+    """Wire session stop/shutdown to auto-export a timestamped bundle.
+
+    ``record_to`` is a no-op when ``debug="off"`` because the journal
+    isn't created in that mode — we warn once and skip rather than
+    silently export an empty bundle.  The export runs *after* the
+    normal shutdown completes (so the journal already has the final
+    records) and is wrapped in a broad try/except so a bundle-write
+    failure never masks the real shutdown outcome.
+    """
+    if debug_mode == "off":
+        logger.warning(
+            "EasyCatConfig(record_to=%r) requested but debug='off' — no journal will "
+            "be captured. Set debug='light' or 'full' to enable recording.",
+            str(record_to),
+        )
+        return
+
+    original_stop = session.stop
+    original_shutdown = session.shutdown
+    already_exported = False
+
+    async def _export_bundle() -> None:
+        nonlocal already_exported
+        if already_exported:
+            return
+        already_exported = True
+        try:
+            record_to.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            path = record_to / f"{session.session_id}-{stamp}.zip"
+            session.export_debug_bundle(str(path))
+            logger.info("Recorded debug bundle to %s", path)
+        except Exception:
+            logger.exception("Failed to record debug bundle to %s", record_to)
+
+    async def _wrapped_stop() -> None:
+        try:
+            await original_stop()
+        finally:
+            await _export_bundle()
+
+    async def _wrapped_shutdown() -> None:
+        try:
+            await original_shutdown()
+        finally:
+            await _export_bundle()
+
+    session.stop = _wrapped_stop  # type: ignore[method-assign]
+    session.shutdown = _wrapped_shutdown  # type: ignore[method-assign]
+
+
+def _maybe_launch_debugger_ui(session: Session) -> None:
+    """Spin up the interactive debugger on localhost when debug="full".
+
+    The debugger is an optional extra (``easycat[debugger]`` → aiohttp);
+    when it isn't installed we log once and keep the session usable
+    rather than crashing.  Pytest and CI runs are detected via
+    ``PYTEST_CURRENT_TEST`` so the auto-launch never fights a test
+    harness that already has the port or the loop.  Host/port
+    overrides come from ``EASYCAT_DEBUGGER_PORT`` because the debugger
+    UI is a local-dev convenience, not a production surface.
+    """
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("EASYCAT_DEBUGGER_DISABLE"):
+        return
+    # aiohttp is the real gate — the debugger module imports fine
+    # without it, but the server fails the moment ``web.run_app`` is
+    # called.  Probe explicitly so we log a clean skip message instead
+    # of crashing a background thread.
+    try:
+        import aiohttp  # noqa: F401
+    except ImportError:
+        logger.info(
+            "debug='full' requested but easycat[debugger] is not installed; "
+            "skipping auto-launch. `pip install easycat[debugger]` to enable."
+        )
+        return
+
+    try:
+        from easycat.debugger import serve_session
+    except ImportError:
+        logger.info(
+            "debug='full' requested but the debugger module is unavailable; skipping auto-launch."
+        )
+        return
+
+    try:
+        port = int(os.getenv("EASYCAT_DEBUGGER_PORT", "8765"))
+    except ValueError:
+        port = 8765
+    open_browser = os.getenv("EASYCAT_DEBUGGER_OPEN_BROWSER", "1") != "0"
+    try:
+        serve_session(
+            session,
+            port=port,
+            open_browser=open_browser,
+            in_thread=True,
+        )
+    except OSError as exc:
+        logger.warning("Could not start debugger UI on port %s: %s", port, exc)
+    except Exception:
+        logger.exception("Debugger UI failed to start; continuing without it.")
 
 
 def create_text_session(

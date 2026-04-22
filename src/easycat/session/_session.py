@@ -316,6 +316,7 @@ class Session:
         self._closed = False
         self._stopping = False
         self._flushed = False
+        self._closed_event: asyncio.Event | None = None
         self._pipeline_task: asyncio.Task[None] | None = None
         self._stt_task: asyncio.Task[None] | None = None
         self._current_tts_task: asyncio.Task[None] | None = None
@@ -1144,6 +1145,48 @@ class Session:
         """
         await self._tts_synth.synthesize(text, token=None, bypass_gate=True)
 
+    # ── Async context manager ────────────────────────────────────
+
+    async def __aenter__(self) -> Session:
+        """Enter an ``async with session:`` block.
+
+        Starts the session when it has not been started already so that
+        ``async with create_session(cfg):`` is a one-liner equivalent to
+        ``easycat.run()`` for callers who already own an event loop.
+        """
+        if self._runtime_mode != "text_session" and not self._is_running and not self._closed:
+            await self.start()
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """Exit the context manager, tearing the session down cleanly."""
+        await self.shutdown()
+
+    async def wait_closed(self) -> None:
+        """Block until the session has been stopped or shut down.
+
+        Mirrors ``asyncio.Server.wait_closed()`` / ``Queue.join()`` and
+        is the idiomatic pair for ``async with session: await
+        session.wait_closed()``.  Returns immediately when the session
+        is already closed.
+        """
+        if self._closed:
+            return
+        event = self._closed_event
+        if event is None:
+            event = asyncio.Event()
+            self._closed_event = event
+            if self._closed:
+                event.set()
+        await event.wait()
+
+    def _mark_closed(self) -> None:
+        """Flip the closed flag and wake any `wait_closed()` waiters."""
+        self._closed = True
+        event = self._closed_event
+        if event is not None:
+            event.set()
+
     # ── Lifecycle ──────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -1298,7 +1341,7 @@ class Session:
                     pass
             self._turn = None
             self.destroy()
-            self._closed = True
+            self._mark_closed()
         finally:
             self._stopping = False
 
@@ -1374,7 +1417,7 @@ class Session:
                     pass
             self._turn = None
             self.destroy()
-            self._closed = True
+            self._mark_closed()
         finally:
             self._stopping = False
 

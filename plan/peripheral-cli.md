@@ -5,13 +5,65 @@
 > surface that turns the essential plan's journal from an internal
 > design win into something a developer actually uses on their first
 > hour with EasyCat and on their worst hour with EasyCat.
+
+## Status (2026-04)
+
+M1 (scaffolding) is effectively done:
+
+- Typer entry point registered in `pyproject.toml`; `easycat --version`
+  and the journey-ordered help menu work.
+- `easycat init` — full `-t/--template`, `-c/--config`, `--list-templates`,
+  `--force`, `--no-git`, `--json` surface with interactive prompts
+  guarded by a TTY check and schema-v1 validator with fuzzy key
+  suggestions.
+- `easycat doctor` — all eight checks (Python version, extras, env
+  vars, provider reachability, onnxruntime, microphone, journal
+  writable, disk space) tagged with their `EASYCAT_Exxx` codes.
+  `--fix` now performs safe auto-remediation for E207 (mkdir the
+  journal directory); other failures stay manual on purpose.
+- `easycat explain` — error code registry with `exit-codes`,
+  `init-schema`, `json-schema` meta-entries and fuzzy suggestions on
+  unknown codes.
+- Output contract (`--json`, stdout/stderr split, exit-code mapping)
+  and top-level `EasyCatError` handler.
+- Three templates: `openai-agents`, `pydantic-ai`, `text-chat`.
+
+M2 gaps:
+
+- Templates `pydantic-ai-workflow`, `twilio-phone`, `webrtc-browser`
+  not shipped.
+- Template `agent.py` line budgets overshoot: `openai-agents` 24 lines
+  (target ≤15), `pydantic-ai` 21 lines (target ≤12), `text-chat` 18
+  lines (target ≤8). Templates currently wire a `current_time` tool
+  instead of the plan's `calculator` + `filesystem` MCP; the tool is
+  working, but the plan text should be updated to match the shipped
+  content or vice-versa.
+
+M3 (journal debugging) — partial:
+
+- `easycat bundles list [--path <dir>] [--json]` and `easycat bundles
+  show <path> [--json]` — shipped (`src/easycat/cli/debug/bundles.py`).
+  `show` surfaces session id, duration, turn count, tool-call count,
+  error count, artifact count, provider versions, and replay entry
+  points (rendered with the new `cp_<sequence>` vocabulary).
+- `easycat bundles export --for=claude-code` — not started. Needs the
+  redaction pass from `peripheral-redaction.md`.
+- `easycat replay` — not started. The library-level `RunBundle` +
+  replay fidelity classes exist (`debug/bundle.py`,
+  `runtime/replay.py`), so this is pure CLI-shell work but it is the
+  biggest remaining chunk.
+
+The `uvx` zero-install guarantee, `[project.scripts]` entry, and
+error-code registry-backed `explain` surface all meet the plan's
+guardrails today.
+
 >
 > **Sibling peripheral docs:**
 >
 > - `peripheral-dx-onboarding.md` — library DX (line budgets, `run()`,
->   `async with`, string-keyed providers, env autodetect, config
->   presets, error codes, dev/prod log rendering). The scaffolded
->   projects here use that library DX; it must exist first.
+>   `async with`, string-keyed providers, config presets, error codes,
+>   dev/prod log rendering). The scaffolded projects here use that
+>   library DX; it must exist first.
 > - `peripheral-eval-and-debugger-ui.md` — `easycat.testing` pytest
 >   fixtures, Simulator + Judge, forked replay, interactive web
 >   debugger UI. The CLI's `replay` command exposes the replay
