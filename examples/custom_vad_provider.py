@@ -5,8 +5,8 @@ for the VAD stage.  Real custom-VAD use cases include: a domain-tuned
 speech detector, a tee that mirrors VAD events to a debug sink, or a
 deterministic stub that fires speech start/stop on schedule for tests.
 
-Here we wrap whichever VAD ``create_vad`` selects (Krisp → Silero →
-TEN → passthrough) with ``LoggingVAD``, which prints each event.
+Here we wrap whichever VAD ``create_vad`` selects (Silero → FunASR →
+TEN → Krisp) with ``LoggingVAD``, which prints each event.
 
 Setup:
   export OPENAI_API_KEY="..."

@@ -205,6 +205,10 @@ class LocalTransport(_AudioQueueMixin):
 
         Chunks larger than one callback frame are split so each enqueued
         piece fits exactly into the output buffer without truncation.
+
+        Returns ``False`` if the device is disconnected or if the playback
+        queue lacks capacity for the full chunk, so callers don't credit
+        the caller with hearing audio that was never scheduled.
         """
         if not self._connected:
             return False
@@ -215,7 +219,7 @@ class LocalTransport(_AudioQueueMixin):
         ]
         available = self._out_queue.maxsize - self._out_queue.qsize()
         if self._out_queue.maxsize > 0 and len(slices) > available:
-            logger.warning("Output audio queue full — dropping chunk")
+            logger.warning("Output audio queue full — dropped %d frame(s)", len(slices))
             return False
 
         turn_id = getattr(chunk, "_easycat_turn_id", None)

@@ -558,7 +558,7 @@ async def test_replay_audio_raises_when_artifact_is_missing(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
+@pytest.mark.integration_live
 @pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY"),
     reason="live OpenAI integration requires OPENAI_API_KEY",

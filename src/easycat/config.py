@@ -13,10 +13,12 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from uuid import uuid4
 
+from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.events import CallInitiated, CallScreening, EventBus, TTSAudio
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents.base import NULL_RECORDER, AgentTurnInput
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.providers import Transport
@@ -70,6 +72,9 @@ from easycat.transports.websocket import (
     WebSocketTransport,
     WebSocketTransportConfig,
 )
+from easycat.tts.cartesia_tts import CartesiaTTSConfig
+from easycat.tts.deepgram_tts import DeepgramTTSConfig
+from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
 from easycat.tts.factory import TTSConfig, create_tts_provider_from_config, parse_tts_string
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig, TurnMode
@@ -100,6 +105,74 @@ def _openai_env_override(api_key: str | None) -> Iterator[None]:
             os.environ.pop("OPENAI_API_KEY", None)
         else:
             os.environ["OPENAI_API_KEY"] = prev
+
+
+_ELEVENLABS_PCM_OUTPUT_RATES = (16000, 22050, 24000, 44100)
+
+
+def _transport_tts_output_format(transport: TransportConfig) -> AudioFormat | None:
+    preferred = getattr(transport, "preferred_tts_output_format", None)
+    if isinstance(preferred, AudioFormat):
+        return preferred
+
+    transport_fmt = getattr(transport, "audio_format", None)
+    if isinstance(transport_fmt, AudioFormat):
+        return transport_fmt
+    return None
+
+
+def _closest_elevenlabs_output_format(rate: int) -> str:
+    closest = min(_ELEVENLABS_PCM_OUTPUT_RATES, key=lambda candidate: abs(candidate - rate))
+    return f"pcm_{closest}"
+
+
+def _align_tts_config_to_transport(
+    tts_config: TTSConfig,
+    transport: TransportConfig,
+) -> TTSConfig:
+    target_format = _transport_tts_output_format(transport)
+    if target_format is None:
+        return tts_config
+
+    if isinstance(tts_config, OpenAITTSConfig):
+        if tts_config.output_format != PCM16_MONO_24K:
+            return tts_config
+        return replace(tts_config, output_format=target_format)
+
+    if isinstance(tts_config, DeepgramTTSConfig):
+        if tts_config.sample_rate != 24000 or tts_config.output_format != PCM16_MONO_24K:
+            return tts_config
+        provider_rate = (
+            target_format.sample_rate if target_format.sample_rate in (16000, 24000) else 24000
+        )
+        return replace(
+            tts_config,
+            sample_rate=provider_rate,
+            output_format=target_format,
+        )
+
+    if isinstance(tts_config, CartesiaTTSConfig):
+        if tts_config.sample_rate != 24000 or tts_config.output_format != PCM16_MONO_24K:
+            return tts_config
+        provider_rate = (
+            target_format.sample_rate if target_format.sample_rate in (16000, 24000) else 24000
+        )
+        return replace(
+            tts_config,
+            sample_rate=provider_rate,
+            output_format=target_format,
+        )
+
+    if isinstance(tts_config, ElevenLabsTTSConfig):
+        if tts_config.output_format != "pcm_24000" or tts_config.audio_format != PCM16_MONO_24K:
+            return tts_config
+        return replace(
+            tts_config,
+            output_format=_closest_elevenlabs_output_format(target_format.sample_rate),
+            audio_format=target_format,
+        )
+
+    return tts_config
 
 
 @dataclass
@@ -206,6 +279,7 @@ class EasyCatConfig:
     agent_runner: AgentRunnerConfig | None = None
     wrap_agent: bool = True
     strip_markdown: bool = False
+    auto_align_tts_output_to_transport: bool = True
     output_processors: Sequence[LLMOutputProcessor] = ()
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
@@ -277,15 +351,9 @@ class EasyCatConfig:
                 # for end-of-turn to upload the whole utterance.
                 self.stt = OpenAIRealtimeSTTConfig(api_key=self.openai_api_key)
             if self.tts is None:
-                # Match the TTS output format to the transport's audio format
-                # so TTSBase._normalize_audio resamples when they disagree
-                # (e.g. a WebSocketTransport left at 16 kHz while OpenAI
-                # TTS emits 24 kHz).
-                transport_fmt = getattr(self.transport, "audio_format", None)
-                tts_kwargs: dict[str, Any] = {"api_key": self.openai_api_key}
-                if transport_fmt is not None:
-                    tts_kwargs["output_format"] = transport_fmt
-                self.tts = OpenAITTSConfig(**tts_kwargs)
+                self.tts = OpenAITTSConfig(api_key=self.openai_api_key)
+        if self.tts is not None and self.auto_align_tts_output_to_transport:
+            self.tts = _align_tts_config_to_transport(self.tts, self.transport)
         if self.echo_cancellation is None:
             self.echo_cancellation = self._default_echo_cancellation_for_transport()
         if self.debug in ("light", "full"):
@@ -439,30 +507,20 @@ def create_session(config: EasyCatConfig) -> Session:
 
         if config.agent is not None:
             agent = auto_adapt_agent(config.agent, model=config.agent_model)
-            # Inject MCP servers and journal into the shim if it's a bridge adapter.
-            # Unwrap AgentRunner if the caller pre-wrapped the shim.
-            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+            # Unwrap AgentRunner to reach the underlying bridge for MCP /
+            # model / API-key injection.
+            bridge = agent._agent if isinstance(agent, AgentRunner) else agent
+            if hasattr(bridge, "_mcp_servers"):
+                # Always overwrite (even with empty tuple) so a reused bridge
+                # from a prior session doesn't leak old MCP servers.
+                bridge._mcp_servers = list(mcp_servers)
+            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
-            shim = agent
-            if isinstance(shim, AgentRunner):
-                shim = shim._agent
-            if isinstance(shim, BridgeAdapterShim):
-                shim._journal = journal
-                shim._artifact_store = artifact_store
-                shim._session_id = session_id
-                # Always overwrite so a reused shim from a prior session doesn't
-                # leak old MCP servers into a new session that leaves MCP unset.
-                shim._mcp_servers = mcp_servers
-                if hasattr(shim.bridge, "_mcp_servers"):
-                    shim.bridge._mcp_servers = list(mcp_servers)
-                # Inject model/API key for URL-backed agents.
-                from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-                if isinstance(shim.bridge, RemoteResponsesAPIBridge):
-                    if config.agent_model:
-                        shim.bridge._model = config.agent_model
-                    if config.remote_agent_api_key:
-                        shim.bridge._api_key = config.remote_agent_api_key
+            if isinstance(bridge, RemoteResponsesAPIBridge):
+                if config.agent_model:
+                    bridge._model = config.agent_model
+                if config.remote_agent_api_key:
+                    bridge._api_key = config.remote_agent_api_key
             if config.wrap_agent and not isinstance(agent, AgentRunner):
                 runner_cfg = config.agent_runner or AgentRunnerConfig()
                 agent = AgentRunner(agent, runner_cfg)
@@ -528,6 +586,7 @@ def create_session(config: EasyCatConfig) -> Session:
                 session_actions=config.session_actions,
                 action_executors=action_executors,
                 audio_gate=audio_gate,
+                mcp_servers=mcp_servers,
             )
         )
     except Exception:
@@ -636,31 +695,19 @@ def create_text_session(
         event_bus = EventBus()
 
         adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
-        # Backfill journal metadata into the bridge shim (mirrors create_session).
-        # Unwrap AgentRunner if the caller pre-wrapped the shim.
-        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+        # Unwrap AgentRunner to reach the underlying bridge for MCP /
+        # model / API-key injection (mirrors create_session).
+        _bridge = adapted._agent if isinstance(adapted, AgentRunner) else adapted
+        _mcp = list(mcp_servers) if mcp_servers else []
+        if hasattr(_bridge, "_mcp_servers"):
+            _bridge._mcp_servers = _mcp
+        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
-        _inner = adapted
-        if isinstance(_inner, AgentRunner):
-            _inner = _inner._agent
-        if isinstance(_inner, BridgeAdapterShim):
-            _inner._journal = journal
-            _inner._artifact_store = artifact_store
-            _inner._session_id = sid
-            # Inject model/API key for URL-backed agents (mirrors create_session).
-            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-            if isinstance(_inner.bridge, RemoteResponsesAPIBridge):
-                if agent_model:
-                    _inner.bridge._model = agent_model
-                if remote_agent_api_key:
-                    _inner.bridge._api_key = remote_agent_api_key
-            # Always overwrite so a reused shim from a prior session doesn't
-            # leak old MCP servers into a new session that leaves MCP unset.
-            _mcp = tuple(mcp_servers) if mcp_servers else ()
-            _inner._mcp_servers = _mcp
-            if hasattr(_inner.bridge, "_mcp_servers"):
-                _inner.bridge._mcp_servers = list(_mcp)
+        if isinstance(_bridge, RemoteResponsesAPIBridge):
+            if agent_model:
+                _bridge._model = agent_model
+            if remote_agent_api_key:
+                _bridge._api_key = remote_agent_api_key
         if wrap_agent and not isinstance(adapted, AgentRunner):
             runner_cfg = agent_runner or AgentRunnerConfig()
             adapted = AgentRunner(adapted, runner_cfg)
@@ -681,6 +728,7 @@ def create_text_session(
                 artifact_store=artifact_store,
                 session_id=sid,
                 runtime_mode="text_session",
+                mcp_servers=tuple(_mcp),
             )
         )
     except Exception:
@@ -745,6 +793,25 @@ class _OutboundPipelineWiring:
         self._hold_audio_task = loop.create_task(_synthesize_hold())
 
 
+async def _run_agent_once(agent: Any, prompt: str) -> str:
+    """Drive the agent once and return its final text response.
+
+    Works whether ``agent`` is an :class:`AgentRunner` (has ``run()``) or
+    a raw :class:`ExternalAgentBridge` (only implements ``invoke()``), so
+    ``wrap_agent=False`` sessions still support agent-mode screening.
+    """
+    run_fn = getattr(agent, "run", None)
+    if callable(run_fn):
+        return await run_fn(prompt)
+    accumulated = ""
+    async for event in agent.invoke(AgentTurnInput.from_text(prompt), NULL_RECORDER):
+        if event.kind == "text_delta" and event.text:
+            accumulated += event.text
+        elif event.kind == "done" and event.text:
+            accumulated = event.text
+    return accumulated
+
+
 def _wire_outbound_pipeline(
     session: Session,
     sm: OutboundCallStateMachine,
@@ -772,10 +839,11 @@ def _wire_outbound_pipeline(
         if event.mode == "agent" and _screening_detector is not None:
             try:
                 prompt = _screening_detector.accumulated_text
-                response_text = await session.agent.run(
+                response_text = await _run_agent_once(
+                    session.agent,
                     f"The callee's phone is screening this call. "
                     f'Their screening prompt says: "{prompt}". '
-                    f"Identify yourself briefly."
+                    f"Identify yourself briefly.",
                 )
                 in_time = _screening_detector.notify_agent_responded()
                 fallback_spoken = not in_time and _screening_detector.screening_response

@@ -87,10 +87,29 @@ class TestLocalTransport:
 
     @pytest.mark.asyncio
     async def test_send_audio_when_not_connected(self):
-        """send_audio is a no-op when disconnected."""
+        """send_audio reports False when the device is not connected."""
         transport = LocalTransport()
         chunk = _make_chunk()
-        await transport.send_audio(chunk)  # Should not raise.
+        delivered = await transport.send_audio(chunk)
+        assert delivered is False
+
+    @pytest.mark.asyncio
+    async def test_send_audio_returns_false_when_output_queue_full(self):
+        """Dropped frames surface as a False return so AudioOut isn't emitted."""
+        if importlib.util.find_spec("sounddevice") is None:
+            pytest.skip("sounddevice not installed")
+        # Tight queue so even a single split chunk overflows.
+        config = LocalTransportConfig(max_pending_out_chunks=1)
+        transport = LocalTransport(config)
+        await transport.connect()
+        try:
+            # A 4800-byte chunk splits into ~8 frames; after the first one
+            # the output queue is full and the remainder is dropped.
+            big_chunk = _make_chunk(4800, sample_rate=16000)
+            delivered = await transport.send_audio(big_chunk)
+            assert delivered is False
+        finally:
+            await transport.disconnect()
 
     @pytest.mark.asyncio
     async def test_config_defaults(self):

@@ -271,16 +271,3 @@ class TestAgentRunnerHistoryUpdate:
         # Should not raise
         runner.replace_last_assistant_text("cleaned")
         assert runner._history == []
-
-
-class TestBaseAdapterHistoryUpdate:
-    """Test BaseAgentAdapter.replace_last_assistant_text (default no-op)."""
-
-    def test_default_is_noop(self) -> None:
-        from easycat.integrations.agents._base_adapter import BaseAgentAdapter
-
-        adapter = BaseAgentAdapter()
-        adapter._message_history = [{"role": "assistant", "content": "**hi**"}]
-        # Default implementation does nothing
-        adapter.replace_last_assistant_text("hi")
-        assert adapter._message_history[0]["content"] == "**hi**"

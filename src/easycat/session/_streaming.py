@@ -11,11 +11,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
     Error,
@@ -24,7 +23,6 @@ from easycat.events import (
     ToolCallResult,
     ToolCallStarted,
 )
-from easycat.integrations.agents._legacy_types import AgentStreamEventType
 from easycat.session._turn_context import TurnContext
 from easycat.session.text_utils import (
     has_unclosed_markdown_delimiters,
@@ -47,30 +45,25 @@ class AgentStreamResult:
 
 
 async def consume_agent_stream(
-    agent: Any,
-    transcript: str,
+    stream_factory: Callable[[], AsyncIterator[Any]],
     *,
-    token: CancelToken | None,
+    cancel_token: Any | None,
     tts_queue: asyncio.Queue[TTSInput | None],
     emit: Callable[[Any], Awaitable[None]],
     prepare_tts_payload: Callable[..., TTSInput],
     strip_md: bool,
     turn: TurnContext,
-    stream_factory: Callable[[], Any] | None = None,
 ) -> AgentStreamResult:
-    """Consume a streaming agent and queue TTS payloads on sentence boundaries.
+    """Consume an :class:`AgentBridgeEvent` stream and queue TTS payloads.
 
-    This is the "translation layer" between agent stream events and TTS
+    This is the "translation layer" between bridge events and TTS
     payloads.  It accumulates text deltas, splits at sentence boundaries,
-    handles markdown buffering, emits EasyCat events, and drains in-flight
-    tool calls during cancellation.
+    handles markdown buffering, emits EasyCat-level events, and drains
+    in-flight tool calls during cancellation.
 
-    ``stream_factory`` is an optional zero-argument callable returning
-    the async iterator to consume.  Session passes
-    ``lambda: agent_stage.execute_streaming(transcript, ctx, turn, cancel_token=token)``
-    so AgentStage can journal the stream while this function drives the
-    consumer.  Falls back to ``agent.run_streaming(transcript, cancel_token=token)``
-    when the factory is absent, preserving the legacy call path.
+    ``stream_factory`` is a zero-argument callable returning the async
+    iterator to consume — typically
+    ``lambda: agent_stage.execute_streaming(...)``.
 
     Returns an :class:`AgentStreamResult` with the accumulated text,
     structured output, and any error that occurred.
@@ -91,35 +84,36 @@ async def consume_agent_stream(
         text_buffer = ""
 
     try:
-        if stream_factory is not None:
-            stream = stream_factory()
-        else:
-            stream = agent.run_streaming(transcript, cancel_token=token)
+        stream = stream_factory()
         async for event in stream:
+            kind = getattr(event, "kind", None)
+            if kind is None:
+                continue
+
             if done_received:
                 continue
 
             # ── Cancellation: drain tool calls then stop ──
-            if token and token.is_cancelled:
+            if cancel_token and cancel_token.is_cancelled:
                 if not result.interrupted:
                     result.interrupted = True
                 if pending_tool_calls > 0:
-                    if event.type == AgentStreamEventType.TOOL_RESULT:
+                    if kind == "tool_result":
                         pending_tool_calls = max(0, pending_tool_calls - 1)
                         await emit(ToolCallResult(call_id=event.call_id, result=event.result))
                         if pending_tool_calls <= 0:
                             break
-                    elif event.type == AgentStreamEventType.TOOL_STARTED:
+                    elif kind == "tool_started":
                         pending_tool_calls += 1
                         await emit(
                             ToolCallStarted(tool_name=event.tool_name, call_id=event.call_id)
                         )
-                    elif event.type == AgentStreamEventType.TOOL_DELTA:
+                    elif kind == "tool_delta":
                         await emit(ToolCallDelta(call_id=event.call_id, delta=event.text))
-                    elif event.type == AgentStreamEventType.DONE:
+                    elif kind == "done":
                         if event.text:
                             result.text = event.text
-                        if event.structured_output is not None:
+                        if getattr(event, "structured_output", None) is not None:
                             result.structured_output = event.structured_output
                         break
                     continue
@@ -127,7 +121,7 @@ async def consume_agent_stream(
                     break
 
             # ── Normal event handling ──
-            if event.type == AgentStreamEventType.TEXT_DELTA:
+            if kind == "text_delta":
                 result.text += event.text
                 await emit(AgentDelta(text=event.text))
 
@@ -157,20 +151,20 @@ async def consume_agent_stream(
                         if payload.text.strip():
                             await tts_queue.put(payload)
 
-            elif event.type == AgentStreamEventType.TOOL_STARTED:
+            elif kind == "tool_started":
                 pending_tool_calls += 1
                 await emit(ToolCallStarted(tool_name=event.tool_name, call_id=event.call_id))
-            elif event.type == AgentStreamEventType.TOOL_DELTA:
+            elif kind == "tool_delta":
                 await emit(ToolCallDelta(call_id=event.call_id, delta=event.text))
-            elif event.type == AgentStreamEventType.TOOL_RESULT:
+            elif kind == "tool_result":
                 pending_tool_calls = max(0, pending_tool_calls - 1)
                 await emit(ToolCallResult(call_id=event.call_id, result=event.result))
-            elif event.type == AgentStreamEventType.DONE:
+            elif kind == "done":
                 if event.text:
                     if not result.text:
                         text_buffer = event.text
                     result.text = event.text
-                if event.structured_output is not None:
+                if getattr(event, "structured_output", None) is not None:
                     result.structured_output = event.structured_output
                 await _flush_buffer()
                 done_received = True
@@ -180,7 +174,9 @@ async def consume_agent_stream(
         logger.exception("Agent streaming error")
         await emit(Error(exception=exc, stage=ErrorStage.AGENT))
     finally:
-        stream_succeeded = result.error is None and (not token or not token.is_cancelled)
+        stream_succeeded = result.error is None and (
+            not cancel_token or not cancel_token.is_cancelled
+        )
         if stream_succeeded:
             await _flush_buffer()
         await tts_queue.put(None)  # sentinel to stop TTS task

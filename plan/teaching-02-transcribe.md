@@ -48,7 +48,7 @@ Both write a `RunBundle` to
 5. **First journal dump.** Open the bundle with `load_bundle()`.
    Read the STT records. Every partial and final is recorded with
    a timestamp. This is your first look at the substrate chapter
-   10 will fully expose.
+   11 will fully expose.
 
 ## Key concepts
 
@@ -62,7 +62,7 @@ Both write a `RunBundle` to
 - `STTProvider` protocol in `providers.py`
 - Partial vs final transcripts
 - `ExecutionJournal` — first appearance; 30-second tour only. The
-  full tour is chapter 10.
+  full tour is chapter 11.
 - Not introduced: VAD, turn-taking, TTS, agents — all deferred
 
 ## Exercises
@@ -89,13 +89,26 @@ Both write a `RunBundle` to
 - `docs/teaching/02-transcribe/streaming.py`
 - `docs/teaching/02-transcribe/README.md`
 
+## Sidebar — Partials can flap; never act on them
+
+The fact that partials revise has a hard implication for the
+agent layer: **never fire the agent on a partial.** Always wait
+for `STTFinal`. A naive agent that prefetches on partials commits
+to a guess that may evaporate two partials later, wasting LLM
+tokens and producing audio for a sentence the user didn't say.
+This is the single most common source of "my voice bot is
+weirdly confident about things I didn't say." Chapter 6 reinforces
+the rule when it wires the agent in.
+
 ## Success criteria
 
 - The reader has personally watched a partial transcript revise
   itself in real time.
 - The reader can name two concrete reasons streaming STT exists:
   (a) lower perceived latency for the user, (b) earlier signal for
-  downstream stages (agent prefetch, turn-end detection).
+  downstream stages (turn-end detection, smart-turn priming).
+- The reader knows that downstream stages should *not* act on
+  partials — only on finals.
 
 ## Links forward
 
