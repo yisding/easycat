@@ -62,14 +62,23 @@ class TestSentenceSplitting:
         assert remaining == ""
 
     def test_single_sentence(self) -> None:
+        # Lookahead says the boundary after "world." is stable, so we emit.
         ready, remaining = split_at_sentence_boundaries("Hello world.")
-        assert ready == ""
-        assert remaining == "Hello world."
+        assert ready == "Hello world."
+        assert remaining == ""
 
     def test_two_sentences(self) -> None:
+        # Both boundaries are stable; the full text is emitted.
         ready, remaining = split_at_sentence_boundaries("First sentence. Second sentence.")
+        assert ready == "First sentence. Second sentence."
+        assert remaining == ""
+
+    def test_incomplete_trailing_token(self) -> None:
+        # A trailing non-terminated token leaves the last boundary unstable;
+        # earlier complete sentences are still emitted.
+        ready, remaining = split_at_sentence_boundaries("First sentence. Second")
         assert "First sentence." in ready
-        assert "Second" in remaining
+        assert remaining == "Second"
 
     def test_no_punctuation(self) -> None:
         ready, remaining = split_at_sentence_boundaries("Hello world")

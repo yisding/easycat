@@ -6,8 +6,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28.1",
-    "pysbd>=0.3.4",
     "rich>=13.0",
+    "sentencesplit>=0.0.3",
     "typer>=0.16",
     "websockets>=16.0",
 ]
@@ -21,6 +21,12 @@ pydantic-ai = ["pydantic-ai>=0.1"]
 openai = ["openai>=1.0.0"]
 deepgram = ["deepgram-sdk>=3.0.0"]
 elevenlabs = ["elevenlabs>=1.0.0"]
+# Cartesia STT/TTS talk directly to the Cartesia WebSocket API via the
+# core ``websockets`` dependency — no SDK install is required. This
+# marker extra exists so downstream tooling (e.g. ``easycat doctor``)
+# can enumerate the provider surface uniformly with the other ``[stt]``
+# / ``[tts]`` extras.
+cartesia = []
 telephony = ["fastapi>=0.110.0", "python-multipart>=0.0.9", "twilio>=9.0.0", "uvicorn>=0.29.0"]
 aec = ["livekit>=1.0.0"]
 local = ["sounddevice>=0.4.6"]
@@ -79,6 +85,7 @@ dev = [
 [tool.ruff]
 line-length = 99
 target-version = "py311"
+extend-exclude = ["src/easycat/cli/scaffold/templates"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP"]

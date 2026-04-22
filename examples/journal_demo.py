@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Demo: run one turn with stub providers and dump journal records.
 
-No API keys required — uses in-process stubs for STT, TTS, and transport.
+No API keys required.  The stubs here implement the provider Protocols
+structurally — inheriting from ``easycat.stubs`` Noop classes would
+trigger Session's noop guard, so each stub stands alone.
 
 Usage:
     uv run python examples/journal_demo.py
@@ -28,26 +30,19 @@ from easycat.session._types import SessionConfig
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
 
-# ── Stub providers ───────────────────────────────────────────────
-
 
 def _chunk(n: int = 320) -> AudioChunk:
     return AudioChunk(data=bytes(n), format=PCM16_MONO_16K)
 
 
 class StubTransport:
-    async def connect(self) -> None:
-        pass
-
-    async def disconnect(self) -> None:
-        pass
+    async def connect(self) -> None: ...
+    async def disconnect(self) -> None: ...
+    async def send_audio(self, chunk: AudioChunk) -> None: ...
 
     async def receive_audio(self) -> AsyncIterator[AudioChunk]:
         for _ in range(3):
             yield _chunk()
-
-    async def send_audio(self, chunk: AudioChunk) -> None:
-        pass
 
 
 class StubVAD:
@@ -61,19 +56,15 @@ class StubVAD:
         elif self._n == 3:
             yield VADStopSpeaking()
 
-    def configure(self, **kwargs: object) -> None:
-        pass
+    def configure(self, **kwargs: object) -> None: ...
 
 
 class StubSTT:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[STTEvent | None] = asyncio.Queue()
 
-    async def start_stream(self) -> None:
-        pass
-
-    async def send_audio(self, chunk: AudioChunk) -> None:
-        pass
+    async def start_stream(self) -> None: ...
+    async def send_audio(self, chunk: AudioChunk) -> None: ...
 
     async def end_stream(self) -> None:
         await self._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello, how are you?"))
@@ -93,15 +84,12 @@ class StubAgent:
 
 
 class StubTTS:
-    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+    async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
 
-    async def stop(self) -> None:
-        pass
-
-    async def cancel(self) -> None:
-        pass
+    async def stop(self) -> None: ...
+    async def cancel(self) -> None: ...
 
 
 class StubNoiseReducer:
@@ -109,11 +97,7 @@ class StubNoiseReducer:
         return chunk
 
 
-# ── Main ─────────────────────────────────────────────────────────
-
-
 async def main() -> None:
-    # Create journal — the single source of truth for all observability.
     journal = InMemoryRingBuffer(capacity=10_000)
 
     config = SessionConfig(
@@ -128,14 +112,12 @@ async def main() -> None:
     )
     session = Session(config)
 
-    # Run one turn.
     print("Starting session...")
     await session.start()
     await asyncio.sleep(0.5)
     await session.stop()
     print("Session stopped.\n")
 
-    # Dump journal records.
     view = session.journal
     assert view is not None
     records = view.read()
@@ -146,7 +128,6 @@ async def main() -> None:
         data_summary = str(r.data)[:40] if r.data else ""
         print(f"{r.sequence:>4}  {r.kind.value:<24} {r.name:<28} {data_summary}")
 
-    # Summary by kind.
     print("\n--- Summary ---")
     from collections import Counter
 

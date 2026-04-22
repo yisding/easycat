@@ -7,11 +7,13 @@ import copy
 import logging
 import os
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from uuid import uuid4
 
+from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.events import CallInitiated, CallScreening, EventBus, TTSAudio
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
@@ -70,12 +72,107 @@ from easycat.transports.websocket import (
     WebSocketTransport,
     WebSocketTransportConfig,
 )
+from easycat.tts.cartesia_tts import CartesiaTTSConfig
+from easycat.tts.deepgram_tts import DeepgramTTSConfig
+from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
 from easycat.tts.factory import TTSConfig, create_tts_provider_from_config, parse_tts_string
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, create_vad
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _openai_env_override(api_key: str | None) -> Iterator[None]:
+    """Project a programmatic OpenAI key into ``OPENAI_API_KEY``.
+
+    Lets :func:`parse_stt_string` / :func:`parse_tts_string` stay
+    provider-agnostic: they read ``OPENAI_API_KEY`` like any other
+    provider's env var, while this helper owns the
+    ``EasyCatConfig.openai_api_key`` → env-var policy. The override is
+    unwound on exit.
+    """
+    if not api_key:
+        yield
+        return
+    prev = os.environ.get("OPENAI_API_KEY")
+    os.environ["OPENAI_API_KEY"] = api_key
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("OPENAI_API_KEY", None)
+        else:
+            os.environ["OPENAI_API_KEY"] = prev
+
+
+_ELEVENLABS_PCM_OUTPUT_RATES = (16000, 22050, 24000, 44100)
+
+
+def _transport_tts_output_format(transport: TransportConfig) -> AudioFormat | None:
+    preferred = getattr(transport, "preferred_tts_output_format", None)
+    if isinstance(preferred, AudioFormat):
+        return preferred
+
+    transport_fmt = getattr(transport, "audio_format", None)
+    if isinstance(transport_fmt, AudioFormat):
+        return transport_fmt
+    return None
+
+
+def _closest_elevenlabs_output_format(rate: int) -> str:
+    closest = min(_ELEVENLABS_PCM_OUTPUT_RATES, key=lambda candidate: abs(candidate - rate))
+    return f"pcm_{closest}"
+
+
+def _align_tts_config_to_transport(
+    tts_config: TTSConfig,
+    transport: TransportConfig,
+) -> TTSConfig:
+    target_format = _transport_tts_output_format(transport)
+    if target_format is None:
+        return tts_config
+
+    if isinstance(tts_config, OpenAITTSConfig):
+        if tts_config.output_format != PCM16_MONO_24K:
+            return tts_config
+        return replace(tts_config, output_format=target_format)
+
+    if isinstance(tts_config, DeepgramTTSConfig):
+        if tts_config.sample_rate != 24000 or tts_config.output_format != PCM16_MONO_24K:
+            return tts_config
+        provider_rate = (
+            target_format.sample_rate if target_format.sample_rate in (16000, 24000) else 24000
+        )
+        return replace(
+            tts_config,
+            sample_rate=provider_rate,
+            output_format=target_format,
+        )
+
+    if isinstance(tts_config, CartesiaTTSConfig):
+        if tts_config.sample_rate != 24000 or tts_config.output_format != PCM16_MONO_24K:
+            return tts_config
+        provider_rate = (
+            target_format.sample_rate if target_format.sample_rate in (16000, 24000) else 24000
+        )
+        return replace(
+            tts_config,
+            sample_rate=provider_rate,
+            output_format=target_format,
+        )
+
+    if isinstance(tts_config, ElevenLabsTTSConfig):
+        if tts_config.output_format != "pcm_24000" or tts_config.audio_format != PCM16_MONO_24K:
+            return tts_config
+        return replace(
+            tts_config,
+            output_format=_closest_elevenlabs_output_format(target_format.sample_rate),
+            audio_format=target_format,
+        )
+
+    return tts_config
 
 
 @dataclass
@@ -182,6 +279,7 @@ class EasyCatConfig:
     agent_runner: AgentRunnerConfig | None = None
     wrap_agent: bool = True
     strip_markdown: bool = False
+    auto_align_tts_output_to_transport: bool = True
     output_processors: Sequence[LLMOutputProcessor] = ()
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
@@ -219,26 +317,31 @@ class EasyCatConfig:
                 f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
             )
 
-        # Resolve string-keyed provider shortcuts ("deepgram/flux" →
-        # DeepgramSTTConfig(...)) before any downstream validation.  Typed
-        # configs still take precedence — users can pass a concrete
-        # DeepgramSTTConfig and keep full control.
-        if isinstance(self.stt, str):
-            self.stt = parse_stt_string(self.stt)
-        if isinstance(self.tts, str):
-            self.tts = parse_tts_string(self.tts)
-
         # Env-var autodetect for the zero-config case: bare
         # ``EasyCatConfig(agent=...)`` with ``OPENAI_API_KEY`` set picks up
         # the OpenAI chain automatically — keeping the scaffolded
-        # ``agent.py`` templates under their line budget.
-        if (
-            self.stt is None
-            and self.tts is None
-            and self.openai_api_key is None
-            and (env_key := os.getenv("OPENAI_API_KEY"))
-        ):
+        # ``agent.py`` templates under their line budget.  Resolved before
+        # string parsing so ``stt="openai-realtime"`` honors the env var
+        # without needing to be passed explicitly, and before the OpenAI
+        # default-fill below so the "swap just the STT" flow
+        # (``stt="deepgram/flux"`` + ``OPENAI_API_KEY``) gets a default
+        # OpenAI TTS without the user spelling it out.
+        if self.openai_api_key is None and (env_key := os.getenv("OPENAI_API_KEY")):
             self.openai_api_key = env_key
+
+        # Resolve string-keyed provider shortcuts ("deepgram/flux" →
+        # DeepgramSTTConfig(...)) before any downstream validation. Typed
+        # configs still take precedence — users can pass a concrete
+        # DeepgramSTTConfig and keep full control. A programmatic
+        # ``openai_api_key`` is projected into the OpenAI env vars for
+        # the duration of parsing so ``stt="openai"`` works without the
+        # env var also being exported; the factory itself stays
+        # provider-agnostic.
+        with _openai_env_override(self.openai_api_key):
+            if isinstance(self.stt, str):
+                self.stt = parse_stt_string(self.stt)
+            if isinstance(self.tts, str):
+                self.tts = parse_tts_string(self.tts)
 
         if self.openai_api_key:
             if self.stt is None:
@@ -248,15 +351,9 @@ class EasyCatConfig:
                 # for end-of-turn to upload the whole utterance.
                 self.stt = OpenAIRealtimeSTTConfig(api_key=self.openai_api_key)
             if self.tts is None:
-                # Match the TTS output format to the transport's audio format
-                # so TTSBase._normalize_audio resamples when they disagree
-                # (e.g. a WebSocketTransport left at 16 kHz while OpenAI
-                # TTS emits 24 kHz).
-                transport_fmt = getattr(self.transport, "audio_format", None)
-                tts_kwargs: dict[str, Any] = {"api_key": self.openai_api_key}
-                if transport_fmt is not None:
-                    tts_kwargs["output_format"] = transport_fmt
-                self.tts = OpenAITTSConfig(**tts_kwargs)
+                self.tts = OpenAITTSConfig(api_key=self.openai_api_key)
+        if self.tts is not None and self.auto_align_tts_output_to_transport:
+            self.tts = _align_tts_config_to_transport(self.tts, self.transport)
         if self.echo_cancellation is None:
             self.echo_cancellation = self._default_echo_cancellation_for_transport()
         if self.debug in ("light", "full"):

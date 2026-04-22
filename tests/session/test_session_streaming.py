@@ -405,10 +405,12 @@ def test_split_no_boundary():
 
 
 def test_split_single_sentence():
+    # Lookahead sees the trailing period as a stable boundary, so the single
+    # complete sentence is emitted rather than buffered until the LLM
+    # finishes.
     ready, remaining = split_at_sentence_boundaries("Hello world. ")
-    # Single sentence is buffered; the caller flushes when the LLM finishes.
-    assert ready == ""
-    assert remaining == "Hello world. "
+    assert ready == "Hello world. "
+    assert remaining == ""
 
 
 def test_split_multiple_sentences():
@@ -1453,8 +1455,11 @@ class SlowToolCallingAgent(_TestBridgeBase):
     ) -> AsyncIterator[AgentBridgeEvent]:
         text = turn_input.text
         _ = recorder, text
-        # Text before tool
-        yield AgentBridgeEvent(kind="text_delta", text="Let me look. ")
+        # Text before tool — deliberately unterminated so lookahead keeps
+        # it buffered instead of flushing it to TTS before the tool runs.
+        text = turn_input.text
+        _ = recorder, text
+        yield AgentBridgeEvent(kind="text_delta", text="Let me look")
         # Tool lifecycle
         yield AgentBridgeEvent(
             kind="tool_started",

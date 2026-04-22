@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "EasyCat voice agent (OpenAI Agents SDK)."
 requires-python = ">=3.11"
 dependencies = [
-    "easycat[openai-agents,local]>=0.1.0",
+    "easycat[$EXTRAS]>=0.1.0",
 ]
 
 [tool.ruff]

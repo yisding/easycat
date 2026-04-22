@@ -133,12 +133,18 @@ class _OutboundAudioSource:
 
         return _Track()
 
-    def enqueue(self, pcm_s16_48k: bytes) -> None:
-        """Enqueue a chunk of 48 kHz PCM16 mono data for sending."""
+    def enqueue(self, pcm_s16_48k: bytes) -> bool:
+        """Enqueue a chunk of 48 kHz PCM16 mono data for sending.
+
+        Returns ``True`` when the chunk was accepted and ``False`` when
+        the outbound queue was full and the frame was dropped.
+        """
         try:
             self._queue.put_nowait(pcm_s16_48k)
         except asyncio.QueueFull:
             logger.debug("Outbound WebRTC audio queue full — dropping frame")
+            return False
+        return True
 
     async def _recv(self) -> Any:
         """Produce the next 20 ms audio frame for aiortc."""
@@ -376,8 +382,7 @@ class WebRTCTransport(_AudioQueueMixin):
         else:
             pcm_data = chunk.data
 
-        self._outbound.enqueue(pcm_data)
-        return True
+        return self._outbound.enqueue(pcm_data)
 
     async def clear_audio(self) -> None:
         """Discard queued outbound audio (useful during barge-in)."""

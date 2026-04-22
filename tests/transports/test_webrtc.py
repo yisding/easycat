@@ -373,10 +373,10 @@ class TestOutboundAudioSource:
         source = _OutboundAudioSource()
         source._queue = asyncio.Queue(maxsize=2)
         # Fill queue.
-        source.enqueue(bytes(100))
-        source.enqueue(bytes(100))
-        # Overflow — should not raise.
-        source.enqueue(bytes(100))
+        assert source.enqueue(bytes(100)) is True
+        assert source.enqueue(bytes(100)) is True
+        # Overflow — should not raise, and should report dropped frame.
+        assert source.enqueue(bytes(100)) is False
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")

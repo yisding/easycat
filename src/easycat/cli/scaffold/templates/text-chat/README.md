@@ -43,4 +43,5 @@ Hit Enter on a blank line to exit.
   `easycat.run(EasyCatConfig(agent=agent))` and add `stt=` / `tts=`. Or run
   `easycat init my-voice-agent --template openai-agents` for a voice starter.
 - **Debug a session:** pass `debug="full"` to `create_text_session` to write a
-  RunBundle journal you can export with `easycat bundles export`.
+  RunBundle journal under `~/.cache/easycat/journals/`. Inspect it via
+  `RunBundle.load(...)` or load into a coding agent for analysis.

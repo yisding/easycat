@@ -145,9 +145,10 @@ comparison goes to LiveKit.
 - **LiveKit Agents 1.5**: ML-based backchannel / false-interruption
   detection default-on.
 - **Cartesia Sonic 3 / Sonic Turbo**: ~90ms TTFA (Sonic 3), ~40ms TTFA
-  (Sonic Turbo) — set the 2026 TTS latency bar. Not a new EasyCat
-  provider (existing Cartesia adapter covers it), but sets the default
-  choice for latency-sensitive templates.
+  (Sonic Turbo) — set the 2026 TTS latency bar. Covered by the
+  Cartesia STT + TTS adapter from `peripheral-cartesia-provider.md`
+  (`CartesiaSTT` / `CartesiaTTS`); sets the default choice for
+  latency-sensitive templates.
 - **AssemblyAI research**: falling pitch at sentence end is a stronger
   signal than silence duration. Smart Turn v3.1 already combines
   prosodic and semantic features, which is why it has displaced older

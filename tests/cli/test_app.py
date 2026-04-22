@@ -36,11 +36,15 @@ def test_help_renders(cli: CliRunner) -> None:
 
 
 def test_journey_menu(cli: CliRunner) -> None:
-    """Bare ``easycat`` prints the journey menu (Scaffold / Debug groups)."""
+    """Bare ``easycat`` prints the journey menu listing implemented commands."""
     result = cli.invoke(app, [])
     assert result.exit_code == 0
     assert "Scaffold" in result.stdout
-    assert "Debug with the journal" in result.stdout
+    for cmd in ("init", "doctor", "explain"):
+        assert cmd in result.stdout
+    # Don't advertise journal-debug commands until they're implemented.
+    for cmd in ("bundles", "replay"):
+        assert cmd not in result.stdout
 
 
 # ── Fast-path guard ──────────────────────────────────────────────

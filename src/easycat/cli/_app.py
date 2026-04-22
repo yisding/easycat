@@ -42,10 +42,6 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
     [green]doctor[/]      Check environment and provider reachability
     [green]explain[/]     Look up an error code (like `cargo --explain`)
 
-  [cyan]Debug with the journal[/]
-    [green]bundles[/]     List, inspect, and export RunBundles
-    [green]replay[/]      Replay a RunBundle against current code
-
 Run [cyan]easycat <command> --help[/] for command-specific options.
 Run [cyan]easycat explain <code>[/] to understand an error.
 """
