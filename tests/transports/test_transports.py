@@ -154,7 +154,7 @@ class TestLocalTransport:
 
         pieces: list[bytes] = []
         while not transport._out_queue.empty():
-            pieces.append(transport._out_queue.get_nowait())
+            pieces.append(transport._out_queue.get_nowait().chunk.data)
 
         # 4800 / 640 = 7.5 → 8 pieces (last one is a 320-byte remainder).
         assert len(pieces) == 8
@@ -162,6 +162,24 @@ class TestLocalTransport:
         assert len(pieces[7]) == 320  # 4800 - 7*640 = 320
 
         await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_send_audio_drops_whole_chunk_when_out_queue_lacks_capacity(self):
+        transport = LocalTransport(
+            LocalTransportConfig(
+                audio_format=PCM16_MONO_24K,
+                frame_duration_ms=20,
+                max_pending_out_chunks=1,
+            )
+        )
+        transport._connected = True
+        transport._out_queue.put_nowait(None)
+
+        chunk = _make_chunk(1920, sample_rate=24000)  # needs two 20ms output frames
+        delivered = await transport.send_audio(chunk)
+
+        assert delivered is False
+        assert transport._out_queue.qsize() == 1
 
 
 # ── WebSocketTransport tests ─────────────────────────────────────

@@ -10,11 +10,13 @@ iterators. The Session is the single place that maps these to EasyCat events.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from easycat.audio_format import AudioChunk
 from easycat.events import Event, STTEvent, TTSEvent
-from easycat.tts.input import TTSInput
+
+if TYPE_CHECKING:
+    from easycat.tts.input import TTSInput
 
 # ── STT Provider ───────────────────────────────────────────────────
 

@@ -14,6 +14,7 @@ from easycat.events import (
     AgentDelta,
     AgentFinal,
     AudioIn,
+    AudioOut,
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
@@ -26,6 +27,7 @@ from easycat.events import (
     STTFinal,
     ToolCallResult,
     ToolCallStarted,
+    TransportAudioDelivered,
     TTSAudio,
     TTSEvent,
     TTSEventType,
@@ -95,6 +97,10 @@ class FakePlaybackAckTransport(FakeTransport):
         mark_name = name or f"mark_{len(self.playback_marks) + 1}"
         self.playback_marks.append(mark_name)
         return mark_name
+
+
+class ReportingTransport(FakeTransport):
+    reports_audio_delivery = True
 
 
 class FakeVAD:
@@ -1515,6 +1521,58 @@ async def test_trailing_playback_mark_emitted_while_session_running():
 
     assert len(transport.playback_marks) == 1
     await session.stop()
+
+
+@pytest.mark.asyncio
+async def test_buffered_transport_delivery_is_counted_only_after_report() -> None:
+    transport = ReportingTransport()
+    session = Session(_full_config(transport=transport))
+    session._turn = TurnContext("test-turn", CancelToken())
+    seen: list[AudioOut] = []
+    session.event_bus.subscribe(AudioOut, lambda event: seen.append(event))
+
+    chunk = _make_chunk()
+    await session._outbound_queue.put(chunk)
+    await session._drain_outbound_audio()
+
+    assert transport.sent == [chunk]
+    assert session._turn.audio_bytes_sent == 0
+    assert seen == []
+
+    await session.event_bus.emit(
+        TransportAudioDelivered(
+            chunk=chunk,
+            turn_id=session._turn.id,
+            turn_ref=session._turn,
+        )
+    )
+
+    assert session._turn.audio_bytes_sent == len(chunk.data)
+    assert len(seen) == 1
+    assert seen[0].chunk is chunk
+    assert seen[0].turn_id == "test-turn"
+
+
+@pytest.mark.asyncio
+async def test_failed_send_does_not_emit_audio_out_or_count_bytes() -> None:
+    class RejectingTransport(FakePlaybackAckTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            return False
+
+    transport = RejectingTransport()
+    session = Session(_full_config(transport=transport))
+    session._playback_mark_bytes_interval = 1
+    session._turn = TurnContext("test-turn", CancelToken())
+    seen: list[AudioOut] = []
+    session.event_bus.subscribe(AudioOut, lambda event: seen.append(event))
+
+    await session._outbound_queue.put(_make_chunk())
+    await session._drain_outbound_audio()
+
+    assert session._turn.audio_bytes_sent == 0
+    assert session._turn.bytes_since_last_mark == 0
+    assert transport.playback_marks == []
+    assert seen == []
 
 
 @pytest.mark.asyncio
