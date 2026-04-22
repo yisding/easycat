@@ -36,7 +36,15 @@ class TransportStage:
         self._journal = journal
         self._last_snapshot = StageStateSnapshot(stage_name=self.name)
 
-    async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
+    async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> bool:
+        """Send audio through the wrapped transport.
+
+        Returns ``True`` when the transport accepted the chunk for
+        delivery and ``False`` when it was silently dropped (for
+        example because the peer is disconnected). Transports whose
+        ``send_audio`` returns ``None`` are treated as delivered for
+        backward compatibility.
+        """
         state_before = self.snapshot_state()
         audio_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
         output_ref = put_artifact(ctx, audio_bytes)
@@ -53,8 +61,7 @@ class TransportStage:
             data_extra=extra,
         )
         try:
-            await self._provider.send_audio(input)
-            result = input
+            delivered = await self._provider.send_audio(input)
         except Exception as exc:
             journal_append_event(
                 ctx,
@@ -65,6 +72,7 @@ class TransportStage:
                 error=str(exc),
             )
             raise
+        result = True if delivered is None else bool(delivered)
         state_after = self.snapshot_state()
         journal_append_event(
             ctx,
@@ -74,7 +82,7 @@ class TransportStage:
             state_before=state_before,
             state_after=state_after,
             output_ref=output_ref,
-            data_extra=extra,
+            data_extra={**extra, "delivered": result},
         )
         return result
 

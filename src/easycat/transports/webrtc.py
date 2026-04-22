@@ -133,12 +133,18 @@ class _OutboundAudioSource:
 
         return _Track()
 
-    def enqueue(self, pcm_s16_48k: bytes) -> None:
-        """Enqueue a chunk of 48 kHz PCM16 mono data for sending."""
+    def enqueue(self, pcm_s16_48k: bytes) -> bool:
+        """Enqueue a chunk of 48 kHz PCM16 mono data for sending.
+
+        Returns ``True`` when the chunk was accepted and ``False`` when
+        the outbound queue was full and the frame was dropped.
+        """
         try:
             self._queue.put_nowait(pcm_s16_48k)
         except asyncio.QueueFull:
             logger.debug("Outbound WebRTC audio queue full — dropping frame")
+            return False
+        return True
 
     async def _recv(self) -> Any:
         """Produce the next 20 ms audio frame for aiortc."""
@@ -363,10 +369,10 @@ class WebRTCTransport(_AudioQueueMixin):
         self._connected = False
         self._client_connected.clear()
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
+    async def send_audio(self, chunk: AudioChunk) -> bool:
         """Send an audio chunk to the remote WebRTC peer."""
         if self._pc is None or self._outbound_track is None:
-            return
+            return False
 
         from easycat.audio_utils import resample
 
@@ -376,7 +382,7 @@ class WebRTCTransport(_AudioQueueMixin):
         else:
             pcm_data = chunk.data
 
-        self._outbound.enqueue(pcm_data)
+        return self._outbound.enqueue(pcm_data)
 
     async def clear_audio(self) -> None:
         """Discard queued outbound audio (useful during barge-in)."""
@@ -469,6 +475,10 @@ class WebRTCTransport(_AudioQueueMixin):
                     self._client_connected.set()
                 elif state in ("disconnected", "failed", "closed"):
                     self._client_connected.clear()
+                    # Null the outbound track so send_audio() reports the
+                    # drop (via bool False) instead of silently queueing into
+                    # a source that nothing is draining any more.
+                    self._outbound_track = None
                     self._enqueue_sentinel()
 
             # Set remote offer and create answer.

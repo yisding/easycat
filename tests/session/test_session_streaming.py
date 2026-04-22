@@ -33,9 +33,10 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.integrations.agents._agent_runner import AgentRunner
-from easycat.integrations.agents._legacy_types import (
-    AgentStreamEvent,
-    AgentStreamEventType,
+from easycat.integrations.agents.base import (
+    AgentBridgeEvent,
+    AgentRecorder,
+    AgentTurnInput,
 )
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._session import Session
@@ -61,6 +62,7 @@ from easycat.session.tts_helpers import (
 from easycat.timeouts import AgentTimeoutError, TimeoutConfig, TTSTimeoutError
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
+from tests._bridge_helpers import _TestBridgeBase
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
 
@@ -157,214 +159,225 @@ class FakeNoiseReducer:
 # ── Streaming test agents ──────────────────────────────────────────
 
 
-class StreamingUpperAgent:
+class StreamingUpperAgent(_TestBridgeBase):
     """Streaming agent that uppercases and streams word by word."""
 
     async def run(self, text: str) -> str:
         return text.upper()
 
-    async def run_streaming(
+    async def invoke(
         self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        text = turn_input.text
+        _ = recorder, text
         words = text.upper().split()
         for i, word in enumerate(words):
             if cancel_token and cancel_token.is_cancelled:
                 break
             delta = word if i == 0 else f" {word}"
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=delta)
+            yield AgentBridgeEvent(kind="text_delta", text=delta)
         full = " ".join(words)
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+        yield AgentBridgeEvent(kind="done", text=full)
 
 
-class StreamingSentenceAgent:
+class StreamingSentenceAgent(_TestBridgeBase):
     """Streams text with sentence boundaries for incremental TTS testing."""
 
     async def run(self, text: str) -> str:
         return "Hello world. How are you? I am fine."
 
-    async def run_streaming(
+    async def invoke(
         self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        text = turn_input.text
+        _ = recorder, text
         chunks = ["Hello world. ", "How are you? ", "I am fine."]
         for chunk in chunks:
             if cancel_token and cancel_token.is_cancelled:
                 break
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.DONE,
+            yield AgentBridgeEvent(kind="text_delta", text=chunk)
+        yield AgentBridgeEvent(
+            kind="done",
             text="Hello world. How are you? I am fine.",
         )
 
 
-class StreamingToolCallingAgent:
+class StreamingToolCallingAgent(_TestBridgeBase):
     """Streaming agent that calls a tool during response."""
 
     async def run(self, text: str) -> str:
         return "The result is 42."
 
-    async def run_streaming(
+    async def invoke(
         self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TOOL_STARTED,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        text = turn_input.text
+        _ = recorder, text
+        yield AgentBridgeEvent(
+            kind="tool_started",
             tool_name="calculator",
             call_id="call_abc",
         )
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TOOL_DELTA,
+        yield AgentBridgeEvent(
+            kind="tool_delta",
             call_id="call_abc",
             text="computing...",
         )
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TOOL_RESULT,
+        yield AgentBridgeEvent(
+            kind="tool_result",
             call_id="call_abc",
             result="42",
         )
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TEXT_DELTA,
+        yield AgentBridgeEvent(
+            kind="text_delta",
             text="The result is 42.",
         )
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.DONE,
+        yield AgentBridgeEvent(
+            kind="done",
             text="The result is 42.",
         )
 
 
-class SlowStreamingAgent:
+class SlowStreamingAgent(_TestBridgeBase):
     """Agent that streams slowly — useful for barge-in testing."""
 
     async def run(self, text: str) -> str:
         return "slow response"
 
-    async def run_streaming(
+    async def invoke(
         self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        text = turn_input.text
+        _ = recorder, text
         for word in ["slow ", "response"]:
             if cancel_token and cancel_token.is_cancelled:
                 break
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=word)
+            yield AgentBridgeEvent(kind="text_delta", text=word)
             await asyncio.sleep(0.05)
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="slow response")
+        yield AgentBridgeEvent(kind="done", text="slow response")
 
 
-class FailingStreamingAgent:
+class FailingStreamingAgent(_TestBridgeBase):
     """Agent that raises during streaming."""
 
     async def run(self, text: str) -> str:
         return "won't get here"
 
-    async def run_streaming(
+    async def invoke(
         self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="start ")
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        text = turn_input.text
+        _ = recorder, text
+        yield AgentBridgeEvent(kind="text_delta", text="start ")
         raise RuntimeError("agent failed mid-stream")
 
 
-class PostDoneStreamingAgent:
+class PostDoneStreamingAgent(_TestBridgeBase):
     """Agent that incorrectly keeps emitting events after DONE."""
 
     async def run(self, text: str) -> str:
         return "Alpha."
 
-    async def run_streaming(
+    async def invoke(
         self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Alpha.")
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Alpha.")
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TOOL_STARTED,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        text = turn_input.text
+        _ = recorder, text
+        yield AgentBridgeEvent(kind="text_delta", text="Alpha.")
+        yield AgentBridgeEvent(kind="done", text="Alpha.")
+        yield AgentBridgeEvent(
+            kind="tool_started",
             tool_name="late_tool",
             call_id="call_late",
         )
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=" Beta.")
+        yield AgentBridgeEvent(kind="text_delta", text=" Beta.")
 
 
-class StructuredOnlyStreamingAgent:
+class StructuredOnlyStreamingAgent(_TestBridgeBase):
     """Agent that completes with structured output and no text."""
 
     async def run(self, text: str) -> str:
         return ""
 
-    async def run_streaming(
+    async def invoke(
         self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.DONE,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        text = turn_input.text
+        _ = recorder, text
+        yield AgentBridgeEvent(
+            kind="done",
             text="",
             structured_output={"answer": 42},
         )
 
 
-class DoneOnlyStreamingAgent:
+class DoneOnlyStreamingAgent(_TestBridgeBase):
     """Agent that emits only a DONE event with full text (no TEXT_DELTA events)."""
 
     async def run(self, text: str) -> str:
         return "Hello from done-only bridge."
 
-    async def run_streaming(
+    async def invoke(
         self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.DONE,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        text = turn_input.text
+        _ = recorder, text
+        yield AgentBridgeEvent(
+            kind="done",
             text="Hello from done-only bridge.",
         )
 
 
-class TimeoutThenRecoverStreamingAgent:
+class TimeoutThenRecoverStreamingAgent(_TestBridgeBase):
     """Agent that times out once, then succeeds on the next turn."""
 
     def __init__(self) -> None:
+
+        super().__init__()
         self.calls = 0
 
     async def run(self, text: str) -> str:
         return "Recovered."
 
-    async def run_streaming(
+    async def invoke(
         self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        text = turn_input.text
+        _ = recorder, text
         self.calls += 1
         if self.calls == 1:
             await asyncio.sleep(0.05)
             return
 
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Recovered.")
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Recovered.")
+        yield AgentBridgeEvent(kind="text_delta", text="Recovered.")
+        yield AgentBridgeEvent(kind="done", text="Recovered.")
 
 
 class TimeoutThenRecoverTTS(FakeTTS):
@@ -392,10 +405,12 @@ def test_split_no_boundary():
 
 
 def test_split_single_sentence():
+    # Lookahead sees the trailing period as a stable boundary, so the single
+    # complete sentence is emitted rather than buffered until the LLM
+    # finishes.
     ready, remaining = split_at_sentence_boundaries("Hello world. ")
-    # Single sentence is buffered; the caller flushes when the LLM finishes.
-    assert ready == ""
-    assert remaining == "Hello world. "
+    assert ready == "Hello world. "
+    assert remaining == ""
 
 
 def test_split_multiple_sentences():
@@ -1075,29 +1090,29 @@ async def test_streaming_tts_timeout_does_not_poison_next_turn() -> None:
 async def test_session_streaming_barge_in_cancellation():
     """Barge-in during streaming should stop agent output via cancel token."""
 
-    class InterruptibleAgent:
+    class InterruptibleAgent(_TestBridgeBase):
         """Agent that checks cancel token and stops."""
 
-        async def run(self, text: str) -> str:
-            return "full response"
-
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
             for word in ["Hello ", "world. ", "This ", "is ", "a ", "long ", "response."]:
                 if cancel_token and cancel_token.is_cancelled:
                     break
-                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=word)
+                yield AgentBridgeEvent(kind="text_delta", text=word)
                 await asyncio.sleep(0.03)
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="")
+            yield AgentBridgeEvent(kind="done", text="")
 
     # Custom VAD that triggers barge-in mid-stream
     class BargeInVAD:
         def __init__(self) -> None:
+
+            super().__init__()
             self._n = 0
 
         async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
@@ -1174,20 +1189,21 @@ async def test_session_reset_clears_agent_history():
 async def test_session_with_agent_runner_streaming():
     """Full pipeline with AgentRunner wrapping a streaming agent."""
 
-    class MyStreamingAgent:
+    class MyStreamingAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return f"Reply: {text}"
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
             response = f"Reply: {text}"
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=response)
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=response)
+            yield AgentBridgeEvent(kind="text_delta", text=response)
+            yield AgentBridgeEvent(kind="done", text=response)
 
     runner = AgentRunner(MyStreamingAgent())
     tts = FakeTTS()
@@ -1233,19 +1249,20 @@ async def test_session_with_agent_runner_streaming():
 
 @pytest.mark.asyncio
 async def test_streaming_flushes_final_buffer_to_tts():
-    class BufferingAgent:
+    class BufferingAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "Hello world"
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world")
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world")
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
+            yield AgentBridgeEvent(kind="text_delta", text="Hello world")
+            yield AgentBridgeEvent(kind="done", text="Hello world")
 
     tts = FakeTTS()
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
@@ -1269,18 +1286,19 @@ async def test_streaming_flushes_final_buffer_to_tts():
 
 @pytest.mark.asyncio
 async def test_streaming_delta_only_still_emits_final_and_flushes_tts():
-    class DeltaOnlyAgent:
+    class DeltaOnlyAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "Hello world"
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world")
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
+            yield AgentBridgeEvent(kind="text_delta", text="Hello world")
 
     tts = FakeTTS()
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
@@ -1309,19 +1327,20 @@ async def test_streaming_delta_only_still_emits_final_and_flushes_tts():
 
 @pytest.mark.asyncio
 async def test_streaming_done_flushes_tts_before_stream_cleanup_finishes():
-    class DelayedAfterDoneAgent:
+    class DelayedAfterDoneAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "Hello world"
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world")
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world")
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
+            yield AgentBridgeEvent(kind="text_delta", text="Hello world")
+            yield AgentBridgeEvent(kind="done", text="Hello world")
             await asyncio.sleep(0.3)
 
     class ObservableFakeTTS(FakeTTS):
@@ -1414,11 +1433,13 @@ async def test_full_streaming_turn_event_order():
 # ── Barge-in with tool calls ──────────────────────────────────────
 
 
-class SlowToolCallingAgent:
+class SlowToolCallingAgent(_TestBridgeBase):
     """Streaming agent with a tool call that takes time, allowing
     cancellation to arrive mid-tool."""
 
     def __init__(self) -> None:
+
+        super().__init__()
         self.interruption_notified = False
         self.interruption_text_spoken = ""
         self.interruption_mode = ""
@@ -1426,36 +1447,40 @@ class SlowToolCallingAgent:
     async def run(self, text: str) -> str:
         return "The answer is 42."
 
-    async def run_streaming(
+    async def invoke(
         self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
-        # Text before tool
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Let me look. ")
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        text = turn_input.text
+        _ = recorder, text
+        # Text before tool — deliberately unterminated so lookahead keeps
+        # it buffered instead of flushing it to TTS before the tool runs.
+        text = turn_input.text
+        _ = recorder, text
+        yield AgentBridgeEvent(kind="text_delta", text="Let me look")
         # Tool lifecycle
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TOOL_STARTED,
+        yield AgentBridgeEvent(
+            kind="tool_started",
             tool_name="database_update",
             call_id="call_xyz",
         )
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TOOL_DELTA,
+        yield AgentBridgeEvent(
+            kind="tool_delta",
             call_id="call_xyz",
             text="updating...",
         )
         # Simulate slow tool — cancellation arrives here
         await asyncio.sleep(0.1)
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TOOL_RESULT,
+        yield AgentBridgeEvent(
+            kind="tool_result",
             call_id="call_xyz",
             result="row updated",
         )
         # Text after tool (should be skipped on barge-in)
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Done!")
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Done!")
+        yield AgentBridgeEvent(kind="text_delta", text="Done!")
+        yield AgentBridgeEvent(kind="done", text="Done!")
 
     def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
         self.interruption_notified = True
@@ -1463,10 +1488,12 @@ class SlowToolCallingAgent:
         self.interruption_mode = mode
 
 
-class FastDoneAgent:
+class FastDoneAgent(_TestBridgeBase):
     """Agent that completes quickly and supports interruption notifications."""
 
     def __init__(self) -> None:
+
+        super().__init__()
         self.finished = asyncio.Event()
         self.interruption_notified = False
         self.interruption_text_spoken = ""
@@ -1475,15 +1502,16 @@ class FastDoneAgent:
     async def run(self, text: str) -> str:
         return "Quick reply."
 
-    async def run_streaming(
+    async def invoke(
         self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Quick reply.")
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Quick reply.")
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        text = turn_input.text
+        _ = recorder, text
+        yield AgentBridgeEvent(kind="text_delta", text="Quick reply.")
+        yield AgentBridgeEvent(kind="done", text="Quick reply.")
         self.finished.set()
 
     def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
@@ -1762,7 +1790,7 @@ async def test_session_barge_in_during_tts_playback():
     """Cancellation after agent stream completes but during TTS playback
     should still trigger notify_interruption (cancelled_during_playback path)."""
 
-    class FastAgent:
+    class FastAgent(_TestBridgeBase):
         """Completes instantly with a full sentence."""
 
         interruption_notified = False
@@ -1772,15 +1800,16 @@ async def test_session_barge_in_during_tts_playback():
         async def run(self, text: str) -> str:
             return "Hello world."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world.")
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world.")
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
+            yield AgentBridgeEvent(kind="text_delta", text="Hello world.")
+            yield AgentBridgeEvent(kind="done", text="Hello world.")
 
         def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
             self.interruption_notified = True
@@ -1841,23 +1870,24 @@ async def test_session_barge_in_records_dequeued_unsynthesized_text_as_incomplet
 
     token = CancelToken()
 
-    class TwoSentenceAgent:
+    class TwoSentenceAgent(_TestBridgeBase):
         interruption_notified = False
 
         async def run(self, text: str) -> str:
             return "First sentence. Second sentence."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="First sentence. ")
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Second sentence.")
-            yield AgentStreamEvent(
-                type=AgentStreamEventType.DONE,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
+            yield AgentBridgeEvent(kind="text_delta", text="First sentence. ")
+            yield AgentBridgeEvent(kind="text_delta", text="Second sentence.")
+            yield AgentBridgeEvent(
+                kind="done",
                 text="First sentence. Second sentence.",
             )
 
@@ -1913,26 +1943,27 @@ async def test_session_barge_in_records_queued_unsynthesized_text_as_incomplete(
 
     token = CancelToken()
 
-    class ThreeSentenceAgent:
+    class ThreeSentenceAgent(_TestBridgeBase):
         interruption_notified = False
 
         async def run(self, text: str) -> str:
             return "First sentence. Second sentence. Third sentence."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
-            yield AgentStreamEvent(
-                type=AgentStreamEventType.TEXT_DELTA,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
+            yield AgentBridgeEvent(
+                kind="text_delta",
                 text="First sentence. Second sentence. ",
             )
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Third sentence.")
-            yield AgentStreamEvent(
-                type=AgentStreamEventType.DONE,
+            yield AgentBridgeEvent(kind="text_delta", text="Third sentence.")
+            yield AgentBridgeEvent(
+                kind="done",
                 text="First sentence. Second sentence. Third sentence.",
             )
 
@@ -1987,24 +2018,25 @@ async def test_session_barge_in_drain_records_timeline_strings(monkeypatch: pyte
     token = CancelToken()
     captured = {"called": False}
 
-    class TwoSentenceAgent:
+    class TwoSentenceAgent(_TestBridgeBase):
         def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
             pass
 
         async def run(self, text: str) -> str:
             return "First sentence. Second sentence."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="First sentence. ")
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Second sentence.")
-            yield AgentStreamEvent(
-                type=AgentStreamEventType.DONE,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
+            yield AgentBridgeEvent(kind="text_delta", text="First sentence. ")
+            yield AgentBridgeEvent(kind="text_delta", text="Second sentence.")
+            yield AgentBridgeEvent(
+                kind="done",
                 text="First sentence. Second sentence.",
             )
 
@@ -2065,21 +2097,22 @@ async def test_session_barge_in_drain_records_timeline_strings(monkeypatch: pyte
 async def test_session_barge_in_after_full_playback_does_not_notify_interruption():
     """If all synthesized audio is already delivered, interruption should not rewrite history."""
 
-    class FastAgent:
+    class FastAgent(_TestBridgeBase):
         interruption_notified = False
 
         async def run(self, text: str) -> str:
             return "Hello world."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world.")
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world.")
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
+            yield AgentBridgeEvent(kind="text_delta", text="Hello world.")
+            yield AgentBridgeEvent(kind="done", text="Hello world.")
 
         def notify_interruption(self, text_spoken: str = "", *, mode: str = "truncate") -> None:
             self.interruption_notified = True
@@ -2125,19 +2158,20 @@ async def test_session_barge_in_after_full_playback_does_not_notify_interruption
 async def test_session_barge_in_after_full_playback_keeps_agent_runner_history():
     """Late cancel after full playback should not truncate AgentRunner history."""
 
-    class FastAgent:
+    class FastAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "Hello world."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello world.")
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Hello world.")
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
+            yield AgentBridgeEvent(kind="text_delta", text="Hello world.")
+            yield AgentBridgeEvent(kind="done", text="Hello world.")
 
     class OneShotTTS:
         async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
@@ -2178,21 +2212,22 @@ async def test_session_barge_in_after_full_playback_keeps_agent_runner_history()
 async def test_session_barge_in_after_full_multichunk_playback_keeps_history():
     """Late cancel after full multi-chunk playback should not truncate history."""
 
-    class MultiSentenceAgent:
+    class MultiSentenceAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "First sentence. Second sentence."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="First sentence. ")
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Second sentence.")
-            yield AgentStreamEvent(
-                type=AgentStreamEventType.DONE,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
+            yield AgentBridgeEvent(kind="text_delta", text="First sentence. ")
+            yield AgentBridgeEvent(kind="text_delta", text="Second sentence.")
+            yield AgentBridgeEvent(
+                kind="done",
                 text="First sentence. Second sentence.",
             )
 
@@ -2233,17 +2268,18 @@ async def test_session_barge_in_after_full_multichunk_playback_keeps_history():
 async def test_streaming_strip_markdown_tts_receives_clean_text():
     """Markdown should be stripped from TTS chunks and AgentFinal when enabled."""
 
-    class MarkdownStreamingAgent:
+    class MarkdownStreamingAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "Go to **Settings** first. Then click *Security* next."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
             # Stream the markdown response in realistic token-size deltas
             chunks = [
                 "Go to **Settings",
@@ -2254,9 +2290,9 @@ async def test_streaming_strip_markdown_tts_receives_clean_text():
             for chunk in chunks:
                 if cancel_token and cancel_token.is_cancelled:
                     break
-                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+                yield AgentBridgeEvent(kind="text_delta", text=chunk)
             full = "Go to **Settings** first. Then click *Security* next."
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+            yield AgentBridgeEvent(kind="done", text=full)
 
     tts = FakeTTS()
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
@@ -2294,21 +2330,22 @@ async def test_streaming_strip_markdown_tts_receives_clean_text():
 
 @pytest.mark.asyncio
 async def test_streaming_strip_markdown_writes_journal_record():
-    class MarkdownStreamingAgent:
+    class MarkdownStreamingAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "Go to **Settings** first."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Go to **Settings")
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="** first.")
-            yield AgentStreamEvent(
-                type=AgentStreamEventType.DONE,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
+            yield AgentBridgeEvent(kind="text_delta", text="Go to **Settings")
+            yield AgentBridgeEvent(kind="text_delta", text="** first.")
+            yield AgentBridgeEvent(
+                kind="done",
                 text="Go to **Settings** first.",
             )
 
@@ -2345,24 +2382,25 @@ async def test_streaming_strip_markdown_writes_journal_record():
 
 @pytest.mark.asyncio
 async def test_streaming_strip_markdown_normalizes_short_code_spans_for_tts():
-    class CodeStreamingAgent:
+    class CodeStreamingAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "Call `__init__`. Then run `print()`."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
             chunks = ["Call `__init__`. ", "Then run `print()`."]
             for chunk in chunks:
                 if cancel_token and cancel_token.is_cancelled:
                     break
-                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
-            yield AgentStreamEvent(
-                type=AgentStreamEventType.DONE,
+                yield AgentBridgeEvent(kind="text_delta", text=chunk)
+            yield AgentBridgeEvent(
+                kind="done",
                 text="Call `__init__`. Then run `print()`.",
             )
 
@@ -2401,22 +2439,23 @@ async def test_streaming_strip_markdown_normalizes_short_code_spans_for_tts():
 async def test_streaming_strip_markdown_preserves_chunk_boundary_spaces():
     """Chunk-boundary spaces should not be removed by incremental stripping."""
 
-    class BoundarySpaceAgent:
+    class BoundarySpaceAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "Then click Security."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
             for chunk in ["Then ", "click Security."]:
                 if cancel_token and cancel_token.is_cancelled:
                     break
-                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Then click Security.")
+                yield AgentBridgeEvent(kind="text_delta", text=chunk)
+            yield AgentBridgeEvent(kind="done", text="Then click Security.")
 
     tts = FakeTTS()
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
@@ -2443,24 +2482,25 @@ async def test_streaming_strip_markdown_preserves_chunk_boundary_spaces():
 async def test_streaming_strip_markdown_cross_sentence_bold():
     """Bold spanning two sentences should still be stripped correctly."""
 
-    class CrossSentenceBoldAgent:
+    class CrossSentenceBoldAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "**This is important. Very important.** Got it?"
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
             chunks = ["**This is important. ", "Very important.** Got it?"]
             for chunk in chunks:
                 if cancel_token and cancel_token.is_cancelled:
                     break
-                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
+                yield AgentBridgeEvent(kind="text_delta", text=chunk)
             full = "**This is important. Very important.** Got it?"
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+            yield AgentBridgeEvent(kind="done", text=full)
 
     tts = FakeTTS()
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
@@ -2497,24 +2537,25 @@ async def test_streaming_strip_markdown_cross_sentence_bold():
 async def test_streaming_strip_markdown_unclosed_bold_multiple_sentences():
     """Unclosed markdown across chunks should not drop earlier stripped text."""
 
-    class UnclosedBoldAgent:
+    class UnclosedBoldAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "**First sentence. Second sentence.** Third sentence."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
             chunks = ["**First sentence. Second sentence.", "** Third sentence."]
             for chunk in chunks:
                 if cancel_token and cancel_token.is_cancelled:
                     break
-                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
-            yield AgentStreamEvent(
-                type=AgentStreamEventType.DONE,
+                yield AgentBridgeEvent(kind="text_delta", text=chunk)
+            yield AgentBridgeEvent(
+                kind="done",
                 text="**First sentence. Second sentence.** Third sentence.",
             )
 
@@ -2547,24 +2588,25 @@ async def test_streaming_strip_markdown_unclosed_bold_multiple_sentences():
 async def test_streaming_strip_markdown_unclosed_italic_multiple_sentences():
     """Unclosed single-italic markdown should defer flushing until closed."""
 
-    class UnclosedItalicAgent:
+    class UnclosedItalicAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "*First sentence. Second sentence.* Third sentence."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
             chunks = ["*First sentence. Second sentence.", "* Third sentence."]
             for chunk in chunks:
                 if cancel_token and cancel_token.is_cancelled:
                     break
-                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
-            yield AgentStreamEvent(
-                type=AgentStreamEventType.DONE,
+                yield AgentBridgeEvent(kind="text_delta", text=chunk)
+            yield AgentBridgeEvent(
+                kind="done",
                 text="*First sentence. Second sentence.* Third sentence.",
             )
 
@@ -2597,17 +2639,18 @@ async def test_streaming_strip_markdown_unclosed_italic_multiple_sentences():
 async def test_streaming_strip_markdown_unclosed_link_multiple_sentences():
     """Unclosed markdown links across chunks should not leak link/url artefacts."""
 
-    class UnclosedLinkAgent:
+    class UnclosedLinkAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "See [OpenAI. Next sentence.](https://openai.com/docs) Last sentence."
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
             chunks = [
                 "See [OpenAI. Next sentence.",
                 "](https://openai.com/docs) Last sentence.",
@@ -2615,9 +2658,9 @@ async def test_streaming_strip_markdown_unclosed_link_multiple_sentences():
             for chunk in chunks:
                 if cancel_token and cancel_token.is_cancelled:
                     break
-                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=chunk)
-            yield AgentStreamEvent(
-                type=AgentStreamEventType.DONE,
+                yield AgentBridgeEvent(kind="text_delta", text=chunk)
+            yield AgentBridgeEvent(
+                kind="done",
                 text="See [OpenAI. Next sentence.](https://openai.com/docs) Last sentence.",
             )
 
@@ -2656,20 +2699,21 @@ async def test_streaming_strip_markdown_unclosed_link_multiple_sentences():
 
 @pytest.mark.asyncio
 async def test_streaming_strip_markdown_flushes_tail_without_sentence_boundary():
-    class TailOnlyMarkdownAgent:
+    class TailOnlyMarkdownAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:
             return "**Final sentence without punctuation**"
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
             full = "**Final sentence without punctuation**"
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=full)
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+            yield AgentBridgeEvent(kind="text_delta", text=full)
+            yield AgentBridgeEvent(kind="done", text=full)
 
     tts = FakeTTS()
     session = Session(
@@ -2696,29 +2740,32 @@ async def test_streaming_strip_markdown_flushes_tail_without_sentence_boundary()
 async def test_streaming_strip_markdown_failed_turn_does_not_rewrite_prior_history():
     """Failed streaming turns must not patch prior assistant history entries."""
 
-    class FlakyMarkdownAgent:
+    class FlakyMarkdownAgent(_TestBridgeBase):
         def __init__(self) -> None:
+
+            super().__init__()
             self.calls = 0
 
         async def run(self, text: str) -> str:
             return "unused"
 
-        async def run_streaming(
+        async def invoke(
             self,
-            text: str,
-            *,
-            context: list[dict[str, str]] | None = None,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
             cancel_token: CancelToken | None = None,
-        ) -> AsyncIterator[AgentStreamEvent]:
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            text = turn_input.text
+            _ = recorder, text
             self.calls += 1
             if self.calls == 1:
                 full = "First **answer**."
-                yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=full)
-                yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=full)
+                yield AgentBridgeEvent(kind="text_delta", text=full)
+                yield AgentBridgeEvent(kind="done", text=full)
                 return
 
-            yield AgentStreamEvent(
-                type=AgentStreamEventType.TEXT_DELTA,
+            yield AgentBridgeEvent(
+                kind="text_delta",
                 text="[overwritten](https://example.com)",
             )
             raise RuntimeError("agent failed mid-stream")

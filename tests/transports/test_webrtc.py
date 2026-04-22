@@ -326,16 +326,37 @@ class TestWebRTCTransportLifecycle:
 
     @pytest.mark.asyncio
     async def test_send_audio_no_peer(self):
-        """send_audio is a no-op when no peer is connected."""
+        """send_audio reports False when no peer is connected."""
         port = find_free_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
 
         chunk = make_chunk()
-        await transport.send_audio(chunk)  # Should not raise.
+        delivered = await transport.send_audio(chunk)
+        assert delivered is False
 
         await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_send_audio_reports_drop_after_peer_disconnect(self):
+        """After the peer connection drops, send_audio must return False so
+        the session stops emitting AudioOut for audio no one will hear."""
+        transport = WebRTCTransport()
+        # Pretend a peer connected: populate the fields that gate send_audio.
+        transport._pc = object()  # type: ignore[assignment]
+        transport._outbound_track = object()
+
+        chunk = make_chunk()
+        # With a live track, send_audio accepts the chunk.
+        delivered_while_live = await transport.send_audio(chunk)
+        assert delivered_while_live is True
+
+        # Simulate the connectionstatechange handler's "disconnected" branch.
+        transport._outbound_track = None
+
+        delivered_after_drop = await transport.send_audio(chunk)
+        assert delivered_after_drop is False
 
 
 # ── Outbound audio source tests ──────────────────────────────────
@@ -352,10 +373,10 @@ class TestOutboundAudioSource:
         source = _OutboundAudioSource()
         source._queue = asyncio.Queue(maxsize=2)
         # Fill queue.
-        source.enqueue(bytes(100))
-        source.enqueue(bytes(100))
-        # Overflow — should not raise.
-        source.enqueue(bytes(100))
+        assert source.enqueue(bytes(100)) is True
+        assert source.enqueue(bytes(100)) is True
+        # Overflow — should not raise, and should report dropped frame.
+        assert source.enqueue(bytes(100)) is False
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")

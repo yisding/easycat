@@ -1,4 +1,4 @@
-"""AC2.11: auto_adapt_agent() bridge selection and error paths."""
+"""auto_adapt_agent() bridge selection and error paths."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from collections.abc import AsyncIterator
 import pytest
 
 from easycat.cancel import CancelToken
-from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -16,6 +15,7 @@ from easycat.integrations.agents.base import (
     BridgeInputError,
     CancellationMode,
     CommitRule,
+    ExternalAgentBridge,
     FrameworkStateSnapshot,
     UnitKind,
 )
@@ -38,7 +38,13 @@ class _CustomBridge:
     def snapshot_state(self) -> FrameworkStateSnapshot:
         return FrameworkStateSnapshot(fields={}, kind="custom")
 
-    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
+    def apply_interruption(self, delivered_text: str, mode: CancellationMode, **_) -> None:
+        pass
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        pass
+
+    def append_interruption_note(self, note: str) -> None:
         pass
 
     def reset(self) -> None:
@@ -46,17 +52,10 @@ class _CustomBridge:
 
 
 class TestAutoAdaptWithBridge:
-    def test_bridge_wrapped_in_shim(self):
+    def test_bridge_passthrough(self):
         bridge = _CustomBridge()
-        adapted = auto_adapt_agent(bridge)
-        assert isinstance(adapted, BridgeAdapterShim)
-        assert adapted.bridge is bridge
-
-    def test_shim_returned_as_is(self):
-        bridge = _CustomBridge()
-        shim = BridgeAdapterShim(bridge)
-        adapted = auto_adapt_agent(shim)
-        assert adapted is shim
+        assert isinstance(bridge, ExternalAgentBridge)
+        assert auto_adapt_agent(bridge) is bridge
 
     def test_unknown_object_passthrough(self):
         obj = object()
@@ -65,8 +64,6 @@ class TestAutoAdaptWithBridge:
 
 
 class TestAutoAdaptBridgeSelection:
-    """AC2.11 — auto_adapt_agent routes to correct bridge type."""
-
     def test_workflow_shallow_routes_to_generic_workflow_bridge(self):
         from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
 
@@ -75,9 +72,8 @@ class TestAutoAdaptBridgeSelection:
                 return text
 
         adapted = auto_adapt_agent(_Shallow())
-        assert isinstance(adapted, BridgeAdapterShim)
-        assert isinstance(adapted.bridge, GenericWorkflowBridge)
-        assert not adapted.bridge.deep_mode
+        assert isinstance(adapted, GenericWorkflowBridge)
+        assert not adapted.deep_mode
 
     def test_workflow_deep_routes_to_generic_workflow_bridge(self):
         from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
@@ -87,15 +83,13 @@ class TestAutoAdaptBridgeSelection:
                 yield f"deep: {text}"
 
         adapted = auto_adapt_agent(_Deep())
-        assert isinstance(adapted, BridgeAdapterShim)
-        assert isinstance(adapted.bridge, GenericWorkflowBridge)
-        assert adapted.bridge.deep_mode
+        assert isinstance(adapted, GenericWorkflowBridge)
+        assert adapted.deep_mode
 
     def test_pydantic_graph_raises_bridge_input_error(self):
         pytest.importorskip("pydantic_graph")
         from pydantic_graph import Graph
 
-        # A bare Graph cannot be auto-adapted — requires explicit construction.
         with pytest.raises(BridgeInputError, match="PydanticAIBridge"):
             auto_adapt_agent(Graph(nodes=[]))
 

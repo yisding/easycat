@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 # ── Removed symbols not present in narrowed form ────────────
 
 
@@ -59,10 +61,10 @@ class TestAllContainsExpected:
         "Event",
         # Agent types
         "AgentRunner",
-        "AgentStreamEvent",
-        "AgentStreamEventType",
-        "StreamingAgent",
-        "BaseAgentAdapter",
+        "AgentBridgeEvent",
+        "AgentTurnInput",
+        "CancellationMode",
+        "ExternalAgentBridge",
         # Journal runtime
         "ExecutionJournal",
         "JournalRecord",
@@ -89,28 +91,37 @@ class TestAllContainsExpected:
 
 
 class TestNewLocations:
-    """Verify that the new canonical import paths work."""
+    """Verify that the canonical bridge import paths work."""
 
     def test_agent_runner_importable(self):
         from easycat.integrations.agents._agent_runner import AgentRunner
 
         assert AgentRunner is not None
 
-    def test_legacy_types_importable(self):
-        from easycat.integrations.agents._legacy_types import (
-            AgentStreamEvent,
-            AgentStreamEventType,
+    def test_bridge_types_importable(self):
+        from easycat.integrations.agents.base import (
+            AgentBridgeEvent,
+            AgentTurnInput,
+            CancellationMode,
+            ExternalAgentBridge,
         )
 
-        assert AgentStreamEvent is not None
-        assert AgentStreamEventType is not None
-
-    def test_base_adapter_importable(self):
-        from easycat.integrations.agents._base_adapter import BaseAgentAdapter
-
-        assert BaseAgentAdapter is not None
+        assert AgentBridgeEvent is not None
+        assert AgentTurnInput is not None
+        assert CancellationMode is not None
+        assert ExternalAgentBridge is not None
 
     def test_factory_importable(self):
         from easycat.integrations.agents._factory import auto_adapt_agent
 
         assert auto_adapt_agent is not None
+
+    def test_legacy_modules_deleted(self):
+        """_legacy_types, _base_adapter, _bridge_adapter_shim should be gone."""
+        for mod in (
+            "easycat.integrations.agents._legacy_types",
+            "easycat.integrations.agents._base_adapter",
+            "easycat.integrations.agents._bridge_adapter_shim",
+        ):
+            with pytest.raises(ImportError):
+                __import__(mod)

@@ -11,6 +11,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from easycat.integrations.agents._helpers import INTERRUPTION_NOTE
+from easycat.integrations.agents.base import CancellationMode
 from easycat.session.text_utils import _truncate_partial_text_to_boundary
 from easycat.session.tts_helpers import _cleanup_estimation_text
 
@@ -19,6 +21,30 @@ if TYPE_CHECKING:
     from easycat.session._turn_context import TurnContext
 
 logger = logging.getLogger(__name__)
+
+
+def notify_bridge_interruption(
+    agent: Any,
+    delivered_text: str,
+    mode: str,
+) -> bool:
+    """Notify a bridge about an end-of-turn interruption.
+
+    ``mode="truncate"`` calls :meth:`ExternalAgentBridge.apply_interruption`
+    with :class:`CancellationMode.IMMEDIATE_STOP` so the bridge rewrites
+    the last assistant message to what was actually heard.  ``mode="message"``
+    calls :meth:`append_interruption_note` instead.  Returns ``True`` on
+    success, ``False`` if the bridge raised.
+    """
+    try:
+        if mode == "message":
+            agent.append_interruption_note(INTERRUPTION_NOTE)
+        else:
+            agent.apply_interruption(delivered_text, CancellationMode.IMMEDIATE_STOP)
+        return True
+    except Exception:
+        logger.debug("bridge interruption notification failed", exc_info=True)
+        return False
 
 
 @dataclass(frozen=True)
@@ -242,8 +268,6 @@ def estimate_and_notify_interruption(
     cancelled_during_playback = bool(token and token.is_cancelled and tts_playback_started)
     if not (interrupted or cancelled_during_playback):
         return None
-    if not hasattr(agent, "notify_interruption"):
-        return None
 
     cutoff_time = token.cancelled_at if token is not None else None
     if cutoff_time is None:
@@ -266,12 +290,7 @@ def estimate_and_notify_interruption(
                 heard_bytes,
             )
         )
-        notified = True
-        try:
-            agent.notify_interruption(text_spoken, mode=interruption_mode)
-        except Exception:
-            logger.debug("Failed to notify agent of interruption", exc_info=True)
-            notified = False
+        notified = notify_bridge_interruption(agent, text_spoken, interruption_mode)
         return InterruptionNotification(
             mode=interruption_mode,
             text_spoken=text_spoken,

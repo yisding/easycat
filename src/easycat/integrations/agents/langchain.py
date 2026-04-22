@@ -18,7 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
-from easycat.integrations.agents._base_adapter import split_replacement_by_original_parts
+from easycat.integrations.agents._helpers import split_replacement_by_original_parts
 from easycat.integrations.agents._langchain_events import translate_stream_event
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -242,9 +242,9 @@ class LangChainBridge:
     def replace_last_assistant_text(self, text: str) -> None:
         """Rewrite the last assistant message in history.
 
-        Called by the adapter shim after post-processing (e.g. Markdown
-        stripping) so the next turn conditions on cleaned text rather
-        than raw LLM output.
+        Called by Session after post-processing (e.g. Markdown stripping)
+        so the next turn conditions on cleaned text rather than raw LLM
+        output.
         """
         self._rewrite_last_ai_content(text)
 

@@ -701,7 +701,7 @@ class TestMCPWiringMockServer:
 class TestMCPFilesystemIntegration:
     """AC2B.9 — gated integration test using real mcp-filesystem binary."""
 
-    @pytest.mark.integration
+    @pytest.mark.integration_live
     def test_mcp_filesystem_integration(self):
         import os
 

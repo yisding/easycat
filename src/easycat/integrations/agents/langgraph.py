@@ -27,7 +27,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
-from easycat.integrations.agents._base_adapter import split_replacement_by_original_parts
+from easycat.integrations.agents._helpers import split_replacement_by_original_parts
 from easycat.integrations.agents._langchain_events import translate_stream_event
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,

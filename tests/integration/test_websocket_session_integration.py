@@ -8,6 +8,8 @@ import websockets
 
 from easycat import WebSocketConnectionTransport, WebSocketTransportConfig, create_session
 from easycat.events import AgentDelta, Interruption, STTFinal, TurnStarted
+from easycat.integrations.agents.base import AgentBridgeEvent
+from tests._bridge_helpers import _TestBridgeBase
 
 from .harness import (
     EventCollector,
@@ -22,33 +24,11 @@ from .harness import (
 )
 
 
-class TwoSentenceStreamingAgent:
-    async def run(self, text: str) -> str:
-        return "First sentence. Second sentence."
-
-    async def run_streaming(self, text: str, **kwargs: object):
-        del text, kwargs
-        yield type(self)._event("First sentence. ")
-        yield type(self)._event("Second sentence.")
-        yield type(self)._done("First sentence. Second sentence.")
-
-    @staticmethod
-    def _event(text: str):
-        from easycat.integrations.agents._legacy_types import (
-            AgentStreamEvent,
-            AgentStreamEventType,
-        )
-
-        return AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=text)
-
-    @staticmethod
-    def _done(text: str):
-        from easycat.integrations.agents._legacy_types import (
-            AgentStreamEvent,
-            AgentStreamEventType,
-        )
-
-        return AgentStreamEvent(type=AgentStreamEventType.DONE, text=text)
+class TwoSentenceStreamingAgent(_TestBridgeBase):
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        yield AgentBridgeEvent(kind="text_delta", text="First sentence. ")
+        yield AgentBridgeEvent(kind="text_delta", text="Second sentence.")
+        yield AgentBridgeEvent(kind="done", text="First sentence. Second sentence.")
 
 
 @pytest.mark.asyncio

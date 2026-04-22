@@ -415,12 +415,10 @@ class TestURLDetection:
     """AC2C.8 -- auto_adapt_agent detects HTTP URLs."""
 
     def test_http_url_detected(self):
-        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
         from easycat.integrations.agents._factory import auto_adapt_agent
 
         adapted = auto_adapt_agent("https://api.example.com/v1", model="gpt-4o")
-        assert isinstance(adapted, BridgeAdapterShim)
-        assert isinstance(adapted.bridge, RemoteResponsesAPIBridge)
+        assert isinstance(adapted, RemoteResponsesAPIBridge)
 
     def test_http_url_without_model_raises(self):
         from easycat.integrations.agents._factory import auto_adapt_agent
@@ -437,12 +435,10 @@ class TestURLDetection:
         assert result == "just-a-string"
 
     def test_http_url_with_path(self):
-        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
         from easycat.integrations.agents._factory import auto_adapt_agent
 
         adapted = auto_adapt_agent("http://localhost:8080", model="gpt-4o")
-        assert isinstance(adapted, BridgeAdapterShim)
-        assert isinstance(adapted.bridge, RemoteResponsesAPIBridge)
+        assert isinstance(adapted, RemoteResponsesAPIBridge)
 
 
 class TestEasyCatConfigURLValidation:
@@ -995,7 +991,7 @@ class TestInterruptionPlan:
 class TestIntegration:
     """AC2C.13 -- gated integration test against a live endpoint."""
 
-    @pytest.mark.integration
+    @pytest.mark.integration_live
     @pytest.mark.asyncio
     async def test_live_responses_api(self):
         base_url = os.environ.get("RESPONSES_API_BASE_URL")

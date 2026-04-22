@@ -15,7 +15,6 @@ from collections.abc import AsyncIterator
 import pytest
 
 from easycat.cancel import CancelToken
-from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -67,7 +66,7 @@ class DirectChatBridge:
         response_text = f"You said: {turn_input.text}"
         try:
             for word in response_text.split():
-                if cancel_token and cancel_token.is_cancelled():
+                if cancel_token and cancel_token.is_cancelled:
                     break
                 yield AgentBridgeEvent(kind="text_delta", text=word + " ")
 
@@ -100,6 +99,15 @@ class DirectChatBridge:
                 self._history[-1]["content"] = delivered_text + "..."
             else:
                 self._history.pop()
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        for entry in reversed(self._history):
+            if entry["role"] == "assistant":
+                entry["content"] = text
+                break
+
+    def append_interruption_note(self, note: str) -> None:
+        self._history.append({"role": "system", "content": note})
 
     def reset(self) -> None:
         self._history.clear()
@@ -183,8 +191,9 @@ class TestCustomBridgeExample:
         assert DirectChatBridge.COMMITTABLE_BOUNDARIES
         assert UnitKind.AGENT in DirectChatBridge.COMMITTABLE_BOUNDARIES
 
-    def test_wrappable_in_shim(self):
-        """Custom bridge can be wrapped in BridgeAdapterShim for Session compat."""
+    def test_implements_external_agent_bridge(self):
+        """Custom bridge must implement ExternalAgentBridge directly."""
+        from easycat.integrations.agents.base import ExternalAgentBridge
+
         bridge = DirectChatBridge(model="test", system="test")
-        shim = BridgeAdapterShim(bridge)
-        assert shim.bridge is bridge
+        assert isinstance(bridge, ExternalAgentBridge)

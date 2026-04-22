@@ -213,7 +213,12 @@ async def test_full_session_smoke():
     assert ts_idx < ve_idx, "TurnStarted should come before VADStopSpeaking"
     assert ve_idx < sf_idx, "VADStopSpeaking should come before STTFinal"
     assert sf_idx < af_idx, "STTFinal should come before AgentFinal"
-    assert af_idx < bs_idx, "AgentFinal should come before BotStartedSpeaking"
+    # Session streams agent text to TTS on sentence boundaries, so
+    # BotStartedSpeaking fires as the first sentence synthesizes — before
+    # the final accumulated AgentFinal is emitted.  TTS arriving early is
+    # the desired behavior (lower latency); the ordering constraint we
+    # actually care about is that TTS fires after STT has produced input.
+    assert sf_idx < bs_idx, "STTFinal should come before BotStartedSpeaking"
     assert bs_idx < ta_idx, "BotStartedSpeaking should come before TTSAudio"
     assert ta_idx < be_idx, "TTSAudio should come before BotStoppedSpeaking"
     assert te_idx < be_idx, "TurnEnded should come before BotStoppedSpeaking"
