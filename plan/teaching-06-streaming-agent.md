@@ -66,10 +66,13 @@ production version.
    custom payload envelope; markdown in agent output).
 6. **Walk the sentence splitter.** Open
    `src/easycat/session/text_utils.py` and read
-   `split_at_sentence_boundaries` end-to-end. Note it's a
-   ~15-line sentencesplit wrapper, not a 500-line NLP module. Why: latency
-   and the fact that perfect splitting doesn't matter when TTS
-   prosody forgives most seams.
+   `split_at_sentence_boundaries`. It wraps `sentencesplit` and handles
+   the real edge cases — trailing abbreviations, unclosed
+   markdown, incomplete final sentence — but the *core idea* is
+   one sentencesplit call plus a "don't flush an unfinished sentence"
+   guard. Why not a bespoke NLP module? Latency, and the fact
+   that perfect splitting doesn't matter when TTS prosody forgives
+   most seams.
 7. **Journal comparison.** Side-by-side chapter 5 and chapter 6
    timelines. First-audio latency should drop by ~3× on most
    prompts.
@@ -83,8 +86,11 @@ production version.
   toy version; required once you feed markdown-heavy agent output)
 - `src/easycat/session/_streaming.py::consume_agent_stream` — read
   in this chapter as reference material, not imported
-- `easycat.strip_markdown.strip_markdown` — why `say("**bold**")`
-  sounds wrong without stripping (see `session/tts_helpers.py`)
+- `from easycat.strip_markdown import strip_markdown` — why
+  `say("**bold**")` sounds wrong without stripping. Not a top-level
+  `easycat.*` re-export; reach for the submodule directly. See
+  `session/_streaming.py` for how `consume_agent_stream` applies
+  it to the sentence buffer before TTS.
 - TTS task parallelism — the next sentence synthesises while the
   current one plays
 
@@ -128,7 +134,53 @@ production version.
 - The reader can name three responsibilities `consume_agent_stream`
   handles that their toy ducks.
 
+## Sidebar — Speech-friendly output
+
+Three things that bite every voice agent the moment it shells out
+to a real LLM. Cover them before chapter 7 lands tools:
+
+- **Markdown stripping.** The agent says `**bold**`; without
+  stripping, TTS reads "asterisks bold asterisks." We already
+  import `strip_markdown` from `easycat.strip_markdown` in this
+  chapter; show the before/after audibly.
+- **Number and date normalisation.** `2024` reads four ways:
+  "twenty twenty-four", "two thousand twenty-four", "two oh
+  twenty-four", "two zero two four." The TTS provider picks one,
+  and it's often wrong. Mention `LLMOutputProcessor` /
+  `PhoneticReplacementProcessor` in `easycat.llm_output_processing`
+  for fixed corrections.
+- **SSML for fine control.** `TTSInput(text=..., format="ssml")`
+  accepts `<break time="500ms"/>` and `<phoneme>` tags. Use it
+  sparingly — most providers support a subset and prosody is
+  brittle across vendors.
+
+## Sidebar — Backpressure when the TTS queue grows
+
+When the agent streams faster than the TTS+playback can drain
+(common with a fast model and a slow voice), the queue grows
+unboundedly. Production uses `easycat.bounded_queue.BoundedAudioQueue`
+with a `DropPolicy`:
+
+- `DropPolicy.DROP_OLDEST` — drop stale audio first. Good for live
+  conversation: the user wants the latest, not the backlog.
+- `DropPolicy.DROP_NEWEST` — refuse new audio until queue drains.
+  Good for transactional flows where every word matters.
+- `DropPolicy.BLOCK` — apply backpressure to the producer. Safest,
+  but if the producer can't slow down (e.g., LLM stream), it stalls.
+
+In the toy code we use an unbounded `asyncio.Queue` and ignore
+this. Name it explicitly so the reader knows the choice exists.
+
+## Sidebar — Partials can flap; never act on them (reprise)
+
+Chapter 2's sidebar named the rule: agents fire on `STTFinal`,
+never on `STTPartial`, because partials can revise themselves.
+This chapter is where it bites — we're finally wiring the agent
+in. The journal shows several partials per turn; inspect them
+and convince yourself the rule is load-bearing, not theoretical.
+
 ## Links forward
 
-Chapter 7 attacks the *other* latency axis: detecting end-of-turn
-faster than VAD silence can.
+Chapter 7 takes a sharp left turn: real agents don't just talk,
+they *call tools*. Wiring a tool call into a streaming voice
+pipeline raises questions the chat-only world doesn't have.

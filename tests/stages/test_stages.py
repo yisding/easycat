@@ -520,6 +520,31 @@ class TestReplayDecision:
         result = stage.replay_decision(snap)
         assert result is None  # no "decision" field in default snapshot
 
+    async def test_turn_stage_records_dataclass_result(self):
+        """``detect`` may return a dataclass; ``stage_complete`` still records
+        the prediction/probability/decision keys."""
+        import dataclasses as _dc
+
+        @_dc.dataclass
+        class _SmartTurnResult:
+            prediction: int
+            probability: float
+            unrelated: str = "ignored"
+
+        class _DataclassSmartTurn:
+            async def detect(self, audio_chunks):
+                return _SmartTurnResult(prediction=1, probability=0.87)
+
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        stage = TurnStage(_DataclassSmartTurn(), journal=journal)
+        await stage.execute([b"\x00\x00"], ctx, turn)
+        complete = next(r for r in journal.read() if r.name == "stage_complete")
+        assert complete.data.get("prediction") == 1
+        assert complete.data.get("probability") == pytest.approx(0.87)
+        assert "unrelated" not in complete.data
+
 
 # ── InterruptionController ───────────────────────────────────────
 
