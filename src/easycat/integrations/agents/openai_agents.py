@@ -14,7 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
-from easycat.integrations.agents._base_adapter import split_replacement_by_original_parts
+from easycat.integrations.agents._helpers import split_replacement_by_original_parts
 from easycat.integrations.agents._openai_agents_events import (
     extract_text_delta,
     extract_tool_delta,

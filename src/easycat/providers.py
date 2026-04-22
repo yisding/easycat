@@ -10,11 +10,13 @@ iterators. The Session is the single place that maps these to EasyCat events.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from easycat.audio_format import AudioChunk
 from easycat.events import Event, STTEvent, TTSEvent
-from easycat.tts.input import TTSInput
+
+if TYPE_CHECKING:
+    from easycat.tts.input import TTSInput
 
 # ── STT Provider ───────────────────────────────────────────────────
 
@@ -166,8 +168,15 @@ class Transport(Protocol):
         """Return an async iterator that yields incoming audio chunks."""
         ...
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
-        """Send an audio chunk to the remote end."""
+    async def send_audio(self, chunk: AudioChunk) -> bool | None:
+        """Send an audio chunk to the remote end.
+
+        Returns ``True`` when the chunk was accepted for delivery and
+        ``False`` when it was silently dropped (transport disconnected,
+        no active peer, etc.). Transports that do not distinguish the
+        two cases may return ``None``, which callers treat as ``True``
+        for backward compatibility.
+        """
         ...
 
     async def clear_audio(self) -> None:

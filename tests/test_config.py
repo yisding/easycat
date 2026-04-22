@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from easycat import EasyCatConfig, create_session
+from easycat import PCM16_MONO_16K, PCM16_MONO_24K, EasyCatConfig, create_session
 from easycat.config import TelephonyConfig
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.events import DTMFAggregated
@@ -19,9 +19,12 @@ from easycat.telephony.session_actions import (
     TwilioSessionActionExecutor,
 )
 from easycat.transports.local import LocalTransportConfig
-from easycat.transports.twilio_media import TwilioTransportConfig
+from easycat.transports.twilio_media import TwilioConnectionTransport, TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
+from easycat.tts.cartesia_tts import CartesiaTTSConfig
+from easycat.tts.deepgram_tts import DeepgramTTSConfig
+from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig, TurnMode
 
@@ -29,6 +32,14 @@ from easycat.turn_manager import TurnManagerConfig, TurnMode
 class _DummyAgent:
     async def run(self, text: str) -> str:
         return text
+
+
+class _DummyWebSocket:
+    async def send(self, _message):
+        return None
+
+    async def close(self):
+        return None
 
 
 def test_easycat_config_requires_stt_tts(monkeypatch: pytest.MonkeyPatch):
@@ -44,6 +55,76 @@ def test_easycat_config_openai_defaults():
     # explicit override but is no longer the auto-wired default.
     assert isinstance(config.stt, OpenAIRealtimeSTTConfig)
     assert isinstance(config.tts, OpenAITTSConfig)
+
+
+def test_easycat_config_auto_aligns_default_openai_tts_to_twilio_transport_instance():
+    transport = TwilioConnectionTransport(_DummyWebSocket())
+
+    config = EasyCatConfig(openai_api_key="test-key", transport=transport)
+
+    assert isinstance(config.tts, OpenAITTSConfig)
+    assert config.tts.output_format == transport.audio_format
+
+
+@pytest.mark.parametrize(
+    ("tts_config", "expected_rate", "expected_output"),
+    [
+        (OpenAITTSConfig(api_key="test-key"), 16000, PCM16_MONO_16K),
+        (DeepgramTTSConfig(api_key="test-key"), 16000, PCM16_MONO_16K),
+        (CartesiaTTSConfig(api_key="test-key"), 16000, PCM16_MONO_16K),
+        (ElevenLabsTTSConfig(api_key="test-key"), 16000, "pcm_16000"),
+    ],
+)
+def test_easycat_config_auto_aligns_default_tts_configs_to_transport(
+    tts_config,
+    expected_rate,
+    expected_output,
+):
+    config = EasyCatConfig(
+        stt=OpenAIRealtimeSTTConfig(api_key="stt-key"),
+        tts=tts_config,
+        transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
+    )
+
+    if isinstance(config.tts, OpenAITTSConfig):
+        assert config.tts.output_format == expected_output
+    elif isinstance(config.tts, DeepgramTTSConfig):
+        assert config.tts.sample_rate == expected_rate
+        assert config.tts.output_format == expected_output
+    elif isinstance(config.tts, CartesiaTTSConfig):
+        assert config.tts.sample_rate == expected_rate
+        assert config.tts.output_format == expected_output
+    else:
+        assert isinstance(config.tts, ElevenLabsTTSConfig)
+        assert config.tts.output_format == expected_output
+        assert config.tts.audio_format == PCM16_MONO_16K
+
+
+def test_easycat_config_auto_aligns_string_tts_shortcuts(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-elevenlabs-key")
+
+    config = EasyCatConfig(
+        stt=OpenAIRealtimeSTTConfig(api_key="stt-key"),
+        tts="elevenlabs",
+        transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
+    )
+
+    assert isinstance(config.tts, ElevenLabsTTSConfig)
+    assert config.tts.output_format == "pcm_16000"
+    assert config.tts.audio_format == PCM16_MONO_16K
+
+
+def test_easycat_config_preserves_explicit_tts_playback_when_auto_align_disabled():
+    config = EasyCatConfig(
+        stt=OpenAIRealtimeSTTConfig(api_key="stt-key"),
+        tts=ElevenLabsTTSConfig(api_key="tts-key"),
+        transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
+        auto_align_tts_output_to_transport=False,
+    )
+
+    assert isinstance(config.tts, ElevenLabsTTSConfig)
+    assert config.tts.output_format == "pcm_24000"
+    assert config.tts.audio_format == PCM16_MONO_24K
 
 
 def test_easycat_config_echo_cancellation_defaults_for_local_and_websocket():
@@ -89,7 +170,6 @@ def test_easycat_config_wraps_agent():
 
 def test_create_session_auto_adapts_openai_agents():
     agents_mod = pytest.importorskip("agents")
-    from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
     from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
     raw = agents_mod.Agent(name="test", instructions="hi")
@@ -102,13 +182,11 @@ def test_create_session_auto_adapts_openai_agents():
         raise
 
     assert isinstance(session.agent, AgentRunner)
-    assert isinstance(session.agent._agent, BridgeAdapterShim)
-    assert isinstance(session.agent._agent.bridge, OpenAIAgentsBridge)
+    assert isinstance(session.agent._agent, OpenAIAgentsBridge)
 
 
 def test_create_session_auto_adapts_pydantic_agents():
     pydantic_ai_mod = pytest.importorskip("pydantic_ai")
-    from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
     from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
     raw = pydantic_ai_mod.Agent("openai:gpt-4o-mini")
@@ -121,8 +199,7 @@ def test_create_session_auto_adapts_pydantic_agents():
         raise
 
     assert isinstance(session.agent, AgentRunner)
-    assert isinstance(session.agent._agent, BridgeAdapterShim)
-    assert isinstance(session.agent._agent.bridge, PydanticAIBridge)
+    assert isinstance(session.agent._agent, PydanticAIBridge)
 
 
 def test_create_session_does_not_mutate_turn_taking_config():

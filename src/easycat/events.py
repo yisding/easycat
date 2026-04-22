@@ -69,6 +69,27 @@ class AudioIn(Event):
     chunk: AudioChunk
 
 
+@dataclass(frozen=True)
+class AudioOut(Event):
+    """Audio chunk past EasyCat's last retractable transport buffer.
+
+    For direct transports this is emitted once the transport accepts the
+    chunk. Buffered transports may defer emission until the chunk has
+    crossed their own clearable queue, so later barge-ins do not report
+    audio EasyCat can still discard.
+    """
+
+    chunk: AudioChunk
+
+
+@dataclass(frozen=True)
+class TransportAudioDelivered(Event):
+    """Internal transport callback for chunks that crossed a clearable buffer."""
+
+    chunk: AudioChunk
+    turn_ref: Any = field(default=None, kw_only=True, repr=False, compare=False)
+
+
 # VAD
 @dataclass(frozen=True)
 class VADStartSpeaking(Event):
@@ -370,7 +391,7 @@ class SessionActionFailed(Event):
 # ── Event groups ─────────────────────────────────────────────────────
 # Semantic groupings of EasyCat-level events for bulk subscription.
 
-AUDIO_EVENTS: tuple[type[Event], ...] = (AudioIn,)
+AUDIO_EVENTS: tuple[type[Event], ...] = (AudioIn, AudioOut)
 VAD_EVENTS: tuple[type[Event], ...] = (VADStartSpeaking, VADStopSpeaking)
 STT_EVENTS: tuple[type[Event], ...] = (STTPartial, STTFinal)
 AGENT_EVENTS: tuple[type[Event], ...] = (AgentRequestStarted, AgentDelta, AgentFinal)

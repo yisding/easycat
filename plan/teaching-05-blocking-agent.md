@@ -23,9 +23,13 @@
 `docs/teaching/05-blocking-agent/main.py`:
 
 - Starts from a copy of `docs/teaching/04-vad-preroll/main.py`.
-- Same pipeline as chapter 4 up through STT + turn-taking.
-- On `USER_PAUSED`, call `await agent.run(user_text)` — fully
-  blocking, returns the complete response.
+- Same pipeline as chapter 4 up through STT + turn-taking — the
+  `MiniTurnDetector` from chapter 4 still emits the
+  `("speech_started", chunk) / ("frame", chunk) /
+  ("speech_ended", None)` events.
+- On `speech_ended`, collect the final STT transcript and call
+  `await agent.run(user_text)` — fully blocking, returns the
+  complete response.
 - Feed the complete response into TTS as one synthesis job.
 - Journal dumps the full timeline to
   `docs/teaching/05-blocking-agent/runs/`.
@@ -45,7 +49,7 @@
    an order of magnitude worse. This is why voice LLM products
    feel off when they do.
 5. **Two axes we'll attack.** We can start the agent *sooner*
-   (smart-turn, chapter 7) and start TTS on *partial* agent output
+   (smart-turn, chapter 8) and start TTS on *partial* agent output
    (streaming, chapter 6).
 
 ## Key concepts

@@ -457,7 +457,7 @@ class TestLitestreamSqliteJournal:
         assert isinstance(j, LitestreamSqliteJournal)
         j.close()
 
-    @pytest.mark.integration
+    @pytest.mark.integration_live
     @pytest.mark.skipif(
         shutil.which("litestream") is None,
         reason="litestream binary not on PATH",
@@ -525,7 +525,7 @@ class TestLibsqlJournal:
         assert isinstance(j, SqliteJournal)
         j.close()
 
-    @pytest.mark.integration
+    @pytest.mark.integration_live
     @pytest.mark.skipif(
         not _libsql_available(),
         reason="libsql_experimental SDK not installed",

@@ -6,8 +6,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28.1",
-    "pysbd>=0.3.4",
     "rich>=13.0",
+    "sentencesplit>=0.0.3",
     "typer>=0.16",
     "websockets>=16.0",
 ]
@@ -100,7 +100,6 @@ select = ["E", "F", "I", "W", "UP"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
-    "integration: deprecated alias for live-provider integration tests",
     "integration_local: in-process end-to-end tests with fake providers",
     "integration_socket: tests requiring localhost socket bind/connect permissions",
     "integration_live: tests requiring live API keys and optional provider extras",

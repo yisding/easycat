@@ -61,9 +61,9 @@ guardrails today.
 > **Sibling peripheral docs:**
 >
 > - `peripheral-dx-onboarding.md` — library DX (line budgets, `run()`,
->   `async with`, string-keyed providers, env autodetect, config
->   presets, error codes, dev/prod log rendering). The scaffolded
->   projects here use that library DX; it must exist first.
+>   `async with`, string-keyed providers, config presets, error codes,
+>   dev/prod log rendering). The scaffolded projects here use that
+>   library DX; it must exist first.
 > - `peripheral-eval-and-debugger-ui.md` — `easycat.testing` pytest
 >   fixtures, Simulator + Judge, forked replay, interactive web
 >   debugger UI. The CLI's `replay` command exposes the replay

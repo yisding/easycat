@@ -58,17 +58,11 @@ _register(
     "AgentRunnerConfig",
 )
 _register(
-    "easycat.integrations.agents._base_adapter",
-    "BaseAgentAdapter",
+    "easycat.integrations.agents._helpers",
+    "INTERRUPTION_NOTE",
     "serialize_output",
 )
 _register("easycat.integrations.agents._factory", "auto_adapt_agent")
-_register(
-    "easycat.integrations.agents._legacy_types",
-    "AgentStreamEvent",
-    "AgentStreamEventType",
-    "StreamingAgent",
-)
 _register("easycat.cancel", "CancelToken")
 _register(
     "easycat.smart_turn",
@@ -96,6 +90,7 @@ _register(
     "TransferPlan",
 )
 _register("easycat.session_manager", "SessionManager")
+_register("easycat.supervisor", "SessionAudioBroadcaster", "SupervisorAudioFrame")
 _register(
     "easycat.turn_manager",
     "TurnManager",
@@ -147,7 +142,13 @@ _register(
 _register("easycat.debug.bundle", "RunBundle")
 _register("easycat.debug.export", "export_debug_bundle")
 _register("easycat.debug.testing", "load_bundle")
-_register("easycat.integrations.agents.base", "ExternalAgentBridge")
+_register(
+    "easycat.integrations.agents.base",
+    "AgentBridgeEvent",
+    "AgentTurnInput",
+    "CancellationMode",
+    "ExternalAgentBridge",
+)
 _register("easycat.stages.base", "Stage")
 
 # ── EasyCat-level events ─────────────────────────────────────────
@@ -171,6 +172,7 @@ _register(
     "AgentFinal",
     "AgentRequestStarted",
     "AudioIn",
+    "AudioOut",
     "BotStartedSpeaking",
     "BotStoppedSpeaking",
     "DTMF",
@@ -370,6 +372,7 @@ if TYPE_CHECKING:
         AgentFinal,
         AgentRequestStarted,
         AudioIn,
+        AudioOut,
         BotStartedSpeaking,
         BotStoppedSpeaking,
         DTMFAggregated,
@@ -409,17 +412,17 @@ if TYPE_CHECKING:
         AgentRunner,
         AgentRunnerConfig,
     )
-    from easycat.integrations.agents._base_adapter import (
-        BaseAgentAdapter,
+    from easycat.integrations.agents._factory import auto_adapt_agent
+    from easycat.integrations.agents._helpers import (
+        INTERRUPTION_NOTE,
         serialize_output,
     )
-    from easycat.integrations.agents._factory import auto_adapt_agent
-    from easycat.integrations.agents._legacy_types import (
-        AgentStreamEvent,
-        AgentStreamEventType,
-        StreamingAgent,
+    from easycat.integrations.agents.base import (
+        AgentBridgeEvent,
+        AgentTurnInput,
+        CancellationMode,
+        ExternalAgentBridge,
     )
-    from easycat.integrations.agents.base import ExternalAgentBridge
     from easycat.llm_output_processing import (
         LLMOutputProcessor,
         MarkdownStripProcessor,
@@ -489,6 +492,7 @@ if TYPE_CHECKING:
         create_stt_provider,
         parse_stt_string,
     )
+    from easycat.supervisor import SessionAudioBroadcaster, SupervisorAudioFrame
     from easycat.telephony.session_actions import (
         TwilioSessionActionConfig,
         TwilioSessionActionExecutor,

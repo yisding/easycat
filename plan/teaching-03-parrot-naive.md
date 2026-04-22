@@ -39,7 +39,13 @@ thing.
 ## Narrative arc
 
 1. **The naive plan.** "If no new STT partial has arrived in 500ms,
-   the user is done." Reasonable-sounding. Let's try it.
+   the user is done — promote the last partial to final and fire
+   TTS." Reasonable-sounding. Note that we are *explicitly
+   breaking* chapter 2's "never act on partials, only on
+   `STTFinal`" rule. That's part of the wrong-version-first
+   payload: by the end of the chapter, you will *feel* why the
+   rule exists. Chapter 4 restores it by waiting for a real turn
+   boundary from the VAD.
 2. **It works!** Short, clean, confident sentences work fine.
 3. **Break it, deliberately.** Say each of these and observe:
    - "The capital of France is... uh... Paris."

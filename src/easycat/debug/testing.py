@@ -52,7 +52,9 @@ def iter_records(bundle: RunBundle, *, name: str | None = None) -> Iterable[dict
     """Iterate journal records, optionally filtering by event name.
 
     Names match the :data:`JournalRecord.name` field emitted at record
-    creation (e.g. ``"TurnStarted"``, ``"STTFinal"``, ``"AgentFinal"``).
+    creation.  The session's journal sink writes snake_case names
+    (``"turn_started"``, ``"stt_final"``, ``"agent_final"``,
+    ``"tool_call_started"``) — pass those here.
     """
     for record in bundle.records():
         if name is None or record.get("name") == name:
@@ -83,9 +85,9 @@ def find_record(bundle: RunBundle, *, name: str) -> dict[str, Any] | None:
 def _assistant_text(record: dict[str, Any]) -> str:
     """Best-effort extraction of the assistant-reply text from a record.
 
-    Accepts both the top-level ``text`` key emitted on
-    ``AgentFinal`` / ``STTFinal`` and the ``data.text`` fallback some
-    bundle variants use.
+    Prefers ``data.text`` (what the session journal sink writes for
+    ``agent_final`` / ``stt_final``) and falls back to a top-level
+    ``text`` key for bundle variants that flatten it.
     """
     data = record.get("data") or {}
     if isinstance(data, dict) and "text" in data:
@@ -99,12 +101,14 @@ def assert_exact_match(
     bundle: RunBundle,
     *,
     expected: str,
-    event: str = "AgentFinal",
+    event: str = "agent_final",
 ) -> None:
     """Assert an event's text field equals ``expected`` exactly.
 
     Matches Vapi Evals' "exact match" method: deterministic content
-    checks are the baseline for non-semantic regressions.
+    checks are the baseline for non-semantic regressions.  Defaults to
+    ``agent_final`` — the name the session journal sink emits for
+    :class:`~easycat.events.AgentFinal`.
     """
     record = find_record(bundle, name=event)
     if record is None:
@@ -120,7 +124,7 @@ def assert_regex(
     bundle: RunBundle,
     *,
     pattern: str,
-    event: str = "AgentFinal",
+    event: str = "agent_final",
     flags: int = 0,
 ) -> None:
     """Assert an event's text field matches a regex pattern.
@@ -138,17 +142,17 @@ def assert_regex(
 
 
 def assert_turn_completed(bundle: RunBundle, turn_id: str) -> None:
-    """Assert the given turn emitted both ``TurnStarted`` and ``TurnEnded``.
+    """Assert the given turn emitted both ``turn_started`` and ``turn_ended``.
 
     Catches pipeline hangs where a turn starts but never resolves —
     the single most common "sessions feel broken" symptom.
     """
     records = turn_records(bundle, turn_id)
     names = {r.get("name") for r in records}
-    if "TurnStarted" not in names:
-        raise AssertionError(f"turn {turn_id!r} has no TurnStarted record")
-    if "TurnEnded" not in names:
-        raise AssertionError(f"turn {turn_id!r} never completed (no TurnEnded record)")
+    if "turn_started" not in names:
+        raise AssertionError(f"turn {turn_id!r} has no turn_started record")
+    if "turn_ended" not in names:
+        raise AssertionError(f"turn {turn_id!r} never completed (no turn_ended record)")
 
 
 def assert_no_error(bundle: RunBundle, *, turn_id: str | None = None) -> None:
@@ -174,15 +178,18 @@ def assert_tool_called(
     bundle: RunBundle,
     *,
     tool_name: str,
-    event: str = "ToolCallStarted",
+    event: str = "tool_call_started",
 ) -> None:
-    """Assert the agent invoked a specific tool at least once."""
+    """Assert the agent invoked a specific tool at least once.
+
+    Reads the ``tool_name`` field that the session journal sink writes
+    from :class:`~easycat.events.ToolCallStarted` (see
+    ``_JOURNAL_ATTRS`` in ``session/_session.py``).
+    """
     for record in iter_records(bundle, name=event):
         data = record.get("data") or {}
-        if isinstance(data, dict) and data.get("tool") == tool_name:
-            return
-        if isinstance(data, dict) and data.get("name") == tool_name:
+        if isinstance(data, dict) and data.get("tool_name") == tool_name:
             return
     raise AssertionError(
-        f"tool {tool_name!r} was never invoked (no {event} record with matching tool/name field)"
+        f"tool {tool_name!r} was never invoked (no {event} record with tool_name={tool_name!r})"
     )

@@ -966,8 +966,8 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
-    { name = "pysbd" },
     { name = "rich" },
+    { name = "sentencesplit" },
     { name = "typer" },
     { name = "websockets" },
 ]
@@ -1108,13 +1108,13 @@ requires-dist = [
     { name = "pyrnnoise", marker = "extra == 'all'", specifier = ">=0.3.0" },
     { name = "pyrnnoise", marker = "extra == 'quickstart'", specifier = ">=0.3.0" },
     { name = "pyrnnoise", marker = "extra == 'rnnoise'", specifier = ">=0.3.0" },
-    { name = "pysbd", specifier = ">=0.3.4" },
     { name = "python-multipart", marker = "extra == 'all'", specifier = ">=0.0.9" },
     { name = "python-multipart", marker = "extra == 'telephony'", specifier = ">=0.0.9" },
     { name = "requests", marker = "extra == 'all'", specifier = ">=2.31.0" },
     { name = "requests", marker = "extra == 'quickstart'", specifier = ">=2.31.0" },
     { name = "requests", marker = "extra == 'rnnoise'", specifier = ">=2.31.0" },
     { name = "rich", specifier = ">=13.0" },
+    { name = "sentencesplit", specifier = ">=0.0.3" },
     { name = "sounddevice", marker = "extra == 'all'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'local'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'quickstart'", specifier = ">=0.4.6" },
@@ -3758,14 +3758,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pysbd"
-version = "0.3.4"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/0a/c99fb7d7e176f8b176ef19704a32e6a9c6aafdf19ef75a187f701fc15801/pysbd-0.3.4-py3-none-any.whl", hash = "sha256:cd838939b7b0b185fcf86b0baf6636667dfb6e474743beeff878e9f42e022953", size = 71082, upload-time = "2021-02-11T16:36:33.351Z" },
-]
-
-[[package]]
 name = "pytest"
 version = "9.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4412,6 +4404,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/66/7c/08ff0012507297a4dd74a5420fdc0eb9e3e80f4e88cab1538d7f28db303d/sentencepiece-0.2.1-cp314-cp314t-win32.whl", hash = "sha256:d3233770f78e637dc8b1fda2cd7c3b99ec77e7505041934188a4e7fe751de3b0", size = 1099765, upload-time = "2025-08-12T07:00:46.058Z" },
     { url = "https://files.pythonhosted.org/packages/91/d5/2a69e1ce15881beb9ddfc7e3f998322f5cedcd5e4d244cb74dade9441663/sentencepiece-0.2.1-cp314-cp314t-win_amd64.whl", hash = "sha256:5e4366c97b68218fd30ea72d70c525e6e78a6c0a88650f57ac4c43c63b234a9d", size = 1157807, upload-time = "2025-08-12T07:00:47.673Z" },
     { url = "https://files.pythonhosted.org/packages/f3/16/54f611fcfc2d1c46cbe3ec4169780b2cfa7cf63708ef2b71611136db7513/sentencepiece-0.2.1-cp314-cp314t-win_arm64.whl", hash = "sha256:105e36e75cbac1292642045458e8da677b2342dcd33df503e640f0b457cb6751", size = 1136264, upload-time = "2025-08-12T07:00:49.485Z" },
+]
+
+[[package]]
+name = "sentencesplit"
+version = "0.0.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/33/ad/543e029f7a3cd5f5824864c1f1eb4d6482ca30d84dda60229ee4817649aa/sentencesplit-0.0.3.tar.gz", hash = "sha256:634db2b153d89afd975266e46d7679c9ca9548c5d3cb309e7907fdd17e8fd7c1", size = 67006, upload-time = "2026-04-12T03:19:17.113Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/ee/b7a6293ed12d32489c6f46a5c380a2d5dd54897eade7fcdb5abf2799e985/sentencesplit-0.0.3-py3-none-any.whl", hash = "sha256:0e966758f6143505e097aea69a741ba54d1d583ad179c1b01188a1a8f9907988", size = 83625, upload-time = "2026-04-12T03:19:15.723Z" },
 ]
 
 [[package]]

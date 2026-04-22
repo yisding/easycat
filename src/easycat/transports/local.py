@@ -14,6 +14,7 @@ import struct
 from dataclasses import dataclass, field
 
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
+from easycat.events import EventBus, TransportAudioDelivered
 from easycat.extras import require_module
 from easycat.transports._base import _AudioQueueMixin
 
@@ -21,6 +22,13 @@ logger = logging.getLogger(__name__)
 
 # Frame duration for mic capture chunks (milliseconds).
 _DEFAULT_FRAME_MS = 20
+
+
+@dataclass
+class _QueuedOutputChunk:
+    chunk: AudioChunk
+    turn_id: str | None = None
+    turn_ref: object | None = None
 
 
 def _enqueue_or_drop(q: asyncio.Queue[object], item: object) -> None:
@@ -55,6 +63,8 @@ class LocalTransport(_AudioQueueMixin):
     ``asyncio.Queue`` that feeds the output stream callback.
     """
 
+    reports_audio_delivery = True
+
     def __init__(self, config: LocalTransportConfig | None = None) -> None:
         self._config = config or LocalTransportConfig()
         self._audio_format = self._config.audio_format
@@ -62,9 +72,11 @@ class LocalTransport(_AudioQueueMixin):
 
         # Output queue uses stdlib thread-safe queue because the sounddevice
         # output callback runs on a separate audio thread.
-        self._out_queue: thread_queue.Queue[bytes | None] = thread_queue.Queue(
+        self._out_queue: thread_queue.Queue[_QueuedOutputChunk | None] = thread_queue.Queue(
             maxsize=self._config.max_pending_out_chunks,
         )
+        self._event_bus: EventBus | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         self._input_stream: object | None = None
         self._output_stream: object | None = None
@@ -83,6 +95,7 @@ class LocalTransport(_AudioQueueMixin):
 
         self._reset_audio_queue()
         self._out_queue = thread_queue.Queue(maxsize=self._config.max_pending_out_chunks)
+        self._loop = asyncio.get_running_loop()
 
         sd = require_module(
             "sounddevice",
@@ -124,14 +137,15 @@ class LocalTransport(_AudioQueueMixin):
             import numpy as np  # type: ignore[import-untyped]
 
             try:
-                pcm = self._out_queue.get_nowait()
+                queued = self._out_queue.get_nowait()
             except thread_queue.Empty:
-                pcm = None
+                queued = None
 
-            if pcm is None:
+            if queued is None:
                 outdata[:] = 0  # type: ignore[index]
                 return
 
+            pcm = queued.chunk.data
             num_samples = len(pcm) // 2
             samples = struct.unpack(f"<{num_samples}h", pcm)
             arr = _np_array(samples, np).astype(np.float32) / 32767.0
@@ -141,6 +155,7 @@ class LocalTransport(_AudioQueueMixin):
             out_flat[:n] = arr[:n]
             if n < len(out_flat):
                 out_flat[n:] = 0
+            self._schedule_audio_delivery(queued)
 
         self._output_stream = sd.OutputStream(
             samplerate=self._audio_format.sample_rate,
@@ -183,24 +198,41 @@ class LocalTransport(_AudioQueueMixin):
 
         self._enqueue_sentinel()
         self._connected = False
+        self._loop = None
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
+    async def send_audio(self, chunk: AudioChunk) -> bool:
         """Queue an audio chunk for speaker playback.
 
         Chunks larger than one callback frame are split so each enqueued
         piece fits exactly into the output buffer without truncation.
+
+        Returns ``False`` if the device is disconnected or if the playback
+        queue lacks capacity for the full chunk, so callers don't credit
+        the caller with hearing audio that was never scheduled.
         """
         if not self._connected:
-            return
+            return False
         frame_bytes = self._frame_samples * self._audio_format.frame_size
         data = chunk.data
-        offset = 0
-        while offset < len(data):
-            try:
-                self._out_queue.put_nowait(data[offset : offset + frame_bytes])
-            except thread_queue.Full:
-                logger.warning("Output audio queue full — dropping frame")
-            offset += frame_bytes
+        slices = [
+            data[offset : offset + frame_bytes] for offset in range(0, len(data), frame_bytes)
+        ]
+        available = self._out_queue.maxsize - self._out_queue.qsize()
+        if self._out_queue.maxsize > 0 and len(slices) > available:
+            logger.warning("Output audio queue full — dropped %d frame(s)", len(slices))
+            return False
+
+        turn_id = getattr(chunk, "_easycat_turn_id", None)
+        turn_ref = getattr(chunk, "_easycat_turn_ref", None)
+        for piece in slices:
+            self._out_queue.put_nowait(
+                _QueuedOutputChunk(
+                    chunk=AudioChunk(data=piece, format=chunk.format, timestamp=chunk.timestamp),
+                    turn_id=turn_id,
+                    turn_ref=turn_ref,
+                )
+            )
+        return True
 
     async def clear_audio(self) -> None:
         """Discard queued outbound audio awaiting speaker playback."""
@@ -209,6 +241,26 @@ class LocalTransport(_AudioQueueMixin):
                 self._out_queue.get_nowait()
             except thread_queue.Empty:
                 break
+
+    def _schedule_audio_delivery(self, queued: _QueuedOutputChunk) -> None:
+        loop = self._loop
+        if self._event_bus is None or loop is None or loop.is_closed():
+            return
+
+        def _emit() -> None:
+            if self._event_bus is None:
+                return
+            loop.create_task(
+                self._event_bus.emit(
+                    TransportAudioDelivered(
+                        chunk=queued.chunk,
+                        turn_id=queued.turn_id,
+                        turn_ref=queued.turn_ref,
+                    )
+                )
+            )
+
+        loop.call_soon_threadsafe(_emit)
 
     def version_info(self) -> dict[str, str]:
         try:

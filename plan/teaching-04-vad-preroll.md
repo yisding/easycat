@@ -69,13 +69,20 @@ minimum that shows it, then point at the real thing.
 
 ## Key concepts
 
-- `src/easycat/vad.py::create_vad()`; fallback order
-  Krisp → Silero → passthrough
+- `src/easycat/vad.py::create_vad()`; auto-backend fallback order
+  Silero → FunASR → TEN → Krisp. There is no passthrough fallback:
+  if none of these import, `create_vad()` raises. Silero is the
+  default and its ONNX model is bundled, but it still requires
+  `onnxruntime`, which ships in the `easycat[silero-vad]` /
+  `easycat[quickstart]` / `easycat[all]` extras (not in the base
+  `dev` group). For this chapter, install one of those extras, or
+  the readers on a plain `uv sync --group dev` will hit a
+  `RuntimeError` from `create_vad()` before hearing a single frame.
 - `src/easycat/turn_manager.py` — the production version, used as
   *read-only reference material* in this chapter
 - Pre-roll buffer: deque of recent frames, flushed on VAD-on
 - VAD is *still* a threshold — it has its own false triggers on
-  mouth clicks, keyboard noise, etc. (Chapter 9 is the real fix.)
+  mouth clicks, keyboard noise, etc. (Chapter 10 is the real fix.)
 
 ## Exercises
 

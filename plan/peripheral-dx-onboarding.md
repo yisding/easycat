@@ -26,8 +26,6 @@ Shipped:
   (`config.py`). Text-mode sessions go through `create_text_session()`
   instead of a `.text()` classmethod because the config itself
   requires STT/TTS providers that a text session skips.
-- Deepgram / ElevenLabs / Cartesia env-var auto-detection when a
-  provider string is omitted (`config.py`).
 - `EASYCAT_LOG_LEVEL` env var honoured by `run()` (`helpers.py`).
 
 Still remaining:
@@ -200,9 +198,9 @@ Semantics:
 
 The CLI design — command surface, Typer app structure, output contract,
 error UX, template discovery — lives in `peripheral-cli.md`. This file
-ensures the library DX underneath it (`run()`, string keys, env
-autodetect, error codes) exists so the CLI is a thin wrapper and not a
-parallel codepath.
+ensures the library DX underneath it (`run()`, string keys, error
+codes) exists so the CLI is a thin wrapper and not a parallel
+codepath.
 
 The zero-install promise (`uvx easycat init my-agent` working on a
 clean machine) is owned by `peripheral-cli.md`. This file's
@@ -379,7 +377,7 @@ Reject any redesign change that violates these:
 
 | Item | Depends on |
 |---|---|
-| Line budgets, `run()`, `async with`, string keys, env autodetect | nothing |
+| Line budgets, `run()`, `async with`, string keys | nothing |
 | Error codes, dev/prod log rendering, `EASYCAT_LOG_LEVEL` | nothing |
 | Config factory presets, `EasyCatConfig` flattening | nothing |
 | Template content (what `agent.py` looks like) | `run()`, string keys (this file) |
@@ -392,10 +390,10 @@ replay) lives in `peripheral-cli.md`. Library-wrapper commands
 ## Suggested Sequencing
 
 1. **In parallel with essential Phase 1-2**: quickstart helpers
-   (`run()`, `async with session`, string-keyed providers, env
-   autodetect). These don't touch the journal or bridge and deliver
-   visible line-count wins early. Also: error codes, log rendering,
-   `EASYCAT_LOG_LEVEL`, config factory presets.
+   (`run()`, `async with session`, string-keyed providers). These
+   don't touch the journal or bridge and deliver visible line-count
+   wins early. Also: error codes, log rendering, `EASYCAT_LOG_LEVEL`,
+   config factory presets.
 2. **Template content**: lands in lockstep with `peripheral-cli.md`
    M1 and M2, because each template's `agent.py` must import the
    library DX helpers from this file.

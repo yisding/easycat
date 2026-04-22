@@ -61,8 +61,8 @@ fixture design was built for.
 > **Sibling peripheral docs:**
 >
 > - `peripheral-dx-onboarding.md` — library DX: line budgets, `run()`,
->   `async with`, string-keyed providers, env autodetect, template
->   content, error diagnostics
+>   `async with`, string-keyed providers, template content, error
+>   diagnostics
 > - `peripheral-cli.md` — `easycat` CLI (scaffolding + journal
 >   debugging). Exposes `bundles export` and `replay` as entry points
 >   into features in this file. `easycat test` (pytest wrapper) and
