@@ -71,14 +71,23 @@ class AudioIn(Event):
 
 @dataclass(frozen=True)
 class AudioOut(Event):
-    """Audio chunk delivered to the transport (what the caller actually hears).
+    """Audio chunk past EasyCat's last retractable transport buffer.
 
-    Emitted after a chunk has been drained from the outbound queue and
-    handed to the transport stage, so barge-in flushes and gated audio
-    that is never replayed do not produce spurious events.
+    For direct transports this is emitted once the transport accepts the
+    chunk. Buffered transports may defer emission until the chunk has
+    crossed their own clearable queue, so later barge-ins do not report
+    audio EasyCat can still discard.
     """
 
     chunk: AudioChunk
+
+
+@dataclass(frozen=True)
+class TransportAudioDelivered(Event):
+    """Internal transport callback for chunks that crossed a clearable buffer."""
+
+    chunk: AudioChunk
+    turn_ref: Any = field(default=None, kw_only=True, repr=False, compare=False)
 
 
 # VAD

@@ -28,11 +28,9 @@ from easycat.events import (
     TurnStarted,
 )
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
-from easycat.integrations.agents._stream_types import (
-    AgentStreamEvent,
-    AgentStreamEventType,
-)
+from easycat.integrations.agents.base import AgentBridgeEvent
 from easycat.turn_manager import TurnManagerConfig, TurnMode
+from tests._bridge_helpers import _TestBridgeBase
 
 from .harness import (
     EventCollector,
@@ -107,46 +105,33 @@ class NewlineAgent:
         return "Hello\n\nWorld"
 
 
-class SlowStreamingAgent:
+class SlowStreamingAgent(_TestBridgeBase):
     """Streaming agent with configurable delay between chunks."""
 
     def __init__(self, sentences: list[str], delay: float = 0.05) -> None:
+        super().__init__()
         self._sentences = sentences
         self._delay = delay
 
-    async def run(self, text: str) -> str:
-        return " ".join(self._sentences)
-
-    async def run_streaming(
-        self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
-        cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
+    async def invoke(
+        self, turn_input, recorder, cancel_token: CancelToken | None = None
+    ) -> AsyncIterator[AgentBridgeEvent]:
         accumulated = ""
         for sentence in self._sentences:
             if cancel_token and cancel_token.is_cancelled:
                 break
             await asyncio.sleep(self._delay)
             accumulated += sentence
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=sentence)
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=accumulated)
+            yield AgentBridgeEvent(kind="text_delta", text=sentence)
+        yield AgentBridgeEvent(kind="done", text=accumulated)
 
 
-class MultiSentenceStreamingAgent:
+class MultiSentenceStreamingAgent(_TestBridgeBase):
     """Streaming agent yielding word-by-word deltas for sentence boundary testing."""
 
-    async def run(self, text: str) -> str:
-        return "Hello world. How are you? I am fine."
-
-    async def run_streaming(
-        self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
-        cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
+    async def invoke(
+        self, turn_input, recorder, cancel_token: CancelToken | None = None
+    ) -> AsyncIterator[AgentBridgeEvent]:
         words = "Hello world. How are you? I am fine.".split(" ")
         accumulated = ""
         for i, word in enumerate(words):
@@ -154,125 +139,74 @@ class MultiSentenceStreamingAgent:
                 break
             token = word if i == 0 else " " + word
             accumulated += token
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=token)
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=accumulated)
+            yield AgentBridgeEvent(kind="text_delta", text=token)
+        yield AgentBridgeEvent(kind="done", text=accumulated)
 
 
-class StreamingAgentWithToolCall:
+class StreamingAgentWithToolCall(_TestBridgeBase):
     """Streaming agent that makes a tool call mid-response."""
 
-    async def run(self, text: str) -> str:
-        return "Before tool. After tool."
-
-    async def run_streaming(
-        self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
-        cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Before tool. ")
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TOOL_STARTED,
-            tool_name="lookup",
-            call_id="call_1",
-        )
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TOOL_RESULT,
-            call_id="call_1",
-            result="42",
-        )
+    async def invoke(
+        self, turn_input, recorder, cancel_token: CancelToken | None = None
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        yield AgentBridgeEvent(kind="text_delta", text="Before tool. ")
+        yield AgentBridgeEvent(kind="tool_started", tool_name="lookup", call_id="call_1")
+        yield AgentBridgeEvent(kind="tool_result", call_id="call_1", result="42")
         if cancel_token and cancel_token.is_cancelled:
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Before tool. ")
+            yield AgentBridgeEvent(kind="done", text="Before tool. ")
             return
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="After tool.")
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Before tool. After tool.")
+        yield AgentBridgeEvent(kind="text_delta", text="After tool.")
+        yield AgentBridgeEvent(kind="done", text="Before tool. After tool.")
 
 
-class StreamingWhitespaceAgent:
+class StreamingWhitespaceAgent(_TestBridgeBase):
     """Streaming agent that produces only whitespace deltas."""
 
-    async def run(self, text: str) -> str:
-        return "   "
-
-    async def run_streaming(
-        self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
-        cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="   ")
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="\n\t")
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="   \n\t")
+    async def invoke(
+        self, turn_input, recorder, cancel_token: CancelToken | None = None
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        yield AgentBridgeEvent(kind="text_delta", text="   ")
+        yield AgentBridgeEvent(kind="text_delta", text="\n\t")
+        yield AgentBridgeEvent(kind="done", text="   \n\t")
 
 
-class StreamingEmptyDoneAgent:
+class StreamingEmptyDoneAgent(_TestBridgeBase):
     """Streaming agent that yields deltas but DONE has empty text."""
 
-    async def run(self, text: str) -> str:
-        return "Hello"
-
-    async def run_streaming(
-        self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
-        cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Hello")
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="")
+    async def invoke(
+        self, turn_input, recorder, cancel_token: CancelToken | None = None
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        yield AgentBridgeEvent(kind="text_delta", text="Hello")
+        yield AgentBridgeEvent(kind="done", text="")
 
 
-class SlowToolCallAgent:
+class SlowToolCallAgent(_TestBridgeBase):
     """Streaming agent with a slow tool call that can be interrupted."""
 
-    async def run(self, text: str) -> str:
-        return "Done"
-
-    async def run_streaming(
-        self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
-        cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="Before. ")
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TOOL_STARTED,
-            tool_name="slow_tool",
-            call_id="call_slow",
-        )
-        # Simulate slow tool
+    async def invoke(
+        self, turn_input, recorder, cancel_token: CancelToken | None = None
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        yield AgentBridgeEvent(kind="text_delta", text="Before. ")
+        yield AgentBridgeEvent(kind="tool_started", tool_name="slow_tool", call_id="call_slow")
         await asyncio.sleep(0.3)
-        yield AgentStreamEvent(
-            type=AgentStreamEventType.TOOL_RESULT,
-            call_id="call_slow",
-            result="result",
-        )
+        yield AgentBridgeEvent(kind="tool_result", call_id="call_slow", result="result")
         if cancel_token and cancel_token.is_cancelled:
-            yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Before. ")
+            yield AgentBridgeEvent(kind="done", text="Before. ")
             return
-        yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text="After.")
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text="Before. After.")
+        yield AgentBridgeEvent(kind="text_delta", text="After.")
+        yield AgentBridgeEvent(kind="done", text="Before. After.")
 
 
-class StreamingMultiSentenceAgent:
+class StreamingMultiSentenceAgent(_TestBridgeBase):
     """Streaming agent that yields text word by word."""
 
     def __init__(self, text: str = "First sentence. Second sentence."):
+        super().__init__()
         self._text = text
 
-    async def run(self, text: str) -> str:
-        return self._text
-
-    async def run_streaming(
-        self,
-        text: str,
-        *,
-        context: list[dict[str, str]] | None = None,
-        cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]:
+    async def invoke(
+        self, turn_input, recorder, cancel_token: CancelToken | None = None
+    ) -> AsyncIterator[AgentBridgeEvent]:
         words = self._text.split(" ")
         accumulated = ""
         for i, word in enumerate(words):
@@ -280,8 +214,8 @@ class StreamingMultiSentenceAgent:
                 break
             token = word if i == 0 else " " + word
             accumulated += token
-            yield AgentStreamEvent(type=AgentStreamEventType.TEXT_DELTA, text=token)
-        yield AgentStreamEvent(type=AgentStreamEventType.DONE, text=accumulated)
+            yield AgentBridgeEvent(kind="text_delta", text=token)
+        yield AgentBridgeEvent(kind="done", text=accumulated)
 
 
 class ZeroAudioTTS:

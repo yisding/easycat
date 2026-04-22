@@ -5,25 +5,28 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from easycat.integrations.agents._base_adapter import BaseAgentAdapter
-from easycat.integrations.agents._stream_types import StreamingAgent
+from easycat.integrations.agents.base import BridgeInputError, ExternalAgentBridge
 
 
 def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
-    """Wrap known third-party agent objects in an EasyCat adapter.
-
-    Routes framework agents through bridges wrapped in
-    :class:`BridgeAdapterShim` so they participate in the debug-first
-    journal pipeline.
+    """Wrap known third-party agent objects in an :class:`ExternalAgentBridge`.
 
     Supported auto-detected frameworks:
 
-    - ``ExternalAgentBridge`` -> :class:`BridgeAdapterShim` (pass-through)
+    - URL string -> :class:`RemoteResponsesAPIBridge`
+    - ``ExternalAgentBridge`` -> pass-through
     - workflow objects with ``on_user_turn(...)`` -> :class:`GenericWorkflowBridge`
     - ``pydantic_graph.Graph`` -> raises :class:`BridgeInputError`
       (requires explicit ``PydanticAIBridge(graph=..., ...)`` construction)
     - ``pydantic_ai.Agent`` -> :class:`PydanticAIBridge` (Agent mode)
     - ``agents.Agent`` (OpenAI Agents SDK) -> :class:`OpenAIAgentsBridge`
+
+    Plain objects with ``async run(text) -> str`` but no framework match
+    are returned unchanged — the caller (``create_session`` /
+    ``AgentStage``) is responsible for wrapping them in
+    :class:`AgentRunner` so that user-supplied ``agent_runner`` settings
+    (timeout, history, etc.) are honored rather than silently replaced
+    with defaults.
 
     Unknown agent types are returned unchanged.
     """
@@ -34,46 +37,31 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
         parsed = urlparse(agent)
         if parsed.scheme in ("http", "https") and parsed.netloc:
             if model is None:
-                from easycat.integrations.agents.base import BridgeInputError
-
                 raise BridgeInputError(
                     "auto_adapt_agent() requires model= when agent is a URL. "
                     "Pass model= explicitly or use create_session(agent=url, "
                     "agent_model=...) instead."
                 )
-            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
             from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
-            return BridgeAdapterShim(RemoteResponsesAPIBridge(base_url=agent, model=model))
+            return RemoteResponsesAPIBridge(base_url=agent, model=model)
 
-    # 1. Already a bridge -- wrap in shim if not already wrapped.
-    try:
-        from easycat.integrations.agents.base import ExternalAgentBridge
-
-        if isinstance(agent, ExternalAgentBridge):
-            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
-
-            if isinstance(agent, BridgeAdapterShim):
-                return agent
-            return BridgeAdapterShim(agent)
-    except ImportError:
-        pass
-
-    # 2. Already an adapter -- return as-is.
-    if isinstance(agent, BaseAgentAdapter):
-        return agent
-
-    # 2b. AgentRunner wrapping a framework object — adapt the inner agent.
+    # 1. AgentRunner wrapping a framework object — adapt the inner agent.
+    # This must run before the generic ExternalAgentBridge passthrough
+    # because AgentRunner itself satisfies ExternalAgentBridge; otherwise
+    # AgentRunner(raw_framework_agent) would bypass adaptation and fail
+    # on the first turn when AgentRunner tries to call inner.run().
     from easycat.integrations.agents._agent_runner import AgentRunner
 
     if isinstance(agent, AgentRunner):
         adapted_inner = auto_adapt_agent(agent._agent, model=model)
         if adapted_inner is not agent._agent:
             agent._agent = adapted_inner
-            agent._is_streaming = isinstance(adapted_inner, StreamingAgent)
-            agent._delegates_history = hasattr(adapted_inner, "message_history") and hasattr(
-                adapted_inner, "clear_history"
-            )
+            agent._is_bridge = isinstance(adapted_inner, ExternalAgentBridge)
+        return agent
+
+    # 2. Already a bridge -- pass through.
+    if isinstance(agent, ExternalAgentBridge):
         return agent
 
     # 3. Workflow with on_user_turn(...) -> GenericWorkflowBridge.
@@ -94,13 +82,10 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
             ]
             unsupplied_kw = [p for p in required_kw_only if p.name not in _BRIDGE_SUPPLIED_KW]
             if len(positional) == 1 and not unsupplied_kw:
-                from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
                 from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
 
-                return BridgeAdapterShim(GenericWorkflowBridge(workflow=agent))
+                return GenericWorkflowBridge(workflow=agent)
             elif len(positional) > 1:
-                from easycat.integrations.agents.base import BridgeInputError
-
                 raise BridgeInputError(
                     f"on_user_turn() has {len(positional)} required positional "
                     f"parameters but GenericWorkflowBridge only passes (text). "
@@ -108,8 +93,6 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
                     f"explicitly."
                 )
             elif unsupplied_kw:
-                from easycat.integrations.agents.base import BridgeInputError
-
                 names = ", ".join(p.name for p in unsupplied_kw)
                 raise BridgeInputError(
                     f"on_user_turn() has required keyword-only parameter(s) "
@@ -118,22 +101,17 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
                     f"the bridge explicitly."
                 )
         except (ValueError, TypeError) as exc:
-            from easycat.integrations.agents.base import BridgeInputError
-
             if isinstance(exc, BridgeInputError):
                 raise
-            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
             from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
 
-            return BridgeAdapterShim(GenericWorkflowBridge(workflow=agent))
+            return GenericWorkflowBridge(workflow=agent)
 
     # 4. pydantic_graph.Graph -> error (requires explicit PydanticAIBridge).
     try:
         from pydantic_graph import Graph as PydanticGraph  # type: ignore[import-untyped]
 
         if isinstance(agent, PydanticGraph):
-            from easycat.integrations.agents.base import BridgeInputError
-
             raise BridgeInputError(
                 "pydantic_graph.Graph requires explicit bridge construction: "
                 "PydanticAIBridge(graph=..., state_factory=..., "
@@ -147,10 +125,9 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
         from pydantic_ai import Agent as PydanticAgent
 
         if isinstance(agent, PydanticAgent):
-            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
             from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
-            return BridgeAdapterShim(PydanticAIBridge(agent=agent))
+            return PydanticAIBridge(agent=agent)
     except ImportError:
         pass
 
@@ -159,22 +136,24 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
         from agents import Agent as OpenAIAgent  # type: ignore[import-untyped]
 
         if isinstance(agent, OpenAIAgent):
-            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
             from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
-            return BridgeAdapterShim(OpenAIAgentsBridge(agent=agent))
+            return OpenAIAgentsBridge(agent=agent)
     except ImportError:
         pass
 
     # 7. Realtime-API-shaped objects -> error.
     cls_name = type(agent).__name__
     if "Realtime" in cls_name or hasattr(agent, f"create_{'realtime'}_session"):
-        from easycat.integrations.agents.base import BridgeInputError
-
         raise BridgeInputError(
             "Voice-to-voice / realtime API objects cannot be auto-adapted. "
             "EasyCat is a chained voice runtime; use the provider SDK directly "
             "for realtime speech-to-speech."
         )
 
+    # Plain ``async run(text)`` agents are returned unchanged.  The
+    # factory (create_session / create_text_session) decides whether to
+    # wrap them in :class:`AgentRunner` and with what
+    # :class:`AgentRunnerConfig`; ``AgentStage`` provides a default-config
+    # safety wrap for callers that construct ``Session`` directly.
     return agent

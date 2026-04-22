@@ -4,6 +4,49 @@
 > debug-first thesis in `essential-debug-first-runtime.md`. It is,
 > however, the most visible user-facing work in the overall redesign, and
 > the one the outside world will judge EasyCat on first.
+
+## Status (2026-04)
+
+Shipped:
+
+- `easycat.run(config)` with auto-attached runtime feedback
+  (`helpers.py:63`).
+- String-keyed provider selection (`stt="deepgram/flux"`,
+  `tts="cartesia/sonic-3"`) with fuzzy suggestions on typos
+  (`stt/factory.py`, `tts/factory.py`).
+- `OPENAI_API_KEY` auto-detection → OpenAI chain default
+  (`config.py:255`).
+- Stable `EASYCAT_Exxx` error codes with headline / cause / fix / example /
+  related (`errors.py`).
+- Third-party traceback frame collapse (`runtime/records.py:50`).
+- `debug="light" | "full"`, `export_debug_bundle()` (`config.py:212`,
+  `session/_session.py:987`).
+- `async with session:` context-manager support (`session/_session.py`).
+- `EasyCatConfig.mic() / .browser() / .phone()` factory presets
+  (`config.py`). Text-mode sessions go through `create_text_session()`
+  instead of a `.text()` classmethod because the config itself
+  requires STT/TTS providers that a text session skips.
+- `EASYCAT_LOG_LEVEL` env var honoured by `run()` (`helpers.py`).
+
+Still remaining:
+
+- Example line-count budgets (pydantic_ai_voice.py is 57 lines against
+  an ≤8 target; openai_agents_voice.py is 49 against ≤7). No CI
+  enforcement yet.
+- `EasyCatConfig.offline()` preset (depends on Kyutai Pocket TTS +
+  Whisper-small + Smart Turn v3.1 wiring).
+- `ExceptionGroup` + PEP 678 `__notes__` across the pipeline.
+- Full structlog dev/prod renderer split; today the logger is stdlib-
+  only.
+- Config flattening pass: currently 27 top-level fields, target ≤22.
+- Advanced knobs promised by the plan that aren't yet config fields:
+  `record_to=`, `warmup=`, `max_session_cost_usd=`,
+  `smart_turn_sensitivity=`, `latency_budget=`.
+
+The high-leverage DX wins are shipped; the remaining work is either
+ecosystem-gated (offline preset on Kyutai) or mechanical cleanup
+(line budgets, structlog, field flattening).
+
 >
 > **Sibling peripheral docs:**
 >
@@ -155,9 +198,9 @@ Semantics:
 
 The CLI design — command surface, Typer app structure, output contract,
 error UX, template discovery — lives in `peripheral-cli.md`. This file
-ensures the library DX underneath it (`run()`, string keys, env
-autodetect, error codes) exists so the CLI is a thin wrapper and not a
-parallel codepath.
+ensures the library DX underneath it (`run()`, string keys, error
+codes) exists so the CLI is a thin wrapper and not a parallel
+codepath.
 
 The zero-install promise (`uvx easycat init my-agent` working on a
 clean machine) is owned by `peripheral-cli.md`. This file's
@@ -334,7 +377,7 @@ Reject any redesign change that violates these:
 
 | Item | Depends on |
 |---|---|
-| Line budgets, `run()`, `async with`, string keys, env autodetect | nothing |
+| Line budgets, `run()`, `async with`, string keys | nothing |
 | Error codes, dev/prod log rendering, `EASYCAT_LOG_LEVEL` | nothing |
 | Config factory presets, `EasyCatConfig` flattening | nothing |
 | Template content (what `agent.py` looks like) | `run()`, string keys (this file) |
@@ -347,10 +390,10 @@ replay) lives in `peripheral-cli.md`. Library-wrapper commands
 ## Suggested Sequencing
 
 1. **In parallel with essential Phase 1-2**: quickstart helpers
-   (`run()`, `async with session`, string-keyed providers, env
-   autodetect). These don't touch the journal or bridge and deliver
-   visible line-count wins early. Also: error codes, log rendering,
-   `EASYCAT_LOG_LEVEL`, config factory presets.
+   (`run()`, `async with session`, string-keyed providers). These
+   don't touch the journal or bridge and deliver visible line-count
+   wins early. Also: error codes, log rendering, `EASYCAT_LOG_LEVEL`,
+   config factory presets.
 2. **Template content**: lands in lockstep with `peripheral-cli.md`
    M1 and M2, because each template's `agent.py` must import the
    library DX helpers from this file.

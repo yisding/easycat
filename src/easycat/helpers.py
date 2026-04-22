@@ -62,11 +62,27 @@ def run(config: EasyCatConfig) -> None:
     TTY so `easycat init → run` feels alive out of the box; tests and
     production pipelines that redirect stderr stay quiet.
 
+    ``EASYCAT_LOG_LEVEL=info`` (or ``debug``/``warning``/``error``) in
+    the environment bumps the ``easycat`` logger without needing
+    ``debug="light"``, matching the ``LIVEKIT_LOG_LEVEL`` convention.
+
     Advanced users who need custom orchestration should reach for
     :func:`easycat.create_session` directly and manage the lifecycle
     themselves.
     """
-    from easycat.config import create_session
+    from easycat.config import _resolve_easycat_log_level, create_session
+
+    env_level = os.getenv("EASYCAT_LOG_LEVEL", "").strip()
+    if env_level and not logging.root.handlers:
+        # Only configure the root logger when the user explicitly asked
+        # for a log level; otherwise stay silent so applications that
+        # already own logging aren't overridden.
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        )
+    if env_level:
+        logging.getLogger("easycat").setLevel(_resolve_easycat_log_level(default=logging.INFO))
 
     session = create_session(config)
     if sys.stderr.isatty() and not os.getenv("PYTEST_CURRENT_TEST"):

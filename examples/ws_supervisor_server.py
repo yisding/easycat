@@ -4,6 +4,15 @@ This example keeps EasyCat's existing "one session per caller connection"
 model.  A second WebSocket endpoint fans session audio out to passive
 supervisors that subscribe by ``session_id``.
 
+.. warning::
+
+    This example has **no authentication**.  Any WebSocket client that
+    knows (or guesses) a ``session_id`` can subscribe to a live call and
+    hear both caller and assistant audio.  Before deploying anywhere
+    reachable from the public internet, add auth on the supervisor
+    endpoint (token in the subscribe message, signed URLs, or an HTTP
+    gate in front of the WebSocket).
+
 Setup:
     export OPENAI_API_KEY="..."
     uv sync --extra openai-agents

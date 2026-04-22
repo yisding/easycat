@@ -39,11 +39,11 @@ def test_journey_menu(cli: CliRunner) -> None:
     result = cli.invoke(app, [])
     assert result.exit_code == 0
     assert "Scaffold" in result.stdout
-    for cmd in ("init", "doctor", "explain"):
+    assert "Debug with the journal" in result.stdout
+    for cmd in ("init", "doctor", "explain", "bundles"):
         assert cmd in result.stdout
-    # Don't advertise journal-debug commands until they're implemented.
-    for cmd in ("bundles", "replay"):
-        assert cmd not in result.stdout
+    # Don't advertise unshipped commands until they're implemented.
+    assert "replay" not in result.stdout
 
 
 # ── Fast-path guard ──────────────────────────────────────────────

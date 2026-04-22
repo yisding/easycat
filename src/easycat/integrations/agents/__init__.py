@@ -4,17 +4,11 @@ Public exports for bridge construction and protocol types.
 """
 
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
-from easycat.integrations.agents._base_adapter import (
-    BaseAgentAdapter,
+from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents._helpers import (
+    INTERRUPTION_NOTE,
     serialize_output,
     split_replacement_by_original_parts,
-)
-from easycat.integrations.agents._factory import auto_adapt_agent
-from easycat.integrations.agents._stream_types import (
-    INTERRUPTION_NOTE,
-    AgentStreamEvent,
-    AgentStreamEventType,
-    StreamingAgent,
 )
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -45,10 +39,7 @@ __all__ = [
     "AgentRecorder",
     "AgentRunner",
     "AgentRunnerConfig",
-    "AgentStreamEvent",
-    "AgentStreamEventType",
     "AgentTurnInput",
-    "BaseAgentAdapter",
     "BridgeConfigurationError",
     "BridgeInputError",
     "CancellationMode",
@@ -67,7 +58,6 @@ __all__ = [
     "RecorderInvariantError",
     "RemoteResponsesAPIBridge",
     "ShallowModeInterruptionError",
-    "StreamingAgent",
     "UnitKind",
     "auto_adapt_agent",
     "serialize_output",
