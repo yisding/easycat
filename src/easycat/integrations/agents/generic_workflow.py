@@ -327,6 +327,26 @@ class GenericWorkflowBridge:
             self._workflow.clear_history()
         self._last_output = None
 
+    # ── History post-processing ──────────────────────────────────
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Delegate to the workflow if it supports history rewrites."""
+        fn = getattr(self._workflow, "replace_last_assistant_text", None)
+        if callable(fn):
+            try:
+                fn(text)
+            except Exception:
+                logger.debug("Workflow replace_last_assistant_text failed", exc_info=True)
+
+    def append_interruption_note(self, note: str) -> None:
+        """Delegate to the workflow if it supports interruption notes."""
+        fn = getattr(self._workflow, "append_interruption_note", None)
+        if callable(fn):
+            try:
+                fn(note)
+            except Exception:
+                logger.debug("Workflow append_interruption_note failed", exc_info=True)
+
     # ── Shallow mode ─────────────────────────────────────────────
 
     async def _invoke_shallow(

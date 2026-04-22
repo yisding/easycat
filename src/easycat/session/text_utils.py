@@ -7,7 +7,6 @@ detection, and other pure helper functions used by the Session class.
 from __future__ import annotations
 
 import re
-from typing import Any
 
 import sentencesplit
 
@@ -233,15 +232,3 @@ def has_unclosed_markdown_delimiters(text: str) -> bool:
     return _has_unclosed_single_emphasis(normalized, "*") or _has_unclosed_single_emphasis(
         normalized, "_"
     )
-
-
-def _replace_last_assistant_text(agent: Any, text: str) -> None:
-    """Update the last assistant message in the agent's chat history.
-
-    Works with :class:`AgentRunner` and :class:`BaseAgentAdapter` (or any
-    object that exposes ``replace_last_assistant_text``).  Silently does
-    nothing when the method is unavailable.
-    """
-    fn = getattr(agent, "replace_last_assistant_text", None)
-    if callable(fn):
-        fn(text)

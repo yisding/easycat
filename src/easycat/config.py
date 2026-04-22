@@ -18,6 +18,7 @@ from easycat.echo_cancellation import EchoCancellationConfig, create_echo_cancel
 from easycat.events import CallInitiated, CallScreening, EventBus, TTSAudio
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents.base import NULL_RECORDER, AgentTurnInput
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.providers import Transport
@@ -506,30 +507,20 @@ def create_session(config: EasyCatConfig) -> Session:
 
         if config.agent is not None:
             agent = auto_adapt_agent(config.agent, model=config.agent_model)
-            # Inject MCP servers and journal into the shim if it's a bridge adapter.
-            # Unwrap AgentRunner if the caller pre-wrapped the shim.
-            from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+            # Unwrap AgentRunner to reach the underlying bridge for MCP /
+            # model / API-key injection.
+            bridge = agent._agent if isinstance(agent, AgentRunner) else agent
+            if hasattr(bridge, "_mcp_servers"):
+                # Always overwrite (even with empty tuple) so a reused bridge
+                # from a prior session doesn't leak old MCP servers.
+                bridge._mcp_servers = list(mcp_servers)
+            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
-            shim = agent
-            if isinstance(shim, AgentRunner):
-                shim = shim._agent
-            if isinstance(shim, BridgeAdapterShim):
-                shim._journal = journal
-                shim._artifact_store = artifact_store
-                shim._session_id = session_id
-                # Always overwrite so a reused shim from a prior session doesn't
-                # leak old MCP servers into a new session that leaves MCP unset.
-                shim._mcp_servers = mcp_servers
-                if hasattr(shim.bridge, "_mcp_servers"):
-                    shim.bridge._mcp_servers = list(mcp_servers)
-                # Inject model/API key for URL-backed agents.
-                from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-                if isinstance(shim.bridge, RemoteResponsesAPIBridge):
-                    if config.agent_model:
-                        shim.bridge._model = config.agent_model
-                    if config.remote_agent_api_key:
-                        shim.bridge._api_key = config.remote_agent_api_key
+            if isinstance(bridge, RemoteResponsesAPIBridge):
+                if config.agent_model:
+                    bridge._model = config.agent_model
+                if config.remote_agent_api_key:
+                    bridge._api_key = config.remote_agent_api_key
             if config.wrap_agent and not isinstance(agent, AgentRunner):
                 runner_cfg = config.agent_runner or AgentRunnerConfig()
                 agent = AgentRunner(agent, runner_cfg)
@@ -595,6 +586,7 @@ def create_session(config: EasyCatConfig) -> Session:
                 session_actions=config.session_actions,
                 action_executors=action_executors,
                 audio_gate=audio_gate,
+                mcp_servers=mcp_servers,
             )
         )
     except Exception:
@@ -703,31 +695,19 @@ def create_text_session(
         event_bus = EventBus()
 
         adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
-        # Backfill journal metadata into the bridge shim (mirrors create_session).
-        # Unwrap AgentRunner if the caller pre-wrapped the shim.
-        from easycat.integrations.agents._bridge_adapter_shim import BridgeAdapterShim
+        # Unwrap AgentRunner to reach the underlying bridge for MCP /
+        # model / API-key injection (mirrors create_session).
+        _bridge = adapted._agent if isinstance(adapted, AgentRunner) else adapted
+        _mcp = list(mcp_servers) if mcp_servers else []
+        if hasattr(_bridge, "_mcp_servers"):
+            _bridge._mcp_servers = _mcp
+        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
-        _inner = adapted
-        if isinstance(_inner, AgentRunner):
-            _inner = _inner._agent
-        if isinstance(_inner, BridgeAdapterShim):
-            _inner._journal = journal
-            _inner._artifact_store = artifact_store
-            _inner._session_id = sid
-            # Inject model/API key for URL-backed agents (mirrors create_session).
-            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-            if isinstance(_inner.bridge, RemoteResponsesAPIBridge):
-                if agent_model:
-                    _inner.bridge._model = agent_model
-                if remote_agent_api_key:
-                    _inner.bridge._api_key = remote_agent_api_key
-            # Always overwrite so a reused shim from a prior session doesn't
-            # leak old MCP servers into a new session that leaves MCP unset.
-            _mcp = tuple(mcp_servers) if mcp_servers else ()
-            _inner._mcp_servers = _mcp
-            if hasattr(_inner.bridge, "_mcp_servers"):
-                _inner.bridge._mcp_servers = list(_mcp)
+        if isinstance(_bridge, RemoteResponsesAPIBridge):
+            if agent_model:
+                _bridge._model = agent_model
+            if remote_agent_api_key:
+                _bridge._api_key = remote_agent_api_key
         if wrap_agent and not isinstance(adapted, AgentRunner):
             runner_cfg = agent_runner or AgentRunnerConfig()
             adapted = AgentRunner(adapted, runner_cfg)
@@ -748,6 +728,7 @@ def create_text_session(
                 artifact_store=artifact_store,
                 session_id=sid,
                 runtime_mode="text_session",
+                mcp_servers=tuple(_mcp),
             )
         )
     except Exception:
@@ -812,6 +793,25 @@ class _OutboundPipelineWiring:
         self._hold_audio_task = loop.create_task(_synthesize_hold())
 
 
+async def _run_agent_once(agent: Any, prompt: str) -> str:
+    """Drive the agent once and return its final text response.
+
+    Works whether ``agent`` is an :class:`AgentRunner` (has ``run()``) or
+    a raw :class:`ExternalAgentBridge` (only implements ``invoke()``), so
+    ``wrap_agent=False`` sessions still support agent-mode screening.
+    """
+    run_fn = getattr(agent, "run", None)
+    if callable(run_fn):
+        return await run_fn(prompt)
+    accumulated = ""
+    async for event in agent.invoke(AgentTurnInput.from_text(prompt), NULL_RECORDER):
+        if event.kind == "text_delta" and event.text:
+            accumulated += event.text
+        elif event.kind == "done" and event.text:
+            accumulated = event.text
+    return accumulated
+
+
 def _wire_outbound_pipeline(
     session: Session,
     sm: OutboundCallStateMachine,
@@ -839,10 +839,11 @@ def _wire_outbound_pipeline(
         if event.mode == "agent" and _screening_detector is not None:
             try:
                 prompt = _screening_detector.accumulated_text
-                response_text = await session.agent.run(
+                response_text = await _run_agent_once(
+                    session.agent,
                     f"The callee's phone is screening this call. "
                     f'Their screening prompt says: "{prompt}". '
-                    f"Identify yourself briefly."
+                    f"Identify yourself briefly.",
                 )
                 in_time = _screening_detector.notify_agent_responded()
                 fallback_spoken = not in_time and _screening_detector.screening_response

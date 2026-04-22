@@ -104,24 +104,19 @@ class SessionAudioBroadcaster:
             self._terminate_queue(queue)
 
     def _on_audio_in(self, event: AudioIn) -> None:
-        self._broadcast(
-            SupervisorAudioFrame(
-                session_id=getattr(event, "session_id", None) or self._session.session_id,
-                track="caller",
-                chunk=event.chunk,
-                turn_id=getattr(event, "turn_id", None),
-                timestamp=getattr(event, "timestamp", event.chunk.timestamp),
-            )
-        )
+        self._forward(event, "caller")
 
     def _on_audio_out(self, event: AudioOut) -> None:
+        self._forward(event, "assistant")
+
+    def _forward(self, event: AudioIn | AudioOut, track: SupervisorTrack) -> None:
         self._broadcast(
             SupervisorAudioFrame(
-                session_id=getattr(event, "session_id", None) or self._session.session_id,
-                track="assistant",
+                session_id=event.session_id or self._session.session_id,
+                track=track,
                 chunk=event.chunk,
-                turn_id=getattr(event, "turn_id", None),
-                timestamp=getattr(event, "timestamp", event.chunk.timestamp),
+                turn_id=event.turn_id,
+                timestamp=event.timestamp,
             )
         )
 
