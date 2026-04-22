@@ -304,8 +304,8 @@ Runnable examples live in the `examples/` directory:
 **Transports**
 - `openai_agents_voice.py`: local microphone/speaker loop with OpenAI Agents SDK
 - `ws_server.py`: WebSocket server (multi-session)
-- `ws_supervisor_server.py`: browser caller + passive supervisor listen-in over WebSocket
 - `ws_browser_example.py`: browser mic/speaker over WebSocket + static web client
+- `ws_supervisor_server.py`: browser caller + passive supervisor listen-in over WebSocket
 - `webrtc_server.py`: WebRTC voice chat with browser client
 - `webrtc_observability_server.py`: WebRTC + FastAPI dashboard streaming live events
 - `twilio_app.py`: Twilio Media Streams example
