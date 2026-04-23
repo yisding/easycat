@@ -8,3 +8,10 @@ build/
 .pytest_cache/
 .ruff_cache/
 .easycat/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key

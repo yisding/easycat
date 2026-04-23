@@ -1,0 +1,37 @@
+# Keep the build context small and predictable.
+.git/
+.github/
+
+# Python build artefacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.egg-info/
+.venv/
+dist/
+build/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.easycat/
+
+# Not needed inside the image
+tests/
+perf/
+plan/
+docs/
+
+# Local dev config
+.pre-commit-config.yaml
+.python-version
+
+# Secrets — never bake these into the image.  Compose can still read a
+# sibling .env file for variable substitution; it is consumed by the
+# client, not sent to the daemon as part of the build context.
+.env
+.env.*
+!.env.example
+**/*.pem
+**/*.key

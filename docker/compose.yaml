@@ -1,0 +1,26 @@
+# docker compose -f docker/compose.yaml up --build
+#
+# Requires OPENAI_API_KEY in your shell (or a sibling .env file).
+
+services:
+  easycat:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: easycat:ws
+    container_name: easycat-ws
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in your shell or a .env file}
+    ports:
+      - "8765:8765"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1',8765),2); s.close()"
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
