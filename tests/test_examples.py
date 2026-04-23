@@ -158,6 +158,7 @@ def test_ws_supervisor_server_example_imports():
 
 
 def test_webrtc_observability_example_imports():
+    pytest.importorskip("agents")
     import examples.webrtc_observability_server as webrtc_observability
 
     assert callable(webrtc_observability.main)
