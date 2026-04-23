@@ -141,6 +141,42 @@ def test_session_actions_pydantic_example_imports():
     assert callable(session_actions_pydantic.main)
 
 
+def test_langchain_voice_example_imports():
+    import examples.langchain_voice as langchain_voice
+
+    assert callable(langchain_voice.main)
+
+
+def test_langgraph_voice_example_imports():
+    import examples.langgraph_voice as langgraph_voice
+
+    assert callable(langgraph_voice.main)
+
+
+def test_function_tools_langchain_example_imports():
+    import examples.function_tools_langchain as function_tools_langchain
+
+    assert callable(function_tools_langchain.main)
+
+
+def test_function_tools_langgraph_example_imports():
+    import examples.function_tools_langgraph as function_tools_langgraph
+
+    assert callable(function_tools_langgraph.main)
+
+
+def test_session_actions_langchain_example_imports():
+    import examples.session_actions_langchain as session_actions_langchain
+
+    assert callable(session_actions_langchain.main)
+
+
+def test_session_actions_langgraph_example_imports():
+    import examples.session_actions_langgraph as session_actions_langgraph
+
+    assert callable(session_actions_langgraph.main)
+
+
 def _python_executable() -> str:
     candidate = sys.executable or ""
     if candidate:
@@ -175,6 +211,12 @@ def _python_executable() -> str:
         "examples/custom_stt_provider.py",
         "examples/custom_tts_provider.py",
         "examples/custom_vad_provider.py",
+        "examples/langchain_voice.py",
+        "examples/langgraph_voice.py",
+        "examples/function_tools_langchain.py",
+        "examples/function_tools_langgraph.py",
+        "examples/session_actions_langchain.py",
+        "examples/session_actions_langgraph.py",
     ],
 )
 def test_examples_can_run_as_scripts_without_package_import_errors(script_path: str):
