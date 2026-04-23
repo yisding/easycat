@@ -91,14 +91,10 @@ class LangChainBridge:
     ) -> None:
         if runnable is None:
             raise BridgeInputError("LangChainBridge requires a non-None runnable=")
-        if not (
-            hasattr(runnable, "astream_events")
-            or hasattr(runnable, "ainvoke")
-            or hasattr(runnable, "invoke")
-        ):
+        if not hasattr(runnable, "astream_events"):
             raise BridgeInputError(
-                "LangChainBridge requires a LangChain Runnable (astream_events / "
-                "ainvoke). Got: " + type(runnable).__name__
+                "LangChainBridge requires a LangChain Runnable with astream_events(). "
+                "Got: " + type(runnable).__name__
             )
         self._runnable = runnable
         self._display_name = display_name or type(runnable).__name__

@@ -200,7 +200,7 @@ class LangGraphBridge:
             checkpoint_id = _get_checkpoint_id(final_state)
             if checkpoint_id and checkpoint_id not in seen_checkpoints:
                 recorder.record_state_snapshot(ref=f"langgraph:{checkpoint_id}")
-            self._last_output = _messages_tail(final_state)
+            self._last_output = _messages_tail(final_state, self._messages_key or "messages")
         except Exception:  # pragma: no cover — best-effort.
             logger.debug("Failed to fetch final LangGraph state", exc_info=True)
 
@@ -533,10 +533,10 @@ def _get_checkpoint_id(state: Any) -> str | None:
     return str(cp) if cp else None
 
 
-def _messages_tail(state: Any) -> Any:
+def _messages_tail(state: Any, key: str = "messages") -> Any:
     values = getattr(state, "values", None)
     if isinstance(values, dict):
-        msgs = values.get("messages")
+        msgs = values.get(key)
         if msgs:
             return msgs[-1]
     return None

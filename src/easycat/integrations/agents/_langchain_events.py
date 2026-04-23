@@ -42,6 +42,25 @@ def _chunk_text(chunk: Any) -> str:
     return ""
 
 
+def _plain_chunk_text(chunk: Any) -> str:
+    """Extract a string text delta from a non-chat ``on_chain_stream`` chunk.
+
+    ``RunnableLambda`` / generic LCEL stages stream whatever value they
+    yield — a ``str``, an ``AIMessageChunk``-like object, or arbitrary
+    state (dict, BaseModel, ...).  Only the first two shapes carry TTS-
+    safe text; returning ``""`` for everything else keeps non-text chain
+    payloads (graph state dicts, Pydantic models, ...) out of the audio
+    stream.
+    """
+    if chunk is None:
+        return ""
+    if isinstance(chunk, str):
+        return chunk
+    if hasattr(chunk, "content"):
+        return _chunk_text(chunk)
+    return ""
+
+
 def translate_stream_event(
     event: dict[str, Any],
     recorder: AgentRecorder | None = None,
@@ -104,6 +123,17 @@ def translate_stream_event(
                     call_id=tc_id,
                     text=tc_args,
                 )
+
+    elif event_type == "on_chain_stream":
+        # Non-chat Runnables (``RunnableLambda``, LCEL stages that stream
+        # plain text, etc.) surface their output via ``on_chain_stream``
+        # rather than ``on_chat_model_stream``.  Extract a string chunk
+        # when one is present; skip silently for non-text chunks so chain
+        # events that carry dicts / state objects don't leak into TTS.
+        chunk = data.get("chunk") if isinstance(data, dict) else None
+        text = _plain_chunk_text(chunk)
+        if text:
+            yield AgentBridgeEvent(kind="text_delta", text=text)
 
     elif event_type == "on_tool_start":
         tool_name = name

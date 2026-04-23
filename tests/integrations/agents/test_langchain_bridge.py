@@ -60,7 +60,6 @@ class _MockRunnable:
         for event in self._events:
             yield event
 
-    # Tolerated for BridgeInputError construction check.
     async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
@@ -176,6 +175,45 @@ class TestStreamEventTranslator:
         out = list(translate_stream_event({"event": "on_retriever_start", "data": {}}))
         assert out == []
 
+    def test_on_chain_stream_str_chunk_yields_text_delta(self):
+        """``RunnableLambda``-style chains stream plain strings via
+        ``on_chain_stream``; the translator must surface them so non-chat
+        runnables can still drive TTS + history."""
+        event = {
+            "event": "on_chain_stream",
+            "name": "RunnableLambda",
+            "run_id": "c1",
+            "data": {"chunk": "hello world"},
+        }
+        out = list(translate_stream_event(event))
+        assert len(out) == 1
+        assert out[0].kind == "text_delta"
+        assert out[0].text == "hello world"
+
+    def test_on_chain_stream_ai_message_chunk_yields_text_delta(self):
+        """LCEL stages that wrap ``AIMessageChunk`` values in
+        ``on_chain_stream`` also stream safely."""
+        event = {
+            "event": "on_chain_stream",
+            "name": "LCEL",
+            "run_id": "c1",
+            "data": {"chunk": _MockAIMessageChunk(content="delta")},
+        }
+        out = list(translate_stream_event(event))
+        assert out and out[0].kind == "text_delta" and out[0].text == "delta"
+
+    def test_on_chain_stream_non_text_chunk_is_ignored(self):
+        """Chain-level chunks that aren't text (graph state dicts,
+        Pydantic models, ...) must not leak into the TTS stream."""
+        event = {
+            "event": "on_chain_stream",
+            "name": "StateGraph",
+            "run_id": "c1",
+            "data": {"chunk": {"counter": 7}},
+        }
+        out = list(translate_stream_event(event))
+        assert out == []
+
 
 # ── LangChainBridge tests ────────────────────────────────────────
 
@@ -192,6 +230,19 @@ class TestLangChainBridgeConstruction:
                 pass
 
             LangChainBridge(NotARunnable())
+
+    def test_rejects_ainvoke_only_runnable(self):
+        """``invoke()`` drives the underlying runnable via
+        ``astream_events``, so an object that implements ``ainvoke`` but
+        not ``astream_events`` would crash on the first turn.  Reject it
+        at construction instead."""
+
+        class AinvokeOnly:
+            async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+                return "ok"
+
+        with pytest.raises(BridgeInputError):
+            LangChainBridge(AinvokeOnly())
 
     def test_committable_boundaries_published(self):
         assert LangChainBridge.COMMITTABLE_BOUNDARIES

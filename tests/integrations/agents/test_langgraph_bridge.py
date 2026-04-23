@@ -383,3 +383,28 @@ class TestLangGraphBridgeState:
         bridge = LangGraphBridge(graph)
         bridge.append_interruption_note("user interrupted")
         assert graph.update_state_calls
+
+    @pytest.mark.asyncio
+    async def test_custom_messages_key_surfaces_final_output(self):
+        """When the graph's state schema uses a non-default messages key,
+        the end-of-turn ``done.structured_output`` must still be the last
+        message in that key rather than silently dropping to ``None``."""
+        ai_msg = _MockMessage("assistant", "final reply", message_id="m-1")
+        state = _MockState(
+            values={"chat_history": [_MockMessage("user", "hi"), ai_msg]},
+            checkpoint_id="cp-final",
+        )
+        scripted = [
+            _node_start("chat", "n1"),
+            _model_stream("final reply", run_id="m1", parent="n1", node="chat"),
+            _node_end("chat", "n1"),
+        ]
+        graph = _MockCompiledGraph(scripted, state=state)
+        bridge = LangGraphBridge(graph, messages_key="chat_history")
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+
+        done = [e for e in events if e.kind == "done"]
+        assert done and done[0].structured_output is ai_msg
