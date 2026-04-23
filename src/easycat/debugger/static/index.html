@@ -503,6 +503,88 @@
     height: 22px;
   }
   footer .right { margin-left: auto; }
+
+  /* Live multi-track view */
+  #live-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .live-toolbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 14px; background: var(--panel);
+    border-bottom: 1px solid var(--border); height: 38px; flex-shrink: 0;
+  }
+  .live-toolbar label {
+    color: var(--muted); font-size: 11px;
+    font-family: var(--mono); display: flex; align-items: center; gap: 6px;
+  }
+  .live-toolbar .spacer { flex: 1; }
+  .live-toolbar .legend {
+    display: flex; gap: 10px; flex-wrap: wrap;
+    color: var(--muted); font-size: 10px; font-family: var(--mono);
+  }
+  .live-toolbar .legend span::before {
+    content: ""; display: inline-block; width: 9px; height: 9px;
+    border-radius: 2px; margin-right: 4px; vertical-align: middle;
+  }
+  #live-canvas { flex: 1; overflow: auto; padding: 8px 0; }
+  .live-row {
+    display: flex; align-items: stretch; min-height: 26px;
+    border-bottom: 1px solid var(--border);
+  }
+  .live-row .lane-name {
+    width: 110px; flex-shrink: 0; padding: 4px 10px;
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; align-items: center;
+  }
+  .live-row .lane-track {
+    position: relative; flex: 1; min-width: 100%;
+    background-image: linear-gradient(to right,
+      rgba(125, 133, 151, 0.12) 1px, transparent 1px);
+    background-size: var(--grid-size, 100px) 100%;
+  }
+  .live-marker {
+    position: absolute; top: 3px; bottom: 3px;
+    border-radius: 2px; padding: 0 5px;
+    font-size: 10px; line-height: 20px; color: #0c0f14;
+    font-family: var(--mono); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; cursor: pointer;
+    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+    transition: outline 0.05s, transform 0.05s;
+  }
+  .live-marker:hover { outline: 1px solid var(--text); z-index: 3; }
+  .live-marker.point { width: 4px; padding: 0; min-width: 4px; }
+  .live-marker.selected { outline: 2px solid var(--accent); z-index: 4; }
+  .live-marker.lane-vad { background: #6ea8fe; }
+  .live-marker.lane-asr { background: #44d18a; }
+  .live-marker.lane-agent { background: #b78dff; }
+  .live-marker.lane-tts { background: #f08fad; }
+  .live-marker.lane-playback { background: #e8a64b; }
+  .live-marker.lane-turn { background: #5fc7c0; }
+  .live-marker.lane-tools { background: #ffd166; }
+  .live-marker.lane-interruption { background: #e0635a; color: #fff; }
+  .live-marker.lane-errors { background: #e0635a; color: #fff; }
+  .live-marker.lane-reconnect { background: #7d8597; color: #fff; }
+  .live-empty {
+    color: var(--muted); padding: 30px;
+    text-align: center; font-size: 12px;
+  }
+  .live-time-axis {
+    position: sticky; top: 0; z-index: 5;
+    height: 22px; background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: stretch;
+  }
+  .live-time-axis .axis-spacer {
+    width: 110px; flex-shrink: 0;
+    background: var(--panel); border-right: 1px solid var(--border);
+  }
+  .live-time-axis .axis-track {
+    position: relative; flex: 1;
+    font-family: var(--mono); font-size: 9px; color: var(--muted);
+  }
+  .live-time-axis .axis-tick {
+    position: absolute; top: 0; bottom: 0;
+    border-left: 1px solid var(--border); padding: 4px 4px;
+  }
 </style>
 </head>
 <body>
@@ -519,6 +601,7 @@
 </header>
 <nav class="tabbar" role="tablist">
   <div class="tab active" data-tab="timeline" role="tab">Timeline</div>
+  <div class="tab" data-tab="live" role="tab">Live</div>
   <div class="tab" data-tab="pipeline" role="tab">Pipeline</div>
   <div class="tab" data-tab="records" role="tab">Records</div>
   <div class="tab" data-tab="transcript" role="tab">Transcript</div>
@@ -527,6 +610,28 @@
 </nav>
 <main>
   <section id="timeline-view" class="view active"></section>
+
+  <section id="live-view" class="view">
+    <div class="live-toolbar">
+      <label>zoom <input id="live-zoom" type="range" min="20" max="500" value="100"
+        style="width: 140px;" />
+        <span id="live-zoom-label" style="width: 70px;">100 px/s</span>
+      </label>
+      <span class="spacer"></span>
+      <span class="legend">
+        <span style="color:#6ea8fe">vad</span>
+        <span style="color:#44d18a">asr</span>
+        <span style="color:#b78dff">agent</span>
+        <span style="color:#f08fad">tts</span>
+        <span style="color:#e8a64b">playback</span>
+        <span style="color:#5fc7c0">turn</span>
+        <span style="color:#ffd166">tools</span>
+        <span style="color:#e0635a">interruption / error</span>
+        <span style="color:#7d8597">reconnect</span>
+      </span>
+    </div>
+    <div id="live-canvas"></div>
+  </section>
 
   <section id="pipeline-view" class="view">
     <svg id="pipeline-svg" viewBox="0 0 900 280" preserveAspectRatio="xMidYMid meet">
@@ -726,6 +831,7 @@ const state = {
 
 const TAB_LOADERS = {
   timeline: renderTimelineView,
+  live: renderLiveView,
   pipeline: renderPipelineView,
   records: () => { renderRecordsView(); loadAndRenderRecords(); },
   transcript: renderTranscriptView,
@@ -877,6 +983,159 @@ function renderTimelineView() {
     }
     root.appendChild(turnNode);
   }
+}
+
+// ── Live multi-track view ────────────────────────────────────────
+// Audacity-style timeline that buckets journal records into per-source
+// lanes.  Driven by ``state.records`` so it works for live sessions
+// (polled WebSocket updates) and replayed bundles alike.
+const LIVE_LANES = [
+  { id: "vad", label: "vad", names: ["vad_start_speaking", "vad_stop_speaking"] },
+  { id: "asr", label: "asr", names: ["stt_partial", "stt_final"] },
+  {
+    id: "agent",
+    label: "agent",
+    names: ["agent_request_started", "agent_delta", "agent_final"],
+  },
+  { id: "tts", label: "tts", names: ["tts_audio", "tts_markers"] },
+  { id: "playback", label: "playback", names: ["bot_started_speaking", "bot_stopped_speaking"] },
+  { id: "turn", label: "turn", names: ["turn_started", "turn_ended"] },
+  {
+    id: "tools",
+    label: "tools",
+    names: ["tool_call_started", "tool_call_delta", "tool_call_result"],
+  },
+  { id: "interruption", label: "interruption", names: ["interruption"] },
+  { id: "errors", label: "errors", names: ["error"] },
+  {
+    id: "reconnect",
+    label: "reconnect",
+    names: ["ws_reconnect_attempt", "ws_reconnect_success", "ws_reconnect_failure"],
+  },
+];
+const LANE_BY_NAME = (() => {
+  const m = new Map();
+  for (const lane of LIVE_LANES) for (const n of lane.names) m.set(n, lane.id);
+  return m;
+})();
+
+let _liveZoomPxPerSec = 100;
+$("#live-zoom").addEventListener("input", (e) => {
+  _liveZoomPxPerSec = parseInt(e.target.value, 10) || 100;
+  $("#live-zoom-label").textContent = `${_liveZoomPxPerSec} px/s`;
+  if (state.activeTab === "live") renderLiveView();
+});
+
+function renderLiveView() {
+  const root = $("#live-canvas");
+  clear(root);
+  const records = (state.records || []).filter(
+    (r) => LANE_BY_NAME.has(r.name) && r.timing && r.timing.mono_ns,
+  );
+  if (records.length === 0) {
+    root.appendChild(el("div", { class: "live-empty" },
+      "No timeline-eligible events yet. Talk to the bot to populate this view."));
+    return;
+  }
+  const t0 = records[0].timing.mono_ns;
+  const tEnd = records[records.length - 1].timing.mono_ns;
+  const totalSec = Math.max((tEnd - t0) / 1e9, 1);
+  const trackWidth = Math.max(800, Math.ceil(totalSec * _liveZoomPxPerSec) + 60);
+  const px = (ms) => (ms * _liveZoomPxPerSec) / 1000;
+
+  const axis = el("div", { class: "live-time-axis", style: `min-width: ${trackWidth + 110}px;` });
+  axis.appendChild(el("div", { class: "axis-spacer" }));
+  const axisTrack = el("div", { class: "axis-track", style: `width: ${trackWidth}px;` });
+  const tickEverySec = _liveZoomPxPerSec >= 200 ? 0.5 : _liveZoomPxPerSec >= 80 ? 1 : 5;
+  for (let s = 0; s <= totalSec + tickEverySec; s += tickEverySec) {
+    const tick = el("div", { class: "axis-tick", style: `left: ${px(s * 1000)}px;` },
+      `${s.toFixed(tickEverySec < 1 ? 1 : 0)}s`);
+    axisTrack.appendChild(tick);
+  }
+  axis.appendChild(axisTrack);
+  root.appendChild(axis);
+
+  const buckets = {};
+  for (const lane of LIVE_LANES) buckets[lane.id] = [];
+  for (const r of records) buckets[LANE_BY_NAME.get(r.name)].push(r);
+
+  for (const lane of LIVE_LANES) {
+    const row = el("div", { class: "live-row", style: `min-width: ${trackWidth + 110}px;` });
+    row.appendChild(el("div", { class: "lane-name" }, lane.label));
+    const track = el("div", {
+      class: "lane-track",
+      style: `width: ${trackWidth}px; --grid-size: ${_liveZoomPxPerSec}px;`,
+    });
+    const items = buckets[lane.id];
+    // Pair start/stop within a lane so VAD/playback/turn spans render
+    // as one rectangle instead of two points.  Pairs match by turn_id.
+    const startEnd = {
+      vad_start_speaking: "vad_stop_speaking",
+      bot_started_speaking: "bot_stopped_speaking",
+      turn_started: "turn_ended",
+      tool_call_started: "tool_call_result",
+    };
+    const consumed = new Set();
+    for (let i = 0; i < items.length; i++) {
+      if (consumed.has(i)) continue;
+      const r = items[i];
+      const startMs = (r.timing.mono_ns - t0) / 1e6;
+      let endMs = null;
+      const stopName = startEnd[r.name];
+      if (stopName) {
+        for (let j = i + 1; j < items.length; j++) {
+          const c = items[j];
+          if (c.name === stopName && c.turn_id === r.turn_id) {
+            endMs = (c.timing.mono_ns - t0) / 1e6;
+            consumed.add(j);
+            break;
+          }
+        }
+      } else if (r.data && typeof r.data.duration_ms === "number") {
+        endMs = startMs + r.data.duration_ms;
+      }
+      const widthMs = endMs == null ? 0 : Math.max(2, endMs - startMs);
+      const isPoint = widthMs <= 2;
+      const marker = el("div", {
+        class: `live-marker lane-${lane.id}${isPoint ? " point" : ""}` +
+          (state.selectedSeq === r.sequence ? " selected" : ""),
+        style: isPoint
+          ? `left: ${px(startMs)}px;`
+          : `left: ${px(startMs)}px; width: ${Math.max(4, px(widthMs))}px;`,
+        title: _liveMarkerTitle(r, startMs, endMs),
+        onclick: () => _liveSelectRecord(r.sequence),
+      }, isPoint ? "" : _liveMarkerLabel(r));
+      track.appendChild(marker);
+    }
+    row.appendChild(track);
+    root.appendChild(row);
+  }
+}
+
+function _liveMarkerLabel(r) {
+  const text = r.data && (r.data.text || r.data.tool_name || r.data.result || r.data.message);
+  if (text) return String(text).slice(0, 60);
+  if (r.data && r.data.duration_ms) return `${r.data.duration_ms.toFixed(0)}ms`;
+  return r.name;
+}
+
+function _liveMarkerTitle(r, startMs, endMs) {
+  const lines = [`${r.name} · seq=${r.sequence}`];
+  if (r.turn_id) lines.push(`turn=${r.turn_id}`);
+  lines.push(`t=${(startMs / 1000).toFixed(2)}s` +
+    (endMs != null ? ` (+${((endMs - startMs)).toFixed(0)}ms)` : ""));
+  if (r.data && r.data.text) lines.push(`text: ${r.data.text}`);
+  return lines.join("\n");
+}
+
+function _liveSelectRecord(seq) {
+  state.selectedSeq = seq;
+  state.filters = { stage: "", turn: null, name: "", from: null, to: null, errorsOnly: false };
+  $("#stage-filter").value = "";
+  $("#name-filter").value = "";
+  activateTab("records");
+  const rec = (state.records || []).find((r) => r.sequence === seq);
+  if (rec) selectRecord(rec);
 }
 
 async function playConcatAudio(turnId) {
@@ -1107,11 +1366,23 @@ function renderTranscriptView() {
     node.appendChild(el("div", { class: "turn-id" }, turn.turn_id));
     if (turn.user) {
       node.appendChild(el("div", { class: "speaker user" }, "User"));
-      node.appendChild(el("div", { class: "text" }, turn.user));
+      const userText = el("div", { class: "text" }, turn.user);
+      if (turn.user_seq != null) {
+        userText.style.cursor = "pointer";
+        userText.title = "Click to inspect the source stt_final record";
+        userText.addEventListener("click", () => _liveSelectRecord(turn.user_seq));
+      }
+      node.appendChild(userText);
     }
     if (turn.agent) {
       node.appendChild(el("div", { class: "speaker agent" }, "Agent"));
-      node.appendChild(el("div", { class: "text" }, turn.agent));
+      const agentText = el("div", { class: "text" }, turn.agent);
+      if (turn.agent_seq != null) {
+        agentText.style.cursor = "pointer";
+        agentText.title = "Click to inspect the source agent record";
+        agentText.addEventListener("click", () => _liveSelectRecord(turn.agent_seq));
+      }
+      node.appendChild(agentText);
       // Only render the audio element when the rollup says this turn
       // produced TTS bytes — otherwise the browser shows a broken
       // player when /api/audio/concat 404s.

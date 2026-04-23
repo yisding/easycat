@@ -539,36 +539,53 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         bucket = by_turn.setdefault(
             turn_id,
-            {"turn_id": turn_id, "user": "", "agent": "", "agent_delta": []},
+            {
+                "turn_id": turn_id,
+                "user": "",
+                "agent": "",
+                "user_seq": None,
+                "agent_seq": None,
+                "agent_delta": [],
+                "agent_delta_seq": None,
+            },
         )
         name = r.get("name") or ""
         data = r.get("data") or {}
+        seq = r.get("sequence")
         if not isinstance(data, dict):
             continue
         if name == "stt_final":
             txt = data.get("text") or data.get("transcript")
             if isinstance(txt, str) and txt:
                 bucket["user"] = txt
+                bucket["user_seq"] = seq
         elif name == "stage_complete" and (
             data.get("stage") == "agent" or data.get("observed_stage") == "agent"
         ):
             resp = data.get("response")
             if isinstance(resp, str) and resp:
                 bucket["agent"] = resp
+                bucket["agent_seq"] = seq
         elif name == "agent_delta":
             txt = data.get("text")
             if isinstance(txt, str) and txt and data.get("type") == "TEXT_DELTA":
                 bucket["agent_delta"].append(txt)
+                if bucket["agent_delta_seq"] is None:
+                    bucket["agent_delta_seq"] = seq
         elif name == "agent_final":
             txt = data.get("text")
             if isinstance(txt, str) and txt and not bucket["agent"]:
                 bucket["agent"] = txt
+                bucket["agent_seq"] = seq
 
     transcripts = []
     for turn_id, bucket in by_turn.items():
         if not bucket["agent"] and bucket["agent_delta"]:
             bucket["agent"] = "".join(bucket["agent_delta"])
+            if bucket["agent_seq"] is None:
+                bucket["agent_seq"] = bucket["agent_delta_seq"]
         bucket.pop("agent_delta", None)
+        bucket.pop("agent_delta_seq", None)
         transcripts.append(bucket)
     return transcripts
 

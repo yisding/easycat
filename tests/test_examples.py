@@ -218,6 +218,13 @@ def test_debug_bundle_example_imports():
     assert callable(debug_bundle.main)
 
 
+def test_journal_ui_example_imports():
+    pytest.importorskip("agents")
+    import examples.journal_ui as journal_ui
+
+    assert callable(journal_ui.main)
+
+
 # ── Subprocess smoke test ───────────────────────────────────────────
 
 # Scripts that import an optional agent framework at module scope; the
@@ -237,6 +244,8 @@ _REQUIRES_AGENTS = frozenset(
         "examples/noise_reduction_backends.py",
         "examples/echo_cancellation.py",
         "examples/session_actions_openai.py",
+        "examples/journal_ui.py",
+        "examples/webrtc_observability_server.py",
     }
 )
 _REQUIRES_PYDANTIC_AI = frozenset(
@@ -291,6 +300,7 @@ def _python_executable() -> str:
         "examples/noise_reduction_backends.py",
         "examples/responses_api_bridge.py",
         "examples/echo_cancellation.py",
+        "examples/journal_ui.py",
     ],
 )
 def test_examples_can_run_as_scripts_without_package_import_errors(script_path: str):

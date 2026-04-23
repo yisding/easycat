@@ -290,7 +290,8 @@ Runnable examples live in the `examples/` directory:
 - `ws_supervisor_server.py`: browser caller + passive supervisor listen-in over WebSocket
 - `reconnecting_ws_client.py`: resilient client using `ReconnectingWebSocket` against `ws_server.py`
 - `webrtc_server.py`: WebRTC voice chat with browser client
-- `webrtc_observability_server.py`: WebRTC + FastAPI dashboard streaming live events
+- `webrtc_observability_server.py`: WebRTC + the bundled debugger UI side-by-side
+  (talk to the bot up top, watch the journal below)
 - `twilio_app.py`: Twilio Media Streams example
 
 **Agents**
@@ -324,6 +325,8 @@ Runnable examples live in the `examples/` directory:
 - `echo_cancellation.py`: enable LiveKit WebRTC AEC3 on a local mic/speaker loop
 - `debug_bundle.py`: record with `debug="light"`, export a `RunBundle`, inspect it
 - `journal_demo.py`: one-turn synthetic session that dumps journal records (no API keys)
+- `journal_ui.py`: run `easycat.debugger.serve_session()` alongside a local mic
+  session — open `http://localhost:8765` to tail the journal in a UI
 
 **Telephony**
 - `telephony_helpers.py`: standalone exercise of `DTMFAggregator`, `VoicemailDetector`,

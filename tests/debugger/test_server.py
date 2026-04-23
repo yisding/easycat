@@ -380,6 +380,11 @@ async def test_api_transcript_extracts_user_and_agent_text(tmp_path):
         assert agent_turns, "expected at least one turn with an agent reply"
         # DeterministicAgent returns "reply-<input>".
         assert any("reply-hello-world" in t["agent"] for t in agent_turns)
+        # Each turn must carry source-record seqs so the UI can link a
+        # sentence back to its journal entry.
+        assert all("user_seq" in t and "agent_seq" in t for t in body["transcripts"])
+        for t in agent_turns:
+            assert isinstance(t["agent_seq"], int)
 
 
 async def test_api_audio_concat_returns_valid_wav(tmp_path):
