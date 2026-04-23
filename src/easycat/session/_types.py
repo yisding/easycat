@@ -73,9 +73,12 @@ class CallIdentity:
 
     ``caller_number`` is the far-end (the human), ``called_number`` is
     the near-end (the bot's DID).  ``display_name`` is the optional
-    caller-ID name if the carrier provided one.  ``custom_fields``
-    carries extra metadata the transport or app attached (e.g. CRM
-    account id, SIP headers).
+    caller-ID name if the carrier provided one.  ``city`` / ``state``
+    / ``zip_code`` / ``country`` carry Twilio's geographic metadata
+    (``FromCity`` / ``FromState`` / ``FromZip`` / ``FromCountry`` on
+    the voice webhook) when the inbound TwiML forwards them.
+    ``custom_fields`` carries extra metadata the transport or app
+    attached (e.g. CRM account id, SIP headers).
     """
 
     caller_number: str = ""
@@ -83,6 +86,10 @@ class CallIdentity:
     direction: CallDirection = "unknown"
     display_name: str | None = None
     call_sid: str | None = None
+    city: str | None = None
+    state: str | None = None
+    zip_code: str | None = None
+    country: str | None = None
     custom_fields: dict[str, str] = field(default_factory=dict)
 
 
@@ -162,6 +169,38 @@ class SessionConfig:
     # MCP servers surfaced to the agent stage recorder so bridges can
     # read them from ``RecorderContext.mcp_servers``.
     mcp_servers: tuple[str, ...] = ()
+
+    # Opt-out auto-handling on STT finals.
+    #
+    # When enabled, every STT final transcript is checked against
+    # :data:`easycat.telephony.compliance.OPT_OUT_PHRASES`.  On a
+    # match, Session:
+    #   1. Emits an :class:`~easycat.events.OptOutDetected` event
+    #      (with the matched phrase and the caller's number).
+    #   2. If :attr:`dnc_list` is set, adds ``call_identity.caller_number``
+    #      to it so the number is blocked on subsequent ``place_call``
+    #      attempts through ``OutboundCallManager``.
+    #   3. If :attr:`session_actions` is set, enqueues an
+    #      :class:`~easycat.session.actions.EndCallAction` with
+    #      ``reason="opt_out"`` so the call terminates gracefully
+    #      after the agent's current utterance finishes.
+    #
+    # Apps that want a custom policy can set
+    # ``opt_out_detection=False`` and subscribe to ``STTFinal`` /
+    # ``OptOutDetected`` themselves.
+    opt_out_detection: bool = True
+    opt_out_phrases: tuple[str, ...] | None = None
+    dnc_list: Any | None = None
+
+    # Greeting synthesized automatically on the first
+    # :class:`~easycat.events.CallAnswered` so the bot speaks first —
+    # the canonical pattern for outbound calls and a common ask for
+    # inbound.  ``None`` (default) leaves the old behaviour (the agent
+    # speaks only after the first user utterance).  The greeting text
+    # flows through the configured TTS provider; callers that want
+    # per-call templating (e.g. ``"Hi {caller_name}"``) can pass an
+    # f-string formatted against ``session.call_identity``.
+    greeting: str | None = None
 
     # Telephony caller / callee identity and exposure policy.
     #

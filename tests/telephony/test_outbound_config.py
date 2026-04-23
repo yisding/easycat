@@ -2,19 +2,42 @@
 
 from __future__ import annotations
 
-from easycat.config import OutboundCallConfig, TelephonyConfig
+from easycat.config import OutboundCallConfig, TelephonyConfig, VoicemailDetectionConfig
+
+
+class TestVoicemailDetectionConfig:
+    def test_defaults_map_to_twilio(self) -> None:
+        cfg = VoicemailDetectionConfig()
+        assert cfg.mode == "detect_end_of_greeting"
+        assert cfg.async_mode is True
+        assert cfg.detection_timeout_s == 30
+        assert cfg.speech_threshold_ms == 2400
+        assert cfg.speech_end_threshold_ms == 1200
+        assert cfg.silence_timeout_ms == 5000
+        params = cfg.to_twilio_params()
+        assert params["amd_mode"] == "DetectMessageEnd"
+        assert params["async_amd"] is True
+        assert params["amd_timeout"] == 30
+        assert params["speech_threshold"] == 2400
+        assert params["speech_end_threshold"] == 1200
+        assert params["silence_timeout"] == 5000
+
+    def test_detect_mode_maps_to_enable(self) -> None:
+        cfg = VoicemailDetectionConfig(mode="detect")
+        assert cfg.to_twilio_params()["amd_mode"] == "Enable"
 
 
 class TestOutboundCallConfig:
     def test_defaults(self) -> None:
         cfg = OutboundCallConfig(from_number="+1555")
         assert cfg.from_number == "+1555"
-        assert cfg.amd_mode == "DetectMessageEnd"
-        assert cfg.async_amd is True
-        assert cfg.amd_timeout == 30
-        assert cfg.speech_threshold == 2400
-        assert cfg.speech_end_threshold == 1200
-        assert cfg.silence_timeout == 5000
+        # Voicemail-detection defaults live on the nested config now.
+        assert cfg.voicemail_detection.mode == "detect_end_of_greeting"
+        assert cfg.voicemail_detection.async_mode is True
+        assert cfg.voicemail_detection.detection_timeout_s == 30
+        assert cfg.voicemail_detection.speech_threshold_ms == 2400
+        assert cfg.voicemail_detection.speech_end_threshold_ms == 1200
+        assert cfg.voicemail_detection.silence_timeout_ms == 5000
         assert cfg.enable_screening_detection is True
         assert cfg.screening_response == ""
         assert cfg.screening_use_agent is False
@@ -31,14 +54,17 @@ class TestOutboundCallConfig:
         async def _dummy_agent(ctx: dict) -> dict:
             return {"action": "wait"}
 
+        vm = VoicemailDetectionConfig(
+            mode="detect",
+            async_mode=False,
+            detection_timeout_s=15,
+            speech_threshold_ms=3000,
+            speech_end_threshold_ms=2000,
+            silence_timeout_ms=8000,
+        )
         cfg = OutboundCallConfig(
             from_number="+1999",
-            amd_mode="Enable",
-            async_amd=False,
-            amd_timeout=15,
-            speech_threshold=3000,
-            speech_end_threshold=2000,
-            silence_timeout=8000,
+            voicemail_detection=vm,
             enable_screening_detection=False,
             screening_response="Hi I'm Sarah",
             screening_use_agent=True,
@@ -54,12 +80,12 @@ class TestOutboundCallConfig:
             twilio_account_sid="AC123",
             twilio_auth_token="token",
         )
-        assert cfg.amd_mode == "Enable"
-        assert cfg.async_amd is False
-        assert cfg.amd_timeout == 15
-        assert cfg.speech_threshold == 3000
-        assert cfg.speech_end_threshold == 2000
-        assert cfg.silence_timeout == 8000
+        assert cfg.voicemail_detection is vm
+        assert cfg.voicemail_detection.mode == "detect"
+        assert cfg.voicemail_detection.detection_timeout_s == 15
+        assert cfg.voicemail_detection.speech_threshold_ms == 3000
+        assert cfg.voicemail_detection.speech_end_threshold_ms == 2000
+        assert cfg.voicemail_detection.silence_timeout_ms == 8000
         assert cfg.enable_screening_detection is False
         assert cfg.screening_response == "Hi I'm Sarah"
         assert cfg.screening_use_agent is True

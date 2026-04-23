@@ -14,6 +14,7 @@ from easycat.telephony.compliance import (
     check_calling_hours,
     detect_opt_out,
     lookup_timezone,
+    match_opt_out_phrase,
 )
 from easycat.telephony.dtmf import (
     DTMFAggregator,
@@ -157,6 +158,7 @@ __all__ = [
     "check_calling_hours",
     "detect_opt_out",
     "lookup_timezone",
+    "match_opt_out_phrase",
     # Number health + retries
     "CallDispositionTracker",
     "NumberHealthMonitor",

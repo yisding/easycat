@@ -273,6 +273,31 @@ class Session:
         self.event_bus.subscribe(VADStartSpeaking, self._cancel_scheduled_stt_segment_commit)
         self.event_bus.subscribe(PlaybackMarkAck, self._on_playback_mark_ack)
         self.event_bus.subscribe(TransportAudioDelivered, self._on_transport_audio_delivered)
+
+        # Opt-out auto-wiring.  Runs on every STT final; on a match it
+        # emits ``OptOutDetected``, adds the caller to an attached DNC
+        # list, and queues ``EndCallAction(reason="opt_out")`` so the
+        # call hangs up after the current agent utterance.  Disable
+        # via ``SessionConfig.opt_out_detection=False``.
+        self._opt_out_detection = cfg.opt_out_detection
+        self._opt_out_phrases: list[str] | None = (
+            list(cfg.opt_out_phrases) if cfg.opt_out_phrases is not None else None
+        )
+        self._dnc_list: Any | None = cfg.dnc_list
+        if self._opt_out_detection:
+            self.event_bus.subscribe(STTFinal, self._on_stt_final_opt_out)
+
+        # Optional "bot speaks first" greeting synthesized on the first
+        # CallAnswered event — works for both inbound (stream start)
+        # and outbound (callee picks up).  Only the first occurrence
+        # is honored so a warm-transfer style flow with a second
+        # CallAnswered doesn't re-greet.
+        self._greeting: str | None = cfg.greeting
+        self._greeting_spoken: bool = False
+        if self._greeting:
+            from easycat.events import CallAnswered as _CallAnsweredEv
+
+            self.event_bus.subscribe(_CallAnsweredEv, self._on_call_answered_greet)
         tm_config = getattr(self._turn_manager, "_config", None)
         self._stt_segment_silence_ms = max(0, getattr(tm_config, "stt_segment_silence_ms", 0))
 
@@ -1091,6 +1116,48 @@ class Session:
         )
 
     @property
+    def transport_kind(self) -> str:
+        """Coarse transport class for tool-side branching.
+
+        Returns one of ``"telephony"``, ``"webrtc"``, ``"websocket"``,
+        ``"local"``, ``"noop"``, or ``"custom"``.  Tools that need to
+        behave differently on a phone call vs a browser session
+        (don't reference the screen, avoid long URLs, skip emoji, …)
+        read this rather than poking at transport internals.
+        """
+        transport = self.transport
+        module = type(transport).__module__
+
+        # Telephony transports live under ``easycat.transports.twilio_media``
+        # and any future SIP-backed siblings.  ``twilio_media`` catches
+        # both ``TwilioTransport`` (server mode) and ``TwilioConnectionTransport``.
+        if "twilio_media" in module or "telephony" in module or "sip" in module:
+            return "telephony"
+        if "webrtc" in module:
+            return "webrtc"
+        if "websocket" in module:
+            return "websocket"
+        if "local" in module:
+            return "local"
+        if "stubs" in module:
+            return "noop"
+        return "custom"
+
+    @property
+    def dnc_list(self) -> Any | None:
+        """Do-Not-Call list consulted by opt-out auto-detection.
+
+        Apps that want opt-out flows to persist across sessions
+        assign the same ``DNCList`` instance to every session
+        (or wire a shared store behind a DNC-list-compatible object).
+        """
+        return self._dnc_list
+
+    @dnc_list.setter
+    def dnc_list(self, value: Any | None) -> None:
+        self._dnc_list = value
+
+    @property
     def call_identity(self) -> CallIdentity | None:
         """Caller / callee identity for this session.
 
@@ -1696,6 +1763,62 @@ class Session:
             return False
         await self.cancel_turn(barge_in=True)
         return True
+
+    async def _on_call_answered_greet(self, event: Any) -> None:
+        """Synthesize the configured greeting once per call.
+
+        Wires :attr:`_greeting` into the first
+        :class:`~easycat.events.CallAnswered`.  Uses the
+        ``synthesize_bypass`` path so the greeting plays even when a
+        classification gate is still buffering (outbound answering
+        machine window).  Subsequent ``CallAnswered`` events — e.g. a
+        warm-transfer re-answer — are ignored.
+        """
+        if self._greeting_spoken or not self._greeting:
+            return
+        self._greeting_spoken = True
+        try:
+            await self.synthesize_bypass(self._greeting)
+        except Exception:
+            logger.debug("Failed to synthesize greeting", exc_info=True)
+
+    async def _on_stt_final_opt_out(self, event: STTFinal) -> None:
+        """Detect TCPA opt-out phrases in every STT final and react.
+
+        Skipped when the caller disabled ``opt_out_detection`` or when
+        the text is empty.  On match: emits
+        :class:`~easycat.events.OptOutDetected`, adds the caller to
+        ``session.dnc_list`` if set, and enqueues a
+        :class:`EndCallAction` so the call terminates after the
+        current agent utterance.
+        """
+        from easycat.events import OptOutDetected
+        from easycat.telephony.compliance import match_opt_out_phrase
+
+        if not event.text:
+            return
+        phrase = match_opt_out_phrase(event.text, self._opt_out_phrases)
+        if phrase is None:
+            return
+
+        number = self._call_identity.caller_number if self._call_identity else ""
+        if self._dnc_list is not None and number:
+            try:
+                self._dnc_list.add(number)
+            except Exception:
+                logger.debug("dnc_list.add raised for opt-out", exc_info=True)
+
+        await self._emit(OptOutDetected(number=number, phrase=phrase, text=event.text))
+
+        # Queue a hangup after the current agent utterance so the
+        # session drains cleanly (saying "understood, goodbye" first
+        # is the agent's job; we just schedule the end).  When no
+        # action queue is present we fall back to firing
+        # ``Session.stop`` — opt-out must terminate the call.
+        if self._session_actions is not None:
+            self._session_actions.end_call(reason="opt_out")
+        else:
+            self._journaled_task(self.stop(), name="opt_out_stop")
 
     async def _on_turn_started(self, event: TurnStarted) -> None:
         """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""

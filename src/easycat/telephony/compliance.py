@@ -165,5 +165,19 @@ OPT_OUT_PHRASES: list[str] = [
 
 def detect_opt_out(text: str) -> bool:
     """Detect if the callee is requesting to be removed from the calling list."""
+    return match_opt_out_phrase(text) is not None
+
+
+def match_opt_out_phrase(text: str, phrases: list[str] | None = None) -> str | None:
+    """Return the first matching opt-out phrase, or ``None`` when none match.
+
+    Useful when a caller wants to know *which* phrase the callee used
+    (logging, journal records, compliance audit trails).  ``phrases``
+    defaults to :data:`OPT_OUT_PHRASES` but can be overridden with a
+    localised list.
+    """
     lower = text.lower()
-    return any(phrase in lower for phrase in OPT_OUT_PHRASES)
+    for phrase in phrases or OPT_OUT_PHRASES:
+        if phrase in lower:
+            return phrase
+    return None

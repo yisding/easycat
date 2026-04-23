@@ -326,6 +326,23 @@ class CallEnded(Event):
     number: str | None = None
 
 
+@dataclass(frozen=True)
+class OptOutDetected(Event):
+    """Callee asked to stop being contacted.
+
+    Emitted when the session-level opt-out detector matches a phrase
+    from :data:`easycat.telephony.compliance.OPT_OUT_PHRASES` (or a
+    user-extended list) in an STT final transcript.  By default the
+    session adds the caller's number to an attached :class:`DNCList`
+    and queues an :class:`EndCallAction`; apps that want a different
+    policy can subscribe and opt out of the auto-wiring.
+    """
+
+    number: str = ""
+    phrase: str = ""
+    text: str = ""
+
+
 # Error
 
 
@@ -416,6 +433,7 @@ TELEPHONY_EVENTS: tuple[type[Event], ...] = (
     ScreeningTimedOut,
     CallFailed,
     CallEnded,
+    OptOutDetected,
 )
 ERROR_EVENTS: tuple[type[Event], ...] = (Error,)
 ACTION_EVENTS: tuple[type[Event], ...] = (

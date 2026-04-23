@@ -35,7 +35,9 @@ def _register(module: str, *names: str) -> None:
 _register(
     "easycat.config",
     "EasyCatConfig",
+    "OutboundCallConfig",
     "TelephonyConfig",
+    "VoicemailDetectionConfig",
     "create_session",
     "create_text_session",
 )
@@ -176,6 +178,7 @@ _register(
     "SessionActionFailed",
     "SessionActionRequested",
     "SessionActionStarted",
+    "OptOutDetected",
     "ToolCallDelta",
     "ToolCallResult",
     "ToolCallStarted",
@@ -311,7 +314,9 @@ if TYPE_CHECKING:
     from easycat.cancel import CancelToken
     from easycat.config import (
         EasyCatConfig,
+        OutboundCallConfig,
         TelephonyConfig,
+        VoicemailDetectionConfig,
         create_session,
         create_text_session,
     )
@@ -341,6 +346,7 @@ if TYPE_CHECKING:
         Event,
         EventBus,
         Interruption,
+        OptOutDetected,
         ReconnectAttempt,
         ReconnectFailure,
         ReconnectSuccess,

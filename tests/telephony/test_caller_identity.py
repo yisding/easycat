@@ -85,12 +85,17 @@ def _make_twilio_transport() -> TwilioTransport:
     return TwilioTransport(TwilioTransportConfig(), event_bus=EventBus())
 
 
-def test_twilio_handle_start_parses_caller_identity() -> None:
+@pytest.mark.asyncio
+async def test_twilio_handle_start_parses_caller_identity() -> None:
+    from easycat.events import CallAnswered
+
     transport = _make_twilio_transport()
     received: list[CallIdentity] = []
     transport.bind_identity_sink(received.append)
+    answered: list[CallAnswered] = []
+    transport._event_bus.subscribe(CallAnswered, answered.append)
 
-    transport._handle_start(
+    await transport._handle_start(
         {
             "streamSid": "MZ1",
             "start": {
@@ -100,6 +105,10 @@ def test_twilio_handle_start_parses_caller_identity() -> None:
                     "From": "+15551234567",
                     "To": "+15557654321",
                     "CallerName": "Alice Example",
+                    "FromCity": "SAN FRANCISCO",
+                    "FromState": "CA",
+                    "FromZip": "94105",
+                    "FromCountry": "US",
                     "crm_account_id": "ACC-42",
                 },
             },
@@ -111,17 +120,27 @@ def test_twilio_handle_start_parses_caller_identity() -> None:
     assert transport.call_identity.direction == "inbound"
     assert transport.call_identity.display_name == "Alice Example"
     assert transport.call_identity.call_sid == "CA1"
+    assert transport.call_identity.city == "SAN FRANCISCO"
+    assert transport.call_identity.state == "CA"
+    assert transport.call_identity.zip_code == "94105"
+    assert transport.call_identity.country == "US"
     assert transport.call_identity.custom_fields == {"crm_account_id": "ACC-42"}
     assert received == [transport.call_identity]
+    # CallAnswered fires for lifecycle-symmetry with outbound.
+    assert len(answered) == 1
+    assert answered[0].call_sid == "CA1"
 
 
-def test_twilio_handle_start_without_custom_parameters() -> None:
+@pytest.mark.asyncio
+async def test_twilio_handle_start_without_custom_parameters() -> None:
     transport = _make_twilio_transport()
-    transport._handle_start({"streamSid": "MZ1", "start": {"callSid": "CA1"}})
+    await transport._handle_start({"streamSid": "MZ1", "start": {"callSid": "CA1"}})
     assert transport.call_identity is not None
     assert transport.call_identity.caller_number == ""
     assert transport.call_identity.called_number == ""
     assert transport.call_identity.direction == "inbound"
+    assert transport.call_identity.city is None
+    assert transport.call_identity.state is None
 
 
 # ── create_session wires OutboundCallManager → session.call_identity ─

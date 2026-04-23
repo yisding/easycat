@@ -206,16 +206,61 @@ def _align_tts_config_to_transport(
 
 
 @dataclass
+class VoicemailDetectionConfig:
+    """Provider-neutral voicemail / answering machine detection knobs.
+
+    The shape mirrors Twilio's AMD parameters today because Twilio
+    is the only supported outbound provider, but the names are
+    provider-neutral so future Telnyx / Plivo / SIP backends can
+    honor the same config without renaming.
+
+    ``mode`` selects how aggressively the provider tries to classify:
+
+    - ``"detect"``: classify answered-by (human/machine) as fast as possible
+    - ``"detect_end_of_greeting"``: wait for the voicemail greeting to
+      finish so the bot can leave a message (Twilio's
+      ``DetectMessageEnd``). This is the default.
+
+    ``detection_timeout_s`` is the ceiling for the classifier; after
+    that the pipeline proceeds with whatever signal it has.
+    ``speech_threshold_ms`` and ``speech_end_threshold_ms`` tune the
+    provider's internal voice-onset / end detectors.
+    ``silence_timeout_ms`` bounds how long the provider waits for any
+    audio before giving up.
+    """
+
+    mode: Literal["detect", "detect_end_of_greeting"] = "detect_end_of_greeting"
+    async_mode: bool = True
+    detection_timeout_s: int = 30
+    speech_threshold_ms: int = 2400
+    speech_end_threshold_ms: int = 1200
+    silence_timeout_ms: int = 5000
+
+    def to_twilio_params(self) -> dict[str, Any]:
+        """Render as the kwargs :class:`OutboundCallManager` expects today."""
+        twilio_mode = "DetectMessageEnd" if self.mode == "detect_end_of_greeting" else "Enable"
+        return {
+            "amd_mode": twilio_mode,
+            "async_amd": self.async_mode,
+            "amd_timeout": self.detection_timeout_s,
+            "speech_threshold": self.speech_threshold_ms,
+            "speech_end_threshold": self.speech_end_threshold_ms,
+            "silence_timeout": self.silence_timeout_ms,
+        }
+
+
+@dataclass
 class OutboundCallConfig:
     """Configuration for outbound call manager."""
 
     from_number: str = ""
-    amd_mode: str = "DetectMessageEnd"
-    async_amd: bool = True
-    amd_timeout: int = 30
-    speech_threshold: int = 2400
-    speech_end_threshold: int = 1200
-    silence_timeout: int = 5000
+    # Voicemail / answering-machine detection.  Defaults are Twilio's
+    # ``DetectMessageEnd`` posture — wait for the greeting to finish
+    # so the bot can leave a message.  Pre-release code accepted the
+    # flat Twilio fields directly; use
+    # ``VoicemailDetectionConfig(...).to_twilio_params()`` when
+    # migrating.
+    voicemail_detection: VoicemailDetectionConfig = field(default_factory=VoicemailDetectionConfig)
     enable_screening_detection: bool = True
     screening_response: str = ""
     screening_use_agent: bool = False
@@ -321,9 +366,7 @@ def _validate_common(
                     f"Invalid MCP server URI: {uri!r}. "
                     f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
                 )
-    if session_id is not None and (
-        "/" in session_id or "\\" in session_id or ".." in session_id
-    ):
+    if session_id is not None and ("/" in session_id or "\\" in session_id or ".." in session_id):
         raise EasyCatConfigError(
             f"session_id must not contain path separators or '..': {session_id!r}"
         )
@@ -412,6 +455,21 @@ class EasyCatConfig:
     # without flipping any switch.  Requires ``debug != "off"`` so the
     # journal actually exists.
     record_to: str | Path | None = None
+
+    # Optional greeting text synthesized on the first
+    # :class:`~easycat.events.CallAnswered`.  Makes the bot speak
+    # first on both inbound and outbound calls — the canonical
+    # outbound pattern and the FCC's preferred moment for an
+    # AI-disclosure utterance.  Set to ``None`` (default) to preserve
+    # user-speaks-first behaviour.
+    greeting: str | None = None
+
+    # Optional Do-Not-Call list reused for opt-out auto-detection.
+    # Session-level opt-out detection runs on every STT final and, on
+    # match, adds the caller's number here.  Attaching the same
+    # ``DNCList`` across sessions lets the list persist in-process
+    # without a database.
+    dnc_list: Any | None = None
 
     # Telephony caller-ID exposure.  ``"tools_only"`` (default) keeps
     # the caller's phone number out of the LLM prompt but available to
@@ -717,6 +775,8 @@ def create_session(config: EasyCatConfig) -> Session:
                 audio_gate=audio_gate,
                 mcp_servers=mcp_servers,
                 caller_id_exposure=config.caller_id_exposure,
+                greeting=config.greeting,
+                dnc_list=config.dnc_list,
             )
         )
         # Bridge the Twilio start-event customParameters through to
@@ -1167,7 +1227,7 @@ def _create_outbound_helpers(
     # State machine — expect fused voicemail events (ignore raw AMD).
     sm = OutboundCallStateMachine(
         event_bus,
-        classification_timeout_s=float(oc.amd_timeout),
+        classification_timeout_s=float(oc.voicemail_detection.detection_timeout_s),
         max_call_duration_s=oc.max_call_duration_s,
         classification_gate=oc.classification_gate,
         classification_gate_timeout_s=oc.classification_gate_timeout_s,
@@ -1248,17 +1308,12 @@ def _create_outbound_helpers(
             manager = OutboundCallManager(
                 event_bus,
                 from_number=oc.from_number,
-                amd_mode=oc.amd_mode,
-                async_amd=oc.async_amd,
-                amd_timeout=oc.amd_timeout,
-                speech_threshold=oc.speech_threshold,
-                speech_end_threshold=oc.speech_end_threshold,
-                silence_timeout=oc.silence_timeout,
                 enable_realtime_transcription=oc.enable_realtime_transcription,
                 twilio_account_sid=oc.twilio_account_sid,
                 twilio_auth_token=oc.twilio_auth_token,
                 twiml_url=oc.twiml_url,
                 status_callback_url=oc.status_callback_url,
+                **oc.voicemail_detection.to_twilio_params(),
             )
             helpers.append(manager)
         except ImportError:

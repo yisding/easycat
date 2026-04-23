@@ -12,6 +12,7 @@ import base64
 import json
 import logging
 import struct
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,7 +21,13 @@ from websockets.asyncio.server import ServerConnection
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.audio_utils import resample
-from easycat.events import DTMF, EventBus, PlaybackMarkAck
+from easycat.events import (
+    DTMF,
+    CallAnswered,
+    CallEnded,
+    EventBus,
+    PlaybackMarkAck,
+)
 from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
 
 logger = logging.getLogger(__name__)
@@ -80,6 +87,7 @@ class TwilioTransport(_ServerTransportBase):
         # extracted from the ``<Stream>`` customParameters flows through
         # to ``session.call_identity`` without the app doing plumbing.
         self._identity_sink: Any = None
+        self._answered_at: float | None = None
 
         self._mark_counter = 0
 
@@ -215,14 +223,34 @@ class TwilioTransport(_ServerTransportBase):
         if event == "connected":
             logger.debug("Twilio connected event: protocol=%s", msg.get("protocol"))
         elif event == "start":
-            self._handle_start(msg)
+            await self._handle_start(msg)
         elif event == "media":
             await self._handle_media(msg)
         elif event == "stop":
             logger.info("Twilio stream stopped (streamSid=%s)", self._stream_sid)
+            # Emit the inbound-direction mirror of the outbound call
+            # manager's ``CallEnded`` event so observers like
+            # ``CallDispositionTracker`` and ``NumberHealthMonitor``
+            # see the same lifecycle regardless of direction.
+            if self._event_bus is not None and self._call_sid is not None:
+                duration = None
+                if self._answered_at is not None:
+                    duration = max(0.0, time.monotonic() - self._answered_at)
+                await self._event_bus.emit(
+                    CallEnded(
+                        call_sid=self._call_sid,
+                        duration_s=duration,
+                        number=(
+                            self._call_identity.caller_number
+                            if self._call_identity is not None
+                            else None
+                        ),
+                    )
+                )
             # Explicitly end the current audio stream so receive_audio() can terminate.
             self._stream_sid = None
             self._call_sid = None
+            self._answered_at = None
             self._enqueue_sentinel()
         elif event == "mark":
             mark_name = msg.get("mark", {}).get("name", "")
@@ -234,14 +262,18 @@ class TwilioTransport(_ServerTransportBase):
         else:
             logger.debug("Unknown Twilio event: %s", event)
 
-    def _handle_start(self, msg: dict[str, Any]) -> None:
+    async def _handle_start(self, msg: dict[str, Any]) -> None:
         """Extract stream metadata from the ``start`` message.
 
         Twilio's Media Streams ``start`` payload carries streamSid /
         callSid plus anything you pass through as ``<Parameter>``
-        children of the TwiML ``<Stream>``.  Common convention is to
-        forward the inbound ``From`` / ``To`` / ``CallerName`` HTTP
-        webhook fields so the voice pipeline sees who's on the line:
+        children of the TwiML ``<Stream>``.  The convention — emitted
+        by :func:`twiml_connect_stream` when
+        ``forward_caller_id=True`` — is to forward the inbound
+        ``From``, ``To``, ``CallerName`` *and* Twilio's geographic
+        fields (``FromCity``, ``FromState``, ``FromZip``,
+        ``FromCountry``) so the voice pipeline sees where the caller
+        is without a secondary Lookup API round-trip:
 
         .. code-block:: xml
 
@@ -249,13 +281,22 @@ class TwilioTransport(_ServerTransportBase):
               <Parameter name="From" value="{{From}}"/>
               <Parameter name="To" value="{{To}}"/>
               <Parameter name="CallerName" value="{{CallerName}}"/>
+              <Parameter name="FromCity" value="{{FromCity}}"/>
+              <Parameter name="FromState" value="{{FromState}}"/>
+              <Parameter name="FromZip" value="{{FromZip}}"/>
+              <Parameter name="FromCountry" value="{{FromCountry}}"/>
             </Stream>
+
+        This method also emits a :class:`~easycat.events.CallAnswered`
+        event so observers get a consistent inbound + outbound
+        lifecycle.
         """
         from easycat.session._types import CallIdentity
 
         start = msg.get("start", {})
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
+        self._answered_at = time.monotonic()
 
         # customParameters is a dict keyed by the ``name`` attribute.
         params: dict[str, str] = {}
@@ -268,6 +309,10 @@ class TwilioTransport(_ServerTransportBase):
         caller = params.pop("From", "") or params.pop("from", "")
         called = params.pop("To", "") or params.pop("to", "")
         display_name = params.pop("CallerName", None) or params.pop("caller_name", None)
+        city = params.pop("FromCity", "") or params.pop("from_city", "")
+        state = params.pop("FromState", "") or params.pop("from_state", "")
+        zip_code = params.pop("FromZip", "") or params.pop("from_zip", "")
+        country = params.pop("FromCountry", "") or params.pop("from_country", "")
 
         identity = CallIdentity(
             caller_number=caller,
@@ -275,6 +320,10 @@ class TwilioTransport(_ServerTransportBase):
             direction="inbound",
             display_name=display_name,
             call_sid=self._call_sid,
+            city=city or None,
+            state=state or None,
+            zip_code=zip_code or None,
+            country=country or None,
             custom_fields=params,
         )
         self._call_identity = identity
@@ -283,6 +332,9 @@ class TwilioTransport(_ServerTransportBase):
                 self._identity_sink(identity)
             except Exception:
                 logger.debug("Identity sink raised on start", exc_info=True)
+
+        if self._event_bus is not None and self._call_sid:
+            await self._event_bus.emit(CallAnswered(call_sid=self._call_sid, answered_by="human"))
 
         logger.info(
             "Twilio stream started: streamSid=%s callSid=%s from=%s to=%s",
@@ -643,11 +695,20 @@ def twiml_connect_stream(
 
     merged: dict[str, str] = {}
     if forward_caller_id:
+        # Twilio's inbound voice webhook carries these eight fields by
+        # default; forwarding them all keeps ``CallIdentity`` fully
+        # populated without an extra Lookup API round-trip.  Apps that
+        # don't want geo metadata can set ``forward_caller_id=False``
+        # and pass their own minimal ``parameters`` dict.
         merged.update(
             {
                 "From": "{{From}}",
                 "To": "{{To}}",
                 "CallerName": "{{CallerName}}",
+                "FromCity": "{{FromCity}}",
+                "FromState": "{{FromState}}",
+                "FromZip": "{{FromZip}}",
+                "FromCountry": "{{FromCountry}}",
             }
         )
     if parameters:
@@ -655,8 +716,7 @@ def twiml_connect_stream(
 
     if not merged:
         stream = (
-            f"    <Stream url={quoteattr(websocket_url)} "
-            f"track={quoteattr(track)}{status_attr} />"
+            f"    <Stream url={quoteattr(websocket_url)} track={quoteattr(track)}{status_attr} />"
         )
     else:
         param_lines = "\n".join(

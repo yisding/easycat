@@ -79,12 +79,18 @@ name, and any extra fields you pass) onto
 Enable the outbound pipeline via `EasyCatConfig.telephony`:
 
 ```python
-from easycat import EasyCatConfig, TelephonyConfig, create_session
-from easycat.config import OutboundCallConfig
+from easycat import (
+    EasyCatConfig,
+    OutboundCallConfig,
+    TelephonyConfig,
+    VoicemailDetectionConfig,
+    create_session,
+)
 
 config = EasyCatConfig(
     openai_api_key="…",
     agent=your_agent,
+    greeting="Hi, this is Lucy from Example Health.",
     telephony=TelephonyConfig(
         enable_outbound_call_manager=True,
         outbound=OutboundCallConfig(
@@ -93,6 +99,10 @@ config = EasyCatConfig(
             twilio_auth_token="…",
             twiml_url="https://your-app.example.com/outbound.twiml",
             status_callback_url="https://your-app.example.com/status",
+            voicemail_detection=VoicemailDetectionConfig(
+                mode="detect_end_of_greeting",  # or "detect"
+                detection_timeout_s=30,
+            ),
         ),
     ),
 )
@@ -108,7 +118,36 @@ With the outbound manager enabled you also get:
 
 When the session places an outbound call via `CallInitiated`,
 `session.call_identity` is stamped with `direction="outbound"` and the
-dialed number.
+dialed number.  `TwilioTransport` mirrors the other direction: on the
+``<Stream>`` start event it parses caller-ID + geographic
+customParameters and emits ``CallAnswered``, so observers like
+``CallDispositionTracker`` see inbound and outbound calls through the
+same lifecycle.
+
+### Bot speaks first
+Set `EasyCatConfig.greeting` to have the bot synthesize a greeting on
+the first `CallAnswered` event.  Works for both inbound (stream
+start) and outbound (callee pickup).  Use this to play an
+AI-disclosure or identification line before the caller's first
+utterance — a requirement under the FCC's 2024 TCPA ruling and TX SB
+140 for outbound AI calls.
+
+### Opt-out auto-detection
+The session listens on every STT final for phrases in
+`easycat.telephony.OPT_OUT_PHRASES` (``"stop calling"``, ``"take me
+off your list"``, ``"opt out"``, …).  On match the session:
+
+1. emits an `OptOutDetected` event carrying the caller number, the
+   matched phrase, and the full transcript text,
+2. adds the caller to `session.dnc_list` when one is attached
+   (pass a shared `DNCList` via `EasyCatConfig.dnc_list`),
+3. enqueues an `EndCallAction(reason="opt_out")` so the call
+   terminates after the agent's current utterance finishes.
+
+Set `SessionConfig.opt_out_detection=False` to opt out of the
+auto-wiring, or pass `opt_out_phrases=("retire me", …)` to replace
+the built-in phrase list (language packs / industry-specific
+terminology).
 
 ### Caller-ID exposure policy
 Control whether the LLM sees the caller's number or only tool code
@@ -129,6 +168,13 @@ config = EasyCatConfig(
     caller_id_exposure="system_message",
 )
 ```
+
+### Transport kind
+Tools that should behave differently on a phone call vs. a browser
+session read `session.transport_kind` — one of `"telephony"`,
+`"webrtc"`, `"websocket"`, `"local"`, `"noop"`, or `"custom"`.  Use
+it to skip "open this URL" prompts on phone calls or mute emoji in
+voice-only surfaces.
 
 ## Session lifecycle
 
