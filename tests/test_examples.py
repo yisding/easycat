@@ -112,22 +112,70 @@ def test_custom_stt_provider_example_imports():
     assert callable(custom_stt_provider.main)
 
 
-def test_deepgram_stt_example_imports():
-    import examples.deepgram_stt as deepgram_stt
+def test_deepgram_voice_example_imports():
+    import examples.deepgram_voice as deepgram_voice
 
-    assert callable(deepgram_stt.main)
+    assert callable(deepgram_voice.main)
 
 
-def test_elevenlabs_tts_example_imports():
-    import examples.elevenlabs_tts as elevenlabs_tts
+def test_elevenlabs_voice_example_imports():
+    import examples.elevenlabs_voice as elevenlabs_voice
 
-    assert callable(elevenlabs_tts.main)
+    assert callable(elevenlabs_voice.main)
 
 
 def test_cartesia_voice_example_imports():
     import examples.cartesia_voice as cartesia_voice
 
     assert callable(cartesia_voice.main)
+
+
+def test_output_processors_example_imports():
+    import examples.output_processors as output_processors
+
+    assert callable(output_processors.main)
+
+
+def test_agent_event_subscription_example_imports():
+    import examples.agent_event_subscription as agent_event_subscription
+
+    assert callable(agent_event_subscription.main)
+
+
+def test_vad_backends_example_imports():
+    import examples.vad_backends as vad_backends
+
+    assert callable(vad_backends.main)
+
+
+def test_noise_reduction_backends_example_imports():
+    import examples.noise_reduction_backends as noise_reduction_backends
+
+    assert callable(noise_reduction_backends.main)
+
+
+def test_responses_api_bridge_example_imports():
+    import examples.responses_api_bridge as responses_api_bridge
+
+    assert callable(responses_api_bridge.main)
+
+
+def test_echo_cancellation_example_imports():
+    import examples.echo_cancellation as echo_cancellation
+
+    assert callable(echo_cancellation.main)
+
+
+def test_reconnecting_ws_client_example_imports():
+    import examples.reconnecting_ws_client as reconnecting_ws_client
+
+    assert callable(reconnecting_ws_client.main)
+
+
+def test_telephony_helpers_example_imports():
+    import examples.telephony_helpers as telephony_helpers
+
+    assert callable(telephony_helpers.main)
 
 
 def test_debug_bundle_example_imports():
@@ -184,12 +232,18 @@ def _python_executable() -> str:
         "examples/smart_turn_demo.py",
         "examples/combined_providers.py",
         "examples/cartesia_voice.py",
-        "examples/deepgram_stt.py",
-        "examples/elevenlabs_tts.py",
+        "examples/deepgram_voice.py",
+        "examples/elevenlabs_voice.py",
         "examples/debug_bundle.py",
         "examples/custom_stt_provider.py",
         "examples/custom_tts_provider.py",
         "examples/custom_vad_provider.py",
+        "examples/output_processors.py",
+        "examples/agent_event_subscription.py",
+        "examples/vad_backends.py",
+        "examples/noise_reduction_backends.py",
+        "examples/responses_api_bridge.py",
+        "examples/echo_cancellation.py",
     ],
 )
 def test_examples_can_run_as_scripts_without_package_import_errors(script_path: str):
