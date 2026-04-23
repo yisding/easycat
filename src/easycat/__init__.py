@@ -11,23 +11,10 @@ keep CLI cold-start (``easycat --version``, ``easycat --help``) within
 a 300ms budget.  Heavy provider modules (transports, stages, telephony)
 only import when the symbol is actually touched.
 
-Internal plumbing remains importable from submodules for advanced use::
-
-    from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
-    from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
-    from easycat.reconnecting_ws import ReconnectingWebSocket, ReconnectConfig
-    from easycat.health_check import PeriodicHealthChecker, HealthCheckable
-    from easycat.timeouts import with_stt_timeout, with_agent_timeout, with_tts_timeout
-    from easycat.audio_utils import chunk_frames, resample, to_mono, ...
-    from easycat.audio_utils import pcm_to_wav
-    from easycat.stt.base import STTBase
-    from easycat.tts.base import TTSBase
-    from easycat.stt import create_stt_provider
-    from easycat.tts.factory import create_tts_provider, TTSProviderConfig
-    from easycat.tts.elevenlabs_tts import ElevenLabsStreamMode
-    from easycat.events import STTEvent, STTEventType, TTSEvent, TTSEventType, WordTimestamp
-    from easycat.telephony import DTMFAggregator, VoicemailDetector, ...
-    from easycat.transports.twilio_media import mulaw_to_pcm16, pcm16_to_mulaw, ...
+Less-common surfaces (stage internals, recorder types, bridge
+boilerplate, telephony helpers) stay reachable from their submodules —
+this module keeps the top-level namespace focused on what an
+application author touches.
 """
 
 from __future__ import annotations
@@ -35,45 +22,37 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING
 
-# Mapping of public-name → (submodule-path, attribute-name).  Every
-# entry in ``__all__`` MUST appear here.  ``_alias`` lets us rename
-# ``REGISTRY`` → ``ERROR_REGISTRY`` and similar.
 _LAZY_ATTR: dict[str, tuple[str, str]] = {}
 
 
-def _register(module: str, *names: str, _alias: dict[str, str] | None = None) -> None:
+def _register(module: str, *names: str) -> None:
     for name in names:
         _LAZY_ATTR[name] = (module, name)
-    if _alias:
-        for public, attr in _alias.items():
-            _LAZY_ATTR[public] = (module, attr)
 
 
-# ── Core session & agent ──────────────────────────────────────────
+# ── Top-level factories and config ────────────────────────────────
 
 _register(
-    "easycat.integrations.agents._agent_runner",
-    "AgentRunner",
-    "AgentRunnerConfig",
+    "easycat.config",
+    "EasyCatConfig",
+    "TelephonyConfig",
+    "create_session",
+    "create_text_session",
 )
 _register(
-    "easycat.integrations.agents._helpers",
-    "INTERRUPTION_NOTE",
-    "serialize_output",
+    "easycat.helpers",
+    "attach_runtime_feedback",
+    "require_env",
+    "run",
+    "wait_for_shutdown_signal",
 )
-_register("easycat.integrations.agents._factory", "auto_adapt_agent")
+_register("easycat.quick", "speak", "transcribe_file")
+
+# ── Core session + agent surface ──────────────────────────────────
+
 _register("easycat.cancel", "CancelToken")
-_register(
-    "easycat.smart_turn",
-    "SmartTurnConfig",
-    "SmartTurnONNX",
-    "SmartTurnProvider",
-    "SmartTurnResult",
-    "create_smart_turn",
-)
-_register("easycat.session.action_executors", "CoreSessionActionExecutor")
 _register("easycat.session._session", "Session")
-_register("easycat.session._types", "SessionConfig", "TurnState")
+_register("easycat.session._types", "Agent", "SessionConfig", "TurnState")
 _register(
     "easycat.session.actions",
     "CustomAction",
@@ -97,23 +76,49 @@ _register(
     "TurnManagerState",
     "TurnMode",
 )
-_register("easycat.session._types", "Agent")
-_register("easycat.quick", "speak", "transcribe_file")
+
+# ── Agent framework bridges ───────────────────────────────────────
+
+_register(
+    "easycat.integrations.agents._agent_runner",
+    "AgentRunner",
+    "AgentRunnerConfig",
+)
+_register("easycat.integrations.agents._factory", "auto_adapt_agent")
+_register(
+    "easycat.integrations.agents.base",
+    "AgentBridgeEvent",
+    "AgentTurnInput",
+    "ExternalAgentBridge",
+)
+
+# ── Speech pipeline knobs ─────────────────────────────────────────
+
+_register(
+    "easycat.smart_turn",
+    "SmartTurnConfig",
+    "SmartTurnONNX",
+    "SmartTurnProvider",
+    "SmartTurnResult",
+    "create_smart_turn",
+)
 _register(
     "easycat.llm_output_processing",
     "LLMOutputProcessor",
-    "MarkdownStripProcessor",
     "PauseProcessor",
     "PhoneticReplacementProcessor",
     "default_pronunciation_processors",
 )
 _register(
-    "easycat.config",
-    "EasyCatConfig",
-    "TelephonyConfig",
-    "create_session",
-    "create_text_session",
+    "easycat.timeouts",
+    "AgentTimeoutError",
+    "STTTimeoutError",
+    "TimeoutConfig",
+    "TTSTimeoutError",
 )
+
+# ── Debug / journal runtime ───────────────────────────────────────
+
 _register(
     "easycat.runtime",
     "ExecutionJournal",
@@ -122,50 +127,24 @@ _register(
     "JournalView",
 )
 _register(
-    "easycat.errors",
-    "EasyCatError",
-    "ErrorEntry",
-    _alias={"ERROR_REGISTRY": "REGISTRY"},
+    "easycat.runtime.replay",
+    "ReplayFidelity",
+    "ReplaySpec",
+    "ToolReplayPolicy",
 )
-_register(
-    "easycat.helpers",
-    "attach_runtime_feedback",
-    "require_env",
-    "run",
-    "wait_for_shutdown_signal",
-)
-
-# ── Debug-first runtime ─────────────────────────────────────────
-
 _register("easycat.debug.bundle", "RunBundle")
 _register("easycat.debug.export", "export_debug_bundle")
 _register("easycat.debug.testing", "load_bundle")
-_register(
-    "easycat.integrations.agents.base",
-    "AgentBridgeEvent",
-    "AgentTurnInput",
-    "CancellationMode",
-    "ExternalAgentBridge",
-)
-_register("easycat.stages.base", "Stage")
 
-# ── EasyCat-level events ─────────────────────────────────────────
+# ── Errors ────────────────────────────────────────────────────────
+
+_register("easycat.errors", "EasyCatError", "ErrorEntry")
+
+# ── EasyCat-level events ──────────────────────────────────────────
 
 _register(
     "easycat.events",
-    "ACTION_EVENTS",
-    "AGENT_EVENTS",
     "ALL_EVENTS",
-    "AUDIO_EVENTS",
-    "ERROR_EVENTS",
-    "INTERRUPTION_EVENTS",
-    "LIFECYCLE_EVENTS",
-    "RECONNECT_EVENTS",
-    "STT_EVENTS",
-    "TELEPHONY_EVENTS",
-    "TOOL_EVENTS",
-    "TTS_EVENTS",
-    "VAD_EVENTS",
     "AgentDelta",
     "AgentFinal",
     "AgentRequestStarted",
@@ -244,6 +223,8 @@ _register(
 )
 _register(
     "easycat.stt",
+    "CartesiaSTT",
+    "CartesiaSTTConfig",
     "DeepgramSTT",
     "DeepgramSTTConfig",
     "ElevenLabsSTT",
@@ -265,6 +246,7 @@ _register(
     "create_tts_provider",
     "parse_tts_string",
 )
+_register("easycat.tts.cartesia_tts", "CartesiaTTS", "CartesiaTTSConfig")
 _register("easycat.tts.deepgram_tts", "DeepgramTTS", "DeepgramTTSConfig")
 _register("easycat.tts.elevenlabs_tts", "ElevenLabsTTS", "ElevenLabsTTSConfig")
 _register("easycat.tts.openai_tts", "OpenAITTS", "OpenAITTSConfig")
@@ -306,16 +288,6 @@ _register(
     "WebSocketTransportConfig",
 )
 
-# ── Configuration & errors ────────────────────────────────────────
-
-_register(
-    "easycat.timeouts",
-    "AgentTimeoutError",
-    "STTTimeoutError",
-    "TimeoutConfig",
-    "TTSTimeoutError",
-)
-
 
 if TYPE_CHECKING:
     # Static-analysis view of every lazy export.  None of these imports
@@ -344,28 +316,10 @@ if TYPE_CHECKING:
         PassthroughAEC,
         create_echo_canceller,
     )
-    from easycat.errors import (
-        REGISTRY as ERROR_REGISTRY,
-    )
-    from easycat.errors import (
-        EasyCatError,
-        ErrorEntry,
-    )
+    from easycat.errors import EasyCatError, ErrorEntry
     from easycat.events import (
-        ACTION_EVENTS,
-        AGENT_EVENTS,
         ALL_EVENTS,
-        AUDIO_EVENTS,
         DTMF,
-        ERROR_EVENTS,
-        INTERRUPTION_EVENTS,
-        LIFECYCLE_EVENTS,
-        RECONNECT_EVENTS,
-        STT_EVENTS,
-        TELEPHONY_EVENTS,
-        TOOL_EVENTS,
-        TTS_EVENTS,
-        VAD_EVENTS,
         AgentDelta,
         AgentFinal,
         AgentRequestStarted,
@@ -410,19 +364,13 @@ if TYPE_CHECKING:
         AgentRunnerConfig,
     )
     from easycat.integrations.agents._factory import auto_adapt_agent
-    from easycat.integrations.agents._helpers import (
-        INTERRUPTION_NOTE,
-        serialize_output,
-    )
     from easycat.integrations.agents.base import (
         AgentBridgeEvent,
         AgentTurnInput,
-        CancellationMode,
         ExternalAgentBridge,
     )
     from easycat.llm_output_processing import (
         LLMOutputProcessor,
-        MarkdownStripProcessor,
         PauseProcessor,
         PhoneticReplacementProcessor,
         default_pronunciation_processors,
@@ -449,9 +397,13 @@ if TYPE_CHECKING:
         JournalRecordKind,
         JournalView,
     )
+    from easycat.runtime.replay import (
+        ReplayFidelity,
+        ReplaySpec,
+        ToolReplayPolicy,
+    )
     from easycat.session._session import Session
     from easycat.session._types import Agent, SessionConfig, TurnState
-    from easycat.session.action_executors import CoreSessionActionExecutor
     from easycat.session.actions import (
         CustomAction,
         EndCallAction,
@@ -473,8 +425,9 @@ if TYPE_CHECKING:
         SmartTurnResult,
         create_smart_turn,
     )
-    from easycat.stages.base import Stage
     from easycat.stt import (
+        CartesiaSTT,
+        CartesiaSTTConfig,
         DeepgramSTT,
         DeepgramSTTConfig,
         ElevenLabsSTT,
@@ -516,6 +469,7 @@ if TYPE_CHECKING:
         WebSocketTransport,
         WebSocketTransportConfig,
     )
+    from easycat.tts.cartesia_tts import CartesiaTTS, CartesiaTTSConfig
     from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
     from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
     from easycat.tts.factory import (

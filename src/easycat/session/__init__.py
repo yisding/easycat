@@ -20,34 +20,18 @@ from typing import TYPE_CHECKING
 _LAZY: dict[str, tuple[str, str]] = {
     # Core Session class
     "Session": ("easycat.session._session", "Session"),
-    # Streaming helpers
-    "AgentStreamResult": ("easycat.session._streaming", "AgentStreamResult"),
-    "consume_agent_stream": ("easycat.session._streaming", "consume_agent_stream"),
     # Per-turn state
     "TurnContext": ("easycat.session._turn_context", "TurnContext"),
     # Session types
     "Agent": ("easycat.session._types", "Agent"),
     "SessionConfig": ("easycat.session._types", "SessionConfig"),
-    "SessionHelper": ("easycat.session._types", "SessionHelper"),
     "TurnState": ("easycat.session._types", "TurnState"),
-    # Text / interruption helpers (promoted from underscore-private modules)
+    # Interruption helpers (public for bridge authors inspecting sessions)
     "estimate_and_notify_interruption": (
         "easycat.session.interruption",
         "estimate_and_notify_interruption",
     ),
-    "has_unclosed_markdown_delimiters": (
-        "easycat.session.text_utils",
-        "has_unclosed_markdown_delimiters",
-    ),
-    "split_at_sentence_boundaries": (
-        "easycat.session.text_utils",
-        "split_at_sentence_boundaries",
-    ),
     # Action executor + actions
-    "CoreSessionActionExecutor": (
-        "easycat.session.action_executors",
-        "CoreSessionActionExecutor",
-    ),
     "CustomAction": ("easycat.session.actions", "CustomAction"),
     "EndCallAction": ("easycat.session.actions", "EndCallAction"),
     "SendDTMFAction": ("easycat.session.actions", "SendDTMFAction"),
@@ -65,13 +49,8 @@ _LAZY: dict[str, tuple[str, str]] = {
 if TYPE_CHECKING:
     # Static-analysis view — imports never execute at runtime.
     from easycat.session._session import Session
-    from easycat.session._streaming import (
-        AgentStreamResult,
-        consume_agent_stream,
-    )
     from easycat.session._turn_context import TurnContext
-    from easycat.session._types import Agent, SessionConfig, SessionHelper, TurnState
-    from easycat.session.action_executors import CoreSessionActionExecutor
+    from easycat.session._types import Agent, SessionConfig, TurnState
     from easycat.session.actions import (
         CustomAction,
         EndCallAction,
@@ -86,10 +65,6 @@ if TYPE_CHECKING:
         TransferPlan,
     )
     from easycat.session.interruption import estimate_and_notify_interruption
-    from easycat.session.text_utils import (
-        has_unclosed_markdown_delimiters,
-        split_at_sentence_boundaries,
-    )
 
 
 def __getattr__(name: str):  # PEP 562

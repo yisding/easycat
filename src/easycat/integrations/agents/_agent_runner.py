@@ -47,7 +47,6 @@ class AgentRunnerConfig:
     """Configuration for AgentRunner."""
 
     timeout: float | None = 30.0
-    enable_tracing: bool = True  # kept for compat but is a no-op
 
 
 # ── AgentRunner ─────────────────────────────────────────────────────

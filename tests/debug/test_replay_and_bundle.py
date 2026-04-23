@@ -674,17 +674,6 @@ class TestStageReplay:
         result = stage.replay(spec)
         assert result is None
 
-    def test_telephony_artifact(self):
-        from easycat.stages.telephony import TelephonyStage
-
-        class _Stub:
-            pass
-
-        stage = TelephonyStage(_Stub())
-        spec = StubReplaySpec(fidelity="artifact")
-        result = stage.replay(spec)
-        assert result is None
-
     def test_turn_artifact(self):
         from easycat.stages.turn import TurnStage
 

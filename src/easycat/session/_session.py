@@ -74,6 +74,10 @@ from easycat.runtime.journal import (
 )
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._streaming import consume_agent_stream
+from easycat.session._text import (
+    _chunk_has_speech_energy,
+    _text_for_estimation_timeline,
+)
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import (
     _TM_TO_TURN_STATE,
@@ -90,10 +94,6 @@ from easycat.session.interruption import (
 from easycat.session.interruption import (
     notify_bridge_interruption as _notify_bridge_interruption,
 )
-from easycat.session.text_utils import (
-    _chunk_has_speech_energy,
-)
-from easycat.session.tts_helpers import _text_for_estimation_timeline
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
 from easycat.stages.base import (
@@ -102,8 +102,8 @@ from easycat.stages.base import (
 from easycat.stages.base import (
     InterruptSignal as _InterruptSignal,
 )
+from easycat.stages.base import journal_append_control_signal as _journal_control_signal
 from easycat.stages.stt import STTStage
-from easycat.stages.telephony import TelephonyStage
 from easycat.stages.transport import TransportStage
 from easycat.stages.tts import TTSStage
 from easycat.stages.turn import TurnStage
@@ -264,7 +264,6 @@ class Session:
 
         # Reliability/observability config
         self._timeout_config = cfg.timeout_config or self._default_timeout_config()
-        self._metrics = None  # Legacy field, retained for attribute access only
         self._journal = cfg.journal
         self._journal_view: JournalView | None = (
             JournalView(self._journal) if self._journal is not None else None
@@ -387,10 +386,6 @@ class Session:
             self._turn_manager._config.endpoint_detector  # type: ignore[attr-defined]
             if self._turn_manager._config is not None  # type: ignore[attr-defined]
             else None,
-            journal=self._journal,
-        )
-        self._telephony_stage = TelephonyStage(
-            self._telephony_helpers[0] if self._telephony_helpers else None,
             journal=self._journal,
         )
         # Hand the TTS stage to the synthesizer so the existing iteration
@@ -663,7 +658,6 @@ class Session:
             self._stt_stage,
             self._vad_stage,
             self._audio_stage,
-            self._telephony_stage,
         )
         for stage in ordered:
             if stage is None:
@@ -672,6 +666,11 @@ class Session:
                 await stage.handle_upstream(signal, self._run_ctx)
             except Exception:  # noqa: BLE001 - never break cancel path
                 logger.exception("Stage %s.handle_upstream failed", stage.name)
+        # Telephony helpers journal the signal without a dedicated stage
+        # wrapper: one bare control-signal record per helper keeps the
+        # observability identical to the old stage path.
+        if self._telephony_helpers:
+            _journal_control_signal(self._run_ctx, stage="telephony", signal=signal)
         # Annotate the trailing signal record with the originating cause
         # so the replay UI can display "interrupt — barge_in" instead of
         # bare signal IDs.
@@ -2056,66 +2055,6 @@ class Session:
 
         await self._emit(AgentRequestStarted())
         await self._run_streaming_agent(transcript, token)
-
-    # ── Agent invocation helper ────────────────────────────────
-
-    async def _invoke_agent(self, transcript: str) -> str:
-        """Invoke the basic agent with optional timeout. Returns the response."""
-        turn = self._turn or self._no_turn
-        if self._timeout_config and self._timeout_config.agent_timeout:
-            return await with_agent_timeout(
-                self._agent_stage.execute(transcript, self._run_ctx, turn),
-                timeout=self._timeout_config.agent_timeout,
-                event_bus=self.event_bus,
-            )
-        return await self._agent_stage.execute(transcript, self._run_ctx, turn)
-
-    # ── Basic agent path ───────────────────────────────────────
-
-    async def _run_basic_agent(self, transcript: str, token: CancelToken | None) -> None:
-        """Non-streaming agent path: invoke run(), emit events, synthesize TTS."""
-        turn = self._turn
-        try:
-            agent_response = await self._invoke_agent(transcript)
-        except asyncio.CancelledError:
-            raise
-        except AgentTimeoutError:
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-        except Exception as exc:
-            logger.exception("Agent error")
-            await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-
-        if token and token.is_cancelled:
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-
-        if self._strip_markdown:
-            original_response = agent_response
-            stripped = strip_markdown(agent_response, normalize_code_spans=True)
-            self._record_markdown_strip(
-                phase="basic_final",
-                original_text=original_response,
-                stripped_text=stripped,
-                turn_id=turn.id if turn is not None else None,
-            )
-            if stripped != original_response:
-                agent_response = stripped
-                self.agent.replace_last_assistant_text(stripped)
-
-        await self._emit(AgentDelta(text=agent_response))
-        await self._emit(AgentFinal(text=agent_response, structured_output=None))
-
-        action_outcome = await self._synthesize_tts(
-            self._prepare_tts_payload(agent_response, is_streaming=False, is_final=True), token
-        )
-        if action_outcome.stop_session:
-            await self.stop()
 
     # ── Streaming agent path ───────────────────────────────────
 
