@@ -139,9 +139,7 @@ def test_session_actions_pydantic_example_imports(monkeypatch: pytest.MonkeyPatc
 
 
 def test_pydantic_ai_workflow_voice_example_imports(monkeypatch: pytest.MonkeyPatch):
-    _load_slim_example(
-        monkeypatch, "examples.pydantic_ai_workflow_voice", framework="pydantic_ai"
-    )
+    _load_slim_example(monkeypatch, "examples.pydantic_ai_workflow_voice", framework="pydantic_ai")
 
 
 # ── Examples that still use ``def main()`` ──────────────────────────
