@@ -21,6 +21,24 @@ To stop:
 docker compose -f docker/compose.yaml down
 ```
 
+## Secrets: use a `.env` file, don't bake them in
+
+Prefer compose's `.env` file (read by the client, expanded into the
+container's environment) over passing secrets as build args:
+
+```bash
+# docker/.env  — git-ignored, never copied into the image
+OPENAI_API_KEY=sk-...
+```
+
+Then `docker compose -f docker/compose.yaml up` picks it up
+automatically.  The repo's `.dockerignore` excludes `.env` and `.env.*`
+from the build context as a second line of defence — if you fork the
+Dockerfile to use a wildcard `COPY . /app`, secrets still won't ship.
+
+Never use `ARG OPENAI_API_KEY=...` in the Dockerfile: build args are
+recoverable from image history.
+
 ## What the image contains
 
 - `python:3.11-slim-bookworm` runtime

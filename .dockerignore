@@ -26,3 +26,12 @@ docs/
 # Local dev config
 .pre-commit-config.yaml
 .python-version
+
+# Secrets — never bake these into the image.  Compose can still read a
+# sibling .env file for variable substitution; it is consumed by the
+# client, not sent to the daemon as part of the build context.
+.env
+.env.*
+!.env.example
+**/*.pem
+**/*.key
