@@ -1,8 +1,7 @@
 """OpenAI Agents SDK bridge for the debug-first runtime.
 
-Ports the core logic from ``easycat.agents.openai_agents.OpenAIAgentsAdapter``
-into the ``ExternalAgentBridge`` protocol, recording execution state to the
-journal via ``AgentRecorder``.
+Implements :class:`ExternalAgentBridge` on top of the ``agents`` package
+and records execution state to the journal via :class:`AgentRecorder`.
 """
 
 from __future__ import annotations

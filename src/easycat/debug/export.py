@@ -151,26 +151,11 @@ def _manifest_to_dict(manifest: Manifest) -> dict[str, Any]:
 
 def _collect_provider_versions(session: Any) -> dict[str, Any]:
     versions: dict[str, Any] = {}
-    for attr in (
-        "_stt",
-        "_tts",
-        "_transport",
-        "_vad",
-        "_noise_reducer",
-        "_echo_canceller",
-        "stt",
-        "tts",
-        "transport",
-        "vad",
-        "noise_reducer",
-        "echo_canceller",
-    ):
+    for attr in ("stt", "tts", "transport", "vad", "noise_reducer", "echo_canceller"):
         provider = getattr(session, attr, None)
         if provider is not None and hasattr(provider, "version_info"):
             try:
-                vi = provider.version_info()
-                role = attr.lstrip("_")
-                versions[role] = vi
+                versions[attr] = provider.version_info()
             except Exception:
                 pass
     return versions

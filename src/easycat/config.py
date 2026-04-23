@@ -272,6 +272,86 @@ class EasyCatConfigError(ValueError):
 
 
 _VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
+_VALID_DEBUG = {"off", "light", "full"}
+_VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
+_VALID_JOURNAL_RETENTION = {"archive", "delete"}
+
+
+def _validate_common(
+    *,
+    debug: str,
+    journal_backend: str,
+    journal_retention: str,
+    mcp_servers: list[str] | None = None,
+    session_id: str | None = None,
+    agent: Any | None = None,
+    agent_model: str | None = None,
+) -> None:
+    """Validate the shared fields used by both session factories."""
+    if debug not in _VALID_DEBUG:
+        raise ValueError(f"Invalid debug={debug!r}. Must be one of {sorted(_VALID_DEBUG)}.")
+    if journal_backend not in _VALID_JOURNAL_BACKEND:
+        raise ValueError(
+            f"Invalid journal_backend={journal_backend!r}. "
+            f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
+        )
+    if journal_retention not in _VALID_JOURNAL_RETENTION:
+        raise ValueError(
+            f"Invalid journal_retention={journal_retention!r}. "
+            f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
+        )
+    if mcp_servers is not None:
+        for uri in mcp_servers:
+            if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
+                raise EasyCatConfigError(
+                    f"Invalid MCP server URI: {uri!r}. "
+                    f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
+                )
+    if session_id is not None and (
+        "/" in session_id or "\\" in session_id or ".." in session_id
+    ):
+        raise EasyCatConfigError(
+            f"session_id must not contain path separators or '..': {session_id!r}"
+        )
+    if isinstance(agent, str):
+        from urllib.parse import urlparse
+
+        parsed = urlparse(agent)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            if agent_model is None:
+                raise EasyCatConfigError(
+                    "agent_model is required when agent is a URL string. "
+                    "Set agent_model to the model identifier the remote "
+                    "Responses API server should use."
+                )
+
+
+def _inject_agent_runtime(
+    agent: Any,
+    *,
+    mcp_servers: tuple[str, ...] | list[str] = (),
+    agent_model: str | None = None,
+    remote_agent_api_key: str | None = None,
+) -> None:
+    """Push session-level MCP/model/key settings into the bridge.
+
+    Unwraps an ``AgentRunner`` to reach the inner bridge.  Does not
+    return a new agent — mutates ``_mcp_servers`` / ``_model`` /
+    ``_api_key`` on the bridge in place, which is the shape bridges
+    expect.
+    """
+    from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+
+    inner = agent._agent if isinstance(agent, AgentRunner) else agent
+    if hasattr(inner, "_mcp_servers"):
+        # Always overwrite (even with empty tuple) so a bridge reused
+        # across sessions doesn't leak a previous MCP list.
+        inner._mcp_servers = list(mcp_servers)
+    if isinstance(inner, RemoteResponsesAPIBridge):
+        if agent_model:
+            inner._model = agent_model
+        if remote_agent_api_key:
+            inner._api_key = remote_agent_api_key
 
 
 @dataclass
@@ -320,23 +400,14 @@ class EasyCatConfig:
     record_to: str | Path | None = None
 
     def __post_init__(self) -> None:
-        _VALID_DEBUG = {"off", "light", "full"}
-        if self.debug not in _VALID_DEBUG:
-            raise ValueError(
-                f"Invalid debug={self.debug!r}. Must be one of {sorted(_VALID_DEBUG)}."
-            )
-        _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
-        if self.journal_backend not in _VALID_JOURNAL_BACKEND:
-            raise ValueError(
-                f"Invalid journal_backend={self.journal_backend!r}. "
-                f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
-            )
-        _VALID_JOURNAL_RETENTION = {"archive", "delete"}
-        if self.journal_retention not in _VALID_JOURNAL_RETENTION:
-            raise ValueError(
-                f"Invalid journal_retention={self.journal_retention!r}. "
-                f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
-            )
+        _validate_common(
+            debug=self.debug,
+            journal_backend=self.journal_backend,
+            journal_retention=self.journal_retention,
+            mcp_servers=self.mcp_servers,
+            agent=self.agent,
+            agent_model=self.agent_model,
+        )
 
         # Pick up OPENAI_API_KEY for the zero-config case so a bare
         # ``EasyCatConfig(agent=...)`` works when the env var is set —
@@ -422,24 +493,6 @@ class EasyCatConfig:
                     .replace("TTS", " TTS")
                 )
                 raise ValueError(f"{name} requires an API key.")
-        if isinstance(self.agent, str):
-            from urllib.parse import urlparse
-
-            parsed = urlparse(self.agent)
-            if parsed.scheme in ("http", "https") and parsed.netloc:
-                if self.agent_model is None:
-                    raise EasyCatConfigError(
-                        "agent_model is required when agent is a URL string. "
-                        "Set agent_model to the model identifier the remote "
-                        "Responses API server should use."
-                    )
-        if self.mcp_servers is not None:
-            for uri in self.mcp_servers:
-                if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
-                    raise EasyCatConfigError(
-                        f"Invalid MCP server URI: {uri!r}. "
-                        f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
-                    )
 
     # ── Factory presets ──────────────────────────────────────────
     #
@@ -567,20 +620,12 @@ def create_session(config: EasyCatConfig) -> Session:
 
         if config.agent is not None:
             agent = auto_adapt_agent(config.agent, model=config.agent_model)
-            # Unwrap AgentRunner to reach the underlying bridge for MCP /
-            # model / API-key injection.
-            bridge = agent._agent if isinstance(agent, AgentRunner) else agent
-            if hasattr(bridge, "_mcp_servers"):
-                # Always overwrite (even with empty tuple) so a reused bridge
-                # from a prior session doesn't leak old MCP servers.
-                bridge._mcp_servers = list(mcp_servers)
-            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-            if isinstance(bridge, RemoteResponsesAPIBridge):
-                if config.agent_model:
-                    bridge._model = config.agent_model
-                if config.remote_agent_api_key:
-                    bridge._api_key = config.remote_agent_api_key
+            _inject_agent_runtime(
+                agent,
+                mcp_servers=mcp_servers,
+                agent_model=config.agent_model,
+                remote_agent_api_key=config.remote_agent_api_key,
+            )
             if config.wrap_agent and not isinstance(agent, AgentRunner):
                 runner_cfg = config.agent_runner or AgentRunnerConfig()
                 agent = AgentRunner(agent, runner_cfg)
@@ -811,47 +856,17 @@ def create_text_session(
     Raises :class:`RuntimeError` if the caller attempts to call
     :meth:`Session.start` on a text session.
     """
-    # Validate URL-backed agents early (mirrors EasyCatConfig._validate).
-    if isinstance(agent, str):
-        from urllib.parse import urlparse
-
-        parsed = urlparse(agent)
-        if parsed.scheme in ("http", "https") and parsed.netloc:
-            if agent_model is None:
-                raise EasyCatConfigError(
-                    "agent_model is required when agent is a URL string. "
-                    "Set agent_model to the model identifier the remote "
-                    "Responses API server should use."
-                )
-
-    _VALID_DEBUG = {"off", "light", "full"}
-    if debug not in _VALID_DEBUG:
-        raise ValueError(f"Invalid debug={debug!r}. Must be one of {sorted(_VALID_DEBUG)}.")
-    _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
-    if journal_backend not in _VALID_JOURNAL_BACKEND:
-        raise ValueError(
-            f"Invalid journal_backend={journal_backend!r}. "
-            f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
-        )
-    _VALID_JOURNAL_RETENTION = {"archive", "delete"}
-    if journal_retention not in _VALID_JOURNAL_RETENTION:
-        raise ValueError(
-            f"Invalid journal_retention={journal_retention!r}. "
-            f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
-        )
-    if mcp_servers is not None:
-        for uri in mcp_servers:
-            if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
-                raise EasyCatConfigError(
-                    f"Invalid MCP server URI: {uri!r}. "
-                    f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
-                )
+    _validate_common(
+        debug=debug,
+        journal_backend=journal_backend,
+        journal_retention=journal_retention,
+        mcp_servers=mcp_servers,
+        session_id=session_id,
+        agent=agent,
+        agent_model=agent_model,
+    )
 
     sid = session_id or f"session-{uuid4().hex[:12]}"
-    if session_id is not None and ("/" in session_id or "\\" in session_id or ".." in session_id):
-        raise EasyCatConfigError(
-            f"session_id must not contain path separators or '..': {session_id!r}"
-        )
     artifact_store = _create_artifact_store(sid, debug)
     journal = (
         create_journal(
@@ -870,19 +885,14 @@ def create_text_session(
         event_bus = EventBus()
 
         adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
-        # Unwrap AgentRunner to reach the underlying bridge for MCP /
-        # model / API-key injection (mirrors create_session).
-        _bridge = adapted._agent if isinstance(adapted, AgentRunner) else adapted
         _mcp = list(mcp_servers) if mcp_servers else []
-        if hasattr(_bridge, "_mcp_servers"):
-            _bridge._mcp_servers = _mcp
-        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-        if isinstance(_bridge, RemoteResponsesAPIBridge):
-            if agent_model:
-                _bridge._model = agent_model
-            if remote_agent_api_key:
-                _bridge._api_key = remote_agent_api_key
+        if agent is not None:
+            _inject_agent_runtime(
+                adapted,
+                mcp_servers=_mcp,
+                agent_model=agent_model,
+                remote_agent_api_key=remote_agent_api_key,
+            )
         if wrap_agent and not isinstance(adapted, AgentRunner):
             runner_cfg = agent_runner or AgentRunnerConfig()
             adapted = AgentRunner(adapted, runner_cfg)

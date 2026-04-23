@@ -19,13 +19,15 @@ OpenAI Agents SDK, PydanticAI agents, or PydanticAI workflows.
 
 ## Bring your own agent
 EasyCat does not replace your agent framework. Build your agent or workflow with
-your SDK of choice, then wrap it with an EasyCat adapter when creating a session.
+your SDK of choice and hand it to EasyCat — `create_session` auto-detects
+OpenAI Agents SDK and PydanticAI objects via `auto_adapt_agent`, so you don't
+have to wrap them yourself.
 
 ### Quickstart (EasyCatConfig)
 ```python
-from easycat import EasyCatConfig, create_session
-from easycat.agents import OpenAIAgentsAdapter
 from agents import Agent
+
+from easycat import EasyCatConfig, create_session
 
 agent = Agent(
     name="Support",
@@ -34,7 +36,7 @@ agent = Agent(
 
 config = EasyCatConfig(
     openai_api_key="your-api-key",
-    agent=OpenAIAgentsAdapter(agent),
+    agent=agent,
 )
 session = create_session(config)
 ```
@@ -44,6 +46,10 @@ session = create_session(config)
 > the API key, you must supply `stt` and `tts` configs explicitly. For most
 > users, `EasyCatConfig` + `create_session` is the fastest way to get a working
 > pipeline.
+>
+> The underlying bridge classes live in `easycat.integrations.agents`
+> (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`,
+> `RemoteResponsesAPIBridge`) for callers who want to construct them by hand.
 
 ## Session lifecycle
 
@@ -201,15 +207,15 @@ session.unsubscribe_handlers(registrations)
 from agents import Agent
 
 from easycat import Session, SessionConfig
-from easycat.agents import OpenAIAgentsAdapter
+from easycat.integrations.agents import OpenAIAgentsBridge
 
 agent = Agent(
     name="Support",
     instructions="Help customers with account issues.",
 )
 
-adapter = OpenAIAgentsAdapter(agent)
-session = Session(SessionConfig(agent=adapter, ...))
+bridge = OpenAIAgentsBridge(agent=agent)
+session = Session(SessionConfig(agent=bridge, ...))
 ```
 
 ### PydanticAI (idiomatic)
@@ -217,64 +223,52 @@ session = Session(SessionConfig(agent=adapter, ...))
 from pydantic_ai import Agent as PydanticAgent
 
 from easycat import Session, SessionConfig
-from easycat.agents import PydanticAIAdapter
+from easycat.integrations.agents import PydanticAIBridge
 
 pydantic_agent = PydanticAgent(
     "openai:gpt-5.2",
     system_prompt="Help customers with account issues.",
 )
 
-adapter = PydanticAIAdapter(pydantic_agent)
-session = Session(SessionConfig(agent=adapter, ...))
+bridge = PydanticAIBridge(agent=pydantic_agent)
+session = Session(SessionConfig(agent=bridge, ...))
 ```
 
-### PydanticAI workflows (recommended for voice apps)
+### Workflows (recommended for multi-step voice apps)
 
-For many voice apps, the best PydanticAI integration point is not a single
-agent but a workflow object that owns the current specialist/step and decides
-which PydanticAI agent handles each user turn.
-
-This maps well to PydanticAI's programmatic hand-off style:
-- the caller can stay pinned to one specialist across turns
-- you do not pay an extra router-model call on every turn
-- the workflow can keep private per-agent histories while EasyCat only sees the
-  spoken response for the current turn
+For voice apps with step-based control flow, define a workflow object with
+an async `on_user_turn(text) -> str` method and hand it to
+`create_session`.  `auto_adapt_agent` wraps it in a
+`GenericWorkflowBridge`, so no import dance is needed.
 
 ```python
 from easycat import EasyCatConfig, create_session
-from easycat.agents import WorkflowTurnResult
 
 
 class BookingWorkflow:
     def __init__(self) -> None:
-        self.active_agent_id = "flight_search"
         self.flight = None
 
-    async def on_user_turn(self, text: str) -> str | WorkflowTurnResult:
+    async def on_user_turn(self, text: str) -> str:
         if self.flight is None:
             self.flight = {"flight_number": "AK456"}
-            self.active_agent_id = "seat_selection"
-            return WorkflowTurnResult(
-                text="I found flight AK456. What seat would you like?",
-                structured_output=self.flight,
-                active_agent_id=self.active_agent_id,
-            )
-
-        return WorkflowTurnResult(
-            text="Got it. I saved seat 1A for you.",
-            structured_output={"row": 1, "seat": "A"},
-            active_agent_id=self.active_agent_id,
-        )
+            return "I found flight AK456. What seat would you like?"
+        return "Got it. I saved seat 1A for you."
 
 
 workflow = BookingWorkflow()
 
 config = EasyCatConfig(
     openai_api_key="your-api-key",
-    agent=workflow,  # auto-adapted to PydanticAIWorkflowAdapter
+    agent=workflow,  # auto-adapted to GenericWorkflowBridge
 )
 session = create_session(config)
 ```
+
+Need recorder access, cancellation tokens, or handoffs? Add a
+`recorder: AgentRecorder` parameter to `on_user_turn` — the bridge
+flips into deep mode and calls your method with the live recorder plus
+a cancel token.
 
 Use `PydanticAIAdapter` for simple single-agent assistants. Use
 `PydanticAIWorkflowAdapter` when your voice app has step-based control flow,

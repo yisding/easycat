@@ -1,8 +1,9 @@
 """Session: the core runtime for a single voice conversation.
 
 Manages the voice pipeline lifecycle, wires provider stages together,
-and handles turn state and cancellation. Supports both basic and
-streaming agent interfaces with incremental TTS synthesis.
+and handles turn state and cancellation.  Drives the agent bridge
+through a single streaming path and feeds incremental TTS synthesis on
+sentence boundaries for low-latency playback.
 """
 
 from __future__ import annotations
@@ -86,8 +87,11 @@ from easycat.session._types import (
     SessionHelper,
     TurnState,
 )
-from easycat.session.action_executors import CoreSessionActionExecutor
-from easycat.session.actions import SessionAction, SessionActionExecutor
+from easycat.session.actions import (
+    CoreSessionActionExecutor,
+    SessionAction,
+    SessionActionExecutor,
+)
 from easycat.session.interruption import (
     estimate_and_notify_interruption,
 )
@@ -1067,17 +1071,14 @@ class Session:
         is created or swapped.  Remote model / API key follow the same
         pattern for :class:`RemoteResponsesAPIBridge`.
         """
-        from easycat.integrations.agents._agent_runner import AgentRunner
-        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+        from easycat.config import _inject_agent_runtime
 
-        inner = agent._agent if isinstance(agent, AgentRunner) else agent
-        if hasattr(inner, "_mcp_servers"):
-            inner._mcp_servers = list(self._mcp_servers)
-        if isinstance(inner, RemoteResponsesAPIBridge):
-            if self._agent_model:
-                inner._model = self._agent_model
-            if self._remote_agent_api_key:
-                inner._api_key = self._remote_agent_api_key
+        _inject_agent_runtime(
+            agent,
+            mcp_servers=self._mcp_servers,
+            agent_model=self._agent_model,
+            remote_agent_api_key=self._remote_agent_api_key,
+        )
 
     @property
     def turn_state(self) -> TurnState:
