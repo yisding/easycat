@@ -177,6 +177,9 @@ class TestOutboundCallManagerPlaceCall:
         manager._client = MagicMock()
         manager._state = OutboundCallManagerState.IDLE
         manager._started = True
+        manager.dnc_list = None
+        manager.compliance_check = None
+        manager.retry_strategy = None
         return manager
 
     @pytest.mark.asyncio
@@ -250,3 +253,25 @@ class TestOutboundCallManagerPlaceCall:
             await manager.place_call("+15551234567")
         assert len(received) == 1
         assert "network error" in received[0].reason
+
+    @pytest.mark.asyncio
+    async def test_place_call_blocks_dnc_numbers(self) -> None:
+        from easycat.telephony.compliance import DNCList
+
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        dnc = DNCList()
+        dnc.add("+15551234567")
+        manager.dnc_list = dnc
+        with pytest.raises(ValueError, match="DNC"):
+            await manager.place_call("+15551234567")
+        manager._client.calls.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_place_call_honors_compliance_check(self) -> None:
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        manager.compliance_check = lambda _to: False
+        with pytest.raises(ValueError, match="compliance_check"):
+            await manager.place_call("+15551234567")
+        manager._client.calls.create.assert_not_called()

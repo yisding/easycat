@@ -47,7 +47,12 @@ from easycat.telephony.ivr import (
     IVRActionType,
     IVRNavigator,
 )
+from easycat.telephony.number_health import (
+    CallDispositionTracker,
+    NumberHealthMonitor,
+)
 from easycat.telephony.outbound import OutboundCallManager
+from easycat.telephony.retry import RetryStrategy, RetryStrategyConfig
 from easycat.telephony.screening import (
     CallScreeningDetector,
     ScreeningResponse,
@@ -229,6 +234,15 @@ class OutboundCallConfig:
     status_callback_url: str = ""
     ivr_agent_callback: AgentCallback | None = None
     ivr_dtmf_delivery: DTMFDelivery | None = None
+
+    # Observability / reliability extras.  All default to on — they're
+    # pure event-bus listeners with no external dependencies and give
+    # the caller per-number answer rates, disposition breakdowns, and
+    # a ready-to-use retry policy for failed Twilio attempts.
+    enable_number_health: bool = True
+    enable_disposition_tracker: bool = True
+    enable_retry_strategy: bool = True
+    retry_strategy: RetryStrategyConfig | None = None
 
     def __post_init__(self) -> None:
         if self.classification_gate_timeout_s <= 0:
@@ -1179,7 +1193,14 @@ def _create_outbound_helpers(
     # Voicemail policy handler.
     helpers.append(VoicemailPolicyHandler(event_bus, expect_fused=True))
 
+    # Observability helpers — pure event-bus listeners, on by default.
+    if oc.enable_number_health:
+        helpers.append(NumberHealthMonitor(event_bus))
+    if oc.enable_disposition_tracker:
+        helpers.append(CallDispositionTracker(event_bus))
+
     # Outbound call manager (requires Twilio credentials).
+    manager: OutboundCallManager | None = None
     if oc.twilio_account_sid and oc.twilio_auth_token:
         try:
             manager = OutboundCallManager(
@@ -1200,6 +1221,14 @@ def _create_outbound_helpers(
             helpers.append(manager)
         except ImportError:
             logger.warning("twilio package not installed — OutboundCallManager disabled")
+
+    # Retry strategy — stateless object the caller asks
+    # ``strategy.record_attempt(number, reason)`` to decide whether to
+    # re-place a failed call.  We attach it to the manager (when
+    # present) so app code can reach it via
+    # ``session.outbound_call_manager.retry_strategy``.
+    if oc.enable_retry_strategy and manager is not None:
+        manager.retry_strategy = RetryStrategy(oc.retry_strategy)
 
 
 def _emit_provider_versions(

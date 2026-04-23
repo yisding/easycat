@@ -11,6 +11,7 @@ __all__ = [
 
 import asyncio
 import logging
+from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
@@ -118,6 +119,17 @@ class OutboundCallManager:
     """Orchestrates placing outbound calls via the Twilio REST API.
 
     Requires the ``twilio`` Python package (``pip install easycat[twilio]``).
+
+    Optional pre-call gates (plugged in after construction by
+    ``_create_outbound_helpers`` or the caller directly):
+
+    - ``dnc_list`` — a :class:`~easycat.telephony.compliance.DNCList`
+      that rejects numbers on the internal Do Not Call list.
+    - ``compliance_check`` — a callable ``(to) -> bool`` that returns
+      ``False`` when the call should be blocked (e.g. calling hours).
+    - ``retry_strategy`` — a :class:`~easycat.telephony.retry.RetryStrategy`
+      used by app code to decide whether to retry after a
+      :class:`CallFailed`.
     """
 
     def __init__(
@@ -166,6 +178,11 @@ class OutboundCallManager:
         self._state = OutboundCallManagerState.IDLE
         self._started = False
 
+        # Optional plug-ins assigned after construction (see docstring).
+        self.dnc_list: Any | None = None
+        self.compliance_check: Callable[[str], bool] | None = None
+        self.retry_strategy: Any | None = None
+
     @property
     def state(self) -> OutboundCallManagerState:
         return self._state
@@ -179,7 +196,22 @@ class OutboundCallManager:
         self._started = False
 
     async def place_call(self, to: str) -> str:
-        """Place an outbound call and return the call SID."""
+        """Place an outbound call and return the call SID.
+
+        Pre-call gates:
+
+        - Numbers on :attr:`dnc_list` raise ``ValueError`` immediately.
+        - ``compliance_check(to) is False`` raises ``ValueError``.  Use
+          this to wire :func:`~easycat.telephony.compliance.check_calling_hours`
+          or your own timezone / DNC-vendor lookup.
+        """
+        if self.dnc_list is not None and self.dnc_list.is_on_dnc(to):
+            raise ValueError(f"Refusing to call {to!r}: on DNC list")
+        if self.compliance_check is not None and not self.compliance_check(to):
+            raise ValueError(
+                f"Refusing to call {to!r}: blocked by compliance_check "
+                "(e.g. outside allowed calling hours)"
+            )
         create_kwargs: dict[str, Any] = {
             "to": to,
             "from_": self._from_number,
