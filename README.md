@@ -301,11 +301,9 @@ Runnable examples live in the `examples/` directory:
 - `responses_api_bridge.py`: remote agent over the OpenAI Responses API (`RemoteResponsesAPIBridge`)
 
 **Provider swaps**
-- `deepgram_stt.py`: Deepgram STT + OpenAI TTS
-- `deepgram_tts.py`: OpenAI STT + Deepgram TTS (Aura voices)
-- `elevenlabs_stt.py`: ElevenLabs STT + OpenAI TTS
-- `elevenlabs_tts.py`: OpenAI STT + ElevenLabs TTS (typed config with voice customization)
-- `cartesia_voice.py`: Cartesia STT + Cartesia TTS
+- `deepgram_voice.py`: Deepgram for both STT (Nova-2) and TTS (Aura)
+- `elevenlabs_voice.py`: ElevenLabs for both STT (Scribe) and TTS (Flash)
+- `cartesia_voice.py`: Cartesia for both STT (Ink-Whisper) and TTS (Sonic)
 - `combined_providers.py`: Deepgram STT + ElevenLabs TTS together (stages compose)
 
 **Turn-taking**
