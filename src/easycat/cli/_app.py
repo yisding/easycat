@@ -1,10 +1,9 @@
 """Typer application construction and top-level ``main`` entry point.
 
-The app layout mirrors the journey-ordered ``--help`` in
-``plan/peripheral-cli.md``: commands are grouped into *Scaffold* and
-*Debug with the journal*.  Typer does not offer first-class command
-grouping, so we render our own menu on the bare ``easycat``
-invocation via a no-argument callback.
+Commands are grouped into *Scaffold* and *Debug with the journal* for
+a journey-ordered ``--help``.  Typer does not offer first-class command
+grouping, so we render our own menu on the bare ``easycat`` invocation
+via a no-argument callback.
 """
 
 from __future__ import annotations

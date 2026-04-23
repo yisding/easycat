@@ -56,6 +56,27 @@ class TestInMemoryArtifactStore:
         store = InMemoryArtifactStore()
         assert store.get("missing") is None
 
+    def test_large_payload_stored_by_ref_keeps_record_small(self):
+        """A 1MB artifact lives in the store; the record only carries a ref."""
+        import json
+
+        store = InMemoryArtifactStore()
+        journal = InMemoryRingBuffer(capacity=100)
+
+        payload = b"\x00" * 1_000_000
+        ref = store.put(payload)
+        assert ref == hashlib.sha256(payload).hexdigest()
+
+        seq = journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="audio_capture",
+            session_id="s",
+            input_ref=ref,
+        )
+        rec = journal.read(start=seq, limit=1)[0]
+        assert rec.input_ref == ref
+        assert len(json.dumps(rec.data)) < 4096
+
 
 class TestFilesystemArtifactStore:
     def test_put_and_get(self, tmp_path):

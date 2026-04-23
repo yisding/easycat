@@ -2161,13 +2161,11 @@ class Session:
                     result = await self._tts_synth.synthesize(
                         payload,
                         token,
-                        turn_end_time=turn.end_time,
                         is_active=(
                             None
                             if self._is_gated
                             else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
                         ),
-                        record_latency=turn.first_tts_audio_time is None,
                     )
                     tts_chunks.append(
                         (
@@ -2362,7 +2360,6 @@ class Session:
             result = await self._tts_synth.synthesize(
                 payload,
                 token,
-                turn_end_time=turn.end_time if turn else None,
                 is_active=(
                     None
                     if gated

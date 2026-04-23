@@ -6,7 +6,6 @@ import asyncio
 import copy
 import logging
 import os
-import warnings
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -313,24 +312,14 @@ class EasyCatConfig:
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
     mcp_servers: list[str] | None = None
-    event_logging: Any = None
     # When set, every session exports a timestamped debug bundle to this
-    # directory on stop/shutdown — the "always be recording" flow from
-    # ``peripheral-eval-and-debugger-ui.md`` so a user who hits a real
-    # failure already has the bundle saved to disk without flipping any
-    # switch.  Requires ``debug != "off"`` so the journal actually exists.
+    # directory on stop/shutdown — the "always be recording" flow so a
+    # user who hits a real failure already has the bundle saved to disk
+    # without flipping any switch.  Requires ``debug != "off"`` so the
+    # journal actually exists.
     record_to: str | Path | None = None
 
     def __post_init__(self) -> None:
-        # ── Ignored legacy field ────────────────────────────────
-        if self.event_logging is not None:
-            warnings.warn(
-                "EasyCatConfig(event_logging=...) is deprecated and ignored. "
-                "Observability is handled by the journal-based runtime.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
         _VALID_DEBUG = {"off", "light", "full"}
         if self.debug not in _VALID_DEBUG:
             raise ValueError(

@@ -4,10 +4,9 @@ These helpers live in the library (LiveKit 1.0 pattern — ship the
 testing surface in core, not a sidecar package) so authors can promote
 a production failure into a regression test in the same PR that fixes
 it.  The API is intentionally small: load a bundle, assert something
-about its records.  Per the plan in
-``plan/peripheral-eval-and-debugger-ui.md``, deeper helpers
-(``assert_llm_judge``, Simulator + Judge personas, per-stage latency
-budgets) follow once the `LatencyBudget` + LLM-judge primitives land.
+about its records.  Deeper helpers (``assert_llm_judge``, Simulator +
+Judge personas, per-stage latency budgets) will follow once the
+``LatencyBudget`` + LLM-judge primitives land.
 """
 
 from __future__ import annotations

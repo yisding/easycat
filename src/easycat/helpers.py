@@ -26,14 +26,6 @@ def require_env(name: str) -> str:
     return value
 
 
-def default_event_logging() -> dict[str, object]:
-    """Useful event trace defaults without overwhelming partials.
-
-    Legacy shim: returns a plain dict since EventLoggingConfig has been removed.
-    """
-    return {"enabled": True, "include_partials": False}
-
-
 async def wait_for_shutdown_signal(session: Session) -> None:
     """Run until SIGINT/SIGTERM, then stop the session cleanly."""
     stop_event = asyncio.Event()

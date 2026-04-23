@@ -8,9 +8,8 @@ Top-level ``from easycat import X`` keeps working; every symbol in
 
 Internally, symbols are loaded lazily via PEP 562 ``__getattr__`` to
 keep CLI cold-start (``easycat --version``, ``easycat --help``) within
-the 300ms budget documented in ``plan/peripheral-cli.md``.  Heavy
-provider modules (transports, stages, telephony) only import when the
-symbol is actually touched.
+a 300ms budget.  Heavy provider modules (transports, stages, telephony)
+only import when the symbol is actually touched.
 
 Internal plumbing remains importable from submodules for advanced use::
 
@@ -131,7 +130,6 @@ _register(
 _register(
     "easycat.helpers",
     "attach_runtime_feedback",
-    "default_event_logging",
     "require_env",
     "run",
     "wait_for_shutdown_signal",
@@ -403,7 +401,6 @@ if TYPE_CHECKING:
     )
     from easycat.helpers import (
         attach_runtime_feedback,
-        default_event_logging,
         require_env,
         run,
         wait_for_shutdown_signal,
