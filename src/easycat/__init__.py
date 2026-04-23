@@ -52,7 +52,15 @@ _register("easycat.quick", "speak", "transcribe_file")
 
 _register("easycat.cancel", "CancelToken")
 _register("easycat.session._session", "Session")
-_register("easycat.session._types", "Agent", "SessionConfig", "TurnState")
+_register(
+    "easycat.session._types",
+    "Agent",
+    "CallDirection",
+    "CallIdentity",
+    "CallerIdExposure",
+    "SessionConfig",
+    "TurnState",
+)
 _register(
     "easycat.session.actions",
     "CustomAction",
@@ -403,7 +411,14 @@ if TYPE_CHECKING:
         ToolReplayPolicy,
     )
     from easycat.session._session import Session
-    from easycat.session._types import Agent, SessionConfig, TurnState
+    from easycat.session._types import (
+        Agent,
+        CallDirection,
+        CallerIdExposure,
+        CallIdentity,
+        SessionConfig,
+        TurnState,
+    )
     from easycat.session.actions import (
         CustomAction,
         EndCallAction,

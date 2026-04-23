@@ -75,16 +75,38 @@ class TwilioTransport(_ServerTransportBase):
 
         self._stream_sid: str | None = None
         self._call_sid: str | None = None
+        self._call_identity: Any | None = None
+        # Optional sink populated by Session wiring so the caller ID
+        # extracted from the ``<Stream>`` customParameters flows through
+        # to ``session.call_identity`` without the app doing plumbing.
+        self._identity_sink: Any = None
 
         self._mark_counter = 0
 
     # ── Transport protocol ────────────────────────────────────────
+
+    @property
+    def call_identity(self) -> Any | None:
+        """Latest :class:`CallIdentity` parsed from the Twilio start event."""
+        return self._call_identity
+
+    def bind_identity_sink(self, sink: Any) -> None:
+        """Register a callback that receives every identity update.
+
+        Used by :func:`easycat.config.create_session` to bridge the
+        Twilio ``<Stream>`` ``customParameters`` (``From``, ``To``,
+        ``CallerName`` …) onto the session's
+        :attr:`~easycat.session._session.Session.call_identity` without
+        making Session depend on the transport directly.
+        """
+        self._identity_sink = sink
 
     async def disconnect(self) -> None:
         """Disconnect Twilio and stop the server."""
         await super().disconnect()
         self._stream_sid = None
         self._call_sid = None
+        self._call_identity = None
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Convert a PCM16 chunk to mulaw 8 kHz and send to Twilio."""
@@ -213,14 +235,61 @@ class TwilioTransport(_ServerTransportBase):
             logger.debug("Unknown Twilio event: %s", event)
 
     def _handle_start(self, msg: dict[str, Any]) -> None:
-        """Extract stream metadata from the ``start`` message."""
+        """Extract stream metadata from the ``start`` message.
+
+        Twilio's Media Streams ``start`` payload carries streamSid /
+        callSid plus anything you pass through as ``<Parameter>``
+        children of the TwiML ``<Stream>``.  Common convention is to
+        forward the inbound ``From`` / ``To`` / ``CallerName`` HTTP
+        webhook fields so the voice pipeline sees who's on the line:
+
+        .. code-block:: xml
+
+            <Stream url="wss://…">
+              <Parameter name="From" value="{{From}}"/>
+              <Parameter name="To" value="{{To}}"/>
+              <Parameter name="CallerName" value="{{CallerName}}"/>
+            </Stream>
+        """
+        from easycat.session._types import CallIdentity
+
         start = msg.get("start", {})
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
+
+        # customParameters is a dict keyed by the ``name`` attribute.
+        params: dict[str, str] = {}
+        raw_params = start.get("customParameters") or {}
+        if isinstance(raw_params, dict):
+            for key, value in raw_params.items():
+                if isinstance(key, str) and isinstance(value, (str, int)):
+                    params[key] = str(value)
+
+        caller = params.pop("From", "") or params.pop("from", "")
+        called = params.pop("To", "") or params.pop("to", "")
+        display_name = params.pop("CallerName", None) or params.pop("caller_name", None)
+
+        identity = CallIdentity(
+            caller_number=caller,
+            called_number=called,
+            direction="inbound",
+            display_name=display_name,
+            call_sid=self._call_sid,
+            custom_fields=params,
+        )
+        self._call_identity = identity
+        if self._identity_sink is not None:
+            try:
+                self._identity_sink(identity)
+            except Exception:
+                logger.debug("Identity sink raised on start", exc_info=True)
+
         logger.info(
-            "Twilio stream started: streamSid=%s callSid=%s",
+            "Twilio stream started: streamSid=%s callSid=%s from=%s to=%s",
             self._stream_sid,
             self._call_sid,
+            caller,
+            called,
         )
 
     async def _handle_media(self, msg: dict[str, Any]) -> None:
@@ -542,6 +611,8 @@ def twiml_connect_stream(
     *,
     track: str = "both",
     status_callback_url: str | None = None,
+    parameters: dict[str, str] | None = None,
+    forward_caller_id: bool = True,
 ) -> str:
     """Generate TwiML ``<Connect><Stream>`` XML for bidirectional streaming.
 
@@ -553,18 +624,57 @@ def twiml_connect_stream(
         Which audio tracks to stream (``inbound``, ``outbound``, or ``both``).
     status_callback_url:
         Optional URL for Twilio to POST call status updates.
+    parameters:
+        Extra ``<Parameter>`` children to attach to the stream.  Values
+        are typically Twilio template placeholders (``{{From}}``,
+        ``{{CallerCity}}`` …) so the inbound webhook forwards call
+        metadata to the media-stream socket.
+    forward_caller_id:
+        When ``True`` (default) emits ``From``, ``To`` and
+        ``CallerName`` ``<Parameter>`` children with Twilio template
+        placeholders so :class:`TwilioTransport` can populate
+        :attr:`easycat.Session.call_identity` automatically.
     """
-    from xml.sax.saxutils import quoteattr
+    from xml.sax.saxutils import escape, quoteattr
 
     status_attr = ""
     if status_callback_url:
         status_attr = f" statusCallback={quoteattr(status_callback_url)}"
 
+    merged: dict[str, str] = {}
+    if forward_caller_id:
+        merged.update(
+            {
+                "From": "{{From}}",
+                "To": "{{To}}",
+                "CallerName": "{{CallerName}}",
+            }
+        )
+    if parameters:
+        merged.update(parameters)
+
+    if not merged:
+        stream = (
+            f"    <Stream url={quoteattr(websocket_url)} "
+            f"track={quoteattr(track)}{status_attr} />"
+        )
+    else:
+        param_lines = "\n".join(
+            f"      <Parameter name={quoteattr(name)} value={quoteattr(escape(value))}/>"
+            for name, value in merged.items()
+        )
+        stream = (
+            f"    <Stream url={quoteattr(websocket_url)} "
+            f"track={quoteattr(track)}{status_attr}>\n"
+            f"{param_lines}\n"
+            "    </Stream>"
+        )
+
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<Response>\n"
         "  <Connect>\n"
-        f"    <Stream url={quoteattr(websocket_url)} track={quoteattr(track)}{status_attr} />\n"
+        f"{stream}\n"
         "  </Connect>\n"
         "</Response>"
     )

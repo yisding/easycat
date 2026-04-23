@@ -413,6 +413,16 @@ class EasyCatConfig:
     # journal actually exists.
     record_to: str | Path | None = None
 
+    # Telephony caller-ID exposure.  ``"tools_only"`` (default) keeps
+    # the caller's phone number out of the LLM prompt but available to
+    # tool code via ``session.call_identity``.  ``"system_message"``
+    # prepends a short system note on every turn so the agent can
+    # reason about the caller.  ``"off"`` hides it from both layers.
+    # See :class:`easycat.session._types.CallIdentity` for the data
+    # model and :class:`easycat.session._types.CallerIdExposure` for
+    # the allowed literals.
+    caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
+
     def __post_init__(self) -> None:
         _validate_common(
             debug=self.debug,
@@ -706,8 +716,18 @@ def create_session(config: EasyCatConfig) -> Session:
                 action_executors=action_executors,
                 audio_gate=audio_gate,
                 mcp_servers=mcp_servers,
+                caller_id_exposure=config.caller_id_exposure,
             )
         )
+        # Bridge the Twilio start-event customParameters through to
+        # ``session.call_identity`` so the agent (or its tools) sees
+        # who's calling without every app reimplementing the plumbing.
+        if isinstance(transport, TwilioTransport):
+
+            def _on_twilio_identity(identity: Any) -> None:
+                session.call_identity = identity
+
+            transport.bind_identity_sink(_on_twilio_identity)
     except Exception:
         if journal is not None and hasattr(journal, "close"):
             journal.close()
@@ -728,6 +748,28 @@ def create_session(config: EasyCatConfig) -> Session:
             telephony_helpers,
             event_bus,
         )
+
+    # Outbound-call caller identity: when :class:`OutboundCallManager`
+    # emits :class:`CallInitiated`, stamp the session with a
+    # direction="outbound" identity so the agent/tools know who they're
+    # calling without having to peek into the event bus themselves.
+    from easycat.events import CallInitiated as _CallInitiatedEv
+    from easycat.session._types import CallIdentity as _CallIdentity
+
+    def _on_outbound_initiated(event: _CallInitiatedEv) -> None:
+        # Don't clobber an existing inbound identity — a session that
+        # places an outbound call while an inbound call is live is
+        # unusual but shouldn't silently lose the inbound number.
+        if session.call_identity is not None and session.call_identity.direction == "inbound":
+            return
+        session.call_identity = _CallIdentity(
+            caller_number=event.to,
+            called_number=event.from_,
+            direction="outbound",
+            call_sid=event.call_sid,
+        )
+
+    event_bus.subscribe(_CallInitiatedEv, _on_outbound_initiated)
 
     if config.record_to is not None:
         _install_record_to_hook(session, Path(config.record_to), debug_mode=config.debug)

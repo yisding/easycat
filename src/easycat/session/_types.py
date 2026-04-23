@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from easycat.bounded_queue import BoundedAudioQueue
@@ -53,6 +53,40 @@ class TurnState(enum.Enum):
     LISTENING = "listening"
     PROCESSING = "processing"
     BOT_SPEAKING = "bot_speaking"
+
+
+# ── Call identity ──────────────────────────────────────────────────
+
+
+CallDirection = Literal["inbound", "outbound", "unknown"]
+
+
+@dataclass(frozen=True)
+class CallIdentity:
+    """Caller / callee metadata for a telephony session.
+
+    Populated from the Twilio ``<Stream>`` ``customParameters`` for
+    inbound calls and from :meth:`OutboundCallManager.place_call` for
+    outbound calls.  Exposed to the agent and to tools via
+    :attr:`Session.call_identity`; the visibility to the agent itself
+    is controlled by :attr:`SessionConfig.caller_id_exposure`.
+
+    ``caller_number`` is the far-end (the human), ``called_number`` is
+    the near-end (the bot's DID).  ``display_name`` is the optional
+    caller-ID name if the carrier provided one.  ``custom_fields``
+    carries extra metadata the transport or app attached (e.g. CRM
+    account id, SIP headers).
+    """
+
+    caller_number: str = ""
+    called_number: str = ""
+    direction: CallDirection = "unknown"
+    display_name: str | None = None
+    call_sid: str | None = None
+    custom_fields: dict[str, str] = field(default_factory=dict)
+
+
+CallerIdExposure = Literal["off", "system_message", "tools_only"]
 
 
 # Mapping from TurnManagerState to the Session-level TurnState.
@@ -128,3 +162,24 @@ class SessionConfig:
     # MCP servers surfaced to the agent stage recorder so bridges can
     # read them from ``RecorderContext.mcp_servers``.
     mcp_servers: tuple[str, ...] = ()
+
+    # Telephony caller / callee identity and exposure policy.
+    #
+    # ``call_identity`` carries the inbound caller's phone number
+    # (and/or the outbound callee's) plus direction + optional carrier
+    # metadata.  Transports populate it: ``TwilioTransport`` reads
+    # ``start.customParameters`` on the ``<Stream>`` event,
+    # ``OutboundCallManager.place_call`` sets direction="outbound"
+    # with the dialed number.
+    #
+    # ``caller_id_exposure`` controls who sees it:
+    #   - "system_message" injects a short system note into the agent's
+    #     per-turn context ("The caller's phone number is +1…"). Good
+    #     when the agent must reason about who's on the line (e.g.
+    #     name checks, greetings by first name).
+    #   - "tools_only" (default) keeps the identity off the LLM prompt
+    #     but available to tool code via ``session.call_identity``.
+    #     Right for PII-sensitive workflows.
+    #   - "off" hides it from both layers.
+    call_identity: CallIdentity | None = None
+    caller_id_exposure: CallerIdExposure = "tools_only"

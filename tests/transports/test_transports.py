@@ -710,6 +710,10 @@ class TestTwiML:
         assert '<Stream url="wss://example.com/stream"' in xml
         assert 'track="both"' in xml
         assert "</Response>" in xml
+        # forward_caller_id defaults to True, so From/To/CallerName
+        # Parameter children are emitted for the inbound webhook.
+        assert '<Parameter name="From"' in xml
+        assert "{{From}}" in xml
 
     def test_twiml_connect_stream_with_callback(self):
         xml = twiml_connect_stream(
@@ -721,6 +725,24 @@ class TestTwiML:
     def test_twiml_connect_stream_custom_track(self):
         xml = twiml_connect_stream("wss://example.com/stream", track="inbound")
         assert 'track="inbound"' in xml
+
+    def test_twiml_connect_stream_disable_caller_id(self):
+        xml = twiml_connect_stream(
+            "wss://example.com/stream",
+            forward_caller_id=False,
+        )
+        # Without caller-ID forwarding the Stream element is self-closing.
+        assert "<Parameter" not in xml
+        assert "<Stream" in xml and "/>" in xml
+
+    def test_twiml_connect_stream_custom_parameters(self):
+        xml = twiml_connect_stream(
+            "wss://example.com/stream",
+            parameters={"crm_account_id": "{{CallerSid}}"},
+        )
+        assert '<Parameter name="crm_account_id"' in xml
+        # Default caller-ID forwarding still present.
+        assert '<Parameter name="From"' in xml
 
     def test_twiml_stream(self):
         xml = twiml_stream("wss://example.com/stream")

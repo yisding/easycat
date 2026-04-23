@@ -24,6 +24,9 @@ _LAZY: dict[str, tuple[str, str]] = {
     "TurnContext": ("easycat.session._turn_context", "TurnContext"),
     # Session types
     "Agent": ("easycat.session._types", "Agent"),
+    "CallDirection": ("easycat.session._types", "CallDirection"),
+    "CallIdentity": ("easycat.session._types", "CallIdentity"),
+    "CallerIdExposure": ("easycat.session._types", "CallerIdExposure"),
     "SessionConfig": ("easycat.session._types", "SessionConfig"),
     "TurnState": ("easycat.session._types", "TurnState"),
     # Interruption helpers (public for bridge authors inspecting sessions)
@@ -50,7 +53,14 @@ if TYPE_CHECKING:
     # Static-analysis view — imports never execute at runtime.
     from easycat.session._session import Session
     from easycat.session._turn_context import TurnContext
-    from easycat.session._types import Agent, SessionConfig, TurnState
+    from easycat.session._types import (
+        Agent,
+        CallDirection,
+        CallerIdExposure,
+        CallIdentity,
+        SessionConfig,
+        TurnState,
+    )
     from easycat.session.actions import (
         CustomAction,
         EndCallAction,

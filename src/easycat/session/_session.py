@@ -83,6 +83,8 @@ from easycat.session._turn_context import TurnContext
 from easycat.session._types import (
     _TM_TO_TURN_STATE,
     Agent,
+    CallerIdExposure,
+    CallIdentity,
     SessionConfig,
     SessionHelper,
     TurnState,
@@ -196,6 +198,14 @@ class Session:
         # ``Session(SessionConfig(agent=..., mcp_servers=...))`` callers
         # (not going through ``create_session``) also get tool access.
         self._inject_agent_runtime_config(self._agent)
+
+        # Telephony caller / callee identity.  Populated by the
+        # transport (inbound: Twilio customParameters) or by the
+        # outbound call manager (outbound: the dialed number).
+        # ``caller_id_exposure`` governs whether the agent's LLM sees
+        # the number or only tool code does.
+        self._call_identity: CallIdentity | None = cfg.call_identity
+        self._caller_id_exposure: CallerIdExposure = cfg.caller_id_exposure
 
         # Skip noop validation in text_session mode — audio providers
         # are intentionally noop.
@@ -1079,6 +1089,56 @@ class Session:
             agent_model=self._agent_model,
             remote_agent_api_key=self._remote_agent_api_key,
         )
+
+    @property
+    def call_identity(self) -> CallIdentity | None:
+        """Caller / callee identity for this session.
+
+        Populated by telephony transports on connect (Twilio reads
+        ``<Stream>`` customParameters) or by
+        :meth:`OutboundCallManager.place_call` for outbound calls.
+        Tool code (including agent function tools) reads this directly;
+        whether the LLM sees it in its prompt is governed by
+        :attr:`caller_id_exposure`.
+        """
+        return self._call_identity
+
+    @call_identity.setter
+    def call_identity(self, value: CallIdentity | None) -> None:
+        self._call_identity = value
+
+    @property
+    def caller_id_exposure(self) -> CallerIdExposure:
+        """Exposure policy for :attr:`call_identity`."""
+        return self._caller_id_exposure
+
+    @caller_id_exposure.setter
+    def caller_id_exposure(self, value: CallerIdExposure) -> None:
+        self._caller_id_exposure = value
+
+    def _caller_id_system_message(self) -> str | None:
+        """Render the caller-ID system message for the agent, or None.
+
+        Returns ``None`` when the exposure policy hides the caller ID
+        from the LLM (``"tools_only"`` / ``"off"``) or when we have no
+        identity to share yet.
+        """
+        if self._caller_id_exposure != "system_message":
+            return None
+        identity = self._call_identity
+        if identity is None:
+            return None
+        parts: list[str] = []
+        if identity.caller_number:
+            prefix = "The caller's phone number is"
+            if identity.direction == "outbound":
+                prefix = "This outbound call is to"
+            parts.append(f"{prefix} {identity.caller_number}.")
+        if identity.called_number:
+            parts.append(f"They dialed {identity.called_number}.")
+        if identity.display_name:
+            parts.append(f"Caller ID name: {identity.display_name}.")
+        return " ".join(parts) if parts else None
 
     @property
     def turn_state(self) -> TurnState:
@@ -2155,12 +2215,17 @@ class Session:
         # ── Run agent stream + TTS concurrently ──
 
         agent_result = None
+        system_prefix = self._caller_id_system_message()
 
         async def _run_agent_consumer() -> None:
             nonlocal agent_result
             agent_result = await consume_agent_stream(
                 stream_factory=lambda: self._agent_stage.execute_streaming(
-                    transcript, self._run_ctx, turn, cancel_token=token
+                    transcript,
+                    self._run_ctx,
+                    turn,
+                    cancel_token=token,
+                    system_prefix=system_prefix,
                 ),
                 cancel_token=token,
                 tts_queue=tts_queue,
@@ -2559,8 +2624,13 @@ class Session:
             # stamp records with the right turn_id.
             text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
             accumulated = ""
+            system_prefix = self._caller_id_system_message()
             async for event in self._agent_stage.execute_streaming(
-                text, self._run_ctx, text_turn, cancel_token=cancel_token
+                text,
+                self._run_ctx,
+                text_turn,
+                cancel_token=cancel_token,
+                system_prefix=system_prefix,
             ):
                 kind = getattr(event, "kind", None)
                 if kind is None:

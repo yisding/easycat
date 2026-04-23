@@ -12,7 +12,7 @@ OpenAI Agents SDK, PydanticAI agents, or PydanticAI workflows.
 - VAD providers: Silero (open-source), TEN VAD (open-source), and Krisp (commercial)
 - Noise reduction: RNNoise (open-source), Krisp (commercial), passthrough fallback
 - Transports: Local (sounddevice), WebSocket server, WebRTC (aiortc), Twilio Media Streams server
-- Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers
+- Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers, outbound calling (Twilio), screening + IVR navigation, per-number health / retry / compliance gates, caller-ID propagation to the agent or tools
 - Reliability/observability: reconnecting WebSocket, timeouts, bounded queues, metrics/tracing
 - Agent adapters: use OpenAI Agents SDK or PydanticAI directly and wrap with EasyCat
 - Workflow adapter: use a stateful PydanticAI workflow as the session boundary
@@ -50,6 +50,85 @@ session = create_session(config)
 > The underlying bridge classes live in `easycat.integrations.agents`
 > (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`,
 > `RemoteResponsesAPIBridge`) for callers who want to construct them by hand.
+
+## Telephony (inbound + outbound)
+
+### Inbound calls (Twilio Media Streams)
+Point Twilio's inbound webhook at a `<Connect><Stream>` that carries
+the caller's phone number through as a `<Parameter>`:
+
+```xml
+<Response>
+  <Connect>
+    <Stream url="wss://your-app.example.com/twilio">
+      <Parameter name="From" value="{{From}}"/>
+      <Parameter name="To" value="{{To}}"/>
+      <Parameter name="CallerName" value="{{CallerName}}"/>
+    </Stream>
+  </Connect>
+</Response>
+```
+
+`TwilioTransport` parses `start.customParameters` and writes a
+`CallIdentity` (caller / called numbers, direction, optional display
+name, and any extra fields you pass) onto
+`session.call_identity`. Tool code inside your agent reads
+`session.call_identity.caller_number` directly.
+
+### Outbound calls (Twilio REST)
+Enable the outbound pipeline via `EasyCatConfig.telephony`:
+
+```python
+from easycat import EasyCatConfig, TelephonyConfig, create_session
+from easycat.config import OutboundCallConfig
+
+config = EasyCatConfig(
+    openai_api_key="…",
+    agent=your_agent,
+    telephony=TelephonyConfig(
+        enable_outbound_call_manager=True,
+        outbound=OutboundCallConfig(
+            from_number="+15559876543",
+            twilio_account_sid="AC…",
+            twilio_auth_token="…",
+            twiml_url="https://your-app.example.com/outbound.twiml",
+            status_callback_url="https://your-app.example.com/status",
+        ),
+    ),
+)
+session = create_session(config)
+```
+
+With the outbound manager enabled you also get:
+
+- `NumberHealthMonitor` — per-number answer rate, block count, pacing
+- `CallDispositionTracker` — human / voicemail / IVR disposition stats
+- `RetryStrategy` attached to the manager — `manager.retry_strategy.record_attempt(number, reason)` decides RETRY / SMS_FALLBACK / NO_RETRY
+- `DNCList`, `check_calling_hours`, and `detect_opt_out` helpers you can hook into `manager.dnc_list` / `manager.compliance_check` for TCPA-friendly calling
+
+When the session places an outbound call via `CallInitiated`,
+`session.call_identity` is stamped with `direction="outbound"` and the
+dialed number.
+
+### Caller-ID exposure policy
+Control whether the LLM sees the caller's number or only tool code
+does via `EasyCatConfig.caller_id_exposure`:
+
+- `"tools_only"` (default): number available at
+  `session.call_identity.caller_number` for tools, hidden from the
+  LLM prompt. Right for PII-sensitive workflows.
+- `"system_message"`: prepend a short system note on every turn
+  (`"The caller's phone number is +1555…"`). Use when the agent needs
+  to greet by number, look up account, etc.
+- `"off"`: hide from both layers.
+
+```python
+config = EasyCatConfig(
+    openai_api_key="…",
+    agent=your_agent,
+    caller_id_exposure="system_message",
+)
+```
 
 ## Session lifecycle
 
