@@ -46,6 +46,64 @@ class TwilioTransportConfig:
     max_pending_chunks: int = 200
 
 
+def _parse_twilio_start_identity(
+    start: dict[str, Any],
+    call_sid: str | None,
+) -> tuple[Any, str, str]:
+    """Build a CallIdentity from Twilio ``start.customParameters``."""
+    from easycat.session._types import CallIdentity
+
+    params: dict[str, str] = {}
+    raw_params = start.get("customParameters") or {}
+    if isinstance(raw_params, dict):
+        for key, value in raw_params.items():
+            if isinstance(key, str) and isinstance(value, (str, int)):
+                params[key] = str(value)
+
+    caller = params.pop("From", "") or params.pop("from", "")
+    called = params.pop("To", "") or params.pop("to", "")
+    display_name = params.pop("CallerName", None) or params.pop("caller_name", None)
+    city = params.pop("FromCity", "") or params.pop("from_city", "")
+    state = params.pop("FromState", "") or params.pop("from_state", "")
+    zip_code = params.pop("FromZip", "") or params.pop("from_zip", "")
+    country = params.pop("FromCountry", "") or params.pop("from_country", "")
+
+    identity = CallIdentity(
+        caller_number=caller,
+        called_number=called,
+        direction="inbound",
+        display_name=display_name,
+        call_sid=call_sid,
+        city=city or None,
+        state=state or None,
+        zip_code=zip_code or None,
+        country=country or None,
+        custom_fields=params,
+    )
+    return identity, caller, called
+
+
+async def _emit_twilio_call_ended(
+    event_bus: EventBus | None,
+    *,
+    call_sid: str | None,
+    answered_at: float | None,
+    call_identity: Any | None,
+) -> None:
+    if event_bus is None or call_sid is None:
+        return
+    duration = None
+    if answered_at is not None:
+        duration = max(0.0, time.monotonic() - answered_at)
+    await event_bus.emit(
+        CallEnded(
+            call_sid=call_sid,
+            duration_s=duration,
+            number=call_identity.caller_number if call_identity is not None else None,
+        )
+    )
+
+
 class TwilioTransport(_ServerTransportBase):
     """Transport for Twilio Media Streams bidirectional WebSocket.
 
@@ -232,21 +290,12 @@ class TwilioTransport(_ServerTransportBase):
             # manager's ``CallEnded`` event so observers like
             # ``CallDispositionTracker`` and ``NumberHealthMonitor``
             # see the same lifecycle regardless of direction.
-            if self._event_bus is not None and self._call_sid is not None:
-                duration = None
-                if self._answered_at is not None:
-                    duration = max(0.0, time.monotonic() - self._answered_at)
-                await self._event_bus.emit(
-                    CallEnded(
-                        call_sid=self._call_sid,
-                        duration_s=duration,
-                        number=(
-                            self._call_identity.caller_number
-                            if self._call_identity is not None
-                            else None
-                        ),
-                    )
-                )
+            await _emit_twilio_call_ended(
+                self._event_bus,
+                call_sid=self._call_sid,
+                answered_at=self._answered_at,
+                call_identity=self._call_identity,
+            )
             # Explicitly end the current audio stream so receive_audio() can terminate.
             self._stream_sid = None
             self._call_sid = None
@@ -291,41 +340,11 @@ class TwilioTransport(_ServerTransportBase):
         event so observers get a consistent inbound + outbound
         lifecycle.
         """
-        from easycat.session._types import CallIdentity
-
         start = msg.get("start", {})
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
-
-        # customParameters is a dict keyed by the ``name`` attribute.
-        params: dict[str, str] = {}
-        raw_params = start.get("customParameters") or {}
-        if isinstance(raw_params, dict):
-            for key, value in raw_params.items():
-                if isinstance(key, str) and isinstance(value, (str, int)):
-                    params[key] = str(value)
-
-        caller = params.pop("From", "") or params.pop("from", "")
-        called = params.pop("To", "") or params.pop("to", "")
-        display_name = params.pop("CallerName", None) or params.pop("caller_name", None)
-        city = params.pop("FromCity", "") or params.pop("from_city", "")
-        state = params.pop("FromState", "") or params.pop("from_state", "")
-        zip_code = params.pop("FromZip", "") or params.pop("from_zip", "")
-        country = params.pop("FromCountry", "") or params.pop("from_country", "")
-
-        identity = CallIdentity(
-            caller_number=caller,
-            called_number=called,
-            direction="inbound",
-            display_name=display_name,
-            call_sid=self._call_sid,
-            city=city or None,
-            state=state or None,
-            zip_code=zip_code or None,
-            country=country or None,
-            custom_fields=params,
-        )
+        identity, caller, called = _parse_twilio_start_identity(start, self._call_sid)
         self._call_identity = identity
         if self._identity_sink is not None:
             try:
@@ -485,9 +504,21 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         self._event_bus = event_bus
         self._stream_sid: str | None = None
         self._call_sid: str | None = None
+        self._call_identity: Any | None = None
+        self._identity_sink: Any = None
+        self._answered_at: float | None = None
         self._mark_counter = 0
         self._receive_task: asyncio.Task[None] | None = None
         self._init_audio_queue(self._config.max_pending_chunks)
+
+    @property
+    def call_identity(self) -> Any | None:
+        """Latest :class:`CallIdentity` parsed from the Twilio start event."""
+        return self._call_identity
+
+    def bind_identity_sink(self, sink: Any) -> None:
+        """Register a callback that receives every identity update."""
+        self._identity_sink = sink
 
     async def connect(self) -> None:
         if self._connected:
@@ -511,6 +542,8 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         self._receive_task = None
         self._stream_sid = None
         self._call_sid = None
+        self._call_identity = None
+        self._answered_at = None
         try:
             await self._ws.close()
         except Exception:
@@ -584,6 +617,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
             self._client_connected.clear()
             self._stream_sid = None
             self._call_sid = None
+            self._answered_at = None
             self._enqueue_sentinel()
 
     async def _handle_message(self, raw: str) -> None:
@@ -595,12 +629,19 @@ class TwilioConnectionTransport(_AudioQueueMixin):
 
         event = msg.get("event", "")
         if event == "start":
-            self._handle_start(msg)
+            await self._handle_start(msg)
         elif event == "media":
             await self._handle_media(msg)
         elif event == "stop":
+            await _emit_twilio_call_ended(
+                self._event_bus,
+                call_sid=self._call_sid,
+                answered_at=self._answered_at,
+                call_identity=self._call_identity,
+            )
             self._stream_sid = None
             self._call_sid = None
+            self._answered_at = None
             self._enqueue_sentinel()
         elif event == "mark":
             mark_name = msg.get("mark", {}).get("name", "")
@@ -609,10 +650,29 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         elif event == "dtmf":
             await self._handle_dtmf(msg)
 
-    def _handle_start(self, msg: dict[str, Any]) -> None:
+    async def _handle_start(self, msg: dict[str, Any]) -> None:
         start = msg.get("start", {})
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
+        self._answered_at = time.monotonic()
+        identity, caller, called = _parse_twilio_start_identity(start, self._call_sid)
+        self._call_identity = identity
+        if self._identity_sink is not None:
+            try:
+                self._identity_sink(identity)
+            except Exception:
+                logger.debug("Identity sink raised on start", exc_info=True)
+
+        if self._event_bus is not None and self._call_sid:
+            await self._event_bus.emit(CallAnswered(call_sid=self._call_sid, answered_by="human"))
+
+        logger.info(
+            "Twilio connection stream started: streamSid=%s callSid=%s from=%s to=%s",
+            self._stream_sid,
+            self._call_sid,
+            caller,
+            called,
+        )
 
     async def _handle_media(self, msg: dict[str, Any]) -> None:
         media = msg.get("media", {})
@@ -687,7 +747,7 @@ def twiml_connect_stream(
         placeholders so :class:`TwilioTransport` can populate
         :attr:`easycat.Session.call_identity` automatically.
     """
-    from xml.sax.saxutils import escape, quoteattr
+    from xml.sax.saxutils import quoteattr
 
     status_attr = ""
     if status_callback_url:
@@ -720,7 +780,7 @@ def twiml_connect_stream(
         )
     else:
         param_lines = "\n".join(
-            f"      <Parameter name={quoteattr(name)} value={quoteattr(escape(value))}/>"
+            f"      <Parameter name={quoteattr(name)} value={quoteattr(value)}/>"
             for name, value in merged.items()
         )
         stream = (

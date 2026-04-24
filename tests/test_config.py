@@ -66,6 +66,39 @@ def test_easycat_config_auto_aligns_default_openai_tts_to_twilio_transport_insta
     assert config.tts.output_format == transport.audio_format
 
 
+@pytest.mark.asyncio
+async def test_create_session_binds_twilio_connection_identity_sink():
+    transport = TwilioConnectionTransport(_DummyWebSocket())
+    session = create_session(
+        EasyCatConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=transport,
+        )
+    )
+
+    await transport._handle_start(
+        {
+            "streamSid": "MZ1",
+            "start": {
+                "streamSid": "MZ1",
+                "callSid": "CA1",
+                "customParameters": {
+                    "From": "+15551234567",
+                    "To": "+15557654321",
+                    "CallerName": "Alice Example",
+                },
+            },
+        }
+    )
+
+    assert session.call_identity is transport.call_identity
+    assert session.call_identity is not None
+    assert session.call_identity.caller_number == "+15551234567"
+    assert session.call_identity.called_number == "+15557654321"
+    assert session.call_identity.display_name == "Alice Example"
+
+
 @pytest.mark.parametrize(
     ("tts_config", "expected_rate", "expected_output"),
     [

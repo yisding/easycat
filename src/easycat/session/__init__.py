@@ -34,7 +34,12 @@ _LAZY: dict[str, tuple[str, str]] = {
         "easycat.session.interruption",
         "estimate_and_notify_interruption",
     ),
+    "split_at_sentence_boundaries": (
+        "easycat.session._text",
+        "split_at_sentence_boundaries",
+    ),
     # Action executor + actions
+    "CoreSessionActionExecutor": ("easycat.session.actions", "CoreSessionActionExecutor"),
     "CustomAction": ("easycat.session.actions", "CustomAction"),
     "EndCallAction": ("easycat.session.actions", "EndCallAction"),
     "SendDTMFAction": ("easycat.session.actions", "SendDTMFAction"),
@@ -52,6 +57,7 @@ _LAZY: dict[str, tuple[str, str]] = {
 if TYPE_CHECKING:
     # Static-analysis view — imports never execute at runtime.
     from easycat.session._session import Session
+    from easycat.session._text import split_at_sentence_boundaries
     from easycat.session._turn_context import TurnContext
     from easycat.session._types import (
         Agent,
@@ -62,6 +68,7 @@ if TYPE_CHECKING:
         TurnState,
     )
     from easycat.session.actions import (
+        CoreSessionActionExecutor,
         CustomAction,
         EndCallAction,
         SendDTMFAction,

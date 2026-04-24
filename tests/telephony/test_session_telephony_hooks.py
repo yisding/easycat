@@ -27,10 +27,11 @@ from easycat import (
     SessionActions,
     SessionConfig,
     STTFinal,
+    TwilioConnectionTransport,
     TwilioTransport,
     TwilioTransportConfig,
 )
-from easycat.events import CallAnswered, EventBus
+from easycat.events import CallAnswered, CallEnded, EventBus
 from easycat.stubs import NoopAgent
 from easycat.telephony.compliance import DNCList
 from easycat.transports.local import LocalTransport, LocalTransportConfig
@@ -43,6 +44,14 @@ def _text_session(**overrides: Any) -> Session:
     )
     defaults.update(overrides)
     return Session(SessionConfig(**defaults))
+
+
+class _DummyWebSocket:
+    async def send(self, _message: str) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
 
 
 # ── transport_kind ─────────────────────────────────────────────────
@@ -179,7 +188,6 @@ async def test_twilio_stop_emits_call_ended() -> None:
     bus = EventBus()
     transport = TwilioTransport(TwilioTransportConfig(), event_bus=bus)
     ended: list[Any] = []
-    from easycat.events import CallEnded
 
     bus.subscribe(CallEnded, ended.append)
 
@@ -197,6 +205,37 @@ async def test_twilio_stop_emits_call_ended() -> None:
     # Simulate the stop message handler directly.
     await transport._handle_message('{"event": "stop", "streamSid": "MZ1", "stop": {}}')
 
+    assert len(ended) == 1
+    assert ended[0].call_sid == "CA1"
+    assert ended[0].number == "+15551234567"
+    assert ended[0].duration_s is not None and ended[0].duration_s >= 0
+
+
+@pytest.mark.asyncio
+async def test_twilio_connection_start_and_stop_emit_lifecycle_events() -> None:
+    bus = EventBus()
+    transport = TwilioConnectionTransport(_DummyWebSocket(), event_bus=bus)
+    answered: list[CallAnswered] = []
+    ended: list[CallEnded] = []
+    bus.subscribe(CallAnswered, answered.append)
+    bus.subscribe(CallEnded, ended.append)
+
+    await transport._handle_start(
+        {
+            "streamSid": "MZ1",
+            "start": {
+                "streamSid": "MZ1",
+                "callSid": "CA1",
+                "customParameters": {"From": "+15551234567"},
+            },
+        }
+    )
+    await transport._handle_message('{"event": "stop", "streamSid": "MZ1", "stop": {}}')
+
+    assert transport.call_identity is not None
+    assert transport.call_identity.caller_number == "+15551234567"
+    assert len(answered) == 1
+    assert answered[0].call_sid == "CA1"
     assert len(ended) == 1
     assert ended[0].call_sid == "CA1"
     assert ended[0].number == "+15551234567"

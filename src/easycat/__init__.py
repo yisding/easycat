@@ -65,6 +65,7 @@ _register(
 )
 _register(
     "easycat.session.actions",
+    "CoreSessionActionExecutor",
     "CustomAction",
     "EndCallAction",
     "SendDTMFAction",
@@ -115,6 +116,7 @@ _register(
 _register(
     "easycat.llm_output_processing",
     "LLMOutputProcessor",
+    "MarkdownStripProcessor",
     "PauseProcessor",
     "PhoneticReplacementProcessor",
     "default_pronunciation_processors",
@@ -385,6 +387,7 @@ if TYPE_CHECKING:
     )
     from easycat.llm_output_processing import (
         LLMOutputProcessor,
+        MarkdownStripProcessor,
         PauseProcessor,
         PhoneticReplacementProcessor,
         default_pronunciation_processors,
@@ -426,6 +429,7 @@ if TYPE_CHECKING:
         TurnState,
     )
     from easycat.session.actions import (
+        CoreSessionActionExecutor,
         CustomAction,
         EndCallAction,
         SendDTMFAction,

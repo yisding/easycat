@@ -744,6 +744,15 @@ class TestTwiML:
         # Default caller-ID forwarding still present.
         assert '<Parameter name="From"' in xml
 
+    def test_twiml_connect_stream_escapes_parameter_values_once(self):
+        xml = twiml_connect_stream(
+            "wss://example.com/stream",
+            parameters={"company": "AT&T <Gold>"},
+            forward_caller_id=False,
+        )
+        assert '<Parameter name="company" value="AT&amp;T &lt;Gold&gt;"/>' in xml
+        assert "amp;amp" not in xml
+
     def test_twiml_stream(self):
         xml = twiml_stream("wss://example.com/stream")
         assert "<Start>" in xml

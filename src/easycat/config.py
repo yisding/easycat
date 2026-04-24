@@ -782,12 +782,13 @@ def create_session(config: EasyCatConfig) -> Session:
         # Bridge the Twilio start-event customParameters through to
         # ``session.call_identity`` so the agent (or its tools) sees
         # who's calling without every app reimplementing the plumbing.
-        if isinstance(transport, TwilioTransport):
+        bind_identity_sink = getattr(transport, "bind_identity_sink", None)
+        if callable(bind_identity_sink):
 
             def _on_twilio_identity(identity: Any) -> None:
                 session.call_identity = identity
 
-            transport.bind_identity_sink(_on_twilio_identity)
+            bind_identity_sink(_on_twilio_identity)
     except Exception:
         if journal is not None and hasattr(journal, "close"):
             journal.close()
