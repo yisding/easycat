@@ -659,6 +659,37 @@ def _safe_config_ns(config: EasyCatConfig) -> object:
     return SimpleNamespace(**attrs)
 
 
+def _merge_twilio_identity(existing: Any, incoming: Any) -> Any:
+    """Preserve an existing call identity while adding Twilio metadata."""
+    if incoming is None:
+        return existing
+    if existing is None:
+        return incoming
+
+    updates: dict[str, Any] = {}
+    incoming_call_sid = getattr(incoming, "call_sid", None)
+    if getattr(existing, "call_sid", None) is None and incoming_call_sid:
+        updates["call_sid"] = incoming_call_sid
+
+    existing_fields = getattr(existing, "custom_fields", None)
+    incoming_fields = getattr(incoming, "custom_fields", None)
+    if isinstance(existing_fields, dict) and isinstance(incoming_fields, dict):
+        merged_fields = dict(incoming_fields)
+        merged_fields.update(existing_fields)
+        if merged_fields != existing_fields:
+            updates["custom_fields"] = merged_fields
+
+    if not updates:
+        return existing
+    if hasattr(existing, "__dataclass_fields__"):
+        return replace(existing, **updates)
+
+    merged = copy.copy(existing)
+    for key, value in updates.items():
+        setattr(merged, key, value)
+    return merged
+
+
 def create_session(config: EasyCatConfig) -> Session:
     """Create a fully wired Session from EasyCatConfig."""
     session_id = f"session-{uuid4().hex[:12]}"
@@ -786,7 +817,7 @@ def create_session(config: EasyCatConfig) -> Session:
         if callable(bind_identity_sink):
 
             def _on_twilio_identity(identity: Any) -> None:
-                session.call_identity = identity
+                session.call_identity = _merge_twilio_identity(session.call_identity, identity)
 
             bind_identity_sink(_on_twilio_identity)
     except Exception:

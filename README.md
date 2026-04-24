@@ -55,12 +55,14 @@ session = create_session(config)
 
 ### Inbound calls (Twilio Media Streams)
 Point Twilio's inbound webhook at a `<Connect><Stream>` that carries
-the caller's phone number through as a `<Parameter>`:
+the caller's phone number and call direction through as `<Parameter>`
+children:
 
 ```xml
 <Response>
   <Connect>
     <Stream url="wss://your-app.example.com/twilio">
+      <Parameter name="Direction" value="{{Direction}}"/>
       <Parameter name="From" value="{{From}}"/>
       <Parameter name="To" value="{{To}}"/>
       <Parameter name="CallerName" value="{{CallerName}}"/>
@@ -395,9 +397,11 @@ Need recorder access, cancellation tokens, or handoffs? Add a
 flips into deep mode and calls your method with the live recorder plus
 a cancel token.
 
-Use `PydanticAIAdapter` for simple single-agent assistants. Use
-`PydanticAIWorkflowAdapter` when your voice app has step-based control flow,
-specialist pinning, or programmatic hand-offs between turns.
+In most cases, you can just pass your PydanticAI agent or workflow to
+`EasyCatConfig(agent=...)` and call `create_session(config)`; EasyCat
+auto-adapts it to the right bridge. Under the hood, simple single-agent
+assistants use `PydanticAIBridge`, while step-based workflows with
+specialist pinning or programmatic hand-offs use `GenericWorkflowBridge`.
 
 ## Examples
 Runnable examples live in the `examples/` directory:

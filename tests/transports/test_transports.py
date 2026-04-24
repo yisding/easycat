@@ -710,8 +710,10 @@ class TestTwiML:
         assert '<Stream url="wss://example.com/stream"' in xml
         assert 'track="both"' in xml
         assert "</Response>" in xml
-        # forward_caller_id defaults to True, so From/To/CallerName
-        # Parameter children are emitted for the inbound webhook.
+        # forward_caller_id defaults to True, so Direction/From/To/
+        # CallerName Parameter children are emitted for the webhook.
+        assert '<Parameter name="Direction"' in xml
+        assert "{{Direction}}" in xml
         assert '<Parameter name="From"' in xml
         assert "{{From}}" in xml
 

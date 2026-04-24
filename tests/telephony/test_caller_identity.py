@@ -314,6 +314,8 @@ def test_session_caller_id_message_renders_outbound() -> None:
     assert message is not None
     assert "+15551112222" in message
     assert "outbound" in message.lower()
+    assert "They dialed" not in message
+    assert "placed from +15559876543" in message
 
 
 def test_session_caller_id_message_handles_empty_identity() -> None:

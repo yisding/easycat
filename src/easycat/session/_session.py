@@ -706,7 +706,7 @@ class Session:
             except Exception:  # noqa: BLE001 - never break cancel path
                 logger.exception("Stage %s.handle_upstream failed", stage.name)
         # Telephony helpers journal the signal without a dedicated stage
-        # wrapper: one bare control-signal record per helper keeps the
+        # wrapper: one bare aggregate control-signal record keeps the
         # observability identical to the old stage path.
         if self._telephony_helpers:
             _journal_control_signal(self._run_ctx, stage="telephony", signal=signal)
@@ -1202,7 +1202,10 @@ class Session:
                 prefix = "This outbound call is to"
             parts.append(f"{prefix} {identity.caller_number}.")
         if identity.called_number:
-            parts.append(f"They dialed {identity.called_number}.")
+            if identity.direction == "outbound":
+                parts.append(f"It was placed from {identity.called_number}.")
+            else:
+                parts.append(f"They dialed {identity.called_number}.")
         if identity.display_name:
             parts.append(f"Caller ID name: {identity.display_name}.")
         return " ".join(parts) if parts else None

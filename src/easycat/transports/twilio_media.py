@@ -60,8 +60,23 @@ def _parse_twilio_start_identity(
             if isinstance(key, str) and isinstance(value, (str, int)):
                 params[key] = str(value)
 
-    caller = params.pop("From", "") or params.pop("from", "")
-    called = params.pop("To", "") or params.pop("to", "")
+    direction_raw = params.pop("Direction", "") or params.pop("direction", "")
+    direction_token = direction_raw.strip().lower()
+    if direction_token.startswith("outbound"):
+        direction = "outbound"
+    elif direction_token.startswith("inbound") or not direction_token:
+        direction = "inbound"
+    else:
+        direction = "unknown"
+
+    from_number = params.pop("From", "") or params.pop("from", "")
+    to_number = params.pop("To", "") or params.pop("to", "")
+    if direction == "outbound":
+        caller = to_number
+        called = from_number
+    else:
+        caller = from_number
+        called = to_number
     display_name = params.pop("CallerName", None) or params.pop("caller_name", None)
     city = params.pop("FromCity", "") or params.pop("from_city", "")
     state = params.pop("FromState", "") or params.pop("from_state", "")
@@ -71,7 +86,7 @@ def _parse_twilio_start_identity(
     identity = CallIdentity(
         caller_number=caller,
         called_number=called,
-        direction="inbound",
+        direction=direction,
         display_name=display_name,
         call_sid=call_sid,
         city=city or None,
@@ -318,15 +333,16 @@ class TwilioTransport(_ServerTransportBase):
         callSid plus anything you pass through as ``<Parameter>``
         children of the TwiML ``<Stream>``.  The convention — emitted
         by :func:`twiml_connect_stream` when
-        ``forward_caller_id=True`` — is to forward the inbound
+        ``forward_caller_id=True`` — is to forward ``Direction``,
         ``From``, ``To``, ``CallerName`` *and* Twilio's geographic
         fields (``FromCity``, ``FromState``, ``FromZip``,
-        ``FromCountry``) so the voice pipeline sees where the caller
-        is without a secondary Lookup API round-trip:
+        ``FromCountry``) so the voice pipeline sees who is on the far
+        end without a secondary Lookup API round-trip:
 
         .. code-block:: xml
 
             <Stream url="wss://…">
+              <Parameter name="Direction" value="{{Direction}}"/>
               <Parameter name="From" value="{{From}}"/>
               <Parameter name="To" value="{{To}}"/>
               <Parameter name="CallerName" value="{{CallerName}}"/>
@@ -742,9 +758,9 @@ def twiml_connect_stream(
         ``{{CallerCity}}`` …) so the inbound webhook forwards call
         metadata to the media-stream socket.
     forward_caller_id:
-        When ``True`` (default) emits ``From``, ``To`` and
-        ``CallerName`` ``<Parameter>`` children with Twilio template
-        placeholders so :class:`TwilioTransport` can populate
+        When ``True`` (default) emits ``Direction``, ``From``, ``To``,
+        ``CallerName`` and geographic ``<Parameter>`` children with
+        Twilio template placeholders so :class:`TwilioTransport` can populate
         :attr:`easycat.Session.call_identity` automatically.
     """
     from xml.sax.saxutils import quoteattr
@@ -755,13 +771,14 @@ def twiml_connect_stream(
 
     merged: dict[str, str] = {}
     if forward_caller_id:
-        # Twilio's inbound voice webhook carries these eight fields by
+        # Twilio's voice webhook carries these identity fields by
         # default; forwarding them all keeps ``CallIdentity`` fully
         # populated without an extra Lookup API round-trip.  Apps that
         # don't want geo metadata can set ``forward_caller_id=False``
         # and pass their own minimal ``parameters`` dict.
         merged.update(
             {
+                "Direction": "{{Direction}}",
                 "From": "{{From}}",
                 "To": "{{To}}",
                 "CallerName": "{{CallerName}}",
@@ -780,7 +797,7 @@ def twiml_connect_stream(
         )
     else:
         param_lines = "\n".join(
-            f"      <Parameter name={quoteattr(name)} value={quoteattr(value)}/>"
+            f"      <Parameter name={quoteattr(str(name))} value={quoteattr(str(value))}/>"
             for name, value in merged.items()
         )
         stream = (
