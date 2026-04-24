@@ -33,8 +33,11 @@
 </div>
 <script>
   // Debugger runs on a separate port (default 8090). Point the iframe at the
-  // same host the user opened this page on, swapping the port. ?debugger=URL
-  // overrides if the debugger lives elsewhere.
+  // same host the user opened this page on, swapping the port.
+  //   ?debugger_port=NNNN  — override the port (matches DASHBOARD_PORT)
+  //   ?debugger=URL        — override the entire URL (debugger on another host)
+  // webrtc_observability_server.py prints a URL that already includes the
+  // debugger_port query param, so the typical flow needs no manual editing.
   const params = new URLSearchParams(location.search);
   const override = params.get("debugger");
   const debuggerPort = params.get("debugger_port") || "8090";

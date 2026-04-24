@@ -73,9 +73,29 @@ async def main() -> None:
             await asyncio.sleep(0.02)
 
     async def receiver() -> None:
-        async for message in ws.recv_iter():
-            size = len(message) if isinstance(message, (bytes, bytearray)) else len(message or "")
-            print(f"[client] received {size} bytes/chars from server")
+        # ``recv_iter()`` only auto-reconnects on ``ConnectionClosed``; a
+        # clean server-initiated close (Ctrl-C of ws_server.py) ends the
+        # iterator normally. Wrap it so the demo keeps reconnecting.
+        while not stop.is_set():
+            try:
+                async for message in ws.recv_iter():
+                    size = (
+                        len(message)
+                        if isinstance(message, (bytes, bytearray))
+                        else len(message or "")
+                    )
+                    print(f"[client] received {size} bytes/chars from server")
+            except Exception as exc:
+                print(f"[client] receive loop error: {exc}")
+            if stop.is_set():
+                return
+            print("[client] receive stream ended; reconnecting…")
+            try:
+                await ws.connect()
+            except Exception as exc:
+                print(f"[client] reconnect failed: {exc}; giving up")
+                stop.set()
+                return
 
     send_task = asyncio.create_task(sender())
     recv_task = asyncio.create_task(receiver())

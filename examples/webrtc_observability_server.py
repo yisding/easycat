@@ -113,7 +113,11 @@ async def main() -> None:
         allow_remote=debugger_host not in ("127.0.0.1", "localhost"),
     )
 
-    print(f"WebRTC + debugger: http://localhost:{signaling_port}/webrtc_observability.html")
+    combined_url = (
+        f"http://localhost:{signaling_port}/webrtc_observability.html"
+        f"?debugger_port={debugger_port}"
+    )
+    print(f"WebRTC + debugger: {combined_url}")
     print(f"WebRTC client only: http://localhost:{signaling_port}/webrtc_client.html")
     print(f"Debugger only:     http://{debugger_host}:{debugger_port}")
 
