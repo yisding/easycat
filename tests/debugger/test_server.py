@@ -173,6 +173,24 @@ def test_filter_records_by_sequence_range():
     assert [r["sequence"] for r in out] == [3, 4, 5, 6]
 
 
+def test_filter_records_by_multiple_names():
+    records = [
+        {"sequence": 1, "name": "vad_start_speaking", "data": {}},
+        {"sequence": 2, "name": "tts_audio", "data": {}},
+        {"sequence": 3, "name": "stt_partial", "data": {}},
+        {"sequence": 4, "name": "bot_started_speaking", "data": {}},
+    ]
+    out = _filter_records(
+        records,
+        stage=None,
+        turn_id=None,
+        name=["vad_start_speaking", "stt_partial"],
+        from_seq=None,
+        to_seq=None,
+    )
+    assert [r["sequence"] for r in out] == [1, 3]
+
+
 def test_summarise_turns_tracks_audio_bytes():
     records = [
         {

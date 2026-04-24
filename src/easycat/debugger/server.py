@@ -255,7 +255,7 @@ def _filter_records(
     *,
     stage: str | None,
     turn_id: str | None,
-    name: str | None,
+    name: str | Iterable[str] | None,
     from_seq: int | None,
     to_seq: int | None,
     errors_only: bool = False,
@@ -266,11 +266,24 @@ def _filter_records(
     single combined operation; pagination on the HTTP API goes through
     :func:`_filter_and_paginate` so the response can carry both the
     page slice and the full match count.
+
+    ``name`` may be a single string (exact match) or an iterable of
+    strings (membership match).  The HTTP handler surfaces the latter
+    via repeated ``name=`` query params so the Live view can fetch only
+    the event names it renders without being capped by ``limit``.
     """
     if offset < 0:
         raise ValueError("offset must be >= 0")
     if limit is not None and limit <= 0:
         raise ValueError("limit must be > 0")
+    name_set: frozenset[str] | None
+    if name is None:
+        name_set = None
+    elif isinstance(name, str):
+        name_set = frozenset({name})
+    else:
+        collected = frozenset(name)
+        name_set = collected or None
     out = []
     for r in records:
         seq = r.get("sequence")
@@ -282,7 +295,7 @@ def _filter_records(
             continue
         if turn_id is not None and r.get("turn_id") != turn_id:
             continue
-        if name is not None and r.get("name") != name:
+        if name_set is not None and r.get("name") not in name_set:
             continue
         if stage is not None:
             data = r.get("data") or {}
@@ -305,7 +318,7 @@ def _filter_and_paginate(
     *,
     stage: str | None,
     turn_id: str | None,
-    name: str | None,
+    name: str | Iterable[str] | None,
     from_seq: int | None,
     to_seq: int | None,
     errors_only: bool,
@@ -838,12 +851,17 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             offset = int(params["offset"]) if "offset" in params else 0
         except ValueError:
             return web.Response(status=400, text="from/to/limit/offset must be integers")
+        # aiohttp's ``getall`` returns every repeated ``name=`` value so
+        # the Live view can request only the handful of event names it
+        # actually renders (e.g. ``name=vad_start_speaking&name=stt_partial``)
+        # without being capped by ``limit``.
+        names = [n for n in params.getall("name", ()) if n]
         try:
             page, total = _filter_and_paginate(
                 source.records(),
                 stage=params.get("stage") or None,
                 turn_id=params.get("turn") or None,
-                name=params.get("name") or None,
+                name=names or None,
                 from_seq=from_seq,
                 to_seq=to_seq,
                 errors_only=params.get("errors") == "1",

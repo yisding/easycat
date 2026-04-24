@@ -20,8 +20,15 @@ from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 
 def main(backend: str) -> None:
     # Probe so you can see which class actually resolved before the session starts.
+    # Close the probe afterwards: Krisp/RNNoise reducers hold native
+    # resources (and Krisp may allow only one session at a time), so
+    # leaving the probe alive would change ``auto`` fallback behavior
+    # when ``run()`` builds its own reducer from the same config.
     probe = create_noise_reducer(NoiseReducerConfig(backend=backend))
     print(f"[noise_reduction_backends] requested={backend!r} built={type(probe).__name__}")
+    close = getattr(probe, "close", None)
+    if callable(close):
+        close()
 
     run(
         EasyCatConfig.mic(

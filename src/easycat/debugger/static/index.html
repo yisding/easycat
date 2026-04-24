@@ -819,6 +819,7 @@ function clear(node) { while (node.firstChild) node.removeChild(node.firstChild)
 const state = {
   manifest: null,
   records: [],
+  liveRecords: [],
   turns: [],
   timeline: [],
   transcripts: [],
@@ -879,13 +880,17 @@ async function refreshAll() {
 async function loadAllSnapshots() {
   // Cap the snapshot record fetch — the records table re-fetches with
   // its own filters/limit when the user interacts.  This snapshot is
-  // only used for stage-filter population and pipeline counts.
+  // only used for stage-filter population and pipeline counts.  The
+  // Live view has its own uncapped, name-filtered fetch so that
+  // chatty ``tts_audio`` / ``agent_delta`` records in long sessions
+  // don't push later VAD/ASR/agent events out of the 1000-record cap.
   const [recsResp, turnsResp, timelineResp, transcriptResp, costResp] = await Promise.all([
     getJSON("/api/records?limit=1000"),
     getJSON("/api/turns"),
     getJSON("/api/timeline"),
     getJSON("/api/transcript"),
     getJSON("/api/cost").catch(() => ({ per_turn: {}, totals: {} })),
+    loadLiveRecords(),
   ]);
   state.records = recsResp.records;
   state.recordsTotal = recsResp.total ?? recsResp.records.length;
@@ -895,6 +900,22 @@ async function loadAllSnapshots() {
   state.cost = costResp;
   $("#status-turns").textContent = `${state.turns.length} turns`;
   populateStageFilter();
+}
+
+async function loadLiveRecords() {
+  // Fetch a dedicated record set for the Live multi-track view: only
+  // the event names the view renders, and uncapped so longer sessions
+  // still show recent VAD/ASR/agent activity.
+  const params = new URLSearchParams();
+  for (const lane of LIVE_LANES) {
+    for (const n of lane.names) params.append("name", n);
+  }
+  try {
+    const r = await getJSON(`/api/records?${params}`);
+    state.liveRecords = r.records || [];
+  } catch {
+    state.liveRecords = [];
+  }
 }
 
 function populateStageFilter() {
@@ -987,8 +1008,10 @@ function renderTimelineView() {
 
 // ── Live multi-track view ────────────────────────────────────────
 // Audacity-style timeline that buckets journal records into per-source
-// lanes.  Driven by ``state.records`` so it works for live sessions
-// (polled WebSocket updates) and replayed bundles alike.
+// lanes.  Driven by ``state.liveRecords`` — a dedicated, uncapped,
+// name-filtered fetch so chatty per-chunk records (``tts_audio``,
+// ``agent_delta``) in long sessions don't push later events out of
+// the capped ``state.records`` snapshot.
 const LIVE_LANES = [
   { id: "vad", label: "vad", names: ["vad_start_speaking", "vad_stop_speaking"] },
   { id: "asr", label: "asr", names: ["stt_partial", "stt_final"] },
@@ -1029,7 +1052,7 @@ $("#live-zoom").addEventListener("input", (e) => {
 function renderLiveView() {
   const root = $("#live-canvas");
   clear(root);
-  const records = (state.records || []).filter(
+  const records = (state.liveRecords || []).filter(
     (r) => LANE_BY_NAME.has(r.name) && r.timing && r.timing.mono_ns,
   );
   if (records.length === 0) {
@@ -1134,7 +1157,9 @@ function _liveSelectRecord(seq) {
   $("#stage-filter").value = "";
   $("#name-filter").value = "";
   activateTab("records");
-  const rec = (state.records || []).find((r) => r.sequence === seq);
+  const rec =
+    (state.records || []).find((r) => r.sequence === seq) ||
+    (state.liveRecords || []).find((r) => r.sequence === seq);
   if (rec) selectRecord(rec);
 }
 

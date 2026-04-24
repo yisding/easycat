@@ -62,7 +62,28 @@ async def main() -> None:
         loop.add_signal_handler(sig, stop.set)
 
     print(f"[client] connecting to {URL} (Ctrl+C to stop)")
-    await ws.connect()
+    # ``max_retries=-1`` means the initial ``connect()`` retries forever
+    # when the server is down.  Race it against ``stop`` so Ctrl-C
+    # cancels the attempt instead of hanging until a server appears.
+    connect_task = asyncio.create_task(ws.connect())
+    stop_task = asyncio.create_task(stop.wait())
+    try:
+        done, _ = await asyncio.wait(
+            {connect_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        if not stop_task.done():
+            stop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+    if connect_task not in done:
+        connect_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await connect_task
+        await ws.close()
+        return
+    # Surface connect errors (rather than silently proceeding).
+    connect_task.result()
 
     async def sender() -> None:
         while not stop.is_set():
