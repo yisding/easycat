@@ -1164,10 +1164,13 @@ class Session:
         Populated by telephony transports on connect (Twilio reads
         ``<Stream>`` customParameters) or by
         :meth:`OutboundCallManager.place_call` for outbound calls.
-        Tool code (including agent function tools) reads this directly;
-        whether the LLM sees it in its prompt is governed by
-        :attr:`caller_id_exposure`.
+        Tool code (including agent function tools) reads this directly
+        unless :attr:`caller_id_exposure` is ``"off"``.  Internal
+        telephony policy hooks retain the private value so opt-out
+        detection can still update DNC state.
         """
+        if self._caller_id_exposure == "off":
+            return None
         return self._call_identity
 
     @call_identity.setter

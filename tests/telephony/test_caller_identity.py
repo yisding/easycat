@@ -20,7 +20,8 @@ from typing import Any
 import pytest
 
 from easycat.cancel import CancelToken
-from easycat.events import CallInitiated, EventBus
+from easycat.events import CallInitiated, EventBus, STTFinal
+from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentTurnInput,
@@ -31,6 +32,7 @@ from easycat.runtime.context import RunContext
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import CallIdentity
 from easycat.stages.agent import AgentStage
+from easycat.telephony.compliance import DNCList
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
 
 
@@ -141,6 +143,29 @@ async def test_twilio_handle_start_without_custom_parameters() -> None:
     assert transport.call_identity.direction == "inbound"
     assert transport.call_identity.city is None
     assert transport.call_identity.state is None
+
+
+@pytest.mark.asyncio
+async def test_twilio_handle_start_ignores_unsubstituted_template_parameters() -> None:
+    transport = _make_twilio_transport()
+    await transport._handle_start(
+        {
+            "streamSid": "MZ1",
+            "start": {
+                "callSid": "CA1",
+                "customParameters": {
+                    "Direction": "{{Direction}}",
+                    "From": "{{From}}",
+                    "To": "{{To}}",
+                    "CallerName": "{{CallerName}}",
+                },
+            },
+        }
+    )
+    assert transport.call_identity is not None
+    assert transport.call_identity.caller_number == ""
+    assert transport.call_identity.called_number == ""
+    assert transport.call_identity.display_name is None
 
 
 # ── create_session wires OutboundCallManager → session.call_identity ─
@@ -274,6 +299,30 @@ def test_session_caller_id_message_off_returns_none() -> None:
         )
     )
     assert session._caller_id_system_message() is None
+    assert session.call_identity is None
+    assert session._call_identity is not None
+    assert session._call_identity.caller_number == "+15550000000"
+
+
+@pytest.mark.asyncio
+async def test_session_caller_id_off_hides_tools_but_keeps_opt_out_internal() -> None:
+    from easycat import Session, SessionConfig
+    from easycat.stubs import NoopAgent
+
+    dnc = DNCList()
+    session = Session(
+        SessionConfig(
+            agent=NoopAgent(),
+            runtime_mode="text_session",
+            dnc_list=dnc,
+            call_identity=CallIdentity(caller_number="+15550000000", direction="inbound"),
+            caller_id_exposure="off",
+        )
+    )
+
+    assert session.call_identity is None
+    await session.event_bus.emit(STTFinal(text="Please stop calling me"))
+    assert dnc.is_on_dnc("+15550000000")
 
 
 def test_session_caller_id_message_tools_only_hides_from_llm() -> None:
@@ -354,3 +403,26 @@ async def test_agent_stage_forces_context_when_system_prefix_given() -> None:
     assert bridge.captured_contexts[0]
     assert bridge.captured_contexts[0][0]["role"] == "system"
     assert "+15550000000" in bridge.captured_contexts[0][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_agent_stage_system_prefix_preserves_agent_runner_bridge_history() -> None:
+    bridge = _CaptureBridge()
+    stage = AgentStage(AgentRunner(bridge))
+
+    async for _ in stage.execute_streaming("first", _ctx(), _turn()):
+        pass
+    async for _ in stage.execute_streaming(
+        "second",
+        _ctx(),
+        _turn(),
+        system_prefix="caller note about +15550000000",
+    ):
+        pass
+
+    second_context = bridge.captured_contexts[1]
+    assert second_context == [
+        {"role": "system", "content": "caller note about +15550000000"},
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "ok"},
+    ]

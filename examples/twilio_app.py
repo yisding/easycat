@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from urllib.parse import parse_qsl
 
 import websockets
 from websockets.asyncio.server import ServerConnection
@@ -70,7 +71,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
         async with manager.connection(key, session):
             await ws.wait_closed()
 
-    from fastapi import FastAPI, Response
+    from fastapi import FastAPI, Request, Response
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -85,8 +86,21 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
     app = FastAPI(lifespan=lifespan)
 
     @app.post("/twiml")
-    async def twiml() -> Response:
-        xml = twiml_connect_stream(stream_url)
+    async def twiml(request: Request) -> Response:
+        form = dict(parse_qsl((await request.body()).decode(), keep_blank_values=True))
+        parameters = {"Direction": form.get("Direction") or "inbound"}
+        for name in (
+            "From",
+            "To",
+            "CallerName",
+            "FromCity",
+            "FromState",
+            "FromZip",
+            "FromCountry",
+        ):
+            if form.get(name):
+                parameters[name] = form[name]
+        xml = twiml_connect_stream(stream_url, parameters=parameters)
         return Response(content=xml, media_type="application/xml")
 
     return app

@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-from easycat.config import OutboundCallConfig, TelephonyConfig, VoicemailDetectionConfig
+import pytest
+
+from easycat.config import (
+    OutboundCallConfig,
+    TelephonyConfig,
+    VoicemailDetectionConfig,
+    _create_telephony_helpers,
+)
+from easycat.events import CallFailed, EventBus
+from easycat.telephony.call_state import OutboundCallStateMachine
+from easycat.telephony.compliance import DNCList
+from easycat.telephony.number_health import CallDispositionTracker
 
 
 class TestVoicemailDetectionConfig:
@@ -141,3 +152,74 @@ class TestTelephonyConfigExtension:
         assert cfg.enable_voicemail_detector is False
         assert cfg.enable_outbound_call_manager is False
         assert cfg.outbound is None
+
+    def test_outbound_helpers_start_disposition_tracker_before_state_machine(self) -> None:
+        bus = EventBus()
+        helpers = _create_telephony_helpers(
+            bus,
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(from_number="+15559876543"),
+            ),
+        )
+        tracker_index = next(
+            i for i, helper in enumerate(helpers) if isinstance(helper, CallDispositionTracker)
+        )
+        sm_index = next(
+            i for i, helper in enumerate(helpers) if isinstance(helper, OutboundCallStateMachine)
+        )
+        assert tracker_index < sm_index
+
+    @pytest.mark.asyncio
+    async def test_outbound_helpers_record_specific_failed_disposition(self) -> None:
+        bus = EventBus()
+        helpers = _create_telephony_helpers(
+            bus,
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(from_number="+15559876543"),
+            ),
+        )
+        tracker = next(helper for helper in helpers if isinstance(helper, CallDispositionTracker))
+
+        for helper in helpers:
+            helper.start()
+        try:
+            await bus.emit(CallFailed(call_sid="CA1", reason="busy"))
+            assert tracker._dispositions
+            assert tracker._dispositions[0][1] == "busy"
+        finally:
+            for helper in helpers:
+                helper.stop()
+
+    def test_shared_dnc_list_is_wired_to_outbound_manager(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Manager:
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.dnc_list = None
+
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+        monkeypatch.setattr("easycat.config.OutboundCallManager", _Manager)
+
+        dnc = DNCList()
+        helpers = _create_telephony_helpers(
+            EventBus(),
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(
+                    from_number="+15559876543",
+                    twilio_account_sid="AC123",
+                    twilio_auth_token="secret",
+                ),
+            ),
+            dnc_list=dnc,
+        )
+
+        manager = next(helper for helper in helpers if isinstance(helper, _Manager))
+        assert manager.dnc_list is dnc

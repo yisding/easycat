@@ -68,8 +68,8 @@ class CallIdentity:
     Populated from the Twilio ``<Stream>`` ``customParameters`` for
     inbound calls and from :meth:`OutboundCallManager.place_call` for
     outbound calls.  Exposed to the agent and to tools via
-    :attr:`Session.call_identity`; the visibility to the agent itself
-    is controlled by :attr:`SessionConfig.caller_id_exposure`.
+    :attr:`Session.call_identity`; visibility to tools and the agent
+    prompt is controlled by :attr:`SessionConfig.caller_id_exposure`.
 
     ``caller_number`` is the far-end (the human), ``called_number`` is
     the near-end (the bot's DID).  ``display_name`` is the optional
@@ -220,5 +220,7 @@ class SessionConfig:
     #     but available to tool code via ``session.call_identity``.
     #     Right for PII-sensitive workflows.
     #   - "off" hides it from both layers.
+    #     Internal telephony policy hooks still retain the private
+    #     identity for DNC/opt-out handling.
     call_identity: CallIdentity | None = None
     caller_id_exposure: CallerIdExposure = "tools_only"

@@ -54,6 +54,19 @@ class _DummyWebSocket:
         return None
 
 
+class _ClosingWebSocket(_DummyWebSocket):
+    def __init__(self, messages: list[str]) -> None:
+        self._messages = messages
+
+    def __aiter__(self) -> _ClosingWebSocket:
+        return self
+
+    async def __anext__(self) -> str:
+        if not self._messages:
+            raise StopAsyncIteration
+        return self._messages.pop(0)
+
+
 # ── transport_kind ─────────────────────────────────────────────────
 
 
@@ -240,3 +253,28 @@ async def test_twilio_connection_start_and_stop_emit_lifecycle_events() -> None:
     assert ended[0].call_sid == "CA1"
     assert ended[0].number == "+15551234567"
     assert ended[0].duration_s is not None and ended[0].duration_s >= 0
+
+
+@pytest.mark.asyncio
+async def test_twilio_connection_close_without_stop_emits_call_ended() -> None:
+    bus = EventBus()
+    ws = _ClosingWebSocket(
+        [
+            (
+                '{"event": "start", "streamSid": "MZ1", "start": {'
+                '"streamSid": "MZ1", "callSid": "CA1", '
+                '"customParameters": {"From": "+15551234567"}}}'
+            )
+        ]
+    )
+    transport = TwilioConnectionTransport(ws, event_bus=bus)
+    ended: list[CallEnded] = []
+    bus.subscribe(CallEnded, ended.append)
+
+    await transport.connect()
+    assert transport._receive_task is not None
+    await transport._receive_task
+
+    assert len(ended) == 1
+    assert ended[0].call_sid == "CA1"
+    assert ended[0].number == "+15551234567"

@@ -476,6 +476,8 @@ class EasyCatConfig:
     # tool code via ``session.call_identity``.  ``"system_message"``
     # prepends a short system note on every turn so the agent can
     # reason about the caller.  ``"off"`` hides it from both layers.
+    # Internal telephony hooks still retain a private identity for
+    # opt-out/DNC handling.
     # See :class:`easycat.session._types.CallIdentity` for the data
     # model and :class:`easycat.session._types.CallerIdExposure` for
     # the allowed literals.
@@ -763,7 +765,11 @@ def create_session(config: EasyCatConfig) -> Session:
         if smart_turn is not None:
             turn_config = replace(turn_config, endpoint_detector=smart_turn)
 
-        telephony_helpers = _create_telephony_helpers(event_bus, config.telephony)
+        telephony_helpers = _create_telephony_helpers(
+            event_bus,
+            config.telephony,
+            dnc_list=config.dnc_list,
+        )
         action_executors = [*config.action_executors, *_create_action_executors(config.telephony)]
 
         # Extract audio gate from the outbound call state machine, if present.
@@ -817,7 +823,7 @@ def create_session(config: EasyCatConfig) -> Session:
         if callable(bind_identity_sink):
 
             def _on_twilio_identity(identity: Any) -> None:
-                session.call_identity = _merge_twilio_identity(session.call_identity, identity)
+                session.call_identity = _merge_twilio_identity(session._call_identity, identity)
 
             bind_identity_sink(_on_twilio_identity)
     except Exception:
@@ -852,7 +858,7 @@ def create_session(config: EasyCatConfig) -> Session:
         # Don't clobber an existing inbound identity — a session that
         # places an outbound call while an inbound call is live is
         # unusual but shouldn't silently lose the inbound number.
-        if session.call_identity is not None and session.call_identity.direction == "inbound":
+        if session._call_identity is not None and session._call_identity.direction == "inbound":
             return
         session.call_identity = _CallIdentity(
             caller_number=event.to,
@@ -1205,7 +1211,12 @@ def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
     return factory(config, event_bus)
 
 
-def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | None) -> list[Any]:
+def _create_telephony_helpers(
+    event_bus: EventBus,
+    config: TelephonyConfig | None,
+    *,
+    dnc_list: Any | None = None,
+) -> list[Any]:
     helpers: list[Any] = []
     if config is None:
         return helpers
@@ -1217,7 +1228,7 @@ def _create_telephony_helpers(event_bus: EventBus, config: TelephonyConfig | Non
         helpers.append(VoicemailDetector(event_bus, config.voicemail_detector))
 
     if config.enable_outbound_call_manager and config.outbound:
-        _create_outbound_helpers(event_bus, config.outbound, helpers)
+        _create_outbound_helpers(event_bus, config.outbound, helpers, dnc_list=dnc_list)
 
     return helpers
 
@@ -1232,7 +1243,11 @@ def _create_action_executors(config: TelephonyConfig | None) -> list[SessionActi
 
 
 def _create_outbound_helpers(
-    event_bus: EventBus, oc: OutboundCallConfig, helpers: list[Any]
+    event_bus: EventBus,
+    oc: OutboundCallConfig,
+    helpers: list[Any],
+    *,
+    dnc_list: Any | None = None,
 ) -> None:
     """Build and wire the outbound call pipeline helpers."""
     # STT+AMD fusion classifier — must be wired before the state machine
@@ -1243,6 +1258,12 @@ def _create_outbound_helpers(
     # Post-screening voicemail detector — re-classifies after screening.
     post_screening_vm = PostScreeningVoicemailDetector(event_bus)
     helpers.append(post_screening_vm)
+
+    # Disposition tracking must subscribe before the state machine: on
+    # CallFailed, the tracker records the specific failure reason before
+    # the state machine emits the terminal ENDED transition.
+    if oc.enable_disposition_tracker:
+        helpers.append(CallDispositionTracker(event_bus))
 
     def _on_screening_for_post_vm(event: CallScreening) -> None:
         post_screening_vm.activate()
@@ -1330,8 +1351,6 @@ def _create_outbound_helpers(
     # Observability helpers — pure event-bus listeners, on by default.
     if oc.enable_number_health:
         helpers.append(NumberHealthMonitor(event_bus))
-    if oc.enable_disposition_tracker:
-        helpers.append(CallDispositionTracker(event_bus))
 
     # Outbound call manager (requires Twilio credentials).
     manager: OutboundCallManager | None = None
@@ -1347,6 +1366,7 @@ def _create_outbound_helpers(
                 status_callback_url=oc.status_callback_url,
                 **oc.voicemail_detection.to_twilio_params(),
             )
+            manager.dnc_list = dnc_list
             helpers.append(manager)
         except ImportError:
             logger.warning("twilio package not installed — OutboundCallManager disabled")

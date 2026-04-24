@@ -11,6 +11,7 @@ from easycat.events import (
     CallAnswered,
     CallEnded,
     CallFailed,
+    CallInitiated,
     CallRinging,
     CallScreening,
     EventBus,
@@ -80,6 +81,23 @@ class TestOutboundCallStateMachine:
         try:
             await bus.emit(CallRinging(call_sid="CA1"))
             await bus.emit(CallAnswered(call_sid="CA1"))
+            assert sm.state == OutboundCallState.CLASSIFYING
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_initiated_status_does_not_reset_active_call(self) -> None:
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15551234567", from_="+15557654321"))
+            await bus.emit(CallRinging(call_sid="CA1"))
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            assert sm.state == OutboundCallState.CLASSIFYING
+
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15551234567", from_="+15557654321"))
+
             assert sm.state == OutboundCallState.CLASSIFYING
         finally:
             sm.stop()

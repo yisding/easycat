@@ -54,28 +54,39 @@ session = create_session(config)
 ## Telephony (inbound + outbound)
 
 ### Inbound calls (Twilio Media Streams)
-Point Twilio's inbound webhook at a `<Connect><Stream>` that carries
-the caller's phone number and call direction through as `<Parameter>`
-children:
+Point Twilio's inbound webhook at a handler that returns
+`<Connect><Stream>` TwiML and passes actual webhook form values through
+as `<Parameter>` children:
 
-```xml
-<Response>
-  <Connect>
-    <Stream url="wss://your-app.example.com/twilio">
-      <Parameter name="Direction" value="{{Direction}}"/>
-      <Parameter name="From" value="{{From}}"/>
-      <Parameter name="To" value="{{To}}"/>
-      <Parameter name="CallerName" value="{{CallerName}}"/>
-    </Stream>
-  </Connect>
-</Response>
+```python
+from urllib.parse import parse_qsl
+
+from fastapi import Request, Response
+from easycat.transports.twilio_media import twiml_connect_stream
+
+
+@app.post("/twiml")
+async def twiml(request: Request) -> Response:
+    form = dict(parse_qsl((await request.body()).decode(), keep_blank_values=True))
+    xml = twiml_connect_stream(
+        "wss://your-app.example.com/twilio",
+        parameters={
+            "Direction": form.get("Direction") or "inbound",
+            "From": form.get("From", ""),
+            "To": form.get("To", ""),
+            "CallerName": form.get("CallerName", ""),
+        },
+    )
+    return Response(content=xml, media_type="application/xml")
 ```
 
 `TwilioTransport` parses `start.customParameters` and writes a
 `CallIdentity` (caller / called numbers, direction, optional display
 name, and any extra fields you pass) onto
 `session.call_identity`. Tool code inside your agent reads
-`session.call_identity.caller_number` directly.
+`session.call_identity.caller_number` directly. Do not pass
+`"{{From}}"`-style placeholders to `twiml_connect_stream`; Twilio
+forwards those verbatim in generated TwiML.
 
 ### Outbound calls (Twilio REST)
 Enable the outbound pipeline via `EasyCatConfig.telephony`:

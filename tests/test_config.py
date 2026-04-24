@@ -101,6 +101,38 @@ async def test_create_session_binds_twilio_connection_identity_sink():
 
 
 @pytest.mark.asyncio
+async def test_create_session_caller_id_off_keeps_twilio_identity_private():
+    transport = TwilioConnectionTransport(_DummyWebSocket())
+    session = create_session(
+        EasyCatConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=transport,
+            caller_id_exposure="off",
+        )
+    )
+
+    await transport._handle_start(
+        {
+            "streamSid": "MZ1",
+            "start": {
+                "streamSid": "MZ1",
+                "callSid": "CA1",
+                "customParameters": {
+                    "From": "+15551234567",
+                    "To": "+15557654321",
+                },
+            },
+        }
+    )
+
+    assert transport.call_identity is not None
+    assert session.call_identity is None
+    assert session._call_identity is not None
+    assert session._call_identity.caller_number == "+15551234567"
+
+
+@pytest.mark.asyncio
 async def test_create_session_twilio_identity_sink_merges_with_outbound_identity():
     transport = TwilioConnectionTransport(_DummyWebSocket())
     session = create_session(

@@ -60,7 +60,9 @@ def _parse_twilio_start_identity(
             if isinstance(key, str) and isinstance(value, (str, int)):
                 params[key] = str(value)
 
-    direction_raw = params.pop("Direction", "") or params.pop("direction", "")
+    direction_raw = _clean_twilio_parameter(
+        params.pop("Direction", "") or params.pop("direction", "")
+    )
     direction_token = direction_raw.strip().lower()
     if direction_token.startswith("outbound"):
         direction = "outbound"
@@ -69,25 +71,29 @@ def _parse_twilio_start_identity(
     else:
         direction = "unknown"
 
-    from_number = params.pop("From", "") or params.pop("from", "")
-    to_number = params.pop("To", "") or params.pop("to", "")
+    from_number = _clean_twilio_parameter(params.pop("From", "") or params.pop("from", ""))
+    to_number = _clean_twilio_parameter(params.pop("To", "") or params.pop("to", ""))
     if direction == "outbound":
         caller = to_number
         called = from_number
     else:
         caller = from_number
         called = to_number
-    display_name = params.pop("CallerName", None) or params.pop("caller_name", None)
-    city = params.pop("FromCity", "") or params.pop("from_city", "")
-    state = params.pop("FromState", "") or params.pop("from_state", "")
-    zip_code = params.pop("FromZip", "") or params.pop("from_zip", "")
-    country = params.pop("FromCountry", "") or params.pop("from_country", "")
+    display_name = _clean_twilio_parameter(
+        params.pop("CallerName", None) or params.pop("caller_name", None)
+    )
+    city = _clean_twilio_parameter(params.pop("FromCity", "") or params.pop("from_city", ""))
+    state = _clean_twilio_parameter(params.pop("FromState", "") or params.pop("from_state", ""))
+    zip_code = _clean_twilio_parameter(params.pop("FromZip", "") or params.pop("from_zip", ""))
+    country = _clean_twilio_parameter(
+        params.pop("FromCountry", "") or params.pop("from_country", "")
+    )
 
     identity = CallIdentity(
         caller_number=caller,
         called_number=called,
         direction=direction,
-        display_name=display_name,
+        display_name=display_name or None,
         call_sid=call_sid,
         city=city or None,
         state=state or None,
@@ -96,6 +102,16 @@ def _parse_twilio_start_identity(
         custom_fields=params,
     )
     return identity, caller, called
+
+
+def _clean_twilio_parameter(value: Any) -> str:
+    """Return a Twilio parameter value, ignoring unsubstituted templates."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.startswith("{{") and text.endswith("}}"):
+        return ""
+    return text
 
 
 async def _emit_twilio_call_ended(
@@ -279,9 +295,17 @@ class TwilioTransport(_ServerTransportBase):
         except websockets.exceptions.ConnectionClosed:
             logger.info("Twilio Media Streams disconnected")
         finally:
+            await _emit_twilio_call_ended(
+                self._event_bus,
+                call_sid=self._call_sid,
+                answered_at=self._answered_at,
+                call_identity=self._call_identity,
+            )
             self._ws = None
             self._client_connected.clear()
             self._stream_sid = None
+            self._call_sid = None
+            self._answered_at = None
             self._enqueue_sentinel()
 
     async def _handle_message(self, raw: str) -> None:
@@ -332,24 +356,23 @@ class TwilioTransport(_ServerTransportBase):
         Twilio's Media Streams ``start`` payload carries streamSid /
         callSid plus anything you pass through as ``<Parameter>``
         children of the TwiML ``<Stream>``.  The convention — emitted
-        by :func:`twiml_connect_stream` when
-        ``forward_caller_id=True`` — is to forward ``Direction``,
-        ``From``, ``To``, ``CallerName`` *and* Twilio's geographic
-        fields (``FromCity``, ``FromState``, ``FromZip``,
-        ``FromCountry``) so the voice pipeline sees who is on the far
-        end without a secondary Lookup API round-trip:
+        by :func:`twiml_connect_stream` — is to forward actual webhook
+        values for ``Direction``, ``From``, ``To``, ``CallerName`` *and*
+        Twilio's geographic fields (``FromCity``, ``FromState``,
+        ``FromZip``, ``FromCountry``) so the voice pipeline sees who is
+        on the far end without a secondary Lookup API round-trip:
 
         .. code-block:: xml
 
             <Stream url="wss://…">
-              <Parameter name="Direction" value="{{Direction}}"/>
-              <Parameter name="From" value="{{From}}"/>
-              <Parameter name="To" value="{{To}}"/>
-              <Parameter name="CallerName" value="{{CallerName}}"/>
-              <Parameter name="FromCity" value="{{FromCity}}"/>
-              <Parameter name="FromState" value="{{FromState}}"/>
-              <Parameter name="FromZip" value="{{FromZip}}"/>
-              <Parameter name="FromCountry" value="{{FromCountry}}"/>
+              <Parameter name="Direction" value="inbound"/>
+              <Parameter name="From" value="+15551234567"/>
+              <Parameter name="To" value="+15557654321"/>
+              <Parameter name="CallerName" value="Alice Example"/>
+              <Parameter name="FromCity" value="SAN FRANCISCO"/>
+              <Parameter name="FromState" value="CA"/>
+              <Parameter name="FromZip" value="94105"/>
+              <Parameter name="FromCountry" value="US"/>
             </Stream>
 
         This method also emits a :class:`~easycat.events.CallAnswered`
@@ -629,6 +652,12 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         except websockets.exceptions.ConnectionClosed:
             logger.info("Twilio Media Streams disconnected")
         finally:
+            await _emit_twilio_call_ended(
+                self._event_bus,
+                call_sid=self._call_sid,
+                answered_at=self._answered_at,
+                call_identity=self._call_identity,
+            )
             self._connected = False
             self._client_connected.clear()
             self._stream_sid = None
@@ -740,7 +769,7 @@ def twiml_connect_stream(
     track: str = "both",
     status_callback_url: str | None = None,
     parameters: dict[str, str] | None = None,
-    forward_caller_id: bool = True,
+    forward_caller_id: bool = False,
 ) -> str:
     """Generate TwiML ``<Connect><Stream>`` XML for bidirectional streaming.
 
@@ -753,15 +782,15 @@ def twiml_connect_stream(
     status_callback_url:
         Optional URL for Twilio to POST call status updates.
     parameters:
-        Extra ``<Parameter>`` children to attach to the stream.  Values
-        are typically Twilio template placeholders (``{{From}}``,
-        ``{{CallerCity}}`` …) so the inbound webhook forwards call
-        metadata to the media-stream socket.
+        Extra ``<Parameter>`` children to attach to the stream.  Pass
+        actual values from the Twilio webhook request, e.g.
+        ``{"From": form["From"], "To": form["To"]}``.  Twilio forwards
+        generated TwiML parameter values verbatim, so ``"{{From}}"``
+        placeholders are not substituted for Python-generated XML.
     forward_caller_id:
-        When ``True`` (default) emits ``Direction``, ``From``, ``To``,
-        ``CallerName`` and geographic ``<Parameter>`` children with
-        Twilio template placeholders so :class:`TwilioTransport` can populate
-        :attr:`easycat.Session.call_identity` automatically.
+        Kept as a compatibility assertion.  When ``True``, at least one
+        caller-ID parameter must be supplied explicitly in ``parameters``;
+        no placeholder values are generated.
     """
     from xml.sax.saxutils import quoteattr
 
@@ -769,27 +798,34 @@ def twiml_connect_stream(
     if status_callback_url:
         status_attr = f" statusCallback={quoteattr(status_callback_url)}"
 
-    merged: dict[str, str] = {}
+    merged: dict[str, str] = dict(parameters or {})
     if forward_caller_id:
-        # Twilio's voice webhook carries these identity fields by
-        # default; forwarding them all keeps ``CallIdentity`` fully
-        # populated without an extra Lookup API round-trip.  Apps that
-        # don't want geo metadata can set ``forward_caller_id=False``
-        # and pass their own minimal ``parameters`` dict.
-        merged.update(
-            {
-                "Direction": "{{Direction}}",
-                "From": "{{From}}",
-                "To": "{{To}}",
-                "CallerName": "{{CallerName}}",
-                "FromCity": "{{FromCity}}",
-                "FromState": "{{FromState}}",
-                "FromZip": "{{FromZip}}",
-                "FromCountry": "{{FromCountry}}",
-            }
-        )
-    if parameters:
-        merged.update(parameters)
+        identity_names = {
+            "From",
+            "To",
+            "CallerName",
+            "FromCity",
+            "FromState",
+            "FromZip",
+            "FromCountry",
+            "from",
+            "to",
+            "caller_name",
+            "from_city",
+            "from_state",
+            "from_zip",
+            "from_country",
+        }
+        if not any(
+            _clean_twilio_parameter(value)
+            for name, value in merged.items()
+            if name in identity_names
+        ):
+            raise ValueError(
+                "forward_caller_id=True requires explicit caller-ID values in "
+                "parameters; Twilio does not substitute {{From}} placeholders "
+                "inside generated TwiML."
+            )
 
     if not merged:
         stream = (

@@ -144,6 +144,15 @@ class AgentStage:
         recorder = self._make_recorder(turn.id)
         input_text = input if isinstance(input, str) else str(input)
         base_context = list(self._history) if self._tracks_history else []
+        if (
+            not self._tracks_history
+            and system_prefix
+            and isinstance(bridge, AgentRunner)
+            and bridge.is_bridge
+        ):
+            # AgentRunner owns history for wrapped bridges.  A transient
+            # system prefix must augment that history, not replace it.
+            base_context = list(bridge.history)
         if system_prefix:
             # System messages prepended by Session are transient — they
             # describe the current turn's environment (caller ID, etc.)

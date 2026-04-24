@@ -415,6 +415,8 @@ class OutboundCallStateMachine:
         This allows a single session to handle sequential outbound calls
         without getting stuck in the ENDED state from a previous call.
         """
+        if event.call_sid and event.call_sid == self._call_sid:
+            return
         self._cancel_timers()
         self._gate.stop()
         self._gate.start()

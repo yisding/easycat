@@ -710,12 +710,7 @@ class TestTwiML:
         assert '<Stream url="wss://example.com/stream"' in xml
         assert 'track="both"' in xml
         assert "</Response>" in xml
-        # forward_caller_id defaults to True, so Direction/From/To/
-        # CallerName Parameter children are emitted for the webhook.
-        assert '<Parameter name="Direction"' in xml
-        assert "{{Direction}}" in xml
-        assert '<Parameter name="From"' in xml
-        assert "{{From}}" in xml
+        assert "<Parameter" not in xml
 
     def test_twiml_connect_stream_with_callback(self):
         xml = twiml_connect_stream(
@@ -733,18 +728,42 @@ class TestTwiML:
             "wss://example.com/stream",
             forward_caller_id=False,
         )
-        # Without caller-ID forwarding the Stream element is self-closing.
         assert "<Parameter" not in xml
         assert "<Stream" in xml and "/>" in xml
 
     def test_twiml_connect_stream_custom_parameters(self):
         xml = twiml_connect_stream(
             "wss://example.com/stream",
-            parameters={"crm_account_id": "{{CallerSid}}"},
+            parameters={"crm_account_id": "ACC-42"},
         )
         assert '<Parameter name="crm_account_id"' in xml
-        # Default caller-ID forwarding still present.
-        assert '<Parameter name="From"' in xml
+        assert 'value="ACC-42"' in xml
+        assert '<Parameter name="From"' not in xml
+
+    def test_twiml_connect_stream_explicit_caller_id_parameters(self):
+        xml = twiml_connect_stream(
+            "wss://example.com/stream",
+            parameters={
+                "Direction": "inbound",
+                "From": "+15551234567",
+                "To": "+15557654321",
+            },
+            forward_caller_id=True,
+        )
+        assert '<Parameter name="Direction" value="inbound"/>' in xml
+        assert '<Parameter name="From" value="+15551234567"/>' in xml
+        assert '<Parameter name="To" value="+15557654321"/>' in xml
+        assert "{{From}}" not in xml
+
+    def test_twiml_connect_stream_forward_caller_id_requires_values(self):
+        with pytest.raises(ValueError, match="explicit caller-ID values"):
+            twiml_connect_stream("wss://example.com/stream", forward_caller_id=True)
+        with pytest.raises(ValueError, match="explicit caller-ID values"):
+            twiml_connect_stream(
+                "wss://example.com/stream",
+                parameters={"From": "{{From}}"},
+                forward_caller_id=True,
+            )
 
     def test_twiml_connect_stream_escapes_parameter_values_once(self):
         xml = twiml_connect_stream(
