@@ -1148,6 +1148,11 @@ def serve_session(
             "port": port,
             "open_browser": open_browser,
             "allow_remote": allow_remote,
+            # aiohttp's default signal handling uses ``signal.set_wakeup_fd``,
+            # which only works on the main thread — installing it from a
+            # daemon thread raises ``RuntimeError`` and kills the server
+            # before it answers a single request.
+            "handle_signals": False,
         },
         daemon=True,
         name="easycat-debugger",
@@ -1184,6 +1189,7 @@ def _serve(
     port: int,
     open_browser: bool,
     allow_remote: bool,
+    handle_signals: bool = True,
 ) -> None:
     try:
         from aiohttp import web
@@ -1201,7 +1207,7 @@ def _serve(
             webbrowser.open(url)
         except Exception:  # pragma: no cover - depends on env
             logger.debug("Could not open browser automatically", exc_info=True)
-    web.run_app(app, host=host, port=port, print=None)
+    web.run_app(app, host=host, port=port, print=None, handle_signals=handle_signals)
 
 
 # ── Async-friendly variant for callers already inside an event loop ─

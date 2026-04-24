@@ -1091,12 +1091,37 @@ function renderLiveView() {
     });
     const items = buckets[lane.id];
     // Pair start/stop within a lane so VAD/playback/turn spans render
-    // as one rectangle instead of two points.  Pairs match by turn_id.
-    const startEnd = {
-      vad_start_speaking: "vad_stop_speaking",
-      bot_started_speaking: "bot_stopped_speaking",
-      turn_started: "turn_ended",
-      tool_call_started: "tool_call_result",
+    // as one rectangle instead of two points.  Each pair uses the
+    // correlation key that actually identifies the pair:
+    //   - VAD: nearest next stop (``vad_start_speaking`` is journaled
+    //     before a turn_id is assigned, so matching on turn_id drops
+    //     every VAD span back to a point).
+    //   - tools: ``data.call_id`` (one turn can fan out multiple tool
+    //     calls sharing the same turn_id; matching on turn_id can
+    //     attach a start to another call's result).
+    //   - playback / turn: ``turn_id`` — one pair per turn is the
+    //     right invariant here.
+    const PAIR_RULES = {
+      vad_start_speaking: {
+        stop: "vad_stop_speaking",
+        match: () => true,
+      },
+      bot_started_speaking: {
+        stop: "bot_stopped_speaking",
+        match: (a, b) => a.turn_id === b.turn_id,
+      },
+      turn_started: {
+        stop: "turn_ended",
+        match: (a, b) => a.turn_id === b.turn_id,
+      },
+      tool_call_started: {
+        stop: "tool_call_result",
+        match: (a, b) => {
+          const aId = a.data && a.data.call_id;
+          const bId = b.data && b.data.call_id;
+          return aId != null && aId === bId;
+        },
+      },
     };
     const consumed = new Set();
     for (let i = 0; i < items.length; i++) {
@@ -1104,11 +1129,12 @@ function renderLiveView() {
       const r = items[i];
       const startMs = (r.timing.mono_ns - t0) / 1e6;
       let endMs = null;
-      const stopName = startEnd[r.name];
-      if (stopName) {
+      const rule = PAIR_RULES[r.name];
+      if (rule) {
         for (let j = i + 1; j < items.length; j++) {
+          if (consumed.has(j)) continue;
           const c = items[j];
-          if (c.name === stopName && c.turn_id === r.turn_id) {
+          if (c.name === rule.stop && rule.match(r, c)) {
             endMs = (c.timing.mono_ns - t0) / 1e6;
             consumed.add(j);
             break;
