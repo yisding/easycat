@@ -18,12 +18,12 @@ except ImportError as exc:
         "openai-agents is required. Install with: uv sync --extra quickstart"
     ) from exc
 
-from easycat import EasyCatConfig, PauseProcessor, PhoneticReplacementProcessor, run
+from easycat import EasyConfig, PauseProcessor, PhoneticReplacementProcessor, run
 
 # default_pronunciation_processors(name_pronunciations=..., phone_pause_ms=...)
 # bundles the two below into one call.
 run(
-    EasyCatConfig.mic(
+    EasyConfig.mic(
         agent=Agent(
             name="assistant",
             instructions=(

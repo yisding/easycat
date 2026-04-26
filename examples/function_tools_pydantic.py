@@ -16,7 +16,7 @@ try:
 except ImportError as exc:
     raise SystemExit("PydanticAI is required. Install with: uv add easycat[pydantic-ai]") from exc
 
-from easycat import EasyCatConfig, run
+from easycat import EasyConfig, run
 
 voice_agent = Agent(
     "openai:gpt-5.2",
@@ -44,4 +44,4 @@ def get_time(timezone_name: str = "UTC") -> str:
     return f"It is {datetime.now(tz).strftime('%H:%M')} {timezone_name}."
 
 
-run(EasyCatConfig.mic(agent=voice_agent))
+run(EasyConfig.mic(agent=voice_agent))

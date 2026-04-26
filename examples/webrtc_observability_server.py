@@ -33,7 +33,7 @@ except ImportError as exc:
     ) from exc
 
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     ICEServer,
     WebRTCTransportConfig,
     attach_runtime_feedback,
@@ -81,7 +81,7 @@ async def main() -> None:
     debugger_port = int(os.getenv("DASHBOARD_PORT", "8090"))
 
     session = create_session(
-        EasyCatConfig(
+        EasyConfig(
             openai_api_key=api_key,
             transport=WebRTCTransportConfig(
                 host=signaling_host,

@@ -1,7 +1,7 @@
 """Agent-initiated session actions — OpenAI Agents SDK.
 
 The same ``SessionActions`` instance is shared between the agent's
-context (so tools can enqueue actions) and ``EasyCatConfig`` (so the
+context (so tools can enqueue actions) and ``EasyConfig`` (so the
 session drains them). For telephony actions (transfer, DTMF, SMS) see
 ``examples/twilio_app.py``.
 
@@ -16,7 +16,7 @@ except ImportError as exc:
         "openai-agents is required. Install with: uv sync --extra quickstart"
     ) from exc
 
-from easycat import EasyCatConfig, SessionActions, run
+from easycat import EasyConfig, SessionActions, run
 from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
 actions = SessionActions()
@@ -30,7 +30,7 @@ def end_call(ctx: RunContextWrapper[SessionActions], reason: str = "") -> str:
 
 
 run(
-    EasyCatConfig.mic(
+    EasyConfig.mic(
         agent=OpenAIAgentsBridge(
             agent=Agent(
                 name="Assistant",

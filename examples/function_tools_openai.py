@@ -18,7 +18,7 @@ except ImportError as exc:
         "openai-agents is required. Install with: uv sync --extra quickstart"
     ) from exc
 
-from easycat import EasyCatConfig, run
+from easycat import EasyConfig, run
 
 
 @function_tool
@@ -38,7 +38,7 @@ def get_time(timezone_name: str = "UTC") -> str:
 
 
 run(
-    EasyCatConfig.mic(
+    EasyConfig.mic(
         agent=Agent(
             name="assistant",
             instructions=(

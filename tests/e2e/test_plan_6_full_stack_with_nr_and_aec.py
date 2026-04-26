@@ -45,12 +45,12 @@ def _build_full_stack_session(*, transport, instructions, debug="full"):
     """
     from agents import Agent  # type: ignore[import-untyped]
 
-    from easycat import EasyCatConfig, create_session
+    from easycat import EasyConfig, create_session
 
     api_key = os.environ["OPENAI_API_KEY"]
     agent = Agent(name="e2e_full_stack", instructions=instructions, model="gpt-4o-mini")
     return create_session(
-        EasyCatConfig(
+        EasyConfig(
             openai_api_key=api_key,
             transport=transport,
             agent=agent,

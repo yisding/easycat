@@ -20,7 +20,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     LocalTransportConfig,
     attach_runtime_feedback,
     create_session,
@@ -79,7 +79,7 @@ async def main() -> None:
 
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
         agent=agent,

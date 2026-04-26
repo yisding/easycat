@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     JournalRecordKind,
     LocalTransportConfig,
     SessionManager,
@@ -40,7 +40,7 @@ def build_session():
 
     from agents import Agent  # type: ignore[import-untyped]
 
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key=os.environ["OPENAI_API_KEY"],
         agent=Agent(
             name="assistant",

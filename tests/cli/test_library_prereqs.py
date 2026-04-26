@@ -4,7 +4,7 @@ The CLI's scaffolded templates assume that:
 
 * ``easycat.run(config)`` exists, calls ``create_session``,
   ``session.start``, ``session.shutdown``, and wires signal handlers.
-* ``EasyCatConfig(stt="<provider>/<model>", tts="...")`` resolves
+* ``EasyConfig(stt="<provider>/<model>", tts="...")`` resolves
   strings to typed configs using env-var API keys and raises
   ``EASYCAT_E104``/``EASYCAT_E203`` on unknowns / missing keys.
 
@@ -20,7 +20,7 @@ from unittest.mock import patch
 import pytest
 
 import easycat
-from easycat import EasyCatConfig
+from easycat import EasyConfig
 from easycat.errors import EasyCatError
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.factory import parse_stt_string
@@ -85,7 +85,7 @@ def test_run_calls_start_and_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("easycat.helpers.asyncio.run", fake_run)
 
-    easycat.run(EasyCatConfig(openai_api_key="stub"))
+    easycat.run(EasyConfig(openai_api_key="stub"))
     assert "start" in session.events
     assert "shutdown" in session.events
     # Shutdown must come after start.
@@ -118,7 +118,7 @@ def test_run_does_not_attach_feedback_under_pytest(
             return real_run(main())
 
         monkeypatch.setattr("easycat.helpers.asyncio.run", fake_run)
-        easycat.run(EasyCatConfig(openai_api_key="stub"))
+        easycat.run(EasyConfig(openai_api_key="stub"))
 
     attach.assert_not_called()
 
@@ -177,47 +177,47 @@ def test_parse_tts_openai(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(cfg, OpenAITTSConfig)
 
 
-def test_easycatconfig_resolves_string_providers(
+def test_easyconfig_resolves_string_providers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End-to-end: string-keyed provider selection in EasyCatConfig."""
+    """End-to-end: string-keyed provider selection in EasyConfig."""
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    cfg = EasyCatConfig(stt="deepgram/flux", tts="openai", agent=object())
+    cfg = EasyConfig(stt="deepgram/flux", tts="openai", agent=object())
     assert isinstance(cfg.stt, DeepgramSTTConfig)
     assert cfg.stt.model == "flux"
     assert isinstance(cfg.tts, OpenAITTSConfig)
 
 
-def test_easycatconfig_env_autodetect_openai(
+def test_easyconfig_env_autodetect_openai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Zero-config case: OPENAI_API_KEY env var picks the OpenAI chain."""
     for var in ("DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    cfg = EasyCatConfig(agent=object())
+    cfg = EasyConfig(agent=object())
     assert isinstance(cfg.stt, OpenAIRealtimeSTTConfig)
     assert isinstance(cfg.tts, OpenAITTSConfig)
 
 
-def test_easycatconfig_typed_config_takes_precedence(
+def test_easyconfig_typed_config_takes_precedence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Explicit typed STTConfig short-circuits the string parser."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     typed = DeepgramSTTConfig(api_key="dg-manual", model="nova-2")
-    cfg = EasyCatConfig(stt=typed, tts="openai", agent=object())
+    cfg = EasyConfig(stt=typed, tts="openai", agent=object())
     assert cfg.stt is typed
 
 
-def test_easycatconfig_programmatic_openai_key_for_string_providers(
+def test_easyconfig_programmatic_openai_key_for_string_providers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`openai_api_key="sk..."` works without OPENAI_API_KEY also exported."""
     for var in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
         monkeypatch.delenv(var, raising=False)
-    cfg = EasyCatConfig(
+    cfg = EasyConfig(
         openai_api_key="sk-programmatic",
         stt="openai-realtime",
         tts="openai",
@@ -229,7 +229,7 @@ def test_easycatconfig_programmatic_openai_key_for_string_providers(
     assert cfg.tts.api_key == "sk-programmatic"
 
 
-def test_easycatconfig_swap_just_stt_keeps_openai_tts_default(
+def test_easyconfig_swap_just_stt_keeps_openai_tts_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`stt="deepgram/flux"` + OPENAI_API_KEY autofills the OpenAI TTS chain."""
@@ -237,7 +237,7 @@ def test_easycatconfig_swap_just_stt_keeps_openai_tts_default(
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
-    cfg = EasyCatConfig(stt="deepgram/flux", agent=object())
+    cfg = EasyConfig(stt="deepgram/flux", agent=object())
     assert isinstance(cfg.stt, DeepgramSTTConfig)
     assert cfg.stt.model == "flux"
     # The autodetect path should still fill in OpenAI TTS even though stt

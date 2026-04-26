@@ -22,7 +22,7 @@ import sys
 import threading
 
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     LocalTransportConfig,
     TurnManagerConfig,
     TurnMode,
@@ -107,7 +107,7 @@ async def main() -> None:
 
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key=api_key,
         transport=LocalTransportConfig(),
         turn_taking=TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK),

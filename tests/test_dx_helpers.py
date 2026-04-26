@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from easycat import EasyCatConfig
+from easycat import EasyConfig
 from easycat.config import _resolve_easycat_log_level
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransportConfig
@@ -36,7 +36,7 @@ def test_log_level_unset_returns_default(monkeypatch: pytest.MonkeyPatch):
 
 def test_mic_preset_uses_local_transport(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
-    cfg = EasyCatConfig.mic()
+    cfg = EasyConfig.mic()
     assert isinstance(cfg.transport, LocalTransportConfig)
 
 
@@ -44,7 +44,7 @@ def test_browser_preset_uses_webrtc_transport_and_aec(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
-    cfg = EasyCatConfig.browser()
+    cfg = EasyConfig.browser()
     assert isinstance(cfg.transport, WebRTCTransportConfig)
     assert cfg.echo_cancellation is not None
     assert cfg.echo_cancellation.enabled is True
@@ -52,13 +52,13 @@ def test_browser_preset_uses_webrtc_transport_and_aec(
 
 def test_phone_preset_uses_twilio_transport(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
-    cfg = EasyCatConfig.phone()
+    cfg = EasyConfig.phone()
     assert isinstance(cfg.transport, TwilioTransportConfig)
 
 
 def test_preset_still_honors_explicit_overrides(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
-    cfg = EasyCatConfig.mic(stt=OpenAIRealtimeSTTConfig(api_key="override"))
+    cfg = EasyConfig.mic(stt=OpenAIRealtimeSTTConfig(api_key="override"))
     # Explicit keyword takes precedence over the preset's transport-only
     # default — the preset must not clobber other fields.
     assert isinstance(cfg.stt, OpenAIRealtimeSTTConfig)

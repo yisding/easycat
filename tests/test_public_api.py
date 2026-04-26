@@ -17,6 +17,7 @@ PUBLIC_API_SNAPSHOT = (
     "CancelToken",
     "EasyCatConfig",
     "EasyCatError",
+    "EasyConfig",
     "EchoCanceller",
     "Error",
     "ErrorEntry",
@@ -81,9 +82,18 @@ def test_public_api_snapshot() -> None:
 
 
 def test_curated_public_api_lazy_imports() -> None:
-    from easycat import EasyCatConfig, MarkdownStripProcessor, create_session
+    from easycat import (
+        EasyCatConfig,
+        EasyConfig,
+        MarkdownStripProcessor,
+        SessionConfig,
+        create_session,
+    )
+    from easycat.session._types import _SessionConfig
 
-    assert EasyCatConfig.__name__ == "EasyCatConfig"
+    assert EasyConfig.__name__ == "EasyConfig"
+    assert EasyCatConfig is EasyConfig
+    assert SessionConfig is _SessionConfig
     assert MarkdownStripProcessor.__name__ == "MarkdownStripProcessor"
     assert create_session.__name__ == "create_session"
 
