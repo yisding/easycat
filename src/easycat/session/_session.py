@@ -78,6 +78,7 @@ from easycat.runtime.journal import (
     ReadonlySqliteJournal,
 )
 from easycat.runtime.records import JournalRecordKind
+from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._streaming import consume_agent_stream
 from easycat.session._text import (
@@ -344,6 +345,7 @@ class Session:
         self._audio_gate = cfg.audio_gate
         self._health_checkers: list[PeriodicHealthChecker] = []
         self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)
+        self._runtime_scope = RuntimeScope()
 
         # Agent-initiated session actions
         self._session_actions = cfg.session_actions
@@ -1281,11 +1283,14 @@ class Session:
             # gap between heartbeats widens — ``loop_lag_ns`` in the
             # record makes that visible in a bundle without requiring
             # live tracing.
-            self._heartbeat_task = asyncio.create_task(self._emit_heartbeats())
+            self._heartbeat_task = self._runtime_scope.create_task(
+                "pipeline_heartbeat",
+                self._emit_heartbeats(),
+            )
         except Exception:
             self._is_running = False
 
-            for task_name in ("_pipeline_task", "_outbound_task", "_heartbeat_task"):
+            for task_name in ("_pipeline_task", "_outbound_task"):
                 task = getattr(self, task_name)
                 if task is not None and not task.done():
                     task.cancel()
@@ -1294,6 +1299,8 @@ class Session:
                     except asyncio.CancelledError:
                         pass
                 setattr(self, task_name, None)
+            await self._runtime_scope.cancel_and_drain("pipeline_heartbeat")
+            self._heartbeat_task = None
 
             for checker in self._health_checkers:
                 await checker.stop()
@@ -1365,13 +1372,8 @@ class Session:
                     await self._outbound_task
                 except (asyncio.CancelledError, Exception):
                     pass
-            if self._heartbeat_task and not self._heartbeat_task.done():
-                self._heartbeat_task.cancel()
-                try:
-                    await self._heartbeat_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                self._heartbeat_task = None
+            await self._runtime_scope.cancel_and_drain("pipeline_heartbeat")
+            self._heartbeat_task = None
             await self.transport.disconnect()
             await self._turn_manager.shutdown()
             try:
@@ -1413,33 +1415,27 @@ class Session:
             if self._stt_task and not self._stt_task.done():
                 self._stt_task.cancel()
                 tasks.append(self._stt_task)
-            # STT segment-commit work runs on background tasks that outlive
-            # _stt_task. Cancel them here so shutdown() does not return while
-            # commit_segment() is still sleeping or awaiting the provider.
-            if self._stt_pause_commit_task and not self._stt_pause_commit_task.done():
-                self._stt_pause_commit_task.cancel()
-                tasks.append(self._stt_pause_commit_task)
-            if self._stt_segment_commit_task and not self._stt_segment_commit_task.done():
-                self._stt_segment_commit_task.cancel()
-                tasks.append(self._stt_segment_commit_task)
             if self._current_tts_task and not self._current_tts_task.done():
                 self._current_tts_task.cancel()
                 tasks.append(self._current_tts_task)
-            if self._greeting_task and not self._greeting_task.done():
-                self._greeting_task.cancel()
-                tasks.append(self._greeting_task)
             if self._outbound_task and not self._outbound_task.done():
                 self._outbound_task.cancel()
                 tasks.append(self._outbound_task)
-            if self._heartbeat_task and not self._heartbeat_task.done():
-                self._heartbeat_task.cancel()
-                tasks.append(self._heartbeat_task)
 
+            # Signal scoped work before awaiting other task handles so
+            # migrated shutdown work preserves the previous force-cancel
+            # ordering. Drain below after every task has observed cancellation.
+            self._runtime_scope.cancel()
             for task in tasks:
                 try:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+            # RuntimeScope-owned work currently covers heartbeat, greeting,
+            # and STT segment commit/pause tasks. These can outlive the
+            # pipeline/STT consumer handles above, so shutdown drains the
+            # scope before provider teardown returns.
+            await self._runtime_scope.cancel_and_drain()
             self._stt_pause_commit_task = None
             self._stt_segment_commit_task = None
             self._greeting_task = None
@@ -1704,9 +1700,12 @@ class Session:
             return
         if self._greeting_task is not None and not self._greeting_task.done():
             return
-        task = self._journaled_task(
-            self._deliver_call_answered_greeting(self._greeting),
-            name="call_answered_greeting",
+        task = self._runtime_scope.add_task(
+            "call_answered_greeting",
+            self._journaled_task(
+                self._deliver_call_answered_greeting(self._greeting),
+                name="call_answered_greeting",
+            ),
         )
         self._greeting_task = task
         task.add_done_callback(self._clear_greeting_task)
@@ -1728,8 +1727,10 @@ class Session:
     async def _cancel_greeting_task(self) -> None:
         task = self._greeting_task
         if task is not None and not task.done():
-            task.cancel()
+            await self._runtime_scope.cancel_and_drain("call_answered_greeting")
+        if task is not None and not task.done():
             try:
+                task.cancel()
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
@@ -1889,9 +1890,12 @@ class Session:
             return
         self._cancel_scheduled_stt_segment_commit()
         delay_s = self._stt_segment_silence_ms / 1000.0
-        self._stt_pause_commit_task = self._journaled_task(
-            self._commit_stt_segment_after(delay_s),
-            name="stt_pause_commit",
+        self._stt_pause_commit_task = self._runtime_scope.add_task(
+            "stt_pause_commit",
+            self._journaled_task(
+                self._commit_stt_segment_after(delay_s),
+                name="stt_pause_commit",
+            ),
         )
         self._stt_pause_commit_task.add_done_callback(self._log_task_exception)
 
@@ -1913,10 +1917,13 @@ class Session:
             return
         if self._stt_segment_commit_task is not None and not self._stt_segment_commit_task.done():
             return
-        self._stt_segment_commit_task = self._journaled_task(
-            self._commit_stt_segment(),
-            name="stt_segment_commit",
-            turn_id=turn.id if turn is not None else None,
+        self._stt_segment_commit_task = self._runtime_scope.add_task(
+            "stt_segment_commit",
+            self._journaled_task(
+                self._commit_stt_segment(),
+                name="stt_segment_commit",
+                turn_id=turn.id if turn is not None else None,
+            ),
         )
         self._stt_segment_commit_task.add_done_callback(self._log_task_exception)
 
@@ -2788,6 +2795,7 @@ class Session:
 
     async def _cancel_stt(self) -> None:
         self._cancel_scheduled_stt_segment_commit()
+        await self._runtime_scope.cancel_and_drain("stt_pause_commit")
         commit_task = self._stt_segment_commit_task
         if commit_task is not None and not commit_task.done():
             commit_task.cancel()
