@@ -303,7 +303,7 @@ def _build_session_with_flags(
 
     import easycat.config as config_module
     from easycat import (
-        EasyCatConfig,
+        EasyConfig,
         ElevenLabsSTTConfig,
         ElevenLabsTTSConfig,
         OpenAIRealtimeSTTConfig,
@@ -369,7 +369,7 @@ def _build_session_with_flags(
         model=llm_model,
         model_settings=model_settings,
     )
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key=api_key,
         transport=transport,
         agent=agent,

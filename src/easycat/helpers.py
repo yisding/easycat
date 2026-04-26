@@ -13,7 +13,7 @@ from easycat.events import AgentFinal, BotStoppedSpeaking, Interruption, STTFina
 from easycat.session._session import Session
 
 if TYPE_CHECKING:
-    from easycat.config import EasyCatConfig
+    from easycat.config import EasyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ def attach_runtime_feedback(session: Session) -> None:
     session.subscribe_event(Interruption, lambda _e: print("\u26a1 Interruption detected."))
 
 
-def run(config: EasyCatConfig) -> None:
+def run(config: EasyConfig) -> None:
     """Run a voice agent to completion from a synchronous entry point.
 
     Replaces the ``asyncio.run(main())`` + ``await session.start()`` +

@@ -22,7 +22,7 @@ except ImportError as exc:
     ) from exc
 
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     attach_runtime_feedback,
     create_session,
     require_env,
@@ -49,7 +49,7 @@ def get_time(timezone_name: str = "UTC") -> str:
 async def main() -> None:
     require_env("OPENAI_API_KEY")
     session = create_session(
-        EasyCatConfig.mic(
+        EasyConfig.mic(
             agent=Agent(
                 name="assistant",
                 instructions=(

@@ -1,4 +1,4 @@
-"""Tests for ``EasyCatConfig(record_to=...)`` auto-capture."""
+"""Tests for ``EasyConfig(record_to=...)`` auto-capture."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from easycat.config import EasyCatConfig, _install_record_to_hook
+from easycat.config import EasyConfig, _install_record_to_hook
 
 
 class _FakeSession:
@@ -108,10 +108,10 @@ async def test_record_to_export_failure_does_not_mask_shutdown(
 
 
 def test_record_to_field_accepts_path_and_str() -> None:
-    """EasyCatConfig accepts both str and Path for record_to."""
+    """EasyConfig accepts both str and Path for record_to."""
     # Only a construction smoke test — we can't run create_session without
     # providers, so this validates the dataclass contract only.
-    cfg1 = EasyCatConfig(openai_api_key="sk-stub", record_to="/tmp/a")
-    cfg2 = EasyCatConfig(openai_api_key="sk-stub", record_to=Path("/tmp/b"))
+    cfg1 = EasyConfig(openai_api_key="sk-stub", record_to="/tmp/a")
+    cfg2 = EasyConfig(openai_api_key="sk-stub", record_to=Path("/tmp/b"))
     assert cfg1.record_to == "/tmp/a"
     assert cfg2.record_to == Path("/tmp/b")

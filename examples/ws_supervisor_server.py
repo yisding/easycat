@@ -40,7 +40,7 @@ import websockets
 from websockets.asyncio.server import ServerConnection
 
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     SessionAudioBroadcaster,
     SessionManager,
     WebSocketConnectionTransport,
@@ -109,7 +109,7 @@ async def main() -> None:
         agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
         transport = WebSocketConnectionTransport(ws)
         session = create_session(
-            EasyCatConfig(
+            EasyConfig(
                 openai_api_key=api_key,
                 transport=transport,
                 agent=agent,

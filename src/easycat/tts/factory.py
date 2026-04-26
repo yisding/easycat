@@ -122,7 +122,7 @@ def parse_tts_string(spec: str) -> TTSConfig:
     concrete :class:`TTSConfig` with ``model`` set when supplied.
 
     Callers that want programmatic API-key injection (e.g. feeding
-    ``EasyCatConfig.openai_api_key`` into a ``tts="openai"`` shortcut)
+    ``EasyConfig.openai_api_key`` into a ``tts="openai"`` shortcut)
     should set the provider's env var in the process scope before
     calling — see ``_openai_env_override`` in ``easycat.config``.
 

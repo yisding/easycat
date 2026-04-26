@@ -12,10 +12,10 @@ try:
 except ImportError as exc:
     raise SystemExit("PydanticAI is required. Install with: uv add easycat[pydantic-ai]") from exc
 
-from easycat import EasyCatConfig, run
+from easycat import EasyConfig, run
 
 run(
-    EasyCatConfig.mic(
+    EasyConfig.mic(
         agent=Agent("openai:gpt-5.2", system_prompt="You are a helpful voice assistant.")
     )
 )

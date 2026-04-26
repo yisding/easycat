@@ -25,6 +25,7 @@ def _register(module: str, *names: str) -> None:
 # Core factories, config, and runtime helpers.
 _register(
     "easycat.config",
+    "EasyConfig",
     "EasyCatConfig",
     "OutboundCallConfig",
     "TelephonyConfig",
@@ -143,6 +144,7 @@ if TYPE_CHECKING:
     from easycat.cancel import CancelToken
     from easycat.config import (
         EasyCatConfig,
+        EasyConfig,
         OutboundCallConfig,
         TelephonyConfig,
         VoicemailDetectionConfig,

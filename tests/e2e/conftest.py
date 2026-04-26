@@ -172,7 +172,7 @@ async def ws_server_factory():
 
         async def build(ws):
             transport = WebSocketConnectionTransport(ws)
-            return create_session(EasyCatConfig(..., transport=transport))
+            return create_session(EasyConfig(..., transport=transport))
 
         handle = await ws_server_factory(build)
         # handle.url, handle.session
@@ -213,11 +213,11 @@ def build_live_session(
     _require_live()
     from agents import Agent  # type: ignore[import-untyped]
 
-    from easycat import EasyCatConfig, create_session
+    from easycat import EasyConfig, create_session
 
     api_key = os.environ["OPENAI_API_KEY"]
     agent = Agent(name="e2e_assistant", instructions=instructions, model=model)
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key=api_key,
         transport=transport,
         agent=agent,

@@ -25,7 +25,7 @@ dispatches it, the session stops after the current turn.
 ## The bridge layer you didn't know was there
 
 ```
-    user code ──▶ EasyCatConfig(agent=...)
+    user code ──▶ EasyConfig(agent=...)
                          │
                          ▼
                auto_adapt_agent()
@@ -137,7 +137,7 @@ want to hand-build the list.
 MCP — Model Context Protocol — servers are first-class:
 
 ```python
-EasyCatConfig(
+EasyConfig(
     agent=my_agent,
     mcp_servers=["stdio://path/to/mcp-server", "sse://localhost:4000"],
 )

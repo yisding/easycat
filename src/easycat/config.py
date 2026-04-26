@@ -26,7 +26,7 @@ from easycat.providers import Transport
 from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
 from easycat.runtime.journal import create_journal
 from easycat.session._session import Session
-from easycat.session._types import SessionConfig
+from easycat.session._types import _SessionConfig
 from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
@@ -95,7 +95,7 @@ def _openai_env_override(api_key: str | None) -> Iterator[None]:
     Lets :func:`parse_stt_string` / :func:`parse_tts_string` stay
     provider-agnostic: they read ``OPENAI_API_KEY`` like any other
     provider's env var, while this helper owns the
-    ``EasyCatConfig.openai_api_key`` → env-var policy. The override is
+    ``EasyConfig.openai_api_key`` → env-var policy. The override is
     unwound on exit.
     """
     if not api_key:
@@ -127,7 +127,7 @@ def _resolve_easycat_log_level(*, default: int) -> int:
 
     Unknown values fall back to the caller-supplied default so a typo
     doesn't silence the logger entirely.  Exposed at module scope so
-    both ``EasyCatConfig._apply_debug_defaults`` and
+    both ``EasyConfig._apply_debug_defaults`` and
     ``easycat.run`` converge on the same policy.
     """
     raw = os.getenv("EASYCAT_LOG_LEVEL", "").strip().lower()
@@ -325,8 +325,12 @@ _TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
 }
 
 
-class EasyCatConfigError(ValueError):
-    """Raised when ``EasyCatConfig`` validation fails."""
+class EasyConfigError(ValueError):
+    """Raised when app config validation fails."""
+
+
+EasyCatConfigError = EasyConfigError
+"""Compatibility alias for the pre-rename config validation error."""
 
 
 _VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
@@ -361,12 +365,12 @@ def _validate_common(
     if mcp_servers is not None:
         for uri in mcp_servers:
             if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
-                raise EasyCatConfigError(
+                raise EasyConfigError(
                     f"Invalid MCP server URI: {uri!r}. "
                     f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
                 )
     if session_id is not None and ("/" in session_id or "\\" in session_id or ".." in session_id):
-        raise EasyCatConfigError(
+        raise EasyConfigError(
             f"session_id must not contain path separators or '..': {session_id!r}"
         )
     if isinstance(agent, str):
@@ -375,7 +379,7 @@ def _validate_common(
         parsed = urlparse(agent)
         if parsed.scheme in ("http", "https") and parsed.netloc:
             if agent_model is None:
-                raise EasyCatConfigError(
+                raise EasyConfigError(
                     "agent_model is required when agent is a URL string. "
                     "Set agent_model to the model identifier the remote "
                     "Responses API server should use."
@@ -411,7 +415,7 @@ def _inject_agent_runtime(
 
 
 @dataclass
-class EasyCatConfig:
+class EasyConfig:
     """Top-level configuration for EasyCat sessions.
 
     Fields:
@@ -493,7 +497,7 @@ class EasyCatConfig:
         )
 
         # Pick up OPENAI_API_KEY for the zero-config case so a bare
-        # ``EasyCatConfig(agent=...)`` works when the env var is set —
+        # ``EasyConfig(agent=...)`` works when the env var is set —
         # the standard OpenAI SDK convention.  Resolved before string
         # parsing so ``stt="openai-realtime"`` honors the env var
         # without needing to be passed explicitly.
@@ -587,13 +591,13 @@ class EasyCatConfig:
     # Documented in ``peripheral-dx-onboarding.md``.
 
     @classmethod
-    def mic(cls, **kwargs: Any) -> EasyCatConfig:
+    def mic(cls, **kwargs: Any) -> EasyConfig:
         """Local-microphone preset — the default developer setup."""
         kwargs.setdefault("transport", LocalTransportConfig())
         return cls(**kwargs)
 
     @classmethod
-    def browser(cls, **kwargs: Any) -> EasyCatConfig:
+    def browser(cls, **kwargs: Any) -> EasyConfig:
         """WebRTC-in-the-browser preset.
 
         Enables echo cancellation by default because browser clients
@@ -604,7 +608,7 @@ class EasyCatConfig:
         return cls(**kwargs)
 
     @classmethod
-    def phone(cls, **kwargs: Any) -> EasyCatConfig:
+    def phone(cls, **kwargs: Any) -> EasyConfig:
         """Inbound telephony preset.
 
         Uses the Twilio Media Streams transport and leaves echo-cancel
@@ -614,7 +618,11 @@ class EasyCatConfig:
         return cls(**kwargs)
 
 
-def _should_auto_turn_from_stt_final(config: EasyCatConfig) -> bool:
+EasyCatConfig = EasyConfig
+"""Compatibility alias for the pre-rename public app config."""
+
+
+def _should_auto_turn_from_stt_final(config: EasyConfig) -> bool:
     """Whether this session should derive turn boundaries from STT finals."""
     if not isinstance(config.stt, DeepgramSTTConfig):
         return False
@@ -637,7 +645,7 @@ def _create_artifact_store(
     return InMemoryArtifactStore()
 
 
-def _safe_config_ns(config: EasyCatConfig) -> object:
+def _safe_config_ns(config: EasyConfig) -> object:
     """Build a lightweight namespace snapshot of the safe config fields.
 
     Only copies the fields that ``safe_config_snapshot`` reads so we
@@ -691,8 +699,8 @@ def _merge_twilio_identity(existing: Any, incoming: Any) -> Any:
     return merged
 
 
-def create_session(config: EasyCatConfig) -> Session:
-    """Create a fully wired Session from EasyCatConfig."""
+def create_session(config: EasyConfig) -> Session:
+    """Create a fully wired Session from EasyConfig."""
     session_id = f"session-{uuid4().hex[:12]}"
     artifact_store = _create_artifact_store(session_id, config.debug)
     journal = (
@@ -785,7 +793,7 @@ def create_session(config: EasyCatConfig) -> Session:
                 return _outbound_sm.gate.is_buffering
 
         session = Session(
-            SessionConfig(
+            _SessionConfig(
                 stt=stt,
                 tts=tts,
                 vad=vad,
@@ -894,7 +902,7 @@ def _install_record_to_hook(
     """
     if debug_mode == "off":
         logger.warning(
-            "EasyCatConfig(record_to=%r) requested but debug='off' — no journal will "
+            "EasyConfig(record_to=%r) requested but debug='off' — no journal will "
             "be captured. Set debug='light' or 'full' to enable recording.",
             str(record_to),
         )
@@ -1055,7 +1063,7 @@ def create_text_session(
         from easycat.stubs import NoopSTT, NoopTransport, NoopTTS, NoopVAD
 
         session = Session(
-            SessionConfig(
+            _SessionConfig(
                 stt=NoopSTT(),
                 tts=NoopTTS(),
                 vad=NoopVAD(),

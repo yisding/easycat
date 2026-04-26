@@ -7,7 +7,7 @@ Covers:
 - AC2C.5:  drain_current_unit on SSE stream
 - AC2C.6:  Capability discovery via metadata
 - AC2C.7:  Graceful degradation on server error
-- AC2C.8:  EasyCatConfig URL detection
+- AC2C.8:  EasyConfig URL detection
 - AC2C.9:  API key not in journal
 - AC2C.10: COMMITTABLE_BOUNDARIES correct
 - AC2C.11: No WebSocket protocol
@@ -408,7 +408,7 @@ class TestGracefulDegradation:
         assert len(error_records) >= 1
 
 
-# ── AC2C.8: EasyCatConfig URL detection ─────────────────────────
+# ── AC2C.8: EasyConfig URL detection ─────────────────────────
 
 
 class TestURLDetection:
@@ -441,17 +441,17 @@ class TestURLDetection:
         assert isinstance(adapted, RemoteResponsesAPIBridge)
 
 
-class TestEasyCatConfigURLValidation:
-    """AC2C.8 -- EasyCatConfig validates agent_model when agent is URL."""
+class TestEasyConfigURLValidation:
+    """AC2C.8 -- EasyConfig validates agent_model when agent is URL."""
 
     def test_url_agent_without_model_raises(self):
         try:
-            from easycat.config import EasyCatConfig, EasyCatConfigError
+            from easycat.config import EasyConfig, EasyConfigError
             from easycat.stt.openai_provider import OpenAISTTConfig
             from easycat.tts.openai_tts import OpenAITTSConfig
 
-            with pytest.raises(EasyCatConfigError, match="agent_model"):
-                EasyCatConfig(
+            with pytest.raises(EasyConfigError, match="agent_model"):
+                EasyConfig(
                     stt=OpenAISTTConfig(api_key="test"),
                     tts=OpenAITTSConfig(api_key="test"),
                     agent="https://api.example.com",
@@ -462,11 +462,11 @@ class TestEasyCatConfigURLValidation:
 
     def test_url_agent_with_model_accepted(self):
         try:
-            from easycat.config import EasyCatConfig
+            from easycat.config import EasyConfig
             from easycat.stt.openai_provider import OpenAISTTConfig
             from easycat.tts.openai_tts import OpenAITTSConfig
 
-            config = EasyCatConfig(
+            config = EasyConfig(
                 stt=OpenAISTTConfig(api_key="test"),
                 tts=OpenAITTSConfig(api_key="test"),
                 agent="https://api.example.com",

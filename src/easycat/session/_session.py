@@ -88,6 +88,7 @@ from easycat.session._types import (
     SessionConfig,
     SessionHelper,
     TurnState,
+    _SessionConfig,
 )
 from easycat.session.actions import (
     CoreSessionActionExecutor,
@@ -168,7 +169,7 @@ class Session:
     """
 
     def __init__(self, config: SessionConfig | None = None) -> None:
-        cfg = config or SessionConfig()
+        cfg = config or _SessionConfig()
         self._config = cfg
 
         # Providers (fall back to no-op stubs)

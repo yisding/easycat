@@ -30,7 +30,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     WebSocketTransportConfig,
     attach_runtime_feedback,
     create_session,
@@ -66,7 +66,7 @@ async def main() -> None:
         instructions="You are a helpful voice assistant. Keep responses concise.",
     )
 
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key=api_key,
         transport=WebSocketTransportConfig(port=WS_PORT),
         agent=agent,

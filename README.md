@@ -23,28 +23,28 @@ your SDK of choice and hand it to EasyCat — `create_session` auto-detects
 OpenAI Agents SDK and PydanticAI objects via `auto_adapt_agent`, so you don't
 have to wrap them yourself.
 
-### Quickstart (EasyCatConfig)
+### Quickstart (EasyConfig)
 ```python
 from agents import Agent
 
-from easycat import EasyCatConfig, create_session
+from easycat import EasyConfig, create_session
 
 agent = Agent(
     name="Support",
     instructions="Help customers with account issues.",
 )
 
-config = EasyCatConfig(
+config = EasyConfig(
     openai_api_key="your-api-key",
     agent=agent,
 )
 session = create_session(config)
 ```
 
-> Note: `EasyCatConfig` will automatically wire **OpenAI STT + OpenAI TTS** if
+> Note: `EasyConfig` will automatically wire **OpenAI STT + OpenAI TTS** if
 > you provide `openai_api_key` and do not override `stt` or `tts`. If you omit
 > the API key, you must supply `stt` and `tts` configs explicitly. For most
-> users, `EasyCatConfig` + `create_session` is the fastest way to get a working
+> users, `EasyConfig` + `create_session` is the fastest way to get a working
 > pipeline.
 >
 > The underlying bridge classes live in `easycat.integrations.agents`
@@ -103,18 +103,18 @@ enabled behind a proxy, validate against the same public URL Twilio
 called, not an internal service URL.
 
 ### Outbound calls (Twilio REST)
-Enable the outbound pipeline via `EasyCatConfig.telephony`:
+Enable the outbound pipeline via `EasyConfig.telephony`:
 
 ```python
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     OutboundCallConfig,
     TelephonyConfig,
     VoicemailDetectionConfig,
     create_session,
 )
 
-config = EasyCatConfig(
+config = EasyConfig(
     openai_api_key="…",
     agent=your_agent,
     greeting="Hi, this is Lucy from Example Health.",
@@ -184,7 +184,7 @@ customParameters and emits ``CallAnswered``, so observers like
 same lifecycle.
 
 ### Bot speaks first
-Set `EasyCatConfig.greeting` to have the bot synthesize a greeting on
+Set `EasyConfig.greeting` to have the bot synthesize a greeting on
 the first `CallAnswered` event.  Works for both inbound (stream
 start) and outbound (callee pickup).  Use this to play an
 AI-disclosure or identification line before the caller's first
@@ -199,7 +199,7 @@ off your list"``, ``"opt out"``, …).  On match the session:
 1. emits an `OptOutDetected` event carrying the caller number, the
    matched phrase, and the full transcript text,
 2. adds the caller to `session.dnc_list` when one is attached
-   (pass a shared `DNCList` via `EasyCatConfig.dnc_list`),
+   (pass a shared `DNCList` via `EasyConfig.dnc_list`),
 3. enqueues an `EndCallAction(reason="opt_out")` so the call
    terminates after the agent's current utterance finishes.
 
@@ -210,7 +210,7 @@ terminology).
 
 ### Caller-ID exposure policy
 Control whether the LLM sees the caller's number or only tool code
-does via `EasyCatConfig.caller_id_exposure`:
+does via `EasyConfig.caller_id_exposure`:
 
 - `"tools_only"` (default): number available at
   `session.call_identity.caller_number` for tools, hidden from the
@@ -221,7 +221,7 @@ does via `EasyCatConfig.caller_id_exposure`:
 - `"off"`: hide from both layers.
 
 ```python
-config = EasyCatConfig(
+config = EasyConfig(
     openai_api_key="…",
     agent=your_agent,
     caller_id_exposure="system_message",
@@ -249,13 +249,13 @@ or custom pronunciations), pass processors in config:
 
 ```python
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     PauseProcessor,
     PhoneticReplacementProcessor,
     create_session,
 )
 
-config = EasyCatConfig(
+config = EasyConfig(
     openai_api_key="your-api-key",
     output_processors=[
         # Replace names/terms with pronunciation-friendly spellings.
@@ -284,9 +284,9 @@ session = create_session(config)
 Or use the convenience helper for the common pronunciation + phone-number stack:
 
 ```python
-from easycat import EasyCatConfig, create_session, default_pronunciation_processors
+from easycat import EasyConfig, create_session, default_pronunciation_processors
 
-config = EasyCatConfig(
+config = EasyConfig(
     openai_api_key="your-api-key",
     output_processors=default_pronunciation_processors(
         name_pronunciations={"Siobhan": "shi-vawn", "Nguyen": "win"},
@@ -352,9 +352,9 @@ live or read them after the session ends:
 ```python
 import asyncio
 
-from easycat import EasyCatConfig, JournalRecordKind, create_session
+from easycat import EasyConfig, JournalRecordKind, create_session
 
-config = EasyCatConfig(openai_api_key="your-api-key", debug="light")
+config = EasyConfig(openai_api_key="your-api-key", debug="light")
 session = create_session(config)
 
 async def tail(session):
@@ -426,7 +426,7 @@ an async `on_user_turn(text) -> str` method and hand it to
 `GenericWorkflowBridge`, so no import dance is needed.
 
 ```python
-from easycat import EasyCatConfig, create_session
+from easycat import EasyConfig, create_session
 
 
 class BookingWorkflow:
@@ -442,7 +442,7 @@ class BookingWorkflow:
 
 workflow = BookingWorkflow()
 
-config = EasyCatConfig(
+config = EasyConfig(
     openai_api_key="your-api-key",
     agent=workflow,  # auto-adapted to GenericWorkflowBridge
 )
@@ -455,7 +455,7 @@ flips into deep mode and calls your method with the live recorder plus
 a cancel token.
 
 In most cases, you can just pass your PydanticAI agent or workflow to
-`EasyCatConfig(agent=...)` and call `create_session(config)`; EasyCat
+`EasyConfig(agent=...)` and call `create_session(config)`; EasyCat
 auto-adapts it to the right bridge. Under the hood, simple single-agent
 assistants use `PydanticAIBridge`, while step-based workflows with
 specialist pinning or programmatic hand-offs use `GenericWorkflowBridge`.
@@ -571,7 +571,7 @@ Optional dependencies you may need depending on providers/transports:
 EasyCat supports two complementary factory styles:
 
 - String-based provider selection (`create_stt_provider` / `create_tts_provider`) for dynamic setups.
-- Config-object based provider wiring via `EasyCatConfig` + `create_session`.
+- Config-object based provider wiring via `EasyConfig` + `create_session`.
 
 Both styles now resolve provider classes through the same central registries in
 `easycat.stt.factory` and `easycat.tts.factory`, so adding providers only

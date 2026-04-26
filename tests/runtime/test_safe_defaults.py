@@ -18,7 +18,7 @@ from easycat.runtime.safe_defaults import (
 
 @dataclass
 class _FakeConfig:
-    """Mimics EasyCatConfig with a mix of safe and secret fields."""
+    """Mimics EasyConfig with a mix of safe and secret fields."""
 
     debug: str = "full"
     stt: str = "openai"
