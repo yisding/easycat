@@ -2,22 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
-import logging
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
 
-import websockets
-
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
-from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
-from easycat.stt.base import STTBase
-
-logger = logging.getLogger(__name__)
+from easycat.stt.websocket_base import WebSocketSTTBase
 
 
 @dataclass
@@ -46,7 +38,7 @@ class DeepgramSTTConfig:
         return self.model.lower().startswith("flux")
 
 
-class DeepgramSTT(STTBase):
+class DeepgramSTT(WebSocketSTTBase):
     """Real-time streaming STT using Deepgram WebSocket API.
 
     Opens a WebSocket on ``start_stream``, forwards audio chunks via
@@ -55,67 +47,34 @@ class DeepgramSTT(STTBase):
     """
 
     def __init__(self, config: DeepgramSTTConfig) -> None:
-        super().__init__(expected_sample_rate=config.sample_rate)
+        super().__init__(
+            provider_name="deepgram_stt",
+            provider_error_name="deepgram",
+            expected_sample_rate=config.sample_rate,
+            close_timeout=5.0,
+        )
         self._config = config
-        self._ws: ReconnectingWebSocket | None = None
-        self._receive_task: asyncio.Task[None] | None = None
 
     async def _on_start(self) -> None:
         url = self._build_url()
         headers = {"Authorization": f"Token {self._config.api_key}"}
-
-        self._ws = ReconnectingWebSocket(
+        await self._connect_websocket(
             url=url,
-            config=ReconnectConfig(extra_headers=headers),
+            headers=headers,
             event_bus=self._config.event_bus,
-            provider_name="deepgram_stt",
             connect_fn=self._config.ws_connect,
         )
-        await self._ws.connect()
-        self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
-        if self._ws is not None:
-            await self._ws.send(chunk.data)
+        await self._send_ws(chunk.data)
 
     async def _on_end(self) -> None:
         if self._ws is not None:
-            try:
-                await self._ws.send(json.dumps({"type": "CloseStream"}))
-            except Exception:
-                logger.debug("Error sending CloseStream", exc_info=True)
+            await self._send_json_control({"type": "CloseStream"}, label="CloseStream")
 
-            if self._receive_task is not None:
-                try:
-                    await asyncio.wait_for(self._receive_task, timeout=5.0)
-                except TimeoutError:
-                    self._receive_task.cancel()
-                    logger.warning("Deepgram receive loop timed out on close")
+        await self._close_active_websocket(close_before_drain=False)
 
-            await self._ws.close()
-
-        self._ws = None
-        self._receive_task = None
-
-    async def _receive_loop(self) -> None:
-        assert self._ws is not None
-        try:
-            async for raw_message in self._ws.recv_iter():
-                if isinstance(raw_message, bytes):
-                    continue
-                try:
-                    msg = json.loads(raw_message)
-                except json.JSONDecodeError:
-                    continue
-                self._handle_message(msg)
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("Deepgram WebSocket closed")
-        except Exception:
-            logger.exception("Error in Deepgram receive loop")
-        finally:
-            self._event_queue.put_nowait(None)
-
-    def _handle_message(self, msg: dict[str, Any]) -> None:
+    def _handle_json_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type", "")
         if self._config.is_flux:
             self._handle_flux_message(msg_type, msg)
@@ -146,6 +105,9 @@ class DeepgramSTT(STTBase):
                 word_timestamps=word_timestamps,
             )
         )
+
+    def _handle_message(self, msg: dict[str, Any]) -> None:
+        self._handle_json_message(msg)
 
     def _handle_flux_message(self, msg_type: str, msg: dict[str, Any]) -> None:
         if msg_type != "TurnInfo":
