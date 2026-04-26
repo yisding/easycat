@@ -13,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._context import normalize_context_messages
 from easycat.integrations.agents._helpers import split_replacement_by_original_parts
 from easycat.integrations.agents._openai_agents_events import (
     extract_text_delta,
@@ -100,7 +101,7 @@ class OpenAIAgentsBridge:
 
         saved_mcp_servers = getattr(self._agent, "mcp_servers", None)
         try:
-            input_data = self._build_input(turn_input.text)
+            input_data = self._build_input(turn_input)
             kwargs = self._build_kwargs()
             if self._mcp_servers is not None and hasattr(self._agent, "mcp_servers"):
                 self._agent.mcp_servers = list(self._mcp_servers)
@@ -389,16 +390,28 @@ class OpenAIAgentsBridge:
 
     # ── Internal helpers ─────────────────────────────────────────
 
-    def _build_input(self, text: str) -> Any:
+    def _build_input(self, turn_input: AgentTurnInput | str) -> Any:
+        if isinstance(turn_input, AgentTurnInput):
+            text = turn_input.text
+            raw_context = turn_input.context
+        else:
+            text = str(turn_input)
+            raw_context = []
+        own_history = bool(self._message_history) or (
+            self._use_previous_response_id and self._previous_response_id is not None
+        )
+        context = normalize_context_messages(raw_context, own_history=own_history)
+        user_message = {"role": "user", "content": text}
         if self._use_previous_response_id and self._previous_response_id is not None:
             parts: list[dict[str, str]] = []
+            parts.extend(context)
             if self._pending_interruption is not None:
                 parts.append({"role": "developer", "content": self._pending_interruption})
                 self._pending_interruption = None
-            parts.append({"role": "user", "content": text})
+            parts.append(user_message)
             return parts
-        if self._message_history:
-            return self._message_history + [{"role": "user", "content": text}]
+        if context or self._message_history:
+            return [*context, *self._message_history, user_message]
         return text
 
     def _build_kwargs(self) -> dict[str, Any]:

@@ -59,15 +59,27 @@ Point Twilio's inbound webhook at a handler that returns
 as `<Parameter>` children:
 
 ```python
+import os
 from urllib.parse import parse_qsl
 
 from fastapi import Request, Response
+from easycat.telephony import validate_twilio_webhook_signature
 from easycat.transports.twilio_media import twiml_connect_stream
 
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 
 @app.post("/twiml")
 async def twiml(request: Request) -> Response:
-    form = dict(parse_qsl((await request.body()).decode(), keep_blank_values=True))
+    form_items = parse_qsl((await request.body()).decode(), keep_blank_values=True)
+    if TWILIO_AUTH_TOKEN and not validate_twilio_webhook_signature(
+        auth_token=TWILIO_AUTH_TOKEN,
+        url=str(request.url),  # must be Twilio's exact public URL
+        params=form_items,
+        signature=request.headers.get("x-twilio-signature"),
+    ):
+        return Response(status_code=403)
+
+    form = dict(form_items)
     xml = twiml_connect_stream(
         "wss://your-app.example.com/twilio",
         parameters={
@@ -86,7 +98,9 @@ name, and any extra fields you pass) onto
 `session.call_identity`. Tool code inside your agent reads
 `session.call_identity.caller_number` directly. Do not pass
 `"{{From}}"`-style placeholders to `twiml_connect_stream`; Twilio
-forwards those verbatim in generated TwiML.
+forwards those verbatim in generated TwiML. When webhook validation is
+enabled behind a proxy, validate against the same public URL Twilio
+called, not an internal service URL.
 
 ### Outbound calls (Twilio REST)
 Enable the outbound pipeline via `EasyCatConfig.telephony`:
@@ -128,6 +142,38 @@ With the outbound manager enabled you also get:
 - `CallDispositionTracker` — human / voicemail / IVR disposition stats
 - `RetryStrategy` attached to the manager — `manager.retry_strategy.record_attempt(number, reason)` decides RETRY / SMS_FALLBACK / NO_RETRY
 - `DNCList`, `check_calling_hours`, and `detect_opt_out` helpers you can hook into `manager.dnc_list` / `manager.compliance_check` for TCPA-friendly calling
+
+Start the session before placing calls, and feed Twilio status callbacks
+back into the same event bus:
+
+```python
+from urllib.parse import parse_qsl
+
+from fastapi import HTTPException, Request, Response
+from easycat.telephony import emit_call_status, validate_twilio_webhook_signature
+
+
+await session.start()
+manager = session.outbound_call_manager
+if manager is None:
+    raise RuntimeError("Outbound manager is not configured")
+
+call_sid = await manager.place_call("+15551234567")
+
+
+@app.post("/status")
+async def status(request: Request) -> Response:
+    form_items = parse_qsl((await request.body()).decode(), keep_blank_values=True)
+    if TWILIO_AUTH_TOKEN and not validate_twilio_webhook_signature(
+        auth_token=TWILIO_AUTH_TOKEN,
+        url=str(request.url),
+        params=form_items,
+        signature=request.headers.get("x-twilio-signature"),
+    ):
+        raise HTTPException(status_code=403)
+    await emit_call_status(dict(form_items), session.event_bus)
+    return Response(status_code=204)
+```
 
 When the session places an outbound call via `CallInitiated`,
 `session.call_identity` is stamped with `direction="outbound"` and the

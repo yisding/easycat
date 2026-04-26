@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
-from easycat.events import CallInitiated, CallScreening, EventBus, TTSAudio
+from easycat.events import CallInitiated, CallScreening, CallStateChanged, EventBus, TTSAudio
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents.base import NULL_RECORDER, AgentTurnInput
@@ -35,7 +35,6 @@ from easycat.stt.openai_provider import OpenAISTTConfig  # noqa: F401  (public r
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.stubs import NoopAgent
 from easycat.telephony.call_state import (
-    CallStateChanged,
     OutboundCallState,
     OutboundCallStateMachine,
 )

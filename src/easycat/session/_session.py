@@ -13,7 +13,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from easycat.audio_format import AudioChunk
@@ -133,6 +133,8 @@ from easycat.tts_synthesizer import TTSSynthesizer
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
+
+_HelperT = TypeVar("_HelperT")
 
 
 @dataclass(slots=True)
@@ -294,6 +296,7 @@ class Session:
         # CallAnswered doesn't re-greet.
         self._greeting: str | None = cfg.greeting
         self._greeting_spoken: bool = False
+        self._greeting_task: asyncio.Task[Any] | None = None
         if self._greeting:
             from easycat.events import CallAnswered as _CallAnsweredEv
 
@@ -1038,6 +1041,18 @@ class Session:
         for event_type, handler in registrations:
             self.event_bus.unsubscribe(event_type, handler)
 
+    def get_helper(self, helper_type: type[_HelperT]) -> _HelperT | None:
+        """Return the first attached session helper matching *helper_type*.
+
+        Telephony features are lifecycle-managed helpers under the hood.  This
+        accessor keeps advanced applications off ``_telephony_helpers`` while
+        preserving the lightweight helper model.
+        """
+        for helper in self._telephony_helpers:
+            if isinstance(helper, helper_type):
+                return helper
+        return None
+
     def export_debug_bundle(
         self,
         path: str,
@@ -1126,22 +1141,51 @@ class Session:
         read this rather than poking at transport internals.
         """
         transport = self.transport
-        module = type(transport).__module__
+        explicit = getattr(transport, "transport_kind", None)
+        if isinstance(explicit, str) and explicit:
+            return explicit
 
-        # Telephony transports live under ``easycat.transports.twilio_media``
-        # and any future SIP-backed siblings.  ``twilio_media`` catches
-        # both ``TwilioTransport`` (server mode) and ``TwilioConnectionTransport``.
-        if "twilio_media" in module or "telephony" in module or "sip" in module:
-            return "telephony"
-        if "webrtc" in module:
+        # Fallback for third-party transports that have not adopted the
+        # explicit property yet.
+        module = type(transport).__module__
+        name = type(transport).__name__.lower()
+        if "webrtc" in module or "webrtc" in name:
             return "webrtc"
-        if "websocket" in module:
+        if "websocket" in module or "websocket" in name:
             return "websocket"
-        if "local" in module:
+        if "local" in module or name == "localtransport":
             return "local"
-        if "stubs" in module:
+        if "noop" in name or "stubs" in module:
             return "noop"
         return "custom"
+
+    @property
+    def outbound_call_manager(self) -> Any | None:
+        """Outbound call manager attached to this session, when configured."""
+        from easycat.telephony.outbound import OutboundCallManager
+
+        return self.get_helper(OutboundCallManager)
+
+    @property
+    def outbound_call_state_machine(self) -> Any | None:
+        """Outbound call state machine attached to this session, when configured."""
+        from easycat.telephony.call_state import OutboundCallStateMachine
+
+        return self.get_helper(OutboundCallStateMachine)
+
+    @property
+    def number_health_monitor(self) -> Any | None:
+        """Per-number health monitor attached to this session, when configured."""
+        from easycat.telephony.number_health import NumberHealthMonitor
+
+        return self.get_helper(NumberHealthMonitor)
+
+    @property
+    def call_disposition_tracker(self) -> Any | None:
+        """Call disposition tracker attached to this session, when configured."""
+        from easycat.telephony.number_health import CallDispositionTracker
+
+        return self.get_helper(CallDispositionTracker)
 
     @property
     def dnc_list(self) -> Any | None:
@@ -1441,6 +1485,7 @@ class Session:
                         " BotStoppedSpeaking is emitted if needed."
                     )
 
+            await self._cancel_greeting_task()
             await self._cancel_stt()
             await self._cancel_tts()
             for checker in self._health_checkers:
@@ -1519,6 +1564,9 @@ class Session:
             if self._current_tts_task and not self._current_tts_task.done():
                 self._current_tts_task.cancel()
                 tasks.append(self._current_tts_task)
+            if self._greeting_task and not self._greeting_task.done():
+                self._greeting_task.cancel()
+                tasks.append(self._greeting_task)
             if self._outbound_task and not self._outbound_task.done():
                 self._outbound_task.cancel()
                 tasks.append(self._outbound_task)
@@ -1533,6 +1581,7 @@ class Session:
                     pass
             self._stt_pause_commit_task = None
             self._stt_segment_commit_task = None
+            self._greeting_task = None
             self._heartbeat_task = None
 
             for checker in self._health_checkers:
@@ -1770,11 +1819,14 @@ class Session:
         await self.cancel_turn(barge_in=True)
         return True
 
-    async def _on_call_answered_greet(self, event: Any) -> None:
-        """Synthesize the configured greeting once per call.
+    def _on_call_answered_greet(self, event: Any) -> None:
+        """Schedule the configured greeting once per call.
 
         Wires :attr:`_greeting` into the first
-        :class:`~easycat.events.CallAnswered`.  Uses the
+        :class:`~easycat.events.CallAnswered`.  The actual TTS work is
+        detached from event dispatch so outbound status callbacks can
+        complete lifecycle/AMD processing without waiting on synthesis.
+        Uses the
         ``synthesize_bypass`` path so the greeting plays even when a
         classification gate is still buffering (outbound answering
         machine window).  Subsequent ``CallAnswered`` events — e.g. a
@@ -1782,11 +1834,38 @@ class Session:
         """
         if self._greeting_spoken or not self._greeting:
             return
-        self._greeting_spoken = True
+        if self._greeting_task is not None and not self._greeting_task.done():
+            return
+        task = self._journaled_task(
+            self._deliver_call_answered_greeting(self._greeting),
+            name="call_answered_greeting",
+        )
+        self._greeting_task = task
+        task.add_done_callback(self._clear_greeting_task)
+
+    def _clear_greeting_task(self, task: asyncio.Task[Any]) -> None:
+        if self._greeting_task is task:
+            self._greeting_task = None
+
+    async def _deliver_call_answered_greeting(self, greeting: str) -> None:
+        await asyncio.sleep(0)
         try:
-            await self.synthesize_bypass(self._greeting)
+            await self.synthesize_bypass(greeting)
+            self._greeting_spoken = True
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.debug("Failed to synthesize greeting", exc_info=True)
+
+    async def _cancel_greeting_task(self) -> None:
+        task = self._greeting_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._greeting_task = None
 
     async def _on_stt_final_opt_out(self, event: STTFinal) -> None:
         """Detect TCPA opt-out phrases in every STT final and react.

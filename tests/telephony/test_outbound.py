@@ -13,6 +13,7 @@ from easycat.events import (
     CallInitiated,
     CallRinging,
     EventBus,
+    VoicemailDetected,
 )
 from easycat.telephony.outbound import (
     OutboundCallManager,
@@ -50,6 +51,13 @@ class TestParseCallStatusCallback:
         assert result.duration_s == 45.0
         assert result.disposition == "completed"
 
+    def test_completed_status_ignores_malformed_duration(self) -> None:
+        result = parse_call_status_callback(
+            {"CallStatus": "completed", "CallSid": "CA123", "Duration": "not-a-number"}
+        )
+        assert isinstance(result, CallEnded)
+        assert result.duration_s is None
+
     def test_busy_status(self) -> None:
         result = parse_call_status_callback({"CallStatus": "busy", "CallSid": "CA123"})
         assert isinstance(result, CallFailed)
@@ -72,6 +80,10 @@ class TestParseCallStatusCallback:
 
     def test_missing_call_status(self) -> None:
         result = parse_call_status_callback({"CallSid": "CA123"})
+        assert result is None
+
+    def test_missing_call_sid(self) -> None:
+        result = parse_call_status_callback({"CallStatus": "ringing"})
         assert result is None
 
     def test_unknown_status(self) -> None:
@@ -102,6 +114,14 @@ class TestParseCallStatusCallback:
         assert result.reason == "declined"
         assert result.sip_code == 603
 
+    def test_malformed_sip_response_code_falls_back_to_status(self) -> None:
+        result = parse_call_status_callback(
+            {"CallStatus": "failed", "CallSid": "CA123", "SipResponseCode": "nope"}
+        )
+        assert isinstance(result, CallFailed)
+        assert result.reason == "failed"
+        assert result.sip_code is None
+
 
 class TestEmitCallStatus:
     @pytest.mark.asyncio
@@ -123,25 +143,43 @@ class TestEmitCallStatus:
         assert result is None
         assert len(received) == 0
 
+    @pytest.mark.asyncio
+    async def test_emits_amd_voicemail_detected(self) -> None:
+        bus = EventBus()
+        received: list[VoicemailDetected] = []
+        bus.subscribe(VoicemailDetected, received.append)
+        result = await emit_call_status(
+            {"CallStatus": "in-progress", "CallSid": "CA1", "AnsweredBy": "machine_start"},
+            bus,
+        )
+        assert isinstance(result, CallAnswered)
+        assert len(received) == 1
+        assert received[0].result == "machine"
+        assert received[0].call_sid == "CA1"
+
 
 class TestOutboundCallManager:
     def test_twilio_sdk_import_error(self) -> None:
         bus = EventBus()
         with patch.dict("sys.modules", {"twilio": None, "twilio.rest": None}):
-            with pytest.raises(ImportError, match="easycat\\[twilio\\]"):
+            with pytest.raises(ImportError, match="easycat\\[telephony\\]"):
                 OutboundCallManager(bus, from_number="+1555")
 
     @patch("easycat.telephony.outbound.OutboundCallManager.__init__", return_value=None)
     def test_init_stores_config(self, mock_init: MagicMock) -> None:
         manager = OutboundCallManager.__new__(OutboundCallManager)
         manager._state = OutboundCallManagerState.IDLE
+        manager._active_call_sid = None
         manager._started = False
         assert manager.state == OutboundCallManagerState.IDLE
+        assert manager.active_call_sid is None
 
     @patch("easycat.telephony.outbound.OutboundCallManager.__init__", return_value=None)
     def test_start_stop_idempotent(self, mock_init: MagicMock) -> None:
         manager = OutboundCallManager.__new__(OutboundCallManager)
+        manager._event_bus = EventBus()
         manager._state = OutboundCallManagerState.IDLE
+        manager._active_call_sid = None
         manager._started = False
         manager.start()
         manager.start()
@@ -153,11 +191,21 @@ class TestOutboundCallManager:
     @patch("easycat.telephony.outbound.OutboundCallManager.__init__", return_value=None)
     def test_stop_resets_state(self, mock_init: MagicMock) -> None:
         manager = OutboundCallManager.__new__(OutboundCallManager)
+        manager._event_bus = EventBus()
         manager._state = OutboundCallManagerState.ACTIVE
+        manager._active_call_sid = "CA1"
         manager._started = True
         manager.stop()
         assert manager.state == OutboundCallManagerState.IDLE
+        assert manager.active_call_sid is None
         assert manager._started is False
+
+    @patch("easycat.telephony.outbound.OutboundCallManager.__init__", return_value=None)
+    def test_active_call_sid_is_read_only(self, mock_init: MagicMock) -> None:
+        manager = OutboundCallManager.__new__(OutboundCallManager)
+        manager._active_call_sid = None
+        with pytest.raises(AttributeError):
+            manager.active_call_sid = "CA1"  # type: ignore[misc]
 
 
 class TestOutboundCallManagerPlaceCall:
@@ -176,6 +224,7 @@ class TestOutboundCallManagerPlaceCall:
         manager._twiml_url = "https://example.com/twiml"
         manager._client = MagicMock()
         manager._state = OutboundCallManagerState.IDLE
+        manager._active_call_sid = None
         manager._started = True
         manager.dnc_list = None
         manager.compliance_check = None
@@ -196,6 +245,8 @@ class TestOutboundCallManagerPlaceCall:
         assert received[0].call_sid == "CA999"
         assert received[0].to == "+15551234567"
         assert received[0].from_ == "+15559876543"
+        assert manager.state == OutboundCallManagerState.ACTIVE
+        assert manager.active_call_sid == "CA999"
 
     @pytest.mark.asyncio
     async def test_place_call_configures_amd(self) -> None:
@@ -275,3 +326,103 @@ class TestOutboundCallManagerPlaceCall:
         with pytest.raises(ValueError, match="compliance_check"):
             await manager.place_call("+15551234567")
         manager._client.calls.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_place_call_requires_start(self) -> None:
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        manager._started = False
+        with pytest.raises(RuntimeError, match="started"):
+            await manager.place_call("+15551234567")
+        manager._client.calls.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_place_call_requires_idle(self) -> None:
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        manager._state = OutboundCallManagerState.ACTIVE
+        manager._active_call_sid = "CA999"
+        with pytest.raises(RuntimeError, match="active call"):
+            await manager.place_call("+15551234567")
+        manager._client.calls.create.assert_not_called()
+
+
+class TestOutboundCallManagerStatusTracking:
+    def _make_manager(self, bus: EventBus) -> OutboundCallManager:
+        manager = OutboundCallManager.__new__(OutboundCallManager)
+        manager._event_bus = bus
+        manager._client = MagicMock()
+        manager._state = OutboundCallManagerState.IDLE
+        manager._active_call_sid = None
+        manager._started = False
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_status_events_track_active_call(self) -> None:
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        manager.start()
+        await bus.emit(CallRinging(call_sid="CA1"))
+        assert manager.state == OutboundCallManagerState.ACTIVE
+        assert manager.active_call_sid == "CA1"
+        await bus.emit(CallAnswered(call_sid="CA1"))
+        assert manager.state == OutboundCallManagerState.ACTIVE
+        assert manager.active_call_sid == "CA1"
+        await bus.emit(CallEnded(call_sid="CA1"))
+        assert manager.state == OutboundCallManagerState.IDLE
+        assert manager.active_call_sid is None
+
+    @pytest.mark.asyncio
+    async def test_failed_event_clears_active_call(self) -> None:
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        manager.start()
+        await bus.emit(CallRinging(call_sid="CA1"))
+        await bus.emit(CallFailed(call_sid="CA1", reason="busy"))
+        assert manager.state == OutboundCallManagerState.IDLE
+        assert manager.active_call_sid is None
+
+    @pytest.mark.asyncio
+    async def test_ignores_terminal_event_for_different_call(self) -> None:
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        manager.start()
+        await bus.emit(CallRinging(call_sid="CA1"))
+        await bus.emit(CallEnded(call_sid="CA2"))
+        assert manager.state == OutboundCallManagerState.ACTIVE
+        assert manager.active_call_sid == "CA1"
+
+    @pytest.mark.asyncio
+    async def test_stop_unsubscribes_from_status_events(self) -> None:
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        manager.start()
+        manager.stop()
+        await bus.emit(CallRinging(call_sid="CA1"))
+        assert manager.state == OutboundCallManagerState.IDLE
+        assert manager.active_call_sid is None
+
+    def test_stop_does_not_call_twilio_rest(self) -> None:
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        manager._active_call_sid = "CA1"
+        manager._state = OutboundCallManagerState.ACTIVE
+        manager.start()
+        manager._active_call_sid = "CA1"
+        manager._state = OutboundCallManagerState.ACTIVE
+        manager.stop()
+        manager._client.calls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hangup_call_uses_twilio_rest_async_api(self) -> None:
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        manager._active_call_sid = "CA1"
+        manager._state = OutboundCallManagerState.ACTIVE
+        call_resource = MagicMock()
+        manager._client.calls.return_value = call_resource
+        await manager.hangup_call()
+        manager._client.calls.assert_called_once_with("CA1")
+        call_resource.update.assert_called_once_with(status="completed")
+        assert manager.state == OutboundCallManagerState.IDLE
+        assert manager.active_call_sid is None

@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Twilio sends/receives mulaw 8 kHz mono.
 MULAW_8K = AudioFormat(sample_rate=8000, channels=1, sample_width=1, encoding="mulaw")
+_TWILIO_OUTBOUND_TRACKS = {"outbound", "outbound_track"}
 
 
 @dataclass
@@ -135,6 +136,38 @@ async def _emit_twilio_call_ended(
     )
 
 
+def _accepted_twilio_media(
+    msg: dict[str, Any],
+    *,
+    active_stream_sid: str | None,
+) -> dict[str, Any] | None:
+    """Return the Twilio media payload only when the frame belongs to the inbound stream."""
+    if active_stream_sid is None:
+        logger.debug("Ignoring Twilio media before start")
+        return None
+
+    stream_sid = msg.get("streamSid")
+    if stream_sid != active_stream_sid:
+        logger.debug(
+            "Ignoring Twilio media for streamSid=%s while active streamSid=%s",
+            stream_sid,
+            active_stream_sid,
+        )
+        return None
+
+    media = msg.get("media", {})
+    if not isinstance(media, dict):
+        logger.debug("Ignoring Twilio media frame with non-object media payload")
+        return None
+
+    track = media.get("track", "")
+    if track in _TWILIO_OUTBOUND_TRACKS:
+        logger.debug("Ignoring Twilio outbound media track: %s", track)
+        return None
+
+    return media
+
+
 class TwilioTransport(_ServerTransportBase):
     """Transport for Twilio Media Streams bidirectional WebSocket.
 
@@ -177,6 +210,7 @@ class TwilioTransport(_ServerTransportBase):
         # to ``session.call_identity`` without the app doing plumbing.
         self._identity_sink: Any = None
         self._answered_at: float | None = None
+        self._call_ended_emitted = False
 
         self._mark_counter = 0
 
@@ -186,6 +220,10 @@ class TwilioTransport(_ServerTransportBase):
     def call_identity(self) -> Any | None:
         """Latest :class:`CallIdentity` parsed from the Twilio start event."""
         return self._call_identity
+
+    @property
+    def transport_kind(self) -> str:
+        return "telephony"
 
     def bind_identity_sink(self, sink: Any) -> None:
         """Register a callback that receives every identity update.
@@ -204,6 +242,7 @@ class TwilioTransport(_ServerTransportBase):
         self._stream_sid = None
         self._call_sid = None
         self._call_identity = None
+        self._call_ended_emitted = False
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Convert a PCM16 chunk to mulaw 8 kHz and send to Twilio."""
@@ -295,12 +334,7 @@ class TwilioTransport(_ServerTransportBase):
         except websockets.exceptions.ConnectionClosed:
             logger.info("Twilio Media Streams disconnected")
         finally:
-            await _emit_twilio_call_ended(
-                self._event_bus,
-                call_sid=self._call_sid,
-                answered_at=self._answered_at,
-                call_identity=self._call_identity,
-            )
+            await self._emit_call_ended_once()
             self._ws = None
             self._client_connected.clear()
             self._stream_sid = None
@@ -329,12 +363,7 @@ class TwilioTransport(_ServerTransportBase):
             # manager's ``CallEnded`` event so observers like
             # ``CallDispositionTracker`` and ``NumberHealthMonitor``
             # see the same lifecycle regardless of direction.
-            await _emit_twilio_call_ended(
-                self._event_bus,
-                call_sid=self._call_sid,
-                answered_at=self._answered_at,
-                call_identity=self._call_identity,
-            )
+            await self._emit_call_ended_once()
             # Explicitly end the current audio stream so receive_audio() can terminate.
             self._stream_sid = None
             self._call_sid = None
@@ -383,6 +412,7 @@ class TwilioTransport(_ServerTransportBase):
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
+        self._call_ended_emitted = False
         identity, caller, called = _parse_twilio_start_identity(start, self._call_sid)
         self._call_identity = identity
         if self._identity_sink is not None:
@@ -404,7 +434,9 @@ class TwilioTransport(_ServerTransportBase):
 
     async def _handle_media(self, msg: dict[str, Any]) -> None:
         """Decode mulaw audio from a ``media`` message and enqueue as PCM16."""
-        media = msg.get("media", {})
+        media = _accepted_twilio_media(msg, active_stream_sid=self._stream_sid)
+        if media is None:
+            return
         payload = media.get("payload", "")
         if not payload:
             return
@@ -418,6 +450,17 @@ class TwilioTransport(_ServerTransportBase):
 
         chunk = AudioChunk(data=pcm_data, format=self._audio_format)
         self._enqueue_chunk(chunk, context="Twilio")
+
+    async def _emit_call_ended_once(self) -> None:
+        if self._call_ended_emitted:
+            return
+        self._call_ended_emitted = True
+        await _emit_twilio_call_ended(
+            self._event_bus,
+            call_sid=self._call_sid,
+            answered_at=self._answered_at,
+            call_identity=self._call_identity,
+        )
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
         """Emit a DTMF event for the pressed digit."""
@@ -546,6 +589,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         self._call_identity: Any | None = None
         self._identity_sink: Any = None
         self._answered_at: float | None = None
+        self._call_ended_emitted = False
         self._mark_counter = 0
         self._receive_task: asyncio.Task[None] | None = None
         self._init_audio_queue(self._config.max_pending_chunks)
@@ -554,6 +598,10 @@ class TwilioConnectionTransport(_AudioQueueMixin):
     def call_identity(self) -> Any | None:
         """Latest :class:`CallIdentity` parsed from the Twilio start event."""
         return self._call_identity
+
+    @property
+    def transport_kind(self) -> str:
+        return "telephony"
 
     def bind_identity_sink(self, sink: Any) -> None:
         """Register a callback that receives every identity update."""
@@ -583,6 +631,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         self._call_sid = None
         self._call_identity = None
         self._answered_at = None
+        self._call_ended_emitted = False
         try:
             await self._ws.close()
         except Exception:
@@ -652,12 +701,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         except websockets.exceptions.ConnectionClosed:
             logger.info("Twilio Media Streams disconnected")
         finally:
-            await _emit_twilio_call_ended(
-                self._event_bus,
-                call_sid=self._call_sid,
-                answered_at=self._answered_at,
-                call_identity=self._call_identity,
-            )
+            await self._emit_call_ended_once()
             self._connected = False
             self._client_connected.clear()
             self._stream_sid = None
@@ -678,12 +722,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         elif event == "media":
             await self._handle_media(msg)
         elif event == "stop":
-            await _emit_twilio_call_ended(
-                self._event_bus,
-                call_sid=self._call_sid,
-                answered_at=self._answered_at,
-                call_identity=self._call_identity,
-            )
+            await self._emit_call_ended_once()
             self._stream_sid = None
             self._call_sid = None
             self._answered_at = None
@@ -700,6 +739,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
+        self._call_ended_emitted = False
         identity, caller, called = _parse_twilio_start_identity(start, self._call_sid)
         self._call_identity = identity
         if self._identity_sink is not None:
@@ -720,12 +760,8 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         )
 
     async def _handle_media(self, msg: dict[str, Any]) -> None:
-        media = msg.get("media", {})
-        # When streaming both tracks, skip the outbound (bot's own speech)
-        # so it never enters the VAD/STT pipeline and cannot be mistaken
-        # for callee audio by downstream classifiers.
-        track = media.get("track", "")
-        if track in ("outbound", "outbound_track"):
+        media = _accepted_twilio_media(msg, active_stream_sid=self._stream_sid)
+        if media is None:
             return
         payload = media.get("payload", "")
         if not payload:
@@ -739,11 +775,30 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         chunk = AudioChunk(data=pcm_data, format=self._audio_format)
         self._enqueue_chunk(chunk, context="Twilio")
 
+    async def _emit_call_ended_once(self) -> None:
+        if self._call_ended_emitted:
+            return
+        self._call_ended_emitted = True
+        await _emit_twilio_call_ended(
+            self._event_bus,
+            call_sid=self._call_sid,
+            answered_at=self._answered_at,
+            call_identity=self._call_identity,
+        )
+
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
         dtmf_data = msg.get("dtmf", {})
         digit = dtmf_data.get("digit", "")
         if digit and self._event_bus is not None:
             await self._event_bus.emit(DTMF(digit=digit))
+
+    @property
+    def stream_sid(self) -> str | None:
+        return self._stream_sid
+
+    @property
+    def call_sid(self) -> str | None:
+        return self._call_sid
 
     def version_info(self) -> dict[str, str]:
         try:

@@ -2,13 +2,77 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import logging
+from collections.abc import Mapping, Sequence
 from typing import Any
 from xml.sax.saxutils import escape, quoteattr
 
 from easycat.events import DTMF, EventBus
 
 logger = logging.getLogger(__name__)
+
+
+# ── Twilio webhook validation ────────────────────────────────────
+
+
+def validate_twilio_webhook_signature(
+    *,
+    auth_token: str,
+    url: str,
+    params: Mapping[str, Any] | Sequence[tuple[str, Any]],
+    signature: str | None,
+) -> bool:
+    """Validate Twilio's ``X-Twilio-Signature`` webhook header.
+
+    ``url`` must be the exact public URL Twilio requested, including query
+    string.  Apps behind a proxy/load balancer should reconstruct that public
+    URL from trusted forwarded headers or framework proxy support before
+    calling this helper.
+    """
+    if not auth_token or not signature:
+        return False
+
+    expected = compute_twilio_webhook_signature(
+        auth_token=auth_token,
+        url=url,
+        params=params,
+    )
+    return hmac.compare_digest(expected, signature.strip())
+
+
+def compute_twilio_webhook_signature(
+    *,
+    auth_token: str,
+    url: str,
+    params: Mapping[str, Any] | Sequence[tuple[str, Any]],
+) -> str:
+    """Compute Twilio's HMAC-SHA1 webhook signature for form parameters."""
+    signed = url + "".join(
+        key + value
+        for key, values in sorted(_twilio_signature_values(params).items())
+        for value in sorted(set(values))
+    )
+    digest = hmac.new(auth_token.encode("utf-8"), signed.encode("utf-8"), hashlib.sha1).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
+def _twilio_signature_values(
+    params: Mapping[str, Any] | Sequence[tuple[str, Any]],
+) -> dict[str, list[str]]:
+    values_by_key: dict[str, list[str]] = {}
+    source = params.items() if isinstance(params, Mapping) else params
+    for key, value in source:
+        key_text = str(key)
+        values = values_by_key.setdefault(key_text, [])
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                values.append("" if item is None else str(item))
+        else:
+            values.append("" if value is None else str(value))
+    return values_by_key
 
 
 # ── TwiML Gather fallback ────────────────────────────────────────

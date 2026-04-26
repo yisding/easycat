@@ -18,10 +18,9 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 
-from easycat.events import EventBus, STTFinal
+from easycat.events import EventBus, IVRAction, IVRActionType, STTFinal
 from easycat.telephony.dtmf import VALID_DTMF_DIGITS
 from easycat.telephony.screening import EARLY_MEDIA_PHRASES as _EARLY_MEDIA_PATTERNS
 
@@ -70,25 +69,6 @@ def detect_human_after_ivr(text: str) -> bool:
         if phrase in lower:
             return True
     return False
-
-
-class IVRActionType(Enum):
-    DTMF = "dtmf"
-    SPEAK = "speak"
-    WAIT = "wait"
-    HANGUP = "hangup"
-    HOLD = "hold"
-    HUMAN_DETECTED = "human_detected"
-
-
-@dataclass(frozen=True)
-class IVRAction:
-    """Emitted when the navigator decides on an action."""
-
-    type: IVRActionType
-    digits: str = ""
-    text: str = ""
-    menu_depth: int = 0
 
 
 @dataclass

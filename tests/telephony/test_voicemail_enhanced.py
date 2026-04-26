@@ -273,6 +273,24 @@ class TestEnhancedVoicemailIntegration:
             classifier.stop()
 
     @pytest.mark.asyncio
+    async def test_fused_classification_preserves_call_sid(self) -> None:
+        bus = EventBus()
+        classifier = STTAMDFusionClassifier(bus, prefer_stt=True)
+        results: list[VoicemailDetected] = []
+        classifier.start()
+        bus.subscribe(VoicemailDetected, results.append)
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA1"))
+            await bus.emit(STTFinal(text="Hi, please leave a message"))
+
+            fused = [event for event in results if event.source == "fusion"]
+            assert len(fused) == 1
+            assert fused[0].call_sid == "CA1"
+        finally:
+            classifier.stop()
+
+    @pytest.mark.asyncio
     async def test_stt_classification_disagrees_with_amd(self) -> None:
         """When AMD says human but greeting says machine, prefer_stt wins."""
         bus = EventBus()

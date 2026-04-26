@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+
 import pytest
 
 from easycat.session.actions import (
@@ -14,6 +18,11 @@ from easycat.telephony.session_actions import (
     TwilioSessionActionConfig,
     TwilioSessionActionExecutor,
 )
+from easycat.telephony.twiml import (
+    compute_twilio_webhook_signature,
+    validate_twilio_webhook_signature,
+)
+from easycat.transports.twilio_media import TwilioConnectionTransport
 
 
 class _FakeCallUpdater:
@@ -57,6 +66,44 @@ class _FakeSession:
     transport = _FakeTransport()
 
 
+class _FakeWebSocket:
+    async def send(self, _message: str) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+def test_twilio_webhook_signature_validation_groups_duplicate_form_values() -> None:
+    url = "https://voice.example.com/twiml?tenant=acme"
+    params = [("Digits", "2"), ("CallSid", "CA123"), ("Digits", "1")]
+    signed = url + "CallSidCA123Digits1Digits2"
+    expected = base64.b64encode(
+        hmac.new(b"token", signed.encode("utf-8"), hashlib.sha1).digest()
+    ).decode("ascii")
+
+    assert (
+        compute_twilio_webhook_signature(
+            auth_token="token",
+            url=url,
+            params=params,
+        )
+        == expected
+    )
+    assert validate_twilio_webhook_signature(
+        auth_token="token",
+        url=url,
+        params=params,
+        signature=expected,
+    )
+    assert not validate_twilio_webhook_signature(
+        auth_token="token",
+        url=url,
+        params=params,
+        signature="bad",
+    )
+
+
 @pytest.mark.asyncio
 async def test_twilio_transfer_action_updates_call_with_twiml() -> None:
     client = _FakeTwilioClient()
@@ -89,6 +136,32 @@ async def test_twilio_dtmf_action_inserts_delays() -> None:
 
     assert result.metadata["digits"] == "1W2W3"
     assert 'digits="1W2W3"' in client.calls.updater.updates[0]["twiml"]
+
+
+@pytest.mark.asyncio
+async def test_twilio_connection_transport_session_action_uses_start_call_sid() -> None:
+    client = _FakeTwilioClient()
+    transport = TwilioConnectionTransport(_FakeWebSocket())
+    await transport._handle_start(
+        {
+            "streamSid": "MZ123",
+            "start": {
+                "streamSid": "MZ123",
+                "callSid": "CA_FROM_START",
+                "customParameters": {"From": "+15551234567"},
+            },
+        }
+    )
+    session = type("Session", (), {"transport": transport})()
+    executor = TwilioSessionActionExecutor(TwilioSessionActionConfig(client=client))
+
+    result = await executor.execute(session, SendDTMFAction(digits="9"))
+
+    assert transport.stream_sid == "MZ123"
+    assert transport.call_sid == "CA_FROM_START"
+    assert client.calls.last_sid == "CA_FROM_START"
+    assert result.metadata["call_sid"] == "CA_FROM_START"
+    assert 'digits="9"' in client.calls.updater.updates[0]["twiml"]
 
 
 @pytest.mark.asyncio

@@ -63,6 +63,7 @@ class LocalTransport(_AudioQueueMixin):
     ``asyncio.Queue`` that feeds the output stream callback.
     """
 
+    transport_kind = "local"
     reports_audio_delivery = True
 
     def __init__(self, config: LocalTransportConfig | None = None) -> None:

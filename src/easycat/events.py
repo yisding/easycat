@@ -264,6 +264,7 @@ class VoicemailDetected(Event):
 
     result: Literal["human", "machine", "unknown"]
     source: Literal["", "fusion", "detector"] = ""
+    call_sid: str = ""
 
 
 # Outbound call lifecycle
@@ -303,6 +304,42 @@ class CallScreening(Event):
 class ScreeningTimedOut(Event):
     """Screening exhausted max turns without resolution."""
 
+    call_sid: str = ""
+
+
+@dataclass(frozen=True)
+class ScreeningResponse(Event):
+    """Call screening response requested by the detector."""
+
+    text: str
+    mode: Literal["static", "agent"]
+
+
+class IVRActionType(enum.Enum):
+    DTMF = "dtmf"
+    SPEAK = "speak"
+    WAIT = "wait"
+    HANGUP = "hangup"
+    HOLD = "hold"
+    HUMAN_DETECTED = "human_detected"
+
+
+@dataclass(frozen=True)
+class IVRAction(Event):
+    """IVR navigator action decided by the agent or timeout policy."""
+
+    type: IVRActionType
+    digits: str = ""
+    text: str = ""
+    menu_depth: int = 0
+
+
+@dataclass(frozen=True)
+class CallStateChanged(Event):
+    """Outbound call state transition."""
+
+    old: Any
+    new: Any
     call_sid: str = ""
 
 
@@ -431,6 +468,9 @@ TELEPHONY_EVENTS: tuple[type[Event], ...] = (
     CallAnswered,
     CallScreening,
     ScreeningTimedOut,
+    ScreeningResponse,
+    IVRAction,
+    CallStateChanged,
     CallFailed,
     CallEnded,
     OptOutDetected,

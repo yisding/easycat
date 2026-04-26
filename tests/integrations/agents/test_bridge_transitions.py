@@ -89,8 +89,12 @@ class _MockRunner:
 
     def __init__(self, result: _MockRunResult) -> None:
         self._result = result
+        self.last_input: Any = None
+        self.last_kwargs: dict[str, Any] = {}
 
     def run_streamed(self, agent: Any, input_data: Any, **kwargs: Any) -> _MockRunResult:
+        self.last_input = input_data
+        self.last_kwargs = kwargs
         return self._result
 
 
@@ -216,8 +220,12 @@ class _MockPydanticAgent:
     def __init__(self, name: str, nodes: list[_MockNode], output: Any = None) -> None:
         self.name = name
         self._run = _MockAgentRun(nodes, output=output)
+        self.last_text: str | None = None
+        self.last_kwargs: dict[str, Any] = {}
 
     def iter(self, text: str, **kwargs: Any) -> _MockAgentRun:
+        self.last_text = text
+        self.last_kwargs = kwargs
         return self._run
 
 
@@ -411,6 +419,59 @@ class TestOpenAIAgentsBridgeHandoff:
         assert "framework_handoff" not in names
 
     @pytest.mark.asyncio
+    async def test_turn_context_is_forwarded_to_runner_input(self):
+        from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
+
+        agent = _MockAgent("AgentA")
+        run_result = _MockRunResult([])
+        mock_runner = _MockRunner(run_result)
+        bridge = OpenAIAgentsBridge(agent=agent)
+        rec = _make_recorder()
+
+        import easycat.integrations.agents.openai_agents as oai_mod
+
+        original_runner = oai_mod.Runner
+        oai_mod.Runner = mock_runner
+        try:
+            async for _ in bridge.invoke(
+                AgentTurnInput.from_text(
+                    "hi",
+                    context=[{"role": "system", "content": "Caller ID: +15551234567"}],
+                ),
+                rec,
+            ):
+                pass
+        finally:
+            oai_mod.Runner = original_runner
+
+        assert mock_runner.last_input == [
+            {"role": "system", "content": "Caller ID: +15551234567"},
+            {"role": "user", "content": "hi"},
+        ]
+
+    def test_turn_context_does_not_duplicate_bridge_owned_history(self):
+        from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
+
+        bridge = OpenAIAgentsBridge(agent=_MockAgent("AgentA"), use_previous_response_id=False)
+        bridge._message_history = [{"role": "user", "content": "previous"}]
+
+        input_data = bridge._build_input(
+            AgentTurnInput.from_text(
+                "next",
+                context=[
+                    {"role": "system", "content": "Caller ID: +15551234567"},
+                    {"role": "user", "content": "shadow previous"},
+                ],
+            )
+        )
+
+        assert input_data == [
+            {"role": "system", "content": "Caller ID: +15551234567"},
+            {"role": "user", "content": "previous"},
+            {"role": "user", "content": "next"},
+        ]
+
+    @pytest.mark.asyncio
     async def test_handoff_records_tool_calls(self):
         """Tool calls before a handoff are recorded in the journal."""
         from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
@@ -553,6 +614,32 @@ class TestPydanticAIAgentModeTransitions:
 
         done_events = [e for e in events if e.kind == "done"]
         assert len(done_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_turn_context_is_forwarded_as_message_history(self):
+        import easycat.integrations.agents.pydantic_ai as pydantic_mod
+        from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
+
+        agent = _MockPydanticAgent("TestAgent", [_MockNode("ModelRequestNode")])
+        bridge = PydanticAIBridge(agent=agent)
+
+        rec = _make_recorder()
+        with patch.object(
+            pydantic_mod,
+            "_pydantic_message_from_context",
+            side_effect=lambda item: {"converted": item},
+        ):
+            async for _ in bridge.invoke(
+                AgentTurnInput.from_text(
+                    "hi",
+                    context=[{"role": "system", "content": "Caller ID: +15551234567"}],
+                ),
+                rec,
+            ):
+                pass
+
+        history = agent.last_kwargs["message_history"]
+        assert history == [{"converted": {"role": "system", "content": "Caller ID: +15551234567"}}]
 
 
 # ════════════════════════════════════════════════════════════════════

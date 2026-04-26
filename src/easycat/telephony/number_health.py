@@ -7,8 +7,8 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 
-from easycat.events import CallEnded, CallFailed, CallInitiated, EventBus
-from easycat.telephony.call_state import CallStateChanged, OutboundCallState
+from easycat.events import CallEnded, CallFailed, CallInitiated, CallStateChanged, EventBus
+from easycat.telephony.call_state import OutboundCallState
 from easycat.telephony.outbound import BLOCK_REASONS
 
 logger = logging.getLogger(__name__)

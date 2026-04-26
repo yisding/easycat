@@ -67,6 +67,7 @@ from easycat.telephony.session_actions import (
     TwilioSessionActionExecutor,
 )
 from easycat.telephony.twiml import (
+    compute_twilio_webhook_signature,
     parse_gather_webhook,
     twiml_dial_number,
     twiml_dial_send_digits,
@@ -74,6 +75,7 @@ from easycat.telephony.twiml import (
     twiml_hangup,
     twiml_play_digits,
     twiml_say_and_hangup,
+    validate_twilio_webhook_signature,
 )
 from easycat.telephony.voicemail import (
     TWILIO_AMD_MAP,
@@ -97,6 +99,7 @@ __all__ = [
     "DTMFAggregatorConfig",
     "parse_twilio_dtmf_message",
     # TwiML helpers
+    "compute_twilio_webhook_signature",
     "parse_gather_webhook",
     "twiml_dial_number",
     "twiml_dial_send_digits",
@@ -104,6 +107,7 @@ __all__ = [
     "twiml_hangup",
     "twiml_play_digits",
     "twiml_say_and_hangup",
+    "validate_twilio_webhook_signature",
     # Voicemail
     "BeepDetectorConfig",
     "VoicemailDetector",
