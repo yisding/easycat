@@ -11,8 +11,9 @@ built and then runs a normal local mic/speaker loop with the chosen VAD.
 
 Setup:
   export OPENAI_API_KEY="..."
-  uv sync --extra quickstart        # ships TEN VAD (no torch)
-  uv pip install torch              # required for Silero
+  uv sync --extra quickstart                        # silero + funasr + krisp
+  uv sync --extra quickstart --extra ten-vad        # adds TEN VAD (separate license)
+  uv pip install torch                              # required for Silero
   uv run python examples/vad_backends.py --backend silero
   uv run python examples/vad_backends.py --backend ten
 """
@@ -32,7 +33,7 @@ from easycat import (
     wait_for_shutdown_signal,
 )
 from easycat.events import EventBus
-from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents import auto_adapt_agent
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig

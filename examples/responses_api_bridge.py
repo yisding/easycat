@@ -25,7 +25,5 @@ model = require_env("EASYCAT_REMOTE_AGENT_MODEL")
 run(
     EasyCatConfig.mic(
         agent=RemoteResponsesAPIBridge(base_url=base_url, model=model, api_key=remote_key),
-        remote_agent_api_key=remote_key,
-        agent_model=model,
     )
 )
