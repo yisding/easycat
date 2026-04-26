@@ -8,18 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
+
+from easycat.runtime.capabilities import HealthCheckable
 
 logger = logging.getLogger(__name__)
-
-
-@runtime_checkable
-class HealthCheckable(Protocol):
-    """Optional protocol that providers can implement for health checking."""
-
-    async def health_check(self) -> bool:
-        """Return True if the provider is healthy, False otherwise."""
-        ...
 
 
 class PeriodicHealthChecker:

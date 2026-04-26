@@ -231,6 +231,8 @@ class NoiseReducerConfig:
 class PassthroughNoiseReducer:
     """No-op reducer that passes audio through unchanged. Last-resort fallback."""
 
+    is_passthrough_provider = True
+
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         return chunk
 

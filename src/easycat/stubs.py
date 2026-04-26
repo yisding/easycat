@@ -19,6 +19,8 @@ _NOOP_VERSION = {
 class NoopSTT:
     """STT provider that does nothing — used as default."""
 
+    is_passthrough_provider = True
+
     async def start_stream(self) -> None:
         pass
 
@@ -42,6 +44,8 @@ class NoopSTT:
 class NoopTTS:
     """TTS provider that does nothing — used as default."""
 
+    is_passthrough_provider = True
+
     @property
     def supports_ssml(self) -> bool:
         return True
@@ -63,6 +67,8 @@ class NoopTTS:
 
 class NoopVAD:
     """VAD provider that does nothing — used as default."""
+
+    is_passthrough_provider = True
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         return
@@ -87,6 +93,7 @@ class NoopTransport:
     """Transport that produces no audio — used as default."""
 
     transport_kind = "noop"
+    is_passthrough_provider = True
 
     async def connect(self) -> None:
         pass
@@ -110,6 +117,8 @@ class NoopTransport:
 
 class NoopAgent:
     """Agent that echoes input text — used as default for pipeline testing."""
+
+    is_passthrough_provider = True
 
     async def run(self, text: str) -> str:
         return text
