@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 
+from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
@@ -19,15 +20,6 @@ from easycat.tts.base import TTSBase
 from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
 
 logger = logging.getLogger(__name__)
-
-
-def _get_package_version(pkg: str) -> str:
-    try:
-        from importlib.metadata import version
-
-        return version(pkg)
-    except Exception:
-        return "unknown"
 
 
 class ElevenLabsStreamMode(enum.StrEnum):
@@ -349,5 +341,5 @@ class ElevenLabsTTS(TTSBase):
             "provider": "elevenlabs",
             "model": self._config.model_id,
             "api_version": "v1",
-            "sdk_version": _get_package_version("httpx"),
+            "sdk_version": get_package_version("httpx"),
         }

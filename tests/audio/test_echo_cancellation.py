@@ -220,6 +220,22 @@ def test_factory_enabled_without_livekit_falls_back():
         assert isinstance(result, PassthroughAEC)
 
 
+def test_factory_enabled_without_livekit_strict_fails():
+    """Strict fallback policy should fail when enabled AEC cannot be loaded."""
+    with patch(
+        "easycat.echo_cancellation.require_module",
+        side_effect=ImportError("livekit unavailable"),
+    ):
+        with pytest.raises(RuntimeError, match="LiveKit AEC is unavailable"):
+            create_echo_canceller(EchoCancellationConfig(enabled=True, fallback_policy="error"))
+
+
+def test_echo_cancellation_config_rejects_unknown_fallback_policy():
+    """EchoCancellationConfig should reject unknown fallback policies."""
+    with pytest.raises(ValueError, match="Unknown echo cancellation fallback_policy 'silent'"):
+        EchoCancellationConfig(enabled=True, fallback_policy="silent")  # type: ignore[arg-type]
+
+
 def test_factory_enabled_with_livekit():
     """Factory with enabled=True and livekit available returns LiveKitAEC."""
     mock_rtc = MagicMock()

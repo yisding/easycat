@@ -526,6 +526,21 @@ async def test_krisp_vad_configure():
 # ── Factory tests ────────────────────────────────────────────────────
 
 
+def test_vad_config_rejects_unknown_backend():
+    """VADConfig should reject typo backend strings before probing dependencies."""
+    with pytest.raises(ValueError, match="Unknown VAD backend 'silreo'"):
+        VADConfig(backend="silreo")
+
+
+def test_vad_factory_revalidates_mutated_backend():
+    """Factory should reject configs mutated after dataclass construction."""
+    config = VADConfig()
+    config.backend = "silreo"  # type: ignore[assignment]
+
+    with pytest.raises(ValueError, match="Unknown VAD backend 'silreo'"):
+        create_vad(config)
+
+
 def test_vad_factory_no_backends(monkeypatch: pytest.MonkeyPatch):
     """Factory should raise RuntimeError when no backends are available."""
 

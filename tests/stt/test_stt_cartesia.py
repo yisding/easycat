@@ -198,6 +198,18 @@ async def test_cartesia_includes_word_timestamps():
     assert events[0].word_timestamps[1].end == 0.7
 
 
+async def test_cartesia_accepts_text_word_timestamp_key():
+    words = [{"text": "hello", "start": 0.0, "end": 0.3}]
+    messages = [_transcript_msg("hello", is_final=True, words=words)]
+    stt, _ = _make_cartesia_stt(messages)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert events[0].word_timestamps is not None
+    assert events[0].word_timestamps[0].word == "hello"
+
+
 async def test_cartesia_language_from_config_when_missing_in_msg():
     messages = [_transcript_msg("bonjour", is_final=True)]
     stt, _ = _make_cartesia_stt(messages, language="fr")

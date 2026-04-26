@@ -11,21 +11,13 @@ from urllib.parse import urlencode
 
 import websockets
 
+from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk
-from easycat.events import STTEvent, STTEventType, WordTimestamp
+from easycat.events import STTEvent, STTEventType
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase
 
 logger = logging.getLogger(__name__)
-
-
-def _get_package_version(pkg: str) -> str:
-    try:
-        from importlib.metadata import version
-
-        return version(pkg)
-    except Exception:
-        return "unknown"
 
 
 @dataclass
@@ -143,7 +135,7 @@ class DeepgramSTT(STTBase):
 
         confidence = best.get("confidence")
         is_final = msg.get("is_final", False)
-        word_timestamps = _word_timestamps_from_words(best.get("words"))
+        word_timestamps = word_timestamps_from_words(best.get("words"))
         event_type = STTEventType.FINAL if is_final else STTEventType.PARTIAL
         self._emit_event(
             STTEvent(
@@ -177,7 +169,7 @@ class DeepgramSTT(STTBase):
                 text=transcript,
                 confidence=confidence,
                 language=self._config.language,
-                word_timestamps=_word_timestamps_from_words(msg.get("words")),
+                word_timestamps=word_timestamps_from_words(msg.get("words")),
             )
         )
 
@@ -207,7 +199,7 @@ class DeepgramSTT(STTBase):
             "provider": "deepgram",
             "model": self._config.model,
             "api_version": "v1",
-            "sdk_version": _get_package_version("websockets"),
+            "sdk_version": get_package_version("websockets"),
         }
 
 
@@ -215,21 +207,3 @@ def _flux_base_url(base_url: str) -> str:
     if base_url.endswith("/v1/listen"):
         return f"{base_url[: -len('/v1/listen')]}/v2/listen"
     return base_url
-
-
-def _word_timestamps_from_words(words: Any) -> list[WordTimestamp] | None:
-    if not isinstance(words, list):
-        return None
-
-    timestamps: list[WordTimestamp] = []
-    for item in words:
-        if not isinstance(item, dict):
-            continue
-        word = item.get("word")
-        start = item.get("start")
-        end = item.get("end")
-        if not isinstance(word, str) or start is None or end is None:
-            continue
-        timestamps.append(WordTimestamp(word=word, start=float(start), end=float(end)))
-
-    return timestamps or None

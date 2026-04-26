@@ -26,7 +26,7 @@ from importlib.metadata import version
 from importlib.util import find_spec
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Literal, TypeAlias, cast
 
 from easycat.audio_format import AudioChunk
 from easycat.audio_utils import resample_chunk
@@ -57,6 +57,15 @@ _FUNASR_SAMPLE_RATE = 16000
 _FUNASR_DEFAULT_CHUNK_MS = 50
 _FUNASR_BUNDLED_MODEL_DIR = Path(__file__).parent / "models" / "funasr_fsmn_vad"
 _FUNASR_DEFAULT_MODEL = str(_FUNASR_BUNDLED_MODEL_DIR)
+VADBackend: TypeAlias = Literal["auto", "silero", "funasr", "ten", "krisp"]
+_VALID_VAD_BACKENDS: tuple[VADBackend, ...] = ("auto", "silero", "funasr", "ten", "krisp")
+
+
+def _validate_vad_backend(backend: str) -> VADBackend:
+    if backend not in _VALID_VAD_BACKENDS:
+        allowed = ", ".join(_VALID_VAD_BACKENDS)
+        raise ValueError(f"Unknown VAD backend '{backend}'. Expected one of: {allowed}.")
+    return cast(VADBackend, backend)
 
 
 # ── VAD base class ────────────────────────────────────────────────
@@ -779,7 +788,7 @@ class VADConfig:
 
     # "funasr", "krisp", "ten", "silero", or "auto"
     # (auto tries silero -> funasr -> ten -> krisp)
-    backend: str = "auto"
+    backend: VADBackend = "auto"
     # FunASR-specific
     funasr_model_dir: str = _FUNASR_DEFAULT_MODEL
     funasr_chunk_size_ms: int = _FUNASR_DEFAULT_CHUNK_MS
@@ -795,6 +804,9 @@ class VADConfig:
     sensitivity: float | None = None
     pre_roll_ms: int = 100
     post_roll_ms: int = 100
+
+    def __post_init__(self) -> None:
+        self.backend = _validate_vad_backend(self.backend)
 
 
 def create_vad(config: VADConfig | None = None) -> Any:
@@ -814,6 +826,7 @@ def create_vad(config: VADConfig | None = None) -> Any:
     Returns an object satisfying the VADProvider protocol.
     """
     cfg = config or VADConfig()
+    cfg.backend = _validate_vad_backend(cfg.backend)
 
     def _default_sensitivity(backend: str) -> float:
         if backend == "ten":

@@ -54,6 +54,16 @@ class _AudioQueueMixin:
         """Reinitialize the queue to clear any stale sentinels from a previous session."""
         self._in_queue = asyncio.Queue(maxsize=self._max_pending_chunks)
 
+    def _drain_audio_queue(self) -> int:
+        """Remove all currently queued inbound audio without replacing the queue."""
+        drained = 0
+        while True:
+            try:
+                self._in_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return drained
+            drained += 1
+
     def _enqueue_sentinel(self) -> None:
         """Put ``None`` on the queue to signal end-of-stream.
 

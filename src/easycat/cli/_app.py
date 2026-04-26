@@ -42,7 +42,8 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
     [green]explain[/]     Look up an error code (like `cargo --explain`)
 
   [cyan]Debug with the journal[/]
-    [green]bundles[/]     List and inspect captured debug bundles
+    [green]bundles[/]     List captured debug bundles
+    [green]inspect[/]     Summarise one captured debug bundle
 
 Run [cyan]easycat <command> --help[/] for command-specific options.
 Run [cyan]easycat explain <code>[/] to understand an error.
@@ -79,8 +80,16 @@ def _root(
 # --version`` and ``--help`` stay under the 300ms cold-import budget.
 
 
+_COMMANDS_REGISTERED = False
+
+
 def _register_commands() -> None:
-    from easycat.cli.debug.bundles import bundles_app
+    global _COMMANDS_REGISTERED
+
+    if _COMMANDS_REGISTERED:
+        return
+
+    from easycat.cli.debug.bundles import bundles_app, inspect_bundle
     from easycat.cli.diagnose.doctor import doctor as doctor_cmd
     from easycat.cli.diagnose.explain import explain as explain_cmd
     from easycat.cli.scaffold.init import init as init_cmd
@@ -88,7 +97,9 @@ def _register_commands() -> None:
     app.command(name="init", help="Scaffold a new project from a template.")(init_cmd)
     app.command(name="doctor", help="Check environment and provider reachability.")(doctor_cmd)
     app.command(name="explain", help="Look up an error code.")(explain_cmd)
+    app.command(name="inspect", help="Inspect a captured debug bundle.")(inspect_bundle)
     app.add_typer(bundles_app, name="bundles")
+    _COMMANDS_REGISTERED = True
 
 
 def main() -> None:

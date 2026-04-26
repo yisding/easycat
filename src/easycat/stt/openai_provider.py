@@ -9,20 +9,12 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType
 from easycat.stt.base import STTBase, pcm_to_wav
 
 logger = logging.getLogger(__name__)
-
-
-def _get_package_version(pkg: str) -> str:
-    try:
-        from importlib.metadata import version
-
-        return version(pkg)
-    except Exception:
-        return "unknown"
 
 
 @dataclass
@@ -187,5 +179,5 @@ class OpenAISTT(STTBase):
             "provider": "openai",
             "model": self._config.model,
             "api_version": "v1",
-            "sdk_version": _get_package_version("httpx"),
+            "sdk_version": get_package_version("httpx"),
         }

@@ -332,6 +332,8 @@ class WebRTCTransport(_AudioQueueMixin):
 
         # Background task that consumes the inbound audio track.
         self._consume_task: asyncio.Task[None] | None = None
+        self._peer_generation = 0
+        self._offer_lock = asyncio.Lock()
 
     # ── Helpers ─────────────────────────────────────────────────
 
@@ -350,6 +352,13 @@ class WebRTCTransport(_AudioQueueMixin):
                 entry["credential"] = srv.credential
             result.append(entry)
         return result
+
+    def _is_current_peer_generation(self, peer_generation: int | None) -> bool:
+        return peer_generation is None or peer_generation == self._peer_generation
+
+    def _enqueue_sentinel_for_peer(self, peer_generation: int | None) -> None:
+        if self._is_current_peer_generation(peer_generation):
+            self._enqueue_sentinel()
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -476,6 +485,11 @@ class WebRTCTransport(_AudioQueueMixin):
 
     async def _handle_offer(self, request: Any) -> Any:
         """Handle an SDP offer from the browser client."""
+        async with self._offer_lock:
+            return await self._handle_offer_locked(request)
+
+    async def _handle_offer_locked(self, request: Any) -> Any:
+        """Handle an SDP offer with peer replacement serialized."""
         web = self._web
         aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
         RTCPeerConnection = aiortc.RTCPeerConnection
@@ -509,21 +523,30 @@ class WebRTCTransport(_AudioQueueMixin):
                 headers=_CORS_HEADERS,
             )
 
-        # Close any existing peer connection.
+        peer_generation = self._peer_generation + 1
+        self._peer_generation = peer_generation
+        self._client_connected.clear()
+        self._outbound_track = None
+
+        # Close any existing peer connection. Advancing the generation before
+        # teardown keeps late callbacks from the previous peer from ending the
+        # receive_audio() iterator for the replacement peer.
+        if self._consume_task is not None and not self._consume_task.done():
+            self._consume_task.cancel()
+            try:
+                await self._consume_task
+            except asyncio.CancelledError:
+                pass
+        self._consume_task = None
+
         if self._pc is not None:
-            if self._consume_task is not None and not self._consume_task.done():
-                self._consume_task.cancel()
-                try:
-                    await self._consume_task
-                except asyncio.CancelledError:
-                    pass
-                self._consume_task = None
             await self._pc.close()
             self._pc = None
 
         # Clear stale audio from the previous peer so it doesn't leak into
-        # the new session's receive_audio() iterator.
-        self._reset_audio_queue()
+        # the new session's receive_audio() iterator. Do not replace the queue:
+        # Session.receive_audio() may already be blocked on this object.
+        self._drain_audio_queue()
 
         # Build ICE configuration from the shared serializer.
         ice_servers = [RTCIceServer(**entry) for entry in self._ice_servers_as_dicts()]
@@ -542,17 +565,25 @@ class WebRTCTransport(_AudioQueueMixin):
             # Listen for the remote audio track.
             @pc.on("track")
             def on_track(track: Any) -> None:
+                if not self._is_current_peer_generation(peer_generation):
+                    return
                 if track.kind == "audio":
                     logger.info("WebRTC remote audio track received")
-                    self._consume_task = asyncio.ensure_future(self._consume_audio(track))
+                    self._consume_task = asyncio.ensure_future(
+                        self._consume_audio(track, peer_generation=peer_generation)
+                    )
 
                     @track.on("ended")
                     async def on_ended() -> None:
+                        if not self._is_current_peer_generation(peer_generation):
+                            return
                         logger.info("WebRTC remote audio track ended")
-                        self._enqueue_sentinel()
+                        self._enqueue_sentinel_for_peer(peer_generation)
 
             @pc.on("connectionstatechange")
             async def on_connectionstatechange() -> None:
+                if not self._is_current_peer_generation(peer_generation):
+                    return
                 state = pc.connectionState
                 logger.info("WebRTC connection state: %s", state)
                 if state == "connected":
@@ -563,7 +594,7 @@ class WebRTCTransport(_AudioQueueMixin):
                     # drop (via bool False) instead of silently queueing into
                     # a source that nothing is draining any more.
                     self._outbound_track = None
-                    self._enqueue_sentinel()
+                    self._enqueue_sentinel_for_peer(peer_generation)
 
             # Set remote offer and create answer.
             offer = RTCSessionDescription(sdp=sdp, type=sdp_type)
@@ -643,7 +674,7 @@ class WebRTCTransport(_AudioQueueMixin):
 
     # ── Audio track consumer ──────────────────────────────────────
 
-    async def _consume_audio(self, track: Any) -> None:
+    async def _consume_audio(self, track: Any, *, peer_generation: int | None = None) -> None:
         """Read audio frames from the remote track and enqueue as AudioChunk.
 
         Always enqueues a sentinel on exit so that ``receive_audio()`` does not
@@ -659,6 +690,8 @@ class WebRTCTransport(_AudioQueueMixin):
         try:
             while True:
                 frame = await track.recv()
+                if not self._is_current_peer_generation(peer_generation):
+                    break
 
                 # Extract raw PCM from the av.AudioFrame.
                 # aiortc decodes Opus to s16 at 48 kHz by default.
@@ -675,7 +708,8 @@ class WebRTCTransport(_AudioQueueMixin):
                     raw = resample(raw, frame_rate, target_rate)
 
                 chunk = AudioChunk(data=raw, format=target_format)
-                self._enqueue_chunk(chunk, context="WebRTC")
+                if self._is_current_peer_generation(peer_generation):
+                    self._enqueue_chunk(chunk, context="WebRTC")
 
         except StopAsyncIteration:
             logger.info("WebRTC audio track stream ended")
@@ -690,7 +724,7 @@ class WebRTCTransport(_AudioQueueMixin):
             # Ensure the pipeline unblocks even if on_ended/connectionstatechange
             # callbacks don't fire.  Duplicate sentinels are harmless — the first
             # one stops receive_audio() and extras are cleared on next connection.
-            self._enqueue_sentinel()
+            self._enqueue_sentinel_for_peer(peer_generation)
 
     # ── Properties ────────────────────────────────────────────────
 
