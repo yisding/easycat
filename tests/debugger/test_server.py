@@ -173,6 +173,24 @@ def test_filter_records_by_sequence_range():
     assert [r["sequence"] for r in out] == [3, 4, 5, 6]
 
 
+def test_filter_records_by_multiple_names():
+    records = [
+        {"sequence": 1, "name": "vad_start_speaking", "data": {}},
+        {"sequence": 2, "name": "tts_audio", "data": {}},
+        {"sequence": 3, "name": "stt_partial", "data": {}},
+        {"sequence": 4, "name": "bot_started_speaking", "data": {}},
+    ]
+    out = _filter_records(
+        records,
+        stage=None,
+        turn_id=None,
+        name=["vad_start_speaking", "stt_partial"],
+        from_seq=None,
+        to_seq=None,
+    )
+    assert [r["sequence"] for r in out] == [1, 3]
+
+
 def test_summarise_turns_tracks_audio_bytes():
     records = [
         {
@@ -380,6 +398,11 @@ async def test_api_transcript_extracts_user_and_agent_text(tmp_path):
         assert agent_turns, "expected at least one turn with an agent reply"
         # DeterministicAgent returns "reply-<input>".
         assert any("reply-hello-world" in t["agent"] for t in agent_turns)
+        # Each turn must carry source-record seqs so the UI can link a
+        # sentence back to its journal entry.
+        assert all("user_seq" in t and "agent_seq" in t for t in body["transcripts"])
+        for t in agent_turns:
+            assert isinstance(t["agent_seq"], int)
 
 
 async def test_api_audio_concat_returns_valid_wav(tmp_path):

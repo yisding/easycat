@@ -468,8 +468,10 @@ Runnable examples live in the `examples/` directory:
 - `ws_server.py`: WebSocket server (multi-session)
 - `ws_browser_example.py`: browser mic/speaker over WebSocket + static web client
 - `ws_supervisor_server.py`: browser caller + passive supervisor listen-in over WebSocket
+- `reconnecting_ws_client.py`: resilient client using `ReconnectingWebSocket` against `ws_server.py`
 - `webrtc_server.py`: WebRTC voice chat with browser client
-- `webrtc_observability_server.py`: WebRTC + FastAPI dashboard streaming live events
+- `webrtc_observability_server.py`: WebRTC + the bundled debugger UI side-by-side
+  (talk to the bot up top, watch the journal below)
 - `twilio_app.py`: Twilio Media Streams example
 
 **Agents**
@@ -477,11 +479,12 @@ Runnable examples live in the `examples/` directory:
 - `pydantic_ai_workflow_voice.py`: workflow-level PydanticAI example (multi-agent hand-off)
 - `function_tools_openai.py` / `function_tools_pydantic.py`: agent function-calling tools
 - `session_actions_openai.py` / `session_actions_pydantic.py`: agent-initiated session actions (end-call)
+- `responses_api_bridge.py`: remote agent over the OpenAI Responses API (`RemoteResponsesAPIBridge`)
 
 **Provider swaps**
-- `deepgram_stt.py`: Deepgram STT + OpenAI TTS
-- `elevenlabs_tts.py`: OpenAI STT + ElevenLabs TTS (typed config with voice customization)
-- `cartesia_voice.py`: Cartesia STT + Cartesia TTS
+- `deepgram_voice.py`: Deepgram for both STT (Nova-2) and TTS (Aura)
+- `elevenlabs_voice.py`: ElevenLabs for both STT (Scribe) and TTS (Flash)
+- `cartesia_voice.py`: Cartesia for both STT (Ink-Whisper) and TTS (Sonic)
 - `combined_providers.py`: Deepgram STT + ElevenLabs TTS together (stages compose)
 
 **Turn-taking**
@@ -491,8 +494,23 @@ Runnable examples live in the `examples/` directory:
 **Advanced**
 - `custom_stt_provider.py` / `custom_tts_provider.py` / `custom_vad_provider.py`: inject a
   user-written provider via `SessionConfig`
+- `output_processors.py`: pre-TTS `PauseProcessor` + `PhoneticReplacementProcessor` for
+  phone-number pacing and custom pronunciations
+- `agent_event_subscription.py`: attach handlers for agent deltas and tool-call events via
+  `session.subscribe_agent_events`
+- `vad_backends.py`: pin a specific VAD backend (`silero` / `funasr` / `ten` / `krisp`) via
+  `VADConfig.backend`
+- `noise_reduction_backends.py`: pin a specific noise-reduction backend via
+  `NoiseReducerConfig.backend`
+- `echo_cancellation.py`: enable LiveKit WebRTC AEC3 on a local mic/speaker loop
 - `debug_bundle.py`: record with `debug="light"`, export a `RunBundle`, inspect it
 - `journal_demo.py`: one-turn synthetic session that dumps journal records (no API keys)
+- `journal_ui.py`: run `easycat.debugger.serve_session()` alongside a local mic
+  session — open `http://localhost:8765` to tail the journal in a UI
+
+**Telephony**
+- `telephony_helpers.py`: standalone exercise of `DTMFAggregator`, `VoicemailDetector`,
+  and the IVR text classifiers (no live Twilio required)
 
 ### Quickstart: WebRTC in browser (fast path)
 1. Install extras:

@@ -1,43 +1,25 @@
-"""Session actions demo — OpenAI Agents SDK.
+"""Agent-initiated session actions — OpenAI Agents SDK.
 
-Shows the simplest session action that works on every transport: ending
-the session after the current reply finishes.
+The same ``SessionActions`` instance is shared between the agent's
+context (so tools can enqueue actions) and ``EasyCatConfig`` (so the
+session drains them). For telephony actions (transfer, DTMF, SMS) see
+``examples/twilio_app.py``.
 
-For telephony-specific actions such as transfer, DTMF, and SMS, use the
-Twilio example instead: ``examples/twilio_app.py``.
-
-Setup:
-  export OPENAI_API_KEY="..."
-  uv sync --extra quickstart
-  uv run python examples/session_actions_openai.py
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+Run:   uv run python examples/session_actions_openai.py
 """
 
-from __future__ import annotations
+try:
+    from agents import Agent, RunContextWrapper, function_tool  # type: ignore[import-untyped]
+except ImportError as exc:
+    raise SystemExit(
+        "openai-agents is required. Install with: uv sync --extra quickstart"
+    ) from exc
 
-import asyncio
-
-from agents import Agent, RunContextWrapper, function_tool  # type: ignore[import-untyped]
-
-from easycat import (
-    EasyCatConfig,
-    LocalTransportConfig,
-    SessionActions,
-    attach_runtime_feedback,
-    create_session,
-    require_env,
-    wait_for_shutdown_signal,
-)
+from easycat import EasyCatConfig, SessionActions, run
 from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
-# ── Shared action queue ──────────────────────────────────────────
-# The same SessionActions instance is injected into the agent's
-# context AND passed to EasyCatConfig.  Tools enqueue; Session drains.
-
 actions = SessionActions()
-
-
-# ── Tool definitions ─────────────────────────────────────────────
-# Tools receive the SessionActions object via RunContextWrapper.
 
 
 @function_tool
@@ -47,36 +29,20 @@ def end_call(ctx: RunContextWrapper[SessionActions], reason: str = "") -> str:
     return "Ending the call now."
 
 
-# ── Agent setup ──────────────────────────────────────────────────
-
-agent = Agent(
-    name="Assistant",
-    instructions=(
-        "You are a helpful voice assistant. "
-        "When the user says goodbye, use the end_call tool. "
-        "Be concise — you are speaking, not writing."
-    ),
-    tools=[end_call],
-)
-
-
-async def main() -> None:
-    api_key = require_env("OPENAI_API_KEY")
-
-    bridge = OpenAIAgentsBridge(agent=agent, context=actions)
-
-    config = EasyCatConfig(
-        openai_api_key=api_key,
-        transport=LocalTransportConfig(),
-        agent=bridge,
+run(
+    EasyCatConfig.mic(
+        agent=OpenAIAgentsBridge(
+            agent=Agent(
+                name="Assistant",
+                instructions=(
+                    "You are a helpful voice assistant. "
+                    "When the user says goodbye, use the end_call tool. "
+                    "Be concise — you are speaking, not writing."
+                ),
+                tools=[end_call],
+            ),
+            context=actions,
+        ),
         session_actions=actions,
     )
-    session = create_session(config)
-    attach_runtime_feedback(session)
-
-    await session.start()
-    await wait_for_shutdown_signal(session)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+)
