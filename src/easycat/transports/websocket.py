@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import websockets
 from websockets.asyncio.server import ServerConnection
@@ -26,6 +27,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WebSocketTransportConfig:
     """Configuration for :class:`WebSocketTransport`."""
+
+    default_echo_cancellation_enabled: ClassVar[bool] = True
 
     host: str = "0.0.0.0"
     port: int = 8765
@@ -53,6 +56,7 @@ class WebSocketTransport(_ServerTransportBase):
     """
 
     transport_kind = "websocket"
+    default_echo_cancellation_enabled = True
     _transport_name = "WebSocket"
 
     def __init__(self, config: WebSocketTransportConfig | None = None) -> None:
@@ -186,6 +190,7 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
     """
 
     transport_kind = "websocket"
+    default_echo_cancellation_enabled = True
 
     def __init__(
         self,

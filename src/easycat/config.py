@@ -24,6 +24,10 @@ from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.providers import Transport
 from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
+from easycat.runtime.capabilities import (
+    bind_identity_sink_if_supported,
+    default_echo_cancellation_enabled,
+)
 from easycat.runtime.journal import create_journal
 from easycat.session._session import Session
 from easycat.session._types import _SessionConfig
@@ -73,7 +77,6 @@ from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 from easycat.transports.websocket import (
-    WebSocketConnectionTransport,
     WebSocketTransport,
     WebSocketTransportConfig,
 )
@@ -541,10 +544,7 @@ class EasyConfig:
         # a speaker loopback), while True/False explicitly force the flag
         # on or off regardless of transport.
         if self.enable_echo_cancellation is None:
-            enable_aec = isinstance(
-                self.transport,
-                (LocalTransportConfig, WebSocketTransportConfig, WebSocketConnectionTransport),
-            )
+            enable_aec = default_echo_cancellation_enabled(self.transport)
         else:
             enable_aec = self.enable_echo_cancellation
         return EchoCancellationConfig(enabled=enable_aec)
@@ -823,16 +823,14 @@ def create_session(config: EasyConfig) -> Session:
                 dnc_list=config.dnc_list,
             )
         )
+
         # Bridge the Twilio start-event customParameters through to
         # ``session.call_identity`` so the agent (or its tools) sees
         # who's calling without every app reimplementing the plumbing.
-        bind_identity_sink = getattr(transport, "bind_identity_sink", None)
-        if callable(bind_identity_sink):
+        def _on_twilio_identity(identity: Any) -> None:
+            session.call_identity = _merge_twilio_identity(session._call_identity, identity)
 
-            def _on_twilio_identity(identity: Any) -> None:
-                session.call_identity = _merge_twilio_identity(session._call_identity, identity)
-
-            bind_identity_sink(_on_twilio_identity)
+        bind_identity_sink_if_supported(transport, _on_twilio_identity)
     except Exception:
         if journal is not None and hasattr(journal, "close"):
             journal.close()

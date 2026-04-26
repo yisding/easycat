@@ -12,6 +12,7 @@ import logging
 import queue as thread_queue
 import struct
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
@@ -43,6 +44,8 @@ def _enqueue_or_drop(q: asyncio.Queue[object], item: object) -> None:
 class LocalTransportConfig:
     """Configuration for :class:`LocalTransport`."""
 
+    default_echo_cancellation_enabled: ClassVar[bool] = True
+
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_24K)
     frame_duration_ms: int = _DEFAULT_FRAME_MS
     input_device: int | str | None = None
@@ -64,6 +67,7 @@ class LocalTransport(_AudioQueueMixin):
     """
 
     transport_kind = "local"
+    default_echo_cancellation_enabled = True
     reports_audio_delivery = True
 
     def __init__(self, config: LocalTransportConfig | None = None) -> None:
