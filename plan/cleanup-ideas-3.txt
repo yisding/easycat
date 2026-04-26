@@ -1,0 +1,348 @@
+# EasyCat Library Cleanup Ideas (Round 3)
+
+Comprehensive design review of the entire library. Backwards compatibility is
+NOT a concern (pre-launch). All citations are file:line as of the review date
+(2026-04-25, branch main). ~35k LOC of source today; targeted cleanup ~2,400
+lines, no public-API regressions.
+
+Headline grade: B- on architecture, C+ on onboarding, B+ on test/observability
+instinct. Library is technically sound but carries significant structural and
+copy-paste duplication that hurts onboarding.
+
+
+================================================================================
+A. THE FIVE THINGS TO FIX FIRST
+================================================================================
+These are the highest-leverage cleanups; everything else is downstream.
+
+--------------------------------------------------------------------------------
+A1. Session is a god-class (2,961 lines, 114 methods)
+--------------------------------------------------------------------------------
+src/easycat/session/_session.py does orchestration, journaling, action
+execution, caller-ID logic, opt-out detection, greeting synthesis, TTS payload
+prep, and stage wiring all in one file.
+
+Concrete extraction targets:
+  - Journaling sink: _subscribe_journal_sink, _append_journal_record,
+    _store_journal_artifact should be a separate class that subscribes to
+    EventBus. Session emits, sink listens.
+  - TTS payload prep: _prepare_tts_payload (line 2539) belongs on
+    consume_agent_stream or a dedicated handler.
+  - Capability checks (replace isinstance against concrete classes):
+      * isinstance(self.echo_canceller, PassthroughAEC)        # line 250
+      * isinstance(self.transport,    PlaybackAckTransport)    # line 385
+      * isinstance(self.stt,          NoopSTT)                 # line 216
+    Add @runtime_checkable capability protocols (SupportsPlaybackAck,
+    IsPassthrough) and check those instead.
+
+Also: TurnManager + Session responsibility blur. Both manage turn state.
+Session passes cancel_turn_callback=self._cancel_for_barge_in to TurnManager
+(line 266); TurnManager calls it back on barge-in. Session knows about
+TurnManagerState (line 339). Cleaner: TurnManager emits, Session subscribes,
+no callbacks.
+
+Target: Session under 1,500 lines, no isinstance checks against concrete
+provider classes.
+
+--------------------------------------------------------------------------------
+A2. stages/ is ~1,500 lines of journaling boilerplate
+--------------------------------------------------------------------------------
+Every stage in src/easycat/stages/{stt,tts,vad,turn,audio,transport,agent}.py
+implements identical scaffolding: snapshot_state, replay, handle_upstream,
+execute -- all wrapping a provider call with journal calls. Stages do NOT add
+functional value beyond journaling.
+
+Two options:
+  1. Auto-generate: one JournalingStageWrapper factory:
+        stt_stage = wrap_stage(stt_provider, name="stt", journal=ctx.journal)
+     Drops ~1,000 lines.
+  2. Delete the layer entirely: move journaling into Session's existing event
+     handlers.
+
+Stage.replay() is already marked "Stub until WS4" (stages/base.py:90) and is
+unused -- that's the smoke signal.
+
+While here: delete runtime/nondeterministic.py (25 lines containing a single
+frozenset) and inline its constant where used.
+
+--------------------------------------------------------------------------------
+A3. WebSocket/Twilio "Transport vs ConnectionTransport" pair design
+--------------------------------------------------------------------------------
+websocket.py and twilio_media.py each define two near-identical classes
+(server-mode + connection-wrapping). Hard duplication:
+
+  websocket.py
+    _receive_loop:        lines 123-138 vs 254-267
+
+  twilio_media.py
+    _handle_message:      lines 345-381 vs 712-735
+    _handle_start:        lines 382-440 vs 737-760
+    _handle_media:        lines 441-458 vs 762-780
+
+Merge each pair into one class with optional ws=None parameter and
+.listen(...) / .from_connection(...) classmethods. Saves ~400 lines and means
+bug fixes happen once.
+
+Decide whether _ServerTransportBase (transports/_base.py:130-199) is
+justified -- currently a thin wrapper around websockets.serve() and both
+subclasses still own all message parsing. Inlining is more honest.
+
+--------------------------------------------------------------------------------
+A4. Provider duplication (~150 lines of pure copy-paste)
+--------------------------------------------------------------------------------
+Across the 9 STT/TTS provider files:
+
+  _get_package_version() copy-pasted 8 times:
+    stt/openai_provider.py:19
+    stt/openai_realtime_provider.py:52
+    stt/deepgram_provider.py:22
+    stt/cartesia_provider.py:22
+    stt/elevenlabs_provider.py:24
+    tts/openai_tts.py:19
+    tts/deepgram_tts.py:19
+    tts/cartesia_tts.py:23
+    tts/elevenlabs_tts.py:24
+  Move to easycat/_version.py.
+
+  _receive_loop bytes-skip -> json.loads -> handle pattern duplicated 4x:
+    stt/deepgram_provider.py:108
+    stt/cartesia_provider.py:123
+    stt/elevenlabs_provider.py:260
+    stt/openai_realtime_provider.py:346
+
+  _on_end with 5s drain timeout duplicated 3x:
+    stt/deepgram_provider.py:89
+    stt/cartesia_provider.py:104
+    stt/elevenlabs_provider.py:185
+
+  Provider error emission (attach notes -> emit Error event) duplicated 4x:
+    stt/cartesia_provider.py:187-206
+    tts/cartesia_tts.py:219-238
+    tts/elevenlabs_tts.py:319-345
+    stt/openai_realtime_provider.py:427-464
+
+  Commit-segment pattern duplicated 3x:
+    stt/openai_realtime_provider.py:230-313 (84 lines)
+    stt/elevenlabs_provider.py:202-232
+    stt/cartesia_provider.py:94-102
+
+Build a WebSocketSTTBase mixin that owns receive loop + close + error
+emission + commit-segment. Provider files shrink to ~120 LOC each.
+
+Provider config dataclasses repeat api_key, base_url, event_bus, timeout
+across 9 configs -- extract BaseProviderConfig.
+
+--------------------------------------------------------------------------------
+A5. Public API surface is too broad (195 symbols)
+--------------------------------------------------------------------------------
+src/easycat/__init__.py exports 195 names. Onboarding signal: "everything is
+equally important." Cull aggressively:
+
+  - Drop the 10 provider Config dataclasses from top level -- users pick one
+    per provider; factory + parse_string covers it.
+  - Drop debug internals (RunBundle, JournalRecordKind, JournalView) --
+    debugger/test code can `from easycat.debug import ...`.
+  - Drop internal action types (CoreSessionActionExecutor, TransferPlan).
+  - Drop the 11 event-tag constants and rare events (OptOutDetected,
+    ScreeningTimedOut, IVRActionType) from top level -- keep them in
+    easycat.events.
+
+Target: ~70 top-level symbols. Move the ~580-line lazy-loader file under
+250 lines.
+
+The lazy loader itself is fine -- the _LAZY_ATTR dict and the TYPE_CHECKING
+block are perfectly synchronized (zero drift). The mechanism is OK; the
+symbol count is the issue.
+
+
+================================================================================
+B. ONBOARDING -- EasyCatConfig vs SessionConfig is the biggest friction point
+================================================================================
+
+config.py:414-615 defines EasyCatConfig (52 fields, presets mic/browser/phone).
+session/_types.py:112-227 defines SessionConfig (24 fields, raw provider
+instances). README quickstart (line 37) uses one; advanced docs use the other;
+the factory builds one from the other internally.
+
+Fix: Make SessionConfig internal-only (rename _SessionConfig and drop from
+__init__.py). Authors use EasyCatConfig always; create_session(config) is the
+one path. If someone needs raw provider wiring, expose
+Session.from_providers(...) -- clearer than a parallel config dataclass.
+
+Flatten the 4-level telephony nest:
+  EasyCatConfig.telephony.outbound.voicemail_detection.mode
+  (config.py:252-308)
+to_twilio_params() at line 238 is provider-specific kwargs leaking into
+config -- a smell. Flatten to 2 levels max with factory functions for outbound.
+
+helpers.py can lose two of four exports without harm:
+  - wait_for_shutdown_signal is reimplemented inside run() (lines 93-96) --
+    collapse, single source.
+  - attach_runtime_feedback is opinionated console output (emoji prefixes),
+    not a utility -- move to easycat.quickstart or keep example-only.
+  - quick.py:speak() is a 5-line wrapper used by ZERO examples -- delete
+    or absorb into docs. transcribe_file is fine.
+
+Smallest working example today is ~20 lines (good). Real apps jump to 50+
+lines because the config tree is uneasy to navigate, not because the
+feature is hard.
+
+
+================================================================================
+C. TELEPHONY SUBMODULE -- scope creep, internal coupling
+================================================================================
+
+telephony/ is 4,500+ lines and is the densest part of the library:
+
+voicemail.py (826) + screening.py (806) + ml_voicemail.py (83) all do
+call-classification but split awkwardly:
+  - ml_voicemail.py is a thin wrapper that imports coherence_score from
+    screening.py:477 -- cross-module coherence logic with no shared home.
+  - PostScreeningVoicemailDetector at voicemail.py:564-640 is a kludge:
+    detects when screening ends and re-runs voicemail classification.
+
+Split:
+  voicemail_classification.py    AMD/SIT/comfort-noise signal helpers
+  voicemail_state_machine.py     VoicemailPolicy + VoicemailPolicyHandler
+  coherence.py                   coherence_score, check_coherence,
+                                 is_conversational (shared by both)
+  DELETE ml_voicemail.py         thin wrappers add no value once coherence
+                                 is centralized
+
+call_state.py (716 lines) packs an 8-state FSM and a 200-line ClassificationGate
+into one file:
+  - Extract ClassificationGate (lines 83-287) into classification_gate.py.
+  - Reconsider whether SCREENING/VOICEMAIL/IVR are sibling states or all
+    "classification outcomes" -- the latter halves the transition table.
+
+outbound.py:28 imports TWILIO_AMD_MAP from voicemail.py. The constant is just
+Twilio->EasyCat result mapping; outbound shouldn't depend on voicemail. Move
+to outbound or a _constants.py.
+
+This is fine code; it's just the wrong shape.
+
+
+================================================================================
+D. RUNTIME / JOURNAL / DEBUG -- not over-engineered, but redundant
+================================================================================
+
+The journal+bundle+debugger stack is justified (replay, crash recovery,
+observability), but has duplicate filter/serialization paths.
+
+Duplications:
+  JournalView.filter_by_*    journal.py:132-155
+  RunBundle.filter_by_*      bundle.py:163-189
+  -- Independently re-implement the same filter logic. Extract a JournalSlice
+     helper; both delegate.
+
+  _record_to_dict           debug/export.py:125
+  _read_journal_ndjson      debug/bundle.py:472
+  -- Parallel ser/des. Move to runtime/serialization.py; both call it.
+
+safe_defaults.apply_write_filter (lines 165-167) is a no-op with a "future
+RedactionPolicy" TODO. For pre-launch, DELETE it until you have the policy.
+
+Naming: debug/ (serialization, bundles) vs debugger/ (interactive UI server).
+Rename debugger/ -> inspector/ or live_view/.
+
+Agent event translators implement the same getattr-duck-typing pattern with
+no shared base:
+  integrations/agents/_openai_agents_events.py    (68 lines)
+  integrations/agents/_pydantic_ai_events.py      (64 lines)
+  integrations/agents/_responses_api_events.py    (115 lines)
+Extract EventTranslator ABC and share the duck-typing pattern.
+
+ExternalAgentBridge protocol is good; AgentRunner's bridge/non-bridge
+branching at _agent_runner.py:100 is acceptable.
+
+
+================================================================================
+E. CONFIRMED DEAD CODE (delete on sight)
+================================================================================
+
+  cli/_output.py:66                       warn() defined, zero callers
+  cli/diagnose/doctor.py:542              `_ = stdout_console  # parity` is
+                                          cargo-cult
+  runtime/safe_defaults.py:165            apply_write_filter() no-op
+                                          placeholder
+  stages/base.py:90                       Stage.replay() "Stub until WS4" +
+                                          ~10 stub implementations
+  runtime/nondeterministic.py             25 lines for one frozenset
+  quick.py:speak()                        used by no example/test/doc
+  helpers.py:wait_for_shutdown_signal     duplicated inside run()
+  cli/__init__.py:_print_version_fast vs  same logic in two places
+    cli/_app.py:_easycat_version
+
+Worth verifying: reconnecting_ws.py (168 lines) is generic and probably used
+by some STT/TTS provider, but the transports themselves use raw `websockets`
+with no reconnection -- either wire the transports through it or document
+why they intentionally skip reconnection.
+
+
+================================================================================
+F. SMALLER, EASY WINS
+================================================================================
+
+  - stt/factory.py and tts/factory.py carry a _MODEL_FIELD_NAME bridge
+    (tts/factory.py:106-109) because some providers use `model_id` and
+    others `model`. Pre-launch, standardize on `model` everywhere and
+    delete the bridge.
+
+  - stubs.py (NoopSTT/NoopTTS/NoopVAD/NoopTransport) ships in production
+    code but is only used in tests. Move to tests/_stubs.py or guard with
+    an easycat.testing namespace.
+
+  - session/_text.py (290 lines, sentence splitting + markdown delim
+    tracking) is consumed only by _streaming.py. Either inline or move
+    to session/_text_utils.py and stop exporting.
+
+  - events.py is 484 lines / 42 dataclasses. Not bloated for the surface
+    area; keep, but stop top-level-exporting the rare ones (see A5).
+
+  - VAD 4-tier auto-fallback (vad.py:800-892) is fine as a feature but
+    repeats the same try/except 4 times -- refactor to a loop over a
+    candidate list.
+
+
+================================================================================
+G. WHAT'S GOOD -- KEEP
+================================================================================
+
+  - Lazy-loader / TYPE_CHECKING block in __init__.py is perfectly
+    synchronized (zero drift). Mechanism is fine; symbol count is the issue.
+  - run() in helpers.py:55-102 is the single best onboarding artifact in
+    the library -- handles asyncio + signals + feedback in one call.
+  - EasyCatConfig.mic()/browser()/phone() presets.
+  - Factory registry (_PROVIDER_TO_CONFIG).
+  - Provider Protocol surface (providers.py) -- well-scoped duck-typing.
+  - Pytest plugin debug/_pytest_plugin.py -- small, registered, working.
+  - Test directory mirrors source structure cleanly; integration markers
+    (integration_local / integration_socket / integration_live) are well
+    thought out.
+  - TwiML helpers (telephony/twiml.py, 253 lines) -- clean.
+  - Smart-turn ONNX integration -- self-contained, well-licensed.
+
+
+================================================================================
+PRIORITIZED PUNCH LIST
+================================================================================
+
+   #  Action                                                   ~Lines  Risk
+  --  -------------------------------------------------------  ------  ------
+   1  Extract Session journaling sink + capability protocols     600   Low
+   2  Auto-generate or delete stages/ boilerplate              1,000   Medium
+   3  Merge Transport/ConnectionTransport pairs (WS + Twilio)    400   Low
+   4  Hide SessionConfig; flatten telephony config                --   Low
+   5  Cull top-level exports from 195 -> ~70                      --   Low
+   6  WebSocketSTTBase mixin + shared _get_package_version       150   Low
+   7  Split voicemail/screening/coherence; delete ml_voicemail    80   Low
+   8  Shared JournalSlice + runtime/serialization.py             100   Low
+   9  Delete confirmed dead code (Section E)                      80   None
+  10  Standardize `model` field across configs; delete bridge     20   None
+
+Estimated cleanup: ~2,400 lines deleted, no public-API regressions (pre-launch).
+The library would land somewhere around 27-28k LOC and feel substantially
+more learnable.
+
+Suggested first PRs: #9 (dead code) and #6 (provider DRY). Lowest risk and
+unblock the bigger refactors (#1, #2, #3).
