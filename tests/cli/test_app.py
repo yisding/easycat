@@ -32,6 +32,7 @@ def test_help_renders(cli: CliRunner) -> None:
     assert "init" in result.stdout
     assert "doctor" in result.stdout
     assert "explain" in result.stdout
+    assert "inspect" in result.stdout
 
 
 def test_journey_menu(cli: CliRunner) -> None:
@@ -40,13 +41,24 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert result.exit_code == 0
     assert "Scaffold" in result.stdout
     assert "Debug with the journal" in result.stdout
-    for cmd in ("init", "doctor", "explain", "bundles"):
+    for cmd in ("init", "doctor", "explain", "bundles", "inspect"):
         assert cmd in result.stdout
     # Don't advertise unshipped commands until they're implemented.
     assert "replay" not in result.stdout
+    assert "demo" not in result.stdout
 
 
 # ── Fast-path guard ──────────────────────────────────────────────
+
+
+def test_python_m_easycat_delegates_to_cli() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "easycat", "--version"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.startswith("easycat ")
 
 
 def test_version_fast_path_skips_typer_and_rich() -> None:

@@ -7,9 +7,9 @@ OpenAI Agents SDK, PydanticAI agents, or PydanticAI workflows.
 - Session runtime that wires the audio pipeline (noise reduction -> VAD -> STT -> agent -> TTS)
 - Typed event system with an EventBus for streaming-first voice events
 - Passive supervisor listen-in via session audio fan-out on the EventBus
-- STT providers: OpenAI, Deepgram, ElevenLabs
-- TTS providers: OpenAI, Deepgram, ElevenLabs
-- VAD providers: Silero (open-source), TEN VAD (open-source), and Krisp (commercial)
+- STT providers: OpenAI, Deepgram, ElevenLabs, Cartesia
+- TTS providers: OpenAI, Deepgram, ElevenLabs, Cartesia
+- VAD providers: Silero (open-source), optional TEN VAD (non-permissive license), and Krisp (commercial)
 - Noise reduction: RNNoise (open-source), Krisp (commercial), passthrough fallback
 - Transports: Local (sounddevice), WebSocket server, WebRTC (aiortc), Twilio Media Streams server
 - Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers, outbound calling (Twilio), screening + IVR navigation, per-number health / retry / compliance gates, caller-ID propagation to the agent or tools
@@ -320,8 +320,8 @@ Notes:
 - For provider authors, `synthesize` accepts either a legacy `str` or `TTSInput`.
 
 ### Local/open-source speech pipeline
-EasyCat ships with hosted STT/TTS providers (OpenAI, Deepgram, ElevenLabs). To
-run fully local speech, plug in your own STT/TTS implementations and use
+EasyCat ships with hosted STT/TTS providers (OpenAI, Deepgram, ElevenLabs, and
+Cartesia). To run fully local speech, plug in your own STT/TTS implementations and use
 `SessionConfig` directly:
 
 ```python
@@ -546,9 +546,10 @@ export OPENAI_API_KEY="your-api-key"
 uv run python examples/openai_agents_voice.py
 ```
 
-The `quickstart` extra bundles local audio, OpenAI providers, noise reduction,
-and a lightweight VAD (TEN VAD) so you can skip torch.  If you prefer Silero
-VAD (requires torch), install extras individually:
+The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
+SDK, RNNoise dependencies, numpy, and onnxruntime. It does not include TEN VAD;
+install that optional extra separately only if you accept its non-permissive
+license. If you prefer Silero VAD (requires torch), install extras individually:
 
 ```
 uv sync --extra local --extra openai --extra openai-agents --extra rnnoise
@@ -559,11 +560,11 @@ Optional dependencies you may need depending on providers/transports:
 - sounddevice (LocalTransport)
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
 - numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
-- ten-vad + numpy (TEN VAD; use latest ten-vad for macOS/Windows ONNX support)
+- ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license)
 - torch (Silero VAD)
 - pyrnnoise + requests (RNNoise noise reduction backend)
 - Krisp SDK (krisp_audio)
-- Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs
+- Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs, Cartesia
 
 ## Factory APIs
 

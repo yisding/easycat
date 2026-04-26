@@ -27,6 +27,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import websockets
 
+from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk
 from easycat.audio_utils import resample_chunk
 from easycat.events import STTEvent, STTEventType
@@ -47,15 +48,6 @@ _REALTIME_SAMPLE_RATE = 24000
 _FINAL_TRANSCRIPT_TIMEOUT_S = 2.0
 
 logger = logging.getLogger(__name__)
-
-
-def _get_package_version(pkg: str) -> str:
-    try:
-        from importlib.metadata import version
-
-        return version(pkg)
-    except Exception:
-        return "unknown"
 
 
 @dataclass
@@ -468,5 +460,5 @@ class OpenAIRealtimeSTT(STTBase):
             "provider": "openai-realtime",
             "model": self._config.model,
             "api_version": "v1",
-            "sdk_version": _get_package_version("websockets"),
+            "sdk_version": get_package_version("websockets"),
         }

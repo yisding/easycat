@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
+from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
@@ -18,15 +19,6 @@ from easycat.tts.base import TTSBase
 from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
 
 logger = logging.getLogger(__name__)
-
-
-def _get_package_version(pkg: str) -> str:
-    try:
-        from importlib.metadata import version
-
-        return version(pkg)
-    except Exception:
-        return "unknown"
 
 
 # Byte-width per sample for each encoding Cartesia returns on the wire.
@@ -242,5 +234,5 @@ class CartesiaTTS(TTSBase):
             "provider": "cartesia",
             "model": self._config.model_id,
             "api_version": self._config.cartesia_version,
-            "sdk_version": _get_package_version("websockets"),
+            "sdk_version": get_package_version("websockets"),
         }

@@ -137,6 +137,26 @@ def test_bundles_show_json(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["replay_entry_points"][0]["checkpoint_id"] == "cp_7"
 
 
+def test_inspect_alias_matches_bundles_show(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "demo.zip"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "name": "TurnStarted",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+            }
+        ],
+    )
+
+    show = cli.invoke(app, ["bundles", "show", str(bundle), "--json"])
+    inspect = cli.invoke(app, ["inspect", str(bundle), "--json"])
+    assert inspect.exit_code == 0
+    assert json.loads(inspect.stdout) == json.loads(show.stdout)
+
+
 def test_bundles_show_missing_path(cli: CliRunner, tmp_path: Path) -> None:
     missing = tmp_path / "nope.zip"
     result = cli.invoke(app, ["bundles", "show", str(missing)])

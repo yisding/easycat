@@ -10,7 +10,7 @@ Two commands land here:
     fastest way to answer "what got recorded last night?" without
     opening a Python REPL.
 
-``bundles show <path>``
+``bundles show <path>`` / ``inspect <path>``
     Summarize a single bundle: session id, turn count, error count,
     provider versions, first + last record timestamps. Deliberately
     avoids printing raw journal lines — that's what
@@ -171,15 +171,8 @@ def list_bundles(
     stdout_console.print(table)
 
 
-# ── `easycat bundles show` ──────────────────────────────────────
-
-
-@cli_command
-def show_bundle(
-    bundle_path: Path = typer.Argument(..., help="Path to a ``.zip`` bundle."),
-    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
-) -> None:
-    """Summarise a single bundle: turns, errors, timings, provider versions."""
+def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
+    """Load and render the bundle summary used by all inspect aliases."""
     if not bundle_path.exists():
         stderr_console.print(f"  [red]✗[/] Bundle not found: [red]{bundle_path}[/]")
         raise typer.Exit(5)
@@ -233,11 +226,32 @@ def show_bundle(
     stdout_console.print(table)
 
 
+# ── `easycat bundles show` / `easycat inspect` ───────────────────
+
+
+@cli_command
+def show_bundle(
+    bundle_path: Path = typer.Argument(..., help="Path to a ``.zip`` bundle."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    """Summarise a single bundle: turns, errors, timings, provider versions."""
+    _show_bundle_summary(bundle_path, json_output=json_output)
+
+
+@cli_command
+def inspect_bundle(
+    bundle_path: Path = typer.Argument(..., help="Path to a ``.zip`` bundle."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    """Friendly alias for ``easycat bundles show``."""
+    _show_bundle_summary(bundle_path, json_output=json_output)
+
+
 bundles_app.command(name="list", help="List captured bundles under .easycat/.")(list_bundles)
 bundles_app.command(name="show", help="Summarise a single bundle.")(show_bundle)
 
 
-__all__: list[str] = ["bundles_app"]
+__all__: list[str] = ["bundles_app", "inspect_bundle"]
 
 # Silence "imported but unused" for shared-helper imports that stay in
 # the file for parity with other CLI modules.

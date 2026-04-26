@@ -121,6 +121,21 @@ async def test_passthrough_returns_unchanged():
 # ── Factory tests ────────────────────────────────────────────────────
 
 
+def test_noise_reducer_config_rejects_unknown_backend():
+    """NoiseReducerConfig should reject typo backend strings before probing dependencies."""
+    with pytest.raises(ValueError, match="Unknown noise reducer backend 'rnnoize'"):
+        NoiseReducerConfig(backend="rnnoize")
+
+
+def test_noise_reducer_factory_revalidates_mutated_backend():
+    """Factory should reject configs mutated after dataclass construction."""
+    config = NoiseReducerConfig()
+    config.backend = "rnnoize"  # type: ignore[assignment]
+
+    with pytest.raises(ValueError, match="Unknown noise reducer backend 'rnnoize'"):
+        create_noise_reducer(config)
+
+
 def test_factory_auto_falls_back_to_passthrough():
     """In auto mode with no SDKs available, factory returns passthrough."""
     with patch(

@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import websockets
 
+from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.audio_utils import resample
 from easycat.events import STTEvent, STTEventType, WordTimestamp
@@ -19,15 +20,6 @@ from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase, pcm_to_wav
 
 logger = logging.getLogger(__name__)
-
-
-def _get_package_version(pkg: str) -> str:
-    try:
-        from importlib.metadata import version
-
-        return version(pkg)
-    except Exception:
-        return "unknown"
 
 
 @dataclass
@@ -373,5 +365,5 @@ class ElevenLabsSTT(STTBase):
             "provider": "elevenlabs",
             "model": self._resolved_model(),
             "api_version": "v1",
-            "sdk_version": _get_package_version("httpx"),
+            "sdk_version": get_package_version("httpx"),
         }

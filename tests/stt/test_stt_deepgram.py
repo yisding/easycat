@@ -200,6 +200,19 @@ async def test_deepgram_includes_word_timestamps():
     assert events[0].word_timestamps[1].end == 0.7
 
 
+@pytest.mark.asyncio
+async def test_deepgram_accepts_text_word_timestamp_key():
+    words = [{"text": "hello", "start": 0.0, "end": 0.3}]
+    messages = [_deepgram_result("hello", is_final=True, words=words)]
+    stt, _ = _make_deepgram_stt(messages)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert events[0].word_timestamps is not None
+    assert events[0].word_timestamps[0].word == "hello"
+
+
 # ── Ignores non-transcript messages ─────────────────────────────
 
 
