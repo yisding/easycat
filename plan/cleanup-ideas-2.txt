@@ -1,0 +1,542 @@
+Cleanup Ideas 2
+===============
+
+Context
+-------
+
+This note summarizes a broad architecture and product-quality review of
+EasyCat. The review assumed backward compatibility can be broken in favor of a
+cleaner, showcase-quality library.
+
+Overall take: EasyCat has real substance: provider support, telephony depth,
+debug journals, teaching material, and a large test suite. The next level is
+not mostly more features. It is a smaller public API, explicit contracts,
+clear lifecycle ownership, secure defaults, and release-grade quality gates.
+
+
+Highest-priority fixes
+----------------------
+
+1. Fix WebRTC ingress queue ownership.
+
+   WebRTCTransport._handle_offer() resets _in_queue while Session._run_pipeline()
+   may already be blocked in receive_audio(). That can orphan the active
+   pipeline on the old queue while new audio lands in the new queue.
+
+   Direction:
+   - Do not swap queue objects under active consumers.
+   - Use a stable ingress object with close/reset_generation semantics, or make
+     WebRTC offers produce per-peer TransportEndpoint objects.
+   - Add tests for first offer after session.start(), repeated offers, peer
+     replacement, ICE failure, and disconnect while send_audio() is pending.
+
+2. Split Session into a facade and owned runtime components.
+
+   Session currently owns provider wiring, event APIs, lifecycle, turn
+   orchestration, STT commits, TTS playback, telephony helpers, journaling,
+   text mode, and debug export. That makes ordering and shutdown difficult to
+   reason about.
+
+   Direction:
+   - Keep Session as the public facade.
+   - Extract RuntimeScope, PipelineRunner, TurnRunner, PlaybackWorker,
+     Recorder, and TextSession.
+   - Move background task creation and cancellation into RuntimeScope.
+   - Collapse duplicated stop() and shutdown() cleanup paths into one lifecycle
+     owner with explicit graceful vs forceful shutdown policy.
+
+3. Replace implicit capabilities with explicit contracts.
+
+   The runtime depends on duck-typed attributes and private state such as
+   version_info, _event_bus, transport_kind, reports_audio_delivery,
+   send_playback_mark, bind_identity_sink, call_sid, wait_for_client, and
+   private chunk stamps.
+
+   Direction:
+   - Add ProviderCapabilities for STT/TTS/VAD/noise/AEC.
+   - Add TransportCapabilities for kind, input/output formats, delivery
+     semantics, clear support, playback marks, and identity exposure.
+   - Add BridgeCapabilities for streaming text, tool deltas, history ownership,
+     interruption support, MCP injection, snapshots, and closeability.
+   - Replace scattered registry maps and isinstance branches with capability
+     registries.
+
+4. Narrow the public API.
+
+   The top-level easycat namespace currently exports roughly 195 names. That
+   makes the library feel unfinished and makes the compatibility surface too
+   large.
+
+   Direction:
+   - Keep top-level exports small: VoiceAgentConfig, create_session,
+     create_text_session, run, Session, RunBundle, and a few stable config
+     types.
+   - Move internals to submodules: easycat.providers, easycat.transports,
+     easycat.telephony, easycat.inspect, easycat.advanced.
+   - Add a golden __all__ snapshot test and a documented public API contract.
+
+5. Rename and reshape config.
+
+   EasyCatConfig mixes product-level config, provider selection, debug/journal
+   setup, telephony, MCP, caller ID, recording, and runtime policy. SessionConfig
+   is a lower-level pipeline object but is exposed like app-level config.
+
+   Direction:
+   - Rename EasyCatConfig to VoiceAgentConfig.
+   - Rename SessionConfig to PipelineConfig and move it under easycat.pipeline
+     or easycat.advanced.
+   - Add ResolvedRuntimeConfig produced by explicit builders.
+   - Split provider, transport, debug, and telephony builders.
+   - Replace monkey-patched session.stop/session.shutdown hooks for record_to
+     with explicit lifecycle hooks.
+
+6. Make security defaults production-grade.
+
+   Current transport defaults are good for demos but too permissive for a
+   showcase library.
+
+   Direction:
+   - Default network servers to 127.0.0.1.
+   - Require explicit allow_remote=True or equivalent for public binds.
+   - Add origin allowlists, path checks, query/session token checks, frame size
+     limits, ping/close timeouts, and compression-off defaults for audio
+     sockets.
+   - Do not expose WebRTC TURN credentials to wildcard CORS.
+   - For Twilio, generate and validate signed one-time stream tokens in TwiML.
+
+
+Runtime architecture
+--------------------
+
+1. Introduce RuntimeScope.
+
+   All background work should be created through one owner backed by
+   asyncio.TaskGroup and AsyncExitStack. Each task should have:
+   - Stable name.
+   - Owning component.
+   - Cancellation policy.
+   - Close deadline.
+   - Journal lifecycle records.
+
+   This should replace raw asyncio.create_task calls scattered through Session,
+   STT event consumption, turn processing, agent/TTS concurrency, greetings,
+   timers, and health checks.
+
+2. Make turn-taking an actor boundary.
+
+   TurnManager currently mutates state, emits events, creates timers, buffers
+   audio, calls smart-turn, and calls back into Session for barge-in. That is
+   reentrant and fragile.
+
+   Direction:
+   - Use a mailbox model: audio/VAD/control commands in, typed TurnEvents out.
+   - Session reacts to TurnEvents instead of being called directly.
+   - Keep all state transitions serialized inside the turn actor.
+   - Make barge-in a command/event pair rather than a direct callback.
+
+3. Type stages.
+
+   The Stage protocol currently has execute(input: Any) -> Any. That is too
+   loose for a package that ships py.typed.
+
+   Direction:
+   - Move to Stage[In, Out].
+   - Define typed ports for AudioIn, CleanAudio, VadDecision, Transcript,
+     AgentStream, TTSFrame, and TransportDelivery.
+   - Use StageContext for turn id, cancel token, deadline, recorder, and
+     capabilities.
+   - Separate live provider wrappers from replay adapters.
+
+4. Split events into namespaces.
+
+   events.py mixes runtime, provider-scoped STT/TTS events, reconnects,
+   telephony, IVR, compliance, actions, errors, and the bus.
+
+   Direction:
+   - easycat.events.core
+   - easycat.events.provider
+   - easycat.events.telephony
+   - easycat.events.actions
+   - easycat.events.errors
+   - Define typed event unions for stable contract tests.
+
+5. Change EventBus dispatch policy.
+
+   EventBus.emit() currently runs sync handlers inline and awaits async handlers
+   serially. User callbacks or observability handlers can stall audio.
+
+   Direction:
+   - Return subscription tokens.
+   - Add handler policies: inline, task, queue, best_effort.
+   - Track handler latency and failures.
+   - Make audio-critical event paths explicit about whether subscribers can
+     block them.
+
+6. Make journal records typed.
+
+   ExecutionJournal.append() accepts primitive fields, while records.py defines
+   richer dataclasses that are only partially used.
+
+   Direction:
+   - Use a discriminated record union with schema versions.
+   - Store control-signal fields as first-class record fields, not buried in
+     data.
+   - Validate bundle schemas in tests.
+   - Preserve a clear upgrade path for old bundles if needed, but do not let old
+     shapes drive the new design.
+
+
+Provider and bridge architecture
+--------------------------------
+
+1. Add provider capability registries.
+
+   Replace scattered STT/TTS factory maps, event_bus injection branches, version
+   duck typing, and transport-output alignment branches with provider specs.
+
+   ProviderSpec should include:
+   - Name and role.
+   - Config type.
+   - Factory.
+   - Required extra and optional dependency checks.
+   - Input/output audio formats.
+   - Streaming support.
+   - Segment commit support.
+   - SSML, markers, pauses, and pronunciation capabilities.
+   - Error mapping function.
+
+2. Add a provider error taxonomy.
+
+   Providers currently leak raw httpx, ValueError, RuntimeError, ImportError, and
+   provider-specific errors.
+
+   Direction:
+   - Add ProviderError(provider, stage, category, retryable, status_code,
+     close_code, request_id, provider_code).
+   - Categories should include auth, rate_limit, timeout, protocol,
+     unsupported_capability, optional_dependency, provider_unavailable,
+     cancelled, invalid_audio, and unknown.
+   - Error events should carry structured error info instead of string-only
+     context.
+
+3. Fix STT stream termination ownership.
+
+   STTBase.end_stream() queues stream termination, while some streaming
+   providers also queue termination from their receive loops.
+
+   Direction:
+   - Pick either the base class or subclass as the only owner of termination.
+   - Test that late final transcripts are emitted before the stream closes.
+   - Test close idempotency and cancellation for every STT provider.
+
+4. Fail fast on invalid backend strings.
+
+   VADConfig.backend and NoiseReducerConfig.backend are plain strings, so typos
+   can fall into auto-selection. AEC enabled=True should also not silently become
+   passthrough unless configured that way.
+
+   Direction:
+   - Use Literal or Enum values.
+   - Add explicit fallback_policy fields when auto-selection is desired.
+   - Add tests for typo handling and missing optional dependencies.
+
+5. Normalize audio and TTS negotiation.
+
+   Providers differ on whether they validate, reject, or resample sample rates.
+   TTS SSML behavior is currently a bool plus stripping.
+
+   Direction:
+   - Centralize PCM16 mono and frame-size validation.
+   - Expose resampling support through capabilities.
+   - Replace supports_ssml with an explicit TTSInputPolicy:
+     plain, native_ssml, stripped_ssml, pauses, markers, pronunciation.
+
+6. Deduplicate provider plumbing.
+
+   Repeated patterns include package version lookup, word timestamp parsing,
+   WebSocket receive loops, retry/backoff, EventBus error emission, and client
+   injection.
+
+   Direction:
+   - Add shared provider runtime helpers.
+   - Keep provider adapters small and focused on provider-specific protocol
+     details.
+
+7. Pick one agent bridge contract.
+
+   The runtime currently accepts plain Agent.run, auto-adapted bridge objects,
+   AgentRunner, URL agents, mutable mid-session swaps, and private runtime
+   config injection.
+
+   Direction:
+   - Standardize on AgentBridge.invoke(...).
+   - Put simple run(text) -> str behind an explicit adapter.
+   - Replace private _mcp_servers/_model/_api_key mutation with public bridge
+     configuration.
+   - Deduplicate interruption logic across OpenAI Agents, PydanticAI, generic
+     workflow, and Responses API bridges.
+
+
+Transport and telephony
+-----------------------
+
+1. Split listener and endpoint.
+
+   A session should run against a per-call or per-browser TransportEndpoint.
+   WebSocket, Twilio, and WebRTC server objects should be TransportListener
+   objects that accept endpoints.
+
+   Direction:
+   - Make WebSocketConnectionTransport and TwilioConnectionTransport the
+     canonical session-level shapes.
+   - Rename current server-owning transports to WebSocketListener and
+     TwilioMediaListener, or move them out of the session-level API.
+   - Add lifecycle states: NEW, LISTENING, CONNECTING, CONNECTED, DRAINING,
+     CLOSED, FAILED.
+
+2. Add connection policy.
+
+   Direction:
+   - ConnectionPolicy validates origin, path, query token, tenant/session id,
+     max payload size, and close behavior.
+   - Twilio should validate a signed stream token in customParameters or query
+     params.
+   - WebRTC should default to same-origin and avoid wildcard TURN credential
+     exposure.
+
+3. Promote telephony compliance to policy.
+
+   Some compliance pieces exist, but outbound behavior should be audited and
+   enforceable.
+
+   Direction:
+   - Replace outbound ValueError blocking with structured CallPreflightResult.
+   - Emit CallBlocked with rule id, jurisdiction, local time, DNC source, and
+     audit metadata.
+   - Replace the small built-in area-code timezone map with a
+     PhoneMetadataProvider abstraction for E.164 normalization, timezone lookup,
+     consent source, DNC provider, and quiet-hours policy.
+   - Make AI disclosure enforceable: DisclosureRequired, DisclosureSpoken, and
+     a gate that prevents outbound agent speech until disclosure is queued or
+     explicitly waived.
+
+4. Tighten Twilio event handling.
+
+   Direction:
+   - Validate DTMF through the existing parser instead of emitting raw digits.
+   - Validate stream id and active stream state before accepting media/control
+     frames.
+   - Track Twilio sequence/timestamp gaps as metrics.
+
+5. Add transport observability.
+
+   Direction:
+   - Queue depth.
+   - Dropped inbound/outbound frames.
+   - Send latency.
+   - Clear latency.
+   - Playback mark ACK latency.
+   - Reconnect attempts.
+   - WebRTC ICE state and RTCP stats.
+   - Twilio sequence/timestamp gaps.
+   - Resampling cost.
+   - Close reason.
+   - health_check() implementations for transports.
+
+6. Productize supervisor audio.
+
+   Direction:
+   - Add auth.
+   - Add per-listener drop counters.
+   - Add recording consent and redaction policy hooks.
+   - Add audit events.
+
+
+Developer experience and docs
+-----------------------------
+
+1. Rewrite README around first success.
+
+   The README should start with:
+   - Install.
+   - easycat init.
+   - Set OPENAI_API_KEY.
+   - Run locally.
+   - Then show one small code example.
+
+   Move detailed telephony content to docs/telephony.md.
+
+2. Fix documentation drift.
+
+   Known drift:
+   - README early provider lists omit Cartesia.
+   - README describes TEN VAD as open-source, while pyproject notes TEN VAD has
+     a non-permissive license.
+   - README says quickstart bundles TEN VAD, but the quickstart extra does not
+     include ten-vad.
+   - Teaching docs still mention pickle bundles, while current bundles are
+     ZIP/NDJSON.
+
+3. Productize CLI.
+
+   Direction:
+   - Make easycat init the primary README path.
+   - Add templates for local, browser, phone, and text.
+   - Either implement scaffold schema fields for llm, tools, transport, and MCP
+     servers or remove them until they are real.
+   - Add easycat inspect <bundle>.
+   - Add easycat replay <bundle>.
+   - Add easycat demo.
+   - Add python -m easycat support via src/easycat/__main__.py.
+
+4. Reshape examples.
+
+   Direction:
+   - Keep only three golden root examples: local mic, browser WebRTC, Twilio.
+   - Move most examples into examples/advanced.
+   - Add smoke tests for README snippets and teaching scripts.
+   - Make docs/teaching protected by CI, since it is a genuine showcase asset.
+
+5. Clean product namespace.
+
+   Direction:
+   - Merge easycat.debug and easycat.debugger into a product namespace such as
+     easycat.inspect.
+   - Move quick.py to recipes.py or teaching.py and remove speak/transcribe_file
+     from top-level exports if they are teaching helpers.
+   - Move TTS test helpers out of public tts exports.
+   - Move plan/ to rfcs/ if intended to be public, or keep it out of release
+     packaging.
+
+
+Packaging and release
+---------------------
+
+1. Polish project metadata.
+
+   Add:
+   - Root LICENSE.
+   - license field.
+   - authors.
+   - classifiers.
+   - keywords.
+   - project URLs.
+   - twine check in CI.
+
+2. Add wheel and sdist hygiene checks.
+
+   Direction:
+   - Build wheel and sdist in CI.
+   - Install the wheel in a clean virtualenv.
+   - Run easycat --help.
+   - Run easycat init.
+   - Run python -m easycat.
+   - Import the documented top-level API.
+   - Denylist caches, pyc files, local artifacts, and stale template junk in
+     wheel contents.
+
+3. Clean repo hygiene.
+
+   Direction:
+   - Ignore local .codex and .pipecat-bench workspaces if they are not intended
+     for source control.
+   - Avoid committing perf __pycache__ files or generated local artifacts.
+   - Decide whether bundled ONNX model files are part of the core package or
+     optional extras with lazy download and checksum verification.
+
+
+Testing and CI
+--------------
+
+1. Match CI to declared support.
+
+   requires-python is >=3.11, so CI should test Python 3.11. A reasonable PR
+   matrix is 3.11, 3.12, 3.13, and 3.14.
+
+2. Add type checking.
+
+   The package ships py.typed. Add pyright or basedpyright first, then tighten
+   over time. Add pyright --verifytypes easycat once public API is curated.
+
+3. Expand contract tests.
+
+   Existing STT x TTS provider contract tests are a good model. Replicate that
+   approach for:
+   - Transports.
+   - Agent bridges.
+   - Event schemas.
+   - Replay and bundle schemas.
+   - CLI JSON envelopes.
+   - Public __all__.
+
+4. Reduce socket and E2E flakiness.
+
+   Direction:
+   - Replace bind-close-reuse free-port helpers with pytest
+     unused_tcp_port_factory where possible, or keep sockets bound until server
+     startup.
+   - Add pytest-timeout.
+   - Add leaked-task checks.
+   - Prefer event-driven waits over sleeps and polling.
+
+5. Split live provider testing from protocol testing.
+
+   Direction:
+   - Use deterministic committed PCM fixtures for protocol and latency-shape CI.
+   - Reserve live TTS/STT for nightly/manual provider canaries.
+   - Make live-provider jobs fail fast when selected secrets are missing.
+   - Map GitHub secrets explicitly into OPENAI_API_KEY, DEEPGRAM_API_KEY,
+     ELEVENLABS_API_KEY, CARTESIA_API_KEY, and Twilio secrets as needed.
+
+6. Make performance tooling enforceable.
+
+   Direction:
+   - Convert perf/bench_journal.py into commands such as perf run and
+     perf compare --baseline.
+   - Store results as CI artifacts.
+   - Gate only stable microbenchmarks in PR CI.
+   - Keep live latency SLOs scheduled or manual.
+
+
+Suggested roadmap
+-----------------
+
+Phase 0: Immediate correctness and trust
+- Fix WebRTC queue ownership.
+- Fail fast on invalid VAD/noise/AEC backend strings.
+- Fix STT termination ownership.
+- Add security defaults for transport binds and CORS.
+- Fix README/docs accuracy drift.
+
+Phase 1: Public shape
+- Rename EasyCatConfig to VoiceAgentConfig.
+- Rename SessionConfig to PipelineConfig.
+- Curate top-level exports.
+- Add public API snapshot tests.
+- Move telephony detail out of README.
+
+Phase 2: Runtime architecture
+- Add RuntimeScope.
+- Extract PipelineRunner, TurnRunner, PlaybackWorker, Recorder, and TextSession.
+- Make TurnManager an actor-style boundary.
+- Replace private collaborator mutation with explicit owner APIs.
+
+Phase 3: Contracts
+- Add ProviderCapabilities, TransportCapabilities, and BridgeCapabilities.
+- Add ProviderError taxonomy.
+- Type stages and event namespaces.
+- Make journal records typed and schema-versioned.
+
+Phase 4: Product polish
+- Productize easycat init, inspect, replay, and demo.
+- Add browser/phone/text templates.
+- Reshape examples.
+- Protect teaching docs with smoke tests.
+
+Phase 5: Release bar
+- Add Python 3.11-3.14 CI.
+- Add pyright/basedpyright.
+- Add wheel/sdist install smoke and contents denylist.
+- Add live provider canaries with explicit secrets.
+- Add benchmark compare and CI artifacts.
+
