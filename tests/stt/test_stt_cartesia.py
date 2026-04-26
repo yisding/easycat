@@ -15,7 +15,7 @@ from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_
 class MockWebSocket:
     """Mock WebSocket connection for Cartesia STT tests."""
 
-    def __init__(self, messages: list[str] | None = None) -> None:
+    def __init__(self, messages: list[str | bytes] | None = None) -> None:
         self.messages = messages or []
         self.sent: list[bytes | str] = []
         self._closed = False
@@ -30,7 +30,7 @@ class MockWebSocket:
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> str:
+    async def __anext__(self) -> str | bytes:
         if self._iter_index >= len(self.messages):
             raise StopAsyncIteration
         msg = self.messages[self._iter_index]
@@ -76,7 +76,7 @@ def _error_msg(code: str = "invalid_input", status_code: int = 400) -> str:
 
 
 def _make_cartesia_stt(
-    messages: list[str] | None = None,
+    messages: list[str | bytes] | None = None,
     *,
     event_bus=None,
     language: str = "en",
@@ -259,6 +259,7 @@ async def test_cartesia_ignores_unknown_message_types():
 
 async def test_cartesia_ignores_malformed_json():
     messages = [
+        b"\x00\x01",
         "not valid json",
         _transcript_msg("hello", is_final=True),
     ]
