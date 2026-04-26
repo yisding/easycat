@@ -150,6 +150,8 @@ class LiveKitAEC:
 class PassthroughAEC:
     """No-op echo canceller that passes audio through unchanged."""
 
+    is_passthrough_provider = True
+
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         return chunk
 

@@ -5,6 +5,7 @@ import logging
 import pytest
 
 from easycat import PCM16_MONO_16K, PCM16_MONO_24K, EasyConfig, create_session
+from easycat.audio_format import AudioChunk
 from easycat.config import TelephonyConfig
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.events import DTMFAggregated
@@ -43,6 +44,34 @@ class _DummyWebSocket:
         return None
 
 
+class _CapabilityTransportConfig:
+    default_echo_cancellation_enabled = True
+
+
+class _IdentitySinkTransport:
+    def __init__(self) -> None:
+        self.identity_sink = None
+
+    async def connect(self) -> None:
+        pass
+
+    async def disconnect(self) -> None:
+        pass
+
+    async def receive_audio(self):
+        return
+        yield
+
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        return True
+
+    async def clear_audio(self) -> None:
+        pass
+
+    def bind_identity_sink(self, sink) -> None:
+        self.identity_sink = sink
+
+
 def test_easycat_config_requires_stt_tts(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ValueError):
@@ -65,6 +94,30 @@ def test_easycat_config_auto_aligns_default_openai_tts_to_twilio_transport_insta
 
     assert isinstance(config.tts, OpenAITTSConfig)
     assert config.tts.output_format == transport.audio_format
+
+
+def test_easycat_config_uses_transport_echo_preference_capability():
+    config = EasyConfig(openai_api_key="test-key", transport=_CapabilityTransportConfig())
+
+    assert config.echo_cancellation is not None
+    assert config.echo_cancellation.enabled is True
+
+
+def test_create_session_binds_custom_identity_sink_capability():
+    transport = _IdentitySinkTransport()
+    session = create_session(
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=transport,
+        )
+    )
+    identity = CallIdentity(caller_number="+15551234567")
+
+    assert transport.identity_sink is not None
+    transport.identity_sink(identity)
+
+    assert session.call_identity is identity
 
 
 @pytest.mark.asyncio

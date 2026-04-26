@@ -59,8 +59,17 @@ from easycat.llm_output_processing import (
     apply_output_processors,
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
-from easycat.providers import PlaybackAckTransport
 from easycat.runtime.artifacts import SnapshotArtifactStore
+from easycat.runtime.capabilities import (
+    PlaybackAcknowledgements,
+    aclose_if_supported,
+    clear_audio_if_supported,
+    health_checkable,
+    is_active_provider,
+    is_passthrough_provider,
+    playback_acknowledgements,
+    transport_reports_audio_delivery,
+)
 from easycat.runtime.context import RunContext
 from easycat.runtime.journal import (
     ExecutionJournal,
@@ -209,19 +218,17 @@ class Session:
         # are intentionally noop.
         if cfg.runtime_mode != "text_session":
             noops = []
-            if isinstance(self.stt, NoopSTT):
+            if is_passthrough_provider(self.stt):
                 noops.append("stt")
-            if isinstance(self.tts, NoopTTS):
+            if is_passthrough_provider(self.tts):
                 noops.append("tts")
-            if cfg.enable_vad and isinstance(self.vad, NoopVAD):
+            if cfg.enable_vad and is_passthrough_provider(self.vad):
                 noops.append("vad")
-            if cfg.enable_noise_reduction and isinstance(
-                self.noise_reducer, PassthroughNoiseReducer
-            ):
+            if cfg.enable_noise_reduction and is_passthrough_provider(self.noise_reducer):
                 noops.append("noise_reducer")
-            if isinstance(self.transport, NoopTransport):
+            if is_passthrough_provider(self.transport):
                 noops.append("transport")
-            if isinstance(self.agent, NoopAgent):
+            if cfg.agent is None and is_passthrough_provider(self.agent):
                 noops.append("agent")
             if noops:
                 raise ValueError(
@@ -238,12 +245,12 @@ class Session:
 
         # Pipeline flags — auto-enable when a real provider is supplied so
         # that direct SessionConfig users don't silently lose processing.
-        self._enable_noise_reduction = cfg.enable_noise_reduction or not isinstance(
-            self.noise_reducer, PassthroughNoiseReducer
+        self._enable_noise_reduction = cfg.enable_noise_reduction or is_active_provider(
+            self.noise_reducer
         )
         self._enable_aec = (
-            cfg.enable_echo_cancellation or not isinstance(self.echo_canceller, PassthroughAEC)
-        ) and not isinstance(self.echo_canceller, PassthroughAEC)
+            cfg.enable_echo_cancellation or is_active_provider(self.echo_canceller)
+        ) and is_active_provider(self.echo_canceller)
         self._enable_vad = cfg.enable_vad
         self._auto_turn_from_stt_final = cfg.auto_turn_from_stt_final
         self._interruption_mode = cfg.interruption_mode
@@ -373,12 +380,10 @@ class Session:
         self._playback_mark_bytes_interval: int = 4_000  # throttle: ~125ms at 16kHz/16-bit
         self._playback_mark_seq: int = 0  # session-scoped so mark names never collide across turns
 
-        self._playback_ack_transport: PlaybackAckTransport | None = None
-        if isinstance(self.transport, PlaybackAckTransport):
-            self._playback_ack_transport = self.transport
-        self._transport_reports_audio_delivery = bool(
-            getattr(self.transport, "reports_audio_delivery", False)
+        self._playback_ack_transport: PlaybackAcknowledgements | None = playback_acknowledgements(
+            self.transport
         )
+        self._transport_reports_audio_delivery = transport_reports_audio_delivery(self.transport)
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
@@ -1254,9 +1259,10 @@ class Session:
                 ("tts", self.tts),
                 ("transport", self.transport),
             ):
-                if hasattr(provider, "health_check"):
+                health_provider = health_checkable(provider)
+                if health_provider is not None:
                     checker = PeriodicHealthChecker(
-                        provider,
+                        health_provider,
                         provider_name=name,
                         event_bus=self.event_bus,
                     )
@@ -1367,11 +1373,10 @@ class Session:
                 self._heartbeat_task = None
             await self.transport.disconnect()
             await self._turn_manager.shutdown()
-            if hasattr(self.agent, "aclose"):
-                try:
-                    await self.agent.aclose()
-                except Exception:
-                    pass
+            try:
+                await aclose_if_supported(self.agent)
+            except Exception:
+                pass
             self._turn = None
             self.destroy()
             self._mark_closed()
@@ -1447,11 +1452,10 @@ class Session:
                 self._outbound_queue.close()
             await self.transport.disconnect()
             await self._turn_manager.shutdown()
-            if hasattr(self.agent, "aclose"):
-                try:
-                    await self.agent.aclose()
-                except Exception:
-                    pass
+            try:
+                await aclose_if_supported(self.agent)
+            except Exception:
+                pass
             self._turn = None
             self.destroy()
             self._mark_closed()
@@ -1549,7 +1553,7 @@ class Session:
 
         await self._cancel_stt()
         await self._cancel_tts()
-        await self.transport.clear_audio()
+        await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
 
@@ -1569,7 +1573,7 @@ class Session:
         """
         self._tts_playback_suppressed = True
         await self._tts_synth.cancel()
-        await self.transport.clear_audio()
+        await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
@@ -1585,7 +1589,7 @@ class Session:
 
         await self._cancel_stt()
         await self._cancel_tts()
-        await self.transport.clear_audio()
+        await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
 
