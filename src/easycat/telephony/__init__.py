@@ -6,6 +6,16 @@ from easycat.telephony.call_state import (
     OutboundCallState,
     OutboundCallStateMachine,
 )
+from easycat.telephony.compliance import (
+    OPT_OUT_PHRASES,
+    AIDisclosureConfig,
+    CallBlocked,
+    DNCList,
+    check_calling_hours,
+    detect_opt_out,
+    lookup_timezone,
+    match_opt_out_phrase,
+)
 from easycat.telephony.dtmf import (
     DTMFAggregator,
     DTMFAggregatorConfig,
@@ -20,11 +30,28 @@ from easycat.telephony.ivr import (
     classify_ivr_prompt,
     detect_human_after_ivr,
 )
+from easycat.telephony.ml_voicemail import (
+    ConversationCoherenceDetector,
+    EarlyMediaDetector,
+)
+from easycat.telephony.number_health import (
+    CallDispositionTracker,
+    NumberHealthMonitor,
+    NumberHealthWarning,
+    NumberRotationSuggested,
+)
 from easycat.telephony.outbound import (
     OutboundCallManager,
     OutboundCallManagerState,
     emit_call_status,
     parse_call_status_callback,
+)
+from easycat.telephony.retry import (
+    RetryDecision,
+    RetryState,
+    RetryStrategy,
+    RetryStrategyConfig,
+    SMSFallbackSuggested,
 )
 from easycat.telephony.screening import (
     CallScreeningDetector,
@@ -40,6 +67,7 @@ from easycat.telephony.session_actions import (
     TwilioSessionActionExecutor,
 )
 from easycat.telephony.twiml import (
+    compute_twilio_webhook_signature,
     parse_gather_webhook,
     twiml_dial_number,
     twiml_dial_send_digits,
@@ -47,6 +75,7 @@ from easycat.telephony.twiml import (
     twiml_hangup,
     twiml_play_digits,
     twiml_say_and_hangup,
+    validate_twilio_webhook_signature,
 )
 from easycat.telephony.voicemail import (
     TWILIO_AMD_MAP,
@@ -70,6 +99,7 @@ __all__ = [
     "DTMFAggregatorConfig",
     "parse_twilio_dtmf_message",
     # TwiML helpers
+    "compute_twilio_webhook_signature",
     "parse_gather_webhook",
     "twiml_dial_number",
     "twiml_dial_send_digits",
@@ -77,6 +107,7 @@ __all__ = [
     "twiml_hangup",
     "twiml_play_digits",
     "twiml_say_and_hangup",
+    "validate_twilio_webhook_signature",
     # Voicemail
     "BeepDetectorConfig",
     "VoicemailDetector",
@@ -89,6 +120,8 @@ __all__ = [
     "classify_greeting",
     "detect_sit_tones",
     "is_comfort_noise",
+    "ConversationCoherenceDetector",
+    "EarlyMediaDetector",
     # Outbound calls
     "OutboundCallManager",
     "OutboundCallManagerState",
@@ -121,4 +154,23 @@ __all__ = [
     "classify_ivr_prompt",
     "DTMFDelivery",
     "detect_human_after_ivr",
+    # Compliance / DNC
+    "AIDisclosureConfig",
+    "CallBlocked",
+    "DNCList",
+    "OPT_OUT_PHRASES",
+    "check_calling_hours",
+    "detect_opt_out",
+    "lookup_timezone",
+    "match_opt_out_phrase",
+    # Number health + retries
+    "CallDispositionTracker",
+    "NumberHealthMonitor",
+    "NumberHealthWarning",
+    "NumberRotationSuggested",
+    "RetryDecision",
+    "RetryState",
+    "RetryStrategy",
+    "RetryStrategyConfig",
+    "SMSFallbackSuggested",
 ]

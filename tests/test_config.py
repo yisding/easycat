@@ -9,6 +9,7 @@ from easycat.config import TelephonyConfig
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.events import DTMFAggregated
 from easycat.integrations.agents._agent_runner import AgentRunner
+from easycat.session._types import CallIdentity
 from easycat.smart_turn import SmartTurnConfig
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.openai_provider import OpenAISTTConfig  # noqa: F401  (re-exported symbol)
@@ -64,6 +65,116 @@ def test_easycat_config_auto_aligns_default_openai_tts_to_twilio_transport_insta
 
     assert isinstance(config.tts, OpenAITTSConfig)
     assert config.tts.output_format == transport.audio_format
+
+
+@pytest.mark.asyncio
+async def test_create_session_binds_twilio_connection_identity_sink():
+    transport = TwilioConnectionTransport(_DummyWebSocket())
+    session = create_session(
+        EasyCatConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=transport,
+        )
+    )
+
+    await transport._handle_start(
+        {
+            "streamSid": "MZ1",
+            "start": {
+                "streamSid": "MZ1",
+                "callSid": "CA1",
+                "customParameters": {
+                    "From": "+15551234567",
+                    "To": "+15557654321",
+                    "CallerName": "Alice Example",
+                },
+            },
+        }
+    )
+
+    assert session.call_identity is transport.call_identity
+    assert session.call_identity is not None
+    assert session.call_identity.caller_number == "+15551234567"
+    assert session.call_identity.called_number == "+15557654321"
+    assert session.call_identity.display_name == "Alice Example"
+
+
+@pytest.mark.asyncio
+async def test_create_session_caller_id_off_keeps_twilio_identity_private():
+    transport = TwilioConnectionTransport(_DummyWebSocket())
+    session = create_session(
+        EasyCatConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=transport,
+            caller_id_exposure="off",
+        )
+    )
+
+    await transport._handle_start(
+        {
+            "streamSid": "MZ1",
+            "start": {
+                "streamSid": "MZ1",
+                "callSid": "CA1",
+                "customParameters": {
+                    "From": "+15551234567",
+                    "To": "+15557654321",
+                },
+            },
+        }
+    )
+
+    assert transport.call_identity is not None
+    assert session.call_identity is None
+    assert session._call_identity is not None
+    assert session._call_identity.caller_number == "+15551234567"
+
+
+@pytest.mark.asyncio
+async def test_create_session_twilio_identity_sink_merges_with_outbound_identity():
+    transport = TwilioConnectionTransport(_DummyWebSocket())
+    session = create_session(
+        EasyCatConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=transport,
+        )
+    )
+    session.call_identity = CallIdentity(
+        caller_number="+15551112222",
+        called_number="+15559876543",
+        direction="outbound",
+    )
+
+    await transport._handle_start(
+        {
+            "streamSid": "MZ1",
+            "start": {
+                "streamSid": "MZ1",
+                "callSid": "CA1",
+                "customParameters": {
+                    "Direction": "outbound-api",
+                    "From": "+15559876543",
+                    "To": "+15551112222",
+                    "crm_account_id": "ACC-42",
+                },
+            },
+        }
+    )
+
+    assert transport.call_identity is not None
+    assert transport.call_identity.direction == "outbound"
+    assert transport.call_identity.caller_number == "+15551112222"
+    assert transport.call_identity.called_number == "+15559876543"
+    assert session.call_identity is not transport.call_identity
+    assert session.call_identity is not None
+    assert session.call_identity.direction == "outbound"
+    assert session.call_identity.caller_number == "+15551112222"
+    assert session.call_identity.called_number == "+15559876543"
+    assert session.call_identity.call_sid == "CA1"
+    assert session.call_identity.custom_fields == {"crm_account_id": "ACC-42"}
 
 
 @pytest.mark.parametrize(

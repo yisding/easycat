@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from easycat.events import DTMF, EventBus
+from easycat.telephony import (
+    compute_twilio_webhook_signature,
+    validate_twilio_webhook_signature,
+)
 from easycat.telephony.twiml import (
     parse_gather_webhook,
     twiml_dial_send_digits,
@@ -10,6 +14,21 @@ from easycat.telephony.twiml import (
     twiml_hangup,
     twiml_play_digits,
 )
+
+
+def test_twilio_webhook_helpers_are_public_telephony_exports() -> None:
+    signature = compute_twilio_webhook_signature(
+        auth_token="token",
+        url="https://voice.example.com/twiml",
+        params={"CallSid": "CA123", "From": "+15551234567"},
+    )
+    assert validate_twilio_webhook_signature(
+        auth_token="token",
+        url="https://voice.example.com/twiml",
+        params={"CallSid": "CA123", "From": "+15551234567"},
+        signature=signature,
+    )
+
 
 # ── Task 6.2: TwiML Gather webhook parsing ──────────────────────
 

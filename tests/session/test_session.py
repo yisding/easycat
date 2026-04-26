@@ -47,7 +47,6 @@ from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig, TurnState
-from easycat.session.actions import SessionActionResult
 from easycat.timeouts import AgentTimeoutError
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig, TurnManagerState
@@ -801,6 +800,8 @@ async def test_cancel_turn_barge_in_propagates_signal_through_all_stages():
     stage_records = [r for r in signal_records if r.name == "control_signal"]
     cause_records = [r for r in signal_records if r.name == "control_signal_cause"]
     observed = {r.data["observed_stage"] for r in stage_records}
+    # Telephony doesn't have its own stage; the session only fans the
+    # signal through helpers when at least one is registered.
     assert observed == {
         "transport",
         "tts",
@@ -809,7 +810,6 @@ async def test_cancel_turn_barge_in_propagates_signal_through_all_stages():
         "stt",
         "vad",
         "audio",
-        "telephony",
     }
     # Every stage record carries the same signal_id so a replay UI can
     # group the upstream walk into one logical event.
@@ -1029,35 +1029,25 @@ async def test_handle_end_of_speech_no_duplicate_stt_final():
 
 
 @pytest.mark.asyncio
-async def test_run_basic_agent_timeout_clears_turn_id():
+async def test_streaming_agent_timeout_emits_error_and_leaves_state_idle():
+    errors: list[Error] = []
+
     class TimeoutAgent:
         async def run(self, text: str) -> str:
             raise AgentTimeoutError(timeout=0.01)
 
     session = Session(_full_config(agent=TimeoutAgent()))
+    session.event_bus.subscribe(Error, lambda e: errors.append(e))
     session._turn = TurnContext("turn-stale", CancelToken())
 
-    await session._run_basic_agent("call me at 415-555-2671", token=None)
+    await session._run_streaming_agent("call me at 415-555-2671", token=None)
 
-    assert session._turn is None
     assert session.turn_state == TurnState.IDLE
+    assert any(isinstance(e.exception, AgentTimeoutError) for e in errors)
 
 
 @pytest.mark.asyncio
-async def test_run_basic_agent_tts_error_cleans_turn_state_and_turn_id():
-    session = Session(_full_config())
-    session._turn = TurnContext("turn-stale", CancelToken())
-    session._tts_synth.synthesize = AsyncMock(side_effect=RuntimeError("tts boom"))
-
-    with pytest.raises(RuntimeError, match="tts boom"):
-        await session._run_basic_agent("call me at 415-555-2671", token=None)
-
-    # _synthesize_tts's finally block cleans up the turn when playback was started.
-    assert session._turn is None
-
-
-@pytest.mark.asyncio
-async def test_run_basic_agent_strip_markdown_writes_journal_record():
+async def test_streaming_agent_strip_markdown_writes_journal_record():
     class MarkdownAgent:
         async def run(self, text: str) -> str:
             return "Go to **Settings** first."
@@ -1065,15 +1055,15 @@ async def test_run_basic_agent_strip_markdown_writes_journal_record():
     journal = InMemoryRingBuffer()
     session = Session(_full_config(agent=MarkdownAgent(), journal=journal, strip_markdown=True))
     session._turn = TurnContext("turn-markdown", CancelToken())
-    session._synthesize_tts = AsyncMock(return_value=SessionActionResult())
 
-    await session._run_basic_agent("help", token=None)
+    await session._run_streaming_agent("help", token=None)
 
     records = [record for record in journal.read() if record.name == "markdown_stripped"]
-    assert len(records) == 1
-    assert records[0].turn_id == "turn-markdown"
-    assert records[0].data == {
-        "phase": "basic_final",
+    assert records, "expected a markdown_stripped record"
+    final_record = next(r for r in records if r.data.get("phase") == "streaming_final")
+    assert final_record.turn_id == "turn-markdown"
+    assert final_record.data == {
+        "phase": "streaming_final",
         "changed": True,
         "original_text": "Go to **Settings** first.",
         "stripped_text": "Go to Settings first.",
@@ -1603,7 +1593,8 @@ async def test_session_applies_output_processors_before_tts() -> None:
         )
     )
 
-    await session._run_basic_agent("call me at 415-555-2671", token=None)
+    session._turn = TurnContext("turn-output-proc", CancelToken())
+    await session._run_streaming_agent("call me at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].text.startswith("speak: ")
@@ -1640,7 +1631,8 @@ async def test_session_falls_back_to_plain_when_ssml_not_supported() -> None:
         )
     )
 
-    await session._run_basic_agent("call AT&T at 415-555-2671", token=None)
+    session._turn = TurnContext("turn-ssml-fallback", CancelToken())
+    await session._run_streaming_agent("call AT&T at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].format == "plain"
@@ -1678,7 +1670,8 @@ async def test_session_falls_back_to_plain_unescapes_ssml_entities() -> None:
         )
     )
 
-    await session._run_basic_agent("Call AT&T at 415-555-2671", token=None)
+    session._turn = TurnContext("turn-ssml-unescape", CancelToken())
+    await session._run_streaming_agent("Call AT&T at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].format == "plain"
@@ -1718,7 +1711,8 @@ async def test_session_composes_phonetic_and_phone_processors() -> None:
         )
     )
 
-    await session._run_basic_agent("call Siobhan at 415-555-2671", token=None)
+    session._turn = TurnContext("turn-phonetic", CancelToken())
+    await session._run_streaming_agent("call Siobhan at 415-555-2671", token=None)
 
     assert tts.payloads
     # provider doesn't support SSML, so we should receive plain text fallback.

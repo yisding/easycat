@@ -87,7 +87,7 @@ def check_easycat_version() -> CheckResult:
         try:
             importlib.import_module(module)
             integrations.append(name)
-        except ImportError:
+        except (ImportError, OSError):
             pass
     detail = f"easycat {version}"
     if integrations:
@@ -235,6 +235,12 @@ def check_microphone() -> CheckResult:
             name="microphone",
             status="skip",
             detail="sounddevice not installed (only required for local transport)",
+        )
+    except OSError as exc:
+        return CheckResult(
+            name="microphone",
+            status="skip",
+            detail=f"sounddevice unavailable: {type(exc).__name__}",
         )
     try:
         # ``sd.default.device`` is a two-tuple ``(input, output)`` when

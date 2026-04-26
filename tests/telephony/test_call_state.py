@@ -11,9 +11,11 @@ from easycat.events import (
     CallAnswered,
     CallEnded,
     CallFailed,
+    CallInitiated,
     CallRinging,
     CallScreening,
     EventBus,
+    ScreeningTimedOut,
     STTFinal,
     TTSAudio,
     VoicemailDetected,
@@ -25,6 +27,7 @@ from easycat.telephony.call_state import (
     OutboundCallState,
     OutboundCallStateMachine,
 )
+from easycat.telephony.voicemail import STTAMDFusionClassifier
 
 
 class TestOutboundCallStates:
@@ -81,6 +84,117 @@ class TestOutboundCallStateMachine:
             await bus.emit(CallRinging(call_sid="CA1"))
             await bus.emit(CallAnswered(call_sid="CA1"))
             assert sm.state == OutboundCallState.CLASSIFYING
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_initiated_status_does_not_reset_active_call(self) -> None:
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15551234567", from_="+15557654321"))
+            await bus.emit(CallRinging(call_sid="CA1"))
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            assert sm.state == OutboundCallState.CLASSIFYING
+
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15551234567", from_="+15557654321"))
+
+            assert sm.state == OutboundCallState.CLASSIFYING
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_stale_failure_does_not_end_active_call(self) -> None:
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15551234567", from_="+15557654321"))
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            assert sm.state == OutboundCallState.CLASSIFYING
+
+            await bus.emit(CallFailed(call_sid="CA2", reason="busy"))
+
+            assert sm.state == OutboundCallState.CLASSIFYING
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_stale_voicemail_classification_is_ignored(self) -> None:
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15551234567", from_="+15557654321"))
+            await bus.emit(CallAnswered(call_sid="CA1"))
+
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA2"))
+
+            assert sm.state == OutboundCallState.CLASSIFYING
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA1"))
+            assert sm.state == OutboundCallState.VOICEMAIL
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_stale_amd_does_not_fuse_into_active_call(self) -> None:
+        bus = EventBus()
+        classifier = STTAMDFusionClassifier(bus, stt_timeout_s=0.01)
+        sm = OutboundCallStateMachine(
+            bus,
+            classification_timeout_s=60,
+            expect_fused_voicemail=True,
+        )
+        classifier.start()
+        sm.start()
+        try:
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15551234567", from_="+15557654321"))
+            await bus.emit(CallAnswered(call_sid="CA1"))
+
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA2"))
+            await asyncio.sleep(0.05)
+            assert sm.state == OutboundCallState.CLASSIFYING
+
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA1"))
+            await asyncio.sleep(0.05)
+            assert sm.state == OutboundCallState.VOICEMAIL
+        finally:
+            classifier.stop()
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_stale_screening_event_is_ignored(self) -> None:
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15551234567", from_="+15557654321"))
+            await bus.emit(CallAnswered(call_sid="CA1"))
+
+            await bus.emit(CallScreening(call_sid="CA2", platform="ios"))
+
+            assert sm.state == OutboundCallState.CLASSIFYING
+            await bus.emit(CallScreening(call_sid="CA1", platform="ios"))
+            assert sm.state == OutboundCallState.SCREENING
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_stale_screening_timeout_is_ignored(self) -> None:
+        bus = EventBus()
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15551234567", from_="+15557654321"))
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(CallScreening(call_sid="CA1", platform="ios"))
+
+            await bus.emit(ScreeningTimedOut(call_sid="CA2"))
+
+            assert sm.state == OutboundCallState.SCREENING
+            await bus.emit(ScreeningTimedOut(call_sid="CA1"))
+            assert sm.state == OutboundCallState.HUMAN
         finally:
             sm.stop()
 

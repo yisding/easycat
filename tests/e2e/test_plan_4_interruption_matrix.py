@@ -1,10 +1,9 @@
 """Plan 4: Interruption matrix across all four bridges.
 
-Exercises the ``InterruptionController`` seven-step flow and the
-four-step atomic mutation (plan -> commit -> apply -> record) across
-every bridge type. Each sub-test drives a real voice-like barge-in
-through the pipeline and verifies the journal records the canonical
-sequence: ControlSignalRecord -> FrameworkStateCommitted ->
+Exercises the four-step atomic mutation (plan -> commit -> apply ->
+record) across every bridge type. Each sub-test drives a real voice-like
+barge-in through the pipeline and verifies the journal records the
+canonical sequence: ControlSignalRecord -> FrameworkStateCommitted ->
 CancellationBoundaryReached (or InterruptionApplyFailed on rollback).
 
 Bridges covered:
@@ -27,7 +26,7 @@ import os
 
 import pytest
 
-from easycat.integrations.agents import (
+from easycat.integrations.agents.base import (
     AgentRecorder,
     CancellationMode,
     ExecutionCursor,

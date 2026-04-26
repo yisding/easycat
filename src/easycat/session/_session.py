@@ -1,8 +1,9 @@
 """Session: the core runtime for a single voice conversation.
 
 Manages the voice pipeline lifecycle, wires provider stages together,
-and handles turn state and cancellation. Supports both basic and
-streaming agent interfaces with incremental TTS synthesis.
+and handles turn state and cancellation.  Drives the agent bridge
+through a single streaming path and feeds incremental TTS synthesis on
+sentence boundaries for low-latency playback.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from easycat.audio_format import AudioChunk
@@ -74,26 +75,31 @@ from easycat.runtime.journal import (
 )
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._streaming import consume_agent_stream
+from easycat.session._text import (
+    _chunk_has_speech_energy,
+    _text_for_estimation_timeline,
+)
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import (
     _TM_TO_TURN_STATE,
     Agent,
+    CallerIdExposure,
+    CallIdentity,
     SessionConfig,
     SessionHelper,
     TurnState,
 )
-from easycat.session.action_executors import CoreSessionActionExecutor
-from easycat.session.actions import SessionAction, SessionActionExecutor
+from easycat.session.actions import (
+    CoreSessionActionExecutor,
+    SessionAction,
+    SessionActionExecutor,
+)
 from easycat.session.interruption import (
     estimate_and_notify_interruption,
 )
 from easycat.session.interruption import (
     notify_bridge_interruption as _notify_bridge_interruption,
 )
-from easycat.session.text_utils import (
-    _chunk_has_speech_energy,
-)
-from easycat.session.tts_helpers import _text_for_estimation_timeline
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
 from easycat.stages.base import (
@@ -102,8 +108,8 @@ from easycat.stages.base import (
 from easycat.stages.base import (
     InterruptSignal as _InterruptSignal,
 )
+from easycat.stages.base import journal_append_control_signal as _journal_control_signal
 from easycat.stages.stt import STTStage
-from easycat.stages.telephony import TelephonyStage
 from easycat.stages.transport import TransportStage
 from easycat.stages.tts import TTSStage
 from easycat.stages.turn import TurnStage
@@ -127,6 +133,8 @@ from easycat.tts_synthesizer import TTSSynthesizer
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
+
+_HelperT = TypeVar("_HelperT")
 
 
 @dataclass(slots=True)
@@ -192,6 +200,14 @@ class Session:
         # ``Session(SessionConfig(agent=..., mcp_servers=...))`` callers
         # (not going through ``create_session``) also get tool access.
         self._inject_agent_runtime_config(self._agent)
+
+        # Telephony caller / callee identity.  Populated by the
+        # transport (inbound: Twilio customParameters) or by the
+        # outbound call manager (outbound: the dialed number).
+        # ``caller_id_exposure`` governs whether the agent's LLM sees
+        # the number or only tool code does.
+        self._call_identity: CallIdentity | None = cfg.call_identity
+        self._caller_id_exposure: CallerIdExposure = cfg.caller_id_exposure
 
         # Skip noop validation in text_session mode — audio providers
         # are intentionally noop.
@@ -259,12 +275,37 @@ class Session:
         self.event_bus.subscribe(VADStartSpeaking, self._cancel_scheduled_stt_segment_commit)
         self.event_bus.subscribe(PlaybackMarkAck, self._on_playback_mark_ack)
         self.event_bus.subscribe(TransportAudioDelivered, self._on_transport_audio_delivered)
+
+        # Opt-out auto-wiring.  Runs on every STT final; on a match it
+        # emits ``OptOutDetected``, adds the caller to an attached DNC
+        # list, and queues ``EndCallAction(reason="opt_out")`` so the
+        # call hangs up after the current agent utterance.  Disable
+        # via ``SessionConfig.opt_out_detection=False``.
+        self._opt_out_detection = cfg.opt_out_detection
+        self._opt_out_phrases: list[str] | None = (
+            list(cfg.opt_out_phrases) if cfg.opt_out_phrases is not None else None
+        )
+        self._dnc_list: Any | None = cfg.dnc_list
+        if self._opt_out_detection:
+            self.event_bus.subscribe(STTFinal, self._on_stt_final_opt_out)
+
+        # Optional "bot speaks first" greeting synthesized on the first
+        # CallAnswered event — works for both inbound (stream start)
+        # and outbound (callee picks up).  Only the first occurrence
+        # is honored so a warm-transfer style flow with a second
+        # CallAnswered doesn't re-greet.
+        self._greeting: str | None = cfg.greeting
+        self._greeting_spoken: bool = False
+        self._greeting_task: asyncio.Task[Any] | None = None
+        if self._greeting:
+            from easycat.events import CallAnswered as _CallAnsweredEv
+
+            self.event_bus.subscribe(_CallAnsweredEv, self._on_call_answered_greet)
         tm_config = getattr(self._turn_manager, "_config", None)
         self._stt_segment_silence_ms = max(0, getattr(tm_config, "stt_segment_silence_ms", 0))
 
         # Reliability/observability config
         self._timeout_config = cfg.timeout_config or self._default_timeout_config()
-        self._metrics = None  # Legacy field, retained for attribute access only
         self._journal = cfg.journal
         self._journal_view: JournalView | None = (
             JournalView(self._journal) if self._journal is not None else None
@@ -387,10 +428,6 @@ class Session:
             self._turn_manager._config.endpoint_detector  # type: ignore[attr-defined]
             if self._turn_manager._config is not None  # type: ignore[attr-defined]
             else None,
-            journal=self._journal,
-        )
-        self._telephony_stage = TelephonyStage(
-            self._telephony_helpers[0] if self._telephony_helpers else None,
             journal=self._journal,
         )
         # Hand the TTS stage to the synthesizer so the existing iteration
@@ -663,7 +700,6 @@ class Session:
             self._stt_stage,
             self._vad_stage,
             self._audio_stage,
-            self._telephony_stage,
         )
         for stage in ordered:
             if stage is None:
@@ -672,6 +708,11 @@ class Session:
                 await stage.handle_upstream(signal, self._run_ctx)
             except Exception:  # noqa: BLE001 - never break cancel path
                 logger.exception("Stage %s.handle_upstream failed", stage.name)
+        # Telephony helpers journal the signal without a dedicated stage
+        # wrapper: one bare aggregate control-signal record keeps the
+        # observability identical to the old stage path.
+        if self._telephony_helpers:
+            _journal_control_signal(self._run_ctx, stage="telephony", signal=signal)
         # Annotate the trailing signal record with the originating cause
         # so the replay UI can display "interrupt — barge_in" instead of
         # bare signal IDs.
@@ -1000,6 +1041,18 @@ class Session:
         for event_type, handler in registrations:
             self.event_bus.unsubscribe(event_type, handler)
 
+    def get_helper(self, helper_type: type[_HelperT]) -> _HelperT | None:
+        """Return the first attached session helper matching *helper_type*.
+
+        Telephony features are lifecycle-managed helpers under the hood.  This
+        accessor keeps advanced applications off ``_telephony_helpers`` while
+        preserving the lightweight helper model.
+        """
+        for helper in self._telephony_helpers:
+            if isinstance(helper, helper_type):
+                return helper
+        return None
+
     def export_debug_bundle(
         self,
         path: str,
@@ -1068,17 +1121,141 @@ class Session:
         is created or swapped.  Remote model / API key follow the same
         pattern for :class:`RemoteResponsesAPIBridge`.
         """
-        from easycat.integrations.agents._agent_runner import AgentRunner
-        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+        from easycat.config import _inject_agent_runtime
 
-        inner = agent._agent if isinstance(agent, AgentRunner) else agent
-        if hasattr(inner, "_mcp_servers"):
-            inner._mcp_servers = list(self._mcp_servers)
-        if isinstance(inner, RemoteResponsesAPIBridge):
-            if self._agent_model:
-                inner._model = self._agent_model
-            if self._remote_agent_api_key:
-                inner._api_key = self._remote_agent_api_key
+        _inject_agent_runtime(
+            agent,
+            mcp_servers=self._mcp_servers,
+            agent_model=self._agent_model,
+            remote_agent_api_key=self._remote_agent_api_key,
+        )
+
+    @property
+    def transport_kind(self) -> str:
+        """Coarse transport class for tool-side branching.
+
+        Returns one of ``"telephony"``, ``"webrtc"``, ``"websocket"``,
+        ``"local"``, ``"noop"``, or ``"custom"``.  Tools that need to
+        behave differently on a phone call vs a browser session
+        (don't reference the screen, avoid long URLs, skip emoji, …)
+        read this rather than poking at transport internals.
+        """
+        transport = self.transport
+        explicit = getattr(transport, "transport_kind", None)
+        if isinstance(explicit, str) and explicit:
+            return explicit
+
+        # Fallback for third-party transports that have not adopted the
+        # explicit property yet.
+        module = type(transport).__module__
+        name = type(transport).__name__.lower()
+        if "webrtc" in module or "webrtc" in name:
+            return "webrtc"
+        if "websocket" in module or "websocket" in name:
+            return "websocket"
+        if "local" in module or name == "localtransport":
+            return "local"
+        if "noop" in name or "stubs" in module:
+            return "noop"
+        return "custom"
+
+    @property
+    def outbound_call_manager(self) -> Any | None:
+        """Outbound call manager attached to this session, when configured."""
+        from easycat.telephony.outbound import OutboundCallManager
+
+        return self.get_helper(OutboundCallManager)
+
+    @property
+    def outbound_call_state_machine(self) -> Any | None:
+        """Outbound call state machine attached to this session, when configured."""
+        from easycat.telephony.call_state import OutboundCallStateMachine
+
+        return self.get_helper(OutboundCallStateMachine)
+
+    @property
+    def number_health_monitor(self) -> Any | None:
+        """Per-number health monitor attached to this session, when configured."""
+        from easycat.telephony.number_health import NumberHealthMonitor
+
+        return self.get_helper(NumberHealthMonitor)
+
+    @property
+    def call_disposition_tracker(self) -> Any | None:
+        """Call disposition tracker attached to this session, when configured."""
+        from easycat.telephony.number_health import CallDispositionTracker
+
+        return self.get_helper(CallDispositionTracker)
+
+    @property
+    def dnc_list(self) -> Any | None:
+        """Do-Not-Call list consulted by opt-out auto-detection.
+
+        Apps that want opt-out flows to persist across sessions
+        assign the same ``DNCList`` instance to every session
+        (or wire a shared store behind a DNC-list-compatible object).
+        """
+        return self._dnc_list
+
+    @dnc_list.setter
+    def dnc_list(self, value: Any | None) -> None:
+        self._dnc_list = value
+
+    @property
+    def call_identity(self) -> CallIdentity | None:
+        """Caller / callee identity for this session.
+
+        Populated by telephony transports on connect (Twilio reads
+        ``<Stream>`` customParameters) or by
+        :meth:`OutboundCallManager.place_call` for outbound calls.
+        Tool code (including agent function tools) reads this directly
+        unless :attr:`caller_id_exposure` is ``"off"``.  Internal
+        telephony policy hooks retain the private value so opt-out
+        detection can still update DNC state.
+        """
+        if self._caller_id_exposure == "off":
+            return None
+        return self._call_identity
+
+    @call_identity.setter
+    def call_identity(self, value: CallIdentity | None) -> None:
+        self._call_identity = value
+
+    @property
+    def caller_id_exposure(self) -> CallerIdExposure:
+        """Exposure policy for :attr:`call_identity`."""
+        return self._caller_id_exposure
+
+    @caller_id_exposure.setter
+    def caller_id_exposure(self, value: CallerIdExposure) -> None:
+        self._caller_id_exposure = value
+
+    def _caller_id_system_message(self) -> str | None:
+        """Render the caller-ID system message for the agent, or None.
+
+        Returns ``None`` when the exposure policy hides the caller ID
+        from the LLM (``"tools_only"`` / ``"off"``) or when we have no
+        identity to share yet.
+        """
+        if self._caller_id_exposure != "system_message":
+            return None
+        identity = self._call_identity
+        if identity is None:
+            return None
+        parts: list[str] = []
+        if identity.caller_number:
+            prefix = "The caller's phone number is"
+            if identity.direction == "outbound":
+                prefix = "This outbound call is to"
+            parts.append(f"{prefix} {identity.caller_number}.")
+        if identity.called_number:
+            if identity.direction == "outbound":
+                parts.append(f"It was placed from {identity.called_number}.")
+            else:
+                parts.append(f"They dialed {identity.called_number}.")
+        if identity.display_name:
+            parts.append(f"Caller ID name: {identity.display_name}.")
+        return " ".join(parts) if parts else None
 
     @property
     def turn_state(self) -> TurnState:
@@ -1308,6 +1485,7 @@ class Session:
                         " BotStoppedSpeaking is emitted if needed."
                     )
 
+            await self._cancel_greeting_task()
             await self._cancel_stt()
             await self._cancel_tts()
             for checker in self._health_checkers:
@@ -1386,6 +1564,9 @@ class Session:
             if self._current_tts_task and not self._current_tts_task.done():
                 self._current_tts_task.cancel()
                 tasks.append(self._current_tts_task)
+            if self._greeting_task and not self._greeting_task.done():
+                self._greeting_task.cancel()
+                tasks.append(self._greeting_task)
             if self._outbound_task and not self._outbound_task.done():
                 self._outbound_task.cancel()
                 tasks.append(self._outbound_task)
@@ -1400,6 +1581,7 @@ class Session:
                     pass
             self._stt_pause_commit_task = None
             self._stt_segment_commit_task = None
+            self._greeting_task = None
             self._heartbeat_task = None
 
             for checker in self._health_checkers:
@@ -1636,6 +1818,92 @@ class Session:
             return False
         await self.cancel_turn(barge_in=True)
         return True
+
+    def _on_call_answered_greet(self, event: Any) -> None:
+        """Schedule the configured greeting once per call.
+
+        Wires :attr:`_greeting` into the first
+        :class:`~easycat.events.CallAnswered`.  The actual TTS work is
+        detached from event dispatch so outbound status callbacks can
+        complete lifecycle/AMD processing without waiting on synthesis.
+        Uses the
+        ``synthesize_bypass`` path so the greeting plays even when a
+        classification gate is still buffering (outbound answering
+        machine window).  Subsequent ``CallAnswered`` events — e.g. a
+        warm-transfer re-answer — are ignored.
+        """
+        if self._greeting_spoken or not self._greeting:
+            return
+        if self._greeting_task is not None and not self._greeting_task.done():
+            return
+        task = self._journaled_task(
+            self._deliver_call_answered_greeting(self._greeting),
+            name="call_answered_greeting",
+        )
+        self._greeting_task = task
+        task.add_done_callback(self._clear_greeting_task)
+
+    def _clear_greeting_task(self, task: asyncio.Task[Any]) -> None:
+        if self._greeting_task is task:
+            self._greeting_task = None
+
+    async def _deliver_call_answered_greeting(self, greeting: str) -> None:
+        await asyncio.sleep(0)
+        try:
+            await self.synthesize_bypass(greeting)
+            self._greeting_spoken = True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("Failed to synthesize greeting", exc_info=True)
+
+    async def _cancel_greeting_task(self) -> None:
+        task = self._greeting_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._greeting_task = None
+
+    async def _on_stt_final_opt_out(self, event: STTFinal) -> None:
+        """Detect TCPA opt-out phrases in every STT final and react.
+
+        Skipped when the caller disabled ``opt_out_detection`` or when
+        the text is empty.  On match: emits
+        :class:`~easycat.events.OptOutDetected`, adds the caller to
+        ``session.dnc_list`` if set, and enqueues a
+        :class:`EndCallAction` so the call terminates after the
+        current agent utterance.
+        """
+        from easycat.events import OptOutDetected
+        from easycat.telephony.compliance import match_opt_out_phrase
+
+        if not event.text:
+            return
+        phrase = match_opt_out_phrase(event.text, self._opt_out_phrases)
+        if phrase is None:
+            return
+
+        number = self._call_identity.caller_number if self._call_identity else ""
+        if self._dnc_list is not None and number:
+            try:
+                self._dnc_list.add(number)
+            except Exception:
+                logger.debug("dnc_list.add raised for opt-out", exc_info=True)
+
+        await self._emit(OptOutDetected(number=number, phrase=phrase, text=event.text))
+
+        # Queue a hangup after the current agent utterance so the
+        # session drains cleanly (saying "understood, goodbye" first
+        # is the agent's job; we just schedule the end).  When no
+        # action queue is present we fall back to firing
+        # ``Session.stop`` — opt-out must terminate the call.
+        if self._session_actions is not None:
+            self._session_actions.end_call(reason="opt_out")
+        else:
+            self._journaled_task(self.stop(), name="opt_out_stop")
 
     async def _on_turn_started(self, event: TurnStarted) -> None:
         """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
@@ -2057,66 +2325,6 @@ class Session:
         await self._emit(AgentRequestStarted())
         await self._run_streaming_agent(transcript, token)
 
-    # ── Agent invocation helper ────────────────────────────────
-
-    async def _invoke_agent(self, transcript: str) -> str:
-        """Invoke the basic agent with optional timeout. Returns the response."""
-        turn = self._turn or self._no_turn
-        if self._timeout_config and self._timeout_config.agent_timeout:
-            return await with_agent_timeout(
-                self._agent_stage.execute(transcript, self._run_ctx, turn),
-                timeout=self._timeout_config.agent_timeout,
-                event_bus=self.event_bus,
-            )
-        return await self._agent_stage.execute(transcript, self._run_ctx, turn)
-
-    # ── Basic agent path ───────────────────────────────────────
-
-    async def _run_basic_agent(self, transcript: str, token: CancelToken | None) -> None:
-        """Non-streaming agent path: invoke run(), emit events, synthesize TTS."""
-        turn = self._turn
-        try:
-            agent_response = await self._invoke_agent(transcript)
-        except asyncio.CancelledError:
-            raise
-        except AgentTimeoutError:
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-        except Exception as exc:
-            logger.exception("Agent error")
-            await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-
-        if token and token.is_cancelled:
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-
-        if self._strip_markdown:
-            original_response = agent_response
-            stripped = strip_markdown(agent_response, normalize_code_spans=True)
-            self._record_markdown_strip(
-                phase="basic_final",
-                original_text=original_response,
-                stripped_text=stripped,
-                turn_id=turn.id if turn is not None else None,
-            )
-            if stripped != original_response:
-                agent_response = stripped
-                self.agent.replace_last_assistant_text(stripped)
-
-        await self._emit(AgentDelta(text=agent_response))
-        await self._emit(AgentFinal(text=agent_response, structured_output=None))
-
-        action_outcome = await self._synthesize_tts(
-            self._prepare_tts_payload(agent_response, is_streaming=False, is_final=True), token
-        )
-        if action_outcome.stop_session:
-            await self.stop()
-
     # ── Streaming agent path ───────────────────────────────────
 
     async def _run_streaming_agent(self, transcript: str, token: CancelToken | None) -> None:
@@ -2215,12 +2423,17 @@ class Session:
         # ── Run agent stream + TTS concurrently ──
 
         agent_result = None
+        system_prefix = self._caller_id_system_message()
 
         async def _run_agent_consumer() -> None:
             nonlocal agent_result
             agent_result = await consume_agent_stream(
                 stream_factory=lambda: self._agent_stage.execute_streaming(
-                    transcript, self._run_ctx, turn, cancel_token=token
+                    transcript,
+                    self._run_ctx,
+                    turn,
+                    cancel_token=token,
+                    system_prefix=system_prefix,
                 ),
                 cancel_token=token,
                 tts_queue=tts_queue,
@@ -2619,8 +2832,13 @@ class Session:
             # stamp records with the right turn_id.
             text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
             accumulated = ""
+            system_prefix = self._caller_id_system_message()
             async for event in self._agent_stage.execute_streaming(
-                text, self._run_ctx, text_turn, cancel_token=cancel_token
+                text,
+                self._run_ctx,
+                text_turn,
+                cancel_token=cancel_token,
+                system_prefix=system_prefix,
             ):
                 kind = getattr(event, "kind", None)
                 if kind is None:

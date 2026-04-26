@@ -122,8 +122,14 @@ class AgentStage:
         turn: TurnContext,
         *,
         cancel_token: Any | None = None,
+        system_prefix: str | None = None,
     ) -> AsyncIterator[AgentBridgeEvent]:
-        """Drive ``bridge.invoke()`` while journaling a stage_start/complete."""
+        """Drive ``bridge.invoke()`` while journaling a stage_start/complete.
+
+        ``system_prefix`` is an optional system-role message prepended
+        to ``turn_input.context``; Session uses it to surface caller-ID
+        metadata when ``caller_id_exposure == "system_message"``.
+        """
         bridge = self._provider
         state_before = self.snapshot_state()
         journal_append_event(
@@ -137,9 +143,25 @@ class AgentStage:
 
         recorder = self._make_recorder(turn.id)
         input_text = input if isinstance(input, str) else str(input)
+        base_context = list(self._history) if self._tracks_history else []
+        if (
+            not self._tracks_history
+            and system_prefix
+            and isinstance(bridge, AgentRunner)
+            and bridge.is_bridge
+        ):
+            # AgentRunner owns history for wrapped bridges.  A transient
+            # system prefix must augment that history, not replace it.
+            base_context = list(bridge.history)
+        if system_prefix:
+            # System messages prepended by Session are transient — they
+            # describe the current turn's environment (caller ID, etc.)
+            # and must not be folded into the stage's shadow history,
+            # otherwise they'd repeat on every subsequent turn.
+            base_context = [{"role": "system", "content": system_prefix}, *base_context]
         turn_input = AgentTurnInput.from_text(
             input_text,
-            context=list(self._history) if self._tracks_history else None,
+            context=base_context if (self._tracks_history or system_prefix) else None,
             turn_id=turn.id,
         )
 

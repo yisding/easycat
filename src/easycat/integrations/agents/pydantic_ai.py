@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._context import normalize_context_messages
 from easycat.integrations.agents._helpers import split_replacement_by_original_parts
 from easycat.integrations.agents._pydantic_ai_events import translate_event
 from easycat.integrations.agents.base import (
@@ -340,7 +341,7 @@ class PydanticAIBridge:
             if self._mcp_servers is not None and hasattr(self._agent, "mcp_servers"):
                 self._agent.mcp_servers = list(self._mcp_servers)
             if hasattr(self._agent, "iter"):
-                async for ev in self._stream_via_iter(turn_input.text, recorder, cancel_token):
+                async for ev in self._stream_via_iter(turn_input, recorder, cancel_token):
                     if ev.kind == "text_delta":
                         accumulated += ev.text
                     elif ev.kind == "done":
@@ -348,7 +349,7 @@ class PydanticAIBridge:
                     yield ev
                 raw_output = self._last_output
             else:
-                async for ev in self._stream_via_run_stream(turn_input.text, cancel_token):
+                async for ev in self._stream_via_run_stream(turn_input, cancel_token):
                     if ev.kind == "text_delta":
                         accumulated += ev.text
                     yield ev
@@ -371,14 +372,14 @@ class PydanticAIBridge:
 
     async def _stream_via_iter(
         self,
-        text: str,
+        turn_input: AgentTurnInput,
         recorder: AgentRecorder,
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Stream using ``agent.iter()`` with full event capture."""
         async with self._agent.iter(
-            text,
-            message_history=self._message_history or None,
+            turn_input.text,
+            message_history=self._message_history_for_turn(turn_input.context),
             deps=self._deps,
             model_settings=self._model_settings,
         ) as agent_run:
@@ -417,13 +418,13 @@ class PydanticAIBridge:
 
     async def _stream_via_run_stream(
         self,
-        text: str,
+        turn_input: AgentTurnInput,
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Fallback: stream text-only via ``agent.run_stream()``."""
         async with self._agent.run_stream(
-            text,
-            message_history=self._message_history or None,
+            turn_input.text,
+            message_history=self._message_history_for_turn(turn_input.context),
             deps=self._deps,
             model_settings=self._model_settings,
         ) as result:
@@ -438,6 +439,18 @@ class PydanticAIBridge:
 
             self._message_history = result.new_messages()
             self._last_output = getattr(result, "output", None)
+
+    def _message_history_for_turn(self, context: list[dict[str, str]]) -> list[Any] | None:
+        history = list(self._message_history)
+        context_messages = normalize_context_messages(context, own_history=bool(history))
+        if not context_messages:
+            return history or None
+        try:
+            converted = [_pydantic_message_from_context(item) for item in context_messages]
+        except ImportError:
+            logger.debug("PydanticAI message types unavailable; dropping turn context")
+            return history or None
+        return [*converted, *history]
 
     # ── Graph mode ───────────────────────────────────────────────
 
@@ -624,6 +637,21 @@ class _GraphEventHandler:
 
 def _agent_name(agent: Any) -> str:
     return getattr(agent, "name", None) or type(agent).__name__
+
+
+def _pydantic_message_from_context(item: dict[str, str]) -> Any:
+    from pydantic_ai.messages import ModelRequest, ModelResponse, SystemPromptPart, TextPart
+
+    role = item["role"]
+    content = item["content"]
+    if role == "assistant":
+        return ModelResponse(parts=[TextPart(content=content)])
+    if role in {"system", "developer"}:
+        return ModelRequest(parts=[SystemPromptPart(content=content)])
+
+    from pydantic_ai.messages import UserPromptPart
+
+    return ModelRequest(parts=[UserPromptPart(content=content)])
 
 
 def _safe_state_dict(state: Any) -> dict[str, Any]:

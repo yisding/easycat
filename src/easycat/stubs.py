@@ -86,6 +86,8 @@ class NoopVAD:
 class NoopTransport:
     """Transport that produces no audio — used as default."""
 
+    transport_kind = "noop"
+
     async def connect(self) -> None:
         pass
 

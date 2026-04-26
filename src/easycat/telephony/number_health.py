@@ -7,8 +7,8 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 
-from easycat.events import CallEnded, CallFailed, CallInitiated, EventBus
-from easycat.telephony.call_state import CallStateChanged, OutboundCallState
+from easycat.events import CallEnded, CallFailed, CallInitiated, CallStateChanged, EventBus
+from easycat.telephony.call_state import OutboundCallState
 from easycat.telephony.outbound import BLOCK_REASONS
 
 logger = logging.getLogger(__name__)
@@ -83,6 +83,7 @@ class NumberHealthMonitor:
         self._concurrent: dict[str, int] = defaultdict(int)
         self._last_call_time: dict[str, float] = {}
         self._call_sid_to_number: dict[str, str] = {}
+        self._terminal_call_sids: dict[str, None] = {}
         self._max_sid_tracking = 10_000
         self._started = False
 
@@ -219,7 +220,21 @@ class NumberHealthMonitor:
             )
         self._concurrent[number] = max(0, prev - 1)
 
+    def _mark_terminal(self, call_sid: str) -> bool:
+        """Return False when this call SID was already recorded as terminal."""
+        if not call_sid:
+            return True
+        if call_sid in self._terminal_call_sids:
+            return False
+        self._terminal_call_sids[call_sid] = None
+        if len(self._terminal_call_sids) > self._max_sid_tracking:
+            oldest = next(iter(self._terminal_call_sids))
+            self._terminal_call_sids.pop(oldest, None)
+        return True
+
     async def _on_call_failed(self, event: CallFailed) -> None:
+        if not self._mark_terminal(event.call_sid):
+            return
         number = self._resolve_number(event.call_sid, event.number)
         self._decrement_concurrent(number)
         is_blocked = event.reason in BLOCK_REASONS
@@ -227,6 +242,8 @@ class NumberHealthMonitor:
         self._call_sid_to_number.pop(event.call_sid, None)
 
     async def _on_call_ended(self, event: CallEnded) -> None:
+        if not self._mark_terminal(event.call_sid):
+            return
         number = self._resolve_number(event.call_sid, event.number)
         self._decrement_concurrent(number)
         duration = event.duration_s or 0.0

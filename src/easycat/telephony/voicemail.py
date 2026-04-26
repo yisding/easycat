@@ -80,7 +80,8 @@ def parse_twilio_amd_webhook(params: dict[str, Any]) -> VoicemailDetected | None
         return None
 
     result = TWILIO_AMD_MAP.get(answered_by.lower(), "unknown")
-    return VoicemailDetected(result=result)
+    call_sid = params.get("CallSid", "")
+    return VoicemailDetected(result=result, call_sid=call_sid if isinstance(call_sid, str) else "")
 
 
 async def emit_twilio_amd(
@@ -675,6 +676,7 @@ class STTAMDFusionClassifier:
 
         self._amd_result: str | None = None
         self._stt_result: str | None = None
+        self._call_sid: str = ""
         self._emitted = False
         self._started = False
         self._call_answered = False
@@ -713,6 +715,7 @@ class STTAMDFusionClassifier:
         self._emitted = False
         self._call_answered = False
         self._screening_active = False
+        self._call_sid = ""
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
         """Reset classification state for a new outbound call."""
@@ -722,6 +725,7 @@ class STTAMDFusionClassifier:
         self._emitted = False
         self._call_answered = False
         self._screening_active = False
+        self._call_sid = event.call_sid
 
     def _cancel_timeout(self) -> None:
         if self._timeout_task and not self._timeout_task.done():
@@ -729,6 +733,8 @@ class STTAMDFusionClassifier:
         self._timeout_task = None
 
     async def _on_call_answered(self, event: CallAnswered) -> None:
+        if event.call_sid:
+            self._call_sid = event.call_sid
         self._call_answered = True
 
     async def _on_screening(self, event: CallScreening) -> None:
@@ -742,6 +748,15 @@ class STTAMDFusionClassifier:
             return
         if event.source == "fusion":
             return  # Ignore our own emissions.
+        if event.call_sid and self._call_sid and event.call_sid != self._call_sid:
+            logger.debug(
+                "Ignoring voicemail classification for %s; active call is %s",
+                event.call_sid,
+                self._call_sid,
+            )
+            return
+        if event.call_sid:
+            self._call_sid = event.call_sid
         self._amd_result = event.result
         await self._try_fuse()
 
@@ -790,7 +805,9 @@ class STTAMDFusionClassifier:
             return
         self._emitted = True
         self._cancel_timeout()
-        await self._event_bus.emit(VoicemailDetected(result=result, source="fusion"))
+        await self._event_bus.emit(
+            VoicemailDetected(result=result, source="fusion", call_sid=self._call_sid)
+        )
 
     def _start_timeout(self) -> None:
         try:

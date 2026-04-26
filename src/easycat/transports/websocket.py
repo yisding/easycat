@@ -52,6 +52,7 @@ class WebSocketTransport(_ServerTransportBase):
       - Text frame: JSON control message (e.g., ``{"type": "ready"}``).
     """
 
+    transport_kind = "websocket"
     _transport_name = "WebSocket"
 
     def __init__(self, config: WebSocketTransportConfig | None = None) -> None:
@@ -183,6 +184,8 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
     Useful for servers that already own the WebSocket accept loop and want
     one EasyCat Session per client connection.
     """
+
+    transport_kind = "websocket"
 
     def __init__(
         self,

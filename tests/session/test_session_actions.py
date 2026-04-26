@@ -232,13 +232,13 @@ async def test_drain_session_actions_emits_failure_when_unsupported() -> None:
 
 
 @pytest.mark.asyncio
-async def test_basic_agent_path_stops_session_after_end_call_action() -> None:
+async def test_streaming_agent_path_stops_session_after_end_call_action() -> None:
     actions = SessionActions()
     actions.end_call(reason="done")
     session = Session(_config(session_actions=actions))
     session.stop = AsyncMock()
     session._turn = TurnContext(turn_id="turn-1", cancel_token=CancelToken())
 
-    await session._run_basic_agent("hello", CancelToken())
+    await session._run_streaming_agent("hello", CancelToken())
 
     session.stop.assert_awaited_once()

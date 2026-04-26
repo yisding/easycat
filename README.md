@@ -12,20 +12,22 @@ OpenAI Agents SDK, PydanticAI agents, or PydanticAI workflows.
 - VAD providers: Silero (open-source), TEN VAD (open-source), and Krisp (commercial)
 - Noise reduction: RNNoise (open-source), Krisp (commercial), passthrough fallback
 - Transports: Local (sounddevice), WebSocket server, WebRTC (aiortc), Twilio Media Streams server
-- Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers
+- Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers, outbound calling (Twilio), screening + IVR navigation, per-number health / retry / compliance gates, caller-ID propagation to the agent or tools
 - Reliability/observability: reconnecting WebSocket, timeouts, bounded queues, metrics/tracing
 - Agent adapters: use OpenAI Agents SDK or PydanticAI directly and wrap with EasyCat
 - Workflow adapter: use a stateful PydanticAI workflow as the session boundary
 
 ## Bring your own agent
 EasyCat does not replace your agent framework. Build your agent or workflow with
-your SDK of choice, then wrap it with an EasyCat adapter when creating a session.
+your SDK of choice and hand it to EasyCat — `create_session` auto-detects
+OpenAI Agents SDK and PydanticAI objects via `auto_adapt_agent`, so you don't
+have to wrap them yourself.
 
 ### Quickstart (EasyCatConfig)
 ```python
-from easycat import EasyCatConfig, create_session
-from easycat.agents import OpenAIAgentsAdapter
 from agents import Agent
+
+from easycat import EasyCatConfig, create_session
 
 agent = Agent(
     name="Support",
@@ -34,7 +36,7 @@ agent = Agent(
 
 config = EasyCatConfig(
     openai_api_key="your-api-key",
-    agent=OpenAIAgentsAdapter(agent),
+    agent=agent,
 )
 session = create_session(config)
 ```
@@ -44,6 +46,194 @@ session = create_session(config)
 > the API key, you must supply `stt` and `tts` configs explicitly. For most
 > users, `EasyCatConfig` + `create_session` is the fastest way to get a working
 > pipeline.
+>
+> The underlying bridge classes live in `easycat.integrations.agents`
+> (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`,
+> `RemoteResponsesAPIBridge`) for callers who want to construct them by hand.
+
+## Telephony (inbound + outbound)
+
+### Inbound calls (Twilio Media Streams)
+Point Twilio's inbound webhook at a handler that returns
+`<Connect><Stream>` TwiML and passes actual webhook form values through
+as `<Parameter>` children:
+
+```python
+import os
+from urllib.parse import parse_qsl
+
+from fastapi import Request, Response
+from easycat.telephony import validate_twilio_webhook_signature
+from easycat.transports.twilio_media import twiml_connect_stream
+
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+
+@app.post("/twiml")
+async def twiml(request: Request) -> Response:
+    form_items = parse_qsl((await request.body()).decode(), keep_blank_values=True)
+    if TWILIO_AUTH_TOKEN and not validate_twilio_webhook_signature(
+        auth_token=TWILIO_AUTH_TOKEN,
+        url=str(request.url),  # must be Twilio's exact public URL
+        params=form_items,
+        signature=request.headers.get("x-twilio-signature"),
+    ):
+        return Response(status_code=403)
+
+    form = dict(form_items)
+    xml = twiml_connect_stream(
+        "wss://your-app.example.com/twilio",
+        parameters={
+            "Direction": form.get("Direction") or "inbound",
+            "From": form.get("From", ""),
+            "To": form.get("To", ""),
+            "CallerName": form.get("CallerName", ""),
+        },
+    )
+    return Response(content=xml, media_type="application/xml")
+```
+
+`TwilioTransport` parses `start.customParameters` and writes a
+`CallIdentity` (caller / called numbers, direction, optional display
+name, and any extra fields you pass) onto
+`session.call_identity`. Tool code inside your agent reads
+`session.call_identity.caller_number` directly. Do not pass
+`"{{From}}"`-style placeholders to `twiml_connect_stream`; Twilio
+forwards those verbatim in generated TwiML. When webhook validation is
+enabled behind a proxy, validate against the same public URL Twilio
+called, not an internal service URL.
+
+### Outbound calls (Twilio REST)
+Enable the outbound pipeline via `EasyCatConfig.telephony`:
+
+```python
+from easycat import (
+    EasyCatConfig,
+    OutboundCallConfig,
+    TelephonyConfig,
+    VoicemailDetectionConfig,
+    create_session,
+)
+
+config = EasyCatConfig(
+    openai_api_key="…",
+    agent=your_agent,
+    greeting="Hi, this is Lucy from Example Health.",
+    telephony=TelephonyConfig(
+        enable_outbound_call_manager=True,
+        outbound=OutboundCallConfig(
+            from_number="+15559876543",
+            twilio_account_sid="AC…",
+            twilio_auth_token="…",
+            twiml_url="https://your-app.example.com/outbound.twiml",
+            status_callback_url="https://your-app.example.com/status",
+            voicemail_detection=VoicemailDetectionConfig(
+                mode="detect_end_of_greeting",  # or "detect"
+                detection_timeout_s=30,
+            ),
+        ),
+    ),
+)
+session = create_session(config)
+```
+
+With the outbound manager enabled you also get:
+
+- `NumberHealthMonitor` — per-number answer rate, block count, pacing
+- `CallDispositionTracker` — human / voicemail / IVR disposition stats
+- `RetryStrategy` attached to the manager — `manager.retry_strategy.record_attempt(number, reason)` decides RETRY / SMS_FALLBACK / NO_RETRY
+- `DNCList`, `check_calling_hours`, and `detect_opt_out` helpers you can hook into `manager.dnc_list` / `manager.compliance_check` for TCPA-friendly calling
+
+Start the session before placing calls, and feed Twilio status callbacks
+back into the same event bus:
+
+```python
+from urllib.parse import parse_qsl
+
+from fastapi import HTTPException, Request, Response
+from easycat.telephony import emit_call_status, validate_twilio_webhook_signature
+
+
+await session.start()
+manager = session.outbound_call_manager
+if manager is None:
+    raise RuntimeError("Outbound manager is not configured")
+
+call_sid = await manager.place_call("+15551234567")
+
+
+@app.post("/status")
+async def status(request: Request) -> Response:
+    form_items = parse_qsl((await request.body()).decode(), keep_blank_values=True)
+    if TWILIO_AUTH_TOKEN and not validate_twilio_webhook_signature(
+        auth_token=TWILIO_AUTH_TOKEN,
+        url=str(request.url),
+        params=form_items,
+        signature=request.headers.get("x-twilio-signature"),
+    ):
+        raise HTTPException(status_code=403)
+    await emit_call_status(dict(form_items), session.event_bus)
+    return Response(status_code=204)
+```
+
+When the session places an outbound call via `CallInitiated`,
+`session.call_identity` is stamped with `direction="outbound"` and the
+dialed number.  `TwilioTransport` mirrors the other direction: on the
+``<Stream>`` start event it parses caller-ID + geographic
+customParameters and emits ``CallAnswered``, so observers like
+``CallDispositionTracker`` see inbound and outbound calls through the
+same lifecycle.
+
+### Bot speaks first
+Set `EasyCatConfig.greeting` to have the bot synthesize a greeting on
+the first `CallAnswered` event.  Works for both inbound (stream
+start) and outbound (callee pickup).  Use this to play an
+AI-disclosure or identification line before the caller's first
+utterance — a requirement under the FCC's 2024 TCPA ruling and TX SB
+140 for outbound AI calls.
+
+### Opt-out auto-detection
+The session listens on every STT final for phrases in
+`easycat.telephony.OPT_OUT_PHRASES` (``"stop calling"``, ``"take me
+off your list"``, ``"opt out"``, …).  On match the session:
+
+1. emits an `OptOutDetected` event carrying the caller number, the
+   matched phrase, and the full transcript text,
+2. adds the caller to `session.dnc_list` when one is attached
+   (pass a shared `DNCList` via `EasyCatConfig.dnc_list`),
+3. enqueues an `EndCallAction(reason="opt_out")` so the call
+   terminates after the agent's current utterance finishes.
+
+Set `SessionConfig.opt_out_detection=False` to opt out of the
+auto-wiring, or pass `opt_out_phrases=("retire me", …)` to replace
+the built-in phrase list (language packs / industry-specific
+terminology).
+
+### Caller-ID exposure policy
+Control whether the LLM sees the caller's number or only tool code
+does via `EasyCatConfig.caller_id_exposure`:
+
+- `"tools_only"` (default): number available at
+  `session.call_identity.caller_number` for tools, hidden from the
+  LLM prompt. Right for PII-sensitive workflows.
+- `"system_message"`: prepend a short system note on every turn
+  (`"The caller's phone number is +1555…"`). Use when the agent needs
+  to greet by number, look up account, etc.
+- `"off"`: hide from both layers.
+
+```python
+config = EasyCatConfig(
+    openai_api_key="…",
+    agent=your_agent,
+    caller_id_exposure="system_message",
+)
+```
+
+### Transport kind
+Tools that should behave differently on a phone call vs. a browser
+session read `session.transport_kind` — one of `"telephony"`,
+`"webrtc"`, `"websocket"`, `"local"`, `"noop"`, or `"custom"`.  Use
+it to skip "open this URL" prompts on phone calls or mute emoji in
+voice-only surfaces.
 
 ## Session lifecycle
 
@@ -201,15 +391,15 @@ session.unsubscribe_handlers(registrations)
 from agents import Agent
 
 from easycat import Session, SessionConfig
-from easycat.agents import OpenAIAgentsAdapter
+from easycat.integrations.agents import OpenAIAgentsBridge
 
 agent = Agent(
     name="Support",
     instructions="Help customers with account issues.",
 )
 
-adapter = OpenAIAgentsAdapter(agent)
-session = Session(SessionConfig(agent=adapter, ...))
+bridge = OpenAIAgentsBridge(agent=agent)
+session = Session(SessionConfig(agent=bridge, ...))
 ```
 
 ### PydanticAI (idiomatic)
@@ -217,68 +407,58 @@ session = Session(SessionConfig(agent=adapter, ...))
 from pydantic_ai import Agent as PydanticAgent
 
 from easycat import Session, SessionConfig
-from easycat.agents import PydanticAIAdapter
+from easycat.integrations.agents import PydanticAIBridge
 
 pydantic_agent = PydanticAgent(
     "openai:gpt-5.2",
     system_prompt="Help customers with account issues.",
 )
 
-adapter = PydanticAIAdapter(pydantic_agent)
-session = Session(SessionConfig(agent=adapter, ...))
+bridge = PydanticAIBridge(agent=pydantic_agent)
+session = Session(SessionConfig(agent=bridge, ...))
 ```
 
-### PydanticAI workflows (recommended for voice apps)
+### Workflows (recommended for multi-step voice apps)
 
-For many voice apps, the best PydanticAI integration point is not a single
-agent but a workflow object that owns the current specialist/step and decides
-which PydanticAI agent handles each user turn.
-
-This maps well to PydanticAI's programmatic hand-off style:
-- the caller can stay pinned to one specialist across turns
-- you do not pay an extra router-model call on every turn
-- the workflow can keep private per-agent histories while EasyCat only sees the
-  spoken response for the current turn
+For voice apps with step-based control flow, define a workflow object with
+an async `on_user_turn(text) -> str` method and hand it to
+`create_session`.  `auto_adapt_agent` wraps it in a
+`GenericWorkflowBridge`, so no import dance is needed.
 
 ```python
 from easycat import EasyCatConfig, create_session
-from easycat.agents import WorkflowTurnResult
 
 
 class BookingWorkflow:
     def __init__(self) -> None:
-        self.active_agent_id = "flight_search"
         self.flight = None
 
-    async def on_user_turn(self, text: str) -> str | WorkflowTurnResult:
+    async def on_user_turn(self, text: str) -> str:
         if self.flight is None:
             self.flight = {"flight_number": "AK456"}
-            self.active_agent_id = "seat_selection"
-            return WorkflowTurnResult(
-                text="I found flight AK456. What seat would you like?",
-                structured_output=self.flight,
-                active_agent_id=self.active_agent_id,
-            )
-
-        return WorkflowTurnResult(
-            text="Got it. I saved seat 1A for you.",
-            structured_output={"row": 1, "seat": "A"},
-            active_agent_id=self.active_agent_id,
-        )
+            return "I found flight AK456. What seat would you like?"
+        return "Got it. I saved seat 1A for you."
 
 
 workflow = BookingWorkflow()
 
 config = EasyCatConfig(
     openai_api_key="your-api-key",
-    agent=workflow,  # auto-adapted to PydanticAIWorkflowAdapter
+    agent=workflow,  # auto-adapted to GenericWorkflowBridge
 )
 session = create_session(config)
 ```
 
-Use `PydanticAIAdapter` for simple single-agent assistants. Use
-`PydanticAIWorkflowAdapter` when your voice app has step-based control flow,
-specialist pinning, or programmatic hand-offs between turns.
+Need recorder access, cancellation tokens, or handoffs? Add a
+`recorder: AgentRecorder` parameter to `on_user_turn` — the bridge
+flips into deep mode and calls your method with the live recorder plus
+a cancel token.
+
+In most cases, you can just pass your PydanticAI agent or workflow to
+`EasyCatConfig(agent=...)` and call `create_session(config)`; EasyCat
+auto-adapts it to the right bridge. Under the hood, simple single-agent
+assistants use `PydanticAIBridge`, while step-based workflows with
+specialist pinning or programmatic hand-offs use `GenericWorkflowBridge`.
 
 ## Examples
 Runnable examples live in the `examples/` directory:

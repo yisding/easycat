@@ -7,21 +7,27 @@ import pytest
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
     DTMF,
+    TELEPHONY_EVENTS,
     AgentDelta,
     AgentFinal,
     AgentRequestStarted,
     AudioIn,
     BotStartedSpeaking,
     BotStoppedSpeaking,
+    CallStateChanged,
     DTMFAggregated,
     Error,
     ErrorStage,
+    Event,
     EventBus,
     Interruption,
+    IVRAction,
+    IVRActionType,
     PlaybackMarkAck,
     ReconnectAttempt,
     ReconnectFailure,
     ReconnectSuccess,
+    ScreeningResponse,
     STTEvent,
     STTEventType,
     STTFinal,
@@ -133,6 +139,76 @@ def test_dtmf_events():
 def test_voicemail_detected():
     event = VoicemailDetected(result="machine")
     assert event.result == "machine"
+    assert event.call_sid == ""
+
+
+def test_voicemail_detected_accepts_call_sid():
+    event = VoicemailDetected(result="machine", call_sid="CA123")
+    assert event.call_sid == "CA123"
+
+
+def test_telephony_helper_payloads_are_events():
+    screening = ScreeningResponse(
+        text="Hi, this is Sarah",
+        mode="static",
+        session_id="session-1",
+        turn_id="turn-1",
+        timestamp=123.0,
+    )
+    action = IVRAction(
+        type=IVRActionType.DTMF,
+        digits="1",
+        menu_depth=2,
+        session_id="session-1",
+        turn_id="turn-1",
+        timestamp=124.0,
+    )
+    changed = CallStateChanged(
+        old="classifying",
+        new="human",
+        call_sid="CA123",
+        session_id="session-1",
+        turn_id="turn-1",
+        timestamp=125.0,
+    )
+
+    assert isinstance(screening, Event)
+    assert screening.session_id == "session-1"
+    assert screening.turn_id == "turn-1"
+    assert screening.timestamp == 123.0
+
+    assert isinstance(action, Event)
+    assert action.session_id == "session-1"
+    assert action.turn_id == "turn-1"
+    assert action.timestamp == 124.0
+
+    assert isinstance(changed, Event)
+    assert changed.call_sid == "CA123"
+    assert changed.session_id == "session-1"
+    assert changed.turn_id == "turn-1"
+    assert changed.timestamp == 125.0
+
+
+def test_telephony_events_include_helper_payloads():
+    assert ScreeningResponse in TELEPHONY_EVENTS
+    assert IVRAction in TELEPHONY_EVENTS
+    assert CallStateChanged in TELEPHONY_EVENTS
+
+
+def test_top_level_exports_include_call_lifecycle_events_and_groups():
+    import easycat
+
+    assert easycat.CallInitiated.__name__ == "CallInitiated"
+    assert easycat.CallRinging.__name__ == "CallRinging"
+    assert easycat.CallAnswered.__name__ == "CallAnswered"
+    assert easycat.CallScreening.__name__ == "CallScreening"
+    assert easycat.ScreeningTimedOut.__name__ == "ScreeningTimedOut"
+    assert easycat.CallFailed.__name__ == "CallFailed"
+    assert easycat.CallEnded.__name__ == "CallEnded"
+    assert easycat.CallStateChanged is CallStateChanged
+    assert easycat.ScreeningResponse is ScreeningResponse
+    assert easycat.IVRAction is IVRAction
+    assert easycat.TELEPHONY_EVENTS is TELEPHONY_EVENTS
 
 
 def test_error_event():
@@ -329,6 +405,23 @@ async def test_eventbus_subscribe_all_receives_multiple_event_types():
     await bus.emit(STTFinal(text="f"))
 
     assert received == ["STTPartial", "STTFinal"]
+
+
+@pytest.mark.asyncio
+async def test_eventbus_event_subscriber_receives_telephony_helper_events():
+    bus = EventBus()
+    received: list[Event] = []
+
+    bus.subscribe(Event, received.append)
+
+    screening = ScreeningResponse(text="Hi", mode="static")
+    action = IVRAction(type=IVRActionType.WAIT)
+    changed = CallStateChanged(old="classifying", new="human", call_sid="CA123")
+    await bus.emit(screening)
+    await bus.emit(action)
+    await bus.emit(changed)
+
+    assert received == [screening, action, changed]
 
 
 @pytest.mark.asyncio

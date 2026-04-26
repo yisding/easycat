@@ -6,6 +6,7 @@ from easycat import TelephonyConfig, create_session
 from easycat.config import OutboundCallConfig
 from easycat.events import AgentFinal, BotStartedSpeaking
 from easycat.telephony.call_state import OutboundCallStateMachine
+from easycat.telephony.number_health import CallDispositionTracker, NumberHealthMonitor
 
 from .harness import (
     EventCollector,
@@ -23,6 +24,36 @@ from .harness import (
 class UpperAgent:
     async def run(self, text: str) -> str:
         return text.upper()
+
+
+def test_create_session_exposes_outbound_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = QueueTransport()
+    patch_provider_factories(
+        monkeypatch,
+        stt=ScriptedSTT(["unused"]),
+        tts=RecordingTTS(chunk_sizes=(640,)),
+        vad=ScriptedVAD([]),
+    )
+
+    session = create_session(
+        make_test_config(
+            transport=transport,
+            agent=UpperAgent(),
+            telephony=TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(
+                    from_number="+15551234567",
+                    enable_screening_detection=False,
+                ),
+            ),
+        )
+    )
+
+    assert isinstance(session.outbound_call_state_machine, OutboundCallStateMachine)
+    assert session.get_helper(OutboundCallStateMachine) is session.outbound_call_state_machine
+    assert isinstance(session.number_health_monitor, NumberHealthMonitor)
+    assert isinstance(session.call_disposition_tracker, CallDispositionTracker)
+    assert session.outbound_call_manager is None
 
 
 @pytest.mark.asyncio
@@ -55,11 +86,8 @@ async def test_create_session_replays_gated_audio_after_human_classification(
 
     await session.start()
     try:
-        outbound_sm = next(
-            helper
-            for helper in session._telephony_helpers
-            if isinstance(helper, OutboundCallStateMachine)
-        )
+        outbound_sm = session.outbound_call_state_machine
+        assert isinstance(outbound_sm, OutboundCallStateMachine)
 
         outbound_sm.gate.close()
         assert outbound_sm.gate.is_buffering
