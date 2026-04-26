@@ -34,9 +34,6 @@ from easycat.events import (
     EventHandler,
     Interruption,
     PlaybackMarkAck,
-    ReconnectAttempt,
-    ReconnectFailure,
-    ReconnectSuccess,
     SessionActionCompleted,
     SessionActionFailed,
     SessionActionRequested,
@@ -48,8 +45,6 @@ from easycat.events import (
     ToolCallResult,
     ToolCallStarted,
     TransportAudioDelivered,
-    TTSAudio,
-    TTSMarkers,
     TurnEnded,
     TurnStarted,
     VADStartSpeaking,
@@ -74,6 +69,7 @@ from easycat.runtime.journal import (
     ReadonlySqliteJournal,
 )
 from easycat.runtime.records import JournalRecordKind
+from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._streaming import consume_agent_stream
 from easycat.session._text import (
     _chunk_has_speech_energy,
@@ -313,10 +309,6 @@ class Session:
         )
         self._artifact_store = cfg.artifact_store
 
-        # Wire journal to event bus so session activity is recorded.
-        if self._journal is not None:
-            self._subscribe_journal_sink(self._journal)
-
         # Backpressure (outbound audio queue)
         self._outbound_queue_external = cfg.outbound_queue is not None
         self._outbound_queue_max_size = 200
@@ -396,6 +388,14 @@ class Session:
         self._text_turn_accumulated: str = ""
         self._text_turn_lock = asyncio.Lock()
         self._turn_manager.bind_session(self.session_id)
+        self._journal_sink = SessionJournalSink(
+            event_bus=self.event_bus,
+            journal=self._journal,
+            artifact_store=self._artifact_store,
+            session_id=self.session_id,
+            current_turn_id=self._journal_turn_id,
+        )
+        self._journal_sink.subscribe()
 
         # WS3 T3.10 integration: instantiate every stage wrapper and a
         # shared RunContext so Session can route provider calls through
@@ -503,7 +503,7 @@ class Session:
         values so the record is JSON-serialisable without requiring
         replay consumers to know the enum type.
         """
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="turn_state_changed",
             turn_id=turn_id,
             data={
@@ -530,7 +530,7 @@ class Session:
                 await asyncio.sleep(max(0.0, next_deadline - loop.time()))
                 now = loop.time()
                 loop_lag_ms = max(0.0, (now - next_deadline) * 1000.0)
-                self._append_journal_record(
+                self._journal_sink.append_record(
                     name="pipeline_heartbeat",
                     data={
                         "interval_ms": int(interval_s * 1000),
@@ -557,7 +557,7 @@ class Session:
         read live.  One record per drop so bundle readers can correlate
         audio gaps to queue pressure timing.
         """
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="audio_queue_drop",
             data={
                 "queue": queue_name,
@@ -589,7 +589,7 @@ class Session:
         ids, which don't survive serialisation.
         """
         resolved_turn = self._journal_turn_id(turn_id)
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="task_scheduled",
             turn_id=resolved_turn,
             data={"task_name": name},
@@ -606,74 +606,29 @@ class Session:
             # finally-cleanup reports the raise (more actionable).
             try:
                 if t.cancelled():
-                    self._append_journal_record(
+                    self._journal_sink.append_record(
                         name="task_cancelled", turn_id=tid, data={"task_name": label}
                     )
                     return
                 exc = t.exception()
             except asyncio.CancelledError:
-                self._append_journal_record(
+                self._journal_sink.append_record(
                     name="task_cancelled", turn_id=tid, data={"task_name": label}
                 )
                 return
             if exc is not None:
-                self._append_journal_record(
+                self._journal_sink.append_record(
                     name="task_raised",
                     turn_id=tid,
                     data={"task_name": label, "exc_type": type(exc).__name__},
                 )
             else:
-                self._append_journal_record(
+                self._journal_sink.append_record(
                     name="task_completed", turn_id=tid, data={"task_name": label}
                 )
 
         task.add_done_callback(_on_done)
         return task
-
-    def _store_journal_artifact(
-        self,
-        payload: bytes,
-        *,
-        artifact_class: str = "debug_verbose",
-    ) -> str | None:
-        if self._artifact_store is None or not payload:
-            return None
-        ref = self._artifact_store.put(payload, artifact_class=artifact_class)
-        return ref or None
-
-    def _append_journal_record(
-        self,
-        *,
-        name: str,
-        kind: JournalRecordKind = JournalRecordKind.EVENT,
-        turn_id: str | None = None,
-        data: dict[str, Any] | None = None,
-        input_bytes: bytes | None = None,
-        output_bytes: bytes | None = None,
-        input_artifact_class: str = "debug_verbose",
-        output_artifact_class: str = "debug_verbose",
-    ) -> None:
-        if self._journal is None:
-            return
-        input_ref = (
-            self._store_journal_artifact(input_bytes, artifact_class=input_artifact_class)
-            if input_bytes is not None
-            else None
-        )
-        output_ref = (
-            self._store_journal_artifact(output_bytes, artifact_class=output_artifact_class)
-            if output_bytes is not None
-            else None
-        )
-        self._journal.append(
-            kind=kind,
-            name=name,
-            session_id=self.session_id,
-            turn_id=self._journal_turn_id(turn_id),
-            data=data,
-            input_ref=input_ref,
-            output_ref=output_ref,
-        )
 
     async def _propagate_upstream_signal(
         self,
@@ -717,11 +672,10 @@ class Session:
         # Annotate the trailing signal record with the originating cause
         # so the replay UI can display "interrupt — barge_in" instead of
         # bare signal IDs.
-        if cause and self._journal is not None:
-            self._journal.append(
+        if cause:
+            self._journal_sink.append_record(
                 kind=JournalRecordKind.CONTROL,
                 name="control_signal_cause",
-                session_id=self.session_id,
                 turn_id=self._turn.id if self._turn else None,
                 data={"signal_id": signal.signal_id, "cause": cause},
             )
@@ -735,7 +689,7 @@ class Session:
         turn_id: str | None = None,
     ) -> None:
         """Append a journal record when final-response markdown stripping runs."""
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="markdown_stripped",
             turn_id=turn_id,
             data={
@@ -756,7 +710,7 @@ class Session:
         is_final: bool,
         turn_id: str | None = None,
     ) -> None:
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="tts_payload_prepared",
             turn_id=turn_id,
             data={
@@ -787,7 +741,7 @@ class Session:
         turn_id: str | None = None,
     ) -> None:
         replacement_text = None
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="assistant_interruption_notified",
             turn_id=turn_id,
             data={
@@ -798,105 +752,6 @@ class Session:
                 "replacement_text": replacement_text,
             },
         )
-
-    def _subscribe_journal_sink(self, journal: ExecutionJournal) -> None:
-        """Subscribe event bus handlers that write session events to the journal."""
-        from easycat.runtime.records import ErrorInfo
-
-        session = self
-        EVT = JournalRecordKind.EVENT
-        CTL = JournalRecordKind.CONTROL
-
-        def _make(kind: JournalRecordKind, name: str):
-            def _handler(event: Any) -> None:
-                data: dict[str, Any] = {}
-                _JOURNAL_ATTRS = (
-                    "text",
-                    "track",
-                    "result",
-                    "tool_name",
-                    "call_id",
-                    "delta",
-                    "structured_output",
-                )
-                for attr in _JOURNAL_ATTRS:
-                    val = getattr(event, attr, None)
-                    if val is not None:
-                        data[attr] = val
-                error = None
-                exc = getattr(event, "exception", None)
-                if exc is not None:
-                    stage = getattr(event, "stage", None)
-                    if hasattr(stage, "value"):
-                        data["stage"] = stage.value
-                    error = ErrorInfo.from_exception(exc)
-                journal.append(
-                    kind=kind,
-                    name=name,
-                    session_id=getattr(event, "session_id", None) or session.session_id,
-                    turn_id=getattr(event, "turn_id", None),
-                    data=data or None,
-                    error=error,
-                )
-
-            return _handler
-
-        def _handle_tts_audio(event: TTSAudio) -> None:
-            # TTSStage.execute now captures the audio bytes as
-            # replay_critical artifacts via ``tts_frame`` records (WS3
-            # T3.9: direct observability calls moved out of Session).
-            # The session-level ``tts_audio`` record stays for legacy
-            # observers but no longer carries the bytes.
-            self._append_journal_record(
-                name="tts_audio",
-                turn_id=event.turn_id,
-                data={
-                    "audio_bytes": len(event.chunk.data),
-                    "duration_ms": event.chunk.duration_ms,
-                    "sample_rate": event.chunk.format.sample_rate,
-                    "channels": event.chunk.format.channels,
-                    "sample_width": event.chunk.format.sample_width,
-                    "encoding": event.chunk.format.encoding,
-                    "bypass_gate": event.bypass_gate,
-                },
-            )
-
-        def _handle_tts_markers(event: TTSMarkers) -> None:
-            self._append_journal_record(
-                name="tts_markers",
-                turn_id=event.turn_id,
-                data={"markers": event.markers},
-            )
-
-        _sub = self.event_bus.subscribe
-        _sub(TurnStarted, _make(EVT, "turn_started"))
-        _sub(TurnEnded, _make(EVT, "turn_ended"))
-        _sub(VADStartSpeaking, _make(EVT, "vad_start_speaking"))
-        _sub(VADStopSpeaking, _make(EVT, "vad_stop_speaking"))
-        _sub(STTPartial, _make(EVT, "stt_partial"))
-        _sub(STTFinal, _make(EVT, "stt_final"))
-        _sub(AgentRequestStarted, _make(EVT, "agent_request_started"))
-        _sub(AgentDelta, _make(EVT, "agent_delta"))
-        _sub(AgentFinal, _make(EVT, "agent_final"))
-        _sub(TTSAudio, _handle_tts_audio)
-        _sub(TTSMarkers, _handle_tts_markers)
-        _sub(BotStartedSpeaking, _make(EVT, "bot_started_speaking"))
-        _sub(BotStoppedSpeaking, _make(EVT, "bot_stopped_speaking"))
-        _sub(Interruption, _make(CTL, "interruption"))
-        _sub(Error, _make(EVT, "error"))
-        _sub(ToolCallStarted, _make(EVT, "tool_call_started"))
-        _sub(ToolCallDelta, _make(EVT, "tool_call_delta"))
-        _sub(ToolCallResult, _make(EVT, "tool_call_result"))
-        # ReconnectingWebSocket emits these on the bus; without a
-        # journal subscriber, "session died 40 min in" would only show
-        # up in logs.  Now a bundle shows the exact retry timeline.
-        _sub(ReconnectAttempt, _make(EVT, "ws_reconnect_attempt"))
-        _sub(ReconnectSuccess, _make(EVT, "ws_reconnect_success"))
-        _sub(ReconnectFailure, _make(EVT, "ws_reconnect_failure"))
-        # PlaybackMarkAck is subscribed elsewhere for state tracking;
-        # journal it separately so interruption postmortems have the
-        # actual ack timeline (what the client rendered when).
-        _sub(PlaybackMarkAck, _make(EVT, "playback_mark_ack"))
 
     def _reset_turn_state(self) -> None:
         """Clear turn correlation state and reset the turn manager."""
@@ -1645,12 +1500,20 @@ class Session:
             # the read-only snapshot instead of the now-closed backend.
             if self._journal_view is not None:
                 self._journal_view._journal = replacement
+            self._journal_sink.replace_backends(
+                journal=replacement,
+                artifact_store=self._artifact_store,
+            )
 
         if self._artifact_store:
             live_store = self._artifact_store
             replacement_store = self._preserve_artifacts_after_destroy(live_store)
             live_store.close()
             self._artifact_store = replacement_store
+            self._journal_sink.replace_backends(
+                journal=self._journal,
+                artifact_store=replacement_store,
+            )
 
     def _preserve_journal_after_destroy(self, journal: ExecutionJournal) -> ExecutionJournal:
         db_path = getattr(journal, "db_path", None)
@@ -2071,7 +1934,7 @@ class Session:
         # providers without the attribute report None and the journal
         # reader treats it as unknown.
         pending_bytes = getattr(self.stt, "_bytes_since_last_commit", None)
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="stt_segment_commit_requested",
             turn_id=turn.id,
             data={
@@ -2093,7 +1956,7 @@ class Session:
         except Exception:
             logger.debug("STT segment commit failed", exc_info=True)
         finally:
-            self._append_journal_record(
+            self._journal_sink.append_record(
                 name="stt_segment_commit_result",
                 turn_id=turn.id,
                 data={
@@ -2155,7 +2018,7 @@ class Session:
                             if not self._stt_pending_segment_futures:
                                 turn.stt_has_uncommitted_audio = False
                             turn.append_stt_segment(stt_event.text, track=stt_event.track)
-                            self._append_journal_record(
+                            self._journal_sink.append_record(
                                 name="stt_segment_final",
                                 turn_id=turn.id,
                                 data={
@@ -2898,10 +2761,9 @@ class Session:
                 )
             )
             if self._journal:
-                self._journal.append(
+                self._journal_sink.append_record(
                     kind=JournalRecordKind.METRIC,
                     name="text_turn_latency_ms",
-                    session_id=self.session_id,
                     turn_id=turn_id,
                     data={"value": elapsed_ms},
                 )
