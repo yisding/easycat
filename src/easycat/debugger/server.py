@@ -255,7 +255,7 @@ def _filter_records(
     *,
     stage: str | None,
     turn_id: str | None,
-    name: str | None,
+    name: str | Iterable[str] | None,
     from_seq: int | None,
     to_seq: int | None,
     errors_only: bool = False,
@@ -266,11 +266,24 @@ def _filter_records(
     single combined operation; pagination on the HTTP API goes through
     :func:`_filter_and_paginate` so the response can carry both the
     page slice and the full match count.
+
+    ``name`` may be a single string (exact match) or an iterable of
+    strings (membership match).  The HTTP handler surfaces the latter
+    via repeated ``name=`` query params so the Live view can fetch only
+    the event names it renders without being capped by ``limit``.
     """
     if offset < 0:
         raise ValueError("offset must be >= 0")
     if limit is not None and limit <= 0:
         raise ValueError("limit must be > 0")
+    name_set: frozenset[str] | None
+    if name is None:
+        name_set = None
+    elif isinstance(name, str):
+        name_set = frozenset({name})
+    else:
+        collected = frozenset(name)
+        name_set = collected or None
     out = []
     for r in records:
         seq = r.get("sequence")
@@ -282,7 +295,7 @@ def _filter_records(
             continue
         if turn_id is not None and r.get("turn_id") != turn_id:
             continue
-        if name is not None and r.get("name") != name:
+        if name_set is not None and r.get("name") not in name_set:
             continue
         if stage is not None:
             data = r.get("data") or {}
@@ -305,7 +318,7 @@ def _filter_and_paginate(
     *,
     stage: str | None,
     turn_id: str | None,
-    name: str | None,
+    name: str | Iterable[str] | None,
     from_seq: int | None,
     to_seq: int | None,
     errors_only: bool,
@@ -539,36 +552,53 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         bucket = by_turn.setdefault(
             turn_id,
-            {"turn_id": turn_id, "user": "", "agent": "", "agent_delta": []},
+            {
+                "turn_id": turn_id,
+                "user": "",
+                "agent": "",
+                "user_seq": None,
+                "agent_seq": None,
+                "agent_delta": [],
+                "agent_delta_seq": None,
+            },
         )
         name = r.get("name") or ""
         data = r.get("data") or {}
+        seq = r.get("sequence")
         if not isinstance(data, dict):
             continue
         if name == "stt_final":
             txt = data.get("text") or data.get("transcript")
             if isinstance(txt, str) and txt:
                 bucket["user"] = txt
+                bucket["user_seq"] = seq
         elif name == "stage_complete" and (
             data.get("stage") == "agent" or data.get("observed_stage") == "agent"
         ):
             resp = data.get("response")
             if isinstance(resp, str) and resp:
                 bucket["agent"] = resp
+                bucket["agent_seq"] = seq
         elif name == "agent_delta":
             txt = data.get("text")
             if isinstance(txt, str) and txt and data.get("type") == "TEXT_DELTA":
                 bucket["agent_delta"].append(txt)
+                if bucket["agent_delta_seq"] is None:
+                    bucket["agent_delta_seq"] = seq
         elif name == "agent_final":
             txt = data.get("text")
             if isinstance(txt, str) and txt and not bucket["agent"]:
                 bucket["agent"] = txt
+                bucket["agent_seq"] = seq
 
     transcripts = []
     for turn_id, bucket in by_turn.items():
         if not bucket["agent"] and bucket["agent_delta"]:
             bucket["agent"] = "".join(bucket["agent_delta"])
+            if bucket["agent_seq"] is None:
+                bucket["agent_seq"] = bucket["agent_delta_seq"]
         bucket.pop("agent_delta", None)
+        bucket.pop("agent_delta_seq", None)
         transcripts.append(bucket)
     return transcripts
 
@@ -821,12 +851,17 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             offset = int(params["offset"]) if "offset" in params else 0
         except ValueError:
             return web.Response(status=400, text="from/to/limit/offset must be integers")
+        # aiohttp's ``getall`` returns every repeated ``name=`` value so
+        # the Live view can request only the handful of event names it
+        # actually renders (e.g. ``name=vad_start_speaking&name=stt_partial``)
+        # without being capped by ``limit``.
+        names = [n for n in params.getall("name", ()) if n]
         try:
             page, total = _filter_and_paginate(
                 source.records(),
                 stage=params.get("stage") or None,
                 turn_id=params.get("turn") or None,
-                name=params.get("name") or None,
+                name=names or None,
                 from_seq=from_seq,
                 to_seq=to_seq,
                 errors_only=params.get("errors") == "1",
@@ -1113,6 +1148,11 @@ def serve_session(
             "port": port,
             "open_browser": open_browser,
             "allow_remote": allow_remote,
+            # aiohttp's default signal handling uses ``signal.set_wakeup_fd``,
+            # which only works on the main thread — installing it from a
+            # daemon thread raises ``RuntimeError`` and kills the server
+            # before it answers a single request.
+            "handle_signals": False,
         },
         daemon=True,
         name="easycat-debugger",
@@ -1149,6 +1189,7 @@ def _serve(
     port: int,
     open_browser: bool,
     allow_remote: bool,
+    handle_signals: bool = True,
 ) -> None:
     try:
         from aiohttp import web
@@ -1166,7 +1207,7 @@ def _serve(
             webbrowser.open(url)
         except Exception:  # pragma: no cover - depends on env
             logger.debug("Could not open browser automatically", exc_info=True)
-    web.run_app(app, host=host, port=port, print=None)
+    web.run_app(app, host=host, port=port, print=None, handle_signals=handle_signals)
 
 
 # ── Async-friendly variant for callers already inside an event loop ─

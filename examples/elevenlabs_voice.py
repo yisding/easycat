@@ -1,12 +1,8 @@
-"""Local voice bot using Deepgram STT + ElevenLabs TTS — stages compose.
+"""Local voice bot using ElevenLabs for both STT (Scribe) and TTS (Flash).
 
-Each per-stage example (``deepgram_voice.py``, ``elevenlabs_voice.py``,
-``cartesia_voice.py``) uses one provider for both stages. This one
-mixes vendors to show that STT and TTS swap independently.
-
-Setup: export OPENAI_API_KEY=...; export DEEPGRAM_API_KEY=...; export ELEVENLABS_API_KEY=...
-       uv sync --extra quickstart --extra deepgram --extra elevenlabs
-Run:   uv run python examples/combined_providers.py
+Setup: export OPENAI_API_KEY=...; export ELEVENLABS_API_KEY=...
+       uv sync --extra quickstart --extra elevenlabs
+Run:   uv run python examples/elevenlabs_voice.py
 """
 
 try:
@@ -17,17 +13,19 @@ except ImportError as exc:
     ) from exc
 
 from easycat import PCM16_MONO_16K, EasyCatConfig, LocalTransportConfig, require_env, run
+from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
 
 require_env("OPENAI_API_KEY")
-require_env("DEEPGRAM_API_KEY")  # consumed by the string shortcut below
 elevenlabs_key = require_env("ELEVENLABS_API_KEY")
 
-# Pin all stages and the transport to 16 kHz; LocalTransport plays PCM verbatim.
+# Pin both stages and the transport to 16 kHz; LocalTransport plays PCM verbatim.
 run(
     EasyCatConfig.mic(
         agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
-        stt="deepgram/nova-2",
+        stt=ElevenLabsSTTConfig(
+            api_key=elevenlabs_key, mode="realtime", realtime_sample_rate=16000
+        ),
         tts=ElevenLabsTTSConfig(
             api_key=elevenlabs_key,
             voice_id="EXAVITQu4vr4xnSDxMaL",  # Sarah
