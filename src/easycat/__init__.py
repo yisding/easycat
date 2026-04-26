@@ -1,20 +1,12 @@
-"""EasyCat -- slim, batteries-included voice bot framework.
+"""EasyCat public API.
 
-Public API
-----------
-This module exports the symbols intended for typical library consumers.
-Top-level ``from easycat import X`` keeps working; every symbol in
-:data:`__all__` is reachable.
+The top-level package intentionally exposes the app-facing surface only.
+Less-common provider implementations, stage internals, action executors,
+telephony helpers, and debug test utilities remain importable from their
+own modules.
 
-Internally, symbols are loaded lazily via PEP 562 ``__getattr__`` to
-keep CLI cold-start (``easycat --version``, ``easycat --help``) within
-a 300ms budget.  Heavy provider modules (transports, stages, telephony)
-only import when the symbol is actually touched.
-
-Less-common surfaces (stage internals, recorder types, bridge
-boilerplate, telephony helpers) stay reachable from their submodules —
-this module keeps the top-level namespace focused on what an
-application author touches.
+Exports are loaded lazily via PEP 562 ``__getattr__`` so CLI cold starts
+do not import provider stacks unless a caller touches that symbol.
 """
 
 from __future__ import annotations
@@ -30,8 +22,7 @@ def _register(module: str, *names: str) -> None:
         _LAZY_ATTR[name] = (module, name)
 
 
-# ── Top-level factories and config ────────────────────────────────
-
+# Core factories, config, and runtime helpers.
 _register(
     "easycat.config",
     "EasyCatConfig",
@@ -48,121 +39,42 @@ _register(
     "run",
     "wait_for_shutdown_signal",
 )
-_register("easycat.quick", "speak", "transcribe_file")
 
-# ── Core session + agent surface ──────────────────────────────────
-
+# Session and advanced app construction.
 _register("easycat.cancel", "CancelToken")
 _register("easycat.session._session", "Session")
-_register(
-    "easycat.session._types",
-    "Agent",
-    "CallDirection",
-    "CallIdentity",
-    "CallerIdExposure",
-    "SessionConfig",
-    "TurnState",
-)
-_register(
-    "easycat.session.actions",
-    "CoreSessionActionExecutor",
-    "CustomAction",
-    "EndCallAction",
-    "SendDTMFAction",
-    "SendSMSAction",
-    "SessionAction",
-    "SessionActionExecutor",
-    "SessionActionResult",
-    "SessionActions",
-    "SessionActionType",
-    "TransferCallAction",
-    "TransferPlan",
-)
+_register("easycat.session._types", "SessionConfig")
+_register("easycat.session.actions", "SessionActions")
 _register("easycat.session_manager", "SessionManager")
-_register("easycat.supervisor", "SessionAudioBroadcaster", "SupervisorAudioFrame")
-_register(
-    "easycat.turn_manager",
-    "TurnManager",
-    "TurnManagerConfig",
-    "TurnManagerState",
-    "TurnMode",
-)
-
-# ── Agent framework bridges ───────────────────────────────────────
-
+_register("easycat.supervisor", "SessionAudioBroadcaster")
+_register("easycat.turn_manager", "TurnManagerConfig", "TurnMode")
 _register(
     "easycat.integrations.agents._agent_runner",
     "AgentRunner",
     "AgentRunnerConfig",
 )
-_register("easycat.integrations.agents._factory", "auto_adapt_agent")
-_register(
-    "easycat.integrations.agents.base",
-    "AgentBridgeEvent",
-    "AgentTurnInput",
-    "ExternalAgentBridge",
-)
 
-# ── Speech pipeline knobs ─────────────────────────────────────────
-
-_register(
-    "easycat.smart_turn",
-    "SmartTurnConfig",
-    "SmartTurnONNX",
-    "SmartTurnProvider",
-    "SmartTurnResult",
-    "create_smart_turn",
-)
+# Speech and output-processing knobs commonly used by applications.
 _register(
     "easycat.llm_output_processing",
-    "LLMOutputProcessor",
     "MarkdownStripProcessor",
     "PauseProcessor",
     "PhoneticReplacementProcessor",
     "default_pronunciation_processors",
 )
-_register(
-    "easycat.timeouts",
-    "AgentTimeoutError",
-    "STTTimeoutError",
-    "TimeoutConfig",
-    "TTSTimeoutError",
-)
+_register("easycat.smart_turn", "SmartTurnConfig")
 
-# ── Debug / journal runtime ───────────────────────────────────────
-
-_register(
-    "easycat.runtime",
-    "ExecutionJournal",
-    "JournalRecord",
-    "JournalRecordKind",
-    "JournalView",
-)
-_register(
-    "easycat.runtime.replay",
-    "ReplayFidelity",
-    "ReplaySpec",
-    "ToolReplayPolicy",
-)
+# Public debug and journal inspection.
+_register("easycat.runtime", "JournalRecordKind")
 _register("easycat.debug.bundle", "RunBundle")
 _register("easycat.debug.export", "export_debug_bundle")
-_register("easycat.debug.testing", "load_bundle")
 
-# ── Errors ────────────────────────────────────────────────────────
-
+# Errors.
 _register("easycat.errors", "EasyCatError", "ErrorEntry")
 
-# ── EasyCat-level events ──────────────────────────────────────────
-
+# Core events.
 _register(
     "easycat.events",
-    "ACTION_EVENTS",
-    "AGENT_EVENTS",
-    "ALL_EVENTS",
-    "AUDIO_EVENTS",
-    "AgentDelta",
-    "AgentFinal",
-    "AgentRequestStarted",
     "AudioIn",
     "AudioOut",
     "BotStartedSpeaking",
@@ -170,54 +82,22 @@ _register(
     "CallAnswered",
     "CallEnded",
     "CallFailed",
-    "CallInitiated",
-    "CallRinging",
-    "CallScreening",
-    "CallStateChanged",
-    "DTMF",
-    "DTMFAggregated",
     "Error",
-    "ERROR_EVENTS",
     "ErrorStage",
     "Event",
     "EventBus",
     "Interruption",
-    "INTERRUPTION_EVENTS",
-    "IVRAction",
-    "IVRActionType",
-    "LIFECYCLE_EVENTS",
-    "ReconnectAttempt",
-    "ReconnectFailure",
-    "ReconnectSuccess",
-    "RECONNECT_EVENTS",
-    "ScreeningResponse",
-    "ScreeningTimedOut",
     "STTFinal",
     "STTPartial",
-    "STT_EVENTS",
-    "SessionActionCompleted",
-    "SessionActionFailed",
-    "SessionActionRequested",
-    "SessionActionStarted",
-    "OptOutDetected",
-    "TELEPHONY_EVENTS",
-    "ToolCallDelta",
-    "ToolCallResult",
-    "ToolCallStarted",
-    "TOOL_EVENTS",
     "TTSAudio",
     "TTSMarkers",
-    "TTS_EVENTS",
     "TurnEnded",
     "TurnStarted",
     "VADStartSpeaking",
     "VADStopSpeaking",
-    "VAD_EVENTS",
-    "VoicemailDetected",
 )
 
-# ── Provider protocols ────────────────────────────────────────────
-
+# Stable provider protocols.
 _register(
     "easycat.providers",
     "EchoCanceller",
@@ -228,8 +108,7 @@ _register(
     "VADProvider",
 )
 
-# ── Audio format ──────────────────────────────────────────────────
-
+# Audio format values used when configuring transports/providers.
 _register(
     "easycat.audio_format",
     "PCM16_MONO_8K",
@@ -240,94 +119,19 @@ _register(
     "AudioFormat",
 )
 
-# ── Provider implementations ─────────────────────────────────────
-
-_register(
-    "easycat.echo_cancellation",
-    "EchoCancellationConfig",
-    "LiveKitAEC",
-    "PassthroughAEC",
-    "create_echo_canceller",
-)
-_register(
-    "easycat.noise_reduction",
-    "KrispNoiseReducer",
-    "NoiseReducerConfig",
-    "PassthroughNoiseReducer",
-    "RNNoiseReducer",
-    "create_noise_reducer",
-)
-_register(
-    "easycat.stt",
-    "CartesiaSTT",
-    "CartesiaSTTConfig",
-    "DeepgramSTT",
-    "DeepgramSTTConfig",
-    "ElevenLabsSTT",
-    "ElevenLabsSTTConfig",
-    "OpenAIRealtimeSTT",
-    "OpenAIRealtimeSTTConfig",
-    "OpenAISTT",
-    "OpenAISTTConfig",
-)
-_register(
-    "easycat.stt.factory",
-    "STTProviderConfig",
-    "create_stt_provider",
-    "parse_stt_string",
-)
-_register(
-    "easycat.tts.factory",
-    "TTSProviderConfig",
-    "create_tts_provider",
-    "parse_tts_string",
-)
-_register("easycat.tts.cartesia_tts", "CartesiaTTS", "CartesiaTTSConfig")
-_register("easycat.tts.deepgram_tts", "DeepgramTTS", "DeepgramTTSConfig")
-_register("easycat.tts.elevenlabs_tts", "ElevenLabsTTS", "ElevenLabsTTSConfig")
-_register("easycat.tts.openai_tts", "OpenAITTS", "OpenAITTSConfig")
-_register("easycat.tts.input", "TTSInput", "TTSInputFormat")
-_register(
-    "easycat.vad",
-    "FunASROnnxVAD",
-    "KrispVAD",
-    "SileroVAD",
-    "TenVAD",
-    "VADConfig",
-    "create_vad",
-)
-
-# ── Transport implementations ────────────────────────────────────
-
-_register("easycat.transports.local", "LocalTransport", "LocalTransportConfig")
-_register(
-    "easycat.transports.twilio_media",
-    "TwilioConnectionTransport",
-    "TwilioTransport",
-    "TwilioTransportConfig",
-)
-_register(
-    "easycat.telephony.session_actions",
-    "TwilioSessionActionConfig",
-    "TwilioSessionActionExecutor",
-)
-_register(
-    "easycat.transports.webrtc",
-    "ICEServer",
-    "WebRTCTransport",
-    "WebRTCTransportConfig",
-)
+# Transport config and endpoint types used by README/examples.
+_register("easycat.transports.local", "LocalTransportConfig")
+_register("easycat.transports.twilio_media", "TwilioConnectionTransport")
+_register("easycat.telephony.session_actions", "TwilioSessionActionConfig")
+_register("easycat.transports.webrtc", "ICEServer", "WebRTCTransportConfig")
 _register(
     "easycat.transports.websocket",
     "WebSocketConnectionTransport",
-    "WebSocketTransport",
     "WebSocketTransportConfig",
 )
 
 
 if TYPE_CHECKING:
-    # Static-analysis view of every lazy export.  None of these imports
-    # run at runtime — ``__getattr__`` handles those.
     from easycat.audio_format import (
         PCM16_MONO_8K,
         PCM16_MONO_16K,
@@ -347,32 +151,8 @@ if TYPE_CHECKING:
     )
     from easycat.debug.bundle import RunBundle
     from easycat.debug.export import export_debug_bundle
-    from easycat.debug.testing import load_bundle
-    from easycat.echo_cancellation import (
-        EchoCancellationConfig,
-        LiveKitAEC,
-        PassthroughAEC,
-        create_echo_canceller,
-    )
     from easycat.errors import EasyCatError, ErrorEntry
     from easycat.events import (
-        ACTION_EVENTS,
-        AGENT_EVENTS,
-        ALL_EVENTS,
-        AUDIO_EVENTS,
-        DTMF,
-        ERROR_EVENTS,
-        INTERRUPTION_EVENTS,
-        LIFECYCLE_EVENTS,
-        RECONNECT_EVENTS,
-        STT_EVENTS,
-        TELEPHONY_EVENTS,
-        TOOL_EVENTS,
-        TTS_EVENTS,
-        VAD_EVENTS,
-        AgentDelta,
-        AgentFinal,
-        AgentRequestStarted,
         AudioIn,
         AudioOut,
         BotStartedSpeaking,
@@ -380,40 +160,19 @@ if TYPE_CHECKING:
         CallAnswered,
         CallEnded,
         CallFailed,
-        CallInitiated,
-        CallRinging,
-        CallScreening,
-        CallStateChanged,
-        DTMFAggregated,
         Error,
         ErrorStage,
         Event,
         EventBus,
         Interruption,
-        IVRAction,
-        IVRActionType,
-        OptOutDetected,
-        ReconnectAttempt,
-        ReconnectFailure,
-        ReconnectSuccess,
-        ScreeningResponse,
-        ScreeningTimedOut,
-        SessionActionCompleted,
-        SessionActionFailed,
-        SessionActionRequested,
-        SessionActionStarted,
         STTFinal,
         STTPartial,
-        ToolCallDelta,
-        ToolCallResult,
-        ToolCallStarted,
         TTSAudio,
         TTSMarkers,
         TurnEnded,
         TurnStarted,
         VADStartSpeaking,
         VADStopSpeaking,
-        VoicemailDetected,
     )
     from easycat.helpers import (
         attach_runtime_feedback,
@@ -421,29 +180,12 @@ if TYPE_CHECKING:
         run,
         wait_for_shutdown_signal,
     )
-    from easycat.integrations.agents._agent_runner import (
-        AgentRunner,
-        AgentRunnerConfig,
-    )
-    from easycat.integrations.agents._factory import auto_adapt_agent
-    from easycat.integrations.agents.base import (
-        AgentBridgeEvent,
-        AgentTurnInput,
-        ExternalAgentBridge,
-    )
+    from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
     from easycat.llm_output_processing import (
-        LLMOutputProcessor,
         MarkdownStripProcessor,
         PauseProcessor,
         PhoneticReplacementProcessor,
         default_pronunciation_processors,
-    )
-    from easycat.noise_reduction import (
-        KrispNoiseReducer,
-        NoiseReducerConfig,
-        PassthroughNoiseReducer,
-        RNNoiseReducer,
-        create_noise_reducer,
     )
     from easycat.providers import (
         EchoCanceller,
@@ -453,114 +195,26 @@ if TYPE_CHECKING:
         TTSProvider,
         VADProvider,
     )
-    from easycat.quick import speak, transcribe_file
-    from easycat.runtime import (
-        ExecutionJournal,
-        JournalRecord,
-        JournalRecordKind,
-        JournalView,
-    )
-    from easycat.runtime.replay import (
-        ReplayFidelity,
-        ReplaySpec,
-        ToolReplayPolicy,
-    )
+    from easycat.runtime import JournalRecordKind
     from easycat.session._session import Session
-    from easycat.session._types import (
-        Agent,
-        CallDirection,
-        CallerIdExposure,
-        CallIdentity,
-        SessionConfig,
-        TurnState,
-    )
-    from easycat.session.actions import (
-        CoreSessionActionExecutor,
-        CustomAction,
-        EndCallAction,
-        SendDTMFAction,
-        SendSMSAction,
-        SessionAction,
-        SessionActionExecutor,
-        SessionActionResult,
-        SessionActions,
-        SessionActionType,
-        TransferCallAction,
-        TransferPlan,
-    )
+    from easycat.session._types import SessionConfig
+    from easycat.session.actions import SessionActions
     from easycat.session_manager import SessionManager
-    from easycat.smart_turn import (
-        SmartTurnConfig,
-        SmartTurnONNX,
-        SmartTurnProvider,
-        SmartTurnResult,
-        create_smart_turn,
-    )
-    from easycat.stt import (
-        CartesiaSTT,
-        CartesiaSTTConfig,
-        DeepgramSTT,
-        DeepgramSTTConfig,
-        ElevenLabsSTT,
-        ElevenLabsSTTConfig,
-        OpenAIRealtimeSTT,
-        OpenAIRealtimeSTTConfig,
-        OpenAISTT,
-        OpenAISTTConfig,
-    )
-    from easycat.stt.factory import (
-        STTProviderConfig,
-        create_stt_provider,
-        parse_stt_string,
-    )
-    from easycat.supervisor import SessionAudioBroadcaster, SupervisorAudioFrame
-    from easycat.telephony.session_actions import (
-        TwilioSessionActionConfig,
-        TwilioSessionActionExecutor,
-    )
-    from easycat.timeouts import (
-        AgentTimeoutError,
-        STTTimeoutError,
-        TimeoutConfig,
-        TTSTimeoutError,
-    )
-    from easycat.transports.local import LocalTransport, LocalTransportConfig
-    from easycat.transports.twilio_media import (
-        TwilioConnectionTransport,
-        TwilioTransport,
-        TwilioTransportConfig,
-    )
-    from easycat.transports.webrtc import (
-        ICEServer,
-        WebRTCTransport,
-        WebRTCTransportConfig,
-    )
+    from easycat.smart_turn import SmartTurnConfig
+    from easycat.supervisor import SessionAudioBroadcaster
+    from easycat.telephony.session_actions import TwilioSessionActionConfig
+    from easycat.transports.local import LocalTransportConfig
+    from easycat.transports.twilio_media import TwilioConnectionTransport
+    from easycat.transports.webrtc import ICEServer, WebRTCTransportConfig
     from easycat.transports.websocket import (
         WebSocketConnectionTransport,
-        WebSocketTransport,
         WebSocketTransportConfig,
     )
-    from easycat.tts.cartesia_tts import CartesiaTTS, CartesiaTTSConfig
-    from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
-    from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
-    from easycat.tts.factory import (
-        TTSProviderConfig,
-        create_tts_provider,
-        parse_tts_string,
-    )
-    from easycat.tts.input import TTSInput, TTSInputFormat
-    from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
-    from easycat.turn_manager import (
-        TurnManager,
-        TurnManagerConfig,
-        TurnManagerState,
-        TurnMode,
-    )
-    from easycat.vad import FunASROnnxVAD, KrispVAD, SileroVAD, TenVAD, VADConfig, create_vad
+    from easycat.turn_manager import TurnManagerConfig, TurnMode
 
 
 def __getattr__(name: str):  # PEP 562
-    """Lazy re-export dispatcher.  Runs once per attribute per session."""
+    """Lazy re-export dispatcher. Runs once per attribute per session."""
     try:
         module_path, attr = _LAZY_ATTR[name]
     except KeyError:
