@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from easycat import EasyCatConfig, WebSocketTransportConfig, create_session
+from easycat import EasyConfig, WebSocketTransportConfig, create_session
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -324,7 +324,7 @@ def test_examples_can_run_as_scripts_without_package_import_errors(script_path: 
 
     assert completed.returncode != 0
     assert "ModuleNotFoundError" not in completed.stderr
-    # Examples using ``easycat.run(...)`` / ``EasyCatConfig.*()`` fail at
+    # Examples using ``easycat.run(...)`` / ``EasyConfig.*()`` fail at
     # config validation with "STT configuration is required." when no
     # provider env var is set; others call ``require_env`` and emit
     # "OPENAI_API_KEY is required." — accept either.
@@ -346,7 +346,7 @@ def test_twilio_example_factory():
 
 
 def test_example_session_smoke():
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key="test-key",
         transport=WebSocketTransportConfig(),
         agent=_DummyAgent(),

@@ -9,7 +9,7 @@ One driver. Two orthogonal axes. Six combinations:
 Only the **two Local cells** run out of the box — WebRTC and
 Twilio need a connected client (browser or phone call) and are
 covered by the respective examples. The *code shape* is the
-same: `EasyCatConfig(transport=...)` is the only line that
+same: `EasyConfig(transport=...)` is the only line that
 changes.
 
     # Axis 1 — swap providers (same transport)
@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     LocalTransportConfig,
     attach_runtime_feedback,
     create_session,
@@ -87,7 +87,7 @@ def transport_config(name: str):
 def provider_mix(name: str) -> dict:
     """Return the STT/TTS strings for the named mix.
 
-    All values are string shortcuts — ``EasyCatConfig.__post_init__``
+    All values are string shortcuts — ``EasyConfig.__post_init__``
     parses them into concrete config objects via the factory.
     """
     if name == "openai":
@@ -112,7 +112,7 @@ async def main() -> None:
     print(f"=== {tag} ===")
 
     mix = provider_mix(args.provider_mix)
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key=os.environ["OPENAI_API_KEY"],
         agent=build_agent(),
         transport=transport_config(args.transport),

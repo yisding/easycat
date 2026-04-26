@@ -11,10 +11,10 @@ except ImportError as exc:
         "openai-agents is required. Install with: uv sync --extra quickstart"
     ) from exc
 
-from easycat import EasyCatConfig, run
+from easycat import EasyConfig, run
 
 run(
-    EasyCatConfig.mic(
+    EasyConfig.mic(
         agent=Agent(name="assistant", instructions="You are a helpful voice assistant.")
     )
 )

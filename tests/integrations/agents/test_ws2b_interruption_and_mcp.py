@@ -9,7 +9,7 @@ Covers:
 - AC2B.7: Atomicity on journal-write failure (commit failure)
 - AC2B.8: Shallow-mode downgrade path
 - AC2B.9: MCP mock wiring, shallow warning, deep pass-through
-- AC2B.10: EasyCatConfig MCP URI validation
+- AC2B.10: EasyConfig MCP URI validation
 - AC2B.11: No EasyCat-native tool code (guardrail re-run)
 - AC2B.12: Signal-to-framework cancellation linkage
 """
@@ -727,16 +727,16 @@ class TestMCPFilesystemIntegration:
         assert rec.context.mcp_servers == (uri,)
 
 
-# ── AC2B.10: EasyCatConfig MCP URI validation ──────────────────
+# ── AC2B.10: EasyConfig MCP URI validation ─────────────────────
 
 
-class TestEasyCatConfigMCPValidation:
-    """AC2B.10 — invalid MCP URIs raise EasyCatConfigError."""
+class TestEasyConfigMCPValidation:
+    """AC2B.10 — invalid MCP URIs raise EasyConfigError."""
 
     def test_valid_uris_accepted(self):
         """Valid schemes do not raise."""
 
-        # EasyCatConfig requires STT/TTS, so we just test the validation
+        # EasyConfig requires STT/TTS, so we just test the validation
         # logic directly via the _validate pathway. We'll construct with
         # required fields.
         try:
@@ -754,20 +754,20 @@ class TestEasyCatConfigMCPValidation:
             pytest.skip("config not importable")
 
     def test_invalid_uri_raises(self):
-        from easycat.config import _VALID_MCP_SCHEMES, EasyCatConfigError
+        from easycat.config import _VALID_MCP_SCHEMES, EasyConfigError
 
         # Test the validation logic directly.
         bad_uri = "ftp://bad-server"
         assert not any(bad_uri.startswith(s) for s in _VALID_MCP_SCHEMES)
 
-        # Attempt to construct EasyCatConfig with invalid URI.
+        # Attempt to construct EasyConfig with invalid URI.
         try:
-            from easycat.config import EasyCatConfig
+            from easycat.config import EasyConfig
             from easycat.stt.openai_provider import OpenAISTTConfig
             from easycat.tts.openai_tts import OpenAITTSConfig
 
-            with pytest.raises(EasyCatConfigError, match="ftp://bad"):
-                EasyCatConfig(
+            with pytest.raises(EasyConfigError, match="ftp://bad"):
+                EasyConfig(
                     stt=OpenAISTTConfig(api_key="test"),
                     tts=OpenAITTSConfig(api_key="test"),
                     mcp_servers=["ftp://bad-server"],
@@ -776,15 +776,15 @@ class TestEasyCatConfigMCPValidation:
             pytest.skip("config dependencies not importable")
 
     def test_mixed_valid_invalid_raises(self):
-        from easycat.config import EasyCatConfigError
+        from easycat.config import EasyConfigError
 
         try:
-            from easycat.config import EasyCatConfig
+            from easycat.config import EasyConfig
             from easycat.stt.openai_provider import OpenAISTTConfig
             from easycat.tts.openai_tts import OpenAITTSConfig
 
-            with pytest.raises(EasyCatConfigError, match="ws://bad"):
-                EasyCatConfig(
+            with pytest.raises(EasyConfigError, match="ws://bad"):
+                EasyConfig(
                     stt=OpenAISTTConfig(api_key="test"),
                     tts=OpenAITTSConfig(api_key="test"),
                     mcp_servers=["stdio://good", "ws://bad"],

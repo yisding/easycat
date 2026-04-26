@@ -138,9 +138,9 @@ class _UpperAgent:
 
 
 def _make_config(stt_cfg: Any, tts_cfg: Any, transport: Any) -> Any:
-    from easycat import EasyCatConfig
+    from easycat import EasyConfig
 
-    return EasyCatConfig(
+    return EasyConfig(
         stt=stt_cfg,
         tts=tts_cfg,
         transport=transport,

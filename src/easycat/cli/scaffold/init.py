@@ -78,7 +78,7 @@ _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
 }
 
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
-# instantiate :class:`EasyCatConfig`.  Text-only templates (REPLs) bypass
+# instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
 # the audio pipeline entirely, so those fields are rejected up front.
 _VOICE_TEMPLATES: frozenset[str] = frozenset({"openai-agents", "pydantic-ai"})
 
@@ -185,7 +185,7 @@ def _validate_provider_spec(spec: str, available: list[str], *, kind: str) -> No
 
 
 def _config_extra_kwargs(cfg: InitConfig) -> str:
-    """Render extra ``EasyCatConfig(...)`` kwargs (or empty string).
+    """Render extra ``EasyConfig(...)`` kwargs (or empty string).
 
     Comma-prefixed inline form so a single placeholder works in both the
     multi-line ``openai-agents`` template and the single-line

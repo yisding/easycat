@@ -16,7 +16,7 @@ try:
 except ImportError as exc:
     raise SystemExit("PydanticAI is required. Install with: uv add easycat[pydantic-ai]") from exc
 
-from easycat import EasyCatConfig, run
+from easycat import EasyConfig, run
 
 
 class FlightDetails(BaseModel):
@@ -95,4 +95,4 @@ class FlightBookingWorkflow:
         self.active_agent_id = "flight_search"
 
 
-run(EasyCatConfig.mic(agent=FlightBookingWorkflow()))
+run(EasyConfig.mic(agent=FlightBookingWorkflow()))

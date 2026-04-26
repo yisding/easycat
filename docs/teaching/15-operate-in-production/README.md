@@ -76,7 +76,7 @@ manager: SessionManager[str] = SessionManager()
 
 async def handle_connection(ws):
     # See examples/twilio_app.py for the full per-connection wiring:
-    # an EasyCatConfig(..., transport=TwilioConnectionTransport(ws))
+    # an EasyConfig(..., transport=TwilioConnectionTransport(ws))
     # is built per socket and handed to `create_session`, then the
     # manager.
     session = build_session_for(ws)

@@ -8,7 +8,7 @@ import socket
 from collections.abc import AsyncIterator, Iterable, Sequence
 from typing import Any
 
-from easycat import EasyCatConfig, OpenAISTTConfig, OpenAITTSConfig
+from easycat import EasyConfig, OpenAISTTConfig, OpenAITTSConfig
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.echo_cancellation import PassthroughAEC
 from easycat.events import STTEvent, STTEventType, TTSEvent, TTSEventType
@@ -332,8 +332,8 @@ def make_test_config(
     agent: Any,
     telephony: Any | None = None,
     turn_taking: TurnManagerConfig | None = None,
-) -> EasyCatConfig:
-    return EasyCatConfig(
+) -> EasyConfig:
+    return EasyConfig(
         stt=OpenAISTTConfig(api_key="test-key"),
         tts=OpenAITTSConfig(api_key="test-key"),
         transport=transport,

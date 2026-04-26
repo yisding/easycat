@@ -2,7 +2,7 @@
 
 The mirror of ``custom_stt_provider.py``: drop down to ``SessionConfig``
 and supply a structurally-typed ``TTSProvider`` instead of letting
-``EasyCatConfig`` auto-wire one.  Real custom-TTS use cases include:
+``EasyConfig`` auto-wire one.  Real custom-TTS use cases include:
 in-house voices, on-prem synthesis, a tee that mirrors audio to a
 recorder, or a wrapper that prepends an earcon.
 

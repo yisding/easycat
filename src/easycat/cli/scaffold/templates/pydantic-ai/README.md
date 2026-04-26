@@ -44,6 +44,6 @@ Ctrl-C to quit.
   `"groq:llama-3.3-70b"`, etc.). Add the matching API key to `.env`.
 - **Need multiple agents?** Check the `pydantic-ai-workflow` template for a
   starter with specialist handoffs.
-- **Debug a session:** pass `debug="full"` to `EasyCatConfig(...)`. EasyCat
+- **Debug a session:** pass `debug="full"` to `EasyConfig(...)`. EasyCat
   writes a RunBundle journal under `~/.cache/easycat/journals/` that you can
   inspect via `RunBundle.load(...)` or load into a coding agent for analysis.

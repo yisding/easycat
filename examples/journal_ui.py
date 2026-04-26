@@ -23,7 +23,7 @@ except ImportError as exc:
     ) from exc
 
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     attach_runtime_feedback,
     create_session,
     require_env,
@@ -36,7 +36,7 @@ async def main() -> None:
     require_env("OPENAI_API_KEY")
     # debug="light" keeps the journal in memory so the UI has something to read.
     session = create_session(
-        EasyCatConfig.mic(
+        EasyConfig.mic(
             agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
             debug="light",
         )

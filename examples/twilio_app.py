@@ -29,7 +29,7 @@ from easycat import (
     CallAnswered,
     CallEnded,
     CallFailed,
-    EasyCatConfig,
+    EasyConfig,
     EventBus,
     SessionManager,
     TelephonyConfig,
@@ -91,7 +91,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
                 sms_from_number=twilio_sms_from,
             )
         session = create_session(
-            EasyCatConfig(
+            EasyConfig(
                 openai_api_key=api_key,
                 transport=transport,
                 telephony=telephony,

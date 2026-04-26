@@ -14,7 +14,7 @@ Setup: export OPENAI_API_KEY=...                       # for STT/TTS
 Run:   uv run python examples/responses_api_bridge.py
 """
 
-from easycat import EasyCatConfig, require_env, run
+from easycat import EasyConfig, require_env, run
 from easycat.integrations.agents import RemoteResponsesAPIBridge
 
 require_env("OPENAI_API_KEY")
@@ -23,7 +23,7 @@ remote_key = require_env("EASYCAT_REMOTE_AGENT_API_KEY")
 model = require_env("EASYCAT_REMOTE_AGENT_MODEL")
 
 run(
-    EasyCatConfig.mic(
+    EasyConfig.mic(
         agent=RemoteResponsesAPIBridge(base_url=base_url, model=model, api_key=remote_key),
     )
 )

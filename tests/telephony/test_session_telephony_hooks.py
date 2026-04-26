@@ -2,7 +2,7 @@
 
 Covers the three feature wires added alongside the caller-ID support:
 
-- ``EasyCatConfig.greeting`` / ``SessionConfig.greeting`` auto-
+- ``EasyConfig.greeting`` / ``SessionConfig.greeting`` auto-
   synthesizes on the first ``CallAnswered`` event, without a second
   ``CallAnswered`` re-greeting.
 - ``opt_out_detection`` (default on) listens for STT finals matching

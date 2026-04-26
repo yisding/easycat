@@ -14,7 +14,7 @@ try:
 except ImportError as exc:
     raise SystemExit("PydanticAI is required. Install with: uv add easycat[pydantic-ai]") from exc
 
-from easycat import EasyCatConfig, SessionActions, run
+from easycat import EasyConfig, SessionActions, run
 from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
 
@@ -45,7 +45,7 @@ def end_call(ctx: RunContext[Deps], reason: str = "") -> str:  # type: ignore[ty
 
 
 run(
-    EasyCatConfig.mic(
+    EasyConfig.mic(
         agent=PydanticAIBridge(agent=voice_agent, deps=deps),
         session_actions=actions,
     )

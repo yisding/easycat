@@ -14,7 +14,7 @@ except ImportError as exc:
         "openai-agents is required. Install with: uv sync --extra quickstart"
     ) from exc
 
-from easycat import EasyCatConfig, run
+from easycat import EasyConfig, run
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 
 
@@ -31,7 +31,7 @@ def main(backend: str) -> None:
         close()
 
     run(
-        EasyCatConfig.mic(
+        EasyConfig.mic(
             agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
             noise_reduction=NoiseReducerConfig(backend=backend),
         )

@@ -312,7 +312,7 @@ and polluting stdout.
 
 ## Plan 13 — Library prereqs — string-keyed providers
 
-**Concern.** `EasyCatConfig(stt="deepgram/flux")` is the headline DX
+**Concern.** `EasyConfig(stt="deepgram/flux")` is the headline DX
 win the plan promised. If the string parser silently mis-routes or
 grabs the wrong env var, templates ship with broken defaults.
 
@@ -327,9 +327,9 @@ through as a valid key.
   `ELEVENLABS_API_KEY` set → `ElevenLabsTTSConfig(model_id=...)`.
 - Unknown provider → `EASYCAT_E104` with fuzzy suggestion.
 - Missing env var → `EASYCAT_E203`.
-- `EasyCatConfig(stt="...")` resolves in `__post_init__` before any
+- `EasyConfig(stt="...")` resolves in `__post_init__` before any
   downstream check.
-- Env autodetect: `EasyCatConfig(agent=...)` with only
+- Env autodetect: `EasyConfig(agent=...)` with only
   `OPENAI_API_KEY` in env picks OpenAI STT/TTS.
 
 **Backed by.** New `test_library_prereqs.py::TestProviderStrings`.

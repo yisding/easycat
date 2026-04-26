@@ -39,11 +39,11 @@ Ctrl-C to quit.
 - **Add more tools:** decorate any function with `@function_tool` and pass it
   in the `tools=[...]` list. The agent will pick the right tool based on the
   user's request.
-- **Swap STT providers:** add `stt="deepgram/flux"` to the `EasyCatConfig(...)`
+- **Swap STT providers:** add `stt="deepgram/flux"` to the `EasyConfig(...)`
   call, put `DEEPGRAM_API_KEY` in `.env`. Flux STT collapses VAD + STT +
   endpointing into one streaming connection for lower latency.
 - **Try a different TTS voice:** pass `tts="openai"` with a specific voice via
   a typed `OpenAITTSConfig(voice="shimmer")`.
-- **Debug a session:** pass `debug="full"` to `EasyCatConfig(...)`. EasyCat
+- **Debug a session:** pass `debug="full"` to `EasyConfig(...)`. EasyCat
   writes a RunBundle journal under `~/.cache/easycat/journals/` that you can
   inspect via `RunBundle.load(...)` or load into a coding agent for analysis.
