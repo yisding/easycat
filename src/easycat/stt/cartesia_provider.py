@@ -81,7 +81,7 @@ class CartesiaSTT(WebSocketSTTBase):
         if self._ws is not None:
             await self._send_json_control({"type": "done"}, label="Cartesia done")
 
-        await self._close_active_websocket(close_before_drain=False)
+        await self._close_active_websocket()
 
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type", "")
@@ -90,9 +90,6 @@ class CartesiaSTT(WebSocketSTTBase):
         elif msg_type == "error":
             self._emit_provider_error_from_message(msg, default_message="Cartesia STT error")
         # ``flush_done`` and ``done`` are acks — nothing to do.
-
-    def _handle_message(self, msg: dict[str, Any]) -> None:
-        self._handle_json_message(msg)
 
     def _handle_transcript(self, msg: dict[str, Any]) -> None:
         text = msg.get("text", "")

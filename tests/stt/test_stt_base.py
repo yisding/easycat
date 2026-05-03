@@ -126,7 +126,7 @@ class JsonWebSocketSTT(WebSocketSTTBase):
         await self._send_ws(chunk.data)
 
     async def _on_end(self) -> None:
-        await self._close_active_websocket(close_before_drain=False)
+        await self._close_active_websocket()
 
     def _handle_json_message(self, msg: dict[str, object]) -> None:
         text = msg.get("text")

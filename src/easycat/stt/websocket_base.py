@@ -69,32 +69,26 @@ class WebSocketSTTBase(STTBase):
             return False
         return True
 
-    async def _close_active_websocket(self, *, close_before_drain: bool = True) -> None:
+    async def _close_active_websocket(self) -> None:
+        """Drain the receive loop, then close the underlying WebSocket."""
         ws = self._ws
         receive_task = self._receive_task
-        if ws is not None:
-            try:
-                await self._close_connection(
-                    ws,
-                    receive_task,
-                    close_before_drain=close_before_drain,
-                )
-            finally:
-                if self._ws is ws:
-                    self._ws = None
-                if self._receive_task is receive_task:
-                    self._receive_task = None
-                self._provider_event_bus = None
+        if ws is None:
+            return
+        try:
+            await self._drain_and_close(ws, receive_task)
+        finally:
+            if self._ws is ws:
+                self._ws = None
+            if self._receive_task is receive_task:
+                self._receive_task = None
+            self._provider_event_bus = None
 
-    async def _close_connection(
+    async def _drain_and_close(
         self,
         ws: ReconnectingWebSocket,
         receive_task: asyncio.Task[None] | None,
-        *,
-        close_before_drain: bool = True,
     ) -> None:
-        if close_before_drain:
-            await ws.close()
         try:
             if receive_task is not None:
                 try:
@@ -115,8 +109,7 @@ class WebSocketSTTBase(STTBase):
                         exc_info=True,
                     )
         finally:
-            if not close_before_drain:
-                await ws.close()
+            await ws.close()
 
     async def _receive_loop(self) -> None:
         assert self._ws is not None
@@ -151,9 +144,7 @@ class WebSocketSTTBase(STTBase):
         *,
         default_message: str | None = None,
     ) -> None:
-        message = msg.get("message") or msg.get("title") or default_message
-        if message is None:
-            message = f"{self._provider_log_label} STT error"
+        message = msg.get("message") or msg.get("title") or default_message or "unknown error"
         exc = RuntimeError(f"{self._provider_log_label} STT error: {message}")
         self._emit_provider_error(
             exc,
