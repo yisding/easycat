@@ -1153,6 +1153,73 @@ async def test_pause_commit_journals_segment_commit_and_final():
 
 
 @pytest.mark.asyncio
+async def test_shutdown_cancels_runtime_scoped_stt_pause_commit() -> None:
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(
+        _full_config(
+            journal=journal,
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=1000,
+                stt_segment_silence_ms=1000,
+            ),
+        )
+    )
+    session._is_running = True
+    session._turn = TurnContext("turn-runtime-scope", CancelToken())
+    session._turn.stt_has_uncommitted_audio = True
+    session._stt_active = True
+    session._turn_manager._state = TurnManagerState.USER_PAUSED
+
+    session._schedule_stt_segment_commit(VADStopSpeaking())
+    task = session._stt_pause_commit_task
+    assert task is not None
+    assert session._runtime_scope.tasks("stt_pause_commit") == (task,)
+
+    await session.shutdown()
+
+    records = [
+        record for record in journal.read() if record.data.get("task_name") == "stt_pause_commit"
+    ]
+    assert task.cancelled()
+    assert session._stt_pause_commit_task is None
+    assert session._runtime_scope.empty
+    assert [record.name for record in records] == ["task_scheduled", "task_cancelled"]
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_runtime_scoped_stt_pause_commit() -> None:
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(
+        _full_config(
+            journal=journal,
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=1000,
+                stt_segment_silence_ms=1000,
+            ),
+        )
+    )
+    session._is_running = True
+    session._turn = TurnContext("turn-runtime-scope", CancelToken())
+    session._turn.stt_has_uncommitted_audio = True
+    session._stt_active = True
+    session._turn_manager._state = TurnManagerState.USER_PAUSED
+
+    session._schedule_stt_segment_commit(VADStopSpeaking())
+    task = session._stt_pause_commit_task
+    assert task is not None
+
+    await session.stop()
+
+    records = [
+        record for record in journal.read() if record.data.get("task_name") == "stt_pause_commit"
+    ]
+    assert task.cancelled()
+    assert session._stt_pause_commit_task is None
+    assert session._runtime_scope.empty
+    assert [record.name for record in records] == ["task_scheduled", "task_cancelled"]
+
+
+@pytest.mark.asyncio
 async def test_tts_audio_and_markers_are_journaled_with_artifact_ref():
     artifact_store = InMemoryArtifactStore()
     journal = InMemoryRingBuffer(artifact_store=artifact_store)
