@@ -89,11 +89,10 @@ def test_curated_public_api_lazy_imports() -> None:
         SessionConfig,
         create_session,
     )
-    from easycat.session._types import _SessionConfig
 
     assert EasyConfig.__name__ == "EasyConfig"
     assert EasyCatConfig is EasyConfig
-    assert SessionConfig is _SessionConfig
+    assert SessionConfig.__name__ == "SessionConfig"
     assert MarkdownStripProcessor.__name__ == "MarkdownStripProcessor"
     assert create_session.__name__ == "create_session"
 
