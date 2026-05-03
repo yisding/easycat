@@ -1728,12 +1728,6 @@ class Session:
         task = self._greeting_task
         if task is not None and not task.done():
             await self._runtime_scope.cancel_and_drain("call_answered_greeting")
-        if task is not None and not task.done():
-            try:
-                task.cancel()
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
         self._greeting_task = None
 
     async def _on_stt_final_opt_out(self, event: STTFinal) -> None:
@@ -2794,15 +2788,9 @@ class Session:
         return response
 
     async def _cancel_stt(self) -> None:
-        self._cancel_scheduled_stt_segment_commit()
         await self._runtime_scope.cancel_and_drain("stt_pause_commit")
-        commit_task = self._stt_segment_commit_task
-        if commit_task is not None and not commit_task.done():
-            commit_task.cancel()
-            try:
-                await commit_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        await self._runtime_scope.cancel_and_drain("stt_segment_commit")
+        self._stt_pause_commit_task = None
         self._stt_segment_commit_task = None
         try:
             await self.stt.end_stream()
