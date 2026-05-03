@@ -43,7 +43,7 @@ async def test_playback_transport_full_turn(monkeypatch: pytest.MonkeyPatch) -> 
     """QueuePlaybackTransport should work as a drop-in transport for a full turn.
 
     Since it extends QueueTransport and adds send_playback_mark, the session
-    should detect it as a PlaybackAckTransport and complete a turn normally.
+    should detect playback-mark support and complete a turn normally.
     """
     transport = QueuePlaybackTransport()
     stt = ScriptedSTT(["hello"])
@@ -64,7 +64,7 @@ async def test_playback_transport_full_turn(monkeypatch: pytest.MonkeyPatch) -> 
         agent_final = await collector.wait_for(AgentFinal, timeout=3.0)
         assert agent_final.text == "HELLO"
 
-        # The session should have detected our transport as PlaybackAckTransport.
+        # The session should have detected the transport's send_playback_mark capability.
         assert session._playback_ack_transport is transport
     finally:
         await transport.finish_input()
