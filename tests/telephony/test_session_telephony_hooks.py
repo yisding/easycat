@@ -22,20 +22,18 @@ from unittest.mock import AsyncMock
 import pytest
 
 from easycat import (
-    CallIdentity,
-    OptOutDetected,
     Session,
     SessionActions,
     SessionConfig,
     STTFinal,
     TwilioConnectionTransport,
-    TwilioTransport,
-    TwilioTransportConfig,
 )
-from easycat.events import CallAnswered, CallEnded, EventBus
+from easycat.events import CallAnswered, CallEnded, EventBus, OptOutDetected
+from easycat.session._types import CallIdentity
 from easycat.stubs import NoopAgent
 from easycat.telephony.compliance import DNCList
 from easycat.transports.local import LocalTransport, LocalTransportConfig
+from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
 
 
 def _text_session(**overrides: Any) -> Session:

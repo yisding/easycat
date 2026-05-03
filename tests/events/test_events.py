@@ -195,20 +195,26 @@ def test_telephony_events_include_helper_payloads():
     assert CallStateChanged in TELEPHONY_EVENTS
 
 
-def test_top_level_exports_include_call_lifecycle_events_and_groups():
+def test_top_level_exports_include_curated_call_lifecycle_events():
     import easycat
 
-    assert easycat.CallInitiated.__name__ == "CallInitiated"
-    assert easycat.CallRinging.__name__ == "CallRinging"
+    # Top-level surface only re-exports the lifecycle events an app
+    # subscribes to. Detailed telephony events stay reachable via the
+    # ``easycat.events`` submodule (asserted below).
     assert easycat.CallAnswered.__name__ == "CallAnswered"
-    assert easycat.CallScreening.__name__ == "CallScreening"
-    assert easycat.ScreeningTimedOut.__name__ == "ScreeningTimedOut"
     assert easycat.CallFailed.__name__ == "CallFailed"
     assert easycat.CallEnded.__name__ == "CallEnded"
-    assert easycat.CallStateChanged is CallStateChanged
-    assert easycat.ScreeningResponse is ScreeningResponse
-    assert easycat.IVRAction is IVRAction
-    assert easycat.TELEPHONY_EVENTS is TELEPHONY_EVENTS
+
+    from easycat import events as ev
+
+    assert ev.CallInitiated.__name__ == "CallInitiated"
+    assert ev.CallRinging.__name__ == "CallRinging"
+    assert ev.CallScreening.__name__ == "CallScreening"
+    assert ev.ScreeningTimedOut.__name__ == "ScreeningTimedOut"
+    assert ev.CallStateChanged is CallStateChanged
+    assert ev.ScreeningResponse is ScreeningResponse
+    assert ev.IVRAction is IVRAction
+    assert ev.TELEPHONY_EVENTS is TELEPHONY_EVENTS
 
 
 def test_error_event():
