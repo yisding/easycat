@@ -8,11 +8,13 @@ import socket
 from collections.abc import AsyncIterator, Iterable, Sequence
 from typing import Any
 
-from easycat import EasyCatConfig, OpenAISTTConfig, OpenAITTSConfig
+from easycat import EasyCatConfig
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.echo_cancellation import PassthroughAEC
 from easycat.events import STTEvent, STTEventType, TTSEvent, TTSEventType
+from easycat.stt.openai_provider import OpenAISTTConfig
 from easycat.tts.input import TTSInput, coerce_tts_input
+from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig
 
 FAST_TURN_CONFIG = TurnManagerConfig(end_of_turn_silence_ms=1)
