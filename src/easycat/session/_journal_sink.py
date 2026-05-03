@@ -62,12 +62,13 @@ class SessionJournalSink:
     artifact_store: ArtifactStore | None
     session_id: str
     current_turn_id: Callable[[str | None], str | None]
-    _registrations: list[tuple[type, EventHandler]] = field(default_factory=list, init=False)
+    _subscribed: bool = field(default=False, init=False)
 
     def subscribe(self) -> None:
         """Subscribe event bus handlers that write session events to the journal."""
-        if self.journal is None or self._registrations:
+        if self.journal is None or self._subscribed:
             return
+        self._subscribed = True
 
         evt = JournalRecordKind.EVENT
         ctl = JournalRecordKind.CONTROL
@@ -165,7 +166,6 @@ class SessionJournalSink:
 
     def _subscribe(self, event_type: type, handler: EventHandler) -> None:
         self.event_bus.subscribe(event_type, handler)
-        self._registrations.append((event_type, handler))
 
     def _make_event_handler(self, kind: JournalRecordKind, name: str) -> EventHandler:
         def _handler(event: Any) -> None:

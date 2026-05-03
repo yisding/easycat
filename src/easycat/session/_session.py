@@ -1499,20 +1499,17 @@ class Session:
             # the read-only snapshot instead of the now-closed backend.
             if self._journal_view is not None:
                 self._journal_view._journal = replacement
-            self._journal_sink.replace_backends(
-                journal=replacement,
-                artifact_store=self._artifact_store,
-            )
 
         if self._artifact_store:
             live_store = self._artifact_store
             replacement_store = self._preserve_artifacts_after_destroy(live_store)
             live_store.close()
             self._artifact_store = replacement_store
-            self._journal_sink.replace_backends(
-                journal=self._journal,
-                artifact_store=replacement_store,
-            )
+
+        self._journal_sink.replace_backends(
+            journal=self._journal,
+            artifact_store=self._artifact_store,
+        )
 
     def _preserve_journal_after_destroy(self, journal: ExecutionJournal) -> ExecutionJournal:
         db_path = getattr(journal, "db_path", None)
