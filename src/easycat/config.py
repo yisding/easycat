@@ -26,7 +26,7 @@ from easycat.providers import Transport
 from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
 from easycat.runtime.journal import create_journal
 from easycat.session._session import Session
-from easycat.session._types import _SessionConfig
+from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
@@ -793,7 +793,7 @@ def create_session(config: EasyConfig) -> Session:
                 return _outbound_sm.gate.is_buffering
 
         session = Session(
-            _SessionConfig(
+            SessionConfig(
                 stt=stt,
                 tts=tts,
                 vad=vad,
@@ -1063,7 +1063,7 @@ def create_text_session(
         from easycat.stubs import NoopSTT, NoopTransport, NoopTTS, NoopVAD
 
         session = Session(
-            _SessionConfig(
+            SessionConfig(
                 stt=NoopSTT(),
                 tts=NoopTTS(),
                 vad=NoopVAD(),

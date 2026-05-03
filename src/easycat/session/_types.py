@@ -224,7 +224,3 @@ class SessionConfig:
     #     identity for DNC/opt-out handling.
     call_identity: CallIdentity | None = None
     caller_id_exposure: CallerIdExposure = "tools_only"
-
-
-_SessionConfig = SessionConfig
-"""Internal alias used by factory code while direct SessionConfig users migrate."""
