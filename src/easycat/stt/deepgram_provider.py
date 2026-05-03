@@ -72,7 +72,7 @@ class DeepgramSTT(WebSocketSTTBase):
         if self._ws is not None:
             await self._send_json_control({"type": "CloseStream"}, label="CloseStream")
 
-        await self._close_active_websocket(close_before_drain=False)
+        await self._close_active_websocket()
 
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type", "")
@@ -105,9 +105,6 @@ class DeepgramSTT(WebSocketSTTBase):
                 word_timestamps=word_timestamps,
             )
         )
-
-    def _handle_message(self, msg: dict[str, Any]) -> None:
-        self._handle_json_message(msg)
 
     def _handle_flux_message(self, msg_type: str, msg: dict[str, Any]) -> None:
         if msg_type != "TurnInfo":
