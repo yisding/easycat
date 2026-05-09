@@ -30,7 +30,7 @@ from easycat import (
     wait_for_shutdown_signal,
 )
 from easycat.events import EventBus, TTSEvent
-from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents import auto_adapt_agent
 from easycat.providers import TTSProvider
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransport, LocalTransportConfig

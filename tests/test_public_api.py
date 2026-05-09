@@ -3,6 +3,8 @@ from __future__ import annotations
 import easycat
 
 PUBLIC_API_SNAPSHOT = (
+    "AgentDelta",
+    "AgentFinal",
     "AgentRunner",
     "AgentRunnerConfig",
     "AudioChunk",
@@ -78,7 +80,7 @@ PUBLIC_API_SNAPSHOT = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 70
+    assert len(easycat.__all__) <= 72
 
 
 def test_curated_public_api_lazy_imports() -> None:

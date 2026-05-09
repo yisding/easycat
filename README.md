@@ -3,6 +3,30 @@
 Slim, batteries-included voice bot framework that plugs into idiomatic
 OpenAI Agents SDK, PydanticAI agents, or PydanticAI workflows.
 
+## Learn the pipeline from scratch
+
+The 16-chapter [teaching ladder](docs/teaching/) walks the entire voice
+pipeline ground-up, in the spirit of *Crafting Interpreters* and
+`nanoGPT`. Each chapter is a self-contained folder with a runnable
+`main.py` and a narrative `README.md`. Start at
+[`docs/teaching/00-hello-audio/`](docs/teaching/00-hello-audio/) and add
+one stage per chapter (echo → transcribe → VAD → blocking agent →
+streaming agent → tools → smart-turn → interruption → noise/AEC →
+journal → evals → swap providers → BYO agent → operate in production).
+
+## CLI
+
+```bash
+easycat init     # scaffold a new project from a template
+easycat doctor   # check API keys, Python version, optional extras, provider reachability
+easycat explain  # look up an EasyCat error code
+easycat bundles  # list captured debug bundles
+easycat inspect  # summarise one captured debug bundle
+```
+
+The fastest path from empty directory to a running session is
+`easycat init` followed by `easycat doctor` to validate the environment.
+
 ## Current capabilities
 - Session runtime that wires the audio pipeline (noise reduction -> VAD -> STT -> agent -> TTS)
 - Typed event system with an EventBus for streaming-first voice events
@@ -41,11 +65,15 @@ config = EasyConfig(
 session = create_session(config)
 ```
 
-> Note: `EasyConfig` will automatically wire **OpenAI STT + OpenAI TTS** if
-> you provide `openai_api_key` and do not override `stt` or `tts`. If you omit
-> the API key, you must supply `stt` and `tts` configs explicitly. For most
-> users, `EasyConfig` + `create_session` is the fastest way to get a working
-> pipeline.
+> Note: `EasyConfig` will automatically wire **OpenAI Realtime STT
+> (gpt-realtime) + OpenAI TTS** if you provide `openai_api_key` and do
+> not override `stt` or `tts`. The Realtime STT streams transcription
+> over a WebSocket as audio arrives — sub-second stop-to-final latency,
+> not a batch upload at end of turn. The Realtime API is priced
+> separately from `/v1/audio/transcriptions`; see OpenAI's pricing page.
+> If you omit the API key, you must supply `stt` and `tts` configs
+> explicitly. For most users, `EasyConfig` + `create_session` is the
+> fastest way to get a working pipeline.
 >
 > The underlying bridge classes live in `easycat.integrations.agents`
 > (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`,

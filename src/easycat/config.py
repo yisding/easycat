@@ -445,6 +445,13 @@ class EasyConfig:
     agent_model: str | None = None
     remote_agent_api_key: str | None = None
     agent_runner: AgentRunnerConfig | None = None
+    # When True (default), a plain ``async run(text) -> str`` agent is
+    # auto-wrapped in :class:`AgentRunner` so it gets timeout, history,
+    # and cancellation handling out of the box.  Set to ``False`` only
+    # when you are passing in a fully-constructed
+    # :class:`ExternalAgentBridge` and want to drive it without the
+    # ``AgentRunner`` defaults — useful for tests and for bridges that
+    # implement their own retry/timeout policy.
     wrap_agent: bool = True
     strip_markdown: bool = False
     auto_align_tts_output_to_transport: bool = True
@@ -619,7 +626,12 @@ class EasyConfig:
 
 
 EasyCatConfig = EasyConfig
-"""Compatibility alias for the pre-rename public app config."""
+"""Deprecated alias kept for the pre-rename ``EasyCatConfig`` symbol.
+
+New code should use :class:`EasyConfig`.  This alias exists only so
+imports written before the rename keep working; it is scheduled for
+removal in a future release.
+"""
 
 
 def _should_auto_turn_from_stt_final(config: EasyConfig) -> bool:

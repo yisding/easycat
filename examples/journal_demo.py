@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
+from easycat import Session, SessionConfig, TurnManagerConfig
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
     Event,
@@ -25,10 +26,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.runtime.journal import InMemoryRingBuffer
-from easycat.session._session import Session
-from easycat.session._types import SessionConfig
 from easycat.tts.input import TTSInput
-from easycat.turn_manager import TurnManagerConfig
 
 
 def _chunk(n: int = 320) -> AudioChunk:

@@ -76,6 +76,8 @@ _register("easycat.errors", "EasyCatError", "ErrorEntry")
 # Core events.
 _register(
     "easycat.events",
+    "AgentDelta",
+    "AgentFinal",
     "AudioIn",
     "AudioOut",
     "BotStartedSpeaking",
@@ -155,6 +157,8 @@ if TYPE_CHECKING:
     from easycat.debug.export import export_debug_bundle
     from easycat.errors import EasyCatError, ErrorEntry
     from easycat.events import (
+        AgentDelta,
+        AgentFinal,
         AudioIn,
         AudioOut,
         BotStartedSpeaking,
