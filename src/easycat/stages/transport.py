@@ -41,9 +41,7 @@ class TransportStage:
 
         Returns ``True`` when the transport accepted the chunk for
         delivery and ``False`` when it was silently dropped (for
-        example because the peer is disconnected). Transports whose
-        ``send_audio`` returns ``None`` are treated as delivered for
-        backward compatibility.
+        example because the peer is disconnected).
         """
         state_before = self.snapshot_state()
         audio_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
@@ -72,7 +70,7 @@ class TransportStage:
                 error=str(exc),
             )
             raise
-        result = True if delivered is None else bool(delivered)
+        result = bool(delivered)
         state_after = self.snapshot_state()
         journal_append_event(
             ctx,

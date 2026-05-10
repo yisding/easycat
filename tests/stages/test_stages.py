@@ -68,7 +68,7 @@ class _StubAgent:
 
 class _StubTransport:
     async def send_audio(self, chunk):
-        pass
+        return True
 
 
 class _StubNoiseReducer:
@@ -458,14 +458,6 @@ class TestStageExecuteRecording:
         stage = AgentStage(_StubAgent())
         result = await stage.execute("hello", ctx, turn)
         assert result == "reply:hello"
-
-    async def test_transport_stage_returns_true_when_send_audio_returns_none(self):
-        """Transports that return None (backward-compat) are treated as delivered."""
-        ctx = _make_ctx(journal=None)
-        turn = _make_turn()
-        stage = TransportStage(_StubTransport())
-        delivered = await stage.execute(b"chunk", ctx, turn)
-        assert delivered is True
 
     async def test_transport_stage_returns_true_when_send_audio_returns_true(self):
         class _DeliveringTransport:

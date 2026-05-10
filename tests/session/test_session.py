@@ -80,8 +80,9 @@ class FakeTransport:
         for chunk in self.chunks:
             yield chunk
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
+    async def send_audio(self, chunk: AudioChunk) -> bool:
         self.sent.append(chunk)
+        return True
 
     async def clear_audio(self) -> None:
         pass
