@@ -332,10 +332,6 @@ class EasyConfigError(ValueError):
     """Raised when app config validation fails."""
 
 
-EasyCatConfigError = EasyConfigError
-"""Compatibility alias for the pre-rename config validation error."""
-
-
 _VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
 _VALID_DEBUG = {"off", "light", "full"}
 _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
