@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, replace
-from difflib import get_close_matches
 from typing import Any
 
+from easycat._provider_catalog import ProviderCatalog
 from easycat.events import EventBus
 from easycat.providers import TTSProvider
 from easycat.tts.cartesia_tts import CartesiaTTS, CartesiaTTSConfig
@@ -23,9 +22,23 @@ _PROVIDERS: dict[str, tuple[type[TTSProvider], type[TTSConfig]]] = {
     "elevenlabs": (ElevenLabsTTS, ElevenLabsTTSConfig),
     "cartesia": (CartesiaTTS, CartesiaTTSConfig),
 }
-_CONFIG_TO_PROVIDER: dict[type[TTSConfig], type[TTSProvider]] = {
-    cfg_cls: provider_cls for provider_cls, cfg_cls in _PROVIDERS.values()
+
+# Provider name → env var that holds its API key. Used by string-keyed
+# provider selection (e.g. ``tts="openai"``) to auto-detect the API
+# key without explicit wiring.
+_PROVIDER_ENV_VAR: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "deepgram": "DEEPGRAM_API_KEY",
+    "elevenlabs": "ELEVENLABS_API_KEY",
+    "cartesia": "CARTESIA_API_KEY",
 }
+
+_CATALOG = ProviderCatalog(
+    providers=_PROVIDERS,
+    env_vars=_PROVIDER_ENV_VAR,
+    kind="TTS",
+)
+_CONFIG_TO_PROVIDER: dict[type[TTSConfig], type[TTSProvider]] = _CATALOG.config_to_provider
 
 
 @dataclass
@@ -83,26 +96,12 @@ def create_tts_provider_from_config(config: TTSConfig, event_bus: EventBus) -> T
 
 
 def _provider_for_config(config_type: type[TTSConfig]) -> type[TTSProvider]:
-    provider_cls = _CONFIG_TO_PROVIDER.get(config_type)
-    if provider_cls is None:
-        raise ValueError("Unsupported TTS configuration type.")
-    return provider_cls
-
-
-# Provider name → env var that holds its API key. Used by string-keyed
-# provider selection (e.g. ``tts="openai"``) to auto-detect the API
-# key without explicit wiring.
-_PROVIDER_ENV_VAR: dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "deepgram": "DEEPGRAM_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-    "cartesia": "CARTESIA_API_KEY",
-}
+    return _CATALOG.provider_for_config(config_type)
 
 
 def available_providers() -> list[str]:
     """Return every registered TTS provider name, sorted."""
-    return sorted(_PROVIDERS)
+    return _CATALOG.available_names()
 
 
 def parse_tts_string(spec: str) -> TTSConfig:
@@ -122,30 +121,4 @@ def parse_tts_string(spec: str) -> TTSConfig:
             suggestion.
         EasyCatError (EASYCAT_E203): Missing required API key env var.
     """
-    from easycat.errors import EASYCAT_E104, EASYCAT_E203
-
-    provider, _, model = spec.partition("/")
-    provider = provider.strip().lower()
-    model = model.strip() or None
-
-    if provider not in _PROVIDERS:
-        available = available_providers()
-        suggestion = get_close_matches(provider, available, n=1, cutoff=0.5)
-        hint = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
-        raise EASYCAT_E104(
-            provider=provider,
-            available=", ".join(available),
-            hint=hint,
-        )
-
-    env_var = _PROVIDER_ENV_VAR[provider]
-    api_key = os.getenv(env_var, "")
-    if not api_key:
-        raise EASYCAT_E203(var=env_var)
-
-    _, config_cls = _PROVIDERS[provider]
-    kwargs: dict[str, Any] = {"api_key": api_key}
-    if model:
-        model_field = getattr(config_cls, "MODEL_FIELD", "model")
-        kwargs[model_field] = model
-    return config_cls(**kwargs)
+    return _CATALOG.parse_string(spec)
