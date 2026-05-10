@@ -105,8 +105,8 @@ class NoopTransport:
         return
         yield  # make this an async generator
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
-        pass
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        return True
 
     async def clear_audio(self) -> None:
         pass
