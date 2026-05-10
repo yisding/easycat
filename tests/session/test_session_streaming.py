@@ -49,7 +49,6 @@ from easycat.session._text import (
 )
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig
-from easycat.session.actions import SessionActionResult
 from easycat.session.interruption import (
     _all_tts_audio_delivered,
     _audio_bytes_acknowledged,
@@ -2363,7 +2362,7 @@ async def test_streaming_strip_markdown_writes_journal_record():
         )
     )
     session._turn = TurnContext("turn-stream-markdown", CancelToken())
-    session._drain_session_actions = AsyncMock(return_value=SessionActionResult())
+    session._drain_session_actions = AsyncMock(return_value=False)
 
     await session._run_streaming_agent("help", token=None)
 

@@ -12,7 +12,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any, TypeVar
 from uuid import uuid4
 
@@ -141,11 +141,6 @@ from easycat.turn_manager import TurnManager, TurnManagerState
 logger = logging.getLogger(__name__)
 
 _HelperT = TypeVar("_HelperT")
-
-
-@dataclass(slots=True)
-class _ActionDrainOutcome:
-    stop_session: bool = False
 
 
 def _ensure_bridge(agent: Any) -> ExternalAgentBridge:
@@ -1603,11 +1598,14 @@ class Session:
         """
         self._action_executors.insert(0, executor)
 
-    async def _drain_session_actions(self) -> _ActionDrainOutcome:
-        """Execute any session actions queued by agent tools during this turn."""
-        outcome = _ActionDrainOutcome()
+    async def _drain_session_actions(self) -> bool:
+        """Execute any session actions queued by agent tools during this turn.
+
+        Returns ``True`` if any executor signalled that the session should stop.
+        """
+        should_stop = False
         if self._session_actions is None or not self._session_actions.has_pending:
-            return outcome
+            return should_stop
 
         actions = self._session_actions.drain()
         for action in actions:
@@ -1634,7 +1632,7 @@ class Session:
                 )
                 continue
 
-            outcome.stop_session = outcome.stop_session or result.stop_session
+            should_stop = should_stop or result.stop_session
             await self._emit(
                 SessionActionCompleted(
                     action=action,
@@ -1643,7 +1641,7 @@ class Session:
                 )
             )
 
-        return outcome
+        return should_stop
 
     def _find_action_executor(self, action: SessionAction) -> SessionActionExecutor | None:
         for executor in self._action_executors:
@@ -2204,12 +2202,12 @@ class Session:
         tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
         tts_playback_started = False
         tts_chunks: list[tuple[str, int, bool]] = []
-        tts_action_outcome = _ActionDrainOutcome()
+        tts_should_stop = False
 
         # ── TTS consumer task ──
 
         async def _process_tts() -> None:
-            nonlocal tts_action_outcome
+            nonlocal tts_should_stop
             nonlocal tts_playback_started
             started = False
             try:
@@ -2264,8 +2262,8 @@ class Session:
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 # Drain session actions (end_call, transfer) BEFORE
                 # transitioning to IDLE so no new turn can sneak in.
-                tts_action_outcome = await self._drain_session_actions()
-                if tts_action_outcome.stop_session:
+                tts_should_stop = await self._drain_session_actions()
+                if tts_should_stop:
                     await self._wait_outbound_drain()
                     await self._turn_manager.bot_stopped_speaking()
                 else:
@@ -2392,7 +2390,7 @@ class Session:
                 turn_id=turn.id,
             )
 
-        if tts_action_outcome.stop_session:
+        if tts_should_stop:
             await self.stop()
             return
 
@@ -2423,11 +2421,13 @@ class Session:
 
     # ── TTS synthesis helper ───────────────────────────────────
 
-    async def _synthesize_tts(
-        self, payload: TTSInput | str, token: CancelToken | None
-    ) -> _ActionDrainOutcome:
-        """Synthesize TTS for a complete payload and emit audio events."""
-        action_outcome = _ActionDrainOutcome()
+    async def _synthesize_tts(self, payload: TTSInput | str, token: CancelToken | None) -> bool:
+        """Synthesize TTS for a complete payload and emit audio events.
+
+        Returns ``True`` if a drained session action signalled that the
+        session should stop.
+        """
+        should_stop = False
         if isinstance(payload, str):
             payload = self._prepare_tts_payload(payload, is_streaming=False, is_final=True)
         turn = self._turn
@@ -2457,8 +2457,8 @@ class Session:
             ):
                 # Drain session actions (end_call, transfer) BEFORE
                 # transitioning to IDLE so no new turn can sneak in.
-                action_outcome = await self._drain_session_actions()
-                if action_outcome.stop_session:
+                should_stop = await self._drain_session_actions()
+                if should_stop:
                     await self._wait_outbound_drain()
                     await self._turn_manager.bot_stopped_speaking()
                 else:
@@ -2476,7 +2476,7 @@ class Session:
                 # and send playback marks.
                 self._auto_turn_speech_frames = 0
                 self._turn_manager.reset()
-        return action_outcome
+        return should_stop
 
     # ── Internal helpers ───────────────────────────────────────
 
