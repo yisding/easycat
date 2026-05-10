@@ -203,9 +203,9 @@ async def test_drain_session_actions_uses_executor_and_emits_lifecycle_events() 
     session.event_bus.subscribe(SessionActionCompleted, completed.append)
     session.event_bus.subscribe(SessionActionFailed, failed.append)
 
-    outcome = await session._drain_session_actions()
+    should_stop = await session._drain_session_actions()
 
-    assert outcome.stop_session is True
+    assert should_stop is True
     assert len(executor.actions) == 1
     assert len(requested) == 1
     assert len(started) == 1
@@ -223,9 +223,9 @@ async def test_drain_session_actions_emits_failure_when_unsupported() -> None:
     failures: list[SessionActionFailed] = []
     session.event_bus.subscribe(SessionActionFailed, failures.append)
 
-    outcome = await session._drain_session_actions()
+    should_stop = await session._drain_session_actions()
 
-    assert outcome.stop_session is False
+    assert should_stop is False
     assert len(failures) == 1
     assert isinstance(failures[0].action, CustomAction)
     assert "No session action executor" in failures[0].error
