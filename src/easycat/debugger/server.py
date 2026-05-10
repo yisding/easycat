@@ -1144,18 +1144,8 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             return web.Response(status=500, text=str(exc))
         if tmp_path is None:
             return web.Response(status=409, text="session has no journal to export")
-        # ``tmp_path`` is a Path now; FileResponse streams the file
-        # without holding the bundle in memory.  The closure on the
-        # caller side (serve_session._export_fn) deletes the file
-        # via a background callback when the response is finalised.
-        if isinstance(tmp_path, (bytes, bytearray)):
-            # Backwards-compat: an older closure returns bytes.  Smaller
-            # bundles can take this path without harm.
-            return web.Response(
-                body=bytes(tmp_path),
-                content_type="application/zip",
-                headers={"Content-Disposition": "attachment; filename=session.zip"},
-            )
+        # FileResponse streams the bundle without loading it into memory.
+        # The temp file is cleaned up by a delayed callback below.
         response = web.FileResponse(
             tmp_path,
             headers={
