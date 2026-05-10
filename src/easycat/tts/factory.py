@@ -73,11 +73,11 @@ def create_tts_provider_from_config(config: TTSConfig, event_bus: EventBus) -> T
     """
     provider_cls = _provider_for_config(type(config))
     provider_config = config
-    if isinstance(config, DeepgramTTSConfig) and config.event_bus is None:
-        provider_config = replace(config, event_bus=event_bus)
-    elif isinstance(config, ElevenLabsTTSConfig) and config.event_bus is None:
-        provider_config = replace(config, event_bus=event_bus)
-    elif isinstance(config, CartesiaTTSConfig) and config.event_bus is None:
+    needs_event_bus = isinstance(
+        config,
+        (DeepgramTTSConfig, ElevenLabsTTSConfig, CartesiaTTSConfig),
+    )
+    if needs_event_bus and config.event_bus is None:
         provider_config = replace(config, event_bus=event_bus)
     return provider_cls(provider_config)
 
