@@ -17,7 +17,7 @@ from easycat.tts.elevenlabs_tts import (
     ElevenLabsTTS,
     ElevenLabsTTSConfig,
 )
-from easycat.tts.test_harness import extract_audio_chunks, verify_pcm16_audio
+from tests.tts._harness import extract_audio_chunks, verify_pcm16_audio
 
 
 def _pcm16_bytes(n_samples: int = 240) -> bytes:

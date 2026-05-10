@@ -13,7 +13,7 @@ from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk, Aud
 from easycat.events import TTSEvent, TTSEventType
 from easycat.tts.base import TTSBase
 from easycat.tts.input import TTSInput
-from easycat.tts.test_harness import (
+from tests.tts._harness import (
     collect_tts_output,
     concatenate_audio,
     extract_audio_chunks,
