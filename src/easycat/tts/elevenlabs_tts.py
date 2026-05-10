@@ -8,7 +8,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 
@@ -43,6 +43,11 @@ _ELEVENLABS_FORMAT_MAP: dict[str, AudioFormat] = {
 @dataclass
 class ElevenLabsTTSConfig:
     """Configuration for the ElevenLabs TTS provider."""
+
+    # Name of the model field on this config — read by ``parse_tts_string``
+    # to know that ``"elevenlabs/<model>"`` shortcuts populate ``model_id``
+    # rather than the conventional ``model``.
+    MODEL_FIELD: ClassVar[str] = "model_id"
 
     api_key: str = ""
     voice_id: str = "EXAVITQu4vr4xnSDxMaL"  # Sarah (default)

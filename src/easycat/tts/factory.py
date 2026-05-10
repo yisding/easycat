@@ -99,15 +99,6 @@ _PROVIDER_ENV_VAR: dict[str, str] = {
     "cartesia": "CARTESIA_API_KEY",
 }
 
-# ElevenLabs and Cartesia both name the model field ``model_id`` rather
-# than ``model``. Bridge the naming gap so users can write
-# ``tts="elevenlabs/eleven_flash_v2_5"`` or ``tts="cartesia/sonic-turbo"``
-# without caring about the field-level quirk.
-_MODEL_FIELD_NAME: dict[str, str] = {
-    "elevenlabs": "model_id",
-    "cartesia": "model_id",
-}
-
 
 def available_providers() -> list[str]:
     """Return every registered TTS provider name, sorted."""
@@ -155,6 +146,6 @@ def parse_tts_string(spec: str) -> TTSConfig:
     _, config_cls = _PROVIDERS[provider]
     kwargs: dict[str, Any] = {"api_key": api_key}
     if model:
-        model_field = _MODEL_FIELD_NAME.get(provider, "model")
+        model_field = getattr(config_cls, "MODEL_FIELD", "model")
         kwargs[model_field] = model
     return config_cls(**kwargs)
