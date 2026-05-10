@@ -13,7 +13,6 @@ from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.session._types import CallIdentity
 from easycat.smart_turn import SmartTurnConfig
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
-from easycat.stt.openai_provider import OpenAISTTConfig  # noqa: F401  (re-exported symbol)
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.telephony.dtmf import emit_twilio_dtmf
 from easycat.telephony.session_actions import (
