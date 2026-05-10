@@ -35,7 +35,6 @@ from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.factory import STTConfig, create_stt_provider_from_config, parse_stt_string
-from easycat.stt.openai_provider import OpenAISTTConfig  # noqa: F401  (public re-export)
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.stubs import NoopAgent
 from easycat.telephony.call_state import (
