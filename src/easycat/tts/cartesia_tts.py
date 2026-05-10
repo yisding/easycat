@@ -8,7 +8,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 from uuid import uuid4
 
 from easycat._provider_helpers import get_package_version
@@ -32,6 +32,11 @@ _ENCODING_SAMPLE_WIDTH: dict[str, int] = {
 @dataclass
 class CartesiaTTSConfig:
     """Configuration for the Cartesia TTS (Sonic) WebSocket provider."""
+
+    # Name of the model field on this config — read by ``parse_tts_string``
+    # to know that ``"cartesia/<model>"`` shortcuts populate ``model_id``
+    # rather than the conventional ``model``.
+    MODEL_FIELD: ClassVar[str] = "model_id"
 
     api_key: str = ""
     # Sonic-3 is the default — best quality/latency balance. Use
