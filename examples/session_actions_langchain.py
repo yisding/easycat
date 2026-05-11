@@ -22,8 +22,7 @@ try:
     from langchain_openai import ChatOpenAI
 except ImportError as exc:
     raise SystemExit(
-        "LangChain is required. "
-        "Install with: uv add easycat[langchain] langchain langchain-openai"
+        "LangChain is required. Install with: uv add easycat[langchain] langchain langchain-openai"
     ) from exc
 
 from easycat import EasyConfig, SessionActions, run
