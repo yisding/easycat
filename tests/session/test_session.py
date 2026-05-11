@@ -735,7 +735,7 @@ async def test_pipeline_heartbeat_emits_records_at_interval():
 async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     """Regression test for plan-7 flakiness.
 
-    When VADStopSpeaking fires, ``_schedule_stt_segment_commit`` creates
+    When VADStopSpeaking fires, ``STTCommitter.schedule`` creates
     a task that calls ``stt.commit_segment``.  If SmartTurn immediately
     declares the turn complete, ``TurnEnded`` fires before the commit
     task has a chance to cancel — and previously ``_schedule_turn_ended``
@@ -751,8 +751,8 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     session._turn_state = TurnState.LISTENING
     session._turn = TurnContext("race-turn", CancelToken())
     session._turn.stt_has_uncommitted_audio = True
-    session._stt_active = True
-    session._stt_segment_silence_ms = 0  # match plan-7's fast config
+    session._stt_committer.mark_active()
+    session._stt_committer._segment_silence_ms = 0  # match plan-7's fast config
 
     events = []
 
@@ -776,7 +776,7 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     session.stt = _RaceSTT()
     session._stt_stage = type(session._stt_stage)(session.stt, journal=session._journal)
 
-    session._schedule_stt_segment_commit(VADStopSpeaking())
+    session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
     await asyncio.sleep(0.001)
     session._schedule_turn_ended(TurnEnded(turn_id="race-turn"))
     for _ in range(20):
@@ -1001,11 +1001,11 @@ async def test_pause_commit_keeps_turn_open_but_collects_segment_final():
     )
     session._turn = TurnContext("turn-1", CancelToken())
     session._turn.stt_has_uncommitted_audio = True
-    session._stt_active = True
+    session._stt_committer.mark_active()
     session._turn_manager._state = TurnManagerState.USER_PAUSED
-    session._start_stt_event_task()
+    session._stt_committer.start_event_loop(session._turn)
 
-    session._schedule_stt_segment_commit(VADStopSpeaking())
+    session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
     await asyncio.sleep(0.05)
 
     assert stt.commit_calls == 1
@@ -1127,11 +1127,11 @@ async def test_pause_commit_journals_segment_commit_and_final():
     )
     session._turn = TurnContext("turn-segment-journal", CancelToken())
     session._turn.stt_has_uncommitted_audio = True
-    session._stt_active = True
+    session._stt_committer.mark_active()
     session._turn_manager._state = TurnManagerState.USER_PAUSED
-    session._start_stt_event_task()
+    session._stt_committer.start_event_loop(session._turn)
 
-    await session._start_stt_segment_commit()
+    await session._stt_committer._start_segment_commit(turn=session._turn)
     await asyncio.sleep(0.05)
 
     records = [record for record in journal.read() if record.name.startswith("stt_segment_")]
@@ -1174,11 +1174,11 @@ async def test_shutdown_cancels_runtime_scoped_stt_pause_commit() -> None:
     session._is_running = True
     session._turn = TurnContext("turn-runtime-scope", CancelToken())
     session._turn.stt_has_uncommitted_audio = True
-    session._stt_active = True
+    session._stt_committer.mark_active()
     session._turn_manager._state = TurnManagerState.USER_PAUSED
 
-    session._schedule_stt_segment_commit(VADStopSpeaking())
-    task = session._stt_pause_commit_task
+    session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
+    task = session._stt_committer._pause_commit_task
     assert task is not None
     assert session._runtime_scope.tasks("stt_pause_commit") == (task,)
 
@@ -1188,7 +1188,7 @@ async def test_shutdown_cancels_runtime_scoped_stt_pause_commit() -> None:
         record for record in journal.read() if record.data.get("task_name") == "stt_pause_commit"
     ]
     assert task.cancelled()
-    assert session._stt_pause_commit_task is None
+    assert session._stt_committer._pause_commit_task is None
     assert session._runtime_scope.empty
     assert [record.name for record in records] == ["task_scheduled", "task_cancelled"]
 
@@ -1208,11 +1208,11 @@ async def test_stop_cancels_runtime_scoped_stt_pause_commit() -> None:
     session._is_running = True
     session._turn = TurnContext("turn-runtime-scope", CancelToken())
     session._turn.stt_has_uncommitted_audio = True
-    session._stt_active = True
+    session._stt_committer.mark_active()
     session._turn_manager._state = TurnManagerState.USER_PAUSED
 
-    session._schedule_stt_segment_commit(VADStopSpeaking())
-    task = session._stt_pause_commit_task
+    session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
+    task = session._stt_committer._pause_commit_task
     assert task is not None
 
     await session.stop()
@@ -1221,7 +1221,7 @@ async def test_stop_cancels_runtime_scoped_stt_pause_commit() -> None:
         record for record in journal.read() if record.data.get("task_name") == "stt_pause_commit"
     ]
     assert task.cancelled()
-    assert session._stt_pause_commit_task is None
+    assert session._stt_committer._pause_commit_task is None
     assert session._runtime_scope.empty
     assert [record.name for record in records] == ["task_scheduled", "task_cancelled"]
 
@@ -1529,7 +1529,7 @@ async def test_playback_mark_ack_scoped_to_current_turn():
 
     # ── Second turn (replaces the TurnContext) ──
     session._is_running = True
-    with patch.object(session, "_start_stt_event_task"):
+    with patch.object(session._stt_committer, "start_event_loop"):
         await session._on_turn_started(TurnStarted())
     session._is_running = False
 
