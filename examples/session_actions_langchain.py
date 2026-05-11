@@ -11,8 +11,13 @@ For telephony-specific actions (transfer, DTMF, SMS) see
 ``examples/twilio_app.py``.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
-       uv add easycat[langchain] langchain langchain-openai
+       uv add easycat[langchain] "langchain<1" langchain-openai
 Run:   uv run python examples/session_actions_langchain.py
+
+LangChain 1.x removed ``create_tool_calling_agent`` (the recommended
+replacement, ``langchain.agents.create_agent``, returns a LangGraph
+``CompiledStateGraph``).  This example pins the still-supported 0.3.x
+line so the LangChain bridge keeps a runnable demo.
 """
 
 try:
@@ -22,7 +27,8 @@ try:
     from langchain_openai import ChatOpenAI
 except ImportError as exc:
     raise SystemExit(
-        "LangChain is required. Install with: uv add easycat[langchain] langchain langchain-openai"
+        "LangChain (<1.0) is required. Install with: "
+        'uv add easycat[langchain] "langchain<1" langchain-openai'
     ) from exc
 
 from easycat import EasyConfig, SessionActions, run

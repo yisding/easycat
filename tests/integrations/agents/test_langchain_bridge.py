@@ -608,6 +608,140 @@ class TestLangChainBridgeInvoke:
         assert len(payload["history"]) == 2
 
 
+class TestLangChainBridgeStructuredOutput:
+    @pytest.mark.asyncio
+    async def test_structured_only_runnable_preserves_chain_output(self):
+        """Runnables that return a structured value without streaming
+        text chunks (``RunnableLambda(lambda _: {"answer": 42})``,
+        ``with_structured_output(...)``) must surface that value as
+        ``done.structured_output`` — falling back to the empty
+        accumulated text would silently strip the result."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableLambda",
+                    "run_id": "c1",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableLambda",
+                    "run_id": "c1",
+                    "parent_ids": [],
+                    "data": {"chunk": {"answer": 42}},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableLambda",
+                    "run_id": "c1",
+                    "parent_ids": [],
+                    "data": {"output": {"answer": 42}},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+        done = [e for e in events if e.kind == "done"]
+        assert done and done[0].structured_output == {"answer": 42}
+        assert done[0].text == ""  # no text chunks streamed
+
+    @pytest.mark.asyncio
+    async def test_dispatch_custom_event_drives_text_delta_by_default(self):
+        """LCEL ``dispatch_custom_event`` payloads must reach the
+        translator under the default include_types — narrowing the
+        filter was silently disabling the custom-event TTS path."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableLambda",
+                    "run_id": "c1",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_custom_event",
+                    "name": "status",
+                    "run_id": "c1",
+                    "parent_ids": [],
+                    "data": {"text": "thinking..."},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableLambda",
+                    "run_id": "c1",
+                    "parent_ids": [],
+                    "data": {"output": None},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        # Default include_types must not be passed to astream_events as a
+        # narrow tuple — otherwise LangChain drops on_custom_event.
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+        text_events = [e for e in events if e.kind == "text_delta"]
+        assert text_events and text_events[0].text == "thinking..."
+        # Confirm the bridge did not silently re-add a filter that would
+        # strip the event upstream.
+        assert "include_types" not in runnable.invoked_with[1]
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_emit_single_started_per_call(self):
+        """For tool-calling agents that surface both ``tool_call_chunks``
+        (model decision) and ``on_tool_start`` (framework invocation),
+        the bridge must only emit one ``tool_started`` per logical call
+        so downstream tool_started/tool_result accounting stays balanced.
+        The matching ``on_tool_end`` must reuse the provider call id so
+        the pair is mapped to a single call."""
+        chunk = _MockAIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {"name": "get_weather", "args": '{"city":"Tokyo"}', "id": "call-abc", "index": 0},
+            ],
+        )
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m1",
+                    "parent_ids": [],
+                    "data": {"chunk": chunk},
+                },
+                {
+                    "event": "on_tool_start",
+                    "name": "get_weather",
+                    "run_id": "tool-run-xyz",
+                    "parent_ids": [],
+                    "data": {"input": {"city": "Tokyo"}},
+                },
+                {
+                    "event": "on_tool_end",
+                    "name": "get_weather",
+                    "run_id": "tool-run-xyz",
+                    "parent_ids": [],
+                    "data": {"output": "Sunny."},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+        started = [e for e in events if e.kind == "tool_started"]
+        results = [e for e in events if e.kind == "tool_result"]
+        assert len(started) == 1
+        assert len(results) == 1
+        assert started[0].call_id == "call-abc"
+        assert results[0].call_id == "call-abc"
+
+
 class TestLangChainBridgeInterruption:
     def test_apply_interruption_rewrites_last_ai(self):
         runnable = _MockRunnable([])

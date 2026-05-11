@@ -174,6 +174,9 @@ class LangGraphBridge:
         # for, to avoid duplicates when the same id appears on multiple
         # events within a super-step.
         seen_checkpoints: set[str] = set()
+        # Shared state for tool-call deduplication — see
+        # :func:`translate_stream_event` for details.
+        tool_state: dict[str, Any] = {}
 
         config = self._config()
         input_payload = self._build_input(turn_input.text, turn_input.context)
@@ -211,7 +214,7 @@ class LangGraphBridge:
                 ):
                     yield bridge_event
 
-                for bridge_event in translate_stream_event(event, recorder):
+                for bridge_event in translate_stream_event(event, recorder, state=tool_state):
                     if bridge_event.kind == "text_delta":
                         accumulated += bridge_event.text
                     yield bridge_event
@@ -254,10 +257,16 @@ class LangGraphBridge:
         except Exception:  # pragma: no cover — best-effort.
             logger.debug("Failed to fetch final LangGraph state", exc_info=True)
 
+        # Nodes that return a final ``AIMessage`` without streaming
+        # chat-model tokens (or that transform model output before
+        # writing it to state) leave ``accumulated`` empty.  Fall back
+        # to the final message's text so the spoken response and the
+        # ``done.text`` history value reflect the graph's actual reply.
+        spoken_text = accumulated if accumulated else _extract_message_text(self._last_output)
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(
             kind="done",
-            text=accumulated,
+            text=spoken_text,
             structured_output=self._last_output,
         )
 
@@ -724,6 +733,35 @@ def _messages_tail(state: Any, key: str = "messages") -> Any:
         if msgs:
             return msgs[-1]
     return None
+
+
+def _extract_message_text(message: Any) -> str:
+    """Best-effort text extraction from an ``AIMessage``-like object.
+
+    Used as the spoken-text fallback when a node produces a final
+    message but no streaming chat-model tokens (e.g. a node that builds
+    an ``AIMessage`` from a non-streaming model or that transforms the
+    model output).  ``AIMessage.text`` is the framework-provided shortcut
+    that flattens ``content_blocks``; we prefer it when available and
+    fall back to walking raw ``content`` for duck-typed messages.
+    """
+    if message is None:
+        return ""
+    text = getattr(message, "text", None)
+    if isinstance(text, str) and text:
+        return text
+    content = _content_of(message)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+        return "".join(parts)
+    return ""
 
 
 def _message_is_ai(msg: Any) -> bool:

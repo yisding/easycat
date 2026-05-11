@@ -547,3 +547,32 @@ class TestLangGraphBridgeState:
 
         done = [e for e in events if e.kind == "done"]
         assert done and done[0].structured_output is ai_msg
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_node_text_falls_back_to_final_message(self):
+        """A node that writes a final ``AIMessage`` to state without
+        streaming chat-model tokens (synchronous LLM call, transformed
+        model output, plain ``RunnableLambda`` node) leaves
+        ``accumulated`` empty.  ``done.text`` must fall back to the
+        final message's text so Session can still speak the reply."""
+        ai_msg = _MockMessage("assistant", "the actual reply", message_id="m-1")
+        state = _MockState(
+            values={"messages": [_MockMessage("user", "hi"), ai_msg]},
+            checkpoint_id="cp-final",
+        )
+        scripted = [
+            _node_start("answer", "n1"),
+            _node_end("answer", "n1"),
+        ]
+        graph = _MockCompiledGraph(scripted, state=state)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+
+        text_deltas = [e for e in events if e.kind == "text_delta"]
+        done = [e for e in events if e.kind == "done"]
+        assert text_deltas == []  # node did not stream
+        assert done and done[0].text == "the actual reply"
+        assert done[0].structured_output is ai_msg

@@ -7,8 +7,14 @@ Two tools (``get_weather`` and ``get_time``) wired through a
 DTMF) see ``session_actions_langchain.py``.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
-       uv add easycat[langchain] langchain langchain-openai
+       uv add easycat[langchain] "langchain<1" langchain-openai
 Run:   uv run python examples/function_tools_langchain.py
+
+LangChain 1.x removed ``create_tool_calling_agent`` (the recommended
+replacement, ``langchain.agents.create_agent``, returns a LangGraph
+``CompiledStateGraph`` — covered by ``function_tools_langgraph.py``).
+This example demonstrates the LangChain-bridge path so the version pin
+keeps it runnable against the still-supported 0.3.x line.
 """
 
 from datetime import datetime
@@ -21,7 +27,8 @@ try:
     from langchain_openai import ChatOpenAI
 except ImportError as exc:
     raise SystemExit(
-        "LangChain is required. Install with: uv add easycat[langchain] langchain langchain-openai"
+        "LangChain (<1.0) is required. Install with: "
+        'uv add easycat[langchain] "langchain<1" langchain-openai'
     ) from exc
 
 from easycat import EasyConfig, run

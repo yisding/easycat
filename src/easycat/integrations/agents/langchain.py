@@ -38,14 +38,16 @@ from easycat.runtime.records import ErrorInfo
 logger = logging.getLogger(__name__)
 
 
-# Default event filter for ``astream_events(include_types=...)``.  ``chat_model``
-# covers token streams + tool_call_chunks; ``tool`` covers ``@tool``-decorated
-# functions; ``chain`` covers chain-only runnables (``RunnableLambda``, plain
-# LCEL stages that stream strings) which would otherwise produce no
-# ``text_delta`` events at all.  Chains that wrap a ``chat_model`` are
-# de-duplicated in ``invoke()`` via the run_id of their chat_model children
-# so the same tokens are not emitted twice.
-_DEFAULT_INCLUDE_TYPES: tuple[str, ...] = ("chat_model", "tool", "chain")
+# No default ``include_types`` filter — LangChain's ``astream_events``
+# filter drops ``on_custom_event`` (``dispatch_custom_event`` /
+# ``adispatch_custom_event``) when ``include_types`` is set, which would
+# silently break the custom-event TTS path documented in
+# :func:`_custom_event_text`.  ``translate_stream_event`` already
+# dispatches on the event *type* string, so unfiltered streams just
+# produce more no-op events rather than spurious behaviour.  Callers
+# that want to narrow the surface for performance can opt in via
+# ``include_types=``.
+_DEFAULT_INCLUDE_TYPES: tuple[str, ...] | None = None
 
 
 class LangChainBridge:
@@ -71,13 +73,11 @@ class LangChainBridge:
         Key under which the prior turn messages are placed.  Defaults
         to ``"history"``.  Set to ``None`` to disable history passing.
     include_types:
-        Runnable types to surface as ``astream_events(include_types=...)``.
-        Defaults to ``("chat_model", "tool", "chain")``.  ``chain`` is
-        included so chain-only runnables (``RunnableLambda``, LCEL stages
-        that stream plain strings) can emit ``text_delta`` events;
-        chunks from chains that wrap a ``chat_model`` are de-duplicated
-        in ``invoke()``.  Pass ``None`` to surface every event (useful
-        when debugging a chain's internal structure).
+        Optional ``astream_events(include_types=...)`` filter.  Defaults
+        to ``None`` (surface every event) — narrowing the filter drops
+        ``on_custom_event`` from ``dispatch_custom_event``, which would
+        silently disable the custom-event TTS path.  Pass an explicit
+        tuple only when performance demands it for very chatty chains.
     """
 
     COMMITTABLE_BOUNDARIES = {
@@ -137,6 +137,18 @@ class LangChainBridge:
         # surfaced via ``on_chat_model_stream``; skip the translator for
         # those events so wrapped models don't double-emit text.
         chains_with_model_descendants: set[str] = set()
+        # Track the top-level chain's ``run_id`` so we can capture its
+        # ``on_chain_end.data.output`` as ``structured_output`` — non-text
+        # runnables (``RunnableLambda(lambda _: {"answer": 42})``,
+        # ``.with_structured_output(...)``) produce no ``text_delta`` and
+        # would otherwise expose an empty string here.
+        root_run_id: str | None = None
+        captured_output: Any = None
+        captured_output_set = False
+        # Shared state for tool-call deduplication across the chat_model
+        # tool_call_chunks path and the ``on_tool_start`` / ``on_tool_end``
+        # path — see ``translate_stream_event`` for details.
+        tool_state: dict[str, Any] = {}
 
         input_payload = self._build_input(turn_input.text, turn_input.context)
         stream_kwargs: dict[str, Any] = {"version": "v2"}
@@ -157,13 +169,25 @@ class LangChainBridge:
                 if event_type in ("on_chat_model_start", "on_llm_start"):
                     for pid in event.get("parent_ids") or ():
                         chains_with_model_descendants.add(str(pid))
+                if event_type == "on_chain_start" and not (event.get("parent_ids") or ()):
+                    if root_run_id is None:
+                        rid = str(event.get("run_id") or "")
+                        if rid:
+                            root_run_id = rid
+                if event_type == "on_chain_end":
+                    rid = str(event.get("run_id") or "")
+                    if root_run_id is not None and rid == root_run_id:
+                        raw_data = event.get("data")
+                        data_dict = raw_data if isinstance(raw_data, dict) else {}
+                        captured_output = data_dict.get("output") if data_dict else None
+                        captured_output_set = True
                 if event_type == "on_chain_stream" and (
                     str(event.get("run_id") or "") in chains_with_model_descendants
                 ):
                     continue
 
                 self._handle_cursor_lifecycle(event, recorder, agent_cursor, open_cursors)
-                for bridge_event in translate_stream_event(event, recorder):
+                for bridge_event in translate_stream_event(event, recorder, state=tool_state):
                     if bridge_event.kind == "text_delta":
                         accumulated += bridge_event.text
                     yield bridge_event
@@ -181,7 +205,11 @@ class LangChainBridge:
             recorder.record_unit_exited(cursor.with_committable(True), reason=None)
         open_cursors.clear()
 
-        self._last_output = accumulated
+        # Prefer the top-level chain's actual output for ``structured_output``
+        # (a dict / BaseModel / arbitrary value).  Fall back to the
+        # accumulated text only when no ``on_chain_end`` was observed — e.g.
+        # bare-chat-model runnables that never emit a chain event.
+        self._last_output = captured_output if captured_output_set else accumulated
         self._append_to_history(turn_input.text, accumulated)
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(

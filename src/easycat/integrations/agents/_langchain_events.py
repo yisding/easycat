@@ -88,6 +88,7 @@ def _plain_chunk_text(chunk: Any) -> str:
 def translate_stream_event(
     event: dict[str, Any],
     recorder: AgentRecorder | None = None,
+    state: dict[str, Any] | None = None,
 ) -> Iterator[AgentBridgeEvent]:
     """Translate one ``astream_events(version="v2")`` event.
 
@@ -96,6 +97,15 @@ def translate_stream_event(
     transitions are recorded via ``recorder.record_tool_call`` and also
     yielded as ``tool_started`` / ``tool_delta`` / ``tool_result``
     events so the runtime can drive TTS and UI updates.
+
+    ``state`` is an optional caller-owned dict used to dedupe the two
+    paths a LangChain tool call surfaces through: the chat-model's
+    ``tool_call_chunks`` (which carry the provider tool-call id) and
+    the framework's ``on_tool_start`` / ``on_tool_end`` (which carry a
+    fresh LangChain ``run_id``).  Without coordination both paths emit
+    ``tool_started``, producing an unmatched leading pair for downstream
+    consumers that count ``tool_started`` / ``tool_result``.  The state
+    dict is mutated in place across calls within a turn.
     """
     if not isinstance(event, dict):
         return
@@ -123,6 +133,9 @@ def translate_stream_event(
             tc_args = tc_chunk.get("args") or ""
             tc_id = tc_chunk.get("id") or ""
             if tc_name:
+                if state is not None and tc_name and tc_id:
+                    chunk_started = state.setdefault("chunk_started_by_name", {})
+                    chunk_started[tc_name] = tc_id
                 if recorder is not None:
                     recorder.record_tool_call(
                         phase="start",
@@ -170,7 +183,21 @@ def translate_stream_event(
 
     elif event_type == "on_tool_start":
         tool_name = name
+        # Default to the LangChain run_id; substitute the provider tool-call
+        # id when the chat-model's chunk path already announced a started
+        # tool of the same name so the matching ``on_tool_end`` can pair
+        # with the original ``tool_started``.
         call_id = run_id
+        chunk_call_id = ""
+        if state is not None and tool_name:
+            chunk_started = state.get("chunk_started_by_name")
+            if isinstance(chunk_started, dict):
+                chunk_call_id = chunk_started.pop(tool_name, "") or ""
+        if chunk_call_id:
+            if state is not None and run_id:
+                run_to_call = state.setdefault("run_id_to_call_id", {})
+                run_to_call[run_id] = chunk_call_id
+            return
         args_input = data.get("input") if isinstance(data, dict) else None
         args_text = ""
         if isinstance(args_input, dict):
@@ -198,7 +225,7 @@ def translate_stream_event(
 
     elif event_type == "on_tool_end":
         tool_name = name
-        call_id = run_id
+        call_id = _resolve_tool_call_id(state, run_id)
         output = data.get("output") if isinstance(data, dict) else None
         result_text = ""
         if output is not None:
@@ -228,7 +255,7 @@ def translate_stream_event(
 
     elif event_type == "on_tool_error":
         tool_name = name
-        call_id = run_id
+        call_id = _resolve_tool_call_id(state, run_id)
         if recorder is not None:
             recorder.record_tool_call(
                 phase="error",
@@ -244,3 +271,15 @@ def translate_stream_event(
             call_id=call_id,
             reason="tool_error",
         )
+
+
+def _resolve_tool_call_id(state: dict[str, Any] | None, run_id: str) -> str:
+    """Map a LangChain tool ``run_id`` back to the provider call-id, if known."""
+    if state is None or not run_id:
+        return run_id
+    run_to_call = state.get("run_id_to_call_id")
+    if isinstance(run_to_call, dict):
+        mapped = run_to_call.pop(run_id, None)
+        if isinstance(mapped, str) and mapped:
+            return mapped
+    return run_id
