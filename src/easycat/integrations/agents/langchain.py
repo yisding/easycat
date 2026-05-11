@@ -18,6 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._context import normalize_context_messages
 from easycat.integrations.agents._helpers import split_replacement_by_original_parts
 from easycat.integrations.agents._langchain_events import translate_stream_event
 from easycat.integrations.agents.base import (
@@ -39,9 +40,12 @@ logger = logging.getLogger(__name__)
 
 # Default event filter for ``astream_events(include_types=...)``.  ``chat_model``
 # covers token streams + tool_call_chunks; ``tool`` covers ``@tool``-decorated
-# functions.  Together they give token + tool visibility without the cursor
-# noise from every RunnableSequence / ChatPromptTemplate / output parser.
-_DEFAULT_INCLUDE_TYPES: tuple[str, ...] = ("chat_model", "tool")
+# functions; ``chain`` covers chain-only runnables (``RunnableLambda``, plain
+# LCEL stages that stream strings) which would otherwise produce no
+# ``text_delta`` events at all.  Chains that wrap a ``chat_model`` are
+# de-duplicated in ``invoke()`` via the run_id of their chat_model children
+# so the same tokens are not emitted twice.
+_DEFAULT_INCLUDE_TYPES: tuple[str, ...] = ("chat_model", "tool", "chain")
 
 
 class LangChainBridge:
@@ -68,10 +72,12 @@ class LangChainBridge:
         to ``"history"``.  Set to ``None`` to disable history passing.
     include_types:
         Runnable types to surface as ``astream_events(include_types=...)``.
-        Defaults to ``("chat_model", "tool")`` which gives LLM token +
-        tool-call visibility without paired cursors for every
-        RunnableSequence / prompt / parser.  Pass ``None`` to surface
-        every event (useful when debugging a chain's internal structure).
+        Defaults to ``("chat_model", "tool", "chain")``.  ``chain`` is
+        included so chain-only runnables (``RunnableLambda``, LCEL stages
+        that stream plain strings) can emit ``text_delta`` events;
+        chunks from chains that wrap a ``chat_model`` are de-duplicated
+        in ``invoke()``.  Pass ``None`` to surface every event (useful
+        when debugging a chain's internal structure).
     """
 
     COMMITTABLE_BOUNDARIES = {
@@ -126,8 +132,13 @@ class LangChainBridge:
         # by LangChain ``run_id`` so start/end always pair even when the
         # runnable interleaves multiple model calls.
         open_cursors: dict[str, ExecutionCursor] = {}
+        # Run ids of chains that are an ancestor of some chat_model run.
+        # Their ``on_chain_stream`` chunks forward the same tokens already
+        # surfaced via ``on_chat_model_stream``; skip the translator for
+        # those events so wrapped models don't double-emit text.
+        chains_with_model_descendants: set[str] = set()
 
-        input_payload = self._build_input(turn_input.text)
+        input_payload = self._build_input(turn_input.text, turn_input.context)
         stream_kwargs: dict[str, Any] = {"version": "v2"}
         if self._include_types is not None:
             stream_kwargs["include_types"] = self._include_types
@@ -141,6 +152,15 @@ class LangChainBridge:
                         reason="cancel_token_set",
                     )
                     break
+
+                event_type = event.get("event") if isinstance(event, dict) else None
+                if event_type in ("on_chat_model_start", "on_llm_start"):
+                    for pid in event.get("parent_ids") or ():
+                        chains_with_model_descendants.add(str(pid))
+                if event_type == "on_chain_stream" and (
+                    str(event.get("run_id") or "") in chains_with_model_descendants
+                ):
+                    continue
 
                 self._handle_cursor_lifecycle(event, recorder, agent_cursor, open_cursors)
                 for bridge_event in translate_stream_event(event, recorder):
@@ -257,13 +277,34 @@ class LangChainBridge:
 
     # ── Internal ─────────────────────────────────────────────────
 
-    def _build_input(self, text: str) -> Any:
+    def _build_input(
+        self,
+        text: str,
+        context: list[dict[str, str]] | None = None,
+    ) -> Any:
         if self._input_key is None:
             return text
         payload: dict[str, Any] = {self._input_key: text}
         if self._history_key is not None:
-            payload[self._history_key] = list(self._message_history)
+            payload[self._history_key] = self._history_with_context(context)
         return payload
+
+    def _history_with_context(self, context: list[dict[str, str]] | None) -> list[Any]:
+        """Prepend per-turn system/developer context messages to history.
+
+        The bridge already owns prior conversation state via
+        ``_message_history``; per-turn context from Session (caller-id
+        metadata, system-prefix instructions, ``AgentTurnInput.context``)
+        is forwarded for this single turn so prompts and agents that
+        condition on it can see it.  User/assistant items in the caller's
+        context are filtered out by ``normalize_context_messages`` to
+        avoid duplicating our own history.
+        """
+        context_msgs = normalize_context_messages(context, own_history=True)
+        if not context_msgs:
+            return list(self._message_history)
+        converted = [_context_to_message(item) for item in context_msgs]
+        return [*converted, *self._message_history]
 
     def _append_to_history(self, user_text: str, assistant_text: str) -> None:
         """Extend message history after a successful turn.
@@ -402,3 +443,33 @@ def _set_content(msg: Any, value: Any) -> None:
         msg.content = value
     except (AttributeError, TypeError):
         object.__setattr__(msg, "content", value)
+
+
+def _context_to_message(item: dict[str, str]) -> Any:
+    """Convert a normalized ``{"role", "content"}`` dict to a LangChain message.
+
+    Falls back to the dict itself when ``langchain_core`` is not
+    importable — LangChain prompt templates accept both shapes for the
+    placeholder-history pattern, and tests run without ``langchain_core``
+    installed.
+    """
+    role = item.get("role", "system")
+    content = item.get("content", "")
+    try:
+        from langchain_core.messages import (
+            AIMessage,
+            HumanMessage,
+            SystemMessage,
+            ToolMessage,
+        )
+    except ImportError:
+        return {"role": role, "content": content}
+    if role == "system" or role == "developer":
+        return SystemMessage(content=content)
+    if role == "user" or role == "human":
+        return HumanMessage(content=content)
+    if role == "assistant" or role == "ai":
+        return AIMessage(content=content)
+    if role == "tool":
+        return ToolMessage(content=content, tool_call_id="")
+    return SystemMessage(content=content)

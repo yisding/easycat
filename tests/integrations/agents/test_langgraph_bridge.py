@@ -306,6 +306,43 @@ class TestLangGraphBridgeInvoke:
         assert refs.count("langgraph:cp-mid") == 1
 
     @pytest.mark.asyncio
+    async def test_turn_context_prepended_to_messages_input(self):
+        """Per-turn system/developer context must be forwarded into the
+        graph's ``messages`` input so messages-state graphs see
+        session-provided instructions (caller-id, system prefix, etc.).
+        Filtering out user/assistant items avoids duplicating state that
+        the graph's checkpointer already owns."""
+
+        captured: dict[str, Any] = {}
+
+        class _CapturingGraph(_MockCompiledGraph):
+            def astream_events(
+                self,
+                input: Any,
+                **kwargs: Any,
+            ) -> AsyncIterator[dict[str, Any]]:
+                captured["input"] = input
+                return super().astream_events(input, **kwargs)
+
+        graph = _CapturingGraph([_node_start("p", "n1"), _node_end("p", "n1")])
+        bridge = LangGraphBridge(graph)
+        turn = AgentTurnInput.from_text(
+            "ping",
+            context=[
+                {"role": "system", "content": "Caller id: +15551234"},
+                {"role": "user", "content": "should be dropped"},
+            ],
+        )
+        async for _ in bridge.invoke(turn, _recorder()):
+            pass
+        messages = captured["input"]["messages"]
+        # System message survived; caller-provided user message was dropped.
+        assert messages == [
+            ("system", "Caller id: +15551234"),
+            ("user", "ping"),
+        ]
+
+    @pytest.mark.asyncio
     async def test_non_node_chain_events_ignored(self):
         """``on_chain_start`` without a matching ``langgraph_node`` (e.g.
         internal runnables inside a node) shouldn't open a cursor."""

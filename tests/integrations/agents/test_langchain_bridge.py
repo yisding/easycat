@@ -71,6 +71,13 @@ def _recorder(journal: InMemoryRingBuffer | None = None) -> JournalAgentRecorder
     )
 
 
+def _content_of_history_item(item: Any) -> Any:
+    """Tolerate both dict-shaped and typed-message history items."""
+    if isinstance(item, dict):
+        return item.get("content")
+    return getattr(item, "content", None)
+
+
 # ── Translator tests ─────────────────────────────────────────────
 
 
@@ -440,6 +447,139 @@ class TestLangChainBridgeInvoke:
         phases = [r.data["phase"] for r in journal.read() if r.name == "tool_phase_changed"]
         assert "start" in phases
         assert "delta" in phases
+
+    @pytest.mark.asyncio
+    async def test_chain_only_runnable_emits_text(self):
+        """``RunnableLambda``-style chains have no chat_model so they only
+        surface text through ``on_chain_stream`` chunks.  The default
+        ``include_types`` must keep ``chain`` so these don't silently
+        produce empty ``done`` events."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableLambda",
+                    "run_id": "l1",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableLambda",
+                    "run_id": "l1",
+                    "parent_ids": [],
+                    "data": {"chunk": "hello "},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableLambda",
+                    "run_id": "l1",
+                    "parent_ids": [],
+                    "data": {"chunk": "world"},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableLambda",
+                    "run_id": "l1",
+                    "parent_ids": [],
+                    "data": {"output": "hello world"},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        done = [e for e in events if e.kind == "done"]
+        assert text == "hello world"
+        assert done and done[0].text == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_chain_wrapping_chat_model_does_not_double_emit(self):
+        """When a chain wraps a ``chat_model``, its ``on_chain_stream``
+        chunks forward the same tokens already emitted via
+        ``on_chat_model_stream``.  Emitting both would speak each token
+        twice — the bridge must deduplicate using the chat_model's
+        parent_ids."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_chat_model_start",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": _MockAIMessageChunk(content="hi!")},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"chunk": _MockAIMessageChunk(content="hi!")},
+                },
+                {
+                    "event": "on_chat_model_end",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {"output": _MockAIMessageChunk(content="hi!")},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"output": "hi!"},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        assert text == "hi!"
+
+    @pytest.mark.asyncio
+    async def test_turn_context_flows_into_history_payload(self):
+        """Per-turn system/developer context (caller-id, system prefix,
+        explicit ``AgentTurnInput.context``) must reach the runnable's
+        prompt — dropping it silently makes session instructions
+        invisible to LangChain agents."""
+        runnable = _MockRunnable([])
+        bridge = LangChainBridge(runnable)
+        turn = AgentTurnInput.from_text(
+            "what time is it?",
+            context=[
+                {"role": "system", "content": "Caller id: +15551234"},
+                # ``user`` items from the caller are filtered out because
+                # the bridge owns its own history.
+                {"role": "user", "content": "this should be dropped"},
+            ],
+        )
+        async for _ in bridge.invoke(turn, _recorder()):
+            pass
+        payload = runnable.invoked_with[0]
+        assert isinstance(payload, dict)
+        assert payload["input"] == "what time is it?"
+        history = payload["history"]
+        assert len(history) == 1  # system only — user dropped, no prior turns yet
+        assert _content_of_history_item(history[0]) == "Caller id: +15551234"
 
     @pytest.mark.asyncio
     async def test_history_roundtrip(self):

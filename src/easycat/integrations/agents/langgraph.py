@@ -35,6 +35,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._context import normalize_context_messages
 from easycat.integrations.agents._helpers import split_replacement_by_original_parts
 from easycat.integrations.agents._langchain_events import (
     _custom_event_text,
@@ -175,7 +176,7 @@ class LangGraphBridge:
         seen_checkpoints: set[str] = set()
 
         config = self._config()
-        input_payload = self._build_input(turn_input.text)
+        input_payload = self._build_input(turn_input.text, turn_input.context)
         stream_kwargs: dict[str, Any] = {
             "version": "v2",
             "config": config,
@@ -363,10 +364,23 @@ class LangGraphBridge:
 
     # ── Internal ─────────────────────────────────────────────────
 
-    def _build_input(self, text: str) -> Any:
+    def _build_input(
+        self,
+        text: str,
+        context: list[dict[str, str]] | None = None,
+    ) -> Any:
         if self._messages_key is None:
             return text
-        return {self._messages_key: [("user", text)]}
+        # Per-turn context (caller-id, system prefix, ``AgentTurnInput.context``)
+        # is forwarded as messages prefixed to the user turn so messages-state
+        # graphs see session-provided instructions.  The graph already owns
+        # conversation history via its checkpointer, so user/assistant items
+        # from the caller's context are filtered to avoid duplicating state
+        # that will land via ``add_messages`` anyway.
+        context_msgs = normalize_context_messages(context, own_history=True)
+        messages: list[Any] = [(item["role"], item["content"]) for item in context_msgs]
+        messages.append(("user", text))
+        return {self._messages_key: messages}
 
     def _extract_graph_stream_chunk(self, event: dict[str, Any]) -> tuple[str, Any] | None:
         """Return ``(mode_name, payload)`` when ``event`` carries a graph-level
