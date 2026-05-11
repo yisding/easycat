@@ -475,6 +475,8 @@ class LlamaAgentsBridge:
         self._remote_context = getattr(result_data, "context", self._remote_context)
         self._last_output = getattr(result_data, "result", None)
         self._remote_event_sequence = -1
+        if not cancelled:
+            _raise_if_remote_failed(result_data, self._workflow_name)
         if not streamed_text and not cancelled:
             text = _extract_output_text(self._last_output)
             if text:
@@ -594,6 +596,24 @@ def _string_or_none(value: Any) -> str | None:
     return str(value)
 
 
+_REMOTE_FAILURE_STATUSES = frozenset(
+    {"failed", "failure", "error", "errored", "cancelled", "canceled"}
+)
+
+
+def _raise_if_remote_failed(handler_data: Any, workflow_name: str | None) -> None:
+    status = getattr(handler_data, "status", None)
+    status_str = status.value if hasattr(status, "value") else status
+    if not isinstance(status_str, str):
+        return
+    if status_str.lower() not in _REMOTE_FAILURE_STATUSES:
+        return
+    error = getattr(handler_data, "error", None)
+    detail = str(error) if error else status_str
+    name = workflow_name or "remote workflow"
+    raise RuntimeError(f"Remote LlamaAgents workflow {name!r} {status_str}: {detail}")
+
+
 def _start_event_from_payload(payload: dict[str, Any]) -> Any:
     try:
         from workflows.events import StartEvent
@@ -701,7 +721,11 @@ def _extract_text_field(value: Any) -> str | None:
             text = data[key]
             if isinstance(text, str):
                 return text
-            if text is not None and not isinstance(text, (dict, list, tuple, set)):
+            if isinstance(text, dict):
+                nested_text = _extract_text_field(text)
+                if nested_text is not None:
+                    return nested_text
+            elif text is not None and not isinstance(text, (list, tuple, set)):
                 return str(text)
 
     nested = data.get("value")

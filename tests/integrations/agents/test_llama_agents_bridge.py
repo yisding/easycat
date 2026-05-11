@@ -283,10 +283,19 @@ class _RemoteEnvelope:
 
 
 class _HandlerData:
-    def __init__(self, handler_id: str, result: Any = None, context: Any = None) -> None:
+    def __init__(
+        self,
+        handler_id: str,
+        result: Any = None,
+        context: Any = None,
+        status: Any = None,
+        error: Any = None,
+    ) -> None:
         self.handler_id = handler_id
         self.result = result
         self.context = context
+        self.status = status
+        self.error = error
 
 
 class _RemoteStream:
@@ -382,6 +391,48 @@ class TestRemoteLlamaAgentsBridge:
         assert client.sent_events[-1][1].response == "Ada"
         assert client.stream_calls[1]["after_sequence"] == 0
         assert [event.text for event in second_turn if event.kind == "done"] == ["Remote done"]
+
+    @pytest.mark.asyncio
+    async def test_remote_failed_handler_status_raises(self, fake_workflows_modules):
+        class _FailingClient(_RemoteClient):
+            async def get_handler(self, handler_id: str) -> _HandlerData:
+                return _HandlerData(handler_id, result=None, status="failed", error="boom")
+
+        client = _FailingClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+        journal = InMemoryRingBuffer(capacity=1000)
+
+        with pytest.raises(RuntimeError, match="failed"):
+            async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder(journal)):
+                pass
+
+        names = [record.name for record in journal.read()]
+        assert "framework_error" in names
+        exit_records = [r for r in journal.read() if r.name == "unit_exited"]
+        assert exit_records and exit_records[-1].data.get("exit_reason") == "error"
+
+    @pytest.mark.asyncio
+    async def test_remote_extracts_text_from_nested_dict_envelope(self, fake_workflows_modules):
+        class _NestedClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> _RemoteStream:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                return _RemoteStream([_StopEvent("ignored")])
+
+            async def get_handler(self, handler_id: str) -> _HandlerData:
+                envelope = {"value": {"result": {"message": "Hello from envelope"}}}
+                return _HandlerData(handler_id, result=envelope)
+
+        client = _NestedClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        events = []
+        async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(event)
+
+        assert [event.text for event in events if event.kind == "text_delta"] == [
+            "Hello from envelope"
+        ]
+        assert [event.text for event in events if event.kind == "done"] == ["Hello from envelope"]
 
 
 class TestAutoAdapt:
