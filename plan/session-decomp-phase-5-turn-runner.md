@@ -486,7 +486,7 @@ decomposition.
 load-bearing piece of the codebase. The 200-line body has
 non-obvious ordering invariants:
 
-- The TTS consumer task starts before the agent consumer.
+- The agent consumer task is created before the TTS consumer task (faithfully preserved from the pre-decomposition Session implementation).
 - `tts_playback_started` is set only on the first non-suppressed,
   non-cancelled payload.
 - `tts_should_stop` is read after the action drain.
