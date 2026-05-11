@@ -25,13 +25,19 @@ Three classes are exposed:
 
 Wire protocol
 -------------
-After the WebTransport session is established, both endpoints multiplex two
-client-opened bidirectional QUIC streams, each starting with a 1-byte tag:
+Each peer opens its **own** bidirectional QUIC streams; we never share a
+stream's two halves between application directions.  The first byte on every
+stream is a 1-byte tag that identifies its purpose:
 
-``0x01`` — **audio stream**.  Both directions carry raw PCM16 bytes
-(client→server = mic, server→client = TTS).
-``0x02`` — **control stream**.  Both directions carry length-prefixed JSON
-frames (4-byte big-endian length, then UTF-8).  Message shapes mirror
+``0x01`` — **audio stream** — raw PCM16 bytes (no further framing).
+``0x02`` — **control stream** — repeated ``[4-byte BE length][UTF-8 JSON]`` frames.
+
+The client opens two streams (audio + control) and writes mic PCM /
+client-side control messages there.  The server, in turn, opens its own audio
+and control streams via :meth:`H3Connection.create_webtransport_stream` and
+writes TTS audio / server-side control messages there.  The browser
+demultiplexes server-opened streams via ``incomingBidirectionalStreams`` and
+reads the tag byte to dispatch.  Message shapes mirror
 :class:`~easycat.transports.websocket.WebSocketTransport`:
 
 * server→client: ``{"type":"ready"}``, ``{"type":"audio_format","sample_rate":N}``
@@ -89,11 +95,35 @@ _MAX_STREAM_DATA = 64 * 1024
 # don't tear the QUIC connection down on short idle periods.
 _IDLE_TIMEOUT_SEC = 30.0
 
+# DoS bounds on the control framing layer.  A single JSON control frame is
+# never larger than a few hundred bytes in practice; capping at 64 KiB lets us
+# reject crafted length prefixes (a malicious uint32 can advertise up to 4 GB
+# and pin app-side buffers indefinitely while bytes trickle in).
+_MAX_CONTROL_FRAME_BYTES = 64 * 1024
+
+# Bounds on streams whose purpose tag has not yet arrived.  A malicious
+# client can open many bidi streams and never write the first byte, growing
+# ``_pending_tags`` unboundedly; cap both the dict size and the per-stream
+# buffer.
+_MAX_PENDING_TAG_STREAMS = 4
+_MAX_PENDING_TAG_BYTES = 4096
+
+# Truncation cap for user-controlled values that end up in log messages.
+_LOG_TRUNC = 64
+
 _DEFAULT_PATH = "/easycat"
 
 # Type alias for the user-supplied per-session handler. Module-private — not
 # part of the public surface.
 _SessionHandler = Callable[["WebTransportConnectionTransport"], Awaitable[None]]
+
+
+def _trunc_for_log(value: object) -> str:
+    """``repr(value)`` truncated to keep adversarial inputs out of large log
+    lines.  ``repr`` already escapes control characters, so this only bounds
+    size, not content sanitization."""
+    s = repr(value)
+    return s if len(s) <= _LOG_TRUNC else s[:_LOG_TRUNC] + "...(truncated)"
 
 
 @dataclass
@@ -112,6 +142,11 @@ class WebTransportTransportConfig:
     max_pending_chunks: int = _DEFAULT_INBOUND_MAX_PENDING
     outbound_max_pending: int = _DEFAULT_OUTBOUND_MAX_PENDING
     path: str = _DEFAULT_PATH
+    # Hard cap on concurrent accepted WebTransport sessions on a single
+    # ``WebTransportServer``.  Each session retains a QUIC connection plus
+    # inbound/outbound queues; without a cap a single client IP can open
+    # arbitrarily many sessions and exhaust process memory.
+    max_concurrent_sessions: int = 64
 
 
 def _build_quic_configuration(certfile: str, keyfile: str) -> QuicConfiguration:
@@ -141,18 +176,40 @@ def _build_quic_configuration(certfile: str, keyfile: str) -> QuicConfiguration:
 
 
 class _ControlCodec:
-    """Length-prefixed (4-byte BE) UTF-8 JSON framing."""
+    """Length-prefixed (4-byte BE) UTF-8 JSON framing.
+
+    Bounded: a length prefix above ``_MAX_CONTROL_FRAME_BYTES`` poisons the
+    codec.  Once poisoned, no further frames are decoded — callers should
+    treat a poisoned codec as a malicious peer signal and tear down the
+    inbound control stream.
+    """
 
     def __init__(self) -> None:
         self._buf = bytearray()
+        self._poisoned = False
+
+    @property
+    def poisoned(self) -> bool:
+        return self._poisoned
 
     def feed(self, data: bytes) -> list[dict[str, Any]]:
+        if self._poisoned:
+            return []
         self._buf.extend(data)
         out: list[dict[str, Any]] = []
         while True:
             if len(self._buf) < 4:
                 break
             (length,) = struct.unpack_from(">I", self._buf, 0)
+            if length > _MAX_CONTROL_FRAME_BYTES:
+                logger.warning(
+                    "WebTransport control frame length %d exceeds %d-byte cap — poisoning codec",
+                    length,
+                    _MAX_CONTROL_FRAME_BYTES,
+                )
+                self._poisoned = True
+                self._buf.clear()
+                break
             if len(self._buf) < 4 + length:
                 break
             payload = bytes(self._buf[4 : 4 + length])
@@ -206,8 +263,13 @@ class _WebTransportSession:
         self._out_queue = out_queue
         self._on_close = on_close
 
-        self._audio_stream_id: int | None = None
-        self._control_stream_id: int | None = None
+        # Client-opened stream ids (server reads from these halves).
+        self._inbound_audio_stream_id: int | None = None
+        self._inbound_control_stream_id: int | None = None
+        # Server-initiated stream ids (server writes to these halves; the
+        # client demultiplexes via its ``incomingBidirectionalStreams``).
+        self._outbound_audio_stream_id: int | None = None
+        self._outbound_control_stream_id: int | None = None
         self._control_codec = _ControlCodec()
         self._pending_tags: dict[int, bytearray] = {}
         self._writer_task: asyncio.Task[None] | None = None
@@ -230,45 +292,71 @@ class _WebTransportSession:
         self._writer_task = None
 
     def handle_stream_data(self, stream_id: int, data: bytes, ended: bool) -> None:
-        if stream_id == self._audio_stream_id:
+        if stream_id == self._inbound_audio_stream_id:
             self._handle_audio_bytes(data)
-        elif stream_id == self._control_stream_id:
+        elif stream_id == self._inbound_control_stream_id:
             self._handle_control_bytes(data)
         else:
-            buf = self._pending_tags.setdefault(stream_id, bytearray())
-            buf.extend(data)
-            if not buf:
-                return
-            tag = buf[0]
-            payload = bytes(buf[1:])
-            del self._pending_tags[stream_id]
-            if tag == _TAG_AUDIO:
-                if self._audio_stream_id is not None:
-                    logger.warning(
-                        "Ignoring extra audio stream %d (already have %d)",
-                        stream_id,
-                        self._audio_stream_id,
-                    )
-                    return
-                self._audio_stream_id = stream_id
-                if payload:
-                    self._handle_audio_bytes(payload)
-            elif tag == _TAG_CONTROL:
-                if self._control_stream_id is not None:
-                    logger.warning(
-                        "Ignoring extra control stream %d (already have %d)",
-                        stream_id,
-                        self._control_stream_id,
-                    )
-                    return
-                self._control_stream_id = stream_id
-                if payload:
-                    self._handle_control_bytes(payload)
-            else:
-                logger.warning("Unknown WebTransport stream tag 0x%02x on %d", tag, stream_id)
+            self._dispatch_untagged_stream(stream_id, data, ended)
 
         if ended:
+            # Drop any pending tag buffer for this stream so a half-tagged
+            # client can't pin entries in ``_pending_tags`` forever.
+            self._pending_tags.pop(stream_id, None)
             self._on_close.set()
+
+    def _dispatch_untagged_stream(self, stream_id: int, data: bytes, ended: bool) -> None:
+        """Handle the first bytes on a stream whose purpose we haven't yet learned.
+
+        Caps both the number of concurrent untagged streams and the per-stream
+        buffer size so a malicious client can't open many streams and never
+        send a tag byte (or send a tag byte forever-prefixed by junk).
+        """
+        if stream_id not in self._pending_tags:
+            if len(self._pending_tags) >= _MAX_PENDING_TAG_STREAMS:
+                logger.warning(
+                    "Refusing untagged WebTransport stream %d — too many pending", stream_id
+                )
+                return
+        buf = self._pending_tags.setdefault(stream_id, bytearray())
+        buf.extend(data)
+        if len(buf) > _MAX_PENDING_TAG_BYTES:
+            logger.warning(
+                "Dropping untagged WebTransport stream %d — exceeded %d-byte buffer",
+                stream_id,
+                _MAX_PENDING_TAG_BYTES,
+            )
+            del self._pending_tags[stream_id]
+            return
+        if not buf:
+            return
+        tag = buf[0]
+        payload = bytes(buf[1:])
+        del self._pending_tags[stream_id]
+        if tag == _TAG_AUDIO:
+            if self._inbound_audio_stream_id is not None:
+                logger.warning(
+                    "Ignoring extra audio stream %d (already have %d)",
+                    stream_id,
+                    self._inbound_audio_stream_id,
+                )
+                return
+            self._inbound_audio_stream_id = stream_id
+            if payload:
+                self._handle_audio_bytes(payload)
+        elif tag == _TAG_CONTROL:
+            if self._inbound_control_stream_id is not None:
+                logger.warning(
+                    "Ignoring extra control stream %d (already have %d)",
+                    stream_id,
+                    self._inbound_control_stream_id,
+                )
+                return
+            self._inbound_control_stream_id = stream_id
+            if payload:
+                self._handle_control_bytes(payload)
+        else:
+            logger.warning("Unknown WebTransport stream tag 0x%02x on %d", tag, stream_id)
 
     def _handle_audio_bytes(self, data: bytes) -> None:
         if not data:
@@ -301,18 +389,25 @@ class _WebTransportSession:
                     self._inbound_format,
                 )
             elif "sample_rate" in msg:
-                logger.warning("Ignoring invalid WebTransport sample_rate: %r", msg["sample_rate"])
+                logger.warning(
+                    "Ignoring invalid WebTransport sample_rate: %s",
+                    _trunc_for_log(msg["sample_rate"]),
+                )
         elif msg_type in ("start", "stop"):
             logger.debug("Client sent WebTransport %s signal", msg_type)
         else:
-            logger.debug("Unknown WebTransport control message type: %r", msg_type)
+            logger.debug("Unknown WebTransport control message type: %s", _trunc_for_log(msg_type))
 
     def _send_control(self, msg: dict[str, Any]) -> None:
-        if self._control_stream_id is None:
-            self._control_stream_id = self._h3.create_webtransport_stream(self._session_id)
-            self._h3.send_data(self._control_stream_id, bytes([_TAG_CONTROL]), end_stream=False)
+        if self._outbound_control_stream_id is None:
+            self._outbound_control_stream_id = self._h3.create_webtransport_stream(
+                self._session_id
+            )
+            self._h3.send_data(
+                self._outbound_control_stream_id, bytes([_TAG_CONTROL]), end_stream=False
+            )
         self._h3.send_data(
-            self._control_stream_id,
+            self._outbound_control_stream_id,
             _ControlCodec.encode(msg),
             end_stream=False,
         )
@@ -330,19 +425,21 @@ class _WebTransportSession:
         :class:`QuicConnection` aborts in-flight bytes and frees the slot;
         the next outbound chunk opens a fresh stream.
         """
-        if self._audio_stream_id is None:
+        if self._outbound_audio_stream_id is None:
             return
         quic = getattr(self._quic_protocol, "_quic", None)
         if quic is None:
-            self._audio_stream_id = None
+            self._outbound_audio_stream_id = None
             return
         try:
-            quic.reset_stream(self._audio_stream_id, error_code=0)
+            quic.reset_stream(self._outbound_audio_stream_id, error_code=0)
             self._quic_protocol.transmit()
         except Exception:
-            logger.debug("reset_stream failed for audio stream", exc_info=True)
+            # Promoted from debug to warning: if reset_stream silently fails,
+            # the client will keep hearing in-flight TTS after a barge-in.
+            logger.warning("reset_stream failed for audio stream", exc_info=True)
         finally:
-            self._audio_stream_id = None
+            self._outbound_audio_stream_id = None
 
     async def _outbound_writer(self) -> None:
         try:
@@ -354,12 +451,14 @@ class _WebTransportSession:
                 if rate != self._outbound_rate:
                     self._send_control({"type": "audio_format", "sample_rate": rate})
                     self._outbound_rate = rate
-                if self._audio_stream_id is None:
-                    self._audio_stream_id = self._h3.create_webtransport_stream(self._session_id)
-                    self._h3.send_data(
-                        self._audio_stream_id, bytes([_TAG_AUDIO]), end_stream=False
+                if self._outbound_audio_stream_id is None:
+                    self._outbound_audio_stream_id = self._h3.create_webtransport_stream(
+                        self._session_id
                     )
-                self._h3.send_data(self._audio_stream_id, chunk.data, end_stream=False)
+                    self._h3.send_data(
+                        self._outbound_audio_stream_id, bytes([_TAG_AUDIO]), end_stream=False
+                    )
+                self._h3.send_data(self._outbound_audio_stream_id, chunk.data, end_stream=False)
                 self._quic_protocol.transmit()
         except asyncio.CancelledError:
             raise
@@ -692,6 +791,17 @@ class WebTransportServer:
         quic_config = _build_quic_configuration(self._config.certfile, self._config.keyfile)
 
         def _on_session(transport: WebTransportConnectionTransport) -> None:
+            if len(self._handler_tasks) >= self._config.max_concurrent_sessions:
+                logger.warning(
+                    "Rejecting WebTransport session — %d concurrent cap reached",
+                    self._config.max_concurrent_sessions,
+                )
+                # Close the half-built transport without ever invoking the
+                # user's handler.  ``disconnect`` enqueues sentinels and
+                # signals ``_on_close``; the connection is then GC'd when
+                # the QUIC peer drops, or when its own idle timeout fires.
+                asyncio.create_task(transport.disconnect())
+                return
             task = asyncio.create_task(self._run_handler(transport))
             self._handler_tasks.add(task)
             task.add_done_callback(self._handler_tasks.discard)
