@@ -368,9 +368,7 @@ class LangGraphBridge:
             return text
         return {self._messages_key: [("user", text)]}
 
-    def _extract_graph_stream_chunk(
-        self, event: dict[str, Any]
-    ) -> tuple[str, Any] | None:
+    def _extract_graph_stream_chunk(self, event: dict[str, Any]) -> tuple[str, Any] | None:
         """Return ``(mode_name, payload)`` when ``event`` carries a graph-level
         ``stream_mode`` chunk, else ``None``.
 
@@ -489,7 +487,13 @@ class LangGraphBridge:
         metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
         node_name = metadata.get("langgraph_node")
         ns_raw = metadata.get("langgraph_checkpoint_ns", "")
+        # Each ``|``-separated segment in ``langgraph_checkpoint_ns`` looks like
+        # ``<node>:<run_uuid>``, so two sequential top-level nodes get distinct
+        # ns values.  Key handoff tracking by the *parent* namespace (i.e. drop
+        # the current node's own segment) so siblings under the same parent
+        # share a key and we can detect "previous sibling → next sibling".
         ns: tuple[str, ...] = tuple(ns_raw.split("|")) if ns_raw else ()
+        parent_ns: tuple[str, ...] = ns[:-1] if ns else ()
 
         if event_type == "on_chain_start":
             # Only node-entry chain_starts have langgraph_node set AND a
@@ -505,7 +509,7 @@ class LangGraphBridge:
                 if run_id in open_cursors:
                     return events
 
-                prev = last_node_by_ns.get(ns)
+                prev = last_node_by_ns.get(parent_ns)
                 if prev and prev != node_name:
                     recorder.record_framework_handoff(
                         from_unit=prev,
@@ -522,7 +526,7 @@ class LangGraphBridge:
                     )
 
                 cursor = ExecutionCursor(
-                    unit_id=f"node-{run_id[:8]}",
+                    unit_id=f"node-{run_id}",
                     unit_kind=UnitKind.WORKFLOW_NODE,
                     display_name=node_name,
                     parent_unit_id=self._nearest_parent_id(open_cursors, ns, agent_cursor.unit_id),
@@ -531,14 +535,14 @@ class LangGraphBridge:
                 )
                 recorder.record_unit_entered(cursor)
                 open_cursors[run_id] = cursor
-                last_node_by_ns[ns] = node_name
+                last_node_by_ns[parent_ns] = node_name
 
         elif event_type in ("on_chat_model_start", "on_llm_start"):
             run_id = str(event.get("run_id") or uuid4().hex[:8])
             if run_id in open_cursors:
                 return events
             cursor = ExecutionCursor(
-                unit_id=f"model-{run_id[:8]}",
+                unit_id=f"model-{run_id}",
                 unit_kind=UnitKind.MODEL_NODE,
                 display_name=str(event.get("name") or "model"),
                 parent_unit_id=self._nearest_parent_id(open_cursors, ns, agent_cursor.unit_id),

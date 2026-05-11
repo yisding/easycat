@@ -353,7 +353,7 @@ class LangChainBridge:
             if run_id in open_cursors:
                 return
             cursor = ExecutionCursor(
-                unit_id=f"model-{run_id[:8]}",
+                unit_id=f"model-{run_id}",
                 unit_kind=UnitKind.MODEL_NODE,
                 display_name=str(event.get("name") or "model"),
                 parent_unit_id=agent_cursor.unit_id,
