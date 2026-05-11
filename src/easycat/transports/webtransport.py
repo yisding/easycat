@@ -884,11 +884,14 @@ class WebTransportTransport(_AudioQueueMixin):
 
     Parallels :class:`~easycat.transports.websocket.WebSocketTransport`'s
     shape: implements the Transport protocol directly, accepts at most one
-    client, and bridges its inbound/outbound queues to the single accepted
-    session.  Under the hood it spawns a :class:`WebTransportServer`.
+    client.  Internally hosts a :class:`WebTransportServer` with a one-shot
+    handler; once a client connects, ``send_audio`` / ``clear_audio`` /
+    ``receive_audio`` delegate straight to the per-session
+    :class:`WebTransportConnectionTransport` — no extra buffering between
+    this outer transport and the inner session.
 
-    For multi-client deployments, use :class:`WebTransportServer` and create
-    one EasyCat ``Session`` per accepted
+    For multi-client deployments, use :class:`WebTransportServer` directly
+    and create one EasyCat ``Session`` per accepted
     :class:`WebTransportConnectionTransport`.
     """
 
@@ -898,14 +901,12 @@ class WebTransportTransport(_AudioQueueMixin):
     def __init__(self, config: WebTransportTransportConfig | None = None) -> None:
         self._config = config or WebTransportTransportConfig()
         self._audio_format = self._config.audio_format
+        # We don't push into the mixin's ``_in_queue`` (``receive_audio``
+        # below delegates), but ``_init_audio_queue`` also sets up
+        # ``_connected`` and ``_client_connected`` which we do use.
         self._init_audio_queue(self._config.max_pending_chunks)
-        self._out_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
-            maxsize=self._config.outbound_max_pending,
-        )
         self._server: WebTransportServer | None = None
         self._active: WebTransportConnectionTransport | None = None
-        self._pump_task: asyncio.Task[None] | None = None
-        self._writer_task: asyncio.Task[None] | None = None
 
     @property
     def audio_format(self) -> AudioFormat:
@@ -915,11 +916,9 @@ class WebTransportTransport(_AudioQueueMixin):
         if self._connected:
             return
         self._reset_audio_queue()
-        while not self._out_queue.empty():
-            try:
-                self._out_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+        # If a previous run set the event, clear it so receive_audio waits
+        # for *this* run's client.
+        self._client_connected.clear()
 
         async def handle(transport: WebTransportConnectionTransport) -> None:
             if self._active is not None:
@@ -930,25 +929,8 @@ class WebTransportTransport(_AudioQueueMixin):
             self._active = transport
             self._client_connected.set()
             try:
-                self._pump_task = asyncio.create_task(self._pump_inbound(transport))
-                self._writer_task = asyncio.create_task(self._pump_outbound(transport))
                 await transport.wait_closed()
             finally:
-                self._client_connected.clear()
-                if self._pump_task is not None:
-                    self._pump_task.cancel()
-                    try:
-                        await self._pump_task
-                    except asyncio.CancelledError:
-                        pass
-                if self._writer_task is not None:
-                    self._writer_task.cancel()
-                    try:
-                        await self._writer_task
-                    except asyncio.CancelledError:
-                        pass
-                self._pump_task = None
-                self._writer_task = None
                 self._active = None
 
         self._server = WebTransportServer(self._config, handle)
@@ -959,66 +941,39 @@ class WebTransportTransport(_AudioQueueMixin):
         if not self._connected:
             return
         self._connected = False
-        self._client_connected.clear()
+        # Unblock any ``receive_audio`` caller that is waiting for the first
+        # client — they'll see ``_connected`` is False and exit cleanly.
+        self._client_connected.set()
         if self._server is not None:
             await self._server.stop()
             self._server = None
-        self._enqueue_sentinel()
-        try:
-            self._out_queue.put_nowait(None)
-        except asyncio.QueueFull:
-            pass
+        self._active = None
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
-        if not self._connected or self._active is None:
+        active = self._active
+        if not self._connected or active is None:
             return False
-        try:
-            self._out_queue.put_nowait(chunk)
-            return True
-        except asyncio.QueueFull:
-            logger.debug("WebTransport outbound queue full — dropping TTS frame")
-            return False
+        return await active.send_audio(chunk)
 
     async def clear_audio(self) -> None:
-        drained = 0
-        while True:
-            try:
-                self._out_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            drained += 1
         active = self._active
         if active is not None:
             await active.clear_audio()
-        if drained:
-            logger.debug("Cleared %d pending WebTransport TTS frames", drained)
 
-    async def _pump_inbound(self, source: WebTransportConnectionTransport) -> None:
-        try:
-            async for chunk in source.receive_audio():
-                try:
-                    self._in_queue.put_nowait(chunk)
-                except asyncio.QueueFull:
-                    logger.warning("Inbound WebTransport audio queue full — dropping frame")
-        except asyncio.CancelledError:
-            raise
-        finally:
-            # Propagate end-of-stream so a downstream consumer iterating
-            # ``WebTransportTransport.receive_audio()`` exits when the inner
-            # session terminates, instead of blocking forever on the queue.
-            self._enqueue_sentinel()
+    async def receive_audio(self):
+        """Yield inbound audio chunks once a client connects.
 
-    async def _pump_outbound(self, sink: WebTransportConnectionTransport) -> None:
-        try:
-            while True:
-                chunk = await self._out_queue.get()
-                if chunk is None:
-                    return
-                ok = await sink.send_audio(chunk)
-                if not ok:
-                    logger.debug("Forwarded send_audio reported drop")
-        except asyncio.CancelledError:
-            raise
+        Blocks on ``_client_connected`` until the first session arrives, then
+        forwards directly from the inner connection transport — no
+        intermediate queue.  Exits cleanly when the session ends or
+        ``disconnect()`` runs before any client arrives.
+        """
+        await self._client_connected.wait()
+        active = self._active
+        if not self._connected or active is None:
+            return
+        async for chunk in active.receive_audio():
+            yield chunk
 
     def version_info(self) -> dict[str, str]:
         try:

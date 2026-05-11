@@ -461,27 +461,53 @@ class TestWebTransportTransportConformance:
             await t.connect()
 
     @pytest.mark.asyncio
-    async def test_pump_inbound_propagates_sentinel(self) -> None:
+    async def test_receive_audio_exits_after_inner_session_ends(self) -> None:
         """When the inner session terminates, the wrapper's ``receive_audio``
-        must also stop iterating (regression for review #16).
+        iteration must stop.  ``WebTransportTransport`` delegates directly to
+        the inner transport — when the inner stream ends, the outer iteration
+        ends naturally.
         """
         outer_cfg = WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem")
         outer = WebTransportTransport(outer_cfg)
 
-        # Build a fully-functional inner connection transport and disconnect
-        # it after the pump is wired up.  The pump must drop its own sentinel
-        # so a downstream consumer of ``outer.receive_audio()`` stops.
         inner = _build_connection_transport()
         await inner.connect()
-        pump_task = asyncio.create_task(outer._pump_inbound(inner))  # noqa: SLF001
-        await inner.disconnect()
-        await asyncio.wait_for(pump_task, timeout=1)
+        # Wire the outer's "active" slot manually since we're not running a
+        # real server in this unit test.
+        outer._active = inner  # noqa: SLF001
+        outer._connected = True  # noqa: SLF001
+        outer._client_connected.set()  # noqa: SLF001
 
-        # Sentinel should now be queued; iterating receive_audio() exits.
-        chunks = []
-        async for c in outer.receive_audio():
-            chunks.append(c)
+        # Start iterating; should block waiting for chunks.
+        recv_task = asyncio.create_task(self._collect_chunks(outer))
+        await asyncio.sleep(0)
+        # Inner disconnects → its receive_audio sentinel fires → outer's
+        # ``async for`` exits.
+        await inner.disconnect()
+        chunks = await asyncio.wait_for(recv_task, timeout=1)
         assert chunks == []
+
+    @pytest.mark.asyncio
+    async def test_receive_audio_exits_when_disconnect_precedes_client(self) -> None:
+        """If ``disconnect()`` runs before any client arrives, iterating
+        ``receive_audio()`` must still exit (not hang on ``_client_connected``).
+        """
+        outer = WebTransportTransport(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem")
+        )
+        outer._connected = True  # noqa: SLF001
+        recv_task = asyncio.create_task(self._collect_chunks(outer))
+        await asyncio.sleep(0)
+        await outer.disconnect()
+        chunks = await asyncio.wait_for(recv_task, timeout=1)
+        assert chunks == []
+
+    @staticmethod
+    async def _collect_chunks(outer: WebTransportTransport) -> list[AudioChunk]:
+        out: list[AudioChunk] = []
+        async for chunk in outer.receive_audio():
+            out.append(chunk)
+        return out
 
 
 # ── WebTransportServer wiring (no network) ────────────────────────
