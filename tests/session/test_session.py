@@ -584,7 +584,7 @@ async def test_cancel_turn_barge_in_emits_interruption():
 
 @pytest.mark.asyncio
 async def test_journaled_task_records_scheduled_and_completed():
-    """``_journaled_task`` must write ``task_scheduled`` at creation and
+    """``RuntimeScope.create_journaled_task`` must write ``task_scheduled`` at creation and
     ``task_completed`` when the coroutine finishes cleanly."""
     journal = InMemoryRingBuffer(capacity=32)
     session = Session(_full_config(journal=journal))
@@ -593,7 +593,9 @@ async def test_journaled_task_records_scheduled_and_completed():
     async def _ok() -> str:
         return "ok"
 
-    task = session._journaled_task(_ok(), name="unit_test_task")
+    task = session._runtime_scope.create_journaled_task(
+        _ok(), name="unit_test_task", journal_sink=session._journal_sink
+    )
     await task
     # add_done_callback schedules the emit callback — let it run.
     await asyncio.sleep(0)
@@ -615,7 +617,9 @@ async def test_journaled_task_records_cancelled():
     async def _slow() -> None:
         await asyncio.sleep(10.0)
 
-    task = session._journaled_task(_slow(), name="slow_task")
+    task = session._runtime_scope.create_journaled_task(
+        _slow(), name="slow_task", journal_sink=session._journal_sink
+    )
     task.cancel()
     try:
         await task
@@ -635,7 +639,9 @@ async def test_journaled_task_records_raised():
     async def _boom() -> None:
         raise ValueError("explosion")
 
-    task = session._journaled_task(_boom(), name="boom_task")
+    task = session._runtime_scope.create_journaled_task(
+        _boom(), name="boom_task", journal_sink=session._journal_sink
+    )
     try:
         await task
     except ValueError:
@@ -959,7 +965,7 @@ async def test_handle_end_of_speech_clears_turn_id_on_stt_timeout():
     session = Session(_full_config())
     session._turn = TurnContext("turn-stale", CancelToken())
     session._timeout_config.stt_timeout = 0.01
-    session._stt_final_future = asyncio.get_running_loop().create_future()
+    session._turn.stt_final_future = asyncio.get_running_loop().create_future()
 
     await session._handle_end_of_speech()
 
@@ -973,7 +979,7 @@ async def test_handle_end_of_speech_clears_turn_id_on_empty_transcript():
     session._turn = TurnContext("turn-stale", CancelToken())
     done = asyncio.get_running_loop().create_future()
     done.set_result("")
-    session._stt_final_future = done
+    session._turn.stt_final_future = done
 
     await session._handle_end_of_speech()
 

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Coroutine
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
+
+if TYPE_CHECKING:
+    from easycat.session._journal_sink import SessionJournalSink
 
 _T = TypeVar("_T")
 
@@ -24,6 +27,73 @@ class RuntimeScope:
     ) -> asyncio.Task[_T]:
         """Create and track a named task."""
         task = asyncio.create_task(coro, name=task_name or name)
+        return self.add_task(name, task)
+
+    def create_journaled_task(
+        self,
+        coro: Coroutine[Any, Any, _T],
+        *,
+        name: str,
+        journal_sink: SessionJournalSink,
+        turn_id: str | None = None,
+    ) -> asyncio.Task[_T]:
+        """Create a tracked task that journals scheduled/completed/cancelled/raised.
+
+        Emits ``task_scheduled`` at creation, then one of
+        ``task_completed`` / ``task_cancelled`` / ``task_raised`` when
+        the task finishes.  A bundle reader can reconstruct a Gantt
+        chart of concurrent awaits — enough to diagnose races like the
+        plan-7 STT-commit-vs-end-stream interleave without re-running
+        the live providers.
+
+        *name* is the stable label that survives replay (e.g.
+        ``"stt_pause_commit"``, ``"tts_synth"``, ``"on_turn_ended"``).
+        Use one per logical task — don't baseline it on Python object
+        ids, which don't survive serialisation.
+        """
+        # Resolve the turn id once at scheduling time so the terminal
+        # record carries the same id even if a new turn has started by
+        # the time the task completes.
+        resolved_turn = journal_sink.current_turn_id(turn_id)
+        journal_sink.append_record(
+            name="task_scheduled",
+            turn_id=resolved_turn,
+            data={"task_name": name},
+        )
+        task = asyncio.create_task(coro, name=name)
+
+        def _on_done(
+            t: asyncio.Task[Any],
+            label: str = name,
+            tid: str | None = resolved_turn,
+        ) -> None:
+            # Pick the right terminal record kind.  We look at exception
+            # first so a task that's both cancelled *and* had raised in
+            # finally-cleanup reports the raise (more actionable).
+            try:
+                if t.cancelled():
+                    journal_sink.append_record(
+                        name="task_cancelled", turn_id=tid, data={"task_name": label}
+                    )
+                    return
+                exc = t.exception()
+            except asyncio.CancelledError:
+                journal_sink.append_record(
+                    name="task_cancelled", turn_id=tid, data={"task_name": label}
+                )
+                return
+            if exc is not None:
+                journal_sink.append_record(
+                    name="task_raised",
+                    turn_id=tid,
+                    data={"task_name": label, "exc_type": type(exc).__name__},
+                )
+            else:
+                journal_sink.append_record(
+                    name="task_completed", turn_id=tid, data={"task_name": label}
+                )
+
+        task.add_done_callback(_on_done)
         return self.add_task(name, task)
 
     def add_task(self, name: str, task: asyncio.Task[_T]) -> asyncio.Task[_T]:
