@@ -85,6 +85,55 @@ def _plain_chunk_text(chunk: Any) -> str:
     return ""
 
 
+def _generation_chunk_text(chunk: Any) -> str:
+    """Extract text from a ``GenerationChunk``-like ``on_llm_stream`` payload.
+
+    Non-chat LLM streams yield ``GenerationChunk`` objects whose token
+    text lives on a ``.text`` attribute (no ``.content``).  Plain
+    strings are accepted as a duck-typed fallback for tests/custom
+    providers.
+    """
+    if chunk is None:
+        return ""
+    if isinstance(chunk, str):
+        return chunk
+    text = getattr(chunk, "text", None)
+    if isinstance(text, str):
+        return text
+    return ""
+
+
+def _llm_result_text(output: Any) -> str:
+    """Concatenate generation texts from an ``on_llm_end`` ``LLMResult`` payload.
+
+    LangChain forwards ``LLMResult`` through ``astream_events`` either
+    as the typed object or as a plain dict; both expose
+    ``generations: list[list[Generation]]`` where each ``Generation``
+    carries a ``text`` field.  For the common ``n=1`` case the result
+    is a single completion string.
+    """
+    if output is None:
+        return ""
+    if isinstance(output, dict):
+        generations = output.get("generations")
+    else:
+        generations = getattr(output, "generations", None)
+    if not isinstance(generations, list):
+        return ""
+    parts: list[str] = []
+    for group in generations:
+        if not isinstance(group, list):
+            continue
+        for gen in group:
+            if isinstance(gen, dict):
+                text = gen.get("text")
+            else:
+                text = getattr(gen, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)
+
+
 def translate_stream_event(
     event: dict[str, Any],
     recorder: AgentRecorder | None = None,
@@ -134,8 +183,13 @@ def translate_stream_event(
             tc_id = tc_chunk.get("id") or ""
             if tc_name:
                 if state is not None and tc_name and tc_id:
+                    # FIFO queue per tool name so parallel calls to the
+                    # same tool (e.g. two ``search`` calls in one
+                    # response) don't overwrite each other — each later
+                    # ``on_tool_start`` for that name consumes the
+                    # next queued id rather than the last-seen one.
                     chunk_started = state.setdefault("chunk_started_by_name", {})
-                    chunk_started[tc_name] = tc_id
+                    chunk_started.setdefault(tc_name, []).append(tc_id)
                 if recorder is not None:
                     recorder.record_tool_call(
                         phase="start",
@@ -172,6 +226,40 @@ def translate_stream_event(
         if text:
             yield AgentBridgeEvent(kind="text_delta", text=text)
 
+    elif event_type == "on_llm_stream":
+        # Non-chat LLM Runnables (``BaseLLM`` subclasses such as
+        # ``OpenAI`` text-completion) emit ``on_llm_stream`` instead of
+        # ``on_chat_model_stream``.  The bridge marks the parent chain
+        # run as having a model descendant so its forwarded
+        # ``on_chain_stream`` chunks are suppressed (avoiding double-
+        # emit); without translating these events the LLM's text would
+        # be silently dropped.
+        chunk = data.get("chunk") if isinstance(data, dict) else None
+        text = _generation_chunk_text(chunk)
+        if state is not None and run_id:
+            streamed = state.setdefault("llm_streamed_run_ids", set())
+            if isinstance(streamed, set):
+                streamed.add(run_id)
+        if text:
+            yield AgentBridgeEvent(kind="text_delta", text=text)
+
+    elif event_type == "on_llm_end":
+        # Non-streaming LLMs (``FakeStreamingListLLM``, any ``BaseLLM``
+        # that doesn't override ``_stream``) only surface their output
+        # via ``on_llm_end`` — no ``on_llm_stream`` events fire and the
+        # parent chain's chunks are suppressed by the bridge.  Without
+        # this handler the LLM's result is dropped entirely.  Skip
+        # streaming LLMs so we don't double-emit on top of their
+        # already-translated stream chunks.
+        if state is not None and run_id:
+            streamed = state.get("llm_streamed_run_ids")
+            if isinstance(streamed, set) and run_id in streamed:
+                return
+        output = data.get("output") if isinstance(data, dict) else None
+        text = _llm_result_text(output)
+        if text:
+            yield AgentBridgeEvent(kind="text_delta", text=text)
+
     elif event_type == "on_custom_event":
         # Surfaced by LCEL ``dispatch_custom_event`` calls.  We only feed
         # it to TTS when the payload explicitly carries a text-shaped
@@ -192,7 +280,11 @@ def translate_stream_event(
         if state is not None and tool_name:
             chunk_started = state.get("chunk_started_by_name")
             if isinstance(chunk_started, dict):
-                chunk_call_id = chunk_started.pop(tool_name, "") or ""
+                chunk_ids = chunk_started.get(tool_name)
+                if isinstance(chunk_ids, list) and chunk_ids:
+                    chunk_call_id = chunk_ids.pop(0)
+                    if not chunk_ids:
+                        chunk_started.pop(tool_name, None)
         if chunk_call_id:
             if state is not None and run_id:
                 run_to_call = state.setdefault("run_id_to_call_id", {})

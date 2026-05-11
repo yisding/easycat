@@ -221,6 +221,159 @@ class TestStreamEventTranslator:
         out = list(translate_stream_event(event))
         assert out == []
 
+    def test_on_llm_stream_generation_chunk_yields_text_delta(self):
+        """Non-chat ``BaseLLM`` runnables (text-completion models,
+        ``FakeStreamingListLLM``) emit ``on_llm_stream`` with a
+        ``GenerationChunk``-like payload whose token text lives on
+        ``.text``.  Without an explicit handler the bridge suppresses
+        the parent chain's chunks (to dedupe chat-model streams) but
+        the LLM's text would otherwise be silently dropped."""
+
+        class _GenerationChunk:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        event = {
+            "event": "on_llm_stream",
+            "name": "FakeStreamingListLLM",
+            "run_id": "l1",
+            "data": {"chunk": _GenerationChunk("hello")},
+        }
+        out = list(translate_stream_event(event))
+        assert len(out) == 1
+        assert out[0].kind == "text_delta"
+        assert out[0].text == "hello"
+
+    def test_on_llm_stream_string_chunk_yields_text_delta(self):
+        """Some duck-typed providers stream a bare string."""
+        event = {
+            "event": "on_llm_stream",
+            "name": "CustomLLM",
+            "run_id": "l1",
+            "data": {"chunk": " world"},
+        }
+        out = list(translate_stream_event(event))
+        assert out and out[0].text == " world"
+
+    def test_on_llm_end_emits_text_for_non_streaming_llm(self):
+        """``FakeStreamingListLLM`` (and similar non-streaming
+        ``BaseLLM`` subclasses) emit only ``on_llm_end`` carrying an
+        ``LLMResult`` dict.  The translator must surface its
+        ``generations[0][0]["text"]`` so the LLM's response isn't lost
+        when the bridge suppresses the parent chain's chunks."""
+        event = {
+            "event": "on_llm_end",
+            "name": "FakeStreamingListLLM",
+            "run_id": "l1",
+            "data": {
+                "output": {
+                    "generations": [[{"text": "hello world", "type": "Generation"}]],
+                    "llm_output": None,
+                }
+            },
+        }
+        out = list(translate_stream_event(event))
+        assert len(out) == 1
+        assert out[0].kind == "text_delta"
+        assert out[0].text == "hello world"
+
+    def test_on_llm_end_skipped_after_streaming(self):
+        """Real streaming LLMs emit ``on_llm_stream`` deltas *and* a
+        terminal ``on_llm_end`` carrying the full text — emitting the
+        end-of-LLM text would double the response on top of the
+        already-translated stream chunks.  Translator must dedupe by
+        ``run_id``."""
+
+        class _GenerationChunk:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        state: dict[str, Any] = {}
+        stream_event = {
+            "event": "on_llm_stream",
+            "name": "OpenAI",
+            "run_id": "l1",
+            "data": {"chunk": _GenerationChunk("hi ")},
+        }
+        end_event = {
+            "event": "on_llm_end",
+            "name": "OpenAI",
+            "run_id": "l1",
+            "data": {"output": {"generations": [[{"text": "hi there", "type": "Generation"}]]}},
+        }
+        stream_out = list(translate_stream_event(stream_event, state=state))
+        end_out = list(translate_stream_event(end_event, state=state))
+        assert [e.text for e in stream_out] == ["hi "]
+        # End event must NOT re-emit text — the stream already covered it.
+        assert end_out == []
+
+    def test_same_name_parallel_tool_calls_preserve_ids_fifo(self):
+        """When the model fires the same tool more than once in one
+        response, each ``on_tool_start`` must match the *next* queued
+        provider call-id rather than the last-seen one, otherwise the
+        first tool_started/tool_result pair is misrouted and the count
+        of ``tool_started`` vs ``tool_result`` events drifts."""
+        # Two parallel "search" calls in a single chat-model chunk.
+        chunk = _MockAIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {"name": "search", "args": None, "id": "call-a", "index": 0},
+                {"name": "search", "args": None, "id": "call-b", "index": 1},
+            ],
+        )
+        chunk_event = {
+            "event": "on_chat_model_stream",
+            "name": "ChatOpenAI",
+            "run_id": "m1",
+            "data": {"chunk": chunk},
+        }
+        state: dict[str, Any] = {}
+        chunk_out = list(translate_stream_event(chunk_event, state=state))
+        # Both started events come from the chat_model chunk path; the
+        # framework's on_tool_start events that follow must dedupe.
+        started_chunks = [e for e in chunk_out if e.kind == "tool_started"]
+        assert [e.call_id for e in started_chunks] == ["call-a", "call-b"]
+
+        start_a = {
+            "event": "on_tool_start",
+            "name": "search",
+            "run_id": "tool-run-a",
+            "data": {"input": {"q": "first"}},
+        }
+        start_b = {
+            "event": "on_tool_start",
+            "name": "search",
+            "run_id": "tool-run-b",
+            "data": {"input": {"q": "second"}},
+        }
+        out_a = list(translate_stream_event(start_a, state=state))
+        out_b = list(translate_stream_event(start_b, state=state))
+        # Framework starts must be suppressed (chunk path already
+        # announced both calls); same-name parallel calls would
+        # otherwise leak duplicate started events with run_ids.
+        assert out_a == []
+        assert out_b == []
+
+        end_a = {
+            "event": "on_tool_end",
+            "name": "search",
+            "run_id": "tool-run-a",
+            "data": {"output": "result-a"},
+        }
+        end_b = {
+            "event": "on_tool_end",
+            "name": "search",
+            "run_id": "tool-run-b",
+            "data": {"output": "result-b"},
+        }
+        result_a = list(translate_stream_event(end_a, state=state))
+        result_b = list(translate_stream_event(end_b, state=state))
+        # FIFO mapping: first on_tool_start was paired with the first
+        # queued chunk id (call-a), so its on_tool_end must surface
+        # call-a — not call-b.
+        assert [(e.kind, e.call_id) for e in result_a] == [("tool_result", "call-a")]
+        assert [(e.kind, e.call_id) for e in result_b] == [("tool_result", "call-b")]
+
     def test_chunk_text_prefers_text_property(self):
         """``AIMessageChunk.text`` flattens ``content_blocks`` across
         providers (Anthropic ``thinking``, OpenAI ``reasoning``
@@ -492,6 +645,153 @@ class TestLangChainBridgeInvoke:
             events.append(ev)
         text = "".join(e.text for e in events if e.kind == "text_delta")
         done = [e for e in events if e.kind == "done"]
+        assert text == "hello world"
+        assert done and done[0].text == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_chain_wrapping_text_llm_streams_text(self):
+        """Chains like ``PromptTemplate | FakeStreamingListLLM`` use a
+        non-chat ``BaseLLM`` whose tokens surface via ``on_llm_stream``
+        rather than ``on_chat_model_stream``.  The bridge marks the
+        parent chain as having a model descendant — so its forwarded
+        ``on_chain_stream`` chunks are suppressed — meaning the LLM's
+        own stream events must be translated or the ``done`` event ends
+        up empty."""
+
+        class _GenerationChunk:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_llm_start",
+                    "name": "FakeStreamingListLLM",
+                    "run_id": "l",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                {
+                    "event": "on_llm_stream",
+                    "name": "FakeStreamingListLLM",
+                    "run_id": "l",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": _GenerationChunk("hello ")},
+                },
+                {
+                    "event": "on_llm_stream",
+                    "name": "FakeStreamingListLLM",
+                    "run_id": "l",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": _GenerationChunk("world")},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"chunk": "hello world"},
+                },
+                {
+                    "event": "on_llm_end",
+                    "name": "FakeStreamingListLLM",
+                    "run_id": "l",
+                    "parent_ids": ["seq"],
+                    "data": {"output": "hello world"},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"output": "hello world"},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("bob"), _recorder()):
+            events.append(ev)
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        done = [e for e in events if e.kind == "done"]
+        assert text == "hello world"
+        assert done and done[0].text == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_chain_wrapping_non_streaming_llm_emits_text(self):
+        """``FakeStreamingListLLM`` and similar non-streaming ``BaseLLM``
+        subclasses don't override ``_stream`` — LangChain emits only
+        ``on_llm_end`` (with the full ``LLMResult``) and the chain's
+        per-character ``on_chain_stream`` chunks fire afterwards.  The
+        bridge suppresses chain chunks once an LLM descendant is
+        observed (to dedupe real streaming), so without translating
+        ``on_llm_end`` the LLM's text would be silently dropped."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_llm_start",
+                    "name": "FakeStreamingListLLM",
+                    "run_id": "l",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                # Real FakeStreamingListLLM emits NO on_llm_stream events,
+                # only on_llm_end with the full LLMResult payload.
+                {
+                    "event": "on_llm_end",
+                    "name": "FakeStreamingListLLM",
+                    "run_id": "l",
+                    "parent_ids": ["seq"],
+                    "data": {
+                        "output": {
+                            "generations": [[{"text": "hello world", "type": "Generation"}]],
+                            "llm_output": None,
+                        }
+                    },
+                },
+                # Chain then forwards the LLM output character-by-character
+                # via on_chain_stream — those must stay suppressed so we
+                # don't double-emit on top of the on_llm_end text.
+                *[
+                    {
+                        "event": "on_chain_stream",
+                        "name": "RunnableSequence",
+                        "run_id": "seq",
+                        "parent_ids": [],
+                        "data": {"chunk": ch},
+                    }
+                    for ch in "hello world"
+                ],
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"output": "hello world"},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("bob"), _recorder()):
+            events.append(ev)
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        done = [e for e in events if e.kind == "done"]
+        # Exactly one emission from on_llm_end — chain chunks suppressed.
         assert text == "hello world"
         assert done and done[0].text == "hello world"
 
