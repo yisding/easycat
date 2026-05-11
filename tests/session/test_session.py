@@ -422,7 +422,7 @@ async def test_replay_gated_audio_stays_bot_speaking_until_outbound_drain():
     assert session._turn_manager.state == TurnManagerState.BOT_SPEAKING
     assert session._outbound_queue.qsize() == 2
 
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
 
     assert session._turn_manager.state == TurnManagerState.IDLE
     assert len(transport.sent) == 2
@@ -457,8 +457,8 @@ async def test_session_start_rolls_back_after_connect_failure():
         await session.start()
 
     assert not session.is_running
-    assert session._pipeline_task is None
-    assert session._outbound_task is None
+    assert session._audio_router.pipeline_task is None
+    assert session._audio_router.outbound_task is None
 
     await session.start()
 
@@ -881,7 +881,7 @@ async def test_flux_auto_turn_does_not_start_on_silence_frames():
     session._is_running = True
     session._turn_manager.start_turn = AsyncMock()  # type: ignore[method-assign]
 
-    await session._run_pipeline()
+    await session._audio_router._run_pipeline()
 
     session._turn_manager.start_turn.assert_not_called()  # type: ignore[attr-defined]
 
@@ -896,7 +896,7 @@ async def test_flux_auto_turn_does_not_barge_in_during_bot_playback():
     session._turn_manager._state = TurnManagerState.BOT_SPEAKING
     session._turn_manager.start_turn = AsyncMock()  # type: ignore[method-assign]
 
-    await session._run_pipeline()
+    await session._audio_router._run_pipeline()
 
     session._turn_manager.start_turn.assert_not_called()  # type: ignore[attr-defined]
 
@@ -1523,7 +1523,7 @@ async def test_playback_mark_ack_scoped_to_current_turn():
     # ── First turn ──
     session._turn = TurnContext("turn-first", CancelToken())
     await session._outbound_queue.put(_make_chunk())
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
     first_turn_marks = list(session._turn.playback_mark_to_bytes.keys())
     assert len(first_turn_marks) == 1
 
@@ -1534,12 +1534,12 @@ async def test_playback_mark_ack_scoped_to_current_turn():
     session._is_running = False
 
     await session._outbound_queue.put(_make_chunk())
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
     second_turn_marks = list(session._turn.playback_mark_to_bytes.keys())
     assert len(second_turn_marks) == 1
 
     # Ack for the second turn's mark works.
-    session._on_playback_mark_ack(PlaybackMarkAck(mark_name=second_turn_marks[0]))
+    session._audio_router.on_playback_ack(PlaybackMarkAck(mark_name=second_turn_marks[0]))
     assert len(session._turn.playback_ack_log) == 1
     assert session._turn.playback_ack_log[0][1] == 320
 
@@ -1559,10 +1559,10 @@ async def test_playback_mark_ack_tracks_transport_confirmed_name():
     session._turn = TurnContext("test-turn", CancelToken())
 
     await session._outbound_queue.put(_make_chunk())
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
 
     canonical_mark = transport.playback_marks[-1]
-    session._on_playback_mark_ack(PlaybackMarkAck(mark_name=canonical_mark))
+    session._audio_router.on_playback_ack(PlaybackMarkAck(mark_name=canonical_mark))
 
     assert len(session._turn.playback_ack_log) == 1
     assert session._turn.playback_ack_log[0][1] == 320
@@ -1597,7 +1597,7 @@ async def test_buffered_transport_delivery_is_counted_only_after_report() -> Non
 
     chunk = _make_chunk()
     await session._outbound_queue.put(chunk)
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
 
     assert transport.sent == [chunk]
     assert session._turn.audio_bytes_sent == 0
@@ -1631,7 +1631,7 @@ async def test_failed_send_does_not_emit_audio_out_or_count_bytes() -> None:
     session.event_bus.subscribe(AudioOut, lambda event: seen.append(event))
 
     await session._outbound_queue.put(_make_chunk())
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
 
     assert session._turn.audio_bytes_sent == 0
     assert session._turn.bytes_since_last_mark == 0

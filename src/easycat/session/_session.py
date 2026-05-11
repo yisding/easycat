@@ -16,7 +16,6 @@ from dataclasses import replace
 from typing import Any, TypeVar
 from uuid import uuid4
 
-from easycat.audio_format import AudioChunk
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -24,8 +23,6 @@ from easycat.events import (
     AgentDelta,
     AgentFinal,
     AgentRequestStarted,
-    AudioIn,
-    AudioOut,
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
@@ -59,14 +56,11 @@ from easycat.llm_output_processing import (
 from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.runtime.artifacts import SnapshotArtifactStore
 from easycat.runtime.capabilities import (
-    PlaybackAcknowledgements,
     aclose_if_supported,
     clear_audio_if_supported,
     health_checkable,
     is_active_provider,
     is_passthrough_provider,
-    playback_acknowledgements,
-    transport_reports_audio_delivery,
 )
 from easycat.runtime.context import RunContext
 from easycat.runtime.journal import (
@@ -77,11 +71,11 @@ from easycat.runtime.journal import (
 )
 from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
+from easycat.session._audio_router import AudioRouter
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._streaming import consume_agent_stream
 from easycat.session._stt_committer import STTCommitter
 from easycat.session._text import (
-    _chunk_has_speech_energy,
     _text_for_estimation_timeline,
 )
 from easycat.session._turn_context import TurnContext
@@ -269,8 +263,8 @@ class Session:
         self._turn_manager.bind_journal_hook(self._on_turn_state_changed)
         self.event_bus.subscribe(TurnStarted, self._on_turn_started)
         self.event_bus.subscribe(TurnEnded, self._schedule_turn_ended)
-        self.event_bus.subscribe(PlaybackMarkAck, self._on_playback_mark_ack)
-        self.event_bus.subscribe(TransportAudioDelivered, self._on_transport_audio_delivered)
+        # PlaybackMarkAck and TransportAudioDelivered are wired to
+        # AudioRouter below — see the audio_router construction site.
 
         # Opt-out auto-wiring.  Runs on every STT final; on a match it
         # emits ``OptOutDetected``, adds the caller to an attached DNC
@@ -308,7 +302,11 @@ class Session:
         )
         self._artifact_store = cfg.artifact_store
 
-        # Backpressure (outbound audio queue)
+        # Backpressure (outbound audio queue).  The queue is shared
+        # between TTSSynthesizer (producer) and AudioRouter (drain
+        # consumer); Session constructs it once and hands the same
+        # instance to both.  Router takes ownership for drain semantics
+        # after construction.
         self._outbound_queue_external = cfg.outbound_queue is not None
         self._outbound_queue_max_size = 200
         self._outbound_queue_policy = DropPolicy.DROP_OLDEST
@@ -319,7 +317,6 @@ class Session:
             name=self._outbound_queue_name,
             on_drop=self._on_queue_drop,
         )
-        self._outbound_task: asyncio.Task[None] | None = None
         self._tts_synth = TTSSynthesizer(
             tts=self.tts,
             event_bus=self.event_bus,
@@ -351,28 +348,21 @@ class Session:
         self._stopping = False
         self._flushed = False
         self._closed_event: asyncio.Event | None = None
-        self._pipeline_task: asyncio.Task[None] | None = None
         self._current_tts_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         # STT futures live on TurnContext (per-turn so a stale callback
         # from the previous turn cannot resolve a future on the next turn).
 
         self._tts_playback_suppressed = False
-        self._auto_turn_speech_frames = 0
 
         # Per-turn state — created fresh at each turn start.
         # _turn_generation is a monotonic counter that increases each time a
         # new turn starts, used to detect stale callbacks from previous turns.
+        # Auto-turn speech-frame counter, gated-replay pending count,
+        # playback-mark accounting, and the outbound queue all live on
+        # AudioRouter (constructed below).
         self._turn: TurnContext | None = None
         self._turn_generation: int = 0
-        self._replay_chunks_pending: int = 0
-        self._playback_mark_bytes_interval: int = 4_000  # throttle: ~125ms at 16kHz/16-bit
-        self._playback_mark_seq: int = 0  # session-scoped so mark names never collide across turns
-
-        self._playback_ack_transport: PlaybackAcknowledgements | None = playback_acknowledgements(
-            self.transport
-        )
-        self._transport_reports_audio_delivery = transport_reports_audio_delivery(self.transport)
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
@@ -402,22 +392,6 @@ class Session:
             artifact_store=self._artifact_store,
         )
         self._no_turn = TurnContext(turn_id="no-turn", cancel_token=CancelToken())
-        self._stt_committer = STTCommitter(
-            stt=lambda: self.stt,
-            event_bus=self.event_bus,
-            journal_sink=self._journal_sink,
-            runtime_scope=self._runtime_scope,
-            timeout_config=self._timeout_config,
-            segment_silence_ms=stt_segment_silence_ms,
-            no_turn=self._no_turn,
-            turn_manager=self._turn_manager,
-            emit=self._emit,
-            auto_turn_from_stt_final=lambda: self._auto_turn_from_stt_final,
-            # Phase 2 will replace this with audio_router.reset_speech_detection.
-            on_speech_detection_reset=self._reset_auto_turn_speech_frames,
-        )
-        self.event_bus.subscribe(VADStopSpeaking, self._stt_committer.schedule)
-        self.event_bus.subscribe(VADStartSpeaking, self._stt_committer.cancel_scheduled)
         self._stt_stage = STTStage(self.stt, journal=self._journal)
         self._tts_stage = TTSStage(self.tts, journal=self._journal)
         self._vad_stage = VADStage(self.vad, journal=self._journal)
@@ -440,6 +414,52 @@ class Session:
             else None,
             journal=self._journal,
         )
+
+        def _set_running(value: bool) -> None:
+            self._is_running = value
+
+        self._audio_router = AudioRouter(
+            transport=self.transport,
+            audio_stage=self._audio_stage,
+            vad_stage=self._vad_stage,
+            stt_stage=self._stt_stage,
+            transport_stage=self._transport_stage,
+            turn_manager=self._turn_manager,
+            event_bus=self.event_bus,
+            journal_sink=self._journal_sink,
+            run_ctx=self._run_ctx,
+            no_turn=self._no_turn,
+            echo_canceller=self.echo_canceller,
+            enable_noise_reduction=lambda: self._enable_noise_reduction,
+            enable_aec=lambda: self._enable_aec,
+            enable_vad=lambda: self._enable_vad,
+            auto_turn_from_stt_final=lambda: self._auto_turn_from_stt_final,
+            emit=self._emit,
+            is_running=lambda: self._is_running,
+            set_running=_set_running,
+            current_turn=lambda: self._turn,
+            is_stt_active=lambda: self._stt_committer.is_active,
+            with_correlation=self._with_correlation,
+            outbound_queue=self._outbound_queue,
+        )
+        self.event_bus.subscribe(PlaybackMarkAck, self._audio_router.on_playback_ack)
+        self.event_bus.subscribe(TransportAudioDelivered, self._audio_router.on_audio_delivered)
+
+        self._stt_committer = STTCommitter(
+            stt=lambda: self.stt,
+            event_bus=self.event_bus,
+            journal_sink=self._journal_sink,
+            runtime_scope=self._runtime_scope,
+            timeout_config=self._timeout_config,
+            segment_silence_ms=stt_segment_silence_ms,
+            no_turn=self._no_turn,
+            turn_manager=self._turn_manager,
+            emit=self._emit,
+            auto_turn_from_stt_final=lambda: self._auto_turn_from_stt_final,
+            on_speech_detection_reset=self._audio_router.reset_speech_detection,
+        )
+        self.event_bus.subscribe(VADStopSpeaking, self._stt_committer.schedule)
+        self.event_bus.subscribe(VADStartSpeaking, self._stt_committer.cancel_scheduled)
         # Hand the TTS stage to the synthesizer so the existing iteration
         # loop goes through stage.execute() instead of tts.synthesize()
         # directly.  The synthesizer needs ctx + turn at call time and
@@ -490,11 +510,6 @@ class Session:
 
     async def _emit(self, event: Any) -> None:
         await self.event_bus.emit(self._with_correlation(event))
-
-    def _reset_auto_turn_speech_frames(self) -> None:
-        # Plumbed into ``STTCommitter.cancel`` via ``on_speech_detection_reset``.
-        # Phase 2 will replace this with ``audio_router.reset_speech_detection``.
-        self._auto_turn_speech_frames = 0
 
     def _journal_turn_id(self, turn_id: str | None = None) -> str | None:
         if turn_id is not None:
@@ -715,8 +730,8 @@ class Session:
                 turn.stt_final_future.set_result("")
             turn.stt_final_future = None
         self._turn = None
-        self._auto_turn_speech_frames = 0
-        self._replay_chunks_pending = 0
+        self._audio_router.reset_speech_detection()
+        self._audio_router.reset_replay_chunks()
         self._turn_manager.reset()
 
     @property
@@ -1103,25 +1118,10 @@ class Session:
     async def replay_gated_audio(self, events: list[Any]) -> None:
         """Replay buffered TTS audio chunks through the outbound queue.
 
-        Transitions through BOT_SPEAKING so that caller speech during
-        replay is treated as barge-in and the corresponding events fire.
-        Called by the classification gate flush callback.
+        Delegates to :class:`AudioRouter` which owns the outbound queue
+        and the gated-replay pending counter.
         """
-        from easycat.events import TTSAudio
-
-        already_replaying = self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-        # Only flush the outbound queue on the first replay call.
-        # A second call (for late gate frames) must not drop audio
-        # that the first replay enqueued.
-        if not already_replaying:
-            self._outbound_queue.flush()
-        chunks = [ev.chunk for ev in events if isinstance(ev, TTSAudio)]
-        if chunks:
-            self._replay_chunks_pending += len(chunks)
-            if not already_replaying:
-                await self._turn_manager.bot_started_speaking()
-            for chunk in chunks:
-                await self._outbound_queue.put(chunk)
+        await self._audio_router.gated_replay(events)
 
     async def synthesize_bypass(self, text: str) -> None:
         """Synthesize text via TTS, bypassing the classification gate.
@@ -1202,6 +1202,7 @@ class Session:
                     on_drop=self._on_queue_drop,
                 )
                 self._tts_synth._outbound_queue = self._outbound_queue
+                self._audio_router.replace_outbound_queue(self._outbound_queue)
 
             for name, provider in (
                 ("stt", self.stt),
@@ -1222,8 +1223,8 @@ class Session:
                 helper.start()
 
             self._is_running = True
-            self._outbound_task = asyncio.create_task(self._drain_outbound_audio())
-            self._pipeline_task = asyncio.create_task(self._run_pipeline())
+            self._audio_router.start_outbound()
+            self._audio_router.start_ingress()
             # Heartbeat task detects asyncio event-loop stalls.  If a
             # sync handler blocks the loop for >heartbeat_interval the
             # gap between heartbeats widens — ``loop_lag_ns`` in the
@@ -1236,15 +1237,8 @@ class Session:
         except Exception:
             self._is_running = False
 
-            for task_name in ("_pipeline_task", "_outbound_task"):
-                task = getattr(self, task_name)
-                if task is not None and not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                setattr(self, task_name, None)
+            await self._audio_router.stop_ingress()
+            await self._audio_router.stop_outbound()
             await self._runtime_scope.cancel_and_drain("pipeline_heartbeat")
             self._heartbeat_task = None
 
@@ -1284,17 +1278,15 @@ class Session:
                 except (asyncio.CancelledError, Exception):
                     pass
 
-            # Always perform cleanup — even when _run_pipeline() already flipped
-            # _is_running to False (e.g. after a transport disconnect).  Each step
-            # is individually guarded and safe to call when no work was started.
-            if (
-                self._pipeline_task
-                and self._pipeline_task is not current_task
-                and not self._pipeline_task.done()
-            ):
-                self._pipeline_task.cancel()
+            # Always perform cleanup — even when the ingress loop already
+            # flipped ``_is_running`` to False (e.g. after a transport
+            # disconnect).  Each step is individually guarded and safe to
+            # call when no work was started.
+            pipeline_task = self._audio_router.pipeline_task
+            if pipeline_task and pipeline_task is not current_task and not pipeline_task.done():
+                pipeline_task.cancel()
                 try:
-                    await self._pipeline_task
+                    await pipeline_task
                 except asyncio.CancelledError:
                     logger.debug(
                         "TTS processing task was cancelled; ensuring"
@@ -1313,12 +1305,7 @@ class Session:
             # Cancel the outbound drain task BEFORE disconnecting the
             # transport — otherwise the task may hang on send_audio()
             # with a disconnected transport.
-            if self._outbound_task and not self._outbound_task.done():
-                self._outbound_task.cancel()
-                try:
-                    await self._outbound_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+            await self._audio_router.stop_outbound()
             await self._runtime_scope.cancel_and_drain("pipeline_heartbeat")
             self._heartbeat_task = None
             await self.transport.disconnect()
@@ -1357,9 +1344,10 @@ class Session:
                     pass
 
             tasks: list[asyncio.Task[Any]] = []
-            if self._pipeline_task and not self._pipeline_task.done():
-                self._pipeline_task.cancel()
-                tasks.append(self._pipeline_task)
+            pipeline_task = self._audio_router.pipeline_task
+            if pipeline_task and not pipeline_task.done():
+                pipeline_task.cancel()
+                tasks.append(pipeline_task)
             stt_task = self._stt_committer.stt_task
             if stt_task and not stt_task.done():
                 stt_task.cancel()
@@ -1367,9 +1355,10 @@ class Session:
             if self._current_tts_task and not self._current_tts_task.done():
                 self._current_tts_task.cancel()
                 tasks.append(self._current_tts_task)
-            if self._outbound_task and not self._outbound_task.done():
-                self._outbound_task.cancel()
-                tasks.append(self._outbound_task)
+            outbound_task = self._audio_router.outbound_task
+            if outbound_task and not outbound_task.done():
+                outbound_task.cancel()
+                tasks.append(outbound_task)
 
             # Signal scoped work before awaiting other task handles so
             # migrated shutdown work preserves the previous force-cancel
@@ -1501,7 +1490,7 @@ class Session:
         await self._cancel_tts()
         await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
-        self._replay_chunks_pending = 0
+        self._audio_router.reset_replay_chunks()
 
         if not barge_in:
             self._reset_turn_state()
@@ -1521,7 +1510,7 @@ class Session:
         await self._tts_synth.cancel()
         await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
-        self._replay_chunks_pending = 0
+        self._audio_router.reset_replay_chunks()
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             self._reset_turn_state()
 
@@ -1538,7 +1527,7 @@ class Session:
         await self._cancel_tts()
         await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
-        self._replay_chunks_pending = 0
+        self._audio_router.reset_replay_chunks()
 
         self.agent.reset()
 
@@ -1741,7 +1730,7 @@ class Session:
         turn = TurnContext(turn_id=event.turn_id, cancel_token=cancel_token)
         self._turn = turn
         self._turn_generation = turn.generation
-        self._auto_turn_speech_frames = 0
+        self._audio_router.reset_speech_detection()
         self._tts_playback_suppressed = False
 
         # Start STT stream
@@ -1821,82 +1810,6 @@ class Session:
             logger.exception("Background task failed")
 
     # ── Pipeline ───────────────────────────────────────────────
-
-    async def _run_pipeline(self) -> None:
-        """Main audio receive loop: Transport -> Noise Reduction -> AEC -> VAD -> STT."""
-        try:
-            async for chunk in self.transport.receive_audio():
-                if not self._is_running:
-                    break
-
-                # Snapshot the active turn once per iteration so all stage
-                # calls inside the loop body operate on the same context.
-                turn = self._turn or self._no_turn
-
-                await self._emit(AudioIn(chunk=chunk))
-
-                # Stages 1-2: Noise reduction + Echo cancellation via AudioStage.
-                # AudioStage wraps both so a single journal record covers
-                # the pair — matches WS3 T3.10's intent that Audio is
-                # one stage for replay purposes.
-                if self._enable_noise_reduction or self._enable_aec:
-                    chunk = await self._audio_stage.execute(chunk, self._run_ctx, turn)
-
-                # Stage 3: VAD (optional) via VADStage.
-                if self._enable_vad:
-                    vad_events = await self._vad_stage.execute(chunk, self._run_ctx, turn)
-                    for vad_event in vad_events:
-                        vad_event = self._with_correlation(vad_event)
-                        await self._emit(vad_event)
-                        await self._turn_manager.on_vad_event(vad_event)
-
-                # TurnManager always sees raw audio frames for pre-roll buffering
-                self._turn_manager.on_audio_frame(chunk)
-
-                # Stage 4: Feed audio to STT (if listening)
-                started_turn_from_chunk = False
-                if self._auto_turn_from_stt_final and not self._stt_committer.is_active:
-                    if self._turn_manager.state == TurnManagerState.IDLE:
-                        if _chunk_has_speech_energy(chunk):
-                            self._auto_turn_speech_frames += 1
-                        else:
-                            self._auto_turn_speech_frames = 0
-
-                        if self._auto_turn_speech_frames >= 2:
-                            await self._turn_manager.start_turn()
-                            self._auto_turn_speech_frames = 0
-                            started_turn_from_chunk = self._stt_committer.is_active
-
-                        # Re-snapshot in case start_turn() installed a new turn
-                        # that the subsequent STT feed should target.
-                        turn = self._turn or self._no_turn
-                    else:
-                        self._auto_turn_speech_frames = 0
-
-                if self._stt_committer.is_active and not started_turn_from_chunk:
-                    active_turn = self._turn
-                    if active_turn is not None:
-                        active_turn.stt_has_uncommitted_audio = True
-                    await self._stt_stage.execute(
-                        chunk, self._run_ctx, active_turn or self._no_turn
-                    )
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            logger.exception("Pipeline error")
-            await self._emit(Error(exception=exc, stage=ErrorStage.PIPELINE))
-        finally:
-            # When the pipeline exits (transport disconnect, cancellation, or
-            # error), mark the session as no longer running so callers polling
-            # ``is_running`` can detect the transport is gone.
-            #
-            # We do NOT close the outbound queue here — an in-flight turn
-            # (agent + TTS) may still be producing audio that needs to drain.
-            # Instead we just flip the flag; ``stop()`` handles full cleanup.
-            if self._is_running:
-                logger.debug("Pipeline exited while session was running; marking session stopped")
-                self._is_running = False
 
     async def _handle_end_of_speech(self, turn: TurnContext | None = None) -> None:
         """Called when VAD signals end of speech: finalize STT, run agent, synthesize TTS.
@@ -2054,21 +1967,21 @@ class Session:
                 # transitioning to IDLE so no new turn can sneak in.
                 tts_should_stop = await self._drain_session_actions()
                 if tts_should_stop:
-                    await self._wait_outbound_drain()
+                    await self._audio_router.await_drain()
                     await self._turn_manager.bot_stopped_speaking()
                 else:
                     await self._turn_manager.bot_stopped_speaking()
                     # Wait for queued audio to drain so _drain_outbound_audio
                     # can still call turn.record_audio_sent() and emit playback
                     # marks for the tail of this turn's audio.
-                    await self._wait_outbound_drain()
+                    await self._audio_router.await_drain()
                 # Only clear if a new turn hasn't started during the drain.
                 if self._turn is turn and self._turn_generation == turn_gen:
                     self._turn = None
             elif started and not tts_playback_started:
                 if gated:
                     # Keep self._turn alive for gated replay mark accounting
-                    self._auto_turn_speech_frames = 0
+                    self._audio_router.reset_speech_detection()
                     self._turn_manager.reset()
                 else:
                     self._reset_turn_state()
@@ -2256,11 +2169,11 @@ class Session:
                 # transitioning to IDLE so no new turn can sneak in.
                 should_stop = await self._drain_session_actions()
                 if should_stop:
-                    await self._wait_outbound_drain()
+                    await self._audio_router.await_drain()
                     await self._turn_manager.bot_stopped_speaking()
                 else:
                     await self._turn_manager.bot_stopped_speaking()
-                    await self._wait_outbound_drain()
+                    await self._audio_router.await_drain()
                 # Only clear if a new turn hasn't started during the drain.
                 if self._turn is turn:
                     self._turn = None
@@ -2271,147 +2184,11 @@ class Session:
                 # gate flushes and replays buffered audio,
                 # _drain_outbound_audio can still call record_audio_sent()
                 # and send playback marks.
-                self._auto_turn_speech_frames = 0
+                self._audio_router.reset_speech_detection()
                 self._turn_manager.reset()
         return should_stop
 
     # ── Internal helpers ───────────────────────────────────────
-
-    async def _wait_outbound_drain(self, timeout: float = 2.0) -> None:
-        """Wait for the outbound queue to empty, with a timeout.
-
-        If the transport's ``send_audio`` is blocked (network backpressure,
-        stalled connection), the outbound worker cannot make progress and the
-        queue never empties.  A bounded wait prevents turn cleanup from
-        hanging indefinitely in that scenario.
-        """
-        if not self._outbound_task or self._outbound_task.done():
-            return
-        deadline = time.monotonic() + timeout
-        while not self._outbound_queue.empty():
-            if time.monotonic() >= deadline:
-                logger.warning("Outbound queue drain timed out after %.1fs", timeout)
-                break
-            await asyncio.sleep(0)
-
-    async def _drain_outbound_audio(self) -> None:
-        """Send queued outbound audio to the transport with backpressure."""
-        while True:
-            if not self._is_running and self._outbound_queue.empty():
-                break
-            try:
-                chunk = await self._outbound_queue.get()
-            except asyncio.QueueEmpty:
-                break
-            replayed_chunk = self._replay_chunks_pending > 0
-            turn = self._turn
-            try:
-                self._stamp_outbound_chunk(chunk, turn)
-                delivered = await self._transport_stage.execute(
-                    chunk, self._run_ctx, turn or self._no_turn
-                )
-                if delivered and not self._transport_reports_audio_delivery:
-                    # Stamp turn_id from self._turn at dequeue time (captured
-                    # before send_audio awaits) so a slow send under
-                    # backpressure doesn't inherit a newer turn's id.
-                    await self._handle_audio_delivery(chunk, turn)
-                    await self._emit(
-                        AudioOut(chunk=chunk, turn_id=turn.id if turn is not None else None)
-                    )
-            except Exception:
-                logger.exception("Failed to send audio to transport")
-            finally:
-                if replayed_chunk:
-                    self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
-                    if (
-                        self._replay_chunks_pending == 0
-                        and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                    ):
-                        await self._turn_manager.bot_stopped_speaking()
-
-        # Send a final mark for any trailing bytes
-        turn = self._turn
-        if turn and turn.bytes_since_last_mark > 0 and self._playback_ack_transport is not None:
-            turn.bytes_since_last_mark = 0
-            await self._send_playback_mark(turn)
-
-    def _stamp_outbound_chunk(self, chunk: AudioChunk, turn: TurnContext | None) -> None:
-        """Attach turn ownership so buffered transports can report later delivery."""
-        try:
-            setattr(chunk, "_easycat_turn_id", turn.id if turn is not None else None)
-            setattr(chunk, "_easycat_turn_ref", turn)
-        except Exception:
-            logger.debug("Failed to stamp outbound audio chunk metadata", exc_info=True)
-
-    async def _handle_audio_delivery(
-        self,
-        chunk: AudioChunk,
-        turn: TurnContext | None,
-    ) -> None:
-        if self._enable_aec:
-            self.echo_canceller.feed_reference(chunk)
-
-        sent_size = len(chunk.data)
-        if turn is None:
-            return
-
-        turn.record_audio_sent(sent_size, chunk.duration_ms)
-        if sent_size <= 0 or self._playback_ack_transport is None:
-            return
-
-        if turn.bytes_since_last_mark >= self._playback_mark_bytes_interval:
-            turn.bytes_since_last_mark = 0
-            await self._send_playback_mark(turn)
-        elif (
-            turn.bytes_since_last_mark > 0
-            and self._turn_manager.state != TurnManagerState.BOT_SPEAKING
-            and self._outbound_queue.empty()
-        ):
-            turn.bytes_since_last_mark = 0
-            await self._send_playback_mark(turn)
-
-    async def _send_playback_mark(self, turn: TurnContext) -> None:
-        if self._playback_ack_transport is None:
-            return
-
-        self._playback_mark_seq += 1
-        requested_mark_name = f"ec_playback_{self._playback_mark_seq}"
-        turn.playback_mark_to_bytes[requested_mark_name] = turn.audio_bytes_sent
-        try:
-            mark_name = await self._playback_ack_transport.send_playback_mark(
-                name=requested_mark_name
-            )
-            if mark_name != requested_mark_name:
-                acked_bytes = turn.playback_mark_to_bytes.pop(requested_mark_name, None)
-                if acked_bytes is not None:
-                    turn.playback_mark_to_bytes[mark_name] = acked_bytes
-        except Exception:
-            turn.playback_mark_to_bytes.pop(requested_mark_name, None)
-            logger.debug("Failed to send playback mark", exc_info=True)
-
-    def _on_playback_mark_ack(self, event: PlaybackMarkAck) -> None:
-        """Track acknowledged playout byte positions for the active turn."""
-        turn = self._turn
-        if not turn:
-            return
-        acked_bytes = turn.playback_mark_to_bytes.pop(event.mark_name, None)
-        if acked_bytes is None:
-            return
-        if turn.playback_ack_log and acked_bytes < turn.playback_ack_log[-1][1]:
-            acked_bytes = turn.playback_ack_log[-1][1]
-        turn.playback_ack_log.append((event.timestamp, acked_bytes))
-
-    async def _on_transport_audio_delivered(self, event: TransportAudioDelivered) -> None:
-        """Finalize accounting for buffered transports at their no-clear point."""
-        turn = event.turn_ref if isinstance(event.turn_ref, TurnContext) else None
-        if turn is None:
-            active = self._turn
-            if active is not None and (event.turn_id is None or active.id == event.turn_id):
-                turn = active
-
-        turn_id = event.turn_id or (turn.id if turn is not None else None)
-        await self._handle_audio_delivery(event.chunk, turn)
-        await self._emit(AudioOut(chunk=event.chunk, turn_id=turn_id))
 
     def _maybe_attach_event_bus(self, provider: Any) -> None:
         """Attach the session EventBus to provider configs that support it."""
