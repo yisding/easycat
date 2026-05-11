@@ -1848,9 +1848,7 @@ class Session:
         )
         self._stt_pause_commit_task.add_done_callback(self._log_task_exception)
 
-    async def _commit_stt_segment_after(
-        self, delay_s: float, turn: TurnContext | None
-    ) -> None:
+    async def _commit_stt_segment_after(self, delay_s: float, turn: TurnContext | None) -> None:
         if delay_s > 0:
             await asyncio.sleep(delay_s)
         if self._turn_manager.state != TurnManagerState.USER_PAUSED:
