@@ -132,11 +132,6 @@ class LangChainBridge:
         # by LangChain ``run_id`` so start/end always pair even when the
         # runnable interleaves multiple model calls.
         open_cursors: dict[str, ExecutionCursor] = {}
-        # Run ids of chains that are an ancestor of some chat_model run.
-        # Their ``on_chain_stream`` chunks forward the same tokens already
-        # surfaced via ``on_chat_model_stream``; skip the translator for
-        # those events so wrapped models don't double-emit text.
-        chains_with_model_descendants: set[str] = set()
         # Track the top-level chain's ``run_id`` so we can capture its
         # ``on_chain_end.data.output`` as ``structured_output`` — non-text
         # runnables (``RunnableLambda(lambda _: {"answer": 42})``,
@@ -145,9 +140,11 @@ class LangChainBridge:
         root_run_id: str | None = None
         captured_output: Any = None
         captured_output_set = False
-        # Shared state for tool-call deduplication across the chat_model
-        # tool_call_chunks path and the ``on_tool_start`` / ``on_tool_end``
-        # path — see ``translate_stream_event`` for details.
+        # Shared state for translator-side bookkeeping: tool-call dedup
+        # across the chat_model ``tool_call_chunks`` path and the
+        # ``on_tool_start`` / ``on_tool_end`` path, plus the set of chain
+        # run-ids that have a model descendant (used to suppress chain
+        # streams that would otherwise duplicate model tokens).
         tool_state: dict[str, Any] = {}
 
         input_payload = self._build_input(turn_input.text, turn_input.context)
@@ -166,9 +163,6 @@ class LangChainBridge:
                     break
 
                 event_type = event.get("event") if isinstance(event, dict) else None
-                if event_type in ("on_chat_model_start", "on_llm_start"):
-                    for pid in event.get("parent_ids") or ():
-                        chains_with_model_descendants.add(str(pid))
                 if event_type == "on_chain_start" and not (event.get("parent_ids") or ()):
                     if root_run_id is None:
                         rid = str(event.get("run_id") or "")
@@ -181,10 +175,6 @@ class LangChainBridge:
                         data_dict = raw_data if isinstance(raw_data, dict) else {}
                         captured_output = data_dict.get("output") if data_dict else None
                         captured_output_set = True
-                if event_type == "on_chain_stream" and (
-                    str(event.get("run_id") or "") in chains_with_model_descendants
-                ):
-                    continue
 
                 self._handle_cursor_lifecycle(event, recorder, agent_cursor, open_cursors)
                 for bridge_event in translate_stream_event(event, recorder, state=tool_state):

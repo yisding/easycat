@@ -260,9 +260,17 @@ class LangGraphBridge:
         # Nodes that return a final ``AIMessage`` without streaming
         # chat-model tokens (or that transform model output before
         # writing it to state) leave ``accumulated`` empty.  Fall back
-        # to the final message's text so the spoken response and the
-        # ``done.text`` history value reflect the graph's actual reply.
-        spoken_text = accumulated if accumulated else _extract_message_text(self._last_output)
+        # to the final message's text only when it's actually an AI
+        # message — for graphs that complete without appending an
+        # assistant reply (a conditional path returning ``{}``, an edge
+        # straight to END), ``_messages_tail`` would surface the user's
+        # own utterance and TTS would repeat the caller's voice back.
+        if accumulated:
+            spoken_text = accumulated
+        elif _message_is_ai(self._last_output):
+            spoken_text = _extract_message_text(self._last_output)
+        else:
+            spoken_text = ""
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(
             kind="done",

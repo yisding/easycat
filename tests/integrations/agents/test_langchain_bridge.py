@@ -856,6 +856,110 @@ class TestLangChainBridgeInvoke:
         assert text == "hi!"
 
     @pytest.mark.asyncio
+    async def test_chain_with_downstream_parser_does_not_double_emit(self):
+        """``prompt | chat_model | StrOutputParser() | RunnableLambda(...)``
+        emits the model tokens via ``on_chat_model_stream`` *and* the
+        same content via downstream-sibling ``on_chain_stream`` events
+        (parser/lambda restating the parsed text).  Without suppression
+        the bridge speaks ``abcABC`` — once from the model, once from
+        each downstream stage."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_chat_model_start",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": _MockAIMessageChunk(content="abc")},
+                },
+                # StrOutputParser is a sibling of the model under ``seq``
+                # and re-yields the parsed string.
+                {
+                    "event": "on_chain_start",
+                    "name": "StrOutputParser",
+                    "run_id": "parser",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "StrOutputParser",
+                    "run_id": "parser",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": "abc"},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "StrOutputParser",
+                    "run_id": "parser",
+                    "parent_ids": ["seq"],
+                    "data": {"output": "abc"},
+                },
+                # RunnableLambda is also a sibling of the model under
+                # ``seq``; it transforms the parsed string and would
+                # otherwise double-emit on top of the model stream.
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableLambda",
+                    "run_id": "lambda",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableLambda",
+                    "run_id": "lambda",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": "ABC"},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableLambda",
+                    "run_id": "lambda",
+                    "parent_ids": ["seq"],
+                    "data": {"output": "ABC"},
+                },
+                {
+                    "event": "on_chat_model_end",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {"output": _MockAIMessageChunk(content="abc")},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"output": "ABC"},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        # Only the chat_model stream contributes; downstream parser /
+        # lambda chain streams are siblings of the model and would
+        # otherwise duplicate its tokens.
+        assert text == "abc"
+
+    @pytest.mark.asyncio
     async def test_turn_context_flows_into_history_payload(self):
         """Per-turn system/developer context (caller-id, system prefix,
         explicit ``AgentTurnInput.context``) must reach the runnable's

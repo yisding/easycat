@@ -576,3 +576,31 @@ class TestLangGraphBridgeState:
         assert text_deltas == []  # node did not stream
         assert done and done[0].text == "the actual reply"
         assert done[0].structured_output is ai_msg
+
+    @pytest.mark.asyncio
+    async def test_done_text_is_empty_when_tail_is_not_ai_message(self):
+        """A graph that completes without appending an assistant
+        message — e.g. a conditional path returning ``{}`` or an edge
+        straight to END — leaves the user's own HumanMessage as the
+        messages tail.  ``done.text`` must stay empty so TTS doesn't
+        parrot the caller back at them."""
+        user_msg = _MockMessage("user", "what time is it?")
+        state = _MockState(values={"messages": [user_msg]}, checkpoint_id="cp-final")
+        scripted = [
+            _node_start("router", "n1"),
+            _node_end("router", "n1"),
+        ]
+        graph = _MockCompiledGraph(scripted, state=state)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("what time is it?"), _recorder()):
+            events.append(ev)
+
+        text_deltas = [e for e in events if e.kind == "text_delta"]
+        done = [e for e in events if e.kind == "done"]
+        assert text_deltas == []
+        assert done and done[0].text == ""
+        # structured_output still reflects the (non-AI) tail so callers
+        # introspecting the raw graph state aren't surprised.
+        assert done[0].structured_output is user_msg

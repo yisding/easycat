@@ -166,6 +166,29 @@ def translate_stream_event(
     name = event.get("name") or ""
     run_id = event.get("run_id") or ""
 
+    # Track chain run_ids that have a chat_model / non-chat LLM as a
+    # descendant.  Their own ``on_chain_stream`` chunks (and the chunks
+    # of their *downstream sibling* runnables — ``StrOutputParser``,
+    # ``RunnableLambda``, anything LCEL composes after the model) forward
+    # the same tokens already emitted via ``on_chat_model_stream`` /
+    # ``on_llm_stream``.  Without suppression a chain like
+    # ``prompt | model | parser | lambda`` would speak ``abcABC`` —
+    # once from the model stream, once from each downstream stage that
+    # re-yields the parsed string.  This also handles nested LCEL inside
+    # LangGraph nodes (their state ``on_chain_stream`` chunks are
+    # filtered out separately by ``_plain_chunk_text``).
+    if state is not None and event_type in ("on_chat_model_start", "on_llm_start"):
+        bag = state.setdefault("chains_with_model_descendants", set())
+        if isinstance(bag, set):
+            for pid in event.get("parent_ids") or ():
+                bag.add(str(pid))
+    if event_type == "on_chain_stream" and state is not None:
+        bag = state.get("chains_with_model_descendants")
+        if isinstance(bag, set) and bag:
+            parents = event.get("parent_ids") or ()
+            if run_id in bag or any(str(pid) in bag for pid in parents):
+                return
+
     if event_type == "on_chat_model_stream":
         chunk = data.get("chunk") if isinstance(data, dict) else None
         if chunk is None:
