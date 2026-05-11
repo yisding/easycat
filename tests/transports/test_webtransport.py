@@ -395,7 +395,17 @@ def _udp_loopback_available() -> bool:
     return True
 
 
+def _aioquic_available() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("aioquic") is not None
+
+
 @pytest.mark.integration_socket
+@pytest.mark.skipif(
+    not _aioquic_available(),
+    reason="aioquic not installed ([webtransport] extra)",
+)
 @pytest.mark.skipif(not _udp_loopback_available(), reason="UDP loopback unavailable")
 class TestWebTransportServerLoopback:
     """Drive real aioquic CONNECT-webtransport handshakes against the server.

@@ -56,23 +56,19 @@ import logging
 import struct
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
-
-from aioquic.asyncio.protocol import QuicConnectionProtocol
-from aioquic.asyncio.server import QuicServer, serve
-from aioquic.h3.connection import H3Connection
-from aioquic.h3.events import (
-    H3Event,
-    HeadersReceived,
-    WebTransportStreamDataReceived,
-)
-from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.events import QuicEvent
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.audio_utils import resample_chunk
+from easycat.extras import require_module
 from easycat.transports._base import _AudioQueueMixin
 from easycat.transports.websocket import _valid_config_sample_rate
+
+if TYPE_CHECKING:
+    from aioquic.asyncio.protocol import QuicConnectionProtocol
+    from aioquic.asyncio.server import QuicServer
+    from aioquic.h3.connection import H3Connection
+    from aioquic.quic.configuration import QuicConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +118,10 @@ def _build_quic_configuration(certfile: str, keyfile: str) -> QuicConfiguration:
             "Generate a local cert with: openssl req -x509 -newkey rsa:2048 "
             '-keyout key.pem -out cert.pem -days 1 -nodes -subj "/CN=localhost"'
         )
-    config = QuicConfiguration(
+    quic_config_mod = require_module(
+        "aioquic.quic.configuration", extra="webtransport", purpose="WebTransport transport"
+    )
+    config = quic_config_mod.QuicConfiguration(
         alpn_protocols=["h3"],
         is_client=False,
         max_datagram_frame_size=65536,
@@ -342,85 +341,111 @@ class _WebTransportSession:
 # ── Per-connection aioquic protocol class ─────────────────────────
 
 
-class _EasyCatH3Protocol(QuicConnectionProtocol):
-    """aioquic protocol that dispatches WebTransport sessions.
+# ``_EasyCatH3Protocol`` subclasses ``aioquic.asyncio.QuicConnectionProtocol``,
+# which is only available when the optional ``[webtransport]`` extra is
+# installed.  We build the class lazily on first use so that importing this
+# module (e.g. for the public-API snapshot or unit tests with fake H3
+# objects) does not require aioquic.
+_PROTOCOL_CLASS_CACHE: type | None = None
 
-    One instance per QUIC connection.  When a CONNECT-webtransport request
-    arrives on the expected path, builds a :class:`WebTransportConnectionTransport`
-    and hands it to the configured session-accepted callback.  In v1 we accept
-    one WebTransport session per QUIC connection (matches browser usage).
-    """
 
-    # Populated by ``_protocol_factory`` before the instance handles events.
-    _accept_path: str
-    _on_session: Callable[[WebTransportConnectionTransport], None]
-    _session_config: WebTransportTransportConfig
+def _get_protocol_class() -> type:
+    global _PROTOCOL_CLASS_CACHE
+    if _PROTOCOL_CLASS_CACHE is not None:
+        return _PROTOCOL_CLASS_CACHE
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._h3: H3Connection | None = None
-        self._transport: WebTransportConnectionTransport | None = None
+    aioquic_proto = require_module(
+        "aioquic.asyncio.protocol", extra="webtransport", purpose="WebTransport transport"
+    )
+    h3_conn = require_module(
+        "aioquic.h3.connection", extra="webtransport", purpose="WebTransport transport"
+    )
+    h3_events = require_module(
+        "aioquic.h3.events", extra="webtransport", purpose="WebTransport transport"
+    )
 
-    def quic_event_received(self, event: QuicEvent) -> None:
-        if self._h3 is None:
-            self._h3 = H3Connection(self._quic, enable_webtransport=True)
-        for h3_event in self._h3.handle_event(event):
-            self._handle_h3_event(h3_event)
+    class _EasyCatH3Protocol(aioquic_proto.QuicConnectionProtocol):
+        """aioquic protocol that dispatches WebTransport sessions.
 
-    def _handle_h3_event(self, event: H3Event) -> None:
-        assert self._h3 is not None
-        if isinstance(event, HeadersReceived):
-            self._handle_headers(event)
-        elif isinstance(event, WebTransportStreamDataReceived):
-            if self._transport is None:
+        One instance per QUIC connection.  When a CONNECT-webtransport
+        request arrives on the expected path, builds a
+        :class:`WebTransportConnectionTransport` and hands it to the configured
+        session-accepted callback.  v1 accepts one WebTransport session per
+        QUIC connection (matches browser usage).
+        """
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._h3 = None
+            self._transport: WebTransportConnectionTransport | None = None
+            # Populated by the protocol factory before events flow.
+            self._accept_path: str = ""
+            self._on_session: Callable[[WebTransportConnectionTransport], None] = lambda _t: None
+            self._session_config: WebTransportTransportConfig = WebTransportTransportConfig()
+
+        def quic_event_received(self, event: Any) -> None:
+            if self._h3 is None:
+                self._h3 = h3_conn.H3Connection(self._quic, enable_webtransport=True)
+            for h3_event in self._h3.handle_event(event):
+                self._handle_h3_event(h3_event)
+
+        def _handle_h3_event(self, event: Any) -> None:
+            assert self._h3 is not None
+            if isinstance(event, h3_events.HeadersReceived):
+                self._handle_headers(event)
+            elif isinstance(event, h3_events.WebTransportStreamDataReceived):
+                if self._transport is None:
+                    return
+                self._transport._feed_stream_data(  # noqa: SLF001
+                    event.stream_id, event.data, event.stream_ended
+                )
+
+        def _handle_headers(self, event: Any) -> None:
+            assert self._h3 is not None
+            headers = dict(event.headers)
+            method = headers.get(b":method", b"").decode("ascii", errors="ignore")
+            protocol = headers.get(b":protocol", b"").decode("ascii", errors="ignore")
+            path = headers.get(b":path", b"").decode("ascii", errors="ignore")
+
+            if method != "CONNECT" or protocol != "webtransport":
+                self._h3.send_headers(event.stream_id, [(b":status", b"400")], end_stream=True)
+                self.transmit()
                 return
-            self._transport._feed_stream_data(  # noqa: SLF001
-                event.stream_id, event.data, event.stream_ended
+
+            if path != self._accept_path:
+                self._h3.send_headers(event.stream_id, [(b":status", b"404")], end_stream=True)
+                self.transmit()
+                return
+
+            if self._transport is not None:
+                # Reject additional WT sessions on the same QUIC connection.
+                self._h3.send_headers(event.stream_id, [(b":status", b"409")], end_stream=True)
+                self.transmit()
+                return
+
+            self._h3.send_headers(
+                event.stream_id,
+                [(b":status", b"200"), (b"sec-webtransport-http3-draft", b"draft02")],
+                end_stream=False,
             )
-
-    def _handle_headers(self, event: HeadersReceived) -> None:
-        assert self._h3 is not None
-        headers = dict(event.headers)
-        method = headers.get(b":method", b"").decode("ascii", errors="ignore")
-        protocol = headers.get(b":protocol", b"").decode("ascii", errors="ignore")
-        path = headers.get(b":path", b"").decode("ascii", errors="ignore")
-
-        if method != "CONNECT" or protocol != "webtransport":
-            self._h3.send_headers(event.stream_id, [(b":status", b"400")], end_stream=True)
             self.transmit()
-            return
 
-        if path != self._accept_path:
-            self._h3.send_headers(event.stream_id, [(b":status", b"404")], end_stream=True)
-            self.transmit()
-            return
+            transport = WebTransportConnectionTransport(
+                config=self._session_config,
+                _h3=self._h3,
+                _quic_protocol=self,
+                _session_id=event.stream_id,
+            )
+            self._transport = transport
+            self._on_session(transport)
 
-        if self._transport is not None:
-            # Reject additional WT sessions on the same QUIC connection.
-            self._h3.send_headers(event.stream_id, [(b":status", b"409")], end_stream=True)
-            self.transmit()
-            return
+        def connection_lost(self, exc: BaseException | None) -> None:
+            if self._transport is not None:
+                self._transport._mark_connection_lost()  # noqa: SLF001
+            super().connection_lost(exc)
 
-        self._h3.send_headers(
-            event.stream_id,
-            [(b":status", b"200"), (b"sec-webtransport-http3-draft", b"draft02")],
-            end_stream=False,
-        )
-        self.transmit()
-
-        transport = WebTransportConnectionTransport(
-            config=self._session_config,
-            _h3=self._h3,
-            _quic_protocol=self,
-            _session_id=event.stream_id,
-        )
-        self._transport = transport
-        self._on_session(transport)
-
-    def connection_lost(self, exc: BaseException | None) -> None:
-        if self._transport is not None:
-            self._transport._mark_connection_lost()  # noqa: SLF001
-        super().connection_lost(exc)
+    _PROTOCOL_CLASS_CACHE = _EasyCatH3Protocol
+    return _EasyCatH3Protocol
 
 
 def _protocol_factory(
@@ -428,11 +453,13 @@ def _protocol_factory(
     accept_path: str,
     on_session: Callable[[WebTransportConnectionTransport], None],
     session_config: WebTransportTransportConfig,
-) -> Callable[..., QuicConnectionProtocol]:
+) -> Callable[..., Any]:
     """Build the ``create_protocol`` callable for :func:`aioquic.asyncio.serve`."""
 
-    def factory(*args: Any, **kwargs: Any) -> QuicConnectionProtocol:
-        proto = _EasyCatH3Protocol(*args, **kwargs)
+    protocol_cls = _get_protocol_class()
+
+    def factory(*args: Any, **kwargs: Any) -> Any:
+        proto = protocol_cls(*args, **kwargs)
         proto._accept_path = accept_path
         proto._on_session = on_session
         proto._session_config = session_config
@@ -636,7 +663,12 @@ class WebTransportServer:
             on_session=_on_session,
             session_config=self._config,
         )
-        self._server = await serve(
+        aioquic_server = require_module(
+            "aioquic.asyncio.server",
+            extra="webtransport",
+            purpose="WebTransport transport",
+        )
+        self._server = await aioquic_server.serve(
             self._config.host,
             self._config.port,
             configuration=quic_config,
