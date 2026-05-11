@@ -67,10 +67,11 @@ def test_session_markdown_strip_delegates_to_journal_sink() -> None:
     session = Session(SessionConfig(runtime_mode="text_session", journal=journal))
     session._turn = TurnContext("turn-markdown", CancelToken())
 
-    session._record_markdown_strip(
+    session._tts_scheduler._record_markdown_strip(
         phase="streaming_final",
         original_text="Go to **Settings**.",
         stripped_text="Go to Settings.",
+        turn_id=session._turn.id,
     )
 
     record = journal.read()[0]

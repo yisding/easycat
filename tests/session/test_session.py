@@ -364,7 +364,7 @@ def test_session_strip_markdown_does_not_inject_hidden_processor():
     processor = MarkerProcessor()
     session = Session(_full_config(strip_markdown=True, output_processors=[processor]))
 
-    assert session._output_processors == [processor]
+    assert session._tts_scheduler._output_processors == [processor]
 
 
 @pytest.mark.asyncio
@@ -1092,7 +1092,7 @@ async def test_prepare_tts_payload_writes_journal_record():
     )
     session._turn = TurnContext("turn-tts-prepared", CancelToken())
 
-    payload = session._prepare_tts_payload("hello", is_streaming=False, is_final=True)
+    payload = session._tts_scheduler.prepare("hello", is_streaming=False, is_final=True)
 
     assert payload.text == "speak: hello"
     records = [record for record in journal.read() if record.name == "tts_payload_prepared"]
@@ -1239,7 +1239,7 @@ async def test_tts_audio_and_markers_are_journaled_with_artifact_ref():
     )
     session._turn = TurnContext("turn-tts-audio", CancelToken())
 
-    await session._synthesize_tts("hello", token=None)
+    await session._tts_scheduler.synthesize("hello", token=None)
 
     audio_records = [record for record in journal.read() if record.name == "tts_audio"]
     marker_records = [record for record in journal.read() if record.name == "tts_markers"]
