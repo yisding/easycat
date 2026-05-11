@@ -16,8 +16,32 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from typing import Protocol, runtime_checkable
 
 from easycat.cancel import CancelToken
+
+
+@runtime_checkable
+class TurnHandle(Protocol):
+    """The contract between Session and turn-running collaborators.
+
+    Session is the single authority on the active turn pointer and
+    turn generation.  Collaborators read and write through this handle
+    rather than holding ``Session`` refs.
+    """
+
+    @property
+    def current(self) -> TurnContext | None: ...
+
+    @property
+    def generation(self) -> int: ...
+
+    @property
+    def no_turn(self) -> TurnContext: ...
+
+    def set(self, turn: TurnContext | None) -> None: ...
+
+    def bump_generation(self) -> int: ...
 
 
 class TurnContext:

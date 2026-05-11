@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Any, TypeVar
@@ -22,11 +21,9 @@ from easycat.echo_cancellation import PassthroughAEC
 from easycat.events import (
     AgentDelta,
     AgentFinal,
-    AgentRequestStarted,
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
-    ErrorStage,
     EventBus,
     EventHandler,
     Interruption,
@@ -65,18 +62,14 @@ from easycat.runtime.journal import (
     JournalView,
     ReadonlySqliteJournal,
 )
-from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._audio_router import AudioRouter
 from easycat.session._cancel_orchestrator import CancelOrchestrator
 from easycat.session._journal_sink import SessionJournalSink
-from easycat.session._streaming import consume_agent_stream
 from easycat.session._stt_committer import STTCommitter
-from easycat.session._text import (
-    _text_for_estimation_timeline,
-)
 from easycat.session._tts_scheduler import TTSScheduler
 from easycat.session._turn_context import TurnContext
+from easycat.session._turn_runner import TurnRunner
 from easycat.session._types import (
     _TM_TO_TURN_STATE,
     Agent,
@@ -91,12 +84,6 @@ from easycat.session.actions import (
     SessionAction,
     SessionActionExecutor,
 )
-from easycat.session.interruption import (
-    estimate_and_notify_interruption,
-)
-from easycat.session.interruption import (
-    notify_bridge_interruption as _notify_bridge_interruption,
-)
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
 from easycat.stages.base import (
@@ -107,7 +94,6 @@ from easycat.stages.transport import TransportStage
 from easycat.stages.tts import TTSStage
 from easycat.stages.turn import TurnStage
 from easycat.stages.vad import VADStage
-from easycat.strip_markdown import strip_markdown
 from easycat.stubs import (
     NoopAgent,
     NoopSTT,
@@ -115,18 +101,47 @@ from easycat.stubs import (
     NoopTTS,
     NoopVAD,
 )
-from easycat.timeouts import (
-    AgentTimeoutError,
-    STTTimeoutError,
-    TTSTimeoutError,
-    with_agent_timeout,
-)
-from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
 
 _HelperT = TypeVar("_HelperT")
+
+
+class _SessionTurnHandle:
+    """Tiny adapter exposing :class:`TurnHandle` on a Session.
+
+    Session is the single authority on the active turn pointer and turn
+    generation; this adapter forwards :class:`TurnHandle` reads/writes
+    onto the Session attributes so TurnRunner can use the protocol
+    without holding a Session reference directly.
+    """
+
+    __slots__ = ("_session",)
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    @property
+    def current(self) -> TurnContext | None:
+        return self._session._turn
+
+    @property
+    def generation(self) -> int:
+        return self._session._turn_generation
+
+    @property
+    def no_turn(self) -> TurnContext:
+        return self._session._no_turn
+
+    def set(self, turn: TurnContext | None) -> None:
+        self._session._turn = turn
+        if turn is not None:
+            self._session._turn_generation = turn.generation
+
+    def bump_generation(self) -> int:
+        self._session._turn_generation += 1
+        return self._session._turn_generation
 
 
 def _ensure_bridge(agent: Any) -> ExternalAgentBridge:
@@ -253,8 +268,9 @@ class Session:
         # every state transition so bundle readers can answer "why did
         # it go to PROCESSING" from the journal alone.
         self._turn_manager.bind_journal_hook(self._on_turn_state_changed)
-        self.event_bus.subscribe(TurnStarted, self._on_turn_started)
-        self.event_bus.subscribe(TurnEnded, self._schedule_turn_ended)
+        # Phase 5 Risk 4 (Option A): TurnStarted/TurnEnded subscriptions
+        # are deferred until after ``self._turn_runner`` is constructed
+        # below, because the handlers now live on the runner.
         # PlaybackMarkAck and TransportAudioDelivered are wired to
         # AudioRouter below — see the audio_router construction site.
 
@@ -346,10 +362,9 @@ class Session:
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
-        self._active_text_turn: asyncio.Task[str] | None = None
-        self._text_turn_cancel_token: CancelToken | None = None
-        self._text_turn_accumulated: str = ""
-        self._text_turn_lock = asyncio.Lock()
+        # Text-turn state (``_active_text_turn``, ``_text_turn_cancel_token``,
+        # ``_text_turn_accumulated``, ``_text_turn_lock``) is owned by
+        # :class:`TurnRunner` after the Phase 5 decomposition.
         self._turn_manager.bind_session(self.session_id)
         self._journal_sink = SessionJournalSink(
             event_bus=self.event_bus,
@@ -495,6 +510,43 @@ class Session:
         )
         # Install the orchestrator's barge-in callback now that it exists.
         self._turn_manager.set_cancel_callback(self._cancel.for_barge_in)
+
+        # Turn runner — owns the per-turn agent loop.  Construction order:
+        # depends on every collaborator above (STTCommitter, TTSScheduler,
+        # AudioRouter, CancelOrchestrator, AgentStage).  Event subscriptions
+        # are deferred to after construction (Risk 4 Option A).
+        self._turn_runner = TurnRunner(
+            stt_committer=self._stt_committer,
+            tts_scheduler=self._tts_scheduler,
+            audio_router=self._audio_router,
+            cancel_orchestrator=self._cancel,
+            turn_manager=self._turn_manager,
+            agent_stage=self._agent_stage,
+            run_ctx=self._run_ctx,
+            event_bus=self.event_bus,
+            journal_sink=self._journal_sink,
+            runtime_scope=self._runtime_scope,
+            timeout_config=self._timeout_config,
+            turn_handle=_SessionTurnHandle(self),
+            stt_stage=self._stt_stage,
+            stt_provider=lambda: self.stt,
+            is_running=lambda: self._is_running,
+            is_gated=lambda: self._is_gated,
+            agent=lambda: self.agent,
+            drain_session_actions=self._drain_session_actions,
+            caller_id_system_message=self._caller_id_system_message,
+            # ``stop`` is re-read each call so test patches via
+            # ``session.stop = AsyncMock(...)`` are observable to the runner.
+            stop=lambda: self.stop(),
+            reset_turn_state=self._reset_turn_state,
+            emit=self._emit,
+            session_id=self.session_id,
+            journal_enabled=self._journal is not None,
+        )
+        # Wire TurnStarted / TurnEnded subscriptions now that the runner
+        # exists (Phase 5 Risk 4 Option A — deferred subscription).
+        self.event_bus.subscribe(TurnStarted, self._turn_runner.on_turn_started)
+        self.event_bus.subscribe(TurnEnded, self._turn_runner.schedule_turn_ended)
 
         # Plug the TurnStage into the TurnManager's endpoint-detector call
         # so smart-turn decisions go through stage.execute() and produce
@@ -1191,9 +1243,10 @@ class Session:
 
             # Cancel any in-flight text turn so it doesn't emit events
             # after the session is torn down.
-            if self._text_turn_cancel_token:
-                self._text_turn_cancel_token.cancel()
-            text_task = self._active_text_turn
+            text_token = self._turn_runner.text_turn_cancel_token
+            if text_token:
+                text_token.cancel()
+            text_task = self._turn_runner.active_text_turn
             if text_task is not None and not text_task.done():
                 text_task.cancel()
                 try:
@@ -1256,9 +1309,10 @@ class Session:
                 turn.cancel_token.cancel()
 
             # Cancel any in-flight text turn.
-            if self._text_turn_cancel_token:
-                self._text_turn_cancel_token.cancel()
-            text_task = self._active_text_turn
+            text_token = self._turn_runner.text_turn_cancel_token
+            if text_token:
+                text_token.cancel()
+            text_task = self._turn_runner.active_text_turn
             if text_task is not None and not text_task.done():
                 text_task.cancel()
                 try:
@@ -1618,46 +1672,6 @@ class Session:
                 journal_sink=self._journal_sink,
             )
 
-    async def _on_turn_started(self, event: TurnStarted) -> None:
-        """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
-        if not self._is_running:
-            return
-
-        # Cancel the previous turn's token so any in-flight agent/TTS work
-        # notices the cancellation before we overwrite self._turn.
-        prev = self._turn
-        self._stt_committer.cancel_scheduled()
-        self._stt_committer.cancel_inflight()
-        self._stt_committer.resolve_pending(prev, "")
-        if prev is not None and prev is not self._no_turn:
-            prev.stt_final_future = None
-
-        if prev and not prev.cancel_token.is_cancelled:
-            prev.cancel_token.cancel()
-
-        cancel_token = self._turn_manager.cancel_token or CancelToken()
-        turn = TurnContext(turn_id=event.turn_id, cancel_token=cancel_token)
-        self._turn = turn
-        self._turn_generation = turn.generation
-        self._audio_router.reset_speech_detection()
-        self._tts_scheduler.set_playback_suppressed(False)
-
-        # Start STT stream
-        try:
-            await self.stt.start_stream()
-            self._stt_committer.mark_active()
-            self._stt_committer.start_event_loop(turn)
-        except Exception as exc:
-            logger.exception("Failed to start STT stream")
-            await self._emit(Error(exception=exc, stage=ErrorStage.STT))
-            self._stt_committer.mark_inactive()
-            return
-
-        # Prime STT with pre-roll frames captured by TurnManager
-        for chunk in self._turn_manager.turn_audio:
-            await self._stt_stage.execute(chunk, self._run_ctx, turn)
-            turn.stt_has_uncommitted_audio = True
-
     def _stop_helpers(self) -> None:
         """Stop attached helper components that own event subscriptions/state."""
         for helper in self._telephony_helpers:
@@ -1666,33 +1680,18 @@ class Session:
             except Exception:
                 logger.debug("Error stopping session helper", exc_info=True)
 
-    def _schedule_turn_ended(self, event: TurnEnded) -> None:
-        """Schedule end-of-turn processing without blocking other handlers.
+    # ── Test-compat shims for migrated turn methods ────────────
+    #
+    # The six turn-loop methods migrated to :class:`TurnRunner` in
+    # Phase 5 of the session decomposition.  These thin delegates
+    # forward to the runner so existing tests that poke the private
+    # surface continue to work without touching their bodies.
 
-        Cancels BOTH the scheduled pause-commit task and any in-flight
-        segment-commit task before running ``_on_turn_ended``.  The
-        in-flight cancel is the fix for the commit race that showed up
-        as OpenAI Realtime "buffer too small" errors on plan-7: without
-        it, ``STTCommitter.commit_now`` could race with ``_handle_end_of_speech``
-        — the pause commit clears the STT server buffer, a few trailing
-        audio frames sneak in after that, and ``end_stream``'s commit
-        then fails with < 100ms of audio.
-        """
-        self._stt_committer.cancel_scheduled()
-        self._stt_committer.cancel_inflight()
-        current_tts_task = self._tts_scheduler.current_task
-        if current_tts_task and not current_tts_task.done():
-            current_tts_task.cancel()
-        gen = self._turn_generation
-        turn = self._turn
-        new_task = self._runtime_scope.create_journaled_task(
-            self._on_turn_ended(event, gen, turn=turn),
-            name="on_turn_ended",
-            journal_sink=self._journal_sink,
-            turn_id=event.turn_id,
-        )
-        self._tts_scheduler.current_task = new_task
-        new_task.add_done_callback(self._log_task_exception)
+    async def _on_turn_started(self, event: TurnStarted) -> None:
+        await self._turn_runner.on_turn_started(event)
+
+    def _schedule_turn_ended(self, event: TurnEnded) -> None:
+        self._turn_runner.schedule_turn_ended(event)
 
     async def _on_turn_ended(
         self,
@@ -1700,102 +1699,10 @@ class Session:
         generation: int,
         turn: TurnContext | None = None,
     ) -> None:
-        """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
-        if self._turn_generation != generation:
-            return
-        if turn and turn.cancel_token.is_cancelled:
-            return
-        if self._turn_manager.state != TurnManagerState.PROCESSING:
-            return
-        if turn:
-            turn.end_time = event.timestamp
-        await self._handle_end_of_speech(turn=turn)
-
-    @staticmethod
-    def _log_task_exception(task: asyncio.Task[object]) -> None:
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("Background task failed")
-
-    # ── Pipeline ───────────────────────────────────────────────
+        await self._turn_runner.on_turn_ended(event, generation, turn=turn)
 
     async def _handle_end_of_speech(self, turn: TurnContext | None = None) -> None:
-        """Called when VAD signals end of speech: finalize STT, run agent, synthesize TTS.
-
-        ``turn`` defaults to the active session turn for backwards
-        compatibility; internal callers always pass it explicitly.
-        """
-        if turn is None:
-            turn = self._turn
-        token = turn.cancel_token if turn else None
-        self._stt_committer.cancel_scheduled()
-
-        # Stop forwarding audio to STT immediately so trailing frames
-        # from continuous transports don't leak into the transcript.
-        stt_needs_close = self._stt_committer.is_active
-        self._stt_committer.mark_inactive()
-
-        await self._stt_committer.await_inflight_commit()
-
-        if not await self._stt_committer.await_pending(turn):
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-
-        if stt_needs_close:
-            await self._stt_committer.end_stream(turn)
-
-        if not await self._stt_committer.await_pending(turn):
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-
-        transcript = ""
-        if turn is not None:
-            transcript = turn.transcript_text
-        stt_final_future = (
-            turn.stt_final_future if turn is not None and turn is not self._no_turn else None
-        )
-        if not transcript and stt_final_future is not None:
-            try:
-                if self._timeout_config and self._timeout_config.stt_timeout:
-                    transcript = await asyncio.wait_for(
-                        stt_final_future,
-                        timeout=self._timeout_config.stt_timeout,
-                    )
-                else:
-                    transcript = await stt_final_future
-            except TimeoutError:
-                err = STTTimeoutError("stt", self._timeout_config.stt_timeout)
-                await self._emit(Error(exception=err, stage=ErrorStage.STT))
-                if self._turn is turn:
-                    self._reset_turn_state()
-                return
-            except Exception:
-                transcript = ""
-            finally:
-                if turn is not None and turn is not self._no_turn:
-                    turn.stt_final_future = None
-
-        if transcript:
-            if turn is not None and turn is not self._no_turn:
-                if turn.stt_final_future is not None and not turn.stt_final_future.done():
-                    turn.stt_final_future.set_result(transcript)
-            if turn:
-                turn.stt_final_time = time.monotonic()
-
-        if not transcript or (token and token.is_cancelled):
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-
-        await self._emit(AgentRequestStarted())
-        await self._run_streaming_agent(transcript, token, turn=turn)
-
-    # ── Streaming agent path ───────────────────────────────────
+        await self._turn_runner.handle_end_of_speech(turn=turn)
 
     async def _run_streaming_agent(
         self,
@@ -1804,214 +1711,10 @@ class Session:
         *,
         turn: TurnContext | None = None,
     ) -> None:
-        """Streaming agent path with incremental TTS on sentence boundaries.
+        await self._turn_runner.run_streaming_agent(transcript, token, turn=turn)
 
-        Uses :func:`consume_agent_stream` to translate agent events into
-        TTS payloads, and runs TTS synthesis concurrently.
-        """
-        if turn is None:
-            turn = self._turn
-        assert turn is not None
-        turn_gen = self._turn_generation
-        tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
-        tts_playback_started = False
-        tts_chunks: list[tuple[str, int, bool]] = []
-        tts_should_stop = False
-
-        # ── TTS consumer task ──
-
-        async def _process_tts() -> None:
-            nonlocal tts_should_stop
-            nonlocal tts_playback_started
-            started = False
-            try:
-                while True:
-                    payload = await tts_queue.get()
-                    if payload is None:
-                        break
-                    if token and token.is_cancelled:
-                        tts_chunks.append((_text_for_estimation_timeline(payload), 0, False))
-                        break
-                    if self._tts_scheduler.is_playback_suppressed:
-                        tts_chunks.append((_text_for_estimation_timeline(payload), 0, False))
-                        break
-
-                    if not started:
-                        gated = self._is_gated
-                        if not gated:
-                            await self._turn_manager.bot_started_speaking()
-                            tts_playback_started = True
-                        started = True
-
-                    result = await self._tts_scheduler.synthesizer.synthesize(
-                        payload,
-                        token,
-                        is_active=(
-                            None
-                            if self._is_gated
-                            else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                        ),
-                    )
-                    tts_chunks.append(
-                        (
-                            _text_for_estimation_timeline(payload),
-                            result.audio_bytes,
-                            result.completed,
-                        )
-                    )
-                    if result.first_audio_time is not None and turn.first_tts_audio_time is None:
-                        turn.first_tts_audio_time = result.first_audio_time
-            except asyncio.CancelledError:
-                pass
-            except TTSTimeoutError:
-                await self._tts_scheduler.cancel()
-            except Exception:
-                logger.exception("TTS streaming error")
-
-            while not tts_queue.empty():
-                remaining = tts_queue.get_nowait()
-                if remaining is not None:
-                    tts_chunks.append((_text_for_estimation_timeline(remaining), 0, False))
-
-            if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
-                # Drain session actions (end_call, transfer) BEFORE
-                # transitioning to IDLE so no new turn can sneak in.
-                tts_should_stop = await self._drain_session_actions()
-                if tts_should_stop:
-                    await self._audio_router.await_drain()
-                    await self._turn_manager.bot_stopped_speaking()
-                else:
-                    await self._turn_manager.bot_stopped_speaking()
-                    # Wait for queued audio to drain so _drain_outbound_audio
-                    # can still call turn.record_audio_sent() and emit playback
-                    # marks for the tail of this turn's audio.
-                    await self._audio_router.await_drain()
-                # Only clear if a new turn hasn't started during the drain.
-                if self._turn is turn and self._turn_generation == turn_gen:
-                    self._turn = None
-            elif started and not tts_playback_started:
-                if gated:
-                    # Keep self._turn alive for gated replay mark accounting
-                    self._audio_router.reset_speech_detection()
-                    self._turn_manager.reset()
-                else:
-                    self._reset_turn_state()
-
-        # ── Run agent stream + TTS concurrently ──
-
-        agent_result = None
-        system_prefix = self._caller_id_system_message()
-
-        async def _run_agent_consumer() -> None:
-            nonlocal agent_result
-            agent_result = await consume_agent_stream(
-                stream_factory=lambda: self._agent_stage.execute_streaming(
-                    transcript,
-                    self._run_ctx,
-                    turn,
-                    cancel_token=token,
-                    system_prefix=system_prefix,
-                ),
-                cancel_token=token,
-                tts_queue=tts_queue,
-                emit=self._emit,
-                prepare_tts_payload=self._tts_scheduler.prepare,
-                strip_md=self._tts_scheduler.strip_markdown_enabled,
-                turn=turn,
-            )
-
-        agent_task = asyncio.create_task(_run_agent_consumer())
-        tts_task = asyncio.create_task(_process_tts())
-
-        caught_exc: Exception | None = None
-        try:
-            if self._timeout_config and self._timeout_config.agent_timeout:
-                await with_agent_timeout(
-                    agent_task,
-                    timeout=self._timeout_config.agent_timeout,
-                    event_bus=self.event_bus,
-                )
-            else:
-                await agent_task
-        except asyncio.CancelledError:
-            if not agent_task.done():
-                agent_task.cancel()
-            if not tts_task.done():
-                tts_task.cancel()
-            for t in (agent_task, tts_task):
-                try:
-                    await t
-                except (asyncio.CancelledError, Exception):
-                    pass
-            raise
-        except Exception as exc:
-            caught_exc = exc
-            # AgentTimeoutError is already logged and emitted by with_agent_timeout.
-            if not isinstance(exc, AgentTimeoutError):
-                logger.exception("Streaming agent error")
-                await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
-            if not agent_task.done():
-                agent_task.cancel()
-            if not tts_task.done():
-                tts_task.cancel()
-        agent_error = agent_result.error if agent_result else caught_exc
-        interrupted = agent_result.interrupted if agent_result else False
-        accumulated_text = agent_result.text if agent_result else ""
-        structured_output = agent_result.structured_output if agent_result else None
-        stream_succeeded = agent_error is None and not (token and token.is_cancelled)
-
-        if self._tts_scheduler.strip_markdown_enabled and accumulated_text and stream_succeeded:
-            original_text = accumulated_text
-            stripped = strip_markdown(accumulated_text, normalize_code_spans=True)
-            self._tts_scheduler._record_markdown_strip(
-                phase="streaming_final",
-                original_text=original_text,
-                stripped_text=stripped,
-                turn_id=turn.id,
-            )
-            if stripped != original_text:
-                accumulated_text = stripped
-                self.agent.replace_last_assistant_text(stripped)
-
-        if (accumulated_text or structured_output is not None) and stream_succeeded:
-            await self._emit(
-                AgentFinal(text=accumulated_text, structured_output=structured_output)
-            )
-
-        try:
-            await tts_task
-        except asyncio.CancelledError:
-            pass
-
-        interruption_notification = estimate_and_notify_interruption(
-            self.agent,
-            token,
-            turn,
-            tts_chunks,
-            tts_playback_started=tts_playback_started,
-            interrupted=interrupted,
-            interruption_mode=self._cancel.interruption_mode,
-            latency_compensation_ms=self._cancel.latency_compensation_ms,
-            ack_stale_ms=self._cancel.ack_stale_ms,
-            ack_tail_cap_ms=self._cancel.ack_tail_cap_ms,
-        )
-        if interruption_notification is not None:
-            self._cancel.record_interruption(
-                source="streaming_turn",
-                mode=interruption_notification.mode,
-                text_spoken=interruption_notification.text_spoken,
-                notified=interruption_notification.notified,
-                turn_id=turn.id,
-            )
-
-        if tts_should_stop:
-            await self.stop()
-            return
-
-        # If a newer turn started (e.g. barge-in), avoid clobbering its state.
-        if self._turn is turn and self._turn_generation == turn_gen:
-            if self._turn_manager.state != TurnManagerState.IDLE:
-                self._reset_turn_state()
+    async def _execute_text_turn(self, text: str, cancel_token: CancelToken | None = None) -> str:
+        return await self._turn_runner._execute_text_turn(text, cancel_token)
 
     # ── Internal helpers ───────────────────────────────────────
 
@@ -2055,130 +1758,4 @@ class Session:
             raise RuntimeError("send_text() is only available in text_session mode")
         if self._closed:
             raise RuntimeError("Session has been stopped")
-
-        # Serialize cancel-and-launch so concurrent send_text() calls
-        # cannot both observe the same prev task and launch parallel turns.
-        async with self._text_turn_lock:
-            prev = self._active_text_turn
-            if prev is not None and not prev.done():
-                delivered = self._text_turn_accumulated
-                if self._text_turn_cancel_token:
-                    self._text_turn_cancel_token.cancel()
-                prev.cancel()
-                try:
-                    await prev
-                except (asyncio.CancelledError, Exception):
-                    pass
-                notified = _notify_bridge_interruption(
-                    self.agent, delivered, self._cancel.interruption_mode
-                )
-                self._cancel.record_interruption(
-                    source="text_session",
-                    mode=self._cancel.interruption_mode,
-                    text_spoken=delivered,
-                    notified=notified,
-                )
-
-            token = CancelToken()
-            self._text_turn_cancel_token = token
-            task = asyncio.ensure_future(self._execute_text_turn(text, token))
-            self._active_text_turn = task
-        return await task
-
-    async def _execute_text_turn(self, text: str, cancel_token: CancelToken | None = None) -> str:
-        turn_id = f"turn-{uuid4().hex[:12]}"
-        await self._emit(TurnStarted(session_id=self.session_id, turn_id=turn_id))
-        try:
-            t0 = time.monotonic()
-            await self._emit(AgentRequestStarted(session_id=self.session_id, turn_id=turn_id))
-            structured_output = None
-            self._text_turn_accumulated = ""
-            # Build a turn context for this text turn so AgentStage can
-            # stamp records with the right turn_id.
-            text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
-            accumulated = ""
-            system_prefix = self._caller_id_system_message()
-            async for event in self._agent_stage.execute_streaming(
-                text,
-                self._run_ctx,
-                text_turn,
-                cancel_token=cancel_token,
-                system_prefix=system_prefix,
-            ):
-                kind = getattr(event, "kind", None)
-                if kind is None:
-                    continue
-                if kind == "done":
-                    if event.text:
-                        accumulated = event.text
-                    if getattr(event, "structured_output", None) is not None:
-                        structured_output = event.structured_output
-                    break
-                if kind == "text_delta" and event.text:
-                    accumulated += event.text
-                    self._text_turn_accumulated = accumulated
-                    await self._emit(
-                        AgentDelta(
-                            text=event.text,
-                            session_id=self.session_id,
-                            turn_id=turn_id,
-                        )
-                    )
-                elif kind == "tool_started":
-                    await self._emit(
-                        ToolCallStarted(
-                            tool_name=event.tool_name,
-                            call_id=event.call_id,
-                            session_id=self.session_id,
-                            turn_id=turn_id,
-                        )
-                    )
-                elif kind == "tool_delta":
-                    await self._emit(
-                        ToolCallDelta(
-                            call_id=event.call_id,
-                            delta=event.text,
-                            session_id=self.session_id,
-                            turn_id=turn_id,
-                        )
-                    )
-                elif kind == "tool_result":
-                    await self._emit(
-                        ToolCallResult(
-                            call_id=event.call_id,
-                            result=event.result,
-                            session_id=self.session_id,
-                            turn_id=turn_id,
-                        )
-                    )
-            response = accumulated
-            elapsed_ms = (time.monotonic() - t0) * 1000
-            await self._emit(
-                AgentFinal(
-                    text=response,
-                    structured_output=structured_output,
-                    session_id=self.session_id,
-                    turn_id=turn_id,
-                )
-            )
-            if self._journal:
-                self._journal_sink.append_record(
-                    kind=JournalRecordKind.METRIC,
-                    name="text_turn_latency_ms",
-                    turn_id=turn_id,
-                    data={"value": elapsed_ms},
-                )
-        except Exception as exc:
-            logger.exception("Agent error in text_session send_text")
-            await self._emit(
-                Error(
-                    exception=exc,
-                    stage=ErrorStage.AGENT,
-                    session_id=self.session_id,
-                    turn_id=turn_id,
-                )
-            )
-            raise
-        finally:
-            await self._emit(TurnEnded(session_id=self.session_id, turn_id=turn_id))
-        return response
+        return await self._turn_runner.send_text(text)
