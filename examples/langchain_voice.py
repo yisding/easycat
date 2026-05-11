@@ -7,7 +7,8 @@ calls, and cursor transitions into the EasyCat journal.
 
 For stateful multi-node agent workflows see ``langgraph_voice.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart; uv add easycat[langchain] langchain-openai
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+       uv add easycat[langchain] langchain-openai
 Run:   uv run python examples/langchain_voice.py
 """
 

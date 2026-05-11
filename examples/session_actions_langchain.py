@@ -10,7 +10,8 @@ closure rather than a deps/context parameter.
 For telephony-specific actions (transfer, DTMF, SMS) see
 ``examples/twilio_app.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart; uv add easycat[langchain] langchain langchain-openai
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+       uv add easycat[langchain] langchain langchain-openai
 Run:   uv run python examples/session_actions_langchain.py
 """
 

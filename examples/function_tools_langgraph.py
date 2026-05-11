@@ -8,7 +8,8 @@ checkpointer. ``auto_adapt_agent()`` routes the compiled graph through
 snapshot. For tools that drive the call (end, transfer, DTMF) see
 ``session_actions_langgraph.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart; uv add easycat[langgraph] langchain-openai
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+       uv add easycat[langgraph] langchain-openai
 Run:   uv run python examples/function_tools_langgraph.py
 """
 

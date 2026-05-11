@@ -214,6 +214,67 @@ class TestStreamEventTranslator:
         out = list(translate_stream_event(event))
         assert out == []
 
+    def test_chunk_text_prefers_text_property(self):
+        """``AIMessageChunk.text`` flattens ``content_blocks`` across
+        providers (Anthropic ``thinking``, OpenAI ``reasoning``
+        summaries).  When a chunk exposes ``.text``, the translator
+        should use it directly instead of walking raw ``content``."""
+
+        class _ChunkWithText:
+            text = "flat text from blocks"
+            content: object = [
+                {"type": "thinking", "thinking": "private"},
+                {"type": "text", "text": "raw fallback"},
+            ]
+            tool_call_chunks: list[Any] = []
+
+        event = {
+            "event": "on_chat_model_stream",
+            "name": "ChatAnthropic",
+            "run_id": "r1",
+            "data": {"chunk": _ChunkWithText()},
+        }
+        out = list(translate_stream_event(event))
+        assert out[0].text == "flat text from blocks"
+
+    def test_on_custom_event_text_payload_yields_text_delta(self):
+        """LCEL ``dispatch_custom_event`` calls surface as
+        ``on_custom_event``; payloads that carry a ``"text"``/``"speak"``
+        field should drive TTS."""
+        event = {
+            "event": "on_custom_event",
+            "name": "status",
+            "run_id": "c1",
+            "data": {"text": "looking that up..."},
+        }
+        out = list(translate_stream_event(event))
+        assert len(out) == 1
+        assert out[0].kind == "text_delta"
+        assert out[0].text == "looking that up..."
+
+    def test_on_custom_event_string_payload_yields_text_delta(self):
+        event = {
+            "event": "on_custom_event",
+            "name": "status",
+            "run_id": "c1",
+            "data": "plain progress string",
+        }
+        out = list(translate_stream_event(event))
+        assert out and out[0].kind == "text_delta"
+        assert out[0].text == "plain progress string"
+
+    def test_on_custom_event_telemetry_payload_is_silent(self):
+        """Custom events that carry only opaque telemetry (no
+        ``text``/``speak`` field) must not leak into TTS."""
+        event = {
+            "event": "on_custom_event",
+            "name": "progress",
+            "run_id": "c1",
+            "data": {"progress": 0.5, "step": 3},
+        }
+        out = list(translate_stream_event(event))
+        assert out == []
+
 
 # ── LangChainBridge tests ────────────────────────────────────────
 

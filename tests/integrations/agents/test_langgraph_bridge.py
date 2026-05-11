@@ -385,6 +385,108 @@ class TestLangGraphBridgeState:
         assert graph.update_state_calls
 
     @pytest.mark.asyncio
+    async def test_get_stream_writer_custom_event_yields_text_delta(self):
+        """``get_stream_writer`` writes land as ``("custom", payload)``
+        tuples on the top-level graph's ``on_chain_stream``.  Payloads
+        with a ``text`` field should drive TTS; opaque telemetry
+        payloads should stay silent."""
+        graph_chunk_text = {
+            "event": "on_chain_stream",
+            "name": "LangGraph",
+            "run_id": "g1",
+            "data": {"chunk": ("custom", {"text": "Looking that up..."})},
+            "metadata": {},
+        }
+        graph_chunk_telemetry = {
+            "event": "on_chain_stream",
+            "name": "LangGraph",
+            "run_id": "g1",
+            "data": {"chunk": ("custom", {"progress": 0.5})},
+            "metadata": {},
+        }
+        graph_chunk_plain_string = {
+            "event": "on_chain_stream",
+            "name": "LangGraph",
+            "run_id": "g1",
+            "data": {"chunk": ("custom", "plain status")},
+            "metadata": {},
+        }
+        scripted = [
+            _node_start("planner", "n1"),
+            graph_chunk_text,
+            graph_chunk_telemetry,
+            graph_chunk_plain_string,
+            _node_end("planner", "n1"),
+        ]
+        graph = _MockCompiledGraph(scripted)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("x"), _recorder()):
+            events.append(ev)
+
+        text_deltas = [e.text for e in events if e.kind == "text_delta"]
+        assert "Looking that up..." in text_deltas
+        assert "plain status" in text_deltas
+        assert all("progress" not in t for t in text_deltas)
+
+    @pytest.mark.asyncio
+    async def test_interrupt_via_updates_channel_raises(self):
+        """``interrupt()`` lands as ``("updates", {"__interrupt__": (...)})``
+        on the top-level graph's ``on_chain_stream`` when
+        ``stream_mode=["updates"]`` is passed to ``astream_events``.
+        Voice runtimes cannot resume HITL, so the bridge fails loudly."""
+
+        class _MockInterrupt:
+            def __init__(self, value: Any) -> None:
+                self.value = value
+                self.id = "irq-1"
+
+        graph_chunk = {
+            "event": "on_chain_stream",
+            "name": "LangGraph",
+            "run_id": "g1",
+            "data": {
+                "chunk": (
+                    "updates",
+                    {"__interrupt__": (_MockInterrupt("approve?"),)},
+                )
+            },
+            "metadata": {},
+        }
+        scripted = [_node_start("planner", "n1"), graph_chunk]
+        graph = _MockCompiledGraph(scripted)
+        bridge = LangGraphBridge(graph)
+
+        with pytest.raises(BridgeInputError, match="interrupt"):
+            async for _ in bridge.invoke(AgentTurnInput.from_text("x"), _recorder()):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_post_stream_pending_interrupt_raises(self):
+        """If a graph stops with pending interrupts but the ``updates``
+        channel didn't surface them (older LangGraph, custom checkpointer),
+        the post-stream ``state.tasks[i].interrupts`` sweep should still
+        flag the HITL mismatch."""
+
+        class _Interrupt:
+            def __init__(self, value: Any) -> None:
+                self.value = value
+
+        class _Task:
+            def __init__(self, interrupts: tuple[Any, ...]) -> None:
+                self.interrupts = interrupts
+
+        state = _MockState(values={"messages": []}, checkpoint_id="cp-paused")
+        state.tasks = (_Task((_Interrupt("review?"),)),)
+        graph = _MockCompiledGraph([_node_start("p", "n1"), _node_end("p", "n1")], state=state)
+        bridge = LangGraphBridge(graph)
+
+        with pytest.raises(BridgeInputError, match="interrupt"):
+            async for _ in bridge.invoke(AgentTurnInput.from_text("x"), _recorder()):
+                pass
+
+    @pytest.mark.asyncio
     async def test_custom_messages_key_surfaces_final_output(self):
         """When the graph's state schema uses a non-default messages key,
         the end-of-turn ``done.structured_output`` must still be the last

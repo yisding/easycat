@@ -21,13 +21,16 @@ from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder
 def _chunk_text(chunk: Any) -> str:
     """Extract a string text delta from an ``AIMessageChunk``-like object.
 
-    LangChain message chunks carry either a plain string ``content`` or a
-    list of typed content blocks (``{"type": "text", "text": "..."}``,
-    thinking blocks, tool_use blocks, etc.).  Only the plain ``"text"``
-    blocks should be fed to TTS; everything else is either audio-unsafe
-    (JSON tool args) or internal reasoning that upstream code might want
-    to surface separately.
+    ``AIMessageChunk.text`` is the framework-provided shortcut that
+    flattens ``content_blocks`` to text-only.  It normalizes Anthropic
+    ``thinking``, OpenAI ``reasoning``, and multimodal blocks across
+    providers, so we try it first and only fall back to manual content
+    parsing for duck-typed chunks (tests, custom providers) that don't
+    implement the ``.text`` property.
     """
+    text = getattr(chunk, "text", None)
+    if isinstance(text, str) and text:
+        return text
     content = getattr(chunk, "content", None)
     if isinstance(content, str):
         return content
@@ -39,6 +42,27 @@ def _chunk_text(chunk: Any) -> str:
             elif isinstance(block, dict) and block.get("type") == "text":
                 parts.append(str(block.get("text", "")))
         return "".join(parts)
+    return ""
+
+
+def _custom_event_text(payload: Any) -> str:
+    """Extract a TTS-safe text fragment from an ``on_custom_event`` payload.
+
+    Custom events (``dispatch_custom_event`` from LCEL, ``get_stream_writer``
+    from LangGraph forwarded as ``("custom", payload)`` chunks) are
+    typically UI telemetry — agents that *want* their custom signal
+    spoken should label it explicitly via a ``"text"`` / ``"speak"``
+    key so we don't accidentally narrate progress dicts or state diffs.
+    """
+    if payload is None:
+        return ""
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("text", "speak", "say"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
     return ""
 
 
@@ -132,6 +156,15 @@ def translate_stream_event(
         # events that carry dicts / state objects don't leak into TTS.
         chunk = data.get("chunk") if isinstance(data, dict) else None
         text = _plain_chunk_text(chunk)
+        if text:
+            yield AgentBridgeEvent(kind="text_delta", text=text)
+
+    elif event_type == "on_custom_event":
+        # Surfaced by LCEL ``dispatch_custom_event`` calls.  We only feed
+        # it to TTS when the payload explicitly carries a text-shaped
+        # field — bare progress dicts (UI telemetry) stay silent so
+        # arbitrary chain instrumentation doesn't leak into audio.
+        text = _custom_event_text(data)
         if text:
             yield AgentBridgeEvent(kind="text_delta", text=text)
 

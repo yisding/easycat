@@ -5,10 +5,18 @@ bridge drives it via ``graph.astream_events(input, version="v2")``
 exactly the way :class:`LangChainBridge` does.  The per-event
 ``metadata`` dict carries ``langgraph_node``, ``langgraph_step``,
 ``thread_id`` and ``checkpoint_id`` fields that we hoist into
-``workflow_node`` cursors and ``state_snapshot`` records.  This keeps
-both bridges on one event vocabulary and drops the four-shape tuple
-normalizer, the node-key diff tracking, and the separate ``debug``
-stream-mode branch the earlier implementation required.
+``workflow_node`` cursors and ``state_snapshot`` records.
+
+Two LangGraph-specific signals are not visible through plain
+``astream_events`` events: ``get_stream_writer`` writes (consumed via
+``stream_mode="custom"``) and ``interrupt()`` payloads (consumed via
+``stream_mode="updates"`` as ``__interrupt__``).  Passing
+``stream_mode=["custom", "updates"]`` to ``astream_events`` causes
+LangGraph to fold both channels into top-level ``on_chain_stream``
+events as ``(mode_name, payload)`` chunks, so the bridge can surface
+``get_stream_writer`` writes via :func:`_custom_event_text` and fail
+loudly when a graph uses ``interrupt()`` (voice runtimes have no path
+to resume a paused graph — the human-in-the-loop *is* the caller).
 
 Interruption patches the last AI message via LangGraph's native
 ``update_state``.  Because LangGraph's ``add_messages`` reducer dedupes
@@ -22,13 +30,16 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._helpers import split_replacement_by_original_parts
-from easycat.integrations.agents._langchain_events import translate_stream_event
+from easycat.integrations.agents._langchain_events import (
+    _custom_event_text,
+    translate_stream_event,
+)
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -42,6 +53,19 @@ from easycat.integrations.agents.base import (
     UnitKind,
 )
 from easycat.runtime.records import ErrorInfo
+
+# ``stream_mode`` values whose payloads LangGraph folds into top-level
+# ``on_chain_stream`` events as ``(mode_name, payload)`` chunks when
+# ``stream_mode`` is passed to ``astream_events``.  Used to detect graph-
+# meta chunks so the translator's generic text-extraction path doesn't
+# narrate them as plain text.
+_GRAPH_STREAM_MODES: frozenset[str] = frozenset(
+    {"values", "updates", "messages", "custom", "debug"}
+)
+# stream_mode channels we ask LangGraph to surface: ``custom`` carries
+# ``get_stream_writer`` writes and ``updates`` carries ``__interrupt__``
+# markers for human-in-the-loop graphs.
+_DEFAULT_STREAM_MODES: tuple[str, ...] = ("custom", "updates")
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +176,11 @@ class LangGraphBridge:
 
         config = self._config()
         input_payload = self._build_input(turn_input.text)
-        stream_kwargs: dict[str, Any] = {"version": "v2", "config": config}
+        stream_kwargs: dict[str, Any] = {
+            "version": "v2",
+            "config": config,
+            "stream_mode": list(_DEFAULT_STREAM_MODES),
+        }
         if self._include_types is not None:
             stream_kwargs["include_types"] = self._include_types
 
@@ -165,6 +193,17 @@ class LangGraphBridge:
                         reason="cancel_token_set",
                     )
                     break
+
+                graph_chunk = self._extract_graph_stream_chunk(event)
+                if graph_chunk is not None:
+                    mode_name, payload = graph_chunk
+                    for bridge_event in self._handle_graph_stream_chunk(
+                        mode_name, payload, recorder
+                    ):
+                        if bridge_event.kind == "text_delta":
+                            accumulated += bridge_event.text
+                        yield bridge_event
+                    continue
 
                 for bridge_event in self._handle_cursor_lifecycle(
                     event, recorder, agent_cursor, open_cursors, last_node_by_ns
@@ -195,12 +234,22 @@ class LangGraphBridge:
         # ``structured_output``.  Best-effort: a graph compiled without
         # a checkpointer would have been rejected at construction, but
         # ``get_state`` can still fail on transient checkpointer errors.
+        # Also belt-and-suspenders: if the graph paused on ``interrupt()``
+        # in a path that didn't surface through the ``updates`` channel
+        # (custom checkpointers, older LangGraph versions), inspect
+        # ``state.tasks[i].interrupts`` and fail loudly so the voice
+        # doesn't go silently dead.
         try:
             final_state = self._graph.get_state(config)
             checkpoint_id = _get_checkpoint_id(final_state)
             if checkpoint_id and checkpoint_id not in seen_checkpoints:
                 recorder.record_state_snapshot(ref=f"langgraph:{checkpoint_id}")
             self._last_output = _messages_tail(final_state, self._messages_key or "messages")
+            pending = _pending_interrupts(final_state)
+            if pending:
+                self._raise_hitl_unsupported(pending, agent_cursor, open_cursors, recorder)
+        except BridgeInputError:
+            raise
         except Exception:  # pragma: no cover — best-effort.
             logger.debug("Failed to fetch final LangGraph state", exc_info=True)
 
@@ -318,6 +367,100 @@ class LangGraphBridge:
         if self._messages_key is None:
             return text
         return {self._messages_key: [("user", text)]}
+
+    def _extract_graph_stream_chunk(
+        self, event: dict[str, Any]
+    ) -> tuple[str, Any] | None:
+        """Return ``(mode_name, payload)`` when ``event`` carries a graph-level
+        ``stream_mode`` chunk, else ``None``.
+
+        LangGraph wraps ``get_stream_writer`` writes and ``__interrupt__``
+        markers as ``(mode_name, payload)`` tuples on the top-level graph's
+        ``on_chain_stream`` events when ``stream_mode`` is passed to
+        ``astream_events``.  Node-level ``on_chain_stream`` events keep
+        their normal chunk shape so the regular translator still picks up
+        plain-text deltas from ``RunnableLambda`` nodes.
+        """
+        if event.get("event") != "on_chain_stream":
+            return None
+        data = event.get("data")
+        if not isinstance(data, dict):
+            return None
+        chunk = data.get("chunk")
+        if not isinstance(chunk, tuple) or len(chunk) != 2:
+            return None
+        mode_name, payload = chunk
+        if not isinstance(mode_name, str) or mode_name not in _GRAPH_STREAM_MODES:
+            return None
+        return mode_name, payload
+
+    def _handle_graph_stream_chunk(
+        self,
+        mode_name: str,
+        payload: Any,
+        recorder: AgentRecorder,
+    ) -> Iterator[AgentBridgeEvent]:
+        """Translate a ``(mode_name, payload)`` graph-level stream chunk.
+
+        ``custom`` payloads (``get_stream_writer`` writes) surface as
+        ``text_delta`` when they carry a ``text`` / ``speak`` / ``say``
+        field — unmarked telemetry payloads stay silent.  ``updates``
+        payloads carrying ``__interrupt__`` short-circuit into a loud
+        :class:`BridgeInputError` because voice runtimes cannot resume a
+        paused graph (no UI to collect the human response).
+        """
+        if mode_name == "custom":
+            text = _custom_event_text(payload)
+            if text:
+                yield AgentBridgeEvent(kind="text_delta", text=text)
+            return
+        if mode_name == "updates" and isinstance(payload, dict):
+            interrupts = payload.get("__interrupt__")
+            if interrupts:
+                self._raise_hitl_unsupported(interrupts)
+            return
+
+    def _raise_hitl_unsupported(
+        self,
+        interrupts: Any,
+        agent_cursor: ExecutionCursor | None = None,
+        open_cursors: dict[str, ExecutionCursor] | None = None,
+        recorder: AgentRecorder | None = None,
+    ) -> None:
+        """Raise a :class:`BridgeInputError` describing the HITL mismatch.
+
+        Closes any still-open cursors before raising so the recorder's
+        invariant ("every entered unit must be exited") is preserved when
+        the error propagates up through ``invoke()``.
+        """
+        if recorder is not None and open_cursors is not None:
+            for cursor in reversed(list(open_cursors.values())):
+                try:
+                    recorder.record_unit_exited(cursor, reason="error")
+                except Exception:
+                    logger.debug("Failed to close cursor during HITL error", exc_info=True)
+            open_cursors.clear()
+        if recorder is not None and agent_cursor is not None:
+            try:
+                recorder.record_unit_exited(agent_cursor, reason="error")
+            except Exception:
+                logger.debug("Failed to close agent cursor during HITL error", exc_info=True)
+        previews: list[str] = []
+        try:
+            for it in interrupts:
+                value = getattr(it, "value", it)
+                previews.append(repr(value)[:120])
+        except Exception:
+            previews = [repr(interrupts)[:200]]
+        raise BridgeInputError(
+            "LangGraph graph paused on interrupt() — voice runtimes cannot "
+            "resume human-in-the-loop graphs (no UI to collect the human "
+            "response).  Rework the graph to avoid interrupt() / "
+            "Command(resume=...) when running through LangGraphBridge, or "
+            "construct your own bridge that drives astream(stream_mode=[...]) "
+            "and surfaces interrupts to your application layer.  "
+            f"Pending interrupts: {previews}"
+        )
 
     def _handle_cursor_lifecycle(
         self,
@@ -520,6 +663,29 @@ class LangGraphBridge:
 
 
 # ── Helpers ──────────────────────────────────────────────────────
+
+
+def _pending_interrupts(state: Any) -> tuple[Any, ...]:
+    """Return any ``Interrupt`` objects on the graph state's tasks.
+
+    LangGraph surfaces pending HITL interrupts as ``state.tasks[i].interrupts``
+    after ``astream`` / ``astream_events`` completes.  Custom checkpointers
+    or older LangGraph versions may not fold ``__interrupt__`` into the
+    ``updates`` channel during streaming, so this post-stream sweep is the
+    belt-and-suspenders to the in-stream detection in
+    :meth:`LangGraphBridge._handle_graph_stream_chunk`.
+    """
+    tasks = getattr(state, "tasks", None)
+    if not tasks:
+        return ()
+    collected: list[Any] = []
+    try:
+        for task in tasks:
+            for interrupt in getattr(task, "interrupts", ()) or ():
+                collected.append(interrupt)
+    except Exception:
+        return ()
+    return tuple(collected)
 
 
 def _get_checkpoint_id(state: Any) -> str | None:

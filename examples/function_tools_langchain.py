@@ -6,7 +6,8 @@ Two tools (``get_weather`` and ``get_time``) wired through a
 :class:`LangChainBridge`. For tools that drive the call (end, transfer,
 DTMF) see ``session_actions_langchain.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart; uv add easycat[langchain] langchain langchain-openai
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+       uv add easycat[langchain] langchain langchain-openai
 Run:   uv run python examples/function_tools_langchain.py
 """
 
