@@ -45,6 +45,7 @@ debugger = [
     "aiohttp>=3.9.0",
 ]
 webrtc = ["aiortc>=1.9.0", "aiohttp>=3.9.0"]
+webtransport = ["aioquic>=0.9.25"]
 quickstart = [
     "sounddevice>=0.4.6",
     "openai>=1.0.0",
@@ -55,6 +56,7 @@ quickstart = [
     "onnxruntime>=1.16.0",
 ]
 all = [
+    "aioquic>=0.9.25",
     "aiortc>=1.9.0",
     "livekit>=1.0.0",
     "aiohttp>=3.9.0",
