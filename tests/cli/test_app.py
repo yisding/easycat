@@ -1,8 +1,7 @@
 """Top-level CLI surface: --version, --help, journey menu.
 
 Also guards the ``--version`` fast path in ``easycat/cli/__init__.py``
-that short-circuits before importing Typer/Rich.  See
-``plan/peripheral-cli.md`` (Typer + lazy imports).
+that short-circuits before importing Typer/Rich.
 """
 
 from __future__ import annotations
@@ -33,6 +32,7 @@ def test_help_renders(cli: CliRunner) -> None:
     assert "init" in result.stdout
     assert "doctor" in result.stdout
     assert "explain" in result.stdout
+    assert "inspect" in result.stdout
 
 
 def test_journey_menu(cli: CliRunner) -> None:
@@ -40,14 +40,25 @@ def test_journey_menu(cli: CliRunner) -> None:
     result = cli.invoke(app, [])
     assert result.exit_code == 0
     assert "Scaffold" in result.stdout
-    for cmd in ("init", "doctor", "explain"):
+    assert "Debug with the journal" in result.stdout
+    for cmd in ("init", "doctor", "explain", "bundles", "inspect"):
         assert cmd in result.stdout
-    # Don't advertise journal-debug commands until they're implemented.
-    for cmd in ("bundles", "replay"):
-        assert cmd not in result.stdout
+    # Don't advertise unshipped commands until they're implemented.
+    assert "replay" not in result.stdout
+    assert "demo" not in result.stdout
 
 
 # ── Fast-path guard ──────────────────────────────────────────────
+
+
+def test_python_m_easycat_delegates_to_cli() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "easycat", "--version"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.startswith("easycat ")
 
 
 def test_version_fast_path_skips_typer_and_rich() -> None:

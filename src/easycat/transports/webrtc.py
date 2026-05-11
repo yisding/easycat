@@ -22,11 +22,13 @@ import fractions
 import json
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.events import EventBus, TransportAudioDelivered
 from easycat.extras import require_module
 from easycat.transports._base import _AudioQueueMixin
 
@@ -102,6 +104,16 @@ class WebRTCTransportConfig:
 # ── Outbound audio track ─────────────────────────────────────────
 
 
+@dataclass
+class _QueuedOutboundChunk:
+    transport_data: bytes
+    original_chunk: AudioChunk
+    turn_id: str | None = None
+    turn_ref: object | None = None
+    transport_offset: int = 0
+    original_reported: int = 0
+
+
 class _OutboundAudioSource:
     """Custom audio source that reads PCM16 data from a queue.
 
@@ -113,10 +125,11 @@ class _OutboundAudioSource:
     """
 
     def __init__(self) -> None:
-        self._queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=100)
-        self._remainder = b""
+        self._queue: asyncio.Queue[_QueuedOutboundChunk] = asyncio.Queue(maxsize=100)
+        self._pending: deque[_QueuedOutboundChunk] = deque()
         self._pts = 0
         self._start: float | None = None
+        self._event_bus: EventBus | None = None
         # Cache the av.AudioFrame class to avoid per-frame import overhead.
         self._AudioFrame: type | None = None
 
@@ -133,14 +146,30 @@ class _OutboundAudioSource:
 
         return _Track()
 
-    def enqueue(self, pcm_s16_48k: bytes) -> bool:
+    def enqueue(
+        self,
+        pcm_s16_48k: bytes,
+        *,
+        original_chunk: AudioChunk,
+        turn_id: str | None = None,
+        turn_ref: object | None = None,
+    ) -> bool:
         """Enqueue a chunk of 48 kHz PCM16 mono data for sending.
 
         Returns ``True`` when the chunk was accepted and ``False`` when
         the outbound queue was full and the frame was dropped.
         """
+        if not pcm_s16_48k:
+            return True
         try:
-            self._queue.put_nowait(pcm_s16_48k)
+            self._queue.put_nowait(
+                _QueuedOutboundChunk(
+                    transport_data=pcm_s16_48k,
+                    original_chunk=original_chunk,
+                    turn_id=turn_id,
+                    turn_ref=turn_ref,
+                )
+            )
         except asyncio.QueueFull:
             logger.debug("Outbound WebRTC audio queue full — dropping frame")
             return False
@@ -164,24 +193,59 @@ class _OutboundAudioSource:
 
         frame_bytes = _FRAME_SAMPLES * 2  # 16-bit mono
 
-        # Start with any leftover data from the previous frame to preserve
-        # audio ordering (instead of putting remainders back on the queue).
-        buf = bytearray(self._remainder)
-        self._remainder = b""
+        buf = bytearray()
+        delivered_chunks: list[tuple[AudioChunk, str | None, object | None]] = []
 
         while len(buf) < frame_bytes:
-            try:
-                chunk = self._queue.get_nowait()
-                buf.extend(chunk)
-            except asyncio.QueueEmpty:
+            if not self._pending:
+                try:
+                    self._pending.append(self._queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+
+            queued = self._pending[0]
+            remaining = queued.transport_data[queued.transport_offset :]
+            if not remaining:
+                self._pending.popleft()
+                continue
+
+            take = min(frame_bytes - len(buf), len(remaining))
+            if take <= 0:
                 break
+
+            buf.extend(remaining[:take])
+            queued.transport_offset += take
+
+            original_size = len(queued.original_chunk.data)
+            if queued.transport_offset >= len(queued.transport_data):
+                reported = original_size
+            else:
+                reported = min(
+                    original_size,
+                    int((queued.transport_offset / len(queued.transport_data)) * original_size),
+                )
+            if reported > queued.original_reported:
+                delivered_chunks.append(
+                    (
+                        AudioChunk(
+                            data=queued.original_chunk.data[queued.original_reported : reported],
+                            format=queued.original_chunk.format,
+                            timestamp=queued.original_chunk.timestamp,
+                        ),
+                        queued.turn_id,
+                        queued.turn_ref,
+                    )
+                )
+                queued.original_reported = reported
+
+            if queued.transport_offset >= len(queued.transport_data):
+                self._pending.popleft()
 
         if len(buf) < frame_bytes:
             # Pad with silence.
             buf.extend(bytes(frame_bytes - len(buf)))
 
-        pcm_data = bytes(buf[:frame_bytes])
-        self._remainder = bytes(buf[frame_bytes:])
+        pcm_data = bytes(buf)
 
         frame = self._AudioFrame(format="s16", layout="mono", samples=_FRAME_SAMPLES)
         frame.sample_rate = _WEBRTC_SAMPLE_RATE
@@ -190,6 +254,16 @@ class _OutboundAudioSource:
         frame.planes[0].update(pcm_data)
 
         self._pts += _FRAME_SAMPLES
+        if self._event_bus is not None:
+            for delivered_chunk, turn_id, turn_ref in delivered_chunks:
+                if delivered_chunk.data:
+                    await self._event_bus.emit(
+                        TransportAudioDelivered(
+                            chunk=delivered_chunk,
+                            turn_id=turn_id,
+                            turn_ref=turn_ref,
+                        )
+                    )
         return frame
 
     def clear(self) -> None:
@@ -199,7 +273,7 @@ class _OutboundAudioSource:
                 self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-        self._remainder = b""
+        self._pending.clear()
 
     def stop(self) -> None:
         """Signal that no more data will be enqueued.
@@ -234,7 +308,10 @@ class WebRTCTransport(_AudioQueueMixin):
     **GET /health** — Returns ``{"status": "ok"}``.
     """
 
+    transport_kind = "webrtc"
+
     _transport_name = "WebRTC"
+    reports_audio_delivery = True
 
     def __init__(self, config: WebRTCTransportConfig | None = None) -> None:
         self._config = config or WebRTCTransportConfig()
@@ -244,6 +321,7 @@ class WebRTCTransport(_AudioQueueMixin):
         self._pc: Any | None = None
         self._outbound: _OutboundAudioSource = _OutboundAudioSource()
         self._outbound_track: Any | None = None
+        self._event_bus: EventBus | None = None
 
         # HTTP signaling server (aiohttp).
         self._web: Any | None = None  # cached aiohttp.web module
@@ -254,6 +332,8 @@ class WebRTCTransport(_AudioQueueMixin):
 
         # Background task that consumes the inbound audio track.
         self._consume_task: asyncio.Task[None] | None = None
+        self._peer_generation = 0
+        self._offer_lock = asyncio.Lock()
 
     # ── Helpers ─────────────────────────────────────────────────
 
@@ -272,6 +352,13 @@ class WebRTCTransport(_AudioQueueMixin):
                 entry["credential"] = srv.credential
             result.append(entry)
         return result
+
+    def _is_current_peer_generation(self, peer_generation: int | None) -> bool:
+        return peer_generation is None or peer_generation == self._peer_generation
+
+    def _enqueue_sentinel_for_peer(self, peer_generation: int | None) -> None:
+        if self._is_current_peer_generation(peer_generation):
+            self._enqueue_sentinel()
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -382,7 +469,13 @@ class WebRTCTransport(_AudioQueueMixin):
         else:
             pcm_data = chunk.data
 
-        return self._outbound.enqueue(pcm_data)
+        self._outbound._event_bus = self._event_bus
+        return self._outbound.enqueue(
+            pcm_data,
+            original_chunk=chunk,
+            turn_id=getattr(chunk, "_easycat_turn_id", None),
+            turn_ref=getattr(chunk, "_easycat_turn_ref", None),
+        )
 
     async def clear_audio(self) -> None:
         """Discard queued outbound audio (useful during barge-in)."""
@@ -392,6 +485,11 @@ class WebRTCTransport(_AudioQueueMixin):
 
     async def _handle_offer(self, request: Any) -> Any:
         """Handle an SDP offer from the browser client."""
+        async with self._offer_lock:
+            return await self._handle_offer_locked(request)
+
+    async def _handle_offer_locked(self, request: Any) -> Any:
+        """Handle an SDP offer with peer replacement serialized."""
         web = self._web
         aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
         RTCPeerConnection = aiortc.RTCPeerConnection
@@ -425,21 +523,30 @@ class WebRTCTransport(_AudioQueueMixin):
                 headers=_CORS_HEADERS,
             )
 
-        # Close any existing peer connection.
+        peer_generation = self._peer_generation + 1
+        self._peer_generation = peer_generation
+        self._client_connected.clear()
+        self._outbound_track = None
+
+        # Close any existing peer connection. Advancing the generation before
+        # teardown keeps late callbacks from the previous peer from ending the
+        # receive_audio() iterator for the replacement peer.
+        if self._consume_task is not None and not self._consume_task.done():
+            self._consume_task.cancel()
+            try:
+                await self._consume_task
+            except asyncio.CancelledError:
+                pass
+        self._consume_task = None
+
         if self._pc is not None:
-            if self._consume_task is not None and not self._consume_task.done():
-                self._consume_task.cancel()
-                try:
-                    await self._consume_task
-                except asyncio.CancelledError:
-                    pass
-                self._consume_task = None
             await self._pc.close()
             self._pc = None
 
         # Clear stale audio from the previous peer so it doesn't leak into
-        # the new session's receive_audio() iterator.
-        self._reset_audio_queue()
+        # the new session's receive_audio() iterator. Do not replace the queue:
+        # Session.receive_audio() may already be blocked on this object.
+        self._drain_audio_queue()
 
         # Build ICE configuration from the shared serializer.
         ice_servers = [RTCIceServer(**entry) for entry in self._ice_servers_as_dicts()]
@@ -458,17 +565,25 @@ class WebRTCTransport(_AudioQueueMixin):
             # Listen for the remote audio track.
             @pc.on("track")
             def on_track(track: Any) -> None:
+                if not self._is_current_peer_generation(peer_generation):
+                    return
                 if track.kind == "audio":
                     logger.info("WebRTC remote audio track received")
-                    self._consume_task = asyncio.ensure_future(self._consume_audio(track))
+                    self._consume_task = asyncio.ensure_future(
+                        self._consume_audio(track, peer_generation=peer_generation)
+                    )
 
                     @track.on("ended")
                     async def on_ended() -> None:
+                        if not self._is_current_peer_generation(peer_generation):
+                            return
                         logger.info("WebRTC remote audio track ended")
-                        self._enqueue_sentinel()
+                        self._enqueue_sentinel_for_peer(peer_generation)
 
             @pc.on("connectionstatechange")
             async def on_connectionstatechange() -> None:
+                if not self._is_current_peer_generation(peer_generation):
+                    return
                 state = pc.connectionState
                 logger.info("WebRTC connection state: %s", state)
                 if state == "connected":
@@ -479,7 +594,7 @@ class WebRTCTransport(_AudioQueueMixin):
                     # drop (via bool False) instead of silently queueing into
                     # a source that nothing is draining any more.
                     self._outbound_track = None
-                    self._enqueue_sentinel()
+                    self._enqueue_sentinel_for_peer(peer_generation)
 
             # Set remote offer and create answer.
             offer = RTCSessionDescription(sdp=sdp, type=sdp_type)
@@ -559,7 +674,7 @@ class WebRTCTransport(_AudioQueueMixin):
 
     # ── Audio track consumer ──────────────────────────────────────
 
-    async def _consume_audio(self, track: Any) -> None:
+    async def _consume_audio(self, track: Any, *, peer_generation: int | None = None) -> None:
         """Read audio frames from the remote track and enqueue as AudioChunk.
 
         Always enqueues a sentinel on exit so that ``receive_audio()`` does not
@@ -575,6 +690,8 @@ class WebRTCTransport(_AudioQueueMixin):
         try:
             while True:
                 frame = await track.recv()
+                if not self._is_current_peer_generation(peer_generation):
+                    break
 
                 # Extract raw PCM from the av.AudioFrame.
                 # aiortc decodes Opus to s16 at 48 kHz by default.
@@ -591,7 +708,8 @@ class WebRTCTransport(_AudioQueueMixin):
                     raw = resample(raw, frame_rate, target_rate)
 
                 chunk = AudioChunk(data=raw, format=target_format)
-                self._enqueue_chunk(chunk, context="WebRTC")
+                if self._is_current_peer_generation(peer_generation):
+                    self._enqueue_chunk(chunk, context="WebRTC")
 
         except StopAsyncIteration:
             logger.info("WebRTC audio track stream ended")
@@ -606,7 +724,7 @@ class WebRTCTransport(_AudioQueueMixin):
             # Ensure the pipeline unblocks even if on_ended/connectionstatechange
             # callbacks don't fire.  Duplicate sentinels are harmless — the first
             # one stops receive_audio() and extras are cleared on next connection.
-            self._enqueue_sentinel()
+            self._enqueue_sentinel_for_peer(peer_generation)
 
     # ── Properties ────────────────────────────────────────────────
 

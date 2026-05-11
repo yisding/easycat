@@ -1,8 +1,9 @@
 """Session: the core runtime for a single voice conversation.
 
 Manages the voice pipeline lifecycle, wires provider stages together,
-and handles turn state and cancellation. Supports both basic and
-streaming agent interfaces with incremental TTS synthesis.
+and handles turn state and cancellation.  Drives the agent bridge
+through a single streaming path and feeds incremental TTS synthesis on
+sentence boundaries for low-latency playback.
 """
 
 from __future__ import annotations
@@ -11,10 +12,11 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
-from typing import Any
+from dataclasses import replace
+from typing import Any, TypeVar
 from uuid import uuid4
 
+from easycat.audio_format import AudioChunk
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -32,9 +34,6 @@ from easycat.events import (
     EventHandler,
     Interruption,
     PlaybackMarkAck,
-    ReconnectAttempt,
-    ReconnectFailure,
-    ReconnectSuccess,
     SessionActionCompleted,
     SessionActionFailed,
     SessionActionRequested,
@@ -45,8 +44,7 @@ from easycat.events import (
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
-    TTSAudio,
-    TTSMarkers,
+    TransportAudioDelivered,
     TurnEnded,
     TurnStarted,
     VADStartSpeaking,
@@ -61,8 +59,18 @@ from easycat.llm_output_processing import (
     apply_output_processors,
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
-from easycat.providers import PlaybackAckTransport
 from easycat.runtime.artifacts import SnapshotArtifactStore
+from easycat.runtime.capabilities import (
+    PlaybackAcknowledgements,
+    aclose_if_supported,
+    clear_audio_if_supported,
+    close_if_supported,
+    health_checkable,
+    is_active_provider,
+    is_passthrough_provider,
+    playback_acknowledgements,
+    transport_reports_audio_delivery,
+)
 from easycat.runtime.context import RunContext
 from easycat.runtime.journal import (
     ExecutionJournal,
@@ -71,27 +79,34 @@ from easycat.runtime.journal import (
     ReadonlySqliteJournal,
 )
 from easycat.runtime.records import JournalRecordKind
+from easycat.runtime.scope import RuntimeScope
+from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._streaming import consume_agent_stream
+from easycat.session._text import (
+    _chunk_has_speech_energy,
+    _text_for_estimation_timeline,
+)
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import (
     _TM_TO_TURN_STATE,
     Agent,
+    CallerIdExposure,
+    CallIdentity,
     SessionConfig,
     SessionHelper,
     TurnState,
 )
-from easycat.session.action_executors import CoreSessionActionExecutor
-from easycat.session.actions import SessionAction, SessionActionExecutor
+from easycat.session.actions import (
+    CoreSessionActionExecutor,
+    SessionAction,
+    SessionActionExecutor,
+)
 from easycat.session.interruption import (
     estimate_and_notify_interruption,
 )
 from easycat.session.interruption import (
     notify_bridge_interruption as _notify_bridge_interruption,
 )
-from easycat.session.text_utils import (
-    _chunk_has_speech_energy,
-)
-from easycat.session.tts_helpers import _text_for_estimation_timeline
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
 from easycat.stages.base import (
@@ -100,8 +115,8 @@ from easycat.stages.base import (
 from easycat.stages.base import (
     InterruptSignal as _InterruptSignal,
 )
+from easycat.stages.base import journal_append_control_signal as _journal_control_signal
 from easycat.stages.stt import STTStage
-from easycat.stages.telephony import TelephonyStage
 from easycat.stages.transport import TransportStage
 from easycat.stages.tts import TTSStage
 from easycat.stages.turn import TurnStage
@@ -126,10 +141,7 @@ from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass(slots=True)
-class _ActionDrainOutcome:
-    stop_session: bool = False
+_HelperT = TypeVar("_HelperT")
 
 
 def _ensure_bridge(agent: Any) -> ExternalAgentBridge:
@@ -191,23 +203,29 @@ class Session:
         # (not going through ``create_session``) also get tool access.
         self._inject_agent_runtime_config(self._agent)
 
+        # Telephony caller / callee identity.  Populated by the
+        # transport (inbound: Twilio customParameters) or by the
+        # outbound call manager (outbound: the dialed number).
+        # ``caller_id_exposure`` governs whether the agent's LLM sees
+        # the number or only tool code does.
+        self._call_identity: CallIdentity | None = cfg.call_identity
+        self._caller_id_exposure: CallerIdExposure = cfg.caller_id_exposure
+
         # Skip noop validation in text_session mode — audio providers
         # are intentionally noop.
         if cfg.runtime_mode != "text_session":
             noops = []
-            if isinstance(self.stt, NoopSTT):
+            if is_passthrough_provider(self.stt):
                 noops.append("stt")
-            if isinstance(self.tts, NoopTTS):
+            if is_passthrough_provider(self.tts):
                 noops.append("tts")
-            if cfg.enable_vad and isinstance(self.vad, NoopVAD):
+            if cfg.enable_vad and is_passthrough_provider(self.vad):
                 noops.append("vad")
-            if cfg.enable_noise_reduction and isinstance(
-                self.noise_reducer, PassthroughNoiseReducer
-            ):
+            if cfg.enable_noise_reduction and is_passthrough_provider(self.noise_reducer):
                 noops.append("noise_reducer")
-            if isinstance(self.transport, NoopTransport):
+            if is_passthrough_provider(self.transport):
                 noops.append("transport")
-            if isinstance(self.agent, NoopAgent):
+            if cfg.agent is None and is_passthrough_provider(self.agent):
                 noops.append("agent")
             if noops:
                 raise ValueError(
@@ -224,12 +242,12 @@ class Session:
 
         # Pipeline flags — auto-enable when a real provider is supplied so
         # that direct SessionConfig users don't silently lose processing.
-        self._enable_noise_reduction = cfg.enable_noise_reduction or not isinstance(
-            self.noise_reducer, PassthroughNoiseReducer
+        self._enable_noise_reduction = cfg.enable_noise_reduction or is_active_provider(
+            self.noise_reducer
         )
         self._enable_aec = (
-            cfg.enable_echo_cancellation or not isinstance(self.echo_canceller, PassthroughAEC)
-        ) and not isinstance(self.echo_canceller, PassthroughAEC)
+            cfg.enable_echo_cancellation or is_active_provider(self.echo_canceller)
+        ) and is_active_provider(self.echo_canceller)
         self._enable_vad = cfg.enable_vad
         self._auto_turn_from_stt_final = cfg.auto_turn_from_stt_final
         self._interruption_mode = cfg.interruption_mode
@@ -256,21 +274,43 @@ class Session:
         self.event_bus.subscribe(VADStopSpeaking, self._schedule_stt_segment_commit)
         self.event_bus.subscribe(VADStartSpeaking, self._cancel_scheduled_stt_segment_commit)
         self.event_bus.subscribe(PlaybackMarkAck, self._on_playback_mark_ack)
+        self.event_bus.subscribe(TransportAudioDelivered, self._on_transport_audio_delivered)
+
+        # Opt-out auto-wiring.  Runs on every STT final; on a match it
+        # emits ``OptOutDetected``, adds the caller to an attached DNC
+        # list, and queues ``EndCallAction(reason="opt_out")`` so the
+        # call hangs up after the current agent utterance.  Disable
+        # via ``SessionConfig.opt_out_detection=False``.
+        self._opt_out_detection = cfg.opt_out_detection
+        self._opt_out_phrases: list[str] | None = (
+            list(cfg.opt_out_phrases) if cfg.opt_out_phrases is not None else None
+        )
+        self._dnc_list: Any | None = cfg.dnc_list
+        if self._opt_out_detection:
+            self.event_bus.subscribe(STTFinal, self._on_stt_final_opt_out)
+
+        # Optional "bot speaks first" greeting synthesized on the first
+        # CallAnswered event — works for both inbound (stream start)
+        # and outbound (callee picks up).  Only the first occurrence
+        # is honored so a warm-transfer style flow with a second
+        # CallAnswered doesn't re-greet.
+        self._greeting: str | None = cfg.greeting
+        self._greeting_spoken: bool = False
+        self._greeting_task: asyncio.Task[Any] | None = None
+        if self._greeting:
+            from easycat.events import CallAnswered as _CallAnsweredEv
+
+            self.event_bus.subscribe(_CallAnsweredEv, self._on_call_answered_greet)
         tm_config = getattr(self._turn_manager, "_config", None)
         self._stt_segment_silence_ms = max(0, getattr(tm_config, "stt_segment_silence_ms", 0))
 
         # Reliability/observability config
         self._timeout_config = cfg.timeout_config or self._default_timeout_config()
-        self._metrics = None  # Legacy field, retained for attribute access only
         self._journal = cfg.journal
         self._journal_view: JournalView | None = (
             JournalView(self._journal) if self._journal is not None else None
         )
         self._artifact_store = cfg.artifact_store
-
-        # Wire journal to event bus so session activity is recorded.
-        if self._journal is not None:
-            self._subscribe_journal_sink(self._journal)
 
         # Backpressure (outbound audio queue)
         self._outbound_queue_external = cfg.outbound_queue is not None
@@ -300,6 +340,7 @@ class Session:
         self._audio_gate = cfg.audio_gate
         self._health_checkers: list[PeriodicHealthChecker] = []
         self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)
+        self._runtime_scope = RuntimeScope()
 
         # Agent-initiated session actions
         self._session_actions = cfg.session_actions
@@ -313,6 +354,7 @@ class Session:
         self._closed = False
         self._stopping = False
         self._flushed = False
+        self._closed_event: asyncio.Event | None = None
         self._pipeline_task: asyncio.Task[None] | None = None
         self._stt_task: asyncio.Task[None] | None = None
         self._current_tts_task: asyncio.Task[None] | None = None
@@ -336,9 +378,10 @@ class Session:
         self._playback_mark_bytes_interval: int = 4_000  # throttle: ~125ms at 16kHz/16-bit
         self._playback_mark_seq: int = 0  # session-scoped so mark names never collide across turns
 
-        self._playback_ack_transport: PlaybackAckTransport | None = None
-        if isinstance(self.transport, PlaybackAckTransport):
-            self._playback_ack_transport = self.transport
+        self._playback_ack_transport: PlaybackAcknowledgements | None = playback_acknowledgements(
+            self.transport
+        )
+        self._transport_reports_audio_delivery = transport_reports_audio_delivery(self.transport)
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
@@ -347,6 +390,14 @@ class Session:
         self._text_turn_accumulated: str = ""
         self._text_turn_lock = asyncio.Lock()
         self._turn_manager.bind_session(self.session_id)
+        self._journal_sink = SessionJournalSink(
+            event_bus=self.event_bus,
+            journal=self._journal,
+            artifact_store=self._artifact_store,
+            session_id=self.session_id,
+            current_turn_id=self._journal_turn_id,
+        )
+        self._journal_sink.subscribe()
 
         # WS3 T3.10 integration: instantiate every stage wrapper and a
         # shared RunContext so Session can route provider calls through
@@ -380,10 +431,6 @@ class Session:
             self._turn_manager._config.endpoint_detector  # type: ignore[attr-defined]
             if self._turn_manager._config is not None  # type: ignore[attr-defined]
             else None,
-            journal=self._journal,
-        )
-        self._telephony_stage = TelephonyStage(
-            self._telephony_helpers[0] if self._telephony_helpers else None,
             journal=self._journal,
         )
         # Hand the TTS stage to the synthesizer so the existing iteration
@@ -458,7 +505,7 @@ class Session:
         values so the record is JSON-serialisable without requiring
         replay consumers to know the enum type.
         """
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="turn_state_changed",
             turn_id=turn_id,
             data={
@@ -485,7 +532,7 @@ class Session:
                 await asyncio.sleep(max(0.0, next_deadline - loop.time()))
                 now = loop.time()
                 loop_lag_ms = max(0.0, (now - next_deadline) * 1000.0)
-                self._append_journal_record(
+                self._journal_sink.append_record(
                     name="pipeline_heartbeat",
                     data={
                         "interval_ms": int(interval_s * 1000),
@@ -512,7 +559,7 @@ class Session:
         read live.  One record per drop so bundle readers can correlate
         audio gaps to queue pressure timing.
         """
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="audio_queue_drop",
             data={
                 "queue": queue_name,
@@ -544,7 +591,7 @@ class Session:
         ids, which don't survive serialisation.
         """
         resolved_turn = self._journal_turn_id(turn_id)
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="task_scheduled",
             turn_id=resolved_turn,
             data={"task_name": name},
@@ -561,74 +608,29 @@ class Session:
             # finally-cleanup reports the raise (more actionable).
             try:
                 if t.cancelled():
-                    self._append_journal_record(
+                    self._journal_sink.append_record(
                         name="task_cancelled", turn_id=tid, data={"task_name": label}
                     )
                     return
                 exc = t.exception()
             except asyncio.CancelledError:
-                self._append_journal_record(
+                self._journal_sink.append_record(
                     name="task_cancelled", turn_id=tid, data={"task_name": label}
                 )
                 return
             if exc is not None:
-                self._append_journal_record(
+                self._journal_sink.append_record(
                     name="task_raised",
                     turn_id=tid,
                     data={"task_name": label, "exc_type": type(exc).__name__},
                 )
             else:
-                self._append_journal_record(
+                self._journal_sink.append_record(
                     name="task_completed", turn_id=tid, data={"task_name": label}
                 )
 
         task.add_done_callback(_on_done)
         return task
-
-    def _store_journal_artifact(
-        self,
-        payload: bytes,
-        *,
-        artifact_class: str = "debug_verbose",
-    ) -> str | None:
-        if self._artifact_store is None or not payload:
-            return None
-        ref = self._artifact_store.put(payload, artifact_class=artifact_class)
-        return ref or None
-
-    def _append_journal_record(
-        self,
-        *,
-        name: str,
-        kind: JournalRecordKind = JournalRecordKind.EVENT,
-        turn_id: str | None = None,
-        data: dict[str, Any] | None = None,
-        input_bytes: bytes | None = None,
-        output_bytes: bytes | None = None,
-        input_artifact_class: str = "debug_verbose",
-        output_artifact_class: str = "debug_verbose",
-    ) -> None:
-        if self._journal is None:
-            return
-        input_ref = (
-            self._store_journal_artifact(input_bytes, artifact_class=input_artifact_class)
-            if input_bytes is not None
-            else None
-        )
-        output_ref = (
-            self._store_journal_artifact(output_bytes, artifact_class=output_artifact_class)
-            if output_bytes is not None
-            else None
-        )
-        self._journal.append(
-            kind=kind,
-            name=name,
-            session_id=self.session_id,
-            turn_id=self._journal_turn_id(turn_id),
-            data=data,
-            input_ref=input_ref,
-            output_ref=output_ref,
-        )
 
     async def _propagate_upstream_signal(
         self,
@@ -656,7 +658,6 @@ class Session:
             self._stt_stage,
             self._vad_stage,
             self._audio_stage,
-            self._telephony_stage,
         )
         for stage in ordered:
             if stage is None:
@@ -665,14 +666,18 @@ class Session:
                 await stage.handle_upstream(signal, self._run_ctx)
             except Exception:  # noqa: BLE001 - never break cancel path
                 logger.exception("Stage %s.handle_upstream failed", stage.name)
+        # Telephony helpers journal the signal without a dedicated stage
+        # wrapper: one bare aggregate control-signal record keeps the
+        # observability identical to the old stage path.
+        if self._telephony_helpers:
+            _journal_control_signal(self._run_ctx, stage="telephony", signal=signal)
         # Annotate the trailing signal record with the originating cause
         # so the replay UI can display "interrupt — barge_in" instead of
         # bare signal IDs.
-        if cause and self._journal is not None:
-            self._journal.append(
+        if cause:
+            self._journal_sink.append_record(
                 kind=JournalRecordKind.CONTROL,
                 name="control_signal_cause",
-                session_id=self.session_id,
                 turn_id=self._turn.id if self._turn else None,
                 data={"signal_id": signal.signal_id, "cause": cause},
             )
@@ -686,7 +691,7 @@ class Session:
         turn_id: str | None = None,
     ) -> None:
         """Append a journal record when final-response markdown stripping runs."""
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="markdown_stripped",
             turn_id=turn_id,
             data={
@@ -707,7 +712,7 @@ class Session:
         is_final: bool,
         turn_id: str | None = None,
     ) -> None:
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="tts_payload_prepared",
             turn_id=turn_id,
             data={
@@ -738,7 +743,7 @@ class Session:
         turn_id: str | None = None,
     ) -> None:
         replacement_text = None
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="assistant_interruption_notified",
             turn_id=turn_id,
             data={
@@ -749,105 +754,6 @@ class Session:
                 "replacement_text": replacement_text,
             },
         )
-
-    def _subscribe_journal_sink(self, journal: ExecutionJournal) -> None:
-        """Subscribe event bus handlers that write session events to the journal."""
-        from easycat.runtime.records import ErrorInfo
-
-        session = self
-        EVT = JournalRecordKind.EVENT
-        CTL = JournalRecordKind.CONTROL
-
-        def _make(kind: JournalRecordKind, name: str):
-            def _handler(event: Any) -> None:
-                data: dict[str, Any] = {}
-                _JOURNAL_ATTRS = (
-                    "text",
-                    "track",
-                    "result",
-                    "tool_name",
-                    "call_id",
-                    "delta",
-                    "structured_output",
-                )
-                for attr in _JOURNAL_ATTRS:
-                    val = getattr(event, attr, None)
-                    if val is not None:
-                        data[attr] = val
-                error = None
-                exc = getattr(event, "exception", None)
-                if exc is not None:
-                    stage = getattr(event, "stage", None)
-                    if hasattr(stage, "value"):
-                        data["stage"] = stage.value
-                    error = ErrorInfo.from_exception(exc)
-                journal.append(
-                    kind=kind,
-                    name=name,
-                    session_id=getattr(event, "session_id", None) or session.session_id,
-                    turn_id=getattr(event, "turn_id", None),
-                    data=data or None,
-                    error=error,
-                )
-
-            return _handler
-
-        def _handle_tts_audio(event: TTSAudio) -> None:
-            # TTSStage.execute now captures the audio bytes as
-            # replay_critical artifacts via ``tts_frame`` records (WS3
-            # T3.9: direct observability calls moved out of Session).
-            # The session-level ``tts_audio`` record stays for legacy
-            # observers but no longer carries the bytes.
-            self._append_journal_record(
-                name="tts_audio",
-                turn_id=event.turn_id,
-                data={
-                    "audio_bytes": len(event.chunk.data),
-                    "duration_ms": event.chunk.duration_ms,
-                    "sample_rate": event.chunk.format.sample_rate,
-                    "channels": event.chunk.format.channels,
-                    "sample_width": event.chunk.format.sample_width,
-                    "encoding": event.chunk.format.encoding,
-                    "bypass_gate": event.bypass_gate,
-                },
-            )
-
-        def _handle_tts_markers(event: TTSMarkers) -> None:
-            self._append_journal_record(
-                name="tts_markers",
-                turn_id=event.turn_id,
-                data={"markers": event.markers},
-            )
-
-        _sub = self.event_bus.subscribe
-        _sub(TurnStarted, _make(EVT, "turn_started"))
-        _sub(TurnEnded, _make(EVT, "turn_ended"))
-        _sub(VADStartSpeaking, _make(EVT, "vad_start_speaking"))
-        _sub(VADStopSpeaking, _make(EVT, "vad_stop_speaking"))
-        _sub(STTPartial, _make(EVT, "stt_partial"))
-        _sub(STTFinal, _make(EVT, "stt_final"))
-        _sub(AgentRequestStarted, _make(EVT, "agent_request_started"))
-        _sub(AgentDelta, _make(EVT, "agent_delta"))
-        _sub(AgentFinal, _make(EVT, "agent_final"))
-        _sub(TTSAudio, _handle_tts_audio)
-        _sub(TTSMarkers, _handle_tts_markers)
-        _sub(BotStartedSpeaking, _make(EVT, "bot_started_speaking"))
-        _sub(BotStoppedSpeaking, _make(EVT, "bot_stopped_speaking"))
-        _sub(Interruption, _make(CTL, "interruption"))
-        _sub(Error, _make(EVT, "error"))
-        _sub(ToolCallStarted, _make(EVT, "tool_call_started"))
-        _sub(ToolCallDelta, _make(EVT, "tool_call_delta"))
-        _sub(ToolCallResult, _make(EVT, "tool_call_result"))
-        # ReconnectingWebSocket emits these on the bus; without a
-        # journal subscriber, "session died 40 min in" would only show
-        # up in logs.  Now a bundle shows the exact retry timeline.
-        _sub(ReconnectAttempt, _make(EVT, "ws_reconnect_attempt"))
-        _sub(ReconnectSuccess, _make(EVT, "ws_reconnect_success"))
-        _sub(ReconnectFailure, _make(EVT, "ws_reconnect_failure"))
-        # PlaybackMarkAck is subscribed elsewhere for state tracking;
-        # journal it separately so interruption postmortems have the
-        # actual ack timeline (what the client rendered when).
-        _sub(PlaybackMarkAck, _make(EVT, "playback_mark_ack"))
 
     def _reset_turn_state(self) -> None:
         """Clear turn correlation state and reset the turn manager."""
@@ -993,6 +899,18 @@ class Session:
         for event_type, handler in registrations:
             self.event_bus.unsubscribe(event_type, handler)
 
+    def get_helper(self, helper_type: type[_HelperT]) -> _HelperT | None:
+        """Return the first attached session helper matching *helper_type*.
+
+        Telephony features are lifecycle-managed helpers under the hood.  This
+        accessor keeps advanced applications off ``_telephony_helpers`` while
+        preserving the lightweight helper model.
+        """
+        for helper in self._telephony_helpers:
+            if isinstance(helper, helper_type):
+                return helper
+        return None
+
     def export_debug_bundle(
         self,
         path: str,
@@ -1061,17 +979,141 @@ class Session:
         is created or swapped.  Remote model / API key follow the same
         pattern for :class:`RemoteResponsesAPIBridge`.
         """
-        from easycat.integrations.agents._agent_runner import AgentRunner
-        from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+        from easycat.config import _inject_agent_runtime
 
-        inner = agent._agent if isinstance(agent, AgentRunner) else agent
-        if hasattr(inner, "_mcp_servers"):
-            inner._mcp_servers = list(self._mcp_servers)
-        if isinstance(inner, RemoteResponsesAPIBridge):
-            if self._agent_model:
-                inner._model = self._agent_model
-            if self._remote_agent_api_key:
-                inner._api_key = self._remote_agent_api_key
+        _inject_agent_runtime(
+            agent,
+            mcp_servers=self._mcp_servers,
+            agent_model=self._agent_model,
+            remote_agent_api_key=self._remote_agent_api_key,
+        )
+
+    @property
+    def transport_kind(self) -> str:
+        """Coarse transport class for tool-side branching.
+
+        Returns one of ``"telephony"``, ``"webrtc"``, ``"websocket"``,
+        ``"local"``, ``"noop"``, or ``"custom"``.  Tools that need to
+        behave differently on a phone call vs a browser session
+        (don't reference the screen, avoid long URLs, skip emoji, …)
+        read this rather than poking at transport internals.
+        """
+        transport = self.transport
+        explicit = getattr(transport, "transport_kind", None)
+        if isinstance(explicit, str) and explicit:
+            return explicit
+
+        # Fallback for third-party transports that have not adopted the
+        # explicit property yet.
+        module = type(transport).__module__
+        name = type(transport).__name__.lower()
+        if "webrtc" in module or "webrtc" in name:
+            return "webrtc"
+        if "websocket" in module or "websocket" in name:
+            return "websocket"
+        if "local" in module or name == "localtransport":
+            return "local"
+        if "noop" in name or "stubs" in module:
+            return "noop"
+        return "custom"
+
+    @property
+    def outbound_call_manager(self) -> Any | None:
+        """Outbound call manager attached to this session, when configured."""
+        from easycat.telephony.outbound import OutboundCallManager
+
+        return self.get_helper(OutboundCallManager)
+
+    @property
+    def outbound_call_state_machine(self) -> Any | None:
+        """Outbound call state machine attached to this session, when configured."""
+        from easycat.telephony.call_state import OutboundCallStateMachine
+
+        return self.get_helper(OutboundCallStateMachine)
+
+    @property
+    def number_health_monitor(self) -> Any | None:
+        """Per-number health monitor attached to this session, when configured."""
+        from easycat.telephony.number_health import NumberHealthMonitor
+
+        return self.get_helper(NumberHealthMonitor)
+
+    @property
+    def call_disposition_tracker(self) -> Any | None:
+        """Call disposition tracker attached to this session, when configured."""
+        from easycat.telephony.number_health import CallDispositionTracker
+
+        return self.get_helper(CallDispositionTracker)
+
+    @property
+    def dnc_list(self) -> Any | None:
+        """Do-Not-Call list consulted by opt-out auto-detection.
+
+        Apps that want opt-out flows to persist across sessions
+        assign the same ``DNCList`` instance to every session
+        (or wire a shared store behind a DNC-list-compatible object).
+        """
+        return self._dnc_list
+
+    @dnc_list.setter
+    def dnc_list(self, value: Any | None) -> None:
+        self._dnc_list = value
+
+    @property
+    def call_identity(self) -> CallIdentity | None:
+        """Caller / callee identity for this session.
+
+        Populated by telephony transports on connect (Twilio reads
+        ``<Stream>`` customParameters) or by
+        :meth:`OutboundCallManager.place_call` for outbound calls.
+        Tool code (including agent function tools) reads this directly
+        unless :attr:`caller_id_exposure` is ``"off"``.  Internal
+        telephony policy hooks retain the private value so opt-out
+        detection can still update DNC state.
+        """
+        if self._caller_id_exposure == "off":
+            return None
+        return self._call_identity
+
+    @call_identity.setter
+    def call_identity(self, value: CallIdentity | None) -> None:
+        self._call_identity = value
+
+    @property
+    def caller_id_exposure(self) -> CallerIdExposure:
+        """Exposure policy for :attr:`call_identity`."""
+        return self._caller_id_exposure
+
+    @caller_id_exposure.setter
+    def caller_id_exposure(self, value: CallerIdExposure) -> None:
+        self._caller_id_exposure = value
+
+    def _caller_id_system_message(self) -> str | None:
+        """Render the caller-ID system message for the agent, or None.
+
+        Returns ``None`` when the exposure policy hides the caller ID
+        from the LLM (``"tools_only"`` / ``"off"``) or when we have no
+        identity to share yet.
+        """
+        if self._caller_id_exposure != "system_message":
+            return None
+        identity = self._call_identity
+        if identity is None:
+            return None
+        parts: list[str] = []
+        if identity.caller_number:
+            prefix = "The caller's phone number is"
+            if identity.direction == "outbound":
+                prefix = "This outbound call is to"
+            parts.append(f"{prefix} {identity.caller_number}.")
+        if identity.called_number:
+            if identity.direction == "outbound":
+                parts.append(f"It was placed from {identity.called_number}.")
+            else:
+                parts.append(f"They dialed {identity.called_number}.")
+        if identity.display_name:
+            parts.append(f"Caller ID name: {identity.display_name}.")
+        return " ".join(parts) if parts else None
 
     @property
     def turn_state(self) -> TurnState:
@@ -1138,6 +1180,48 @@ class Session:
         """
         await self._tts_synth.synthesize(text, token=None, bypass_gate=True)
 
+    # ── Async context manager ────────────────────────────────────
+
+    async def __aenter__(self) -> Session:
+        """Enter an ``async with session:`` block.
+
+        Starts the session when it has not been started already so that
+        ``async with create_session(cfg):`` is a one-liner equivalent to
+        ``easycat.run()`` for callers who already own an event loop.
+        """
+        if self._runtime_mode != "text_session" and not self._is_running and not self._closed:
+            await self.start()
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """Exit the context manager, tearing the session down cleanly."""
+        await self.shutdown()
+
+    async def wait_closed(self) -> None:
+        """Block until the session has been stopped or shut down.
+
+        Mirrors ``asyncio.Server.wait_closed()`` / ``Queue.join()`` and
+        is the idiomatic pair for ``async with session: await
+        session.wait_closed()``.  Returns immediately when the session
+        is already closed.
+        """
+        if self._closed:
+            return
+        event = self._closed_event
+        if event is None:
+            event = asyncio.Event()
+            self._closed_event = event
+            if self._closed:
+                event.set()
+        await event.wait()
+
+    def _mark_closed(self) -> None:
+        """Flip the closed flag and wake any `wait_closed()` waiters."""
+        self._closed = True
+        event = self._closed_event
+        if event is not None:
+            event.set()
+
     # ── Lifecycle ──────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -1173,9 +1257,10 @@ class Session:
                 ("tts", self.tts),
                 ("transport", self.transport),
             ):
-                if hasattr(provider, "health_check"):
+                health_provider = health_checkable(provider)
+                if health_provider is not None:
                     checker = PeriodicHealthChecker(
-                        provider,
+                        health_provider,
                         provider_name=name,
                         event_bus=self.event_bus,
                     )
@@ -1193,11 +1278,14 @@ class Session:
             # gap between heartbeats widens — ``loop_lag_ns`` in the
             # record makes that visible in a bundle without requiring
             # live tracing.
-            self._heartbeat_task = asyncio.create_task(self._emit_heartbeats())
+            self._heartbeat_task = self._runtime_scope.create_task(
+                "pipeline_heartbeat",
+                self._emit_heartbeats(),
+            )
         except Exception:
             self._is_running = False
 
-            for task_name in ("_pipeline_task", "_outbound_task", "_heartbeat_task"):
+            for task_name in ("_pipeline_task", "_outbound_task"):
                 task = getattr(self, task_name)
                 if task is not None and not task.done():
                     task.cancel()
@@ -1206,6 +1294,8 @@ class Session:
                     except asyncio.CancelledError:
                         pass
                 setattr(self, task_name, None)
+            await self._runtime_scope.cancel_and_drain("pipeline_heartbeat")
+            self._heartbeat_task = None
 
             for checker in self._health_checkers:
                 await checker.stop()
@@ -1259,6 +1349,7 @@ class Session:
                         " BotStoppedSpeaking is emitted if needed."
                     )
 
+            await self._cancel_greeting_task()
             await self._cancel_stt()
             await self._cancel_tts()
             for checker in self._health_checkers:
@@ -1276,23 +1367,18 @@ class Session:
                     await self._outbound_task
                 except (asyncio.CancelledError, Exception):
                     pass
-            if self._heartbeat_task and not self._heartbeat_task.done():
-                self._heartbeat_task.cancel()
-                try:
-                    await self._heartbeat_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                self._heartbeat_task = None
+            await self._runtime_scope.cancel_and_drain("pipeline_heartbeat")
+            self._heartbeat_task = None
             await self.transport.disconnect()
             await self._turn_manager.shutdown()
-            if hasattr(self.agent, "aclose"):
-                try:
-                    await self.agent.aclose()
-                except Exception:
-                    pass
+            try:
+                await aclose_if_supported(self.agent)
+            except Exception:
+                pass
+            await self._close_audio_providers()
             self._turn = None
             self.destroy()
-            self._closed = True
+            self._mark_closed()
         finally:
             self._stopping = False
 
@@ -1322,35 +1408,31 @@ class Session:
             if self._pipeline_task and not self._pipeline_task.done():
                 self._pipeline_task.cancel()
                 tasks.append(self._pipeline_task)
-            if self._stt_task and not self._stt_task.done():
-                self._stt_task.cancel()
-                tasks.append(self._stt_task)
-            # STT segment-commit work runs on background tasks that outlive
-            # _stt_task. Cancel them here so shutdown() does not return while
-            # commit_segment() is still sleeping or awaiting the provider.
-            if self._stt_pause_commit_task and not self._stt_pause_commit_task.done():
-                self._stt_pause_commit_task.cancel()
-                tasks.append(self._stt_pause_commit_task)
-            if self._stt_segment_commit_task and not self._stt_segment_commit_task.done():
-                self._stt_segment_commit_task.cancel()
-                tasks.append(self._stt_segment_commit_task)
             if self._current_tts_task and not self._current_tts_task.done():
                 self._current_tts_task.cancel()
                 tasks.append(self._current_tts_task)
             if self._outbound_task and not self._outbound_task.done():
                 self._outbound_task.cancel()
                 tasks.append(self._outbound_task)
-            if self._heartbeat_task and not self._heartbeat_task.done():
-                self._heartbeat_task.cancel()
-                tasks.append(self._heartbeat_task)
 
+            # Signal scoped work before awaiting other task handles so
+            # migrated shutdown work preserves the previous force-cancel
+            # ordering. Drain below after every task has observed cancellation.
+            self._runtime_scope.cancel()
             for task in tasks:
                 try:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+            await self._cancel_stt()
+            # RuntimeScope-owned work currently covers heartbeat, greeting,
+            # and STT segment commit/pause tasks. These can outlive the
+            # pipeline/STT consumer handles above, so shutdown drains the
+            # scope before provider teardown returns.
+            await self._runtime_scope.cancel_and_drain()
             self._stt_pause_commit_task = None
             self._stt_segment_commit_task = None
+            self._greeting_task = None
             self._heartbeat_task = None
 
             for checker in self._health_checkers:
@@ -1361,14 +1443,14 @@ class Session:
                 self._outbound_queue.close()
             await self.transport.disconnect()
             await self._turn_manager.shutdown()
-            if hasattr(self.agent, "aclose"):
-                try:
-                    await self.agent.aclose()
-                except Exception:
-                    pass
+            try:
+                await aclose_if_supported(self.agent)
+            except Exception:
+                pass
+            await self._close_audio_providers()
             self._turn = None
             self.destroy()
-            self._closed = True
+            self._mark_closed()
         finally:
             self._stopping = False
 
@@ -1420,6 +1502,11 @@ class Session:
             live_store.close()
             self._artifact_store = replacement_store
 
+        self._journal_sink.replace_backends(
+            journal=self._journal,
+            artifact_store=self._artifact_store,
+        )
+
     def _preserve_journal_after_destroy(self, journal: ExecutionJournal) -> ExecutionJournal:
         db_path = getattr(journal, "db_path", None)
         if db_path is not None:
@@ -1458,7 +1545,7 @@ class Session:
 
         await self._cancel_stt()
         await self._cancel_tts()
-        await self.transport.clear_audio()
+        await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
 
@@ -1478,7 +1565,7 @@ class Session:
         """
         self._tts_playback_suppressed = True
         await self._tts_synth.cancel()
-        await self.transport.clear_audio()
+        await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
@@ -1494,7 +1581,7 @@ class Session:
 
         await self._cancel_stt()
         await self._cancel_tts()
-        await self.transport.clear_audio()
+        await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
         self._replay_chunks_pending = 0
 
@@ -1512,11 +1599,14 @@ class Session:
         """
         self._action_executors.insert(0, executor)
 
-    async def _drain_session_actions(self) -> _ActionDrainOutcome:
-        """Execute any session actions queued by agent tools during this turn."""
-        outcome = _ActionDrainOutcome()
+    async def _drain_session_actions(self) -> bool:
+        """Execute any session actions queued by agent tools during this turn.
+
+        Returns ``True`` if any executor signalled that the session should stop.
+        """
+        should_stop = False
         if self._session_actions is None or not self._session_actions.has_pending:
-            return outcome
+            return should_stop
 
         actions = self._session_actions.drain()
         for action in actions:
@@ -1543,7 +1633,7 @@ class Session:
                 )
                 continue
 
-            outcome.stop_session = outcome.stop_session or result.stop_session
+            should_stop = should_stop or result.stop_session
             await self._emit(
                 SessionActionCompleted(
                     action=action,
@@ -1552,7 +1642,7 @@ class Session:
                 )
             )
 
-        return outcome
+        return should_stop
 
     def _find_action_executor(self, action: SessionAction) -> SessionActionExecutor | None:
         for executor in self._action_executors:
@@ -1587,6 +1677,91 @@ class Session:
             return False
         await self.cancel_turn(barge_in=True)
         return True
+
+    def _on_call_answered_greet(self, event: Any) -> None:
+        """Schedule the configured greeting once per call.
+
+        Wires :attr:`_greeting` into the first
+        :class:`~easycat.events.CallAnswered`.  The actual TTS work is
+        detached from event dispatch so outbound status callbacks can
+        complete lifecycle/AMD processing without waiting on synthesis.
+        Uses the
+        ``synthesize_bypass`` path so the greeting plays even when a
+        classification gate is still buffering (outbound answering
+        machine window).  Subsequent ``CallAnswered`` events — e.g. a
+        warm-transfer re-answer — are ignored.
+        """
+        if self._greeting_spoken or not self._greeting:
+            return
+        if self._greeting_task is not None and not self._greeting_task.done():
+            return
+        task = self._runtime_scope.add_task(
+            "call_answered_greeting",
+            self._journaled_task(
+                self._deliver_call_answered_greeting(self._greeting),
+                name="call_answered_greeting",
+            ),
+        )
+        self._greeting_task = task
+        task.add_done_callback(self._clear_greeting_task)
+
+    def _clear_greeting_task(self, task: asyncio.Task[Any]) -> None:
+        if self._greeting_task is task:
+            self._greeting_task = None
+
+    async def _deliver_call_answered_greeting(self, greeting: str) -> None:
+        await asyncio.sleep(0)
+        try:
+            await self.synthesize_bypass(greeting)
+            self._greeting_spoken = True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("Failed to synthesize greeting", exc_info=True)
+
+    async def _cancel_greeting_task(self) -> None:
+        task = self._greeting_task
+        if task is not None and not task.done():
+            await self._runtime_scope.cancel_and_drain("call_answered_greeting")
+        self._greeting_task = None
+
+    async def _on_stt_final_opt_out(self, event: STTFinal) -> None:
+        """Detect TCPA opt-out phrases in every STT final and react.
+
+        Skipped when the caller disabled ``opt_out_detection`` or when
+        the text is empty.  On match: emits
+        :class:`~easycat.events.OptOutDetected`, adds the caller to
+        ``session.dnc_list`` if set, and enqueues a
+        :class:`EndCallAction` so the call terminates after the
+        current agent utterance.
+        """
+        from easycat.events import OptOutDetected
+        from easycat.telephony.compliance import match_opt_out_phrase
+
+        if not event.text:
+            return
+        phrase = match_opt_out_phrase(event.text, self._opt_out_phrases)
+        if phrase is None:
+            return
+
+        number = self._call_identity.caller_number if self._call_identity else ""
+        if self._dnc_list is not None and number:
+            try:
+                self._dnc_list.add(number)
+            except Exception:
+                logger.debug("dnc_list.add raised for opt-out", exc_info=True)
+
+        await self._emit(OptOutDetected(number=number, phrase=phrase, text=event.text))
+
+        # Queue a hangup after the current agent utterance so the
+        # session drains cleanly (saying "understood, goodbye" first
+        # is the agent's job; we just schedule the end).  When no
+        # action queue is present we fall back to firing
+        # ``Session.stop`` — opt-out must terminate the call.
+        if self._session_actions is not None:
+            self._session_actions.end_call(reason="opt_out")
+        else:
+            self._journaled_task(self.stop(), name="opt_out_stop")
 
     async def _on_turn_started(self, event: TurnStarted) -> None:
         """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
@@ -1634,6 +1809,26 @@ class Session:
                 helper.stop()
             except Exception:
                 logger.debug("Error stopping session helper", exc_info=True)
+
+    async def _close_audio_providers(self) -> None:
+        """Release optional resources owned by audio providers."""
+        providers = (
+            ("stt", self.stt),
+            ("tts", self.tts),
+            ("vad", self.vad),
+            ("noise_reducer", self.noise_reducer),
+            ("echo_canceller", self.echo_canceller),
+        )
+        closed: set[int] = set()
+        for name, provider in providers:
+            provider_id = id(provider)
+            if provider_id in closed:
+                continue
+            closed.add(provider_id)
+            try:
+                await close_if_supported(provider)
+            except Exception:
+                logger.debug("Error closing %s provider", name, exc_info=True)
 
     def _schedule_turn_ended(self, event: TurnEnded) -> None:
         """Schedule end-of-turn processing without blocking other handlers.
@@ -1704,9 +1899,12 @@ class Session:
             return
         self._cancel_scheduled_stt_segment_commit()
         delay_s = self._stt_segment_silence_ms / 1000.0
-        self._stt_pause_commit_task = self._journaled_task(
-            self._commit_stt_segment_after(delay_s),
-            name="stt_pause_commit",
+        self._stt_pause_commit_task = self._runtime_scope.add_task(
+            "stt_pause_commit",
+            self._journaled_task(
+                self._commit_stt_segment_after(delay_s),
+                name="stt_pause_commit",
+            ),
         )
         self._stt_pause_commit_task.add_done_callback(self._log_task_exception)
 
@@ -1728,10 +1926,13 @@ class Session:
             return
         if self._stt_segment_commit_task is not None and not self._stt_segment_commit_task.done():
             return
-        self._stt_segment_commit_task = self._journaled_task(
-            self._commit_stt_segment(),
-            name="stt_segment_commit",
-            turn_id=turn.id if turn is not None else None,
+        self._stt_segment_commit_task = self._runtime_scope.add_task(
+            "stt_segment_commit",
+            self._journaled_task(
+                self._commit_stt_segment(),
+                name="stt_segment_commit",
+                turn_id=turn.id if turn is not None else None,
+            ),
         )
         self._stt_segment_commit_task.add_done_callback(self._log_task_exception)
 
@@ -1753,7 +1954,7 @@ class Session:
         # providers without the attribute report None and the journal
         # reader treats it as unknown.
         pending_bytes = getattr(self.stt, "_bytes_since_last_commit", None)
-        self._append_journal_record(
+        self._journal_sink.append_record(
             name="stt_segment_commit_requested",
             turn_id=turn.id,
             data={
@@ -1775,7 +1976,7 @@ class Session:
         except Exception:
             logger.debug("STT segment commit failed", exc_info=True)
         finally:
-            self._append_journal_record(
+            self._journal_sink.append_record(
                 name="stt_segment_commit_result",
                 turn_id=turn.id,
                 data={
@@ -1837,7 +2038,7 @@ class Session:
                             if not self._stt_pending_segment_futures:
                                 turn.stt_has_uncommitted_audio = False
                             turn.append_stt_segment(stt_event.text, track=stt_event.track)
-                            self._append_journal_record(
+                            self._journal_sink.append_record(
                                 name="stt_segment_final",
                                 turn_id=turn.id,
                                 data={
@@ -2008,66 +2209,6 @@ class Session:
         await self._emit(AgentRequestStarted())
         await self._run_streaming_agent(transcript, token)
 
-    # ── Agent invocation helper ────────────────────────────────
-
-    async def _invoke_agent(self, transcript: str) -> str:
-        """Invoke the basic agent with optional timeout. Returns the response."""
-        turn = self._turn or self._no_turn
-        if self._timeout_config and self._timeout_config.agent_timeout:
-            return await with_agent_timeout(
-                self._agent_stage.execute(transcript, self._run_ctx, turn),
-                timeout=self._timeout_config.agent_timeout,
-                event_bus=self.event_bus,
-            )
-        return await self._agent_stage.execute(transcript, self._run_ctx, turn)
-
-    # ── Basic agent path ───────────────────────────────────────
-
-    async def _run_basic_agent(self, transcript: str, token: CancelToken | None) -> None:
-        """Non-streaming agent path: invoke run(), emit events, synthesize TTS."""
-        turn = self._turn
-        try:
-            agent_response = await self._invoke_agent(transcript)
-        except asyncio.CancelledError:
-            raise
-        except AgentTimeoutError:
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-        except Exception as exc:
-            logger.exception("Agent error")
-            await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-
-        if token and token.is_cancelled:
-            if self._turn is turn:
-                self._reset_turn_state()
-            return
-
-        if self._strip_markdown:
-            original_response = agent_response
-            stripped = strip_markdown(agent_response, normalize_code_spans=True)
-            self._record_markdown_strip(
-                phase="basic_final",
-                original_text=original_response,
-                stripped_text=stripped,
-                turn_id=turn.id if turn is not None else None,
-            )
-            if stripped != original_response:
-                agent_response = stripped
-                self.agent.replace_last_assistant_text(stripped)
-
-        await self._emit(AgentDelta(text=agent_response))
-        await self._emit(AgentFinal(text=agent_response, structured_output=None))
-
-        action_outcome = await self._synthesize_tts(
-            self._prepare_tts_payload(agent_response, is_streaming=False, is_final=True), token
-        )
-        if action_outcome.stop_session:
-            await self.stop()
-
     # ── Streaming agent path ───────────────────────────────────
 
     async def _run_streaming_agent(self, transcript: str, token: CancelToken | None) -> None:
@@ -2082,12 +2223,12 @@ class Session:
         tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
         tts_playback_started = False
         tts_chunks: list[tuple[str, int, bool]] = []
-        tts_action_outcome = _ActionDrainOutcome()
+        tts_should_stop = False
 
         # ── TTS consumer task ──
 
         async def _process_tts() -> None:
-            nonlocal tts_action_outcome
+            nonlocal tts_should_stop
             nonlocal tts_playback_started
             started = False
             try:
@@ -2112,13 +2253,11 @@ class Session:
                     result = await self._tts_synth.synthesize(
                         payload,
                         token,
-                        turn_end_time=turn.end_time,
                         is_active=(
                             None
                             if self._is_gated
                             else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
                         ),
-                        record_latency=turn.first_tts_audio_time is None,
                     )
                     tts_chunks.append(
                         (
@@ -2144,8 +2283,8 @@ class Session:
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 # Drain session actions (end_call, transfer) BEFORE
                 # transitioning to IDLE so no new turn can sneak in.
-                tts_action_outcome = await self._drain_session_actions()
-                if tts_action_outcome.stop_session:
+                tts_should_stop = await self._drain_session_actions()
+                if tts_should_stop:
                     await self._wait_outbound_drain()
                     await self._turn_manager.bot_stopped_speaking()
                 else:
@@ -2168,12 +2307,17 @@ class Session:
         # ── Run agent stream + TTS concurrently ──
 
         agent_result = None
+        system_prefix = self._caller_id_system_message()
 
         async def _run_agent_consumer() -> None:
             nonlocal agent_result
             agent_result = await consume_agent_stream(
                 stream_factory=lambda: self._agent_stage.execute_streaming(
-                    transcript, self._run_ctx, turn, cancel_token=token
+                    transcript,
+                    self._run_ctx,
+                    turn,
+                    cancel_token=token,
+                    system_prefix=system_prefix,
                 ),
                 cancel_token=token,
                 tts_queue=tts_queue,
@@ -2267,7 +2411,7 @@ class Session:
                 turn_id=turn.id,
             )
 
-        if tts_action_outcome.stop_session:
+        if tts_should_stop:
             await self.stop()
             return
 
@@ -2298,11 +2442,13 @@ class Session:
 
     # ── TTS synthesis helper ───────────────────────────────────
 
-    async def _synthesize_tts(
-        self, payload: TTSInput | str, token: CancelToken | None
-    ) -> _ActionDrainOutcome:
-        """Synthesize TTS for a complete payload and emit audio events."""
-        action_outcome = _ActionDrainOutcome()
+    async def _synthesize_tts(self, payload: TTSInput | str, token: CancelToken | None) -> bool:
+        """Synthesize TTS for a complete payload and emit audio events.
+
+        Returns ``True`` if a drained session action signalled that the
+        session should stop.
+        """
+        should_stop = False
         if isinstance(payload, str):
             payload = self._prepare_tts_payload(payload, is_streaming=False, is_final=True)
         turn = self._turn
@@ -2313,7 +2459,6 @@ class Session:
             result = await self._tts_synth.synthesize(
                 payload,
                 token,
-                turn_end_time=turn.end_time if turn else None,
                 is_active=(
                     None
                     if gated
@@ -2333,8 +2478,8 @@ class Session:
             ):
                 # Drain session actions (end_call, transfer) BEFORE
                 # transitioning to IDLE so no new turn can sneak in.
-                action_outcome = await self._drain_session_actions()
-                if action_outcome.stop_session:
+                should_stop = await self._drain_session_actions()
+                if should_stop:
                     await self._wait_outbound_drain()
                     await self._turn_manager.bot_stopped_speaking()
                 else:
@@ -2352,7 +2497,7 @@ class Session:
                 # and send playback marks.
                 self._auto_turn_speech_frames = 0
                 self._turn_manager.reset()
-        return action_outcome
+        return should_stop
 
     # ── Internal helpers ───────────────────────────────────────
 
@@ -2385,37 +2530,18 @@ class Session:
             replayed_chunk = self._replay_chunks_pending > 0
             turn = self._turn
             try:
+                self._stamp_outbound_chunk(chunk, turn)
                 delivered = await self._transport_stage.execute(
                     chunk, self._run_ctx, turn or self._no_turn
                 )
-                if delivered:
+                if delivered and not self._transport_reports_audio_delivery:
                     # Stamp turn_id from self._turn at dequeue time (captured
                     # before send_audio awaits) so a slow send under
                     # backpressure doesn't inherit a newer turn's id.
+                    await self._handle_audio_delivery(chunk, turn)
                     await self._emit(
                         AudioOut(chunk=chunk, turn_id=turn.id if turn is not None else None)
                     )
-                    if self._enable_aec:
-                        self.echo_canceller.feed_reference(chunk)
-                    sent_size = len(chunk.data)
-                    if turn:
-                        turn.record_audio_sent(sent_size, chunk.duration_ms)
-                        if (
-                            sent_size > 0
-                            and self._playback_ack_transport is not None
-                            and turn.bytes_since_last_mark >= self._playback_mark_bytes_interval
-                        ):
-                            turn.bytes_since_last_mark = 0
-                            await self._send_playback_mark(turn)
-                        elif (
-                            sent_size > 0
-                            and turn.bytes_since_last_mark > 0
-                            and self._playback_ack_transport is not None
-                            and self._turn_manager.state != TurnManagerState.BOT_SPEAKING
-                            and self._outbound_queue.empty()
-                        ):
-                            turn.bytes_since_last_mark = 0
-                            await self._send_playback_mark(turn)
             except Exception:
                 logger.exception("Failed to send audio to transport")
             finally:
@@ -2430,6 +2556,41 @@ class Session:
         # Send a final mark for any trailing bytes
         turn = self._turn
         if turn and turn.bytes_since_last_mark > 0 and self._playback_ack_transport is not None:
+            turn.bytes_since_last_mark = 0
+            await self._send_playback_mark(turn)
+
+    def _stamp_outbound_chunk(self, chunk: AudioChunk, turn: TurnContext | None) -> None:
+        """Attach turn ownership so buffered transports can report later delivery."""
+        try:
+            setattr(chunk, "_easycat_turn_id", turn.id if turn is not None else None)
+            setattr(chunk, "_easycat_turn_ref", turn)
+        except Exception:
+            logger.debug("Failed to stamp outbound audio chunk metadata", exc_info=True)
+
+    async def _handle_audio_delivery(
+        self,
+        chunk: AudioChunk,
+        turn: TurnContext | None,
+    ) -> None:
+        if self._enable_aec:
+            self.echo_canceller.feed_reference(chunk)
+
+        sent_size = len(chunk.data)
+        if turn is None:
+            return
+
+        turn.record_audio_sent(sent_size, chunk.duration_ms)
+        if sent_size <= 0 or self._playback_ack_transport is None:
+            return
+
+        if turn.bytes_since_last_mark >= self._playback_mark_bytes_interval:
+            turn.bytes_since_last_mark = 0
+            await self._send_playback_mark(turn)
+        elif (
+            turn.bytes_since_last_mark > 0
+            and self._turn_manager.state != TurnManagerState.BOT_SPEAKING
+            and self._outbound_queue.empty()
+        ):
             turn.bytes_since_last_mark = 0
             await self._send_playback_mark(turn)
 
@@ -2463,6 +2624,17 @@ class Session:
         if turn.playback_ack_log and acked_bytes < turn.playback_ack_log[-1][1]:
             acked_bytes = turn.playback_ack_log[-1][1]
         turn.playback_ack_log.append((event.timestamp, acked_bytes))
+
+    async def _on_transport_audio_delivered(self, event: TransportAudioDelivered) -> None:
+        """Finalize accounting for buffered transports at their no-clear point."""
+        turn = event.turn_ref if isinstance(event.turn_ref, TurnContext) else None
+        if turn is None and self._turn is not None:
+            if event.turn_id is None or self._turn.id == event.turn_id:
+                turn = self._turn
+
+        turn_id = event.turn_id or (turn.id if turn is not None else None)
+        await self._handle_audio_delivery(event.chunk, turn)
+        await self._emit(AudioOut(chunk=event.chunk, turn_id=turn_id))
 
     def _maybe_attach_event_bus(self, provider: Any) -> None:
         """Attach the session EventBus to provider configs that support it."""
@@ -2546,8 +2718,13 @@ class Session:
             # stamp records with the right turn_id.
             text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
             accumulated = ""
+            system_prefix = self._caller_id_system_message()
             async for event in self._agent_stage.execute_streaming(
-                text, self._run_ctx, text_turn, cancel_token=cancel_token
+                text,
+                self._run_ctx,
+                text_turn,
+                cancel_token=cancel_token,
+                system_prefix=system_prefix,
             ):
                 kind = getattr(event, "kind", None)
                 if kind is None:
@@ -2606,10 +2783,9 @@ class Session:
                 )
             )
             if self._journal:
-                self._journal.append(
+                self._journal_sink.append_record(
                     kind=JournalRecordKind.METRIC,
                     name="text_turn_latency_ms",
-                    session_id=self.session_id,
                     turn_id=turn_id,
                     data={"value": elapsed_ms},
                 )
@@ -2629,14 +2805,9 @@ class Session:
         return response
 
     async def _cancel_stt(self) -> None:
-        self._cancel_scheduled_stt_segment_commit()
-        commit_task = self._stt_segment_commit_task
-        if commit_task is not None and not commit_task.done():
-            commit_task.cancel()
-            try:
-                await commit_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        await self._runtime_scope.cancel_and_drain("stt_pause_commit")
+        await self._runtime_scope.cancel_and_drain("stt_segment_commit")
+        self._stt_pause_commit_task = None
         self._stt_segment_commit_task = None
         try:
             await self.stt.end_stream()

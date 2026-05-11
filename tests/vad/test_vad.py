@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from easycat import vad as vad_module
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk
 from easycat.events import VADStartSpeaking, VADStopSpeaking
 from easycat.vad import (
@@ -18,6 +17,12 @@ from easycat.vad import (
     VADConfig,
     create_vad,
 )
+from easycat.vad import factory as vad_factory_module
+from easycat.vad import funasr as vad_funasr_module
+from easycat.vad import krisp as vad_krisp_module
+from easycat.vad import silero as vad_silero_module
+from easycat.vad import ten as vad_ten_module
+from easycat.vad._base import _VADBase
 
 
 def _make_chunk(value: int = 0, n_samples: int = 512) -> AudioChunk:
@@ -31,37 +36,37 @@ def _make_chunk(value: int = 0, n_samples: int = 512) -> AudioChunk:
 
 def test_silero_backend_candidates_prefer_onnx_on_arm64(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("EASYCAT_SILERO_BACKEND", raising=False)
-    monkeypatch.setattr(vad_module.platform, "machine", lambda: "aarch64")
-    assert vad_module._silero_backend_candidates() == ("onnx",)
+    monkeypatch.setattr(vad_silero_module.platform, "machine", lambda: "aarch64")
+    assert vad_silero_module._silero_backend_candidates() == ("onnx",)
 
 
 def test_silero_backend_candidates_prefer_torch_elsewhere(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("EASYCAT_SILERO_BACKEND", raising=False)
-    monkeypatch.setattr(vad_module.platform, "machine", lambda: "x86_64")
-    assert vad_module._silero_backend_candidates() == ("torch", "onnx")
+    monkeypatch.setattr(vad_silero_module.platform, "machine", lambda: "x86_64")
+    assert vad_silero_module._silero_backend_candidates() == ("torch", "onnx")
 
 
 def test_silero_backend_candidates_respect_override(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("EASYCAT_SILERO_BACKEND", "torch")
-    monkeypatch.setattr(vad_module.platform, "machine", lambda: "aarch64")
-    assert vad_module._silero_backend_candidates() == ("torch",)
+    monkeypatch.setattr(vad_silero_module.platform, "machine", lambda: "aarch64")
+    assert vad_silero_module._silero_backend_candidates() == ("torch",)
 
 
 def test_silero_onnx_model_path_uses_bundled_asset():
-    model_path = vad_module._silero_onnx_model_path()
+    model_path = vad_silero_module._silero_onnx_model_path()
     assert model_path.endswith("src/easycat/models/silero_vad.onnx")
 
 
 def test_silero_fails_when_only_torch_backend_is_allowed(monkeypatch: pytest.MonkeyPatch):
     """SileroVAD should raise RuntimeError if torch is unavailable and ONNX is disabled."""
-    monkeypatch.setattr(vad_module, "_silero_backend_candidates", lambda: ("torch",))
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("torch",))
 
     def _require_module(module_name: str, **_: object) -> object:
         if module_name == "torch":
             raise ImportError("Silero VAD requires the torch package.")
         raise AssertionError(f"unexpected module load: {module_name}")
 
-    monkeypatch.setattr(vad_module, "require_module", _require_module)
+    monkeypatch.setattr(vad_silero_module, "require_module", _require_module)
 
     with pytest.raises(RuntimeError, match="torch|PyTorch|Silero"):
         SileroVAD()
@@ -96,8 +101,8 @@ async def test_silero_process_mocked_torch(monkeypatch: pytest.MonkeyPatch):
             return mock_torch
         raise AssertionError(f"unexpected module load: {module_name}")
 
-    monkeypatch.setattr(vad_module, "_silero_backend_candidates", lambda: ("torch",))
-    monkeypatch.setattr(vad_module, "require_module", _require_module)
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("torch",))
+    monkeypatch.setattr(vad_silero_module, "require_module", _require_module)
 
     vad = SileroVAD()
     vad._min_speech_duration_ms = 0
@@ -135,7 +140,7 @@ async def test_silero_process_mocked_onnx(monkeypatch: pytest.MonkeyPatch):
         self._backend = "onnx"
         self._torch = None
 
-    monkeypatch.setattr(vad_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
     monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
 
     vad = SileroVAD()
@@ -153,7 +158,7 @@ async def test_silero_process_mocked_onnx(monkeypatch: pytest.MonkeyPatch):
 
 def test_silero_falls_back_to_onnx_after_torch_failure(monkeypatch: pytest.MonkeyPatch):
     """SileroVAD should use ONNX if the torch loader fails on safe architectures."""
-    monkeypatch.setattr(vad_module, "_silero_backend_candidates", lambda: ("torch", "onnx"))
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("torch", "onnx"))
 
     def _load_torch_model(self: SileroVAD) -> None:
         raise RuntimeError("torch loader failed")
@@ -180,7 +185,7 @@ def test_krisp_vad_fails_without_sdk(monkeypatch: pytest.MonkeyPatch):
         raise ImportError("Krisp VAD requires krisp_audio")
 
     monkeypatch.setattr(
-        vad_module,
+        vad_krisp_module,
         "require_module",
         _require_module,
     )
@@ -229,7 +234,7 @@ def test_ten_vad_fails_without_sdk(monkeypatch: pytest.MonkeyPatch):
             return types.SimpleNamespace()
         raise AssertionError(f"unexpected module load: {module_name}")
 
-    monkeypatch.setattr(vad_module, "require_module", _require_module)
+    monkeypatch.setattr(vad_ten_module, "require_module", _require_module)
     with pytest.raises(RuntimeError, match="TEN VAD|ten_vad"):
         TenVAD()
 
@@ -286,9 +291,9 @@ def test_funasr_vad_fails_without_sdk(monkeypatch: pytest.MonkeyPatch):
             return object()
         raise AssertionError(f"unexpected module load: {module_name}")
 
-    monkeypatch.setattr(vad_module, "require_module", _require_module)
+    monkeypatch.setattr(vad_funasr_module, "require_module", _require_module)
     monkeypatch.setattr(
-        vad_module,
+        vad_funasr_module,
         "find_spec",
         lambda name: None if name == "funasr_onnx" else None,
     )
@@ -403,7 +408,7 @@ async def test_funasr_vad_resamples_8k_input(monkeypatch: pytest.MonkeyPatch):
         return _make_chunk(0)
 
     monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
-    monkeypatch.setattr(vad_module, "resample_chunk", _resample_chunk)
+    monkeypatch.setattr(vad_funasr_module, "resample_chunk", _resample_chunk)
 
     vad = FunASROnnxVAD(chunk_size_ms=32)
     chunk_8k = AudioChunk(data=bytes(256 * 2), format=PCM16_MONO_8K)
@@ -461,9 +466,9 @@ def test_resolve_funasr_model_dir_uses_bundled_assets(
     for name in ("model.onnx", "config.yaml", "am.mvn"):
         (bundled / name).write_bytes(b"x")
 
-    monkeypatch.setattr(vad_module, "_FUNASR_BUNDLED_MODEL_DIR", bundled)
+    monkeypatch.setattr(vad_funasr_module, "_FUNASR_BUNDLED_MODEL_DIR", bundled)
 
-    resolved = vad_module._resolve_funasr_model_dir(vad_module._FUNASR_DEFAULT_MODEL)
+    resolved = vad_funasr_module._resolve_funasr_model_dir(vad_funasr_module._FUNASR_DEFAULT_MODEL)
     assert resolved == str(bundled)
 
 
@@ -526,6 +531,71 @@ async def test_krisp_vad_configure():
 # ── Factory tests ────────────────────────────────────────────────────
 
 
+def test_vad_config_rejects_unknown_backend():
+    """VADConfig should reject typo backend strings before probing dependencies."""
+    with pytest.raises(ValueError, match="Unknown VAD backend 'silreo'"):
+        VADConfig(backend="silreo")
+
+
+def test_vad_factory_revalidates_mutated_backend():
+    """Factory should reject configs mutated after dataclass construction."""
+    config = VADConfig()
+    config.backend = "silreo"  # type: ignore[assignment]
+
+    with pytest.raises(ValueError, match="Unknown VAD backend 'silreo'"):
+        create_vad(config)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("min_speech_duration_ms", -1, "min_speech_duration_ms must be non-negative"),
+        ("min_silence_duration_ms", -1, "min_silence_duration_ms must be non-negative"),
+        ("pre_roll_ms", -1, "pre_roll_ms must be non-negative"),
+        ("post_roll_ms", -1, "post_roll_ms must be non-negative"),
+        ("min_speech_duration_ms", float("nan"), "min_speech_duration_ms"),
+        ("min_silence_duration_ms", float("inf"), "min_silence_duration_ms"),
+        ("pre_roll_ms", float("-inf"), "pre_roll_ms"),
+        ("sensitivity", -0.1, "sensitivity must be between 0 and 1"),
+        ("sensitivity", 1.1, "sensitivity must be between 0 and 1"),
+        ("sensitivity", float("nan"), "sensitivity must be a number between 0 and 1"),
+        ("sensitivity", float("inf"), "sensitivity must be a number between 0 and 1"),
+        ("funasr_chunk_size_ms", 0, "funasr_chunk_size_ms must be a positive integer"),
+        (
+            "funasr_intra_op_num_threads",
+            0,
+            "funasr_intra_op_num_threads must be a positive integer",
+        ),
+    ],
+)
+def test_vad_config_validates_numeric_knobs(field: str, value: object, message: str):
+    kwargs = {field: value}
+    with pytest.raises(ValueError, match=message):
+        VADConfig(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"min_speech_duration_ms": -1}, "min_speech_duration_ms must be non-negative"),
+        ({"min_silence_duration_ms": -1}, "min_silence_duration_ms must be non-negative"),
+        ({"pre_roll_ms": -1}, "pre_roll_ms must be non-negative"),
+        ({"post_roll_ms": -1}, "post_roll_ms must be non-negative"),
+        ({"min_speech_duration_ms": float("nan")}, "min_speech_duration_ms"),
+        ({"min_silence_duration_ms": float("inf")}, "min_silence_duration_ms"),
+        ({"post_roll_ms": float("-inf")}, "post_roll_ms"),
+        ({"sensitivity": -0.1}, "sensitivity must be between 0 and 1"),
+        ({"sensitivity": 1.1}, "sensitivity must be between 0 and 1"),
+        ({"sensitivity": float("nan")}, "sensitivity must be a number between 0 and 1"),
+        ({"sensitivity": float("inf")}, "sensitivity must be a number between 0 and 1"),
+    ],
+)
+def test_vad_base_configure_validates_numeric_knobs(kwargs: dict[str, object], message: str):
+    vad = _VADBase()
+    with pytest.raises(ValueError, match=message):
+        vad.configure(**kwargs)
+
+
 def test_vad_factory_no_backends(monkeypatch: pytest.MonkeyPatch):
     """Factory should raise RuntimeError when no backends are available."""
 
@@ -545,10 +615,10 @@ def test_vad_factory_no_backends(monkeypatch: pytest.MonkeyPatch):
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             raise RuntimeError("silero missing")
 
-    monkeypatch.setattr(vad_module, "KrispVAD", _BrokenKrisp)
-    monkeypatch.setattr(vad_module, "TenVAD", _BrokenTen)
-    monkeypatch.setattr(vad_module, "FunASROnnxVAD", _BrokenFunASR)
-    monkeypatch.setattr(vad_module, "SileroVAD", _BrokenSilero)
+    monkeypatch.setattr(vad_factory_module, "KrispVAD", _BrokenKrisp)
+    monkeypatch.setattr(vad_factory_module, "TenVAD", _BrokenTen)
+    monkeypatch.setattr(vad_factory_module, "FunASROnnxVAD", _BrokenFunASR)
+    monkeypatch.setattr(vad_factory_module, "SileroVAD", _BrokenSilero)
 
     with pytest.raises(RuntimeError, match="No VAD backend"):
         create_vad(VADConfig(backend="auto"))
@@ -561,7 +631,7 @@ def test_vad_factory_explicit_silero_fails(monkeypatch: pytest.MonkeyPatch):
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             raise RuntimeError("Silero missing")
 
-    monkeypatch.setattr(vad_module, "SileroVAD", _BrokenSilero)
+    monkeypatch.setattr(vad_factory_module, "SileroVAD", _BrokenSilero)
     with pytest.raises(RuntimeError, match="torch|PyTorch|Silero"):
         create_vad(VADConfig(backend="silero"))
 
@@ -579,7 +649,7 @@ def test_vad_factory_explicit_ten_fails(monkeypatch: pytest.MonkeyPatch):
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             raise RuntimeError("TEN VAD missing")
 
-    monkeypatch.setattr(vad_module, "TenVAD", _BrokenTen)
+    monkeypatch.setattr(vad_factory_module, "TenVAD", _BrokenTen)
     with pytest.raises(RuntimeError, match="TEN VAD|ten_vad"):
         create_vad(VADConfig(backend="ten"))
 
@@ -594,7 +664,7 @@ def test_vad_factory_explicit_funasr(monkeypatch: pytest.MonkeyPatch):
         def configure(self, **_kwargs: object) -> None:
             pass
 
-    monkeypatch.setattr(vad_module, "FunASROnnxVAD", _FakeFunASR)
+    monkeypatch.setattr(vad_factory_module, "FunASROnnxVAD", _FakeFunASR)
     vad = create_vad(
         VADConfig(
             backend="funasr",
@@ -627,7 +697,7 @@ def test_vad_factory_silero_preferred(monkeypatch: pytest.MonkeyPatch):
         def configure(self, **_kwargs: object) -> None:
             pass
 
-    monkeypatch.setattr(vad_module, "SileroVAD", _FakeSilero)
+    monkeypatch.setattr(vad_factory_module, "SileroVAD", _FakeSilero)
     vad = create_vad(VADConfig(backend="auto"))
     assert isinstance(vad, _FakeSilero)
 
@@ -646,14 +716,14 @@ def test_vad_factory_funasr_fallback_before_ten(monkeypatch: pytest.MonkeyPatch)
         def configure(self, **_kwargs: object) -> None:
             pass
 
-    monkeypatch.setattr(vad_module, "SileroVAD", _BrokenSilero)
-    monkeypatch.setattr(vad_module, "FunASROnnxVAD", _FakeFunASR)
+    monkeypatch.setattr(vad_factory_module, "SileroVAD", _BrokenSilero)
+    monkeypatch.setattr(vad_factory_module, "FunASROnnxVAD", _FakeFunASR)
 
     class _BrokenTen:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             raise AssertionError("TEN should not be tried before FunASR")
 
-    monkeypatch.setattr(vad_module, "TenVAD", _BrokenTen)
+    monkeypatch.setattr(vad_factory_module, "TenVAD", _BrokenTen)
 
     vad = create_vad(VADConfig(backend="auto"))
     assert isinstance(vad, _FakeFunASR)
@@ -670,8 +740,8 @@ def test_vad_factory_ten_fallback_after_funasr(monkeypatch: pytest.MonkeyPatch):
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             raise RuntimeError("funasr missing")
 
-    monkeypatch.setattr(vad_module, "SileroVAD", _BrokenSilero)
-    monkeypatch.setattr(vad_module, "FunASROnnxVAD", _BrokenFunASR)
+    monkeypatch.setattr(vad_factory_module, "SileroVAD", _BrokenSilero)
+    monkeypatch.setattr(vad_factory_module, "FunASROnnxVAD", _BrokenFunASR)
 
     mock_ten_vad = MagicMock()
     mock_ten_vad.TenVad.return_value = MagicMock()

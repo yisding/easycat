@@ -30,6 +30,7 @@ from easycat.runtime.records import (
     RecoveredSessionMarker,
     TimingInfo,
 )
+from easycat.runtime.scope import RuntimeScope
 
 __all__ = [
     "ArtifactStore",
@@ -53,6 +54,7 @@ __all__ = [
     "JournalRecordKind",
     "JournalView",
     "RecoveredSessionMarker",
+    "RuntimeScope",
     "SqliteJournal",
     "TimingInfo",
     "create_journal",

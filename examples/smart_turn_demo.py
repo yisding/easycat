@@ -1,50 +1,25 @@
-"""Smart-turn endpoint detection demo.
+"""Smart-turn endpoint detection — finish turns early via ONNX classifier.
 
-By default ``TurnManager`` waits ``end_of_turn_silence_ms`` (1 second)
-of silence before declaring the turn over.  Smart-turn classifies the
-captured audio with a small ONNX model (~8 MB Whisper-Tiny) and ends
-the turn early when it is confident the user is done — typically
-shaving a few hundred ms off the response time.
+By default ``TurnManager`` waits ``end_of_turn_silence_ms`` (1 s) of silence
+before ending the turn. Smart-turn classifies captured audio with a ~8 MB
+Whisper-Tiny ONNX model and ends early when confident.
 
-Setup:
-  export OPENAI_API_KEY="..."
-  uv sync --extra quickstart --extra smart-turn
-  uv run python examples/smart_turn_demo.py
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra smart-turn
+Run:   uv run python examples/smart_turn_demo.py
 """
 
-from __future__ import annotations
-
-import asyncio
-
-from easycat import (
-    EasyCatConfig,
-    LocalTransportConfig,
-    SmartTurnConfig,
-    attach_runtime_feedback,
-    create_session,
-    require_env,
-    wait_for_shutdown_signal,
-)
-
-
-async def main() -> None:
-    api_key = require_env("OPENAI_API_KEY")
+try:
     from agents import Agent  # type: ignore[import-untyped]
+except ImportError as exc:
+    raise SystemExit(
+        "openai-agents is required. Install with: uv sync --extra quickstart"
+    ) from exc
 
-    agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
+from easycat import EasyConfig, SmartTurnConfig, run
 
-    config = EasyCatConfig(
-        openai_api_key=api_key,
-        transport=LocalTransportConfig(),
+run(
+    EasyConfig.mic(
+        agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
         smart_turn=SmartTurnConfig(enabled=True, threshold=0.5),
-        agent=agent,
     )
-    session = create_session(config)
-    attach_runtime_feedback(session)
-
-    await session.start()
-    await wait_for_shutdown_signal(session)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+)

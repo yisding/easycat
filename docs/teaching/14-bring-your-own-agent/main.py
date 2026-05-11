@@ -1,6 +1,6 @@
 """Chapter 14 — bring your own agent via GenericWorkflowBridge.
 
-Chapter 13 handed ``agents.Agent(...)`` to ``EasyCatConfig(agent=...)``.
+Chapter 13 handed ``agents.Agent(...)`` to ``EasyConfig(agent=...)``.
 Under the hood, ``create_session`` wrapped it in an
 ``OpenAIAgentsBridge`` so the runtime could drive it. This chapter
 drops the OpenAI Agents SDK and plugs in a plain async class — the
@@ -34,9 +34,7 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from easycat import (
-    CoreSessionActionExecutor,
-    EasyCatConfig,
-    EndCallAction,
+    EasyConfig,
     LocalTransportConfig,
     MarkdownStripProcessor,
     PauseProcessor,
@@ -48,7 +46,7 @@ from easycat import (
 )
 from easycat.cancel import CancelToken
 from easycat.integrations.agents import GenericWorkflowBridge
-from easycat.session.actions import SessionActions
+from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
 
 MODEL = "gpt-4o-mini"
 RUNS_DIR = Path(__file__).parent / "runs"
@@ -132,7 +130,7 @@ async def main() -> None:
         PauseProcessor(pattern=r"\b\d{3}[-. ]?\d{3}[-. ]?\d{4}\b", pause_ms=120),
     ]
 
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key=os.environ["OPENAI_API_KEY"],
         agent=bridge,  # ← the whole point of this chapter
         transport=LocalTransportConfig(),

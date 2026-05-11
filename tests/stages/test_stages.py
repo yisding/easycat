@@ -7,9 +7,7 @@ import pytest
 from easycat.cancel import CancelToken
 from easycat.runtime.context import RunContext
 from easycat.runtime.journal import InMemoryRingBuffer
-from easycat.session._interruption_controller import InterruptionController
 from easycat.session._turn_context import TurnContext
-from easycat.session._voice_delivery_ledger import VoiceDeliveryLedger
 from easycat.stages import (
     NONDETERMINISTIC_FIELDS,
     AgentStage,
@@ -24,7 +22,6 @@ from easycat.stages import (
     Stage,
     StageStateSnapshot,
     STTStage,
-    TelephonyStage,
     TransportStage,
     TTSStage,
     TurnStage,
@@ -71,7 +68,7 @@ class _StubAgent:
 
 class _StubTransport:
     async def send_audio(self, chunk):
-        pass
+        return True
 
 
 class _StubNoiseReducer:
@@ -96,10 +93,6 @@ class _StubVAD:
 class _StubSmartTurn:
     async def detect(self, audio_chunks):
         return {"prediction": 1, "probability": 0.95}
-
-
-class _StubTelephony:
-    pass
 
 
 # ── RunContext ───────────────────────────────────────────────────
@@ -273,7 +266,6 @@ _STAGE_CLASSES = [
     (TransportStage, _StubTransport),
     (VADStage, _StubVAD),
     (TurnStage, _StubSmartTurn),
-    (TelephonyStage, _StubTelephony),
 ]
 
 
@@ -467,14 +459,6 @@ class TestStageExecuteRecording:
         result = await stage.execute("hello", ctx, turn)
         assert result == "reply:hello"
 
-    async def test_transport_stage_returns_true_when_send_audio_returns_none(self):
-        """Transports that return None (backward-compat) are treated as delivered."""
-        ctx = _make_ctx(journal=None)
-        turn = _make_turn()
-        stage = TransportStage(_StubTransport())
-        delivered = await stage.execute(b"chunk", ctx, turn)
-        assert delivered is True
-
     async def test_transport_stage_returns_true_when_send_audio_returns_true(self):
         class _DeliveringTransport:
             async def send_audio(self, chunk):
@@ -544,89 +528,6 @@ class TestReplayDecision:
         assert complete.data.get("prediction") == 1
         assert complete.data.get("probability") == pytest.approx(0.87)
         assert "unrelated" not in complete.data
-
-
-# ── InterruptionController ───────────────────────────────────────
-
-
-class TestInterruptionController:
-    def test_basic_flow(self):
-        journal = InMemoryRingBuffer(capacity=100)
-        ctrl = InterruptionController(journal=journal)
-        ctrl.signal_interrupt("barge_in", delivered_text="Hello")
-        records = journal.read()
-        assert any(r.name == "interruption_signal" for r in records)
-        assert any(r.data.get("cause") == "barge_in" for r in records)
-
-    def test_no_journal(self):
-        ctrl = InterruptionController()
-        # Should not raise even without a journal
-        ctrl.signal_interrupt("timeout")
-
-    def test_with_bridge(self):
-        class _MockBridge:
-            applied = False
-
-            def apply_interruption(self, *, delivered_text, mode, recorder=None, **kwargs):
-                self.applied = True
-
-        bridge = _MockBridge()
-        ctrl = InterruptionController()
-        ctrl.signal_interrupt("barge_in", bridge=bridge, delivered_text="Hi")
-        assert bridge.applied
-
-    def test_bridge_failure_sets_downgrade(self):
-        class _FailBridge:
-            def apply_interruption(self, **kwargs):
-                raise RuntimeError("fail")
-
-        ctrl = InterruptionController()
-        ctrl.signal_interrupt("barge_in", bridge=_FailBridge())
-        assert ctrl._pending_downgrade
-
-    def test_text_interrupt(self):
-        journal = InMemoryRingBuffer(capacity=100)
-        ctrl = InterruptionController(journal=journal)
-        ctrl.signal_text_interrupt("new input")
-        records = journal.read()
-        assert any("text_interrupt" in r.data.get("cause", "") for r in records)
-
-
-# ── VoiceDeliveryLedger ──────────────────────────────────────────
-
-
-class TestVoiceDeliveryLedger:
-    def test_voice_mode(self):
-        ledger = VoiceDeliveryLedger()
-        ledger.record_agent_text("Hello world")
-        # In voice mode, agent text is NOT auto-delivered
-        assert ledger.delivered_text == ""
-
-    def test_text_mode(self):
-        ledger = VoiceDeliveryLedger(text_mode=True)
-        ledger.record_agent_text("Hello")
-        ledger.record_agent_text(" world")
-        assert ledger.delivered_text == "Hello world"
-
-    def test_mark_delivered(self):
-        ledger = VoiceDeliveryLedger()
-        ledger.record_agent_text("Full response")
-        ledger.mark_delivered("Full")
-        assert ledger.delivered_text == "Full"
-
-    def test_record_spoken_text(self):
-        ledger = VoiceDeliveryLedger()
-        ledger.record_spoken_text("spoken part")
-        assert ledger._spoken_text == "spoken part"
-
-    def test_reset(self):
-        ledger = VoiceDeliveryLedger(text_mode=True)
-        ledger.record_agent_text("Hello")
-        ledger.record_spoken_text("spoken")
-        ledger.reset()
-        assert ledger.delivered_text == ""
-        assert ledger._raw_agent_text == ""
-        assert ledger._spoken_text == ""
 
 
 # ── Text mode (create_text_session / send_text) ──────────────────

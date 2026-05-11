@@ -15,7 +15,7 @@ from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_
 class MockWebSocket:
     """Mock WebSocket connection for Cartesia STT tests."""
 
-    def __init__(self, messages: list[str] | None = None) -> None:
+    def __init__(self, messages: list[str | bytes] | None = None) -> None:
         self.messages = messages or []
         self.sent: list[bytes | str] = []
         self._closed = False
@@ -30,7 +30,7 @@ class MockWebSocket:
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> str:
+    async def __anext__(self) -> str | bytes:
         if self._iter_index >= len(self.messages):
             raise StopAsyncIteration
         msg = self.messages[self._iter_index]
@@ -76,7 +76,7 @@ def _error_msg(code: str = "invalid_input", status_code: int = 400) -> str:
 
 
 def _make_cartesia_stt(
-    messages: list[str] | None = None,
+    messages: list[str | bytes] | None = None,
     *,
     event_bus=None,
     language: str = "en",
@@ -198,6 +198,18 @@ async def test_cartesia_includes_word_timestamps():
     assert events[0].word_timestamps[1].end == 0.7
 
 
+async def test_cartesia_accepts_text_word_timestamp_key():
+    words = [{"text": "hello", "start": 0.0, "end": 0.3}]
+    messages = [_transcript_msg("hello", is_final=True, words=words)]
+    stt, _ = _make_cartesia_stt(messages)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert events[0].word_timestamps is not None
+    assert events[0].word_timestamps[0].word == "hello"
+
+
 async def test_cartesia_language_from_config_when_missing_in_msg():
     messages = [_transcript_msg("bonjour", is_final=True)]
     stt, _ = _make_cartesia_stt(messages, language="fr")
@@ -247,6 +259,7 @@ async def test_cartesia_ignores_unknown_message_types():
 
 async def test_cartesia_ignores_malformed_json():
     messages = [
+        b"\x00\x01",
         "not valid json",
         _transcript_msg("hello", is_final=True),
     ]

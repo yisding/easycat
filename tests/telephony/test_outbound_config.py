@@ -2,19 +2,53 @@
 
 from __future__ import annotations
 
-from easycat.config import OutboundCallConfig, TelephonyConfig
+import pytest
+
+from easycat.config import (
+    OutboundCallConfig,
+    TelephonyConfig,
+    VoicemailDetectionConfig,
+    _create_telephony_helpers,
+)
+from easycat.events import CallFailed, EventBus
+from easycat.telephony.call_state import OutboundCallStateMachine
+from easycat.telephony.compliance import DNCList
+from easycat.telephony.number_health import CallDispositionTracker
+
+
+class TestVoicemailDetectionConfig:
+    def test_defaults_map_to_twilio(self) -> None:
+        cfg = VoicemailDetectionConfig()
+        assert cfg.mode == "detect_end_of_greeting"
+        assert cfg.async_mode is True
+        assert cfg.detection_timeout_s == 30
+        assert cfg.speech_threshold_ms == 2400
+        assert cfg.speech_end_threshold_ms == 1200
+        assert cfg.silence_timeout_ms == 5000
+        params = cfg.to_twilio_params()
+        assert params["amd_mode"] == "DetectMessageEnd"
+        assert params["async_amd"] is True
+        assert params["amd_timeout"] == 30
+        assert params["speech_threshold"] == 2400
+        assert params["speech_end_threshold"] == 1200
+        assert params["silence_timeout"] == 5000
+
+    def test_detect_mode_maps_to_enable(self) -> None:
+        cfg = VoicemailDetectionConfig(mode="detect")
+        assert cfg.to_twilio_params()["amd_mode"] == "Enable"
 
 
 class TestOutboundCallConfig:
     def test_defaults(self) -> None:
         cfg = OutboundCallConfig(from_number="+1555")
         assert cfg.from_number == "+1555"
-        assert cfg.amd_mode == "DetectMessageEnd"
-        assert cfg.async_amd is True
-        assert cfg.amd_timeout == 30
-        assert cfg.speech_threshold == 2400
-        assert cfg.speech_end_threshold == 1200
-        assert cfg.silence_timeout == 5000
+        # Voicemail-detection defaults live on the nested config now.
+        assert cfg.voicemail_detection.mode == "detect_end_of_greeting"
+        assert cfg.voicemail_detection.async_mode is True
+        assert cfg.voicemail_detection.detection_timeout_s == 30
+        assert cfg.voicemail_detection.speech_threshold_ms == 2400
+        assert cfg.voicemail_detection.speech_end_threshold_ms == 1200
+        assert cfg.voicemail_detection.silence_timeout_ms == 5000
         assert cfg.enable_screening_detection is True
         assert cfg.screening_response == ""
         assert cfg.screening_use_agent is False
@@ -31,14 +65,17 @@ class TestOutboundCallConfig:
         async def _dummy_agent(ctx: dict) -> dict:
             return {"action": "wait"}
 
+        vm = VoicemailDetectionConfig(
+            mode="detect",
+            async_mode=False,
+            detection_timeout_s=15,
+            speech_threshold_ms=3000,
+            speech_end_threshold_ms=2000,
+            silence_timeout_ms=8000,
+        )
         cfg = OutboundCallConfig(
             from_number="+1999",
-            amd_mode="Enable",
-            async_amd=False,
-            amd_timeout=15,
-            speech_threshold=3000,
-            speech_end_threshold=2000,
-            silence_timeout=8000,
+            voicemail_detection=vm,
             enable_screening_detection=False,
             screening_response="Hi I'm Sarah",
             screening_use_agent=True,
@@ -54,12 +91,12 @@ class TestOutboundCallConfig:
             twilio_account_sid="AC123",
             twilio_auth_token="token",
         )
-        assert cfg.amd_mode == "Enable"
-        assert cfg.async_amd is False
-        assert cfg.amd_timeout == 15
-        assert cfg.speech_threshold == 3000
-        assert cfg.speech_end_threshold == 2000
-        assert cfg.silence_timeout == 8000
+        assert cfg.voicemail_detection is vm
+        assert cfg.voicemail_detection.mode == "detect"
+        assert cfg.voicemail_detection.detection_timeout_s == 15
+        assert cfg.voicemail_detection.speech_threshold_ms == 3000
+        assert cfg.voicemail_detection.speech_end_threshold_ms == 2000
+        assert cfg.voicemail_detection.silence_timeout_ms == 8000
         assert cfg.enable_screening_detection is False
         assert cfg.screening_response == "Hi I'm Sarah"
         assert cfg.screening_use_agent is True
@@ -115,3 +152,74 @@ class TestTelephonyConfigExtension:
         assert cfg.enable_voicemail_detector is False
         assert cfg.enable_outbound_call_manager is False
         assert cfg.outbound is None
+
+    def test_outbound_helpers_start_disposition_tracker_before_state_machine(self) -> None:
+        bus = EventBus()
+        helpers = _create_telephony_helpers(
+            bus,
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(from_number="+15559876543"),
+            ),
+        )
+        tracker_index = next(
+            i for i, helper in enumerate(helpers) if isinstance(helper, CallDispositionTracker)
+        )
+        sm_index = next(
+            i for i, helper in enumerate(helpers) if isinstance(helper, OutboundCallStateMachine)
+        )
+        assert tracker_index < sm_index
+
+    @pytest.mark.asyncio
+    async def test_outbound_helpers_record_specific_failed_disposition(self) -> None:
+        bus = EventBus()
+        helpers = _create_telephony_helpers(
+            bus,
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(from_number="+15559876543"),
+            ),
+        )
+        tracker = next(helper for helper in helpers if isinstance(helper, CallDispositionTracker))
+
+        for helper in helpers:
+            helper.start()
+        try:
+            await bus.emit(CallFailed(call_sid="CA1", reason="busy"))
+            assert tracker._dispositions
+            assert tracker._dispositions[0][1] == "busy"
+        finally:
+            for helper in helpers:
+                helper.stop()
+
+    def test_shared_dnc_list_is_wired_to_outbound_manager(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Manager:
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.dnc_list = None
+
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+        monkeypatch.setattr("easycat.config.OutboundCallManager", _Manager)
+
+        dnc = DNCList()
+        helpers = _create_telephony_helpers(
+            EventBus(),
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(
+                    from_number="+15559876543",
+                    twilio_account_sid="AC123",
+                    twilio_auth_token="secret",
+                ),
+            ),
+            dnc_list=dnc,
+        )
+
+        manager = next(helper for helper in helpers if isinstance(helper, _Manager))
+        assert manager.dnc_list is dnc

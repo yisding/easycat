@@ -34,7 +34,7 @@ import asyncio
 import os
 
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     ICEServer,
     WebRTCTransportConfig,
     attach_runtime_feedback,
@@ -78,7 +78,7 @@ async def main() -> None:
 
     ice_servers = _build_ice_servers()
 
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key=api_key,
         transport=WebRTCTransportConfig(
             host=signaling_host,

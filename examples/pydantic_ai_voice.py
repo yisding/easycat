@@ -1,57 +1,21 @@
 """Local voice bot demo using a single PydanticAI agent.
 
-If your app needs multiple specialists or step-based control flow, see
-``examples/pydantic_ai_workflow_voice.py``.  For function tools, see
-``examples/function_tools_pydantic.py``.
+For function tools see ``examples/function_tools_pydantic.py``;
+for multi-agent workflows see ``examples/pydantic_ai_workflow_voice.py``.
 
-Setup:
-  export OPENAI_API_KEY="..."
-  uv sync --extra quickstart
-  uv add easycat[pydantic-ai]
-  uv run python examples/pydantic_ai_voice.py
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart; uv add easycat[pydantic-ai]
+Run:   uv run python examples/pydantic_ai_voice.py
 """
 
-from __future__ import annotations
+try:
+    from pydantic_ai import Agent  # type: ignore[import-untyped]
+except ImportError as exc:
+    raise SystemExit("PydanticAI is required. Install with: uv add easycat[pydantic-ai]") from exc
 
-import asyncio
+from easycat import EasyConfig, run
 
-from easycat import (
-    EasyCatConfig,
-    LocalTransportConfig,
-    attach_runtime_feedback,
-    create_session,
-    require_env,
-    wait_for_shutdown_signal,
+run(
+    EasyConfig.mic(
+        agent=Agent("openai:gpt-5.2", system_prompt="You are a helpful voice assistant.")
+    )
 )
-
-
-async def main() -> None:
-    api_key = require_env("OPENAI_API_KEY")
-
-    try:
-        from pydantic_ai import Agent  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise SystemExit(
-            "PydanticAI is required. Install with: uv add easycat[pydantic-ai]"
-        ) from exc
-
-    voice_agent = Agent(
-        "openai:gpt-5.2",
-        system_prompt="You are a helpful voice assistant.",
-    )
-
-    config = EasyCatConfig(
-        openai_api_key=api_key,
-        transport=LocalTransportConfig(),
-        agent=voice_agent,
-    )
-    session = create_session(config)
-    attach_runtime_feedback(session)
-
-    await session.start()
-
-    await wait_for_shutdown_signal(session)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

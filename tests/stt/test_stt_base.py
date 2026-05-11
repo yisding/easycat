@@ -9,6 +9,7 @@ import pytest
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType
 from easycat.stt.base import STTBase, pcm_to_wav
+from easycat.stt.websocket_base import WebSocketSTTBase
 from tests.stt.helpers import (
     collect_stt_events,
     generate_pcm_noise,
@@ -84,6 +85,53 @@ class EchoSTT(STTBase):
     async def _on_end(self) -> None:
         if self.audio_received:
             self._emit_event(STTEvent(type=STTEventType.FINAL, text=self.transcript))
+
+
+class MockWebSocket:
+    def __init__(self, messages: list[str | bytes]) -> None:
+        self.messages = messages
+        self.sent: list[str | bytes] = []
+        self.closed = False
+        self._iter_index = 0
+
+    async def send(self, data: str | bytes) -> None:
+        self.sent.append(data)
+
+    async def close(self) -> None:
+        self.closed = True
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str | bytes:
+        if self._iter_index >= len(self.messages):
+            raise StopAsyncIteration
+        message = self.messages[self._iter_index]
+        self._iter_index += 1
+        return message
+
+
+class JsonWebSocketSTT(WebSocketSTTBase):
+    def __init__(self, ws: MockWebSocket) -> None:
+        super().__init__(provider_name="test_stt", provider_error_name="test")
+        self._mock_ws = ws
+
+    async def _on_start(self) -> None:
+        async def connect(_url: str, **_kwargs: object) -> MockWebSocket:
+            return self._mock_ws
+
+        await self._connect_websocket(url="wss://example.test", headers={}, connect_fn=connect)
+
+    async def _on_audio(self, chunk: AudioChunk) -> None:
+        await self._send_ws(chunk.data)
+
+    async def _on_end(self) -> None:
+        await self._close_active_websocket()
+
+    def _handle_json_message(self, msg: dict[str, object]) -> None:
+        text = msg.get("text")
+        if isinstance(text, str):
+            self._emit_event(STTEvent(type=STTEventType.FINAL, text=text))
 
 
 @pytest.mark.asyncio
@@ -183,6 +231,18 @@ async def test_base_fresh_queue_per_stream():
     events2 = await collect_stt_events(stt, chunks)
     assert len(events2) == 1
     assert events2[0].text == "second"
+
+
+@pytest.mark.asyncio
+async def test_websocket_base_ignores_binary_and_invalid_json_messages():
+    ws = MockWebSocket([b"\x00\x01", "{not json", '{"text": "hello"}'])
+    stt = JsonWebSocketSTT(ws)
+
+    events = await collect_stt_events(stt, make_audio_chunks(generate_pcm_sine(duration_ms=100)))
+
+    assert [event.text for event in events] == ["hello"]
+    assert ws.closed is True
+    assert ws.sent
 
 
 # ── Test harness tests (verify helper functions) ──────────────────

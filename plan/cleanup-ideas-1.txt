@@ -1,0 +1,408 @@
+EasyCat Showcase-Quality Cleanup Ideas (Round 1)
+==================================================
+
+Synthesis of a six-subagent audit of the EasyCat codebase aimed at
+identifying everything that prevents this from being a showcase-quality
+voice-bot library. Backwards compatibility is explicitly OFF the table —
+we can rename, restructure, delete.
+
+Overall verdict
+---------------
+
+EasyCat is architecturally ambitious and substantively shipped: the
+journal-first runtime, stage protocol, replay primitives, and provider
+Protocol surface are real. What stops it from being showcase quality is
+accumulated scar tissue:
+
+  - a god-class `Session` (2,961 LOC, ~114 methods, 30+ instance vars)
+  - ~9× copy-pasted provider plumbing
+  - a dual config story (EasyCatConfig vs SessionConfig)
+  - a 580-line `__init__.py` lazy-loading 100+ symbols
+  - a debug story that pitches further than the code currently delivers
+
+Estimated 1.5–2 weeks of focused refactoring to move from "impressive
+but intimidating" to "exemplary."
+
+
+1. The big architectural rocks
+==============================
+
+1.1 Break up `Session` (`session/_session.py`, 2,961 lines).
+    The class owns 30+ instance variables and ~114 methods spanning
+    provider wiring, STT consumption, TTS queueing, interruption,
+    opt-out detection, greeting, playback-mark tracking, action
+    draining, and text-mode. Extract three cohesive collaborators:
+
+      - TTSProducer    — owns tts queue, synth, sentence boundaries,
+                         payload prep, playback suppression
+      - STTConsumer    — owns the STT event task, segment commit
+                         scheduling, final futures, VAD→turn-end state
+      - TurnLifecycle  — owns the turn state machine and the cancel
+                         token (collapsing TurnContext + TurnManager._state
+                         + Session._turn fan-out into one ActiveTurn)
+
+    After that, Session is ~600 lines of wiring + event dispatch.
+
+1.2 Unify turn state.
+    Today "are we in a turn?" reads from TurnManager._state,
+    Session._turn, and Session.turn_state — all three can disagree
+    (e.g. _turn non-null after _state == IDLE during playback-mark
+    gating, _session.py:474–477). One ActiveTurn dataclass returned by
+    TurnManager on start eliminates:
+      - the stale-callback generation counter (_turn_context.py:42–44
+        class-global is a smell)
+      - the dual cancel-token storage (_turn_context.py:45 +
+        turn_manager.py:125)
+
+1.3 Move STT segment-commit logic out of Session into TurnManager.
+    Four scattered Session methods (_session.py:2000–2074) are doing
+    what's plainly turn-FSM work and belong inside TurnManager.
+
+1.4 Flatten the underscore-prefixed session module split.
+    `_session.py`, `_streaming.py`, `_text.py`, `_turn_context.py`
+    are imported by `__init__.py` for re-export — the underscore
+    convention contradicts that. Rename without the underscore, or
+    consolidate. Several of them (e.g. `_text.py`) are misnamed for
+    their contents.
+
+
+2. Eliminate provider duplication
+=================================
+
+This is where the codebase looks most "scratchpad" today.
+
+2.1 `_get_package_version()` is copy-pasted in 9 files across stt/* and
+    tts/*. One shared helper.
+
+2.2 Four WebSocket STT providers (OpenAI Realtime, Deepgram, ElevenLabs,
+    Cartesia) reimplement the same receive loop, close sequence, and
+    reconnect handling. Extract `_WebSocketSTTProvider(STTBase)`;
+    subclasses override only `_handle_message()`.
+
+    This also fixes a real bug: only 2/4 currently emit provider error
+    events to the bus, so bundle diagnostics silently miss errors from
+    Deepgram and ElevenLabs.
+
+2.3 `_word_timestamps_from_words()` exists in 3 nearly-identical forms
+    (Deepgram, Cartesia, ElevenLabs inline). One helper, tolerant of
+    `text` vs `word` keys.
+
+2.4 Standardize provider config field names. Today:
+      - `model` vs `model_id`
+      - `base_url` vs `ws_url`
+      - sample-rate sometimes a config field, sometimes a hardcoded
+        module constant
+    Add a `SpeechProviderConfigBase` with canonical names; force
+    aliases at the seam, not in user code. Delete the workaround at
+    `tts/factory.py:106–109` that exists ONLY because of this.
+
+2.5 VAD / noise-reduction / echo-cancellation use three different
+    factory styles. Pick one — the STT/TTS registry is the right
+    target.
+
+2.6 Decide on `STTBase`/`TTSBase`. They're currently doing little:
+    either thicken them (own connection lifecycle, error emission,
+    audio normalization, retry) or replace with the existing
+    Protocols. The current "thin facade with required overrides" is
+    the worst of both worlds.
+
+2.7 Resampling is duplicated across STT and VAD providers. Move into a
+    pre-processing stage / shared helper.
+
+2.8 Auth-header construction is per-provider boilerplate
+    (Bearer/Token/xi-api-key/X-API-Key). Extract.
+
+
+3. Tighten the agent-bridge layer
+=================================
+
+3.1 Five bridges (openai_agents.py:208–262, pydantic_ai.py:157–210,
+    responses_api.py:250–304, generic_workflow.py:187–250,
+    _agent_runner.py) reimplement the same 4-step
+    plan→commit→apply→record interruption sequence. Pull into a base
+    class; bridges override only `_plan_interruption` and
+    `_apply_planned_mutation`.
+
+3.2 `auto_adapt_agent` (_factory.py:11–159) is a 7-branch isinstance
+    ladder that pokes private attributes (agent._agent,
+    agent._is_bridge) and inspects parameter NAMES ("recorder",
+    "cancel_token") — fragile. Replace with a registry: each bridge
+    ships a (predicate, factory) pair.
+
+3.3 Tool-name is lost in `tool_delta` events for PydanticAI
+    (_pydantic_ai_events.py:34–39) but tracked via a `pending` dict for
+    OpenAI/Responses. Make `tool_name` a first-class field on
+    `AgentBridgeEvent` instead of reconstructing it.
+
+3.4 History ownership is inconsistent. OpenAI stores dicts, PydanticAI
+    stores ModelResponse objects, Remote uses previous_response_id,
+    AgentRunner duplicates its own _history. Pick one: either
+    canonicalize the format or move history to Session and pass via
+    turn_input.context (more stateless, cleaner).
+
+3.5 Split `replace_last_assistant_text` and `append_interruption_note`
+    out of ExternalAgentBridge into an optional HistoryPostProcessor
+    protocol — Remote and shallow workflow modes don't really
+    implement these, and the protocol becomes honest.
+
+3.6 MCP server injection is bolted on (save/restore around runs in
+    each bridge). Formalize as a bridge initialization step or
+    callback hook.
+
+3.7 Cancellation semantics differ across bridges (mid-turn vs
+    end-of-turn). Define and document one contract.
+
+3.8 NullAgentRecorder is a no-op recorder used in production
+    (AgentRunner.run()). Either mark test-only or replace with a
+    logging recorder.
+
+
+4. Be honest about the debug-first story
+========================================
+
+The journal/artifact/stage foundation IS production quality —
+append-only, content-addressed SHA-256, ring-buffer eviction with
+ref-counting, path-traversal guards, version-pinned bundles. Keep that
+pitch. But:
+
+4.1 Agent replay is SIMULATED only. LIVE agent replay (the one users
+    actually want for regression tests) is in the design doc, not the
+    code. Either ship it or stop pitching it.
+
+4.2 `TTSStage.replay()` doesn't exist — only audio playback via
+    `replay_audio()`.
+
+4.3 `check_provider_versions()` is dead code — `ReplayRunner.run()`
+    never calls it.
+
+4.4 `health_check.py` is not wired into Session. Aspirational
+    scaffolding.
+
+4.5 No byte-determinism test for ARTIFACT+fast replay. The guarantee
+    is asserted in docs; not verified anywhere.
+
+4.6 The debugger UI is scaffolding — `/ws` mentioned but missing, no
+    error path for missing artifact refs, agent replay path can't run
+    end-to-end.
+
+4.7 RunBundle.from_partial_journal() (loading crashed sessions) is in
+    the design doc, not the code.
+
+4.8 Inline-artifacts export round-trip is incomplete: writer encodes
+    base64 into manifest; loader doesn't read it back.
+
+4.9 Reorganize the three observability namespaces:
+
+      runtime/   # Durable execution truth: journal, records, context,
+                 # replay, artifacts
+      bundles/   # Format + export + load + pytest helpers
+      debugger/  # UI server (only)
+
+    This eliminates the runtime/ vs debug/ vs debugger/ confusion and
+    lets each subdir have one responsibility.
+
+4.10 Add a record_schema_version field on JournalRecord (or a per-
+     workstream changelog) — currently only the bundle manifest is
+     versioned.
+
+
+5. Public surface and DX
+========================
+
+5.1 Two configs is a smell. EasyCatConfig (builder) vs SessionConfig
+    (raw provider holder) confuses users from minute one. Rename
+    EasyCatConfig → Config, demote SessionConfig to a private session
+    internal, expose only Config + create_session(config) at top
+    level.
+
+5.2 The 580-line `__init__.py` lazy-loading 100+ symbols breaks IDE
+    autocomplete and documentation tooling. Keep lazy loading for CLI
+    cold-start, but shrink the top-level namespace to ~15 things
+    people actually use (Config, create_session, Session, EventBus,
+    Agent, the protocol types). Users learn to import from submodules
+    — which is what every example already does.
+
+5.3 quick.py / helpers.py / extras.py should be one module. The split
+    has no clear principle.
+
+5.4 run() (helpers.py) silently couples lifecycle with TTY-detected
+    emoji feedback. Split into run_until_sigterm(session) + opt-in
+    attach_runtime_feedback(session).
+
+5.5 tts_synthesizer.py belongs in session/ — it's a session-internal
+    bridge between providers and the runtime, not a public module.
+
+5.6 Telephony is Twilio-only with no abstraction. Either own it
+    ("EasyCat speaks Twilio") or define a TelephonyProvider protocol
+    and rename OutboundCallManager → TwilioOutboundCallManager. The
+    current half-pretense (a folder named telephony/ whose every class
+    assumes Twilio) is the worst option.
+
+5.7 ml_voicemail.py contains zero ML — keyword overlap heuristics.
+    Rename voicemail_heuristics.py or merge into voicemail.py.
+
+5.8 session_manager.py vs supervisor.py are correctly designed but
+    cryptically named. A doc comment at the top of each, explaining
+    the distinction, is enough.
+
+5.9 compliance.py ships a 13-area-code timezone map with an honest
+    "for production use, replace this" disclaimer. Make
+    set_timezone_resolver(callback) an explicit hook.
+
+5.10 number_health.py thresholds are hardcoded with no rationale and
+     emits no events for declining health. Document defaults; emit
+     NumberHealthWarning so users can act on it.
+
+5.11 CLI: easycat --help should show the journey menu, not just the
+     root callback help. Subcommand discovery is too hidden.
+
+5.12 More Config presets: .phone_outbound() (Twilio + outbound + retry
+     + voicemail). Plus a Config.simple(agent, stt, tts) that
+     short-circuits 80% of decisions.
+
+
+6. Cross-cutting smaller fixes that punch above their weight
+============================================================
+
+6.1 Class-based event dispatch — STTPartialEvent(Event),
+    STTFinalEvent(Event) — instead of STTEvent dataclass + type enum
+    + manual `if event.type ==` switching. Reuses EventBus semantics.
+
+6.2 Make STTTimeoutError / AgentTimeoutError / TTSTimeoutError inherit
+    from EasyCatError with proper codes, so `easycat explain E302`
+    works for the runtime errors users actually hit.
+
+6.3 VADProvider.configure() is in the Protocol but never called.
+    Either wire it (per-session VAD knobs) or delete it.
+
+6.4 cancel.py uses threading.Lock + call_soon_threadsafe for
+    cross-thread cancellation, but EasyCat is async-only. Drop the
+    threading carry-on; one fewer race window.
+
+6.5 Session._cancel_for_barge_in silently consults
+    session_actions.no_interrupt — the ONLY way to suppress barge-in
+    is to know about that flag. Make the suppression explicit
+    (session.suppress_next_interrupt()).
+
+6.6 Greeting synthesis is detached from call-answer lifecycle (fire-
+    and-forget background task). If user speaks during greeting, audio
+    conflict is implicit. Either await or cancel on TurnStarted.
+
+6.7 Smart Turn is a complete subsystem with no factory and not wired
+    into the main pipeline. Either integrate or document it as
+    opt-in.
+
+6.8 No version on Provider Protocols. Adding a new method to
+    STTProvider breaks every external implementation silently.
+    Use feature-detection or version Protocols explicitly.
+
+6.9 Factories return concrete base classes (STTBase) instead of
+    Protocols (STTProvider). Return Protocols.
+
+6.10 Stage protocol's snapshot_state() / handle_upstream() docstring
+     still says "Stub until WS4." Update with real contracts.
+
+
+7. Repo hygiene and showcase polish
+===================================
+
+7.1 plan/ in the repo root is the single biggest cosmetic problem.
+    30+ workstream docs land in front of every visitor on GitHub.
+    Move to .github/workstreams/ or git-ignore.
+
+7.2 Teaching chapters 14–15 are stranded in plan/ while 0–13 live in
+    docs/teaching/. Consolidate.
+
+7.3 README doesn't link the teaching ladder prominently. That ladder
+    is genuinely the best onboarding artifact in the repo, and it's
+    invisible to first-time visitors.
+
+7.4 Examples (36 flat files) should subdivide:
+      examples/transports/
+      examples/agents/
+      examples/providers/
+      examples/advanced/
+    Add examples/README.md with a table of all 36 examples, purpose,
+    and required extras.
+
+7.5 tests/test_examples.py only verifies imports, not behavior. For a
+    teaching-focused library, that's a liability — silent bugs in
+    copy-paste examples go undetected.
+
+7.6 AGENTS.md and CLAUDE.md overlap. Pick one or split by clear
+    audience.
+
+7.7 No API reference. Narrative docs are good; users still need a
+    generated reference for Config, provider classes, and the
+    Transport / STTProvider / TTSProvider protocols. Sphinx or pdoc.
+
+7.8 No mypy / pyright in CI. Only ruff. The codebase is typing-
+    disciplined; lock it in.
+
+7.9 Add a "Troubleshooting" section to README:
+      - "Where do I get API keys?" (1 paragraph per provider)
+      - "How do I know if VAD is working?" (check journal)
+      - "The bot is slow — how do I debug?" (link to teaching ladder)
+      - "Can I run without a mic?" (use debug_bundle.py)
+
+7.10 Deployment docs cover Docker only. Add Kubernetes, systemd, cloud
+     functions, and observability export patterns.
+
+7.11 Test fixtures are scattered. Centralize common ScriptedSTT /
+     ScriptedVAD / QueueTransport in conftest.py instead of letting
+     each test reinvent setup.
+
+7.12 Integration test markers exist (integration_socket,
+     integration_live) but README is silent on how to run them
+     locally. Document.
+
+
+8. Top 10 highest-impact moves, in order
+========================================
+
+ 1. Split Session into Session + TTSProducer + STTConsumer +
+    TurnLifecycle, with one ActiveTurn replacing the three turn-state
+    sources of truth.
+
+ 2. Move plan/ out of the repo root and consolidate teaching 14–15
+    into docs/teaching/.
+
+ 3. Rename EasyCatConfig → Config and bury SessionConfig; cut
+    __init__.py to ~15 top-level exports.
+
+ 4. Extract _WebSocketSTTProvider base and unify error-event
+    emission; delete the 9 copies of _get_package_version.
+
+ 5. Extract the 4-step interruption sequence into a base bridge
+    class; replace auto_adapt_agent's if/elif ladder with a predicate
+    registry.
+
+ 6. Reorganize runtime/ + debug/ + debugger/ into runtime/ +
+    bundles/ + debugger/, and either ship agent LIVE replay +
+    TTSStage.replay() or remove the unbacked claims from the docs.
+
+ 7. Standardize provider config field names (model, base_url,
+    sample_rate) under a shared base; delete tts/factory.py:106–109
+    workaround.
+
+ 8. Reorganize examples into 4 subfolders with a README index; have
+    tests/test_examples.py exercise actual behavior, not just
+    imports.
+
+ 9. Define a TelephonyProvider protocol and rename Twilio classes to
+    admit they're Twilio-specific; rename ml_voicemail.py.
+
+10. Add a generated API reference (Sphinx or pdoc), wire mypy/pyright
+    into CI, and add timeout error codes so easycat explain covers
+    runtime errors.
+
+
+Notes on sequencing
+-------------------
+
+The least entangled and most leveraged starting points are (1) the
+Session split and (3) the public API flattening — they unblock or
+clarify almost everything else. Provider deduplication (4) and
+bridge deduplication (5) can run in parallel. The honesty pass on
+the debug story (6) is mostly documentation + small completions and
+should happen alongside the bundle/runtime/debugger reorg.

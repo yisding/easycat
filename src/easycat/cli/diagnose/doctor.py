@@ -13,6 +13,7 @@ import importlib.metadata
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -86,7 +87,7 @@ def check_easycat_version() -> CheckResult:
         try:
             importlib.import_module(module)
             integrations.append(name)
-        except ImportError:
+        except (ImportError, OSError):
             pass
     detail = f"easycat {version}"
     if integrations:
@@ -217,6 +218,154 @@ def check_provider_reachability(
     return results
 
 
+def check_microphone() -> CheckResult:
+    """Probe whether a default input device is available.
+
+    Only meaningful when the ``local`` extra's ``sounddevice`` dep is
+    present — server-side deployments (WebRTC, Twilio, WebSocket) don't
+    need a local mic so a missing ``sounddevice`` is a skip, not a
+    failure.  When sounddevice is installed but reports no default
+    input, surface ``EASYCAT_E206`` with the platform-specific fix
+    pointing the user at OS-level permissions.
+    """
+    try:
+        import sounddevice as sd  # type: ignore[import-untyped]
+    except ImportError:
+        return CheckResult(
+            name="microphone",
+            status="skip",
+            detail="sounddevice not installed (only required for local transport)",
+        )
+    except OSError as exc:
+        return CheckResult(
+            name="microphone",
+            status="skip",
+            detail=f"sounddevice unavailable: {type(exc).__name__}",
+        )
+    try:
+        # ``sd.default.device`` is a two-tuple ``(input, output)`` when
+        # set, or a pair of -1 when nothing is configured.  Some
+        # sounddevice builds return a single int for non-default
+        # configurations; handle both shapes defensively.
+        raw = sd.default.device
+        default_input = raw[0] if isinstance(raw, (tuple, list)) else raw
+        if default_input is None or default_input == -1:
+            return CheckResult(
+                name="microphone",
+                status="fail",
+                detail="no default input device",
+                code="EASYCAT_E206",
+                fix=(
+                    "macOS: grant mic access to the terminal. "
+                    "Linux: check PulseAudio/PipeWire. Windows: check Sound settings."
+                ),
+            )
+        # Try to resolve the device name for an informative OK row.
+        try:
+            info = sd.query_devices(default_input, "input")
+            name = info.get("name", "unknown") if isinstance(info, dict) else "unknown"
+        except Exception:  # noqa: BLE001
+            name = "available"
+        return CheckResult(name="microphone", status="ok", detail=f"default input: {name}")
+    except Exception as exc:  # noqa: BLE001
+        # Unexpected sounddevice errors (portaudio missing, etc.) are
+        # reported as a skip because they don't invalidate the rest of
+        # the doctor output — the user still has a working machine for
+        # non-local transports.
+        return CheckResult(
+            name="microphone",
+            status="skip",
+            detail=f"sounddevice probe failed: {type(exc).__name__}",
+        )
+
+
+def _journal_dir() -> Path:
+    """Resolve the default journal directory.
+
+    Mirrors the fallback order the runtime uses so the check reports on
+    the path the runtime will actually try to write to.
+    """
+    xdg = os.getenv("XDG_CACHE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    return base / "easycat" / "journals"
+
+
+def check_journal_writable() -> CheckResult:
+    """Verify the journal directory exists and is writable.
+
+    A silently read-only journal dir is the highest-pain failure mode
+    because the session looks healthy but loses every record; catching
+    this at ``doctor`` time is the whole point of having E207 in the
+    registry.
+    """
+    path = _journal_dir()
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return CheckResult(
+            name="journal_writable",
+            status="fail",
+            detail=f"cannot create {path}: {exc}",
+            code="EASYCAT_E207",
+            fix=f"mkdir -p {path} && chmod u+w {path}",
+        )
+    probe = path / ".doctor-write-probe"
+    try:
+        probe.write_bytes(b"ok")
+    except OSError as exc:
+        return CheckResult(
+            name="journal_writable",
+            status="fail",
+            detail=f"{path} is not writable: {exc}",
+            code="EASYCAT_E207",
+            fix=f"chmod u+w {path}",
+        )
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return CheckResult(name="journal_writable", status="ok", detail=str(path))
+
+
+def check_disk_space(min_free_mb: int = 500) -> CheckResult:
+    """Warn before the journal dir runs out of space.
+
+    ``min_free_mb`` matches the threshold documented in the
+    ``EASYCAT_E208`` registry entry.
+    """
+    import shutil as _shutil
+
+    path = _journal_dir()
+    # Walk up to the nearest existing parent so the check works even if
+    # the journal dir hasn't been created yet.
+    probe_path = path
+    while not probe_path.exists() and probe_path != probe_path.parent:
+        probe_path = probe_path.parent
+    try:
+        usage = _shutil.disk_usage(probe_path)
+    except OSError as exc:
+        return CheckResult(
+            name="disk_space",
+            status="skip",
+            detail=f"cannot stat {probe_path}: {exc}",
+        )
+    free_mb = usage.free // (1024 * 1024)
+    if free_mb < min_free_mb:
+        return CheckResult(
+            name="disk_space",
+            status="fail",
+            detail=f"{free_mb}MB free at {probe_path} (need >= {min_free_mb}MB)",
+            code="EASYCAT_E208",
+            fix="Free up disk space or set XDG_CACHE_HOME to a larger filesystem.",
+        )
+    return CheckResult(
+        name="disk_space",
+        status="ok",
+        detail=f"{free_mb}MB free at {probe_path}",
+    )
+
+
 def check_onnxruntime() -> CheckResult:
     """Report whether onnxruntime is importable.
 
@@ -240,6 +389,26 @@ def check_onnxruntime() -> CheckResult:
 # ── Orchestration ────────────────────────────────────────────────
 
 
+def _apply_safe_fixes(results: list[CheckResult]) -> int:
+    """Apply narrow auto-fixes for failures marked safe to remediate.
+
+    Returns the number of fixes actually applied.  Only touches the
+    journal directory today (``EASYCAT_E207``) because mkdir is the
+    one class of fix that has no ambiguity, no user-data side effect,
+    and no security implication.  Future entries here must meet the
+    same bar.
+    """
+    applied = 0
+    for result in results:
+        if result.code == "EASYCAT_E207":
+            try:
+                _journal_dir().mkdir(parents=True, exist_ok=True)
+                applied += 1
+            except OSError:
+                continue
+    return applied
+
+
 def _run_all_checks(only_provider: str | None) -> list[CheckResult]:
     results: list[CheckResult] = []
     results.append(check_python_version())
@@ -247,6 +416,9 @@ def _run_all_checks(only_provider: str | None) -> list[CheckResult]:
     results.extend(check_env_vars(only_provider=only_provider))
     results.extend(check_provider_reachability(only_provider=only_provider))
     results.append(check_onnxruntime())
+    results.append(check_microphone())
+    results.append(check_journal_writable())
+    results.append(check_disk_space())
     return results
 
 
@@ -332,10 +504,18 @@ def doctor(
     results = _run_all_checks(only_provider=only_provider)
 
     if fix:
-        # ``--fix`` is documented but not wired in M1.  Be transparent.
-        stderr_console.print(
-            "[dim]--fix is a placeholder in this release; no automatic fixes will be applied.[/]"
-        )
+        # ``--fix`` handles the narrow, safe remediations: creating the
+        # journal directory (E207).  API-key and mic-permission fixes
+        # stay manual — no CLI should be writing to ``~/.bashrc`` or
+        # flipping macOS privacy prompts on the user's behalf.
+        applied = _apply_safe_fixes(results)
+        if applied:
+            stderr_console.print(
+                f"[dim]--fix applied {applied} remediation(s); re-running checks.[/]"
+            )
+            results = _run_all_checks(only_provider=only_provider)
+        else:
+            stderr_console.print("[dim]--fix: no auto-remediatable issues found.[/]")
 
     if json_output:
         failed = any(r.status == "fail" for r in results)

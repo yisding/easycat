@@ -2,12 +2,13 @@
 
 ## Project Structure & Module Organization
 - `src/easycat/`: core library code.
-- Key subpackages: `stt/`, `tts/`, `agents/`, `transports/`, `telephony/`.
-- Core orchestrators/utilities live in top-level modules such as `session/` (package), `config.py`, `events.py`, `turn_manager.py`, `smart_turn.py`, `agent_runner.py`, `metrics.py`, `tracing.py`, and `timeouts.py`.
-- Provider interfaces are centralized in `providers.py`; STT/TTS provider factory registries are in `stt/factory.py` and `tts/factory.py`.
+- Key subpackages: `session/`, `stages/`, `stt/`, `tts/`, `transports/`, `telephony/`, `integrations/agents/`, `runtime/`, `debug/`, `debugger/`, `cli/`.
+- Core orchestrators/utilities live alongside: `config.py`, `events.py`, `turn_manager.py`, `smart_turn.py`, `timeouts.py`.
+- Provider interfaces are centralized in `providers.py`; STT/TTS factory registries live in `stt/factory.py` and `tts/factory.py`.
+- Agent framework bridges live in `src/easycat/integrations/agents/` (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, `RemoteResponsesAPIBridge`, plus `AgentRunner`).
 - `src/easycat/models/`: runtime model assets (for example ONNX smart-turn model).
-- `tests/`: pytest suite mirroring domains (for example `tests/stt/`, `tests/tts/`, `tests/session/`, `tests/turns/`, `tests/transports/`, `tests/websocket/`, `tests/agents/`).
-- `examples/`: runnable reference apps (`openai_agents_voice.py`, `ws_server.py`, `ws_browser_example.py`, `webrtc_server.py`, `webrtc_observability_server.py`, `twilio_app.py`, `pydantic_ai_voice.py`, `pydantic_ai_workflow_voice.py`, `function_tools_openai.py`, `function_tools_pydantic.py`, `deepgram_stt.py`, `elevenlabs_tts.py`, `cartesia_voice.py`, `combined_providers.py`, `push_to_talk.py`, `smart_turn_demo.py`, `custom_stt_provider.py`, `custom_tts_provider.py`, `custom_vad_provider.py`, `debug_bundle.py`, `session_actions_openai.py`, `session_actions_pydantic.py`, `journal_demo.py`) plus browser/deployment assets in `webrtc_static/` and `ec2_webrtc/`.
+- `tests/`: pytest suite mirroring domains (`tests/stt/`, `tests/tts/`, `tests/session/`, `tests/stages/`, `tests/transports/`, `tests/websocket/`, `tests/integrations/agents/`, `tests/telephony/`, `tests/runtime/`, `tests/debug/`).
+- `examples/`: runnable reference apps covering local microphone, WebSocket, WebRTC, Twilio, and Cartesia/Deepgram/ElevenLabs provider swaps.
 
 ## Build, Test, and Development Commands
 - `uv sync --group dev`: install project + dev tools.

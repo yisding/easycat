@@ -27,6 +27,7 @@ from easycat.debug.bundle import (
 )
 from easycat.debug.export import export_debug_bundle
 from easycat.debug.testing import load_bundle
+from easycat.runtime.records import ErrorInfo, JournalRecord, JournalRecordKind, TimingInfo
 from easycat.runtime.replay import (
     REPLAY_IGNORE_FIELDS,
     ProviderVersionMismatchError,
@@ -345,6 +346,42 @@ class TestBundleExport:
         with zipfile.ZipFile(path, "r") as zf:
             assert f"artifacts/{ref}.bin" in zf.namelist()
             assert zf.read(f"artifacts/{ref}.bin") == data
+
+    def test_export_serializes_nested_enum_values(self, tmp_path):
+        record = JournalRecord(
+            sequence=1,
+            session_id="sess",
+            kind=JournalRecordKind.METRIC,
+            name="metric",
+            timing=TimingInfo(wall_ns=1, mono_ns=2, cpu_ns=3),
+            data={
+                "policy": ToolReplayPolicy.ALLOW,
+                "nested": {"kind": JournalRecordKind.EVENT},
+                "mixed_set": {1, "a"},
+            },
+            error=ErrorInfo(type="RuntimeError", message="boom"),
+            tags=frozenset({"debug", "runtime"}),
+        )
+        session = _FakeSession(debug="light", journal=_FakeJournal([record]))
+        path = tmp_path / "export.zip"
+
+        export_debug_bundle(session, path)
+
+        with zipfile.ZipFile(path, "r") as zf:
+            line = zf.read("journal.ndjson").decode("utf-8").strip()
+        exported = json.loads(line)
+        assert exported["kind"] == "metric"
+        assert exported["timing"] == {"wall_ns": 1, "mono_ns": 2, "cpu_ns": 3, "queue_ns": 0}
+        assert exported["data"]["policy"] == "allow"
+        assert exported["data"]["nested"]["kind"] == "event"
+        assert exported["data"]["mixed_set"] == ["a", 1]
+        assert exported["error"] == {
+            "type": "RuntimeError",
+            "message": "boom",
+            "traceback": None,
+            "notes": None,
+        }
+        assert exported["tags"] == ["debug", "runtime"]
 
 
 # ── TestBundleSafeDefaults ──────────────────────────────────────
@@ -670,17 +707,6 @@ class TestStageReplay:
                 pass
 
         stage = TransportStage(_Stub())
-        spec = StubReplaySpec(fidelity="artifact")
-        result = stage.replay(spec)
-        assert result is None
-
-    def test_telephony_artifact(self):
-        from easycat.stages.telephony import TelephonyStage
-
-        class _Stub:
-            pass
-
-        stage = TelephonyStage(_Stub())
         spec = StubReplaySpec(fidelity="artifact")
         result = stage.replay(spec)
         assert result is None

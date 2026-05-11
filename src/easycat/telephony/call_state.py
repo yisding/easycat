@@ -15,7 +15,6 @@ import asyncio
 import logging
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +25,7 @@ from easycat.events import (
     CallInitiated,
     CallRinging,
     CallScreening,
+    CallStateChanged,
     EventBus,
     ScreeningTimedOut,
     STTFinal,
@@ -78,15 +78,6 @@ _VOICEMAIL_ACCEPT_STATES = frozenset(
         OutboundCallState.SCREENING,
     }
 )
-
-
-@dataclass(frozen=True)
-class CallStateChanged:
-    """Emitted on every state transition."""
-
-    old: OutboundCallState
-    new: OutboundCallState
-    call_sid: str = ""
 
 
 class ClassificationGate:
@@ -415,6 +406,17 @@ class OutboundCallStateMachine:
         This allows a single session to handle sequential outbound calls
         without getting stuck in the ENDED state from a previous call.
         """
+        if not event.call_sid:
+            return
+        if event.call_sid == self._call_sid:
+            return
+        if self._call_sid and self._state != OutboundCallState.ENDED:
+            logger.debug(
+                "Ignoring CallInitiated for %s while %s is active",
+                event.call_sid,
+                self._call_sid,
+            )
+            return
         self._cancel_timers()
         self._gate.stop()
         self._gate.start()
@@ -485,16 +487,33 @@ class OutboundCallStateMachine:
         if new_state == OutboundCallState.VOICEMAIL and self._voicemail_pickup_window_s > 0:
             self._start_voicemail_pickup_window()
 
+    def _matches_active_call(self, call_sid: str) -> bool:
+        """Return whether a lifecycle event belongs to the current call."""
+        if not call_sid:
+            return False
+        if not self._call_sid:
+            return True
+        if call_sid == self._call_sid:
+            return True
+        logger.debug(
+            "Ignoring stale call event for %s; active call is %s",
+            call_sid,
+            self._call_sid,
+        )
+        return False
+
     async def _on_ringing(self, event: CallRinging) -> None:
+        if not self._matches_active_call(event.call_sid):
+            return
         if self._state == OutboundCallState.INITIATING:
-            if event.call_sid:
-                self._call_sid = event.call_sid
+            self._call_sid = event.call_sid
             await self._transition(OutboundCallState.RINGING)
 
     async def _on_answered(self, event: CallAnswered) -> None:
+        if not self._matches_active_call(event.call_sid):
+            return
         if self._state in {OutboundCallState.INITIATING, OutboundCallState.RINGING}:
-            if event.call_sid:
-                self._call_sid = event.call_sid
+            self._call_sid = event.call_sid
             # Close the gate before transitioning so that any TTS emitted by
             # CallStateChanged subscribers is captured by the buffer.
             self._gate.close()
@@ -503,18 +522,24 @@ class OutboundCallStateMachine:
             self._start_max_duration_timer()
 
     async def _on_failed(self, event: CallFailed) -> None:
+        if not self._matches_active_call(event.call_sid):
+            return
         await self._terminate_call(event.call_sid)
 
     async def _on_ended(self, event: CallEnded) -> None:
+        if not self._matches_active_call(event.call_sid):
+            return
         await self._terminate_call(event.call_sid)
 
     async def _terminate_call(self, call_sid: str) -> None:
-        if call_sid:
-            self._call_sid = call_sid
+        self._call_sid = call_sid
         self._cancel_timers()
         await self._transition(OutboundCallState.ENDED)
 
     async def _on_voicemail(self, event: VoicemailDetected) -> None:
+        event_call_sid = getattr(event, "call_sid", "")
+        if event_call_sid and not self._matches_active_call(event_call_sid):
+            return
         # When a fusion classifier is active, ignore raw AMD events (empty source)
         # but accept both fused and detector-sourced events.
         if self._expect_fused_voicemail and not event.source:
@@ -547,11 +572,15 @@ class OutboundCallStateMachine:
             await self._transition(OutboundCallState.HUMAN)
 
     async def _on_screening(self, event: CallScreening) -> None:
+        if not self._matches_active_call(event.call_sid):
+            return
         if self._state == OutboundCallState.CLASSIFYING:
             self._cancel_classification_timeout()
             await self._transition(OutboundCallState.SCREENING)
 
     async def _on_screening_timed_out(self, event: ScreeningTimedOut) -> None:
+        if event.call_sid and not self._matches_active_call(event.call_sid):
+            return
         if self._state == OutboundCallState.SCREENING:
             await self._transition(OutboundCallState.HUMAN)
 

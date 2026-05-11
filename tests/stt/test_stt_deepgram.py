@@ -14,7 +14,7 @@ from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_
 class MockWebSocket:
     """Mock WebSocket connection for Deepgram tests."""
 
-    def __init__(self, messages: list[str] | None = None) -> None:
+    def __init__(self, messages: list[str | bytes] | None = None) -> None:
         self.messages = messages or []
         self.sent: list[bytes | str] = []
         self._closed = False
@@ -29,7 +29,7 @@ class MockWebSocket:
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> str:
+    async def __anext__(self) -> str | bytes:
         if self._iter_index >= len(self.messages):
             raise StopAsyncIteration
         msg = self.messages[self._iter_index]
@@ -75,7 +75,7 @@ def _deepgram_turn_info(
 
 
 def _make_deepgram_stt(
-    messages: list[str] | None = None,
+    messages: list[str | bytes] | None = None,
 ) -> tuple[DeepgramSTT, MockWebSocket]:
     """Create a DeepgramSTT with a mocked WebSocket."""
     ws = MockWebSocket(messages or [])
@@ -200,6 +200,19 @@ async def test_deepgram_includes_word_timestamps():
     assert events[0].word_timestamps[1].end == 0.7
 
 
+@pytest.mark.asyncio
+async def test_deepgram_accepts_text_word_timestamp_key():
+    words = [{"text": "hello", "start": 0.0, "end": 0.3}]
+    messages = [_deepgram_result("hello", is_final=True, words=words)]
+    stt, _ = _make_deepgram_stt(messages)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert events[0].word_timestamps is not None
+    assert events[0].word_timestamps[0].word == "hello"
+
+
 # ── Ignores non-transcript messages ─────────────────────────────
 
 
@@ -207,6 +220,22 @@ async def test_deepgram_includes_word_timestamps():
 async def test_deepgram_ignores_non_results_messages():
     messages = [
         json.dumps({"type": "Metadata", "request_id": "abc"}),
+        _deepgram_result("hello", is_final=True),
+    ]
+    stt, _ = _make_deepgram_stt(messages)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert len(events) == 1
+    assert events[0].text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_deepgram_ignores_binary_and_malformed_json_messages():
+    messages = [
+        b"\x00\x01",
+        "{not json",
         _deepgram_result("hello", is_final=True),
     ]
     stt, _ = _make_deepgram_stt(messages)

@@ -4,14 +4,15 @@ import logging
 
 import pytest
 
-from easycat import PCM16_MONO_16K, PCM16_MONO_24K, EasyCatConfig, create_session
+from easycat import PCM16_MONO_16K, PCM16_MONO_24K, EasyConfig, create_session
+from easycat.audio_format import AudioChunk
 from easycat.config import TelephonyConfig
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.events import DTMFAggregated
 from easycat.integrations.agents._agent_runner import AgentRunner
+from easycat.session._types import CallIdentity
 from easycat.smart_turn import SmartTurnConfig
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
-from easycat.stt.openai_provider import OpenAISTTConfig  # noqa: F401  (re-exported symbol)
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.telephony.dtmf import emit_twilio_dtmf
 from easycat.telephony.session_actions import (
@@ -42,14 +43,42 @@ class _DummyWebSocket:
         return None
 
 
+class _CapabilityTransportConfig:
+    default_echo_cancellation_enabled = True
+
+
+class _IdentitySinkTransport:
+    def __init__(self) -> None:
+        self.identity_sink = None
+
+    async def connect(self) -> None:
+        pass
+
+    async def disconnect(self) -> None:
+        pass
+
+    async def receive_audio(self):
+        return
+        yield
+
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        return True
+
+    async def clear_audio(self) -> None:
+        pass
+
+    def bind_identity_sink(self, sink) -> None:
+        self.identity_sink = sink
+
+
 def test_easycat_config_requires_stt_tts(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ValueError):
-        EasyCatConfig()
+        EasyConfig()
 
 
 def test_easycat_config_openai_defaults():
-    config = EasyCatConfig(openai_api_key="test-key")
+    config = EasyConfig(openai_api_key="test-key")
     # Default STT is the streaming Realtime provider (sub-second
     # stop-to-final); the batch OpenAISTTConfig is still usable via
     # explicit override but is no longer the auto-wired default.
@@ -60,10 +89,144 @@ def test_easycat_config_openai_defaults():
 def test_easycat_config_auto_aligns_default_openai_tts_to_twilio_transport_instance():
     transport = TwilioConnectionTransport(_DummyWebSocket())
 
-    config = EasyCatConfig(openai_api_key="test-key", transport=transport)
+    config = EasyConfig(openai_api_key="test-key", transport=transport)
 
     assert isinstance(config.tts, OpenAITTSConfig)
     assert config.tts.output_format == transport.audio_format
+
+
+def test_easycat_config_uses_transport_echo_preference_capability():
+    config = EasyConfig(openai_api_key="test-key", transport=_CapabilityTransportConfig())
+
+    assert config.echo_cancellation is not None
+    assert config.echo_cancellation.enabled is True
+
+
+def test_create_session_binds_custom_identity_sink_capability():
+    transport = _IdentitySinkTransport()
+    session = create_session(
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=transport,
+        )
+    )
+    identity = CallIdentity(caller_number="+15551234567")
+
+    assert transport.identity_sink is not None
+    transport.identity_sink(identity)
+
+    assert session.call_identity is identity
+
+
+@pytest.mark.asyncio
+async def test_create_session_binds_twilio_connection_identity_sink():
+    transport = TwilioConnectionTransport(_DummyWebSocket())
+    session = create_session(
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=transport,
+        )
+    )
+
+    await transport._handle_start(
+        {
+            "streamSid": "MZ1",
+            "start": {
+                "streamSid": "MZ1",
+                "callSid": "CA1",
+                "customParameters": {
+                    "From": "+15551234567",
+                    "To": "+15557654321",
+                    "CallerName": "Alice Example",
+                },
+            },
+        }
+    )
+
+    assert session.call_identity is transport.call_identity
+    assert session.call_identity is not None
+    assert session.call_identity.caller_number == "+15551234567"
+    assert session.call_identity.called_number == "+15557654321"
+    assert session.call_identity.display_name == "Alice Example"
+
+
+@pytest.mark.asyncio
+async def test_create_session_caller_id_off_keeps_twilio_identity_private():
+    transport = TwilioConnectionTransport(_DummyWebSocket())
+    session = create_session(
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=transport,
+            caller_id_exposure="off",
+        )
+    )
+
+    await transport._handle_start(
+        {
+            "streamSid": "MZ1",
+            "start": {
+                "streamSid": "MZ1",
+                "callSid": "CA1",
+                "customParameters": {
+                    "From": "+15551234567",
+                    "To": "+15557654321",
+                },
+            },
+        }
+    )
+
+    assert transport.call_identity is not None
+    assert session.call_identity is None
+    assert session._call_identity is not None
+    assert session._call_identity.caller_number == "+15551234567"
+
+
+@pytest.mark.asyncio
+async def test_create_session_twilio_identity_sink_merges_with_outbound_identity():
+    transport = TwilioConnectionTransport(_DummyWebSocket())
+    session = create_session(
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=transport,
+        )
+    )
+    session.call_identity = CallIdentity(
+        caller_number="+15551112222",
+        called_number="+15559876543",
+        direction="outbound",
+    )
+
+    await transport._handle_start(
+        {
+            "streamSid": "MZ1",
+            "start": {
+                "streamSid": "MZ1",
+                "callSid": "CA1",
+                "customParameters": {
+                    "Direction": "outbound-api",
+                    "From": "+15559876543",
+                    "To": "+15551112222",
+                    "crm_account_id": "ACC-42",
+                },
+            },
+        }
+    )
+
+    assert transport.call_identity is not None
+    assert transport.call_identity.direction == "outbound"
+    assert transport.call_identity.caller_number == "+15551112222"
+    assert transport.call_identity.called_number == "+15559876543"
+    assert session.call_identity is not transport.call_identity
+    assert session.call_identity is not None
+    assert session.call_identity.direction == "outbound"
+    assert session.call_identity.caller_number == "+15551112222"
+    assert session.call_identity.called_number == "+15559876543"
+    assert session.call_identity.call_sid == "CA1"
+    assert session.call_identity.custom_fields == {"crm_account_id": "ACC-42"}
 
 
 @pytest.mark.parametrize(
@@ -80,7 +243,7 @@ def test_easycat_config_auto_aligns_default_tts_configs_to_transport(
     expected_rate,
     expected_output,
 ):
-    config = EasyCatConfig(
+    config = EasyConfig(
         stt=OpenAIRealtimeSTTConfig(api_key="stt-key"),
         tts=tts_config,
         transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
@@ -103,7 +266,7 @@ def test_easycat_config_auto_aligns_default_tts_configs_to_transport(
 def test_easycat_config_auto_aligns_string_tts_shortcuts(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-elevenlabs-key")
 
-    config = EasyCatConfig(
+    config = EasyConfig(
         stt=OpenAIRealtimeSTTConfig(api_key="stt-key"),
         tts="elevenlabs",
         transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
@@ -115,7 +278,7 @@ def test_easycat_config_auto_aligns_string_tts_shortcuts(monkeypatch: pytest.Mon
 
 
 def test_easycat_config_preserves_explicit_tts_playback_when_auto_align_disabled():
-    config = EasyCatConfig(
+    config = EasyConfig(
         stt=OpenAIRealtimeSTTConfig(api_key="stt-key"),
         tts=ElevenLabsTTSConfig(api_key="tts-key"),
         transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
@@ -128,23 +291,23 @@ def test_easycat_config_preserves_explicit_tts_playback_when_auto_align_disabled
 
 
 def test_easycat_config_echo_cancellation_defaults_for_local_and_websocket():
-    local = EasyCatConfig(openai_api_key="test-key", transport=LocalTransportConfig())
-    websocket = EasyCatConfig(openai_api_key="test-key", transport=WebSocketTransportConfig())
+    local = EasyConfig(openai_api_key="test-key", transport=LocalTransportConfig())
+    websocket = EasyConfig(openai_api_key="test-key", transport=WebSocketTransportConfig())
 
     assert local.echo_cancellation == EchoCancellationConfig(enabled=True)
     assert websocket.echo_cancellation == EchoCancellationConfig(enabled=True)
 
 
 def test_easycat_config_echo_cancellation_defaults_off_for_other_transports():
-    twilio = EasyCatConfig(openai_api_key="test-key", transport=TwilioTransportConfig())
-    webrtc = EasyCatConfig(openai_api_key="test-key", transport=WebRTCTransportConfig())
+    twilio = EasyConfig(openai_api_key="test-key", transport=TwilioTransportConfig())
+    webrtc = EasyConfig(openai_api_key="test-key", transport=WebRTCTransportConfig())
 
     assert twilio.echo_cancellation == EchoCancellationConfig(enabled=False)
     assert webrtc.echo_cancellation == EchoCancellationConfig(enabled=False)
 
 
 def test_easycat_config_echo_cancellation_respects_explicit_override():
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key="test-key",
         transport=LocalTransportConfig(),
         echo_cancellation=EchoCancellationConfig(enabled=False),
@@ -158,7 +321,7 @@ def test_easycat_config_wraps_agent():
         async def run(self, text: str) -> str:
             return text
 
-    config = EasyCatConfig(openai_api_key="test-key", agent=DummyAgent())
+    config = EasyConfig(openai_api_key="test-key", agent=DummyAgent())
     try:
         session = create_session(config)
     except RuntimeError as exc:
@@ -173,7 +336,7 @@ def test_create_session_auto_adapts_openai_agents():
     from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
     raw = agents_mod.Agent(name="test", instructions="hi")
-    config = EasyCatConfig(openai_api_key="test-key", agent=raw)
+    config = EasyConfig(openai_api_key="test-key", agent=raw)
     try:
         session = create_session(config)
     except RuntimeError as exc:
@@ -190,7 +353,7 @@ def test_create_session_auto_adapts_pydantic_agents():
     from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
     raw = pydantic_ai_mod.Agent("openai:gpt-4o-mini")
-    config = EasyCatConfig(openai_api_key="test-key", agent=raw)
+    config = EasyConfig(openai_api_key="test-key", agent=raw)
     try:
         session = create_session(config)
     except RuntimeError as exc:
@@ -204,7 +367,7 @@ def test_create_session_auto_adapts_pydantic_agents():
 
 def test_create_session_does_not_mutate_turn_taking_config():
     turn_cfg = TurnManagerConfig(endpoint_detector=None)
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key="test-key",
         turn_taking=turn_cfg,
         agent=_DummyAgent(),
@@ -221,7 +384,7 @@ def test_create_session_does_not_mutate_turn_taking_config():
 
 @pytest.mark.asyncio
 async def test_telephony_helpers_are_managed_by_session_lifecycle():
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key="test-key",
         telephony=TelephonyConfig(enable_dtmf_aggregator=True),
         agent=_DummyAgent(),
@@ -256,7 +419,7 @@ async def test_telephony_helpers_are_managed_by_session_lifecycle():
 
 
 def test_create_session_adds_twilio_action_executor_when_configured():
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key="test-key",
         agent=_DummyAgent(),
         telephony=TelephonyConfig(
@@ -295,7 +458,7 @@ def test_create_session_disables_vad_for_deepgram_flux(monkeypatch: pytest.Monke
         "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
     )
 
-    config = EasyCatConfig(
+    config = EasyConfig(
         stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
         tts=OpenAITTSConfig(api_key="test-key"),
         agent=_DummyAgent(),
@@ -334,7 +497,7 @@ def test_create_session_keeps_flux_auto_turn_disabled_for_push_to_talk(
         "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
     )
 
-    config = EasyCatConfig(
+    config = EasyConfig(
         stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
         tts=OpenAITTSConfig(api_key="test-key"),
         turn_taking=TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK),
@@ -375,7 +538,7 @@ def test_create_session_keeps_vad_enabled_for_flux_when_smart_turn_enabled(
         "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
     )
 
-    config = EasyCatConfig(
+    config = EasyConfig(
         stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
         tts=OpenAITTSConfig(api_key="test-key"),
         smart_turn=SmartTurnConfig(enabled=True),
@@ -416,7 +579,7 @@ def test_create_session_keeps_vad_enabled_for_flux_when_voicemail_detector_enabl
         "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
     )
 
-    config = EasyCatConfig(
+    config = EasyConfig(
         stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
         tts=OpenAITTSConfig(api_key="test-key"),
         telephony=TelephonyConfig(enable_voicemail_detector=True),
@@ -434,5 +597,15 @@ def test_create_session_keeps_vad_enabled_for_flux_when_voicemail_detector_enabl
 
 
 def test_debug_mode_sets_easycat_logger_to_debug():
-    EasyCatConfig(openai_api_key="test-key", debug="full")
+    EasyConfig(openai_api_key="test-key", debug="full")
     assert logging.getLogger("easycat").level == logging.DEBUG
+
+
+def test_debug_bool_true_rejected():
+    with pytest.raises(ValueError, match="Invalid debug=True"):
+        EasyConfig(openai_api_key="test-key", debug=True)
+
+
+def test_debug_bool_false_rejected():
+    with pytest.raises(ValueError, match="Invalid debug=False"):
+        EasyConfig(openai_api_key="test-key", debug=False)

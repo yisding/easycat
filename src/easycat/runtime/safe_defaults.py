@@ -115,7 +115,7 @@ def _safe_repr(val: Any) -> str:
 def safe_config_snapshot(config: object) -> dict[str, Any]:
     """Return a dict containing only allowlisted, non-secret config fields.
 
-    Accepts any object (typically ``EasyCatConfig`` or ``SessionConfig``).
+    Accepts any object (typically ``EasyConfig`` or ``SessionConfig``).
     Fields are serialised via :func:`_safe_repr` which redacts secret
     fields in nested dataclass values (e.g. provider configs that contain
     ``api_key``).

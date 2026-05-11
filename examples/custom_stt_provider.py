@@ -1,6 +1,6 @@
 """Inject a custom STT provider via SessionConfig.
 
-``EasyCatConfig`` covers the common path: pick a registered provider by
+``EasyConfig`` covers the common path: pick a registered provider by
 name or config dataclass.  When you have your own provider — an in-house
 ASR, a wrapper that adds logging, a tee that mirrors audio to a recorder
 — drop down to ``SessionConfig`` and wire providers by hand.
@@ -33,7 +33,7 @@ from easycat import (
 )
 from easycat.audio_format import AudioChunk
 from easycat.events import EventBus, STTEvent
-from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents import auto_adapt_agent
 from easycat.providers import STTProvider
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransport, LocalTransportConfig
@@ -76,7 +76,7 @@ async def main() -> None:
 
     from agents import Agent  # type: ignore[import-untyped]
 
-    # Build every provider by hand — no EasyCatConfig auto-wiring.
+    # Build every provider by hand — no EasyConfig auto-wiring.
     event_bus = EventBus()
     inner_stt = OpenAIRealtimeSTT(
         OpenAIRealtimeSTTConfig(api_key=api_key, event_bus=event_bus),

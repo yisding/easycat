@@ -19,4 +19,9 @@ def require_module(
         hint = f" Install with: uv add easycat[{extra}]." if extra else ""
         label = purpose or module_name
         raise ImportError(f"{label} requires the {module_name} package.{hint}")
-    return importlib.import_module(module_name)
+    try:
+        return importlib.import_module(module_name)
+    except OSError as exc:
+        hint = f" Install with: uv add easycat[{extra}]." if extra else ""
+        label = purpose or module_name
+        raise ImportError(f"{label} could not load {module_name}: {exc}.{hint}") from exc

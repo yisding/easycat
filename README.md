@@ -3,47 +3,265 @@
 Slim, batteries-included voice bot framework that plugs into idiomatic
 OpenAI Agents SDK, PydanticAI agents, or PydanticAI workflows.
 
+## Learn the pipeline from scratch
+
+The 16-chapter [teaching ladder](docs/teaching/) walks the entire voice
+pipeline ground-up, in the spirit of *Crafting Interpreters* and
+`nanoGPT`. Each chapter is a self-contained folder with a runnable
+`main.py` and a narrative `README.md`. Start at
+[`docs/teaching/00-hello-audio/`](docs/teaching/00-hello-audio/) and add
+one stage per chapter (echo → transcribe → VAD → blocking agent →
+streaming agent → tools → smart-turn → interruption → noise/AEC →
+journal → evals → swap providers → BYO agent → operate in production).
+
+## CLI
+
+```bash
+easycat init     # scaffold a new project from a template
+easycat doctor   # check API keys, Python version, optional extras, provider reachability
+easycat explain  # look up an EasyCat error code
+easycat bundles  # list captured debug bundles
+easycat inspect  # summarise one captured debug bundle
+```
+
+The fastest path from empty directory to a running session is
+`easycat init` followed by `easycat doctor` to validate the environment.
+
 ## Current capabilities
 - Session runtime that wires the audio pipeline (noise reduction -> VAD -> STT -> agent -> TTS)
 - Typed event system with an EventBus for streaming-first voice events
 - Passive supervisor listen-in via session audio fan-out on the EventBus
-- STT providers: OpenAI, Deepgram, ElevenLabs
-- TTS providers: OpenAI, Deepgram, ElevenLabs
-- VAD providers: Silero (open-source), TEN VAD (open-source), and Krisp (commercial)
+- STT providers: OpenAI, Deepgram, ElevenLabs, Cartesia
+- TTS providers: OpenAI, Deepgram, ElevenLabs, Cartesia
+- VAD providers: Silero (open-source), optional TEN VAD (non-permissive license), and Krisp (commercial)
 - Noise reduction: RNNoise (open-source), Krisp (commercial), passthrough fallback
 - Transports: Local (sounddevice), WebSocket server, WebRTC (aiortc), Twilio Media Streams server
-- Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers
+- Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers, outbound calling (Twilio), screening + IVR navigation, per-number health / retry / compliance gates, caller-ID propagation to the agent or tools
 - Reliability/observability: reconnecting WebSocket, timeouts, bounded queues, metrics/tracing
 - Agent adapters: use OpenAI Agents SDK or PydanticAI directly and wrap with EasyCat
 - Workflow adapter: use a stateful PydanticAI workflow as the session boundary
 
 ## Bring your own agent
 EasyCat does not replace your agent framework. Build your agent or workflow with
-your SDK of choice, then wrap it with an EasyCat adapter when creating a session.
+your SDK of choice and hand it to EasyCat — `create_session` auto-detects
+OpenAI Agents SDK and PydanticAI objects via `auto_adapt_agent`, so you don't
+have to wrap them yourself.
 
-### Quickstart (EasyCatConfig)
+### Quickstart (EasyConfig)
 ```python
-from easycat import EasyCatConfig, create_session
-from easycat.agents import OpenAIAgentsAdapter
 from agents import Agent
+
+from easycat import EasyConfig, create_session
 
 agent = Agent(
     name="Support",
     instructions="Help customers with account issues.",
 )
 
-config = EasyCatConfig(
+config = EasyConfig(
     openai_api_key="your-api-key",
-    agent=OpenAIAgentsAdapter(agent),
+    agent=agent,
 )
 session = create_session(config)
 ```
 
-> Note: `EasyCatConfig` will automatically wire **OpenAI STT + OpenAI TTS** if
-> you provide `openai_api_key` and do not override `stt` or `tts`. If you omit
-> the API key, you must supply `stt` and `tts` configs explicitly. For most
-> users, `EasyCatConfig` + `create_session` is the fastest way to get a working
-> pipeline.
+> Note: `EasyConfig` will automatically wire **OpenAI Realtime STT
+> (gpt-realtime) + OpenAI TTS** if you provide `openai_api_key` and do
+> not override `stt` or `tts`. The Realtime STT streams transcription
+> over a WebSocket as audio arrives — sub-second stop-to-final latency,
+> not a batch upload at end of turn. The Realtime API is priced
+> separately from `/v1/audio/transcriptions`; see OpenAI's pricing page.
+> If you omit the API key, you must supply `stt` and `tts` configs
+> explicitly. For most users, `EasyConfig` + `create_session` is the
+> fastest way to get a working pipeline.
+>
+> The underlying bridge classes live in `easycat.integrations.agents`
+> (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`,
+> `RemoteResponsesAPIBridge`) for callers who want to construct them by hand.
+
+## Telephony (inbound + outbound)
+
+### Inbound calls (Twilio Media Streams)
+Point Twilio's inbound webhook at a handler that returns
+`<Connect><Stream>` TwiML and passes actual webhook form values through
+as `<Parameter>` children:
+
+```python
+import os
+from urllib.parse import parse_qsl
+
+from fastapi import Request, Response
+from easycat.telephony import validate_twilio_webhook_signature
+from easycat.transports.twilio_media import twiml_connect_stream
+
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+
+@app.post("/twiml")
+async def twiml(request: Request) -> Response:
+    form_items = parse_qsl((await request.body()).decode(), keep_blank_values=True)
+    if TWILIO_AUTH_TOKEN and not validate_twilio_webhook_signature(
+        auth_token=TWILIO_AUTH_TOKEN,
+        url=str(request.url),  # must be Twilio's exact public URL
+        params=form_items,
+        signature=request.headers.get("x-twilio-signature"),
+    ):
+        return Response(status_code=403)
+
+    form = dict(form_items)
+    xml = twiml_connect_stream(
+        "wss://your-app.example.com/twilio",
+        parameters={
+            "Direction": form.get("Direction") or "inbound",
+            "From": form.get("From", ""),
+            "To": form.get("To", ""),
+            "CallerName": form.get("CallerName", ""),
+        },
+    )
+    return Response(content=xml, media_type="application/xml")
+```
+
+`TwilioTransport` parses `start.customParameters` and writes a
+`CallIdentity` (caller / called numbers, direction, optional display
+name, and any extra fields you pass) onto
+`session.call_identity`. Tool code inside your agent reads
+`session.call_identity.caller_number` directly. Do not pass
+`"{{From}}"`-style placeholders to `twiml_connect_stream`; Twilio
+forwards those verbatim in generated TwiML. When webhook validation is
+enabled behind a proxy, validate against the same public URL Twilio
+called, not an internal service URL.
+
+### Outbound calls (Twilio REST)
+Enable the outbound pipeline via `EasyConfig.telephony`:
+
+```python
+from easycat import (
+    EasyConfig,
+    OutboundCallConfig,
+    TelephonyConfig,
+    VoicemailDetectionConfig,
+    create_session,
+)
+
+config = EasyConfig(
+    openai_api_key="…",
+    agent=your_agent,
+    greeting="Hi, this is Lucy from Example Health.",
+    telephony=TelephonyConfig(
+        enable_outbound_call_manager=True,
+        outbound=OutboundCallConfig(
+            from_number="+15559876543",
+            twilio_account_sid="AC…",
+            twilio_auth_token="…",
+            twiml_url="https://your-app.example.com/outbound.twiml",
+            status_callback_url="https://your-app.example.com/status",
+            voicemail_detection=VoicemailDetectionConfig(
+                mode="detect_end_of_greeting",  # or "detect"
+                detection_timeout_s=30,
+            ),
+        ),
+    ),
+)
+session = create_session(config)
+```
+
+With the outbound manager enabled you also get:
+
+- `NumberHealthMonitor` — per-number answer rate, block count, pacing
+- `CallDispositionTracker` — human / voicemail / IVR disposition stats
+- `RetryStrategy` attached to the manager — `manager.retry_strategy.record_attempt(number, reason)` decides RETRY / SMS_FALLBACK / NO_RETRY
+- `DNCList`, `check_calling_hours`, and `detect_opt_out` helpers you can hook into `manager.dnc_list` / `manager.compliance_check` for TCPA-friendly calling
+
+Start the session before placing calls, and feed Twilio status callbacks
+back into the same event bus:
+
+```python
+from urllib.parse import parse_qsl
+
+from fastapi import HTTPException, Request, Response
+from easycat.telephony import emit_call_status, validate_twilio_webhook_signature
+
+
+await session.start()
+manager = session.outbound_call_manager
+if manager is None:
+    raise RuntimeError("Outbound manager is not configured")
+
+call_sid = await manager.place_call("+15551234567")
+
+
+@app.post("/status")
+async def status(request: Request) -> Response:
+    form_items = parse_qsl((await request.body()).decode(), keep_blank_values=True)
+    if TWILIO_AUTH_TOKEN and not validate_twilio_webhook_signature(
+        auth_token=TWILIO_AUTH_TOKEN,
+        url=str(request.url),
+        params=form_items,
+        signature=request.headers.get("x-twilio-signature"),
+    ):
+        raise HTTPException(status_code=403)
+    await emit_call_status(dict(form_items), session.event_bus)
+    return Response(status_code=204)
+```
+
+When the session places an outbound call via `CallInitiated`,
+`session.call_identity` is stamped with `direction="outbound"` and the
+dialed number.  `TwilioTransport` mirrors the other direction: on the
+``<Stream>`` start event it parses caller-ID + geographic
+customParameters and emits ``CallAnswered``, so observers like
+``CallDispositionTracker`` see inbound and outbound calls through the
+same lifecycle.
+
+### Bot speaks first
+Set `EasyConfig.greeting` to have the bot synthesize a greeting on
+the first `CallAnswered` event.  Works for both inbound (stream
+start) and outbound (callee pickup).  Use this to play an
+AI-disclosure or identification line before the caller's first
+utterance — a requirement under the FCC's 2024 TCPA ruling and TX SB
+140 for outbound AI calls.
+
+### Opt-out auto-detection
+The session listens on every STT final for phrases in
+`easycat.telephony.OPT_OUT_PHRASES` (``"stop calling"``, ``"take me
+off your list"``, ``"opt out"``, …).  On match the session:
+
+1. emits an `OptOutDetected` event carrying the caller number, the
+   matched phrase, and the full transcript text,
+2. adds the caller to `session.dnc_list` when one is attached
+   (pass a shared `DNCList` via `EasyConfig.dnc_list`),
+3. enqueues an `EndCallAction(reason="opt_out")` so the call
+   terminates after the agent's current utterance finishes.
+
+Set `SessionConfig.opt_out_detection=False` to opt out of the
+auto-wiring, or pass `opt_out_phrases=("retire me", …)` to replace
+the built-in phrase list (language packs / industry-specific
+terminology).
+
+### Caller-ID exposure policy
+Control whether the LLM sees the caller's number or only tool code
+does via `EasyConfig.caller_id_exposure`:
+
+- `"tools_only"` (default): number available at
+  `session.call_identity.caller_number` for tools, hidden from the
+  LLM prompt. Right for PII-sensitive workflows.
+- `"system_message"`: prepend a short system note on every turn
+  (`"The caller's phone number is +1555…"`). Use when the agent needs
+  to greet by number, look up account, etc.
+- `"off"`: hide from both layers.
+
+```python
+config = EasyConfig(
+    openai_api_key="…",
+    agent=your_agent,
+    caller_id_exposure="system_message",
+)
+```
+
+### Transport kind
+Tools that should behave differently on a phone call vs. a browser
+session read `session.transport_kind` — one of `"telephony"`,
+`"webrtc"`, `"websocket"`, `"local"`, `"noop"`, or `"custom"`.  Use
+it to skip "open this URL" prompts on phone calls or mute emoji in
+voice-only surfaces.
 
 ## Session lifecycle
 
@@ -59,13 +277,13 @@ or custom pronunciations), pass processors in config:
 
 ```python
 from easycat import (
-    EasyCatConfig,
+    EasyConfig,
     PauseProcessor,
     PhoneticReplacementProcessor,
     create_session,
 )
 
-config = EasyCatConfig(
+config = EasyConfig(
     openai_api_key="your-api-key",
     output_processors=[
         # Replace names/terms with pronunciation-friendly spellings.
@@ -94,9 +312,9 @@ session = create_session(config)
 Or use the convenience helper for the common pronunciation + phone-number stack:
 
 ```python
-from easycat import EasyCatConfig, create_session, default_pronunciation_processors
+from easycat import EasyConfig, create_session, default_pronunciation_processors
 
-config = EasyCatConfig(
+config = EasyConfig(
     openai_api_key="your-api-key",
     output_processors=default_pronunciation_processors(
         name_pronunciations={"Siobhan": "shi-vawn", "Nguyen": "win"},
@@ -130,8 +348,8 @@ Notes:
 - For provider authors, `synthesize` accepts either a legacy `str` or `TTSInput`.
 
 ### Local/open-source speech pipeline
-EasyCat ships with hosted STT/TTS providers (OpenAI, Deepgram, ElevenLabs). To
-run fully local speech, plug in your own STT/TTS implementations and use
+EasyCat ships with hosted STT/TTS providers (OpenAI, Deepgram, ElevenLabs, and
+Cartesia). To run fully local speech, plug in your own STT/TTS implementations and use
 `SessionConfig` directly:
 
 ```python
@@ -153,48 +371,30 @@ session = Session(
 This keeps the pipeline (VAD → STT → agent → TTS) identical while letting you
 swap in open-source models for fully local operation.
 
-## Event-by-event logging (barge-in, ASR, TTS)
-EasyCat can now attach a built-in event trace logger that prints one log line
-per EventBus event so it is easy to inspect conversation flow (including
-`Interruption` / barge-in, `STTPartial` / `STTFinal`, and TTS events).
+## Inspecting conversation flow
+
+Observability is handled by the journal runtime. Enable it via `debug="light"`
+(in-memory) or `debug="full"` (SQLite WAL, crash-durable) and tail records
+live or read them after the session ends:
 
 ```python
-import logging
+import asyncio
 
-from easycat import EasyCatConfig, EventLoggingConfig, create_session
+from easycat import EasyConfig, JournalRecordKind, create_session
 
-logging.basicConfig(level=logging.INFO)
-
-config = EasyCatConfig(
-    openai_api_key="your-api-key",
-    event_logging=EventLoggingConfig(
-        enabled=True,
-        include_partials=True,
-        include_audio_events=False,  # set True to log every TTSAudio chunk
-        include_text=True,          # set False to log only text lengths
-    ),
-)
+config = EasyConfig(openai_api_key="your-api-key", debug="light")
 session = create_session(config)
+
+async def tail(session):
+    async for record in session.journal.follow():
+        if record.kind == JournalRecordKind.EVENT:
+            print(f"[{record.name}] {record.data}")
+
+asyncio.create_task(tail(session))
 ```
 
-By default, logs are emitted to logger name `easycat.event_trace` and include
-a per-session event index + relative timestamp for easier debugging.
-
-For production ingestion, you can enable JSON logs + event throttling and inspect
-a small in-memory ring buffer for "last N events" snapshots:
-
-```python
-event_logging=EventLoggingConfig(
-    enabled=True,
-    json_mode=True,
-    sample_rates={"STTPartial": 0.25},   # keep every 4th partial
-    min_interval_s={"TTSAudio": 0.25},   # max 4 audio logs/second
-    ring_buffer_size=500,
-)
-```
-
-Events now carry `session_id` and `turn_id` correlation fields, and tool events
-also include `call_id`, making cross-system traces easier to join.
+Records carry `session_id`, `turn_id`, and monotonic sequence numbers so
+cross-system traces join cleanly.
 
 ### Hook directly into agent/tool events
 You can subscribe to agent stream events (including tool calls) via the session:
@@ -219,15 +419,15 @@ session.unsubscribe_handlers(registrations)
 from agents import Agent
 
 from easycat import Session, SessionConfig
-from easycat.agents import OpenAIAgentsAdapter
+from easycat.integrations.agents import OpenAIAgentsBridge
 
 agent = Agent(
     name="Support",
     instructions="Help customers with account issues.",
 )
 
-adapter = OpenAIAgentsAdapter(agent)
-session = Session(SessionConfig(agent=adapter, ...))
+bridge = OpenAIAgentsBridge(agent=agent)
+session = Session(SessionConfig(agent=bridge, ...))
 ```
 
 ### PydanticAI (idiomatic)
@@ -235,68 +435,58 @@ session = Session(SessionConfig(agent=adapter, ...))
 from pydantic_ai import Agent as PydanticAgent
 
 from easycat import Session, SessionConfig
-from easycat.agents import PydanticAIAdapter
+from easycat.integrations.agents import PydanticAIBridge
 
 pydantic_agent = PydanticAgent(
     "openai:gpt-5.2",
     system_prompt="Help customers with account issues.",
 )
 
-adapter = PydanticAIAdapter(pydantic_agent)
-session = Session(SessionConfig(agent=adapter, ...))
+bridge = PydanticAIBridge(agent=pydantic_agent)
+session = Session(SessionConfig(agent=bridge, ...))
 ```
 
-### PydanticAI workflows (recommended for voice apps)
+### Workflows (recommended for multi-step voice apps)
 
-For many voice apps, the best PydanticAI integration point is not a single
-agent but a workflow object that owns the current specialist/step and decides
-which PydanticAI agent handles each user turn.
-
-This maps well to PydanticAI's programmatic hand-off style:
-- the caller can stay pinned to one specialist across turns
-- you do not pay an extra router-model call on every turn
-- the workflow can keep private per-agent histories while EasyCat only sees the
-  spoken response for the current turn
+For voice apps with step-based control flow, define a workflow object with
+an async `on_user_turn(text) -> str` method and hand it to
+`create_session`.  `auto_adapt_agent` wraps it in a
+`GenericWorkflowBridge`, so no import dance is needed.
 
 ```python
-from easycat import EasyCatConfig, create_session
-from easycat.agents import WorkflowTurnResult
+from easycat import EasyConfig, create_session
 
 
 class BookingWorkflow:
     def __init__(self) -> None:
-        self.active_agent_id = "flight_search"
         self.flight = None
 
-    async def on_user_turn(self, text: str) -> str | WorkflowTurnResult:
+    async def on_user_turn(self, text: str) -> str:
         if self.flight is None:
             self.flight = {"flight_number": "AK456"}
-            self.active_agent_id = "seat_selection"
-            return WorkflowTurnResult(
-                text="I found flight AK456. What seat would you like?",
-                structured_output=self.flight,
-                active_agent_id=self.active_agent_id,
-            )
-
-        return WorkflowTurnResult(
-            text="Got it. I saved seat 1A for you.",
-            structured_output={"row": 1, "seat": "A"},
-            active_agent_id=self.active_agent_id,
-        )
+            return "I found flight AK456. What seat would you like?"
+        return "Got it. I saved seat 1A for you."
 
 
 workflow = BookingWorkflow()
 
-config = EasyCatConfig(
+config = EasyConfig(
     openai_api_key="your-api-key",
-    agent=workflow,  # auto-adapted to PydanticAIWorkflowAdapter
+    agent=workflow,  # auto-adapted to GenericWorkflowBridge
 )
 session = create_session(config)
 ```
 
-Use `PydanticAIAdapter` for simple single-agent assistants. Use
-`PydanticAIWorkflowAdapter` when your voice app has step-based control flow,
-specialist pinning, or programmatic hand-offs between turns.
+Need recorder access, cancellation tokens, or handoffs? Add a
+`recorder: AgentRecorder` parameter to `on_user_turn` — the bridge
+flips into deep mode and calls your method with the live recorder plus
+a cancel token.
+
+In most cases, you can just pass your PydanticAI agent or workflow to
+`EasyConfig(agent=...)` and call `create_session(config)`; EasyCat
+auto-adapts it to the right bridge. Under the hood, simple single-agent
+assistants use `PydanticAIBridge`, while step-based workflows with
+specialist pinning or programmatic hand-offs use `GenericWorkflowBridge`.
 
 ## Examples
 Runnable examples live in the `examples/` directory:
@@ -306,8 +496,10 @@ Runnable examples live in the `examples/` directory:
 - `ws_server.py`: WebSocket server (multi-session)
 - `ws_browser_example.py`: browser mic/speaker over WebSocket + static web client
 - `ws_supervisor_server.py`: browser caller + passive supervisor listen-in over WebSocket
+- `reconnecting_ws_client.py`: resilient client using `ReconnectingWebSocket` against `ws_server.py`
 - `webrtc_server.py`: WebRTC voice chat with browser client
-- `webrtc_observability_server.py`: WebRTC + FastAPI dashboard streaming live events
+- `webrtc_observability_server.py`: WebRTC + the bundled debugger UI side-by-side
+  (talk to the bot up top, watch the journal below)
 - `twilio_app.py`: Twilio Media Streams example
 
 **Agents**
@@ -315,11 +507,12 @@ Runnable examples live in the `examples/` directory:
 - `pydantic_ai_workflow_voice.py`: workflow-level PydanticAI example (multi-agent hand-off)
 - `function_tools_openai.py` / `function_tools_pydantic.py`: agent function-calling tools
 - `session_actions_openai.py` / `session_actions_pydantic.py`: agent-initiated session actions (end-call)
+- `responses_api_bridge.py`: remote agent over the OpenAI Responses API (`RemoteResponsesAPIBridge`)
 
 **Provider swaps**
-- `deepgram_stt.py`: Deepgram STT + OpenAI TTS
-- `elevenlabs_tts.py`: OpenAI STT + ElevenLabs TTS (typed config with voice customization)
-- `cartesia_voice.py`: Cartesia STT + Cartesia TTS
+- `deepgram_voice.py`: Deepgram for both STT (Nova-2) and TTS (Aura)
+- `elevenlabs_voice.py`: ElevenLabs for both STT (Scribe) and TTS (Flash)
+- `cartesia_voice.py`: Cartesia for both STT (Ink-Whisper) and TTS (Sonic)
 - `combined_providers.py`: Deepgram STT + ElevenLabs TTS together (stages compose)
 
 **Turn-taking**
@@ -329,8 +522,23 @@ Runnable examples live in the `examples/` directory:
 **Advanced**
 - `custom_stt_provider.py` / `custom_tts_provider.py` / `custom_vad_provider.py`: inject a
   user-written provider via `SessionConfig`
+- `output_processors.py`: pre-TTS `PauseProcessor` + `PhoneticReplacementProcessor` for
+  phone-number pacing and custom pronunciations
+- `agent_event_subscription.py`: attach handlers for agent deltas and tool-call events via
+  `session.subscribe_agent_events`
+- `vad_backends.py`: pin a specific VAD backend (`silero` / `funasr` / `ten` / `krisp`) via
+  `VADConfig.backend`
+- `noise_reduction_backends.py`: pin a specific noise-reduction backend via
+  `NoiseReducerConfig.backend`
+- `echo_cancellation.py`: enable LiveKit WebRTC AEC3 on a local mic/speaker loop
 - `debug_bundle.py`: record with `debug="light"`, export a `RunBundle`, inspect it
 - `journal_demo.py`: one-turn synthetic session that dumps journal records (no API keys)
+- `journal_ui.py`: run `easycat.debugger.serve_session()` alongside a local mic
+  session — open `http://localhost:8765` to tail the journal in a UI
+
+**Telephony**
+- `telephony_helpers.py`: standalone exercise of `DTMFAggregator`, `VoicemailDetector`,
+  and the IVR text classifiers (no live Twilio required)
 
 ### Quickstart: WebRTC in browser (fast path)
 1. Install extras:
@@ -366,9 +574,10 @@ export OPENAI_API_KEY="your-api-key"
 uv run python examples/openai_agents_voice.py
 ```
 
-The `quickstart` extra bundles local audio, OpenAI providers, noise reduction,
-and a lightweight VAD (TEN VAD) so you can skip torch.  If you prefer Silero
-VAD (requires torch), install extras individually:
+The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
+SDK, RNNoise dependencies, numpy, and onnxruntime. It does not include TEN VAD;
+install that optional extra separately only if you accept its non-permissive
+license. If you prefer Silero VAD (requires torch), install extras individually:
 
 ```
 uv sync --extra local --extra openai --extra openai-agents --extra rnnoise
@@ -379,18 +588,18 @@ Optional dependencies you may need depending on providers/transports:
 - sounddevice (LocalTransport)
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
 - numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
-- ten-vad + numpy (TEN VAD; use latest ten-vad for macOS/Windows ONNX support)
+- ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license)
 - torch (Silero VAD)
 - pyrnnoise + requests (RNNoise noise reduction backend)
 - Krisp SDK (krisp_audio)
-- Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs
+- Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs, Cartesia
 
 ## Factory APIs
 
 EasyCat supports two complementary factory styles:
 
 - String-based provider selection (`create_stt_provider` / `create_tts_provider`) for dynamic setups.
-- Config-object based provider wiring via `EasyCatConfig` + `create_session`.
+- Config-object based provider wiring via `EasyConfig` + `create_session`.
 
 Both styles now resolve provider classes through the same central registries in
 `easycat.stt.factory` and `easycat.tts.factory`, so adding providers only

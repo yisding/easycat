@@ -8,9 +8,11 @@ containing the journal, artifacts, and manifest metadata.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 import tempfile
 import zipfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -124,21 +126,34 @@ def export_debug_bundle(
 
 def _record_to_dict(record: Any) -> dict[str, Any]:
     """Convert a journal record to a JSON-safe dict."""
-    if hasattr(record, "__dict__"):
-        d: dict[str, Any] = {}
-        for k, v in record.__dict__.items():
-            if k.startswith("_"):
-                continue
-            if hasattr(v, "__dict__") and not isinstance(v, (str, bytes, int, float)):
-                d[k] = {kk: vv for kk, vv in v.__dict__.items() if not kk.startswith("_")}
-            elif hasattr(v, "value") and not isinstance(v, (str, bytes, int, float)):
-                d[k] = v.value
-            elif isinstance(v, frozenset):
-                d[k] = sorted(v)
-            else:
-                d[k] = v
-        return d
-    return record
+    value = _json_safe_value(record)
+    return value if isinstance(value, dict) else record
+
+
+def _json_safe_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if hasattr(value, "value") and not isinstance(value, (str, bytes, int, float, bool)):
+        return _json_safe_value(value.value)
+    if dataclasses.is_dataclass(value):
+        return {
+            field.name: _json_safe_value(getattr(value, field.name))
+            for field in dataclasses.fields(value)
+            if not field.name.startswith("_")
+        }
+    if isinstance(value, Mapping):
+        return {str(k): _json_safe_value(v) for k, v in value.items()}
+    if isinstance(value, frozenset):
+        return sorted((_json_safe_value(v) for v in value), key=repr)
+    if isinstance(value, set):
+        return sorted((_json_safe_value(v) for v in value), key=repr)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_json_safe_value(v) for v in value]
+    if hasattr(value, "__dict__"):
+        return {k: _json_safe_value(v) for k, v in value.__dict__.items() if not k.startswith("_")}
+    return value
 
 
 def _manifest_to_dict(manifest: Manifest) -> dict[str, Any]:
@@ -151,26 +166,11 @@ def _manifest_to_dict(manifest: Manifest) -> dict[str, Any]:
 
 def _collect_provider_versions(session: Any) -> dict[str, Any]:
     versions: dict[str, Any] = {}
-    for attr in (
-        "_stt",
-        "_tts",
-        "_transport",
-        "_vad",
-        "_noise_reducer",
-        "_echo_canceller",
-        "stt",
-        "tts",
-        "transport",
-        "vad",
-        "noise_reducer",
-        "echo_canceller",
-    ):
+    for attr in ("stt", "tts", "transport", "vad", "noise_reducer", "echo_canceller"):
         provider = getattr(session, attr, None)
         if provider is not None and hasattr(provider, "version_info"):
             try:
-                vi = provider.version_info()
-                role = attr.lstrip("_")
-                versions[role] = vi
+                versions[attr] = provider.version_info()
             except Exception:
                 pass
     return versions

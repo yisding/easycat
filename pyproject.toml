@@ -15,6 +15,9 @@ dependencies = [
 [project.scripts]
 easycat = "easycat.cli:main"
 
+[project.entry-points.pytest11]
+easycat = "easycat.debug._pytest_plugin"
+
 [project.optional-dependencies]
 openai-agents = ["openai-agents>=0.6.2"]
 pydantic-ai = ["pydantic-ai>=0.1"]

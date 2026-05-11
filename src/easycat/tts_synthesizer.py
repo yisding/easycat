@@ -82,9 +82,7 @@ class TTSSynthesizer:
         payload: TTSInput | str,
         token: Any | None,
         *,
-        turn_end_time: float | None = None,
         is_active: Callable[[], bool] | None = None,
-        record_latency: bool = True,
         bypass_gate: bool = False,
     ) -> TTSSynthResult:
         """Synthesize text and stream audio to the outbound queue.
@@ -95,9 +93,7 @@ class TTSSynthesizer:
         Args:
             payload: Text payload to synthesize.
             token: CancelToken to check between chunks.
-            turn_end_time: Monotonic timestamp of turn end (for E2E latency).
             is_active: Optional predicate; iteration stops when it returns False.
-            record_latency: Legacy parameter, retained for call-site compat.
             bypass_gate: Whether to bypass the audio gate.
 
         Returns:

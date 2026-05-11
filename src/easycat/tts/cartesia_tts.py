@@ -8,9 +8,10 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 from uuid import uuid4
 
+from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
@@ -18,15 +19,6 @@ from easycat.tts.base import TTSBase
 from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
 
 logger = logging.getLogger(__name__)
-
-
-def _get_package_version(pkg: str) -> str:
-    try:
-        from importlib.metadata import version
-
-        return version(pkg)
-    except Exception:
-        return "unknown"
 
 
 # Byte-width per sample for each encoding Cartesia returns on the wire.
@@ -40,6 +32,11 @@ _ENCODING_SAMPLE_WIDTH: dict[str, int] = {
 @dataclass
 class CartesiaTTSConfig:
     """Configuration for the Cartesia TTS (Sonic) WebSocket provider."""
+
+    # Name of the model field on this config — read by ``parse_tts_string``
+    # to know that ``"cartesia/<model>"`` shortcuts populate ``model_id``
+    # rather than the conventional ``model``.
+    MODEL_FIELD: ClassVar[str] = "model_id"
 
     api_key: str = ""
     # Sonic-3 is the default — best quality/latency balance. Use
@@ -242,5 +239,5 @@ class CartesiaTTS(TTSBase):
             "provider": "cartesia",
             "model": self._config.model_id,
             "api_version": self._config.cartesia_version,
-            "sdk_version": _get_package_version("websockets"),
+            "sdk_version": get_package_version("websockets"),
         }

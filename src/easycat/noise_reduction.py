@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import struct
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, TypeAlias, cast
 
 from easycat.audio_format import PCM16_MONO_48K, AudioChunk
 from easycat.audio_utils import resample_chunk
@@ -22,6 +22,19 @@ logger = logging.getLogger(__name__)
 
 # Frame size expected by RNNoise: 480 samples at 48 kHz (10 ms)
 _RNNOISE_FRAME_SAMPLES = 480
+NoiseReducerBackend: TypeAlias = Literal["auto", "krisp", "rnnoise"]
+_VALID_NOISE_REDUCER_BACKENDS: tuple[NoiseReducerBackend, ...] = (
+    "auto",
+    "krisp",
+    "rnnoise",
+)
+
+
+def _validate_noise_reducer_backend(backend: str) -> NoiseReducerBackend:
+    if backend not in _VALID_NOISE_REDUCER_BACKENDS:
+        allowed = ", ".join(_VALID_NOISE_REDUCER_BACKENDS)
+        raise ValueError(f"Unknown noise reducer backend '{backend}'. Expected one of: {allowed}.")
+    return cast(NoiseReducerBackend, backend)
 
 
 # ── RNNoise integration (open-source fallback) ─────────────────────
@@ -207,13 +220,18 @@ class NoiseReducerConfig:
     """Configuration for noise reducer factory."""
 
     # "krisp", "rnnoise", or "auto" (try krisp first, then rnnoise)
-    backend: str = "auto"
+    backend: NoiseReducerBackend = "auto"
     # Krisp-specific
     krisp_model_path: str | None = None
+
+    def __post_init__(self) -> None:
+        self.backend = _validate_noise_reducer_backend(self.backend)
 
 
 class PassthroughNoiseReducer:
     """No-op reducer that passes audio through unchanged. Last-resort fallback."""
+
+    is_passthrough_provider = True
 
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         return chunk
@@ -241,6 +259,7 @@ def create_noise_reducer(config: NoiseReducerConfig | None = None) -> Any:
     Returns an object satisfying the NoiseReducer protocol.
     """
     cfg = config or NoiseReducerConfig()
+    cfg.backend = _validate_noise_reducer_backend(cfg.backend)
 
     if cfg.backend == "krisp":
         return KrispNoiseReducer(model_path=cfg.krisp_model_path)

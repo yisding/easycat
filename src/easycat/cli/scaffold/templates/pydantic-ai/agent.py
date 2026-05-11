@@ -2,7 +2,7 @@
 
 from pydantic_ai import Agent
 
-from easycat import EasyCatConfig, run
+from easycat import EasyConfig, run
 
 voice_agent = Agent(
     "openai:gpt-4.1-mini",
@@ -18,4 +18,4 @@ def current_time() -> str:
     return datetime.now().strftime("%H:%M")
 
 
-run(EasyCatConfig(agent=voice_agent$EASYCAT_CONFIG_EXTRA))
+run(EasyConfig(agent=voice_agent, **__EASYCAT_CONFIG_EXTRA__))  # noqa: F821

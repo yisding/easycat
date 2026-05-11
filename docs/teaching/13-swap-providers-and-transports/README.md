@@ -55,7 +55,7 @@ Each run drops a bundle in `runs/ch13-<mix>-<transport>-*.bundle`.
 
 ```
   ┌─────────────────────┐        ┌─────────┐
-  │  EasyCatConfig(...) │──────► │ Session │ ──► the agent never
+  │  EasyConfig(...) │──────► │ Session │ ──► the agent never
   │    stt=...          │        │ (same   │     knows which stt,
   │    tts=...          │        │  code   │     tts, or transport
   │    transport=...    │        │  every  │     is wired
@@ -69,7 +69,7 @@ Each run drops a bundle in `runs/ch13-<mix>-<transport>-*.bundle`.
 ## The one code change per axis
 
 ```python
-EasyCatConfig(
+EasyConfig(
     openai_api_key=...,
     agent=agent,                       # ← same across every cell
     transport=LocalTransportConfig(),  # ← axis 2 switch

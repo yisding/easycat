@@ -20,8 +20,8 @@
 >   modes for Tier 3 platforms, and the concrete decision tree.
 > - `peripheral-dx-onboarding.md` — library DX: line budgets,
 >   `easycat.run()` / `async with session`, string-keyed providers,
->   env autodetect, template content, config factory presets,
->   offline preset, error diagnostics, `EasyCatConfig` flattening.
+>   template content, config factory presets, offline preset, error
+>   diagnostics, `EasyCatConfig` flattening.
 > - `peripheral-cli.md` — `easycat` CLI focused on scaffolding
 >   (`init` + template catalog + `--config` schema) and journal
 >   debugging (`bundles list|show|export`, `replay`). Supporting
@@ -518,7 +518,7 @@ Out of scope for this plan (and some also out of scope for EasyCat entirely):
   `test`, `bundles`, `replay`, `cost` — entire command surface in
   `peripheral-cli.md`)
 - Line-count budget enforcement on examples
-- `run()`, `async with session`, string-keyed provider selection, env autodetect
+- `run()`, `async with session`, string-keyed provider selection
 - OTel export
 - `easycat.testing` with Simulator + Judge
 - Interactive web debugger UI

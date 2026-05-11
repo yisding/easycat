@@ -46,6 +46,26 @@ def _reject_traversal(name: str) -> None:
         )
 
 
+def _read_zip_member(
+    zf: zipfile.ZipFile,
+    name: str,
+    *,
+    missing_reason_code: str,
+) -> bytes:
+    try:
+        return zf.read(name)
+    except KeyError as exc:
+        raise BundleValidationError(
+            f"Bundle is missing {name}",
+            reason_code=missing_reason_code,
+        ) from exc
+    except zipfile.BadZipFile as exc:
+        raise BundleValidationError(
+            f"Invalid bundle member {name!r}: {exc}",
+            reason_code="BAD_ZIP",
+        ) from exc
+
+
 FORMAT_VERSION = 1
 
 
@@ -89,11 +109,47 @@ class ArtifactEntry:
     size_bytes: int = 0
 
 
+_CHECKPOINT_ID_PREFIX = "cp_"
+
+
+def checkpoint_id(sequence: int) -> str:
+    """Convert a monotonic journal sequence to its user-facing checkpoint id.
+
+    The ``cp_<sequence>`` vocabulary (``cp_87``) is what the debugger
+    UI, replay commands, and LLM-coding-agent prompts use externally;
+    the journal itself keeps the raw integer for ordering and
+    indexing.  Keeping both forms isolated behind this helper means a
+    future format change (e.g. short hashes) can happen in one place.
+    """
+    if sequence < 0:
+        raise ValueError(f"checkpoint sequence must be non-negative, got {sequence}")
+    return f"{_CHECKPOINT_ID_PREFIX}{sequence}"
+
+
+def parse_checkpoint_id(value: str) -> int:
+    """Inverse of :func:`checkpoint_id`.  Raises ``ValueError`` on a bad id."""
+    if not isinstance(value, str) or not value.startswith(_CHECKPOINT_ID_PREFIX):
+        raise ValueError(f"Invalid checkpoint id {value!r}: expected 'cp_<int>'")
+    raw = value[len(_CHECKPOINT_ID_PREFIX) :]
+    try:
+        seq = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid checkpoint id {value!r}: not an integer") from exc
+    if seq < 0:
+        raise ValueError(f"Invalid checkpoint id {value!r}: negative sequence")
+    return seq
+
+
 @dataclass(frozen=True)
 class CommittableCheckpoint:
     sequence: int
     stage: str
     unit_id: str = ""
+
+    @property
+    def checkpoint_id(self) -> str:
+        """Return the ``cp_<sequence>`` user-facing id for this checkpoint."""
+        return checkpoint_id(self.sequence)
 
 
 @dataclass(frozen=True)
@@ -142,6 +198,15 @@ class RunBundle:
             if r.get("sequence") == seq:
                 return r
         return None
+
+    def lookup_by_checkpoint_id(self, cid: str) -> dict[str, Any] | None:
+        """Resolve a ``cp_<sequence>`` id to its journal record.
+
+        Thin sugar over :meth:`lookup_by_sequence` that accepts the
+        user-facing vocabulary without forcing callers to parse the
+        prefix themselves.
+        """
+        return self.lookup_by_sequence(parse_checkpoint_id(cid))
 
     # ── Replay surface ────────────────────────────────────────
 
@@ -235,9 +300,29 @@ class RunBundle:
         if not path.exists():
             raise FileNotFoundError(f"Bundle not found: {path}")
 
-        with zipfile.ZipFile(path, "r") as zf:
+        try:
+            zf = zipfile.ZipFile(path, "r")
+        except zipfile.BadZipFile as exc:
+            raise BundleValidationError(
+                f"Invalid bundle archive: {path}",
+                reason_code="BAD_ZIP",
+            ) from exc
+
+        with zf:
             # Read manifest
-            manifest_data = json.loads(zf.read("manifest.json"))
+            try:
+                manifest_data = json.loads(
+                    _read_zip_member(
+                        zf,
+                        "manifest.json",
+                        missing_reason_code="MISSING_MANIFEST",
+                    )
+                )
+            except json.JSONDecodeError as exc:
+                raise BundleValidationError(
+                    "Bundle manifest is not valid JSON",
+                    reason_code="INVALID_MANIFEST_JSON",
+                ) from exc
             fmt_ver = manifest_data.get("format_version", 0)
             if fmt_ver > FORMAT_VERSION:
                 raise BundleVersionError(
@@ -258,7 +343,11 @@ class RunBundle:
             )
 
             # Read journal
-            journal_ndjson = zf.read("journal.ndjson")
+            journal_ndjson = _read_zip_member(
+                zf,
+                "journal.ndjson",
+                missing_reason_code="MISSING_JOURNAL",
+            )
 
             # Read artifacts.  Check each entry's declared uncompressed
             # size before reading so a zip bomb can't force a massive
@@ -284,7 +373,11 @@ class RunBundle:
                         "Total artifact size exceeds 500MB cap",
                         reason_code="SIZE_EXCEEDED",
                     )
-                data = zf.read(name)
+                data = _read_zip_member(
+                    zf,
+                    name,
+                    missing_reason_code="MISSING_ARTIFACT",
+                )
                 if len(data) > declared or total_size + len(data) > _ARTIFACT_SIZE_CAP:
                     raise BundleValidationError(
                         "Total artifact size exceeds 500MB cap",
@@ -486,8 +579,11 @@ def discover_bundles(data_dir: str | None = None) -> list[Path]:
         search = data_path / subdir
         if search.exists():
             for f in search.iterdir():
-                if f.suffix in (".zip", ".easycat-bundle", ".sqlite") or f.name.endswith(
-                    ".easycat-bundle"
-                ):
+                if f.suffix in (
+                    ".zip",
+                    ".bundle",
+                    ".easycat-bundle",
+                    ".sqlite",
+                ) or f.name.endswith(".easycat-bundle"):
                     bundles.append(f)
     return sorted(bundles)

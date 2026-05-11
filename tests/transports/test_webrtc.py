@@ -16,6 +16,7 @@ import importlib.util
 
 import pytest
 
+import easycat.transports.webrtc as webrtc_mod
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.transports.webrtc import (
     ICEServer,
@@ -30,6 +31,119 @@ from .conftest import find_free_port, make_chunk
 _HAS_AIORTC = importlib.util.find_spec("aiortc") is not None
 _HAS_AIOHTTP = importlib.util.find_spec("aiohttp") is not None
 _HAS_WEBRTC_DEPS = _HAS_AIORTC and _HAS_AIOHTTP
+
+
+class _FakeResponse:
+    def __init__(
+        self,
+        *,
+        status: int = 200,
+        text: str = "",
+        content_type: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.status = status
+        self.text = text
+        self.content_type = content_type
+        self.headers = headers or {}
+
+
+class _FakeWeb:
+    Response = _FakeResponse
+
+
+class _FakeOfferRequest:
+    async def json(self) -> dict[str, str]:
+        return {"sdp": "v=0\r\n", "type": "offer"}
+
+
+class _FakeSessionDescription:
+    def __init__(self, *, sdp: str, type: str) -> None:  # noqa: A002
+        self.sdp = sdp
+        self.type = type
+
+
+class _FakeRTCConfiguration:
+    def __init__(self, *, iceServers: list[object]) -> None:  # noqa: N803
+        self.iceServers = iceServers
+
+
+class _FakeRTCIceServer:
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+
+
+class _FakeMediaStreamTrack:
+    def __init__(self) -> None:
+        pass
+
+
+class _FakeMediaStreamError(Exception):
+    pass
+
+
+class _FakeRTCPeerConnection:
+    instances: list[_FakeRTCPeerConnection] = []
+
+    def __init__(self, config: _FakeRTCConfiguration) -> None:
+        self.config = config
+        self.connectionState = "new"
+        self.iceGatheringState = "complete"
+        self.localDescription: _FakeSessionDescription | None = None
+        self.remoteDescription: _FakeSessionDescription | None = None
+        self.closed = False
+        self.tracks: list[object] = []
+        self._handlers: dict[str, object] = {}
+        self.instances.append(self)
+
+    def addTrack(self, track: object) -> None:  # noqa: N802
+        self.tracks.append(track)
+
+    def on(self, event: str):
+        def decorator(callback):
+            self._handlers[event] = callback
+            return callback
+
+        return decorator
+
+    async def setRemoteDescription(self, offer: _FakeSessionDescription) -> None:  # noqa: N802
+        self.remoteDescription = offer
+
+    async def createAnswer(self) -> _FakeSessionDescription:  # noqa: N802
+        return _FakeSessionDescription(sdp="fake-answer", type="answer")
+
+    async def setLocalDescription(self, answer: _FakeSessionDescription) -> None:  # noqa: N802
+        self.localDescription = answer
+
+    async def close(self) -> None:
+        self.closed = True
+        self.connectionState = "closed"
+        callback = self._handlers.get("connectionstatechange")
+        if callback is not None:
+            result = callback()
+            if asyncio.iscoroutine(result):
+                await result
+        await asyncio.sleep(0)
+
+
+class _FakeAiortc:
+    MediaStreamError = _FakeMediaStreamError
+    MediaStreamTrack = _FakeMediaStreamTrack
+    RTCConfiguration = _FakeRTCConfiguration
+    RTCIceServer = _FakeRTCIceServer
+    RTCPeerConnection = _FakeRTCPeerConnection
+    RTCSessionDescription = _FakeSessionDescription
+
+
+def _install_fake_webrtc_modules(monkeypatch: pytest.MonkeyPatch) -> None:
+    _FakeRTCPeerConnection.instances.clear()
+
+    def fake_require_module(name: str, **_: object) -> object:
+        if name == "aiortc":
+            return _FakeAiortc
+        raise AssertionError(f"unexpected module request: {name}")
+
+    monkeypatch.setattr(webrtc_mod, "require_module", fake_require_module)
 
 
 # ── Config tests ──────────────────────────────────────────────────
@@ -94,6 +208,93 @@ class TestWebRTCTransportConformance:
         t = WebRTCTransport()
         assert not t.is_connected
         assert not t.has_client
+
+
+class TestWebRTCIngressQueueOwnership:
+    @pytest.mark.asyncio
+    async def test_repeated_offer_keeps_active_receive_audio_on_same_queue(self, monkeypatch):
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        original_queue = transport._in_queue
+
+        audio_iter = transport.receive_audio()
+        pending = asyncio.create_task(anext(audio_iter))
+        await asyncio.sleep(0)
+        assert not pending.done()
+
+        first_response = await transport._handle_offer(_FakeOfferRequest())
+        second_response = await transport._handle_offer(_FakeOfferRequest())
+
+        assert first_response.status == 200
+        assert second_response.status == 200
+        assert transport._in_queue is original_queue
+        await asyncio.sleep(0)
+        assert not pending.done()
+
+        new_chunk = make_chunk(8)
+        transport._enqueue_chunk(new_chunk, context="test")
+        received = await asyncio.wait_for(pending, timeout=1.0)
+        assert received is new_chunk
+        await audio_iter.aclose()
+
+    @pytest.mark.asyncio
+    async def test_repeated_offer_drains_stale_audio_without_replacing_queue(self, monkeypatch):
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+
+        first_response = await transport._handle_offer(_FakeOfferRequest())
+        assert first_response.status == 200
+
+        original_queue = transport._in_queue
+        stale_chunk = make_chunk(8)
+        transport._enqueue_chunk(stale_chunk, context="test")
+        transport._enqueue_sentinel()
+
+        second_response = await transport._handle_offer(_FakeOfferRequest())
+
+        assert second_response.status == 200
+        assert transport._in_queue is original_queue
+        assert transport._in_queue.empty()
+
+        new_chunk = make_chunk(10)
+        transport._enqueue_chunk(new_chunk, context="test")
+        audio_iter = transport.receive_audio()
+        received = await asyncio.wait_for(anext(audio_iter), timeout=1.0)
+        assert received is new_chunk
+        await audio_iter.aclose()
+
+    @pytest.mark.asyncio
+    async def test_replacing_connected_peer_clears_wait_for_client(self, monkeypatch):
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+
+        first_response = await transport._handle_offer(_FakeOfferRequest())
+        assert first_response.status == 200
+        first_pc = _FakeRTCPeerConnection.instances[0]
+        first_pc.connectionState = "connected"
+        first_connected = first_pc._handlers["connectionstatechange"]()
+        if asyncio.iscoroutine(first_connected):
+            await first_connected
+        assert transport.has_client
+        assert transport._client_connected.is_set()
+
+        second_response = await transport._handle_offer(_FakeOfferRequest())
+
+        assert second_response.status == 200
+        assert first_pc.closed
+        assert not transport.has_client
+        assert not transport._client_connected.is_set()
+
+        second_pc = _FakeRTCPeerConnection.instances[1]
+        second_pc.connectionState = "connected"
+        second_connected = second_pc._handlers["connectionstatechange"]()
+        if asyncio.iscoroutine(second_connected):
+            await second_connected
+        assert transport.has_client
+        assert transport._client_connected.is_set()
 
 
 # ── Lifecycle tests (require aiohttp) ────────────────────────────
@@ -366,17 +567,18 @@ class TestOutboundAudioSource:
     def test_enqueue_and_drain(self):
         source = _OutboundAudioSource()
         data = bytes(960 * 2)  # 20ms at 48kHz mono s16
-        source.enqueue(data)
+        source.enqueue(data, original_chunk=AudioChunk(data=data, format=PCM16_MONO_16K))
         assert not source._queue.empty()
 
     def test_enqueue_overflow(self):
         source = _OutboundAudioSource()
         source._queue = asyncio.Queue(maxsize=2)
+        chunk = AudioChunk(data=bytes(100), format=PCM16_MONO_16K)
         # Fill queue.
-        assert source.enqueue(bytes(100)) is True
-        assert source.enqueue(bytes(100)) is True
+        assert source.enqueue(bytes(100), original_chunk=chunk) is True
+        assert source.enqueue(bytes(100), original_chunk=chunk) is True
         # Overflow — should not raise, and should report dropped frame.
-        assert source.enqueue(bytes(100)) is False
+        assert source.enqueue(bytes(100), original_chunk=chunk) is False
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
@@ -396,7 +598,7 @@ class TestOutboundAudioSource:
         # Enqueue one frame of non-silent data.
         test_data = bytes(range(256)) * (960 * 2 // 256 + 1)
         test_data = test_data[: 960 * 2]
-        source.enqueue(test_data)
+        source.enqueue(test_data, original_chunk=AudioChunk(data=test_data, format=PCM16_MONO_16K))
 
         frame = await source._recv()
         actual = bytes(frame.planes[0])
@@ -412,8 +614,8 @@ class TestOutboundAudioSource:
         # Create chunk A (1.5 frames) and chunk B (1 frame).
         chunk_a = bytes([0xAA]) * (frame_bytes + frame_bytes // 2)
         chunk_b = bytes([0xBB]) * frame_bytes
-        source.enqueue(chunk_a)
-        source.enqueue(chunk_b)
+        source.enqueue(chunk_a, original_chunk=AudioChunk(data=chunk_a, format=PCM16_MONO_16K))
+        source.enqueue(chunk_b, original_chunk=AudioChunk(data=chunk_b, format=PCM16_MONO_16K))
 
         # Frame 1: first frame of A.
         frame1 = await source._recv()
@@ -434,20 +636,25 @@ class TestOutboundAudioSource:
 
     def test_clear_discards_queued_data(self):
         source = _OutboundAudioSource()
-        source.enqueue(bytes(100))
-        source.enqueue(bytes(200))
-        source._remainder = bytes(50)
+        chunk = AudioChunk(data=bytes(200), format=PCM16_MONO_16K)
+        source.enqueue(bytes(100), original_chunk=chunk)
+        source.enqueue(bytes(200), original_chunk=chunk)
+        source._pending.append(source._queue.get_nowait())
 
         source.clear()
 
         assert source._queue.empty()
-        assert source._remainder == b""
+        assert not source._pending
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_clear_then_recv_produces_silence(self):
         source = _OutboundAudioSource()
-        source.enqueue(bytes([0xFF]) * 960 * 2)
+        test_data = bytes([0xFF]) * 960 * 2
+        source.enqueue(
+            test_data,
+            original_chunk=AudioChunk(data=test_data, format=PCM16_MONO_16K),
+        )
         source.clear()
 
         frame = await source._recv()

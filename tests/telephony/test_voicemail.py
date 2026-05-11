@@ -96,6 +96,7 @@ class TestParseTwilioAmdWebhook:
         event = parse_twilio_amd_webhook(payload)
         assert event is not None
         assert event.result == "machine"
+        assert event.call_sid == "CA456"
 
 
 class TestEmitTwilioAmd:

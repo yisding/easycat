@@ -27,6 +27,7 @@ from easycat.events import (
     CallInitiated,
     CallScreening,
     EventBus,
+    ScreeningResponse,
     ScreeningTimedOut,
     STTFinal,
     STTPartial,
@@ -399,14 +400,6 @@ _TERMINAL_SCREENING_STATES = frozenset(
         ScreeningState.SCREENING_TIMEOUT,
     }
 )
-
-
-@dataclass(frozen=True)
-class ScreeningResponse:
-    """Emitted when the detector decides to respond to screening."""
-
-    text: str
-    mode: Literal["static", "agent"]
 
 
 def is_conversational(

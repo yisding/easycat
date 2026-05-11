@@ -10,11 +10,13 @@ iterators. The Session is the single place that maps these to EasyCat events.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from easycat.audio_format import AudioChunk
 from easycat.events import Event, STTEvent, TTSEvent
-from easycat.tts.input import TTSInput
+
+if TYPE_CHECKING:
+    from easycat.tts.input import TTSInput
 
 # ── STT Provider ───────────────────────────────────────────────────
 
@@ -166,14 +168,12 @@ class Transport(Protocol):
         """Return an async iterator that yields incoming audio chunks."""
         ...
 
-    async def send_audio(self, chunk: AudioChunk) -> bool | None:
+    async def send_audio(self, chunk: AudioChunk) -> bool:
         """Send an audio chunk to the remote end.
 
         Returns ``True`` when the chunk was accepted for delivery and
         ``False`` when it was silently dropped (transport disconnected,
-        no active peer, etc.). Transports that do not distinguish the
-        two cases may return ``None``, which callers treat as ``True``
-        for backward compatibility.
+        no active peer, etc.).
         """
         ...
 
@@ -184,18 +184,4 @@ class Transport(Protocol):
         The default implementation is a no-op for transports without
         outbound buffering.
         """
-        ...
-
-
-@runtime_checkable
-class PlaybackAckTransport(Protocol):
-    """Optional transport capability for explicit playback acknowledgements.
-
-    Transports that support this can place a mark in their outbound playback
-    queue and later emit an acknowledgement (for example via EventBus) when
-    playback reaches that mark.
-    """
-
-    async def send_playback_mark(self, name: str | None = None) -> str:
-        """Enqueue a playback mark and return the mark name used."""
         ...

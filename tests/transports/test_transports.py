@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import importlib
 import importlib.util
 import json
 import struct
@@ -24,6 +25,7 @@ from easycat.audio_format import PCM16_MONO_24K, AudioChunk
 from easycat.events import DTMF, EventBus, PlaybackMarkAck
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import (
+    TwilioConnectionTransport,
     TwilioTransport,
     TwilioTransportConfig,
     mulaw_to_pcm16,
@@ -56,6 +58,16 @@ def _make_sine_pcm16(freq: int = 440, duration_ms: int = 20, sample_rate: int = 
     return struct.pack(f"<{n_samples}h", *samples)
 
 
+def _sounddevice_available() -> bool:
+    if importlib.util.find_spec("sounddevice") is None:
+        return False
+    try:
+        importlib.import_module("sounddevice")
+    except (ImportError, OSError):
+        return False
+    return True
+
+
 # ── LocalTransport tests ─────────────────────────────────────────
 
 
@@ -66,7 +78,7 @@ class TestLocalTransport:
     async def test_connect_disconnect_without_sounddevice(self):
         """LocalTransport requires sounddevice to connect."""
         transport = LocalTransport()
-        if importlib.util.find_spec("sounddevice") is None:
+        if not _sounddevice_available():
             with pytest.raises(ImportError):
                 await transport.connect()
             assert not transport.is_connected
@@ -96,8 +108,8 @@ class TestLocalTransport:
     @pytest.mark.asyncio
     async def test_send_audio_returns_false_when_output_queue_full(self):
         """Dropped frames surface as a False return so AudioOut isn't emitted."""
-        if importlib.util.find_spec("sounddevice") is None:
-            pytest.skip("sounddevice not installed")
+        if not _sounddevice_available():
+            pytest.skip("sounddevice not available")
         # Tight queue so even a single split chunk overflows.
         config = LocalTransportConfig(max_pending_out_chunks=1)
         transport = LocalTransport(config)
@@ -122,8 +134,8 @@ class TestLocalTransport:
     @pytest.mark.asyncio
     async def test_receive_audio_returns_on_disconnect(self):
         """receive_audio iterator ends when transport disconnects."""
-        if importlib.util.find_spec("sounddevice") is None:
-            pytest.skip("sounddevice not installed")
+        if not _sounddevice_available():
+            pytest.skip("sounddevice not available")
         transport = LocalTransport()
         await transport.connect()
 
@@ -142,8 +154,8 @@ class TestLocalTransport:
     @pytest.mark.asyncio
     async def test_send_audio_splits_oversized_chunks(self):
         """Chunks larger than one frame are split into frame-sized pieces."""
-        if importlib.util.find_spec("sounddevice") is None:
-            pytest.skip("sounddevice not installed")
+        if not _sounddevice_available():
+            pytest.skip("sounddevice not available")
         transport = LocalTransport()
         await transport.connect()
 
@@ -154,7 +166,7 @@ class TestLocalTransport:
 
         pieces: list[bytes] = []
         while not transport._out_queue.empty():
-            pieces.append(transport._out_queue.get_nowait())
+            pieces.append(transport._out_queue.get_nowait().chunk.data)
 
         # 4800 / 640 = 7.5 → 8 pieces (last one is a 320-byte remainder).
         assert len(pieces) == 8
@@ -162,6 +174,24 @@ class TestLocalTransport:
         assert len(pieces[7]) == 320  # 4800 - 7*640 = 320
 
         await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_send_audio_drops_whole_chunk_when_out_queue_lacks_capacity(self):
+        transport = LocalTransport(
+            LocalTransportConfig(
+                audio_format=PCM16_MONO_24K,
+                frame_duration_ms=20,
+                max_pending_out_chunks=1,
+            )
+        )
+        transport._connected = True
+        transport._out_queue.put_nowait(None)
+
+        chunk = _make_chunk(1920, sample_rate=24000)  # needs two 20ms output frames
+        delivered = await transport.send_audio(chunk)
+
+        assert delivered is False
+        assert transport._out_queue.qsize() == 1
 
 
 # ── WebSocketTransport tests ─────────────────────────────────────
@@ -257,6 +287,20 @@ class TestWebSocketTransport:
             assert transport._audio_format.sample_rate == 24000
 
         await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_invalid_sample_rate_config_is_ignored(self):
+        """Invalid config messages must not poison the negotiated audio format."""
+        transport = WebSocketTransport()
+
+        for sample_rate in (True, False, 0, -16000, 384001, 16000.0, "16000", None):
+            transport._handle_control_message(
+                json.dumps({"type": "config", "sample_rate": sample_rate})
+            )
+            assert transport._audio_format.sample_rate == 16000
+
+        transport._handle_control_message(json.dumps({"type": "config", "sample_rate": 44100}))
+        assert transport._audio_format.sample_rate == 44100
 
     @pytest.mark.asyncio
     async def test_client_disconnect_signals_end(self):
@@ -393,6 +437,23 @@ def _twilio_media_msg(mulaw_data: bytes, stream_sid: str = "MZ123") -> str:
     )
 
 
+def _twilio_media_msg_with_track(
+    mulaw_data: bytes,
+    *,
+    stream_sid: str = "MZ123",
+    track: str = "inbound",
+) -> str:
+    payload = base64.b64encode(mulaw_data).decode("ascii")
+    return json.dumps(
+        {
+            "event": "media",
+            "sequenceNumber": "2",
+            "streamSid": stream_sid,
+            "media": {"track": track, "chunk": "1", "timestamp": "0", "payload": payload},
+        }
+    )
+
+
 def _twilio_dtmf_msg(digit: str, stream_sid: str = "MZ123") -> str:
     return json.dumps(
         {
@@ -409,6 +470,14 @@ def _twilio_stop_msg(stream_sid: str = "MZ123") -> str:
 
 def _twilio_mark_msg(name: str, stream_sid: str = "MZ123") -> str:
     return json.dumps({"event": "mark", "streamSid": stream_sid, "mark": {"name": name}})
+
+
+class _DummyTwilioWebSocket:
+    async def send(self, _message: str) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
 
 
 @pytest.mark.integration_socket
@@ -459,6 +528,75 @@ class TestTwilioTransport:
         await transport.disconnect()
         assert len(received) == 1
         assert received[0].format.sample_rate == 16000
+
+    @pytest.mark.asyncio
+    async def test_media_frame_guard_filters_prestart_wrong_stream_and_outbound_tracks(self):
+        """Server transport only accepts inbound media for the active streamSid."""
+        transport = TwilioTransport(TwilioTransportConfig())
+        mulaw_data = pcm16_to_mulaw(bytes(320), source_rate=8000)
+
+        await transport._handle_message(_twilio_media_msg_with_track(mulaw_data))
+        assert transport._in_queue.empty()
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(
+            _twilio_media_msg_with_track(mulaw_data, stream_sid="WRONG", track="inbound")
+        )
+        await transport._handle_message(
+            _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="outbound")
+        )
+        await transport._handle_message(
+            _twilio_media_msg_with_track(
+                mulaw_data,
+                stream_sid="STREAM1",
+                track="outbound_track",
+            )
+        )
+        assert transport._in_queue.empty()
+
+        await transport._handle_message(
+            _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="inbound")
+        )
+        chunk = transport._in_queue.get_nowait()
+        assert chunk is not None
+        assert chunk.format.sample_rate == 16000
+
+    @pytest.mark.asyncio
+    async def test_connection_media_frame_guard_filters_prestart_wrong_stream_and_outbound_tracks(
+        self,
+    ):
+        """Connection transport uses the same Twilio inbound media guard."""
+        transport = TwilioConnectionTransport(_DummyTwilioWebSocket())
+        mulaw_data = pcm16_to_mulaw(bytes(320), source_rate=8000)
+
+        await transport._handle_message(_twilio_media_msg_with_track(mulaw_data))
+        assert transport._in_queue.empty()
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        assert transport.stream_sid == "STREAM1"
+        assert transport.call_sid == "CALL1"
+
+        await transport._handle_message(
+            _twilio_media_msg_with_track(mulaw_data, stream_sid="WRONG", track="inbound")
+        )
+        await transport._handle_message(
+            _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="outbound")
+        )
+        await transport._handle_message(
+            _twilio_media_msg_with_track(
+                mulaw_data,
+                stream_sid="STREAM1",
+                track="outbound_track",
+            )
+        )
+        assert transport._in_queue.empty()
+
+        await transport._handle_message(
+            _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="inbound")
+        )
+        chunk = transport._in_queue.get_nowait()
+        assert chunk is not None
+        assert chunk.format.sample_rate == 16000
 
     @pytest.mark.asyncio
     async def test_send_audio_to_twilio(self):
@@ -559,6 +697,35 @@ class TestTwilioTransport:
 
         await transport.disconnect()
         assert marks_received == ["mark_1", "mark_2"]
+
+    @pytest.mark.asyncio
+    async def test_control_events_ignore_wrong_stream_sid(self):
+        """stop/mark/dtmf are scoped to the active Twilio streamSid."""
+        event_bus = EventBus()
+        transport = TwilioTransport(event_bus=event_bus)
+        digits_received: list[str] = []
+        marks_received: list[str] = []
+        event_bus.subscribe(DTMF, lambda e: digits_received.append(e.digit))
+        event_bus.subscribe(PlaybackMarkAck, lambda e: marks_received.append(e.mark_name))
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(_twilio_dtmf_msg("5", stream_sid="WRONG"))
+        await transport._handle_message(_twilio_mark_msg("mark_1", stream_sid="WRONG"))
+        await transport._handle_message(_twilio_stop_msg(stream_sid="WRONG"))
+
+        assert digits_received == []
+        assert marks_received == []
+        assert transport.stream_sid == "STREAM1"
+        assert transport.call_sid == "CALL1"
+
+        await transport._handle_message(_twilio_dtmf_msg("6", stream_sid="STREAM1"))
+        await transport._handle_message(_twilio_mark_msg("mark_2", stream_sid="STREAM1"))
+        await transport._handle_message(_twilio_stop_msg(stream_sid="STREAM1"))
+
+        assert digits_received == ["6"]
+        assert marks_received == ["mark_2"]
+        assert transport.stream_sid is None
+        assert transport.call_sid is None
 
     @pytest.mark.asyncio
     async def test_stream_metadata(self):
@@ -692,6 +859,7 @@ class TestTwiML:
         assert '<Stream url="wss://example.com/stream"' in xml
         assert 'track="both"' in xml
         assert "</Response>" in xml
+        assert "<Parameter" not in xml
 
     def test_twiml_connect_stream_with_callback(self):
         xml = twiml_connect_stream(
@@ -703,6 +871,57 @@ class TestTwiML:
     def test_twiml_connect_stream_custom_track(self):
         xml = twiml_connect_stream("wss://example.com/stream", track="inbound")
         assert 'track="inbound"' in xml
+
+    def test_twiml_connect_stream_disable_caller_id(self):
+        xml = twiml_connect_stream(
+            "wss://example.com/stream",
+            forward_caller_id=False,
+        )
+        assert "<Parameter" not in xml
+        assert "<Stream" in xml and "/>" in xml
+
+    def test_twiml_connect_stream_custom_parameters(self):
+        xml = twiml_connect_stream(
+            "wss://example.com/stream",
+            parameters={"crm_account_id": "ACC-42"},
+        )
+        assert '<Parameter name="crm_account_id"' in xml
+        assert 'value="ACC-42"' in xml
+        assert '<Parameter name="From"' not in xml
+
+    def test_twiml_connect_stream_explicit_caller_id_parameters(self):
+        xml = twiml_connect_stream(
+            "wss://example.com/stream",
+            parameters={
+                "Direction": "inbound",
+                "From": "+15551234567",
+                "To": "+15557654321",
+            },
+            forward_caller_id=True,
+        )
+        assert '<Parameter name="Direction" value="inbound"/>' in xml
+        assert '<Parameter name="From" value="+15551234567"/>' in xml
+        assert '<Parameter name="To" value="+15557654321"/>' in xml
+        assert "{{From}}" not in xml
+
+    def test_twiml_connect_stream_forward_caller_id_requires_values(self):
+        with pytest.raises(ValueError, match="explicit caller-ID values"):
+            twiml_connect_stream("wss://example.com/stream", forward_caller_id=True)
+        with pytest.raises(ValueError, match="explicit caller-ID values"):
+            twiml_connect_stream(
+                "wss://example.com/stream",
+                parameters={"From": "{{From}}"},
+                forward_caller_id=True,
+            )
+
+    def test_twiml_connect_stream_escapes_parameter_values_once(self):
+        xml = twiml_connect_stream(
+            "wss://example.com/stream",
+            parameters={"company": "AT&T <Gold>"},
+            forward_caller_id=False,
+        )
+        assert '<Parameter name="company" value="AT&amp;T &lt;Gold&gt;"/>' in xml
+        assert "amp;amp" not in xml
 
     def test_twiml_stream(self):
         xml = twiml_stream("wss://example.com/stream")

@@ -11,7 +11,7 @@ import pytest
 from easycat.audio_format import PCM16_MONO_24K
 from easycat.events import TTSEventType
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
-from easycat.tts.test_harness import extract_audio_chunks, verify_pcm16_audio
+from tests.tts._harness import extract_audio_chunks, verify_pcm16_audio
 
 
 def _pcm16_bytes(n_samples: int = 240) -> bytes:

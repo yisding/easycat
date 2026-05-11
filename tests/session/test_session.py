@@ -14,6 +14,7 @@ from easycat.events import (
     AgentDelta,
     AgentFinal,
     AudioIn,
+    AudioOut,
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
@@ -26,6 +27,7 @@ from easycat.events import (
     STTFinal,
     ToolCallResult,
     ToolCallStarted,
+    TransportAudioDelivered,
     TTSAudio,
     TTSEvent,
     TTSEventType,
@@ -45,7 +47,6 @@ from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig, TurnState
-from easycat.session.actions import SessionActionResult
 from easycat.timeouts import AgentTimeoutError
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig, TurnManagerState
@@ -79,8 +80,9 @@ class FakeTransport:
         for chunk in self.chunks:
             yield chunk
 
-    async def send_audio(self, chunk: AudioChunk) -> None:
+    async def send_audio(self, chunk: AudioChunk) -> bool:
         self.sent.append(chunk)
+        return True
 
     async def clear_audio(self) -> None:
         pass
@@ -95,6 +97,10 @@ class FakePlaybackAckTransport(FakeTransport):
         mark_name = name or f"mark_{len(self.playback_marks) + 1}"
         self.playback_marks.append(mark_name)
         return mark_name
+
+
+class ReportingTransport(FakeTransport):
+    reports_audio_delivery = True
 
 
 class FakeVAD:
@@ -386,6 +392,81 @@ async def test_session_teardown_finalizes_and_closes_journal(method_name: str):
 
     assert journal.finalize_calls == 1
     assert journal.close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
+async def test_session_teardown_closes_audio_providers(method_name: str):
+    calls: list[str] = []
+
+    class CloseSTT(FakeSTT):
+        def close(self) -> None:
+            calls.append("stt.close")
+
+    class AsyncCloseTTS(FakeTTS):
+        async def aclose(self) -> None:
+            calls.append("tts.aclose")
+
+    class AsyncCloseVAD(FakeVAD):
+        async def close(self) -> None:
+            calls.append("vad.close")
+
+    class CloseNoiseReducer:
+        async def process(self, chunk: AudioChunk) -> AudioChunk:
+            return chunk
+
+        def close(self) -> None:
+            calls.append("noise.close")
+
+    class AsyncCloseEchoCanceller:
+        async def process(self, chunk: AudioChunk) -> AudioChunk:
+            return chunk
+
+        def feed_reference(self, chunk: AudioChunk) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            calls.append("echo.aclose")
+
+    session = Session(
+        _full_config(
+            stt=CloseSTT(),
+            tts=AsyncCloseTTS(),
+            vad=AsyncCloseVAD(),
+            noise_reducer=CloseNoiseReducer(),
+            echo_canceller=AsyncCloseEchoCanceller(),
+        )
+    )
+
+    await getattr(session, method_name)()
+
+    assert calls == [
+        "stt.close",
+        "tts.aclose",
+        "vad.close",
+        "noise.close",
+        "echo.aclose",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_ends_active_stt_stream_without_close_hook():
+    class EndOnlySTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__()
+            self.end_calls = 0
+
+        async def end_stream(self) -> None:
+            self.end_calls += 1
+            await self._queue.put(None)
+
+    stt = EndOnlySTT()
+    session = Session(_full_config(stt=stt))
+    session._stt_active = True
+
+    await session.shutdown()
+
+    assert stt.end_calls == 1
 
 
 @pytest.mark.asyncio
@@ -795,6 +876,8 @@ async def test_cancel_turn_barge_in_propagates_signal_through_all_stages():
     stage_records = [r for r in signal_records if r.name == "control_signal"]
     cause_records = [r for r in signal_records if r.name == "control_signal_cause"]
     observed = {r.data["observed_stage"] for r in stage_records}
+    # Telephony doesn't have its own stage; the session only fans the
+    # signal through helpers when at least one is registered.
     assert observed == {
         "transport",
         "tts",
@@ -803,7 +886,6 @@ async def test_cancel_turn_barge_in_propagates_signal_through_all_stages():
         "stt",
         "vad",
         "audio",
-        "telephony",
     }
     # Every stage record carries the same signal_id so a replay UI can
     # group the upstream walk into one logical event.
@@ -1023,35 +1105,25 @@ async def test_handle_end_of_speech_no_duplicate_stt_final():
 
 
 @pytest.mark.asyncio
-async def test_run_basic_agent_timeout_clears_turn_id():
+async def test_streaming_agent_timeout_emits_error_and_leaves_state_idle():
+    errors: list[Error] = []
+
     class TimeoutAgent:
         async def run(self, text: str) -> str:
             raise AgentTimeoutError(timeout=0.01)
 
     session = Session(_full_config(agent=TimeoutAgent()))
+    session.event_bus.subscribe(Error, lambda e: errors.append(e))
     session._turn = TurnContext("turn-stale", CancelToken())
 
-    await session._run_basic_agent("call me at 415-555-2671", token=None)
+    await session._run_streaming_agent("call me at 415-555-2671", token=None)
 
-    assert session._turn is None
     assert session.turn_state == TurnState.IDLE
+    assert any(isinstance(e.exception, AgentTimeoutError) for e in errors)
 
 
 @pytest.mark.asyncio
-async def test_run_basic_agent_tts_error_cleans_turn_state_and_turn_id():
-    session = Session(_full_config())
-    session._turn = TurnContext("turn-stale", CancelToken())
-    session._tts_synth.synthesize = AsyncMock(side_effect=RuntimeError("tts boom"))
-
-    with pytest.raises(RuntimeError, match="tts boom"):
-        await session._run_basic_agent("call me at 415-555-2671", token=None)
-
-    # _synthesize_tts's finally block cleans up the turn when playback was started.
-    assert session._turn is None
-
-
-@pytest.mark.asyncio
-async def test_run_basic_agent_strip_markdown_writes_journal_record():
+async def test_streaming_agent_strip_markdown_writes_journal_record():
     class MarkdownAgent:
         async def run(self, text: str) -> str:
             return "Go to **Settings** first."
@@ -1059,15 +1131,15 @@ async def test_run_basic_agent_strip_markdown_writes_journal_record():
     journal = InMemoryRingBuffer()
     session = Session(_full_config(agent=MarkdownAgent(), journal=journal, strip_markdown=True))
     session._turn = TurnContext("turn-markdown", CancelToken())
-    session._synthesize_tts = AsyncMock(return_value=SessionActionResult())
 
-    await session._run_basic_agent("help", token=None)
+    await session._run_streaming_agent("help", token=None)
 
     records = [record for record in journal.read() if record.name == "markdown_stripped"]
-    assert len(records) == 1
-    assert records[0].turn_id == "turn-markdown"
-    assert records[0].data == {
-        "phase": "basic_final",
+    assert records, "expected a markdown_stripped record"
+    final_record = next(r for r in records if r.data.get("phase") == "streaming_final")
+    assert final_record.turn_id == "turn-markdown"
+    assert final_record.data == {
+        "phase": "streaming_final",
         "changed": True,
         "original_text": "Go to **Settings** first.",
         "stripped_text": "Go to Settings first.",
@@ -1154,6 +1226,73 @@ async def test_pause_commit_journals_segment_commit_and_final():
         "committed": True,
         "transcript_text": "",
     }
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_runtime_scoped_stt_pause_commit() -> None:
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(
+        _full_config(
+            journal=journal,
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=1000,
+                stt_segment_silence_ms=1000,
+            ),
+        )
+    )
+    session._is_running = True
+    session._turn = TurnContext("turn-runtime-scope", CancelToken())
+    session._turn.stt_has_uncommitted_audio = True
+    session._stt_active = True
+    session._turn_manager._state = TurnManagerState.USER_PAUSED
+
+    session._schedule_stt_segment_commit(VADStopSpeaking())
+    task = session._stt_pause_commit_task
+    assert task is not None
+    assert session._runtime_scope.tasks("stt_pause_commit") == (task,)
+
+    await session.shutdown()
+
+    records = [
+        record for record in journal.read() if record.data.get("task_name") == "stt_pause_commit"
+    ]
+    assert task.cancelled()
+    assert session._stt_pause_commit_task is None
+    assert session._runtime_scope.empty
+    assert [record.name for record in records] == ["task_scheduled", "task_cancelled"]
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_runtime_scoped_stt_pause_commit() -> None:
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(
+        _full_config(
+            journal=journal,
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=1000,
+                stt_segment_silence_ms=1000,
+            ),
+        )
+    )
+    session._is_running = True
+    session._turn = TurnContext("turn-runtime-scope", CancelToken())
+    session._turn.stt_has_uncommitted_audio = True
+    session._stt_active = True
+    session._turn_manager._state = TurnManagerState.USER_PAUSED
+
+    session._schedule_stt_segment_commit(VADStopSpeaking())
+    task = session._stt_pause_commit_task
+    assert task is not None
+
+    await session.stop()
+
+    records = [
+        record for record in journal.read() if record.data.get("task_name") == "stt_pause_commit"
+    ]
+    assert task.cancelled()
+    assert session._stt_pause_commit_task is None
+    assert session._runtime_scope.empty
+    assert [record.name for record in records] == ["task_scheduled", "task_cancelled"]
 
 
 @pytest.mark.asyncio
@@ -1518,6 +1657,58 @@ async def test_trailing_playback_mark_emitted_while_session_running():
 
 
 @pytest.mark.asyncio
+async def test_buffered_transport_delivery_is_counted_only_after_report() -> None:
+    transport = ReportingTransport()
+    session = Session(_full_config(transport=transport))
+    session._turn = TurnContext("test-turn", CancelToken())
+    seen: list[AudioOut] = []
+    session.event_bus.subscribe(AudioOut, lambda event: seen.append(event))
+
+    chunk = _make_chunk()
+    await session._outbound_queue.put(chunk)
+    await session._drain_outbound_audio()
+
+    assert transport.sent == [chunk]
+    assert session._turn.audio_bytes_sent == 0
+    assert seen == []
+
+    await session.event_bus.emit(
+        TransportAudioDelivered(
+            chunk=chunk,
+            turn_id=session._turn.id,
+            turn_ref=session._turn,
+        )
+    )
+
+    assert session._turn.audio_bytes_sent == len(chunk.data)
+    assert len(seen) == 1
+    assert seen[0].chunk is chunk
+    assert seen[0].turn_id == "test-turn"
+
+
+@pytest.mark.asyncio
+async def test_failed_send_does_not_emit_audio_out_or_count_bytes() -> None:
+    class RejectingTransport(FakePlaybackAckTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            return False
+
+    transport = RejectingTransport()
+    session = Session(_full_config(transport=transport))
+    session._playback_mark_bytes_interval = 1
+    session._turn = TurnContext("test-turn", CancelToken())
+    seen: list[AudioOut] = []
+    session.event_bus.subscribe(AudioOut, lambda event: seen.append(event))
+
+    await session._outbound_queue.put(_make_chunk())
+    await session._drain_outbound_audio()
+
+    assert session._turn.audio_bytes_sent == 0
+    assert session._turn.bytes_since_last_mark == 0
+    assert transport.playback_marks == []
+    assert seen == []
+
+
+@pytest.mark.asyncio
 async def test_session_applies_output_processors_before_tts() -> None:
     class CaptureTTS(FakeTTS):
         def __init__(self) -> None:
@@ -1545,7 +1736,8 @@ async def test_session_applies_output_processors_before_tts() -> None:
         )
     )
 
-    await session._run_basic_agent("call me at 415-555-2671", token=None)
+    session._turn = TurnContext("turn-output-proc", CancelToken())
+    await session._run_streaming_agent("call me at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].text.startswith("speak: ")
@@ -1582,7 +1774,8 @@ async def test_session_falls_back_to_plain_when_ssml_not_supported() -> None:
         )
     )
 
-    await session._run_basic_agent("call AT&T at 415-555-2671", token=None)
+    session._turn = TurnContext("turn-ssml-fallback", CancelToken())
+    await session._run_streaming_agent("call AT&T at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].format == "plain"
@@ -1620,7 +1813,8 @@ async def test_session_falls_back_to_plain_unescapes_ssml_entities() -> None:
         )
     )
 
-    await session._run_basic_agent("Call AT&T at 415-555-2671", token=None)
+    session._turn = TurnContext("turn-ssml-unescape", CancelToken())
+    await session._run_streaming_agent("Call AT&T at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].format == "plain"
@@ -1660,7 +1854,8 @@ async def test_session_composes_phonetic_and_phone_processors() -> None:
         )
     )
 
-    await session._run_basic_agent("call Siobhan at 415-555-2671", token=None)
+    session._turn = TurnContext("turn-phonetic", CancelToken())
+    await session._run_streaming_agent("call Siobhan at 415-555-2671", token=None)
 
     assert tts.payloads
     # provider doesn't support SSML, so we should receive plain text fallback.

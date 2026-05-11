@@ -40,24 +40,21 @@ from easycat.integrations.agents.base import (
 )
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._session import Session
+from easycat.session._text import (
+    _cleanup_estimation_text,
+    _text_for_estimation_timeline,
+    _text_for_spoken_estimation,
+    has_unclosed_markdown_delimiters,
+    split_at_sentence_boundaries,
+)
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig
-from easycat.session.actions import SessionActionResult
 from easycat.session.interruption import (
     _all_tts_audio_delivered,
     _audio_bytes_acknowledged,
     _audio_bytes_likely_heard,
     _audio_bytes_likely_heard_hybrid,
     _estimate_text_spoken,
-)
-from easycat.session.text_utils import (
-    has_unclosed_markdown_delimiters,
-    split_at_sentence_boundaries,
-)
-from easycat.session.tts_helpers import (
-    _cleanup_estimation_text,
-    _text_for_estimation_timeline,
-    _text_for_spoken_estimation,
 )
 from easycat.timeouts import AgentTimeoutError, TimeoutConfig, TTSTimeoutError
 from easycat.tts.input import TTSInput
@@ -2365,7 +2362,7 @@ async def test_streaming_strip_markdown_writes_journal_record():
         )
     )
     session._turn = TurnContext("turn-stream-markdown", CancelToken())
-    session._drain_session_actions = AsyncMock(return_value=SessionActionResult())
+    session._drain_session_actions = AsyncMock(return_value=False)
 
     await session._run_streaming_agent("help", token=None)
 

@@ -71,14 +71,23 @@ class AudioIn(Event):
 
 @dataclass(frozen=True)
 class AudioOut(Event):
-    """Audio chunk delivered to the transport (what the caller actually hears).
+    """Audio chunk past EasyCat's last retractable transport buffer.
 
-    Emitted after a chunk has been drained from the outbound queue and
-    handed to the transport stage, so barge-in flushes and gated audio
-    that is never replayed do not produce spurious events.
+    For direct transports this is emitted once the transport accepts the
+    chunk. Buffered transports may defer emission until the chunk has
+    crossed their own clearable queue, so later barge-ins do not report
+    audio EasyCat can still discard.
     """
 
     chunk: AudioChunk
+
+
+@dataclass(frozen=True)
+class TransportAudioDelivered(Event):
+    """Internal transport callback for chunks that crossed a clearable buffer."""
+
+    chunk: AudioChunk
+    turn_ref: Any = field(default=None, kw_only=True, repr=False, compare=False)
 
 
 # VAD
@@ -255,6 +264,7 @@ class VoicemailDetected(Event):
 
     result: Literal["human", "machine", "unknown"]
     source: Literal["", "fusion", "detector"] = ""
+    call_sid: str = ""
 
 
 # Outbound call lifecycle
@@ -298,6 +308,42 @@ class ScreeningTimedOut(Event):
 
 
 @dataclass(frozen=True)
+class ScreeningResponse(Event):
+    """Call screening response requested by the detector."""
+
+    text: str
+    mode: Literal["static", "agent"]
+
+
+class IVRActionType(enum.Enum):
+    DTMF = "dtmf"
+    SPEAK = "speak"
+    WAIT = "wait"
+    HANGUP = "hangup"
+    HOLD = "hold"
+    HUMAN_DETECTED = "human_detected"
+
+
+@dataclass(frozen=True)
+class IVRAction(Event):
+    """IVR navigator action decided by the agent or timeout policy."""
+
+    type: IVRActionType
+    digits: str = ""
+    text: str = ""
+    menu_depth: int = 0
+
+
+@dataclass(frozen=True)
+class CallStateChanged(Event):
+    """Outbound call state transition."""
+
+    old: Any
+    new: Any
+    call_sid: str = ""
+
+
+@dataclass(frozen=True)
 class CallFailed(Event):
     """Call failed (busy, no answer, rejected, error)."""
 
@@ -315,6 +361,23 @@ class CallEnded(Event):
     duration_s: float | None = None
     disposition: str | None = None
     number: str | None = None
+
+
+@dataclass(frozen=True)
+class OptOutDetected(Event):
+    """Callee asked to stop being contacted.
+
+    Emitted when the session-level opt-out detector matches a phrase
+    from :data:`easycat.telephony.compliance.OPT_OUT_PHRASES` (or a
+    user-extended list) in an STT final transcript.  By default the
+    session adds the caller's number to an attached :class:`DNCList`
+    and queues an :class:`EndCallAction`; apps that want a different
+    policy can subscribe and opt out of the auto-wiring.
+    """
+
+    number: str = ""
+    phrase: str = ""
+    text: str = ""
 
 
 # Error
@@ -405,8 +468,12 @@ TELEPHONY_EVENTS: tuple[type[Event], ...] = (
     CallAnswered,
     CallScreening,
     ScreeningTimedOut,
+    ScreeningResponse,
+    IVRAction,
+    CallStateChanged,
     CallFailed,
     CallEnded,
+    OptOutDetected,
 )
 ERROR_EVENTS: tuple[type[Event], ...] = (Error,)
 ACTION_EVENTS: tuple[type[Event], ...] = (

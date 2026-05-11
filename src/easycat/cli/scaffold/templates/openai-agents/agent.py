@@ -4,7 +4,7 @@ from datetime import datetime
 
 from agents import Agent, function_tool
 
-from easycat import EasyCatConfig, run
+from easycat import EasyConfig, run
 
 
 @function_tool
@@ -14,11 +14,12 @@ def current_time() -> str:
 
 
 run(
-    EasyCatConfig(
+    EasyConfig(
         agent=Agent(
             name="$AGENT_NAME",
             instructions="$AGENT_INSTRUCTIONS",
             tools=[current_time],
-        )$EASYCAT_CONFIG_EXTRA
+        ),
+        **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821
     )
 )

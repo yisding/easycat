@@ -173,6 +173,24 @@ def test_filter_records_by_sequence_range():
     assert [r["sequence"] for r in out] == [3, 4, 5, 6]
 
 
+def test_filter_records_by_multiple_names():
+    records = [
+        {"sequence": 1, "name": "vad_start_speaking", "data": {}},
+        {"sequence": 2, "name": "tts_audio", "data": {}},
+        {"sequence": 3, "name": "stt_partial", "data": {}},
+        {"sequence": 4, "name": "bot_started_speaking", "data": {}},
+    ]
+    out = _filter_records(
+        records,
+        stage=None,
+        turn_id=None,
+        name=["vad_start_speaking", "stt_partial"],
+        from_seq=None,
+        to_seq=None,
+    )
+    assert [r["sequence"] for r in out] == [1, 3]
+
+
 def test_summarise_turns_tracks_audio_bytes():
     records = [
         {
@@ -380,6 +398,11 @@ async def test_api_transcript_extracts_user_and_agent_text(tmp_path):
         assert agent_turns, "expected at least one turn with an agent reply"
         # DeterministicAgent returns "reply-<input>".
         assert any("reply-hello-world" in t["agent"] for t in agent_turns)
+        # Each turn must carry source-record seqs so the UI can link a
+        # sentence back to its journal entry.
+        assert all("user_seq" in t and "agent_seq" in t for t in body["transcripts"])
+        for t in agent_turns:
+            assert isinstance(t["agent_seq"], int)
 
 
 async def test_api_audio_concat_returns_valid_wav(tmp_path):
@@ -1150,3 +1173,262 @@ async def test_replay_force_artifact_with_confirm_succeeds(tmp_path):
         body = await resp.json()
         assert body["destructive"] is True
         assert body["fidelity_label"] == "artifact"
+
+
+# ── First-class Replay UI: serialized frames + windowing + structured errors ────
+
+
+async def test_api_replay_returns_serialized_frames(tmp_path):
+    """``POST /api/replay`` should return the frame list, with bytes
+    blobs stripped (raw bytes can't go through JSON) and refs preserved
+    so the UI can fetch artifacts on demand from ``/api/artifact/{ref}``."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay", json={"fidelity": "artifact"}, headers=_SAFE_HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert isinstance(body["frames"], list)
+        assert len(body["frames"]) == body["frame_count"]
+        assert body["total_frames"] >= body["frame_count"]
+        assert body["frames_truncated"] is False
+        for frame in body["frames"]:
+            # Bytes blobs must be stripped; refs survive.
+            assert "input_blob" not in frame
+            assert "output_blob" not in frame
+            for required in ("sequence", "stage", "kind", "name", "data"):
+                assert required in frame
+            assert isinstance(frame["input_blob_size"], int)
+            assert isinstance(frame["output_blob_size"], int)
+
+
+async def test_api_replay_accepts_window_and_stage_filter(tmp_path):
+    """Window keys (``from_sequence``/``to_sequence``) and ``stage_filter``
+    should reach the runner.  When filtered to one stage, every frame
+    must report that stage."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact", "stage_filter": ["tts"]},
+            headers=_SAFE_HEADERS,
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["frames"], "tts stage should produce at least one frame"
+        for frame in body["frames"]:
+            assert frame["stage"] == "tts"
+
+
+async def test_api_replay_rejects_unknown_stage(tmp_path):
+    """An unknown stage in ``stage_filter`` must return 400 with a
+    ``BAD_REQUEST`` error_code rather than silently producing no frames."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact", "stage_filter": ["bogus_stage"]},
+            headers=_SAFE_HEADERS,
+        )
+        assert resp.status == 400
+        body = await resp.json()
+        assert body["error_code"] == "BAD_REQUEST"
+        assert "bogus_stage" in body["message"]
+
+
+async def test_api_replay_returns_structured_version_mismatch(tmp_path):
+    """When the runner raises :class:`ProviderVersionMismatchError`, the
+    handler must return a 409 with ``error_code`` and a ``mismatches``
+    detail array — not a stringified message."""
+    from easycat.runtime.replay import (
+        ProviderVersionMismatchError,
+        VersionMismatch,
+    )
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+
+    def _raise(**_kwargs):
+        raise ProviderVersionMismatchError(
+            "openai: bundle='1.0' installed='2.0' (MISMATCH)",
+            error_code="PROVIDER_VERSION_MISMATCH",
+            mismatches=(
+                VersionMismatch(
+                    provider="openai",
+                    bundle_version="1.0",
+                    installed_version="2.0",
+                    code="MISMATCH",
+                ),
+            ),
+        )
+
+    source._replay_fn = _raise
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay", json={"fidelity": "artifact"}, headers=_SAFE_HEADERS
+        )
+        assert resp.status == 409
+        body = await resp.json()
+        assert body["error_code"] == "PROVIDER_VERSION_MISMATCH"
+        assert body["details"]["mismatches"] == [
+            {
+                "provider": "openai",
+                "bundle_version": "1.0",
+                "installed_version": "2.0",
+                "code": "MISMATCH",
+            }
+        ]
+
+
+async def test_api_replay_returns_structured_replay_error(tmp_path):
+    """:class:`ReplayError` (non-committable boundary) must surface the
+    requested sequence and nearest committable checkpoints so the UI can
+    render snap-to-checkpoint buttons."""
+    from easycat.runtime.replay import ReplayError
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+
+    def _raise(**_kwargs):
+        raise ReplayError(
+            "Replay start sequence 7 is not a committable boundary.",
+            requested_sequence=7,
+            nearest_committable_before=5,
+            nearest_committable_after=10,
+            stage="agent",
+        )
+
+    source._replay_fn = _raise
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact", "from_sequence": 7},
+            headers=_SAFE_HEADERS,
+        )
+        assert resp.status == 409
+        body = await resp.json()
+        assert body["error_code"] == "REPLAY_NON_COMMITTABLE"
+        assert body["details"] == {
+            "requested_sequence": 7,
+            "nearest_committable_before": 5,
+            "nearest_committable_after": 10,
+            "stage": "agent",
+        }
+
+
+async def test_api_replay_returns_structured_side_effect_blocked(tmp_path):
+    """:class:`ReplaySideEffectBlocked` becomes ``REPLAY_SIDE_EFFECT_BLOCKED``
+    so the UI can hint at switching tool policy."""
+    from easycat.runtime.replay import ReplaySideEffectBlocked
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+
+    def _raise(**_kwargs):
+        raise ReplaySideEffectBlocked("tool 'send_email' blocked at sequence 42")
+
+    source._replay_fn = _raise
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay", json={"fidelity": "artifact"}, headers=_SAFE_HEADERS
+        )
+        assert resp.status == 409
+        body = await resp.json()
+        assert body["error_code"] == "REPLAY_SIDE_EFFECT_BLOCKED"
+        assert "send_email" in body["message"]
+
+
+async def test_api_manifest_includes_replay_entry_points(tmp_path):
+    """Bundle manifests must surface ``replay_entry_points`` so the UI
+    can populate a checkpoint-snap picker.  Entries serialise the four
+    fields the UI cares about; live-session manifests carry an empty list
+    for shape symmetry."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/manifest")
+        assert resp.status == 200
+        body = await resp.json()
+        assert "replay_entry_points" in body
+        assert isinstance(body["replay_entry_points"], list)
+        for entry in body["replay_entry_points"]:
+            assert set(entry.keys()) == {"sequence", "stage", "unit_id", "checkpoint_id"}
+            assert entry["checkpoint_id"] == f"cp_{entry['sequence']}"
+
+
+async def test_api_manifest_session_has_empty_replay_entry_points():
+    """Live session sources expose ``replay_entry_points: []`` so the UI
+    can read the field unconditionally."""
+    artifact_store = InMemoryArtifactStore()
+    journal = InMemoryRingBuffer(capacity=4, artifact_store=artifact_store)
+
+    class _StubSession:
+        session_id = "live-1"
+        is_running = True
+        turn_state = "IDLE"
+        _artifact_store = artifact_store
+
+        @property
+        def journal(self):
+            return journal
+
+    source = _session_source(_StubSession())
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/manifest")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["replay_entry_points"] == []
+
+
+async def test_api_replay_caps_frame_count(tmp_path, monkeypatch):
+    """Frame payload is capped at ``_REPLAY_FRAME_LIMIT`` so a giant
+    bundle can't blow the response.  When the cap fires, ``frames``
+    is truncated, ``frames_truncated`` is True, and ``total_frames``
+    reports the full count."""
+    from easycat.debugger import server as server_module
+
+    monkeypatch.setattr(server_module, "_REPLAY_FRAME_LIMIT", 3)
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay", json={"fidelity": "artifact"}, headers=_SAFE_HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["frames_truncated"] is True
+        assert body["frame_count"] == 3
+        assert body["total_frames"] > 3
+        assert len(body["frames"]) == 3

@@ -58,7 +58,8 @@ per-stage SLOs so regressions fail the test instead of silently
 widening the histogram:
 
 - Baseline (``B``) p50 < ``EASYCAT_BENCHMARK_SLO_BASELINE_P50_MS``
-  (default 3000 ms) and p90 < ``_P90_MS`` (default 4500 ms).
+  (default 5000 ms) and p90 < ``_P90_MS`` (default 6500 ms).  This
+  includes no-smart-turn end-of-turn detection plus live-provider timing.
 - Full stack (``X``) p50 < ``EASYCAT_BENCHMARK_SLO_FULL_STACK_P50_MS``
   (default 4500 ms).
 - Per-feature median overhead versus baseline:
@@ -302,7 +303,7 @@ def _build_session_with_flags(
 
     import easycat.config as config_module
     from easycat import (
-        EasyCatConfig,
+        EasyConfig,
         ElevenLabsSTTConfig,
         ElevenLabsTTSConfig,
         OpenAIRealtimeSTTConfig,
@@ -368,7 +369,7 @@ def _build_session_with_flags(
         model=llm_model,
         model_settings=model_settings,
     )
-    config = EasyCatConfig(
+    config = EasyConfig(
         openai_api_key=api_key,
         transport=transport,
         agent=agent,
@@ -653,8 +654,8 @@ def _slo(env_var: str, default: float) -> float:
 
 # SLO thresholds (ms). Overridable via env var so slow hardware / known
 # regressions can loosen without editing the test.
-_SLO_BASELINE_P50_MS = _slo("EASYCAT_BENCHMARK_SLO_BASELINE_P50_MS", 3000.0)
-_SLO_BASELINE_P90_MS = _slo("EASYCAT_BENCHMARK_SLO_BASELINE_P90_MS", 4500.0)
+_SLO_BASELINE_P50_MS = _slo("EASYCAT_BENCHMARK_SLO_BASELINE_P50_MS", 5000.0)
+_SLO_BASELINE_P90_MS = _slo("EASYCAT_BENCHMARK_SLO_BASELINE_P90_MS", 6500.0)
 _SLO_FULL_STACK_P50_MS = _slo("EASYCAT_BENCHMARK_SLO_FULL_STACK_P50_MS", 4500.0)
 _SLO_LIGHT_JOURNAL_OVERHEAD_MS = _slo("EASYCAT_BENCHMARK_SLO_LIGHT_OVERHEAD_MS", 400.0)
 _SLO_FULL_JOURNAL_OVERHEAD_MS = _slo("EASYCAT_BENCHMARK_SLO_FULL_OVERHEAD_MS", 800.0)

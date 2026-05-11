@@ -28,7 +28,6 @@ from easycat.stages.base import (
     StageStateSnapshot,
 )
 from easycat.stages.stt import STTStage
-from easycat.stages.telephony import TelephonyStage
 from easycat.stages.transport import TransportStage
 from easycat.stages.tts import TTSStage
 from easycat.stages.turn import TurnStage
@@ -48,7 +47,6 @@ __all__ = [
     "STTStage",
     "Stage",
     "StageStateSnapshot",
-    "TelephonyStage",
     "TransportStage",
     "TTSStage",
     "TurnStage",

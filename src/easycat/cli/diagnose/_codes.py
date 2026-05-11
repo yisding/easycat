@@ -65,15 +65,18 @@ _INIT_SCHEMA_BODY = """\
       "template": "openai-agents" | "pydantic-ai" | "text-chat",
       "stt": "<provider>/<model>",            // optional
       "tts": "<provider>/<model>",            // optional
-      "llm": "<provider>/<model>",            // optional, template-specific
-      "transport": "local" | "webrtc" | "telephony",
+      "transport": "local",                   // optional; only local is scaffolded
       "agent_name": "string",                 // optional
       "agent_instructions": "string",         // optional
-      "mcp_servers": ["filesystem", ...]      // optional, curated list
+      "mcp_servers": ["stdio://...", ...]     // optional MCP URIs
     }
 
 Required keys: `schema_version`, `template`.  Unknown keys are
 rejected on purpose so coding agents get loud feedback on typos.
+This release scaffolds voice-provider shortcuts for the voice
+templates, the default `local` transport only, and MCP server URIs
+starting with `stdio://`, `sse://`, `http://`, or `https://`.
+Plain MCP names such as `"filesystem"` are rejected.
 Bump `schema_version` when the shape changes; old versions stay
 documented via `easycat explain init-schema --version N` in future
 releases.

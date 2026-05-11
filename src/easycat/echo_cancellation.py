@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, TypeAlias, cast
 
 from easycat.audio_format import AudioChunk
 from easycat.extras import require_module
@@ -28,6 +28,20 @@ _FRAME_SAMPLES_BY_RATE: dict[int, int] = {
     24000: 240,
     48000: 480,
 }
+EchoCancellationFallbackPolicy: TypeAlias = Literal["passthrough", "error"]
+_VALID_AEC_FALLBACK_POLICIES: tuple[EchoCancellationFallbackPolicy, ...] = (
+    "passthrough",
+    "error",
+)
+
+
+def _validate_aec_fallback_policy(policy: str) -> EchoCancellationFallbackPolicy:
+    if policy not in _VALID_AEC_FALLBACK_POLICIES:
+        allowed = ", ".join(_VALID_AEC_FALLBACK_POLICIES)
+        raise ValueError(
+            f"Unknown echo cancellation fallback_policy '{policy}'. Expected one of: {allowed}."
+        )
+    return cast(EchoCancellationFallbackPolicy, policy)
 
 
 def _frame_samples_for_rate(sample_rate: int) -> int:
@@ -136,6 +150,8 @@ class LiveKitAEC:
 class PassthroughAEC:
     """No-op echo canceller that passes audio through unchanged."""
 
+    is_passthrough_provider = True
+
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         return chunk
 
@@ -159,15 +175,21 @@ class EchoCancellationConfig:
     """Configuration for echo cancellation."""
 
     enabled: bool = False
+    fallback_policy: EchoCancellationFallbackPolicy = "passthrough"
+
+    def __post_init__(self) -> None:
+        self.fallback_policy = _validate_aec_fallback_policy(self.fallback_policy)
 
 
 def create_echo_canceller(config: EchoCancellationConfig | None = None) -> Any:
     """Create an echo canceller based on configuration.
 
-    Returns a LiveKitAEC if enabled and the livekit package is available,
-    otherwise returns a PassthroughAEC.
+    Returns LiveKitAEC when enabled and the livekit package is available.
+    Missing LiveKit falls back to PassthroughAEC when fallback_policy is
+    "passthrough", or raises RuntimeError when fallback_policy is "error".
     """
     cfg = config or EchoCancellationConfig()
+    cfg.fallback_policy = _validate_aec_fallback_policy(cfg.fallback_policy)
 
     if not cfg.enabled:
         return PassthroughAEC()
@@ -175,5 +197,9 @@ def create_echo_canceller(config: EchoCancellationConfig | None = None) -> Any:
     try:
         return LiveKitAEC()
     except (ImportError, RuntimeError) as exc:
+        if cfg.fallback_policy == "error":
+            raise RuntimeError(
+                f"Echo cancellation requested but LiveKit AEC is unavailable: {exc}"
+            ) from exc
         logger.warning("LiveKit AEC not available, falling back to passthrough: %s", exc)
         return PassthroughAEC()

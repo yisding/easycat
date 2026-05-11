@@ -48,6 +48,12 @@ _SHA256_REF = re.compile(r"^[a-f0-9]{64}$")
 _TURN_ID_OK = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
+# Hard cap on frames returned in /api/replay so a 50k-record bundle can't
+# blow the response past sane sizes. The cap is generous: typical voice
+# bundles run a few thousand records, and a per-frame `data` dict is
+# small. UI surfaces `frames_truncated` + `total_frames` when this fires.
+_REPLAY_FRAME_LIMIT = 5000
+
 
 def _safe_ref(ref: str) -> str:
     """Reject anything that isn't a SHA-256 hex digest before any I/O.
@@ -110,6 +116,63 @@ class DebuggerSource:
         return self._replay_fn(**kwargs)
 
 
+def _serialize_frame(frame: Any) -> dict[str, Any]:
+    """Project a :class:`ReplayFrame` into JSON-safe shape for the wire.
+
+    The raw frame carries ``input_blob`` / ``output_blob`` as ``bytes``,
+    which can't go through ``json.dumps``.  We strip the bytes and expose
+    the SHA-256 refs instead — the UI fetches blobs on demand from
+    ``/api/artifact/{ref}``.  Sizes are surfaced separately so the UI can
+    show a badge without paying the round-trip.
+    """
+    return {
+        "sequence": frame.sequence,
+        "stage": frame.stage,
+        "kind": frame.kind,
+        "name": frame.name,
+        "turn_id": frame.turn_id,
+        "data": frame.data,
+        "input_ref": frame.input_ref,
+        "output_ref": frame.output_ref,
+        "input_blob_size": len(frame.input_blob) if frame.input_blob else 0,
+        "output_blob_size": len(frame.output_blob) if frame.output_blob else 0,
+        "error": frame.error,
+        "side_effecting": frame.side_effecting,
+    }
+
+
+def _validated_replay_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Type-check and normalise the optional windowing/filter keys.
+
+    Raises :class:`ValueError` on bad input so the handler maps it to a
+    400 with a structured ``BAD_REQUEST`` error_code.  Unknown stage
+    names are rejected here rather than silently ignored — a typo in a
+    UI checkbox should surface, not produce surprising frame slices.
+    """
+    from easycat.runtime.replay import _STAGE_NAMES
+
+    out: dict[str, Any] = {}
+    if "from_sequence" in kwargs and kwargs["from_sequence"] is not None:
+        value = kwargs["from_sequence"]
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError("from_sequence must be an integer")
+        out["from_sequence"] = value
+    if "to_sequence" in kwargs and kwargs["to_sequence"] is not None:
+        value = kwargs["to_sequence"]
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError("to_sequence must be an integer")
+        out["to_sequence"] = value
+    if "stage_filter" in kwargs and kwargs["stage_filter"] is not None:
+        value = kwargs["stage_filter"]
+        if not isinstance(value, list) or not all(isinstance(s, str) for s in value):
+            raise ValueError("stage_filter must be a list of strings")
+        unknown = [s for s in value if s not in _STAGE_NAMES]
+        if unknown:
+            raise ValueError(f"unknown stage(s) in stage_filter: {sorted(unknown)}")
+        out["stage_filter"] = list(value)
+    return out
+
+
 def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
     """Build an immutable bundle-backed source with cached lookups.
 
@@ -133,16 +196,26 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
         timing = kwargs.get("timing", "fast")
         force = bool(kwargs.get("force", False))
         tool_policy = ToolReplayPolicy(kwargs.get("tool_policy", "deny"))
+        validated = _validated_replay_kwargs(kwargs)
         spec = ReplaySpec(
             fidelity=fidelity,
             timing=timing,
             force=force,
             tool_policy=tool_policy,
+            from_sequence=validated.get("from_sequence"),
+            to_sequence=validated.get("to_sequence"),
+            stage_filter=validated.get("stage_filter"),
         )
         result = bundle.replay(spec)
+        total_frames = len(result.frames)
+        truncated = total_frames > _REPLAY_FRAME_LIMIT
+        kept = result.frames[:_REPLAY_FRAME_LIMIT] if truncated else result.frames
         return {
             "fidelity_label": result.fidelity_label.value,
-            "frame_count": len(result.frames),
+            "frame_count": len(kept),
+            "total_frames": total_frames,
+            "frames_truncated": truncated,
+            "frames": [_serialize_frame(f) for f in kept],
             "side_effecting": result.side_effecting,
             "blocked_tool_calls": result.blocked_tool_calls,
             "stubbed_tool_calls": result.stubbed_tool_calls,
@@ -165,6 +238,15 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
             "supports_replay": True,
             "supports_export": False,
             "is_live": False,
+            "replay_entry_points": [
+                {
+                    "sequence": cp.sequence,
+                    "stage": cp.stage,
+                    "unit_id": cp.unit_id,
+                    "checkpoint_id": cp.checkpoint_id,
+                }
+                for cp in bundle.replay_entry_points
+            ],
         },
         _bundle_fn=lambda: bundle,
         _replay_fn=_replay,
@@ -201,6 +283,7 @@ def _session_source(session: Any) -> DebuggerSource:
             "supports_replay": False,
             "supports_export": True,
             "is_live": True,
+            "replay_entry_points": [],
         }
 
     return DebuggerSource(
@@ -255,7 +338,7 @@ def _filter_records(
     *,
     stage: str | None,
     turn_id: str | None,
-    name: str | None,
+    name: str | Iterable[str] | None,
     from_seq: int | None,
     to_seq: int | None,
     errors_only: bool = False,
@@ -266,11 +349,24 @@ def _filter_records(
     single combined operation; pagination on the HTTP API goes through
     :func:`_filter_and_paginate` so the response can carry both the
     page slice and the full match count.
+
+    ``name`` may be a single string (exact match) or an iterable of
+    strings (membership match).  The HTTP handler surfaces the latter
+    via repeated ``name=`` query params so the Live view can fetch only
+    the event names it renders without being capped by ``limit``.
     """
     if offset < 0:
         raise ValueError("offset must be >= 0")
     if limit is not None and limit <= 0:
         raise ValueError("limit must be > 0")
+    name_set: frozenset[str] | None
+    if name is None:
+        name_set = None
+    elif isinstance(name, str):
+        name_set = frozenset({name})
+    else:
+        collected = frozenset(name)
+        name_set = collected or None
     out = []
     for r in records:
         seq = r.get("sequence")
@@ -282,7 +378,7 @@ def _filter_records(
             continue
         if turn_id is not None and r.get("turn_id") != turn_id:
             continue
-        if name is not None and r.get("name") != name:
+        if name_set is not None and r.get("name") not in name_set:
             continue
         if stage is not None:
             data = r.get("data") or {}
@@ -305,7 +401,7 @@ def _filter_and_paginate(
     *,
     stage: str | None,
     turn_id: str | None,
-    name: str | None,
+    name: str | Iterable[str] | None,
     from_seq: int | None,
     to_seq: int | None,
     errors_only: bool,
@@ -539,36 +635,53 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         bucket = by_turn.setdefault(
             turn_id,
-            {"turn_id": turn_id, "user": "", "agent": "", "agent_delta": []},
+            {
+                "turn_id": turn_id,
+                "user": "",
+                "agent": "",
+                "user_seq": None,
+                "agent_seq": None,
+                "agent_delta": [],
+                "agent_delta_seq": None,
+            },
         )
         name = r.get("name") or ""
         data = r.get("data") or {}
+        seq = r.get("sequence")
         if not isinstance(data, dict):
             continue
         if name == "stt_final":
             txt = data.get("text") or data.get("transcript")
             if isinstance(txt, str) and txt:
                 bucket["user"] = txt
+                bucket["user_seq"] = seq
         elif name == "stage_complete" and (
             data.get("stage") == "agent" or data.get("observed_stage") == "agent"
         ):
             resp = data.get("response")
             if isinstance(resp, str) and resp:
                 bucket["agent"] = resp
+                bucket["agent_seq"] = seq
         elif name == "agent_delta":
             txt = data.get("text")
             if isinstance(txt, str) and txt and data.get("type") == "TEXT_DELTA":
                 bucket["agent_delta"].append(txt)
+                if bucket["agent_delta_seq"] is None:
+                    bucket["agent_delta_seq"] = seq
         elif name == "agent_final":
             txt = data.get("text")
             if isinstance(txt, str) and txt and not bucket["agent"]:
                 bucket["agent"] = txt
+                bucket["agent_seq"] = seq
 
     transcripts = []
     for turn_id, bucket in by_turn.items():
         if not bucket["agent"] and bucket["agent_delta"]:
             bucket["agent"] = "".join(bucket["agent_delta"])
+            if bucket["agent_seq"] is None:
+                bucket["agent_seq"] = bucket["agent_delta_seq"]
         bucket.pop("agent_delta", None)
+        bucket.pop("agent_delta_seq", None)
         transcripts.append(bucket)
     return transcripts
 
@@ -821,12 +934,17 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             offset = int(params["offset"]) if "offset" in params else 0
         except ValueError:
             return web.Response(status=400, text="from/to/limit/offset must be integers")
+        # aiohttp's ``getall`` returns every repeated ``name=`` value so
+        # the Live view can request only the handful of event names it
+        # actually renders (e.g. ``name=vad_start_speaking&name=stt_partial``)
+        # without being capped by ``limit``.
+        names = [n for n in params.getall("name", ()) if n]
         try:
             page, total = _filter_and_paginate(
                 source.records(),
                 stage=params.get("stage") or None,
                 turn_id=params.get("turn") or None,
-                name=params.get("name") or None,
+                name=names or None,
                 from_seq=from_seq,
                 to_seq=to_seq,
                 errors_only=params.get("errors") == "1",
@@ -903,7 +1021,18 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
 
     _DESTRUCTIVE_FIDELITIES = frozenset({"live"})
     _DESTRUCTIVE_TOOL_POLICIES = frozenset({"allow"})
-    _ALLOWED_REPLAY_KEYS = frozenset({"fidelity", "timing", "force", "tool_policy", "confirm"})
+    _ALLOWED_REPLAY_KEYS = frozenset(
+        {
+            "fidelity",
+            "timing",
+            "force",
+            "tool_policy",
+            "confirm",
+            "from_sequence",
+            "to_sequence",
+            "stage_filter",
+        }
+    )
 
     async def replay(request: Any) -> Any:
         if not source.manifest().get("supports_replay"):
@@ -941,10 +1070,64 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                 },
                 status=409,
             )
+        from easycat.runtime.replay import (
+            ProviderVersionMismatchError,
+            ReplayError,
+            ReplaySideEffectBlocked,
+        )
+
         try:
             result = source.replay(**payload)
-        except (ValueError, TypeError, RuntimeError) as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+        except ProviderVersionMismatchError as exc:
+            return web.json_response(
+                {
+                    "error_code": exc.error_code,
+                    "message": str(exc),
+                    "details": {
+                        "mismatches": [
+                            {
+                                "provider": m.provider,
+                                "bundle_version": m.bundle_version,
+                                "installed_version": m.installed_version,
+                                "code": m.code,
+                            }
+                            for m in exc.mismatches
+                        ],
+                    },
+                },
+                status=409,
+            )
+        except ReplayError as exc:
+            return web.json_response(
+                {
+                    "error_code": "REPLAY_NON_COMMITTABLE",
+                    "message": str(exc),
+                    "details": {
+                        "requested_sequence": exc.requested_sequence,
+                        "nearest_committable_before": exc.nearest_committable_before,
+                        "nearest_committable_after": exc.nearest_committable_after,
+                        "stage": exc.stage,
+                    },
+                },
+                status=409,
+            )
+        except ReplaySideEffectBlocked as exc:
+            return web.json_response(
+                {
+                    "error_code": "REPLAY_SIDE_EFFECT_BLOCKED",
+                    "message": str(exc),
+                    "details": {},
+                },
+                status=409,
+            )
+        except (ValueError, TypeError) as exc:
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+            )
+        except RuntimeError as exc:
+            return web.json_response(
+                {"error_code": "REPLAY_FAILED", "message": str(exc)}, status=500
+            )
         result["destructive"] = destructive
         return web.json_response(result)
 
@@ -961,18 +1144,8 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             return web.Response(status=500, text=str(exc))
         if tmp_path is None:
             return web.Response(status=409, text="session has no journal to export")
-        # ``tmp_path`` is a Path now; FileResponse streams the file
-        # without holding the bundle in memory.  The closure on the
-        # caller side (serve_session._export_fn) deletes the file
-        # via a background callback when the response is finalised.
-        if isinstance(tmp_path, (bytes, bytearray)):
-            # Backwards-compat: an older closure returns bytes.  Smaller
-            # bundles can take this path without harm.
-            return web.Response(
-                body=bytes(tmp_path),
-                content_type="application/zip",
-                headers={"Content-Disposition": "attachment; filename=session.zip"},
-            )
+        # FileResponse streams the bundle without loading it into memory.
+        # The temp file is cleaned up by a delayed callback below.
         response = web.FileResponse(
             tmp_path,
             headers={
@@ -1113,6 +1286,11 @@ def serve_session(
             "port": port,
             "open_browser": open_browser,
             "allow_remote": allow_remote,
+            # aiohttp's default signal handling uses ``signal.set_wakeup_fd``,
+            # which only works on the main thread — installing it from a
+            # daemon thread raises ``RuntimeError`` and kills the server
+            # before it answers a single request.
+            "handle_signals": False,
         },
         daemon=True,
         name="easycat-debugger",
@@ -1149,6 +1327,7 @@ def _serve(
     port: int,
     open_browser: bool,
     allow_remote: bool,
+    handle_signals: bool = True,
 ) -> None:
     try:
         from aiohttp import web
@@ -1166,7 +1345,7 @@ def _serve(
             webbrowser.open(url)
         except Exception:  # pragma: no cover - depends on env
             logger.debug("Could not open browser automatically", exc_info=True)
-    web.run_app(app, host=host, port=port, print=None)
+    web.run_app(app, host=host, port=port, print=None, handle_signals=handle_signals)
 
 
 # ── Async-friendly variant for callers already inside an event loop ─

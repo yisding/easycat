@@ -8,10 +8,11 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 
+from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
@@ -19,15 +20,6 @@ from easycat.tts.base import TTSBase
 from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
 
 logger = logging.getLogger(__name__)
-
-
-def _get_package_version(pkg: str) -> str:
-    try:
-        from importlib.metadata import version
-
-        return version(pkg)
-    except Exception:
-        return "unknown"
 
 
 class ElevenLabsStreamMode(enum.StrEnum):
@@ -51,6 +43,11 @@ _ELEVENLABS_FORMAT_MAP: dict[str, AudioFormat] = {
 @dataclass
 class ElevenLabsTTSConfig:
     """Configuration for the ElevenLabs TTS provider."""
+
+    # Name of the model field on this config — read by ``parse_tts_string``
+    # to know that ``"elevenlabs/<model>"`` shortcuts populate ``model_id``
+    # rather than the conventional ``model``.
+    MODEL_FIELD: ClassVar[str] = "model_id"
 
     api_key: str = ""
     voice_id: str = "EXAVITQu4vr4xnSDxMaL"  # Sarah (default)
@@ -349,5 +346,5 @@ class ElevenLabsTTS(TTSBase):
             "provider": "elevenlabs",
             "model": self._config.model_id,
             "api_version": "v1",
-            "sdk_version": _get_package_version("httpx"),
+            "sdk_version": get_package_version("httpx"),
         }

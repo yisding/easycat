@@ -459,33 +459,208 @@
   }
 
   /* Replay view */
-  #replay-view { padding: 14px; overflow: auto; }
-  .replay-form {
+  #replay-view { flex-direction: column; }
+  #replay-form-pane {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    max-height: 60%;
+    overflow: auto;
+  }
+  #replay-form {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 5px;
-    padding: 16px;
-    margin-bottom: 14px;
-    max-width: 700px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    max-width: 720px;
   }
-  .replay-form .row {
+  #replay-form > summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 0;
+    list-style: none;
+  }
+  #replay-form > summary::-webkit-details-marker { display: none; }
+  #replay-form > summary::before {
+    content: "▸ ";
+    display: inline-block;
+    transition: transform 0.15s;
+  }
+  #replay-form[open] > summary::before { transform: rotate(90deg); }
+  #replay-form[open] > summary { margin-bottom: 12px; }
+  #replay-form .row {
     display: grid;
-    grid-template-columns: 130px 1fr;
+    grid-template-columns: 140px 1fr;
     gap: 10px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
     align-items: center;
   }
-  .replay-form label {
+  #replay-form .row.actions { grid-template-columns: 1fr; justify-items: end; }
+  #replay-form label {
     color: var(--muted);
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
+  }
+  #replay-from-seq, #replay-to-seq { width: 110px; }
+  .replay-stage-checkboxes {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .replay-stage-checkboxes label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  #replay-summary {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    max-width: 720px;
+  }
+  #replay-summary .summary-row {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  #replay-summary .summary-counts {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .fidelity-badge {
+    font-family: var(--mono);
+    padding: 1px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .fidelity-badge.artifact { background: rgba(68,209,138,0.2); color: var(--green); }
+  .fidelity-badge.simulated { background: rgba(110,168,254,0.2); color: var(--accent); }
+  .fidelity-badge.live { background: rgba(224,99,90,0.2); color: var(--red); }
+  .fidelity-downgraded {
+    color: var(--muted);
+    font-size: 10px;
+    font-family: var(--mono);
+  }
+  .replay-warning {
+    background: rgba(232,166,75,0.12);
+    border-left: 3px solid var(--orange);
+    padding: 8px 12px;
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text);
+    border-radius: 0 3px 3px 0;
+  }
+  .replay-truncated {
+    background: rgba(110,168,254,0.10);
+    border-left: 3px solid var(--accent);
+    padding: 6px 10px;
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--muted);
+    border-radius: 0 3px 3px 0;
+  }
+  .replay-chip-section {
+    margin-top: 6px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+  }
+  .replay-chip-section .label {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-right: 6px;
+  }
+  .replay-chip {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 3px;
+    background: var(--panel-2);
+    color: var(--text);
+    margin: 2px 3px 2px 0;
+    font-size: 10px;
+  }
+  .replay-chip.blocked { background: rgba(224,99,90,0.2); color: var(--red); }
+  .replay-chip.stubbed { background: rgba(232,166,75,0.2); color: var(--orange); }
+  .replay-chip.allowed { background: rgba(224,99,90,0.2); color: var(--red); }
+  #replay-error {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--red);
+    border-radius: 0 5px 5px 0;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    max-width: 720px;
+  }
+  #replay-error h4 {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--red);
+    margin: 0 0 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  #replay-error .err-message {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+    margin-bottom: 8px;
+    word-break: break-word;
+  }
+  #replay-error table {
+    margin: 8px 0;
+    font-size: 11px;
+  }
+  #replay-error table th, #replay-error table td {
+    padding: 4px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    cursor: default;
+  }
+  #replay-error .err-actions {
+    display: flex; gap: 8px; margin-top: 6px;
+  }
+  #replay-body {
+    display: flex; flex: 1; overflow: hidden; min-height: 0;
+  }
+  #replay-frames-pane {
+    flex: 1; overflow: auto; padding: 12px;
+    border-right: 1px solid var(--border);
+  }
+  #replay-frames-filters {
+    display: flex; gap: 8px; margin-bottom: 12px;
+    align-items: center; flex-wrap: wrap;
+  }
+  #replay-frames-filters input, #replay-frames-filters select { height: 28px; }
+  #replay-frames-filters .count {
+    color: var(--muted);
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  #replay-inspector-pane {
+    width: 420px; flex-shrink: 0; overflow: auto;
+    padding: 14px; background: var(--panel);
   }
   .replay-result {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 5px;
     padding: 16px;
+    margin: 12px;
     max-width: 700px;
   }
 
@@ -503,6 +678,88 @@
     height: 22px;
   }
   footer .right { margin-left: auto; }
+
+  /* Live multi-track view */
+  #live-view.active { flex-direction: column; min-height: 0; }
+  .live-toolbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 14px; background: var(--panel);
+    border-bottom: 1px solid var(--border); height: 38px; flex-shrink: 0;
+  }
+  .live-toolbar label {
+    color: var(--muted); font-size: 11px;
+    font-family: var(--mono); display: flex; align-items: center; gap: 6px;
+  }
+  .live-toolbar .spacer { flex: 1; }
+  .live-toolbar .legend {
+    display: flex; gap: 10px; flex-wrap: wrap;
+    color: var(--muted); font-size: 10px; font-family: var(--mono);
+  }
+  .live-toolbar .legend span::before {
+    content: ""; display: inline-block; width: 9px; height: 9px;
+    border-radius: 2px; margin-right: 4px; vertical-align: middle;
+  }
+  #live-canvas { flex: 1; overflow: auto; padding: 8px 0; }
+  .live-row {
+    display: flex; align-items: stretch; min-height: 26px;
+    border-bottom: 1px solid var(--border);
+  }
+  .live-row .lane-name {
+    width: 110px; flex-shrink: 0; padding: 4px 10px;
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; align-items: center;
+  }
+  .live-row .lane-track {
+    position: relative; flex: 1; min-width: 100%;
+    background-image: linear-gradient(to right,
+      rgba(125, 133, 151, 0.12) 1px, transparent 1px);
+    background-size: var(--grid-size, 100px) 100%;
+  }
+  .live-marker {
+    position: absolute; top: 3px; bottom: 3px;
+    border-radius: 2px; padding: 0 5px;
+    font-size: 10px; line-height: 20px; color: #0c0f14;
+    font-family: var(--mono); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; cursor: pointer;
+    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+    transition: outline 0.05s, transform 0.05s;
+  }
+  .live-marker:hover { outline: 1px solid var(--text); z-index: 3; }
+  .live-marker.point { width: 4px; padding: 0; min-width: 4px; }
+  .live-marker.selected { outline: 2px solid var(--accent); z-index: 4; }
+  .live-marker.lane-vad { background: #6ea8fe; }
+  .live-marker.lane-asr { background: #44d18a; }
+  .live-marker.lane-agent { background: #b78dff; }
+  .live-marker.lane-tts { background: #f08fad; }
+  .live-marker.lane-playback { background: #e8a64b; }
+  .live-marker.lane-turn { background: #5fc7c0; }
+  .live-marker.lane-tools { background: #ffd166; }
+  .live-marker.lane-interruption { background: #e0635a; color: #fff; }
+  .live-marker.lane-errors { background: #e0635a; color: #fff; }
+  .live-marker.lane-reconnect { background: #7d8597; color: #fff; }
+  .live-empty {
+    color: var(--muted); padding: 30px;
+    text-align: center; font-size: 12px;
+  }
+  .live-time-axis {
+    position: sticky; top: 0; z-index: 5;
+    height: 22px; background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: stretch;
+  }
+  .live-time-axis .axis-spacer {
+    width: 110px; flex-shrink: 0;
+    background: var(--panel); border-right: 1px solid var(--border);
+  }
+  .live-time-axis .axis-track {
+    position: relative; flex: 1;
+    font-family: var(--mono); font-size: 9px; color: var(--muted);
+  }
+  .live-time-axis .axis-tick {
+    position: absolute; top: 0; bottom: 0;
+    border-left: 1px solid var(--border); padding: 4px 4px;
+  }
 </style>
 </head>
 <body>
@@ -519,6 +776,7 @@
 </header>
 <nav class="tabbar" role="tablist">
   <div class="tab active" data-tab="timeline" role="tab">Timeline</div>
+  <div class="tab" data-tab="live" role="tab">Live</div>
   <div class="tab" data-tab="pipeline" role="tab">Pipeline</div>
   <div class="tab" data-tab="records" role="tab">Records</div>
   <div class="tab" data-tab="transcript" role="tab">Transcript</div>
@@ -527,6 +785,28 @@
 </nav>
 <main>
   <section id="timeline-view" class="view active"></section>
+
+  <section id="live-view" class="view">
+    <div class="live-toolbar">
+      <label>zoom <input id="live-zoom" type="range" min="20" max="500" value="100"
+        style="width: 140px;" />
+        <span id="live-zoom-label" style="width: 70px;">100 px/s</span>
+      </label>
+      <span class="spacer"></span>
+      <span class="legend">
+        <span style="color:#6ea8fe">vad</span>
+        <span style="color:#44d18a">asr</span>
+        <span style="color:#b78dff">agent</span>
+        <span style="color:#f08fad">tts</span>
+        <span style="color:#e8a64b">playback</span>
+        <span style="color:#5fc7c0">turn</span>
+        <span style="color:#ffd166">tools</span>
+        <span style="color:#e0635a">interruption / error</span>
+        <span style="color:#7d8597">reconnect</span>
+      </span>
+    </div>
+    <div id="live-canvas"></div>
+  </section>
 
   <section id="pipeline-view" class="view">
     <svg id="pipeline-svg" viewBox="0 0 900 280" preserveAspectRatio="xMidYMid meet">
@@ -580,45 +860,88 @@
   <section id="cost-view" class="view"></section>
 
   <section id="replay-view" class="view">
-    <div class="replay-form">
-      <h3>Run replay</h3>
-      <div class="row">
-        <label for="replay-fidelity">Fidelity</label>
-        <select id="replay-fidelity">
-          <option value="artifact">ARTIFACT (deterministic)</option>
-          <option value="simulated">SIMULATED (stages only)</option>
-          <option value="live">LIVE (re-execute providers)</option>
-        </select>
-      </div>
-      <div class="row">
-        <label for="replay-tool-policy">Tool policy</label>
-        <select id="replay-tool-policy">
-          <option value="deny">DENY (block side effects)</option>
-          <option value="stub">STUB (substitute from journal)</option>
-          <option value="allow">ALLOW (permit live side effects)</option>
-        </select>
-      </div>
-      <div class="row">
-        <label for="replay-timing">Timing</label>
-        <select id="replay-timing">
-          <option value="fast">fast (mask non-deterministic fields)</option>
-          <option value="wall">wall (preserve original timing)</option>
-        </select>
-      </div>
-      <div class="row">
-        <label></label>
-        <button class="primary" id="run-replay-btn">▶ Run replay</button>
-      </div>
+    <div id="replay-form-pane">
+      <details id="replay-form" open>
+        <summary>Configure replay</summary>
+        <div class="row">
+          <label for="replay-fidelity">Fidelity</label>
+          <select id="replay-fidelity">
+            <option value="artifact">ARTIFACT (deterministic)</option>
+            <option value="simulated">SIMULATED (stages only)</option>
+            <option value="live">LIVE (re-execute providers)</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="replay-tool-policy">Tool policy</label>
+          <select id="replay-tool-policy">
+            <option value="deny">DENY (block side effects)</option>
+            <option value="stub">STUB (substitute from journal)</option>
+            <option value="allow">ALLOW (permit live side effects)</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="replay-timing">Timing</label>
+          <select id="replay-timing">
+            <option value="fast">fast (mask non-deterministic fields)</option>
+            <option value="wall">wall (preserve original timing)</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="replay-from-seq">Sequence window</label>
+          <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <input id="replay-from-seq" type="number" min="0" placeholder="from" />
+            <span style="color: var(--muted); font-family: var(--mono);">→</span>
+            <input id="replay-to-seq" type="number" min="0" placeholder="to" />
+            <select id="replay-checkpoint-picker" style="min-width: 180px;">
+              <option value="">snap from-seq to checkpoint…</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <label>Stage filter</label>
+          <div id="replay-stage-checkboxes" class="replay-stage-checkboxes"></div>
+        </div>
+        <div class="row actions">
+          <button class="primary" id="run-replay-btn">▶ Run replay</button>
+        </div>
+      </details>
+      <div id="replay-summary" hidden></div>
+      <div id="replay-error" hidden></div>
     </div>
-    <div class="replay-result" id="replay-result-block" hidden>
-      <h3>Result</h3>
-      <pre id="replay-result-pre"></pre>
+    <div id="replay-body">
+      <div id="replay-frames-pane">
+        <div id="replay-frames-filters">
+          <select id="replay-frame-stage-filter">
+            <option value="">all stages</option>
+          </select>
+          <input id="replay-frame-name-filter" placeholder="name…" style="width: 180px;" />
+          <span class="count" id="replay-frame-count"></span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>seq</th>
+              <th>kind</th>
+              <th>name</th>
+              <th>stage</th>
+              <th>turn</th>
+              <th>refs</th>
+            </tr>
+          </thead>
+          <tbody id="replay-frames-body"></tbody>
+        </table>
+      </div>
+      <aside id="replay-inspector-pane">
+        <div class="empty" id="replay-inspector-empty">Run a replay, then select a frame.</div>
+        <div id="replay-inspector-content" hidden></div>
+      </aside>
     </div>
     <div class="replay-result" id="replay-unsupported" hidden>
-      <p style="color: var(--muted);">
-        Replay is only available for bundle sources.  Live sessions can export
-        a bundle from the header to enable replay.
+      <p style="color: var(--muted); margin: 0 0 12px;">
+        Replay is only available for bundle sources. Live sessions can export
+        a bundle to enable replay.
       </p>
+      <button class="primary" id="replay-export-now-btn">↓ Export bundle now</button>
     </div>
   </section>
 </main>
@@ -714,6 +1037,7 @@ function clear(node) { while (node.firstChild) node.removeChild(node.firstChild)
 const state = {
   manifest: null,
   records: [],
+  liveRecords: [],
   turns: [],
   timeline: [],
   transcripts: [],
@@ -722,10 +1046,23 @@ const state = {
   selectedSeq: null,
   ws: null,
   wsConnected: false,
+  replay: {
+    result: null,
+    frames: [],
+    selectedSeq: null,
+    filters: { stage: "", name: "" },
+    requestedFidelity: null,
+    stageCheckboxesBuilt: false,
+  },
 };
+
+// Stage names mirrored from runtime/replay.py:_STAGE_NAMES.  Used to
+// render the stage-filter checkbox group and the frame-stage select.
+const REPLAY_STAGE_NAMES = ["stt", "tts", "vad", "agent", "audio", "transport", "telephony", "turn"];
 
 const TAB_LOADERS = {
   timeline: renderTimelineView,
+  live: renderLiveView,
   pipeline: renderPipelineView,
   records: () => { renderRecordsView(); loadAndRenderRecords(); },
   transcript: renderTranscriptView,
@@ -773,13 +1110,17 @@ async function refreshAll() {
 async function loadAllSnapshots() {
   // Cap the snapshot record fetch — the records table re-fetches with
   // its own filters/limit when the user interacts.  This snapshot is
-  // only used for stage-filter population and pipeline counts.
+  // only used for stage-filter population and pipeline counts.  The
+  // Live view has its own uncapped, name-filtered fetch so that
+  // chatty ``tts_audio`` / ``agent_delta`` records in long sessions
+  // don't push later VAD/ASR/agent events out of the 1000-record cap.
   const [recsResp, turnsResp, timelineResp, transcriptResp, costResp] = await Promise.all([
     getJSON("/api/records?limit=1000"),
     getJSON("/api/turns"),
     getJSON("/api/timeline"),
     getJSON("/api/transcript"),
     getJSON("/api/cost").catch(() => ({ per_turn: {}, totals: {} })),
+    loadLiveRecords(),
   ]);
   state.records = recsResp.records;
   state.recordsTotal = recsResp.total ?? recsResp.records.length;
@@ -789,6 +1130,22 @@ async function loadAllSnapshots() {
   state.cost = costResp;
   $("#status-turns").textContent = `${state.turns.length} turns`;
   populateStageFilter();
+}
+
+async function loadLiveRecords() {
+  // Fetch a dedicated record set for the Live multi-track view: only
+  // the event names the view renders, and uncapped so longer sessions
+  // still show recent VAD/ASR/agent activity.
+  const params = new URLSearchParams();
+  for (const lane of LIVE_LANES) {
+    for (const n of lane.names) params.append("name", n);
+  }
+  try {
+    const r = await getJSON(`/api/records?${params}`);
+    state.liveRecords = r.records || [];
+  } catch {
+    state.liveRecords = [];
+  }
 }
 
 function populateStageFilter() {
@@ -877,6 +1234,189 @@ function renderTimelineView() {
     }
     root.appendChild(turnNode);
   }
+}
+
+// ── Live multi-track view ────────────────────────────────────────
+// Audacity-style timeline that buckets journal records into per-source
+// lanes.  Driven by ``state.liveRecords`` — a dedicated, uncapped,
+// name-filtered fetch so chatty per-chunk records (``tts_audio``,
+// ``agent_delta``) in long sessions don't push later events out of
+// the capped ``state.records`` snapshot.
+const LIVE_LANES = [
+  { id: "vad", label: "vad", names: ["vad_start_speaking", "vad_stop_speaking"] },
+  { id: "asr", label: "asr", names: ["stt_partial", "stt_final"] },
+  {
+    id: "agent",
+    label: "agent",
+    names: ["agent_request_started", "agent_delta", "agent_final"],
+  },
+  { id: "tts", label: "tts", names: ["tts_audio", "tts_markers"] },
+  { id: "playback", label: "playback", names: ["bot_started_speaking", "bot_stopped_speaking"] },
+  { id: "turn", label: "turn", names: ["turn_started", "turn_ended"] },
+  {
+    id: "tools",
+    label: "tools",
+    names: ["tool_call_started", "tool_call_delta", "tool_call_result"],
+  },
+  { id: "interruption", label: "interruption", names: ["interruption"] },
+  { id: "errors", label: "errors", names: ["error"] },
+  {
+    id: "reconnect",
+    label: "reconnect",
+    names: ["ws_reconnect_attempt", "ws_reconnect_success", "ws_reconnect_failure"],
+  },
+];
+const LANE_BY_NAME = (() => {
+  const m = new Map();
+  for (const lane of LIVE_LANES) for (const n of lane.names) m.set(n, lane.id);
+  return m;
+})();
+
+let _liveZoomPxPerSec = 100;
+$("#live-zoom").addEventListener("input", (e) => {
+  _liveZoomPxPerSec = parseInt(e.target.value, 10) || 100;
+  $("#live-zoom-label").textContent = `${_liveZoomPxPerSec} px/s`;
+  if (state.activeTab === "live") renderLiveView();
+});
+
+function renderLiveView() {
+  const root = $("#live-canvas");
+  clear(root);
+  const records = (state.liveRecords || []).filter(
+    (r) => LANE_BY_NAME.has(r.name) && r.timing && r.timing.mono_ns,
+  );
+  if (records.length === 0) {
+    root.appendChild(el("div", { class: "live-empty" },
+      "No timeline-eligible events yet. Talk to the bot to populate this view."));
+    return;
+  }
+  const t0 = records[0].timing.mono_ns;
+  const tEnd = records[records.length - 1].timing.mono_ns;
+  const totalSec = Math.max((tEnd - t0) / 1e9, 1);
+  const trackWidth = Math.max(800, Math.ceil(totalSec * _liveZoomPxPerSec) + 60);
+  const px = (ms) => (ms * _liveZoomPxPerSec) / 1000;
+
+  const axis = el("div", { class: "live-time-axis", style: `min-width: ${trackWidth + 110}px;` });
+  axis.appendChild(el("div", { class: "axis-spacer" }));
+  const axisTrack = el("div", { class: "axis-track", style: `width: ${trackWidth}px;` });
+  const tickEverySec = _liveZoomPxPerSec >= 200 ? 0.5 : _liveZoomPxPerSec >= 80 ? 1 : 5;
+  for (let s = 0; s <= totalSec + tickEverySec; s += tickEverySec) {
+    const tick = el("div", { class: "axis-tick", style: `left: ${px(s * 1000)}px;` },
+      `${s.toFixed(tickEverySec < 1 ? 1 : 0)}s`);
+    axisTrack.appendChild(tick);
+  }
+  axis.appendChild(axisTrack);
+  root.appendChild(axis);
+
+  const buckets = {};
+  for (const lane of LIVE_LANES) buckets[lane.id] = [];
+  for (const r of records) buckets[LANE_BY_NAME.get(r.name)].push(r);
+
+  for (const lane of LIVE_LANES) {
+    const row = el("div", { class: "live-row", style: `min-width: ${trackWidth + 110}px;` });
+    row.appendChild(el("div", { class: "lane-name" }, lane.label));
+    const track = el("div", {
+      class: "lane-track",
+      style: `width: ${trackWidth}px; --grid-size: ${_liveZoomPxPerSec}px;`,
+    });
+    const items = buckets[lane.id];
+    // Pair start/stop within a lane so VAD/playback/turn spans render
+    // as one rectangle instead of two points.  Each pair uses the
+    // correlation key that actually identifies the pair:
+    //   - VAD: nearest next stop (``vad_start_speaking`` is journaled
+    //     before a turn_id is assigned, so matching on turn_id drops
+    //     every VAD span back to a point).
+    //   - tools: ``data.call_id`` (one turn can fan out multiple tool
+    //     calls sharing the same turn_id; matching on turn_id can
+    //     attach a start to another call's result).
+    //   - playback / turn: ``turn_id`` — one pair per turn is the
+    //     right invariant here.
+    const PAIR_RULES = {
+      vad_start_speaking: {
+        stop: "vad_stop_speaking",
+        match: () => true,
+      },
+      bot_started_speaking: {
+        stop: "bot_stopped_speaking",
+        match: (a, b) => a.turn_id === b.turn_id,
+      },
+      turn_started: {
+        stop: "turn_ended",
+        match: (a, b) => a.turn_id === b.turn_id,
+      },
+      tool_call_started: {
+        stop: "tool_call_result",
+        match: (a, b) => {
+          const aId = a.data && a.data.call_id;
+          const bId = b.data && b.data.call_id;
+          return aId != null && aId === bId;
+        },
+      },
+    };
+    const consumed = new Set();
+    for (let i = 0; i < items.length; i++) {
+      if (consumed.has(i)) continue;
+      const r = items[i];
+      const startMs = (r.timing.mono_ns - t0) / 1e6;
+      let endMs = null;
+      const rule = PAIR_RULES[r.name];
+      if (rule) {
+        for (let j = i + 1; j < items.length; j++) {
+          if (consumed.has(j)) continue;
+          const c = items[j];
+          if (c.name === rule.stop && rule.match(r, c)) {
+            endMs = (c.timing.mono_ns - t0) / 1e6;
+            consumed.add(j);
+            break;
+          }
+        }
+      } else if (r.data && typeof r.data.duration_ms === "number") {
+        endMs = startMs + r.data.duration_ms;
+      }
+      const widthMs = endMs == null ? 0 : Math.max(2, endMs - startMs);
+      const isPoint = widthMs <= 2;
+      const marker = el("div", {
+        class: `live-marker lane-${lane.id}${isPoint ? " point" : ""}` +
+          (state.selectedSeq === r.sequence ? " selected" : ""),
+        style: isPoint
+          ? `left: ${px(startMs)}px;`
+          : `left: ${px(startMs)}px; width: ${Math.max(4, px(widthMs))}px;`,
+        title: _liveMarkerTitle(r, startMs, endMs),
+        onclick: () => _liveSelectRecord(r.sequence),
+      }, isPoint ? "" : _liveMarkerLabel(r));
+      track.appendChild(marker);
+    }
+    row.appendChild(track);
+    root.appendChild(row);
+  }
+}
+
+function _liveMarkerLabel(r) {
+  const text = r.data && (r.data.text || r.data.tool_name || r.data.result || r.data.message);
+  if (text) return String(text).slice(0, 60);
+  if (r.data && r.data.duration_ms) return `${r.data.duration_ms.toFixed(0)}ms`;
+  return r.name;
+}
+
+function _liveMarkerTitle(r, startMs, endMs) {
+  const lines = [`${r.name} · seq=${r.sequence}`];
+  if (r.turn_id) lines.push(`turn=${r.turn_id}`);
+  lines.push(`t=${(startMs / 1000).toFixed(2)}s` +
+    (endMs != null ? ` (+${((endMs - startMs)).toFixed(0)}ms)` : ""));
+  if (r.data && r.data.text) lines.push(`text: ${r.data.text}`);
+  return lines.join("\n");
+}
+
+function _liveSelectRecord(seq) {
+  state.selectedSeq = seq;
+  state.filters = { stage: "", turn: null, name: "", from: null, to: null, errorsOnly: false };
+  $("#stage-filter").value = "";
+  $("#name-filter").value = "";
+  activateTab("records");
+  const rec =
+    (state.records || []).find((r) => r.sequence === seq) ||
+    (state.liveRecords || []).find((r) => r.sequence === seq);
+  if (rec) selectRecord(rec);
 }
 
 async function playConcatAudio(turnId) {
@@ -1107,11 +1647,23 @@ function renderTranscriptView() {
     node.appendChild(el("div", { class: "turn-id" }, turn.turn_id));
     if (turn.user) {
       node.appendChild(el("div", { class: "speaker user" }, "User"));
-      node.appendChild(el("div", { class: "text" }, turn.user));
+      const userText = el("div", { class: "text" }, turn.user);
+      if (turn.user_seq != null) {
+        userText.style.cursor = "pointer";
+        userText.title = "Click to inspect the source stt_final record";
+        userText.addEventListener("click", () => _liveSelectRecord(turn.user_seq));
+      }
+      node.appendChild(userText);
     }
     if (turn.agent) {
       node.appendChild(el("div", { class: "speaker agent" }, "Agent"));
-      node.appendChild(el("div", { class: "text" }, turn.agent));
+      const agentText = el("div", { class: "text" }, turn.agent);
+      if (turn.agent_seq != null) {
+        agentText.style.cursor = "pointer";
+        agentText.title = "Click to inspect the source agent record";
+        agentText.addEventListener("click", () => _liveSelectRecord(turn.agent_seq));
+      }
+      node.appendChild(agentText);
       // Only render the audio element when the rollup says this turn
       // produced TTS bytes — otherwise the browser shows a broken
       // player when /api/audio/concat 404s.
@@ -1182,33 +1734,97 @@ function renderCostView() {
 
 // ── Replay view ──────────────────────────────────────────────────
 function renderReplayView() {
-  const supports = state.manifest?.supports_replay;
-  $("#replay-unsupported").hidden = !!supports;
-  document.querySelector(".replay-form").style.display = supports ? "" : "none";
+  const supports = !!state.manifest?.supports_replay;
+  $("#replay-unsupported").hidden = supports;
+  $("#replay-form-pane").hidden = !supports;
+  $("#replay-body").hidden = !supports;
+  if (!supports) return;
+  _buildReplayStageCheckboxes();
+  _buildReplayFrameStageFilter();
+  _populateCheckpointPicker();
+  // Re-render any prior result so switching tabs doesn't clear it.
+  if (state.replay.result) {
+    renderReplayResult(state.replay.result);
+    renderReplayFrames();
+  }
+}
+
+function _buildReplayStageCheckboxes() {
+  if (state.replay.stageCheckboxesBuilt) return;
+  const host = $("#replay-stage-checkboxes");
+  if (!host) return;
+  clear(host);
+  for (const stage of REPLAY_STAGE_NAMES) {
+    const cb = el("input", { type: "checkbox", value: stage });
+    host.appendChild(el("label", null, [cb, document.createTextNode(stage)]));
+  }
+  state.replay.stageCheckboxesBuilt = true;
+}
+
+function _buildReplayFrameStageFilter() {
+  const sel = $("#replay-frame-stage-filter");
+  if (!sel || sel.dataset.built) return;
+  for (const stage of REPLAY_STAGE_NAMES) {
+    sel.appendChild(el("option", { value: stage }, stage));
+  }
+  sel.dataset.built = "1";
+}
+
+function _populateCheckpointPicker() {
+  const sel = $("#replay-checkpoint-picker");
+  if (!sel) return;
+  clear(sel);
+  const entries = state.manifest?.replay_entry_points || [];
+  if (entries.length === 0) {
+    sel.appendChild(el("option", { value: "" }, "no committable boundaries"));
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.appendChild(el("option", { value: "" }, "snap from-seq to checkpoint…"));
+  for (const cp of entries) {
+    sel.appendChild(el("option", { value: String(cp.sequence) },
+      `${cp.checkpoint_id} · ${cp.stage}`));
+  }
+}
+
+function _collectReplayPayload() {
+  const fidelity = $("#replay-fidelity").value;
+  const toolPolicy = $("#replay-tool-policy").value;
+  const timing = $("#replay-timing").value;
+  const fromSeq = parseInt($("#replay-from-seq").value, 10);
+  const toSeq = parseInt($("#replay-to-seq").value, 10);
+  const stages = [
+    ...document.querySelectorAll("#replay-stage-checkboxes input:checked"),
+  ].map(c => c.value);
+  const body = { fidelity, tool_policy: toolPolicy, timing };
+  if (!Number.isNaN(fromSeq)) body.from_sequence = fromSeq;
+  if (!Number.isNaN(toSeq)) body.to_sequence = toSeq;
+  if (stages.length) body.stage_filter = stages;
+  return body;
 }
 
 async function runReplay(opts) {
   const btn = $("#run-replay-btn");
   btn.disabled = true;
   btn.textContent = "…running";
-  const block = $("#replay-result-block");
-  const pre = $("#replay-result-pre");
-  block.hidden = true;
-  const fidelity = $("#replay-fidelity").value;
-  const toolPolicy = $("#replay-tool-policy").value;
-  const timing = $("#replay-timing").value;
+  $("#replay-error").hidden = true;
+  const payload = _collectReplayPayload();
   // Destructive iff: LIVE fidelity, ALLOW tool policy, or force=true.
   // Mirror the server-side rule exactly so a future ``force`` toggle
   // can't silently bypass the confirm dialog.
   const force = !!(opts && opts.force);
-  const isDestructive = fidelity === "live" || toolPolicy === "allow" || force;
+  if (force) payload.force = true;
+  const isDestructive =
+    payload.fidelity === "live" || payload.tool_policy === "allow" || force;
   // The server enforces a confirm flag for destructive combos so a
   // CSRF / drive-by from another tab can't fire LIVE/ALLOW silently.
   // Surface that in the UI with a real warning instead of waiting for
   // the 409 to come back as a JSON error.
   if (isDestructive && !(opts && opts.confirmed)) {
     const ok = window.confirm(
-      `Replay fidelity "${fidelity}" with tool policy "${toolPolicy}" will ` +
+      `Replay fidelity "${payload.fidelity}" with tool policy ` +
+      `"${payload.tool_policy}"${force ? " (force=true)" : ""} will ` +
       "re-execute against live providers and may incur cost or trigger real " +
       "tool side-effects.\n\nProceed?"
     );
@@ -1218,22 +1834,270 @@ async function runReplay(opts) {
       return;
     }
   }
+  payload.confirm = isDestructive;
+  state.replay.requestedFidelity = payload.fidelity;
+  let resp;
   try {
-    const result = await postJSON("/api/replay", {
-      fidelity,
-      tool_policy: toolPolicy,
-      timing,
-      confirm: isDestructive,
+    resp = await fetch("/api/replay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(payload),
     });
-    pre.textContent = JSON.stringify(result, null, 2);
-    block.hidden = false;
   } catch (e) {
-    pre.textContent = `Error: ${e.message}`;
-    block.hidden = false;
-  } finally {
+    renderReplayError({ error_code: "NETWORK", message: e.message });
     btn.disabled = false;
     btn.textContent = "▶ Run replay";
+    return;
   }
+  let body = {};
+  try { body = await resp.json(); } catch { /* tolerate empty */ }
+  btn.disabled = false;
+  btn.textContent = "▶ Run replay";
+  if (resp.ok) {
+    state.replay.result = body;
+    state.replay.frames = body.frames || [];
+    state.replay.selectedSeq = null;
+    state.replay.filters = { stage: "", name: "" };
+    $("#replay-frame-stage-filter").value = "";
+    $("#replay-frame-name-filter").value = "";
+    // Collapse the form so the result is the focus.
+    $("#replay-form").open = false;
+    renderReplayResult(body);
+    renderReplayFrames();
+    return;
+  }
+  if (resp.status === 409 && body.destructive === true) {
+    // Destructive 409 is the legacy confirm-required envelope; the
+    // client confirm above should have prevented this, but if a stale
+    // tab posts without confirm we surface the message directly.
+    renderReplayError({ error_code: "DESTRUCTIVE_NOT_CONFIRMED", message: body.error });
+    return;
+  }
+  renderReplayError(body);
+}
+
+function renderReplayResult(result) {
+  const summary = $("#replay-summary");
+  summary.hidden = false;
+  clear(summary);
+
+  const fid = result.fidelity_label || "";
+  const requested = state.replay.requestedFidelity;
+  const row = el("div", { class: "summary-row" }, [
+    el("span", { class: `fidelity-badge ${fid}` }, fid || "?"),
+    requested && requested !== fid
+      ? el("span", { class: "fidelity-downgraded" }, `(downgraded from ${requested})`)
+      : null,
+    el("span", { class: "summary-counts" },
+      `${result.frame_count} frame${result.frame_count === 1 ? "" : "s"}` +
+      (result.total_frames && result.total_frames !== result.frame_count
+        ? ` of ${result.total_frames}` : "")),
+  ]);
+  summary.appendChild(row);
+
+  if (result.frames_truncated) {
+    summary.appendChild(el("div", { class: "replay-truncated" },
+      `Frames truncated to ${result.frame_count} of ${result.total_frames}. ` +
+      `Use a sequence window to narrow the run.`));
+  }
+  if (result.side_effecting) {
+    summary.appendChild(el("div", { class: "replay-warning" },
+      "This replay performed live side effects against real providers."));
+  }
+  for (const [key, cls, label] of [
+    ["blocked_tool_calls", "blocked", "blocked"],
+    ["stubbed_tool_calls", "stubbed", "stubbed"],
+    ["allowed_tool_calls", "allowed", "allowed"],
+  ]) {
+    const items = result[key] || [];
+    if (!items.length) continue;
+    const section = el("div", { class: "replay-chip-section" }, [
+      el("span", { class: "label" }, label),
+      ...items.map(it => el("span", { class: `replay-chip ${cls}` }, String(it))),
+    ]);
+    summary.appendChild(section);
+  }
+}
+
+function renderReplayFrames() {
+  const body = $("#replay-frames-body");
+  if (!body) return;
+  clear(body);
+  const filters = state.replay.filters;
+  const nameFilter = (filters.name || "").trim().toLowerCase();
+  const frames = state.replay.frames.filter(f => {
+    if (filters.stage && f.stage !== filters.stage) return false;
+    if (nameFilter && !(f.name || "").toLowerCase().includes(nameFilter)) return false;
+    return true;
+  });
+  $("#replay-frame-count").textContent = frames.length === state.replay.frames.length
+    ? `${frames.length} frame${frames.length === 1 ? "" : "s"}`
+    : `showing ${frames.length} of ${state.replay.frames.length} frames`;
+  for (const frame of frames) {
+    const stage = frame.stage || "";
+    const refs = [];
+    if (frame.input_ref) refs.push(`in:${frame.input_ref.slice(0, 8)}`);
+    if (frame.output_ref) refs.push(`out:${frame.output_ref.slice(0, 8)}`);
+    const refSpans = refs.map(r => el("span", { class: "ref" }, r));
+    const stageCell = stage
+      ? el("td", null, el("span", { class: `stage-tag ${stage}` }, stage))
+      : el("td");
+    const tr = el("tr", { dataset: { seq: String(frame.sequence) } }, [
+      el("td", null, String(frame.sequence)),
+      el("td", { class: frame.kind === "control" ? "kind-control" : "" }, frame.kind || ""),
+      el("td", {
+        class: (frame.error ? "has-error" : "") + (frame.side_effecting ? " kind-control" : ""),
+      }, frame.name || ""),
+      stageCell,
+      el("td", null, (frame.turn_id || "").slice(-12)),
+      el("td", null, refSpans.length ? refSpans : ""),
+    ]);
+    if (frame.sequence === state.replay.selectedSeq) tr.classList.add("selected");
+    tr.addEventListener("click", () => selectReplayFrame(frame));
+    body.appendChild(tr);
+  }
+}
+
+function selectReplayFrame(frame) {
+  state.replay.selectedSeq = frame.sequence;
+  for (const row of document.querySelectorAll("#replay-frames-body tr")) {
+    row.classList.toggle("selected", row.dataset.seq === String(frame.sequence));
+  }
+  const empty = $("#replay-inspector-empty");
+  const content = $("#replay-inspector-content");
+  empty.hidden = true;
+  content.hidden = false;
+  clear(content);
+
+  const data = frame.data || {};
+  content.appendChild(el("h3", null, "Frame"));
+  const grid = el("div", { class: "field-grid" });
+  const addRow = (label, value) => {
+    grid.appendChild(el("div", { class: "label" }, label));
+    grid.appendChild(el("div", { class: "value" }, value || ""));
+  };
+  addRow("sequence", String(frame.sequence));
+  addRow("kind", frame.kind || "");
+  addRow("name", frame.name || "");
+  addRow("stage", frame.stage || "");
+  addRow("turn_id", frame.turn_id || "");
+  if (frame.input_ref) {
+    addRow("input_ref", `${frame.input_ref.slice(0, 16)}… (${frame.input_blob_size}B)`);
+  }
+  if (frame.output_ref) {
+    addRow("output_ref", `${frame.output_ref.slice(0, 16)}… (${frame.output_blob_size}B)`);
+  }
+  if (frame.side_effecting) addRow("side_effecting", "yes");
+  content.appendChild(grid);
+
+  content.appendChild(el("h3", null, "Data"));
+  content.appendChild(el("pre", null, JSON.stringify(data, null, 2)));
+
+  if (frame.error) {
+    content.appendChild(el("h3", { class: "has-error" }, "Error"));
+    content.appendChild(el("pre", null, JSON.stringify(frame.error, null, 2)));
+  }
+
+  if (frame.output_ref && frame.name === "tts_frame" && data.encoding === "pcm") {
+    content.appendChild(el("h3", null,
+      `Audio (PCM ${data.sample_rate}Hz, ${data.channels}ch, ${data.sample_width * 8}-bit)`));
+    content.appendChild(el("button", {
+      class: "primary",
+      onclick: () => playPCM(
+        frame.output_ref, data.sample_rate, data.channels, data.sample_width,
+      ),
+    }, "▶ Play frame"));
+  }
+}
+
+function renderReplayError(err) {
+  const host = $("#replay-error");
+  if (!host) return;
+  clear(host);
+  host.hidden = false;
+  const code = (err && err.error_code) || "UNKNOWN";
+  const message = (err && err.message) || (err && err.error) || "Replay failed.";
+  const details = (err && err.details) || {};
+
+  host.appendChild(el("h4", null, code.replace(/_/g, " ")));
+  host.appendChild(el("div", { class: "err-message" }, message));
+
+  if (code === "PROVIDER_VERSION_MISMATCH" || code === "PROVIDER_VERSION_UNKNOWN") {
+    const tbl = el("table", null, [
+      el("thead", null, el("tr", null, [
+        el("th", null, "provider"),
+        el("th", null, "bundle"),
+        el("th", null, "installed"),
+        el("th", null, "code"),
+      ])),
+      el("tbody", null, (details.mismatches || []).map(m => el("tr", null, [
+        el("td", null, m.provider || ""),
+        el("td", null, m.bundle_version || ""),
+        el("td", null, m.installed_version || ""),
+        el("td", null, m.code || ""),
+      ]))),
+    ]);
+    host.appendChild(tbl);
+    host.appendChild(el("div", { class: "err-actions" }, [
+      el("button", {
+        class: "primary",
+        onclick: () => runReplay({ force: true }),
+      }, "Retry with force=true"),
+      el("button", { onclick: () => { host.hidden = true; } }, "Dismiss"),
+    ]));
+    return;
+  }
+
+  if (code === "REPLAY_NON_COMMITTABLE") {
+    const before = details.nearest_committable_before;
+    const after = details.nearest_committable_after;
+    const buttons = [];
+    if (typeof before === "number") {
+      buttons.push(el("button", {
+        onclick: () => {
+          $("#replay-from-seq").value = String(before);
+          host.hidden = true;
+        },
+      }, `Snap to before (cp_${before})`));
+    }
+    if (typeof after === "number") {
+      buttons.push(el("button", {
+        onclick: () => {
+          $("#replay-from-seq").value = String(after);
+          host.hidden = true;
+        },
+      }, `Snap to after (cp_${after})`));
+    }
+    buttons.push(el("button", { onclick: () => { host.hidden = true; } }, "Dismiss"));
+    host.appendChild(el("div", { class: "err-actions" }, buttons));
+    return;
+  }
+
+  if (code === "REPLAY_SIDE_EFFECT_BLOCKED") {
+    host.appendChild(el("div", { class: "err-message" },
+      "Switch tool policy to STUB to substitute from the journal, or to ALLOW " +
+      "(requires confirm) to re-execute live."));
+    host.appendChild(el("div", { class: "err-actions" },
+      el("button", { onclick: () => { host.hidden = true; } }, "Dismiss")));
+    return;
+  }
+
+  host.appendChild(el("div", { class: "err-actions" },
+    el("button", { onclick: () => { host.hidden = true; } }, "Dismiss")));
+}
+
+async function exportBundle() {
+  try {
+    const r = await fetch("/api/export", { method: "POST" });
+    if (!r.ok) { alert(`Export failed: ${r.status}`); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = el("a", { href: url, download: "session.zip" });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (e) { alert(`Export failed: ${e.message}`); }
 }
 
 // ── WebSocket live updates ───────────────────────────────────────
@@ -1327,19 +2191,23 @@ $("#errors-only-toggle").addEventListener("change", () => {
   state.filters.errorsOnly = $("#errors-only-toggle").checked;
   loadAndRenderRecords();
 });
-$("#run-replay-btn").addEventListener("click", runReplay);
-$("#export-btn").addEventListener("click", async () => {
-  try {
-    const r = await fetch("/api/export", { method: "POST" });
-    if (!r.ok) { alert(`Export failed: ${r.status}`); return; }
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const a = el("a", { href: url, download: "session.zip" });
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  } catch (e) { alert(`Export failed: ${e.message}`); }
+$("#run-replay-btn").addEventListener("click", () => runReplay());
+$("#replay-checkpoint-picker").addEventListener("change", (ev) => {
+  if (ev.target.value) $("#replay-from-seq").value = ev.target.value;
 });
+$("#replay-frame-stage-filter").addEventListener("change", () => {
+  state.replay.filters.stage = $("#replay-frame-stage-filter").value;
+  renderReplayFrames();
+});
+$("#replay-frame-name-filter").addEventListener("input", () => {
+  clearTimeout(window._replayNameDebounce);
+  window._replayNameDebounce = setTimeout(() => {
+    state.replay.filters.name = $("#replay-frame-name-filter").value.trim();
+    renderReplayFrames();
+  }, 200);
+});
+$("#export-btn").addEventListener("click", exportBundle);
+$("#replay-export-now-btn").addEventListener("click", exportBundle);
 
 // Periodic time tick in footer.
 setInterval(() => {

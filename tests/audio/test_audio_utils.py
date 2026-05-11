@@ -214,3 +214,36 @@ def test_chunk_frames_8k_10ms():
 def test_chunk_frames_empty_audio():
     frames = list(chunk_frames(b"", frame_duration_ms=10, sample_rate=16000))
     assert frames == []
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"frame_duration_ms": 0, "sample_rate": 16000},
+        {"frame_duration_ms": -10, "sample_rate": 16000},
+        {"frame_duration_ms": 10, "sample_rate": 0},
+        {"frame_duration_ms": 10, "sample_rate": -16000},
+        {"frame_duration_ms": 10, "sample_rate": 16000, "sample_width": 0},
+        {"frame_duration_ms": 10, "sample_rate": 16000, "channels": 0},
+        {"frame_duration_ms": 1, "sample_rate": 999},
+    ],
+)
+def test_chunk_frames_rejects_non_positive_or_zero_byte_frames(kwargs):
+    with pytest.raises(ValueError):
+        list(chunk_frames(b"\x00" * 10, **kwargs))
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"frame_duration_ms": True, "sample_rate": 16000},
+        {"frame_duration_ms": 10.0, "sample_rate": 16000},
+        {"frame_duration_ms": 10, "sample_rate": True},
+        {"frame_duration_ms": 10, "sample_rate": "16000"},
+        {"frame_duration_ms": 10, "sample_rate": 16000, "sample_width": 2.0},
+        {"frame_duration_ms": 10, "sample_rate": 16000, "channels": False},
+    ],
+)
+def test_chunk_frames_rejects_non_integer_parameters(kwargs):
+    with pytest.raises(TypeError):
+        list(chunk_frames(b"\x00" * 10, **kwargs))

@@ -10,11 +10,14 @@ executors.
 from __future__ import annotations
 
 import enum
+import logging
 import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 
 class SessionActionType(enum.StrEnum):
@@ -216,3 +219,17 @@ class SessionActions:
         with self._lock:
             self._queue.clear()
             self._no_interrupt = False
+
+
+@dataclass(slots=True)
+class CoreSessionActionExecutor(SessionActionExecutor):
+    """Executor for provider-neutral core session actions."""
+
+    def supports(self, action: SessionAction) -> bool:
+        return isinstance(action, EndCallAction)
+
+    async def execute(self, session: Any, action: SessionAction) -> SessionActionResult:
+        if not isinstance(action, EndCallAction):
+            raise TypeError(f"Expected EndCallAction, got {type(action).__name__}")
+        logger.info("Agent requested end_call: reason=%s", action.reason)
+        return SessionActionResult(stop_session=True, metadata={"reason": action.reason})

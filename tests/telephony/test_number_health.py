@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from easycat.events import EventBus
+from easycat.events import CallEnded, CallFailed, CallInitiated, EventBus
 from easycat.telephony.call_state import CallStateChanged, OutboundCallState
 from easycat.telephony.number_health import (
     CallDispositionTracker,
@@ -69,6 +69,21 @@ class TestNumberHealthMonitor:
         monitor.record_call("+1555", answered=False)
         # With TTL=0, record is already expired.
         assert monitor.answer_rate("+1555") == 1.0  # No active records.
+
+    @pytest.mark.asyncio
+    async def test_duplicate_terminal_events_are_recorded_once(self) -> None:
+        bus = EventBus()
+        monitor = NumberHealthMonitor(bus)
+        monitor.start()
+        try:
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15551234567", from_="+15557654321"))
+            await bus.emit(CallEnded(call_sid="CA1", duration_s=10.0, number="+15551234567"))
+            await bus.emit(CallEnded(call_sid="CA1", duration_s=11.0, number="+15551234567"))
+            await bus.emit(CallFailed(call_sid="CA1", reason="busy", number="+15551234567"))
+            assert len(monitor._records["+15551234567"]) == 1
+            assert monitor._records["+15551234567"][0].answered is True
+        finally:
+            monitor.stop()
 
 
 class TestCallDispositionTracker:

@@ -14,10 +14,10 @@ from typing import Any, Literal
 class JournalRecordKind(enum.Enum):
     """Discriminator for journal record filtering."""
 
-    EVENT = "event"  # from EventTraceLogger
-    SPAN_START = "span_start"  # from SpanManager.start()
-    SPAN_END = "span_end"  # from SpanManager.finish()
-    METRIC = "metric"  # from InMemoryMetrics
+    EVENT = "event"
+    SPAN_START = "span_start"
+    SPAN_END = "span_end"
+    METRIC = "metric"
     CONTROL = "control"  # control signals (interrupt, cancel, etc.)
     FRAMEWORK_TRANSITION = "framework_transition"  # agent bridge boundaries
     DEGRADED = "degraded"  # journal health
