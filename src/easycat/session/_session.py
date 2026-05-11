@@ -68,6 +68,7 @@ from easycat.runtime.journal import (
 from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._audio_router import AudioRouter
+from easycat.session._cancel_orchestrator import CancelOrchestrator
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._streaming import consume_agent_stream
 from easycat.session._stt_committer import STTCommitter
@@ -99,12 +100,8 @@ from easycat.session.interruption import (
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
 from easycat.stages.base import (
-    ControlSignal as _ControlSignal,
-)
-from easycat.stages.base import (
     InterruptSignal as _InterruptSignal,
 )
-from easycat.stages.base import journal_append_control_signal as _journal_control_signal
 from easycat.stages.stt import STTStage
 from easycat.stages.transport import TransportStage
 from easycat.stages.tts import TTSStage
@@ -238,19 +235,19 @@ class Session:
         ) and is_active_provider(self.echo_canceller)
         self._enable_vad = cfg.enable_vad
         self._auto_turn_from_stt_final = cfg.auto_turn_from_stt_final
-        self._interruption_mode = cfg.interruption_mode
-        self._interruption_latency_compensation_ms = max(
-            0, cfg.interruption_latency_compensation_ms
-        )
-        self._interruption_ack_stale_ms = max(0, cfg.interruption_ack_stale_ms)
-        self._interruption_ack_tail_cap_ms = max(0, cfg.interruption_ack_tail_cap_ms)
+        # Interruption-config knobs are owned by the CancelOrchestrator
+        # (see ``self._cancel`` below).  Session exposes read-only
+        # property delegates so external readers keep working.
         # _strip_markdown and _output_processors moved to TTSScheduler.
 
-        # Turn manager — single source of truth for turn state
+        # Turn manager — single source of truth for turn state.  The
+        # barge-in cancel callback is installed later via
+        # :meth:`TurnManager.set_cancel_callback` because Phase 4 of the
+        # session decomposition wires the callback through
+        # ``CancelOrchestrator`` which does not yet exist at this point.
         self._turn_manager = cfg.turn_manager or TurnManager(
             self.event_bus,
             config=cfg.turn_manager_config,
-            cancel_turn_callback=self._cancel_for_barge_in,
         )
         # TurnManager emits a ``turn_state_changed`` journal record on
         # every state transition so bundle readers can answer "why did
@@ -472,6 +469,33 @@ class Session:
             drain_session_actions=self._drain_session_actions,
             clear_turn=_clear_turn,
         )
+
+        # Cancel orchestrator — owns control-signal propagation, barge-in
+        # suppression policy, and the interruption-config knobs.  Must be
+        # constructed after all 7 stages and the STTCommitter/TTSScheduler
+        # exist; it is wired into the TurnManager below.
+        self._cancel = CancelOrchestrator(
+            transport_stage=self._transport_stage,
+            tts_stage=self._tts_stage,
+            agent_stage=self._agent_stage,
+            turn_stage=self._turn_stage,
+            stt_stage=self._stt_stage,
+            vad_stage=self._vad_stage,
+            audio_stage=self._audio_stage,
+            run_ctx=self._run_ctx,
+            journal_sink=self._journal_sink,
+            interruption_mode=cfg.interruption_mode,
+            interruption_latency_compensation_ms=cfg.interruption_latency_compensation_ms,
+            interruption_ack_stale_ms=cfg.interruption_ack_stale_ms,
+            interruption_ack_tail_cap_ms=cfg.interruption_ack_tail_cap_ms,
+            current_turn=lambda: self._turn,
+            session_actions=lambda: self._session_actions,
+            telephony_helpers_present=lambda: bool(self._telephony_helpers),
+            cancel_turn_impl=self.cancel_turn,
+        )
+        # Install the orchestrator's barge-in callback now that it exists.
+        self._turn_manager.set_cancel_callback(self._cancel.for_barge_in)
+
         # Plug the TurnStage into the TurnManager's endpoint-detector call
         # so smart-turn decisions go through stage.execute() and produce
         # journal records.
@@ -598,78 +622,6 @@ class Session:
             },
         )
 
-    async def _propagate_upstream_signal(
-        self,
-        signal: _ControlSignal,
-        *,
-        cause: str | None = None,
-    ) -> None:
-        """Walk the upstream signal through every stage, late → early.
-
-        WS3 T3.8: control signals propagate from late stages (TTS,
-        Transport) back toward early stages (VAD, STT) so each one can
-        observe the event in journal order.  Each stage's
-        ``handle_upstream`` writes a ``ControlSignalRecord`` so a replay
-        can see who saw the signal and when.
-
-        Errors inside ``handle_upstream`` are isolated per-stage —
-        signal propagation must not throw and break the legacy cancel
-        path that the same caller relies on.
-        """
-        ordered = (
-            self._transport_stage,
-            self._tts_stage,
-            self._agent_stage,
-            self._turn_stage,
-            self._stt_stage,
-            self._vad_stage,
-            self._audio_stage,
-        )
-        for stage in ordered:
-            if stage is None:
-                continue
-            try:
-                await stage.handle_upstream(signal, self._run_ctx)
-            except Exception:  # noqa: BLE001 - never break cancel path
-                logger.exception("Stage %s.handle_upstream failed", stage.name)
-        # Telephony helpers journal the signal without a dedicated stage
-        # wrapper: one bare aggregate control-signal record keeps the
-        # observability identical to the old stage path.
-        if self._telephony_helpers:
-            _journal_control_signal(self._run_ctx, stage="telephony", signal=signal)
-        # Annotate the trailing signal record with the originating cause
-        # so the replay UI can display "interrupt — barge_in" instead of
-        # bare signal IDs.
-        if cause:
-            self._journal_sink.append_record(
-                kind=JournalRecordKind.CONTROL,
-                name="control_signal_cause",
-                turn_id=self._turn.id if self._turn else None,
-                data={"signal_id": signal.signal_id, "cause": cause},
-            )
-
-    def _record_interruption_notification(
-        self,
-        *,
-        source: str,
-        mode: str,
-        text_spoken: str,
-        notified: bool,
-        turn_id: str | None = None,
-    ) -> None:
-        replacement_text = None
-        self._journal_sink.append_record(
-            name="assistant_interruption_notified",
-            turn_id=turn_id,
-            data={
-                "source": source,
-                "mode": mode,
-                "text_spoken": text_spoken,
-                "notified": notified,
-                "replacement_text": replacement_text,
-            },
-        )
-
     def _reset_turn_state(self) -> None:
         """Clear turn correlation state and reset the turn manager."""
         turn = self._turn
@@ -689,6 +641,26 @@ class Session:
     def _is_gated(self) -> bool:
         """Whether the classification gate is currently buffering TTS audio."""
         return self._audio_gate is not None and self._audio_gate()
+
+    # Read-only delegates for the interruption-config knobs that moved
+    # onto :class:`CancelOrchestrator` in Phase 4 of the session
+    # decomposition.  External tests/tools that read these off Session
+    # keep working.
+    @property
+    def _interruption_mode(self) -> str:
+        return self._cancel.interruption_mode
+
+    @property
+    def _interruption_latency_compensation_ms(self) -> int:
+        return self._cancel.latency_compensation_ms
+
+    @property
+    def _interruption_ack_stale_ms(self) -> int:
+        return self._cancel.ack_stale_ms
+
+    @property
+    def _interruption_ack_tail_cap_ms(self) -> int:
+        return self._cancel.ack_tail_cap_ms
 
     # ── Properties ─────────────────────────────────────────────
 
@@ -1420,10 +1392,11 @@ class Session:
     async def cancel_turn(self, *, barge_in: bool = False) -> None:
         """Trigger cancel token, abort STT/agent/TTS, reset turn state.
 
-        If barge_in is True, emits an Interruption event and dispatches
-        an upstream ``InterruptSignal`` through every stage so each one
-        records its own ``ControlSignalRecord`` (WS3 T3.8 dual-path
-        coexistence: signal flow runs alongside the legacy cancel token).
+        If barge_in is True, emits an Interruption event and delegates
+        upstream ``InterruptSignal`` propagation to the
+        :class:`CancelOrchestrator` so every stage records its own
+        ``ControlSignalRecord`` (WS3 T3.8 dual-path coexistence: signal
+        flow runs alongside the legacy cancel token).
         """
         turn = self._turn
         if turn:
@@ -1433,7 +1406,7 @@ class Session:
             if turn:
                 turn.record_barge_in()
             await self._emit(Interruption())
-            await self._propagate_upstream_signal(
+            await self._cancel.propagate_signal(
                 _InterruptSignal(signal_id=f"barge-in-{uuid4().hex[:8]}"),
                 cause="barge_in",
             )
@@ -1557,22 +1530,6 @@ class Session:
         await self._turn_manager.end_turn()
 
     # ── TurnManager callbacks ──────────────────────────────────
-
-    async def _cancel_for_barge_in(self) -> bool:
-        """Cancel current turn due to barge-in (called by TurnManager).
-
-        Returns ``False`` when barge-in is suppressed so the TurnManager
-        skips starting a new user turn.
-
-        When a queued session action has ``no_interrupt=True`` (e.g. an
-        end-call or transfer announcement), barge-in is
-        suppressed so the critical speech plays in full.
-        """
-        if self._session_actions is not None and self._session_actions.no_interrupt:
-            logger.debug("Barge-in suppressed: queued action has no_interrupt=True")
-            return False
-        await self.cancel_turn(barge_in=True)
-        return True
 
     def _on_call_answered_greet(self, event: Any) -> None:
         """Schedule the configured greeting once per call.
@@ -2033,13 +1990,13 @@ class Session:
             tts_chunks,
             tts_playback_started=tts_playback_started,
             interrupted=interrupted,
-            interruption_mode=self._interruption_mode,
-            latency_compensation_ms=self._interruption_latency_compensation_ms,
-            ack_stale_ms=self._interruption_ack_stale_ms,
-            ack_tail_cap_ms=self._interruption_ack_tail_cap_ms,
+            interruption_mode=self._cancel.interruption_mode,
+            latency_compensation_ms=self._cancel.latency_compensation_ms,
+            ack_stale_ms=self._cancel.ack_stale_ms,
+            ack_tail_cap_ms=self._cancel.ack_tail_cap_ms,
         )
         if interruption_notification is not None:
-            self._record_interruption_notification(
+            self._cancel.record_interruption(
                 source="streaming_turn",
                 mode=interruption_notification.mode,
                 text_spoken=interruption_notification.text_spoken,
@@ -2113,11 +2070,11 @@ class Session:
                 except (asyncio.CancelledError, Exception):
                     pass
                 notified = _notify_bridge_interruption(
-                    self.agent, delivered, self._interruption_mode
+                    self.agent, delivered, self._cancel.interruption_mode
                 )
-                self._record_interruption_notification(
+                self._cancel.record_interruption(
                     source="text_session",
-                    mode=self._interruption_mode,
+                    mode=self._cancel.interruption_mode,
                     text_spoken=delivered,
                     notified=notified,
                 )
