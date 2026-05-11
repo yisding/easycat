@@ -86,9 +86,20 @@ class _FakeH3:
         return sid
 
 
+class _FakeQuicConnection:
+    """Records ``reset_stream`` calls so tests can assert barge-in semantics."""
+
+    def __init__(self) -> None:
+        self.resets: list[tuple[int, int]] = []
+
+    def reset_stream(self, stream_id: int, error_code: int) -> None:
+        self.resets.append((stream_id, error_code))
+
+
 class _FakeQuicProtocol:
     def __init__(self) -> None:
         self.transmit_calls = 0
+        self._quic = _FakeQuicConnection()
 
     def transmit(self) -> None:
         self.transmit_calls += 1
@@ -188,6 +199,50 @@ class TestWebTransportSession:
         assert {"type": "audio_format", "sample_rate": 16000} in decoded_control
         assert any(chunk.data in body for body in bodies)
 
+    @pytest.mark.asyncio
+    async def test_reset_audio_stream_aborts_in_flight_bytes(self) -> None:
+        """After ``reset_audio_stream``, the next chunk opens a fresh stream."""
+        session, fake_h3, _in_q, out_q = _make_session()
+        await session.start()
+        try:
+            chunk = AudioChunk(data=b"\x00\x01" * 4, format=PCM16_MONO_16K)
+            await out_q.put(chunk)
+            await asyncio.sleep(0.05)
+            first_audio_sid = session._audio_stream_id  # noqa: SLF001
+            assert first_audio_sid is not None
+
+            session.reset_audio_stream()
+            assert session._audio_stream_id is None  # noqa: SLF001
+            quic = session._quic_protocol._quic  # noqa: SLF001
+            assert (first_audio_sid, 0) in quic.resets
+
+            # Next chunk must allocate a new stream id.
+            await out_q.put(chunk)
+            await asyncio.sleep(0.05)
+            second_audio_sid = session._audio_stream_id  # noqa: SLF001
+            assert second_audio_sid is not None
+            assert second_audio_sid != first_audio_sid
+        finally:
+            await session.stop()
+
+    @pytest.mark.asyncio
+    async def test_outbound_writer_signals_close_on_unexpected_error(self) -> None:
+        """A crash in the writer must set ``on_close`` so the owning transport
+        tears down instead of silently wedging."""
+        session, fake_h3, _in_q, out_q = _make_session()
+        await session.start()
+        try:
+            # Sabotage send_data after the initial ``ready`` control frame
+            # so the next outbound audio chunk explodes inside the writer.
+            def _explode(*_args, **_kwargs):
+                raise RuntimeError("simulated send_data failure")
+
+            fake_h3.send_data = _explode  # type: ignore[assignment]
+            await out_q.put(AudioChunk(data=b"\x00\x01" * 4, format=PCM16_MONO_16K))
+            await asyncio.wait_for(session._on_close.wait(), timeout=1)  # noqa: SLF001
+        finally:
+            await session.stop()
+
 
 # ── Conformance: protocol shape and types ─────────────────────────
 
@@ -272,6 +327,35 @@ class TestWebTransportConnectionTransport:
         with pytest.raises(RuntimeError, match="no underlying session"):
             await t.connect()
 
+    @pytest.mark.asyncio
+    async def test_clear_audio_resets_in_flight_quic_stream(self) -> None:
+        """``clear_audio`` must reset the QUIC audio stream, not just the app queue."""
+        t = _build_connection_transport()
+        await t.connect()
+        try:
+            # Send enough audio that the writer task allocates an audio stream.
+            await t.send_audio(AudioChunk(data=b"\x00\x01" * 4, format=PCM16_MONO_16K))
+            await asyncio.sleep(0.05)
+            session = t._session  # noqa: SLF001
+            assert session is not None
+            audio_sid = session._audio_stream_id  # noqa: SLF001
+            assert audio_sid is not None
+
+            await t.clear_audio()
+            quic = session._quic_protocol._quic  # noqa: SLF001
+            assert (audio_sid, 0) in quic.resets
+            assert session._audio_stream_id is None  # noqa: SLF001
+        finally:
+            await t.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_send_audio_returns_false_after_disconnect(self) -> None:
+        t = _build_connection_transport()
+        await t.connect()
+        await t.disconnect()
+        result = await t.send_audio(AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K))
+        assert result is False
+
 
 # ── WebTransportTransport conformance ─────────────────────────────
 
@@ -296,6 +380,29 @@ class TestWebTransportTransportConformance:
         with pytest.raises(ValueError, match="certfile and keyfile"):
             await t.connect()
 
+    @pytest.mark.asyncio
+    async def test_pump_inbound_propagates_sentinel(self) -> None:
+        """When the inner session terminates, the wrapper's ``receive_audio``
+        must also stop iterating (regression for review #16).
+        """
+        outer_cfg = WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem")
+        outer = WebTransportTransport(outer_cfg)
+
+        # Build a fully-functional inner connection transport and disconnect
+        # it after the pump is wired up.  The pump must drop its own sentinel
+        # so a downstream consumer of ``outer.receive_audio()`` stops.
+        inner = _build_connection_transport()
+        await inner.connect()
+        pump_task = asyncio.create_task(outer._pump_inbound(inner))  # noqa: SLF001
+        await inner.disconnect()
+        await asyncio.wait_for(pump_task, timeout=1)
+
+        # Sentinel should now be queued; iterating receive_audio() exits.
+        chunks = []
+        async for c in outer.receive_audio():
+            chunks.append(c)
+        assert chunks == []
+
 
 # ── WebTransportServer wiring (no network) ────────────────────────
 
@@ -319,6 +426,23 @@ class TestWebTransportServerWiring:
             WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"), _noop
         )
         await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_safe_when_called_from_within_handler(self) -> None:
+        """A handler that triggers ``server.stop()`` mustn't deadlock by
+        gathering its own task (regression for review #3/#8).
+        """
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda transport: asyncio.sleep(0),  # type: ignore[arg-type]
+        )
+        server._started = True  # noqa: SLF001 — fake "started"
+        # Inject a handler task that is the current task.
+        current = asyncio.current_task()
+        assert current is not None
+        server._handler_tasks.add(current)  # noqa: SLF001
+        # Should return promptly without awaiting itself.
+        await asyncio.wait_for(server.stop(), timeout=1)
 
 
 # ── Top-level lazy exports ────────────────────────────────────────

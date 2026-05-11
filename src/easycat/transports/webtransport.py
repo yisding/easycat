@@ -85,12 +85,15 @@ _DEFAULT_OUTBOUND_MAX_PENDING = 300
 
 # Per-QUIC-stream flow-control window (~2 s of 16 kHz PCM16 audio).
 _MAX_STREAM_DATA = 64 * 1024
-_IDLE_TIMEOUT_SEC = 15.0
+# Voice turns can have multi-second silences between user/bot exchanges, so
+# don't tear the QUIC connection down on short idle periods.
+_IDLE_TIMEOUT_SEC = 30.0
 
 _DEFAULT_PATH = "/easycat"
 
-# Type alias for the user-supplied per-session handler.
-SessionHandler = Callable[["WebTransportConnectionTransport"], Awaitable[None]]
+# Type alias for the user-supplied per-session handler. Module-private — not
+# part of the public surface.
+_SessionHandler = Callable[["WebTransportConnectionTransport"], Awaitable[None]]
 
 
 @dataclass
@@ -315,6 +318,32 @@ class _WebTransportSession:
         )
         self._quic_protocol.transmit()
 
+    def reset_audio_stream(self) -> None:
+        """Abort the server→client audio stream so already-buffered bytes are
+        discarded (barge-in semantics).
+
+        ``H3Connection.send_data`` writes into aioquic's per-stream buffer
+        immediately; once handed off, bytes are transmitted as flow control
+        permits — draining the application queue alone is not sufficient to
+        stop the client from hearing the next ~2 s of TTS (the
+        ``max_stream_data`` window).  Resetting the stream via the underlying
+        :class:`QuicConnection` aborts in-flight bytes and frees the slot;
+        the next outbound chunk opens a fresh stream.
+        """
+        if self._audio_stream_id is None:
+            return
+        quic = getattr(self._quic_protocol, "_quic", None)
+        if quic is None:
+            self._audio_stream_id = None
+            return
+        try:
+            quic.reset_stream(self._audio_stream_id, error_code=0)
+            self._quic_protocol.transmit()
+        except Exception:
+            logger.debug("reset_stream failed for audio stream", exc_info=True)
+        finally:
+            self._audio_stream_id = None
+
     async def _outbound_writer(self) -> None:
         try:
             while True:
@@ -336,6 +365,10 @@ class _WebTransportSession:
             raise
         except Exception:
             logger.exception("WebTransport outbound writer crashed")
+            # Signal session teardown so the owning transport disconnects
+            # cleanly instead of wedging with send_audio() still returning
+            # True while no bytes ever reach the peer.
+            self._on_close.set()
 
 
 # ── Per-connection aioquic protocol class ─────────────────────────
@@ -570,6 +603,11 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
             except asyncio.QueueEmpty:
                 break
             drained += 1
+        # Aborting the QUIC audio stream is what actually stops the client
+        # from hearing already-handed-off bytes — draining the app queue
+        # alone leaves up to ``max_stream_data`` (~2 s @ 16 kHz) buffered.
+        if self._session is not None:
+            self._session.reset_audio_stream()
         if drained:
             logger.debug("Cleared %d pending WebTransport TTS frames", drained)
 
@@ -640,7 +678,7 @@ class WebTransportServer:
     def __init__(
         self,
         config: WebTransportTransportConfig,
-        session_handler: SessionHandler,
+        session_handler: _SessionHandler,
     ) -> None:
         self._config = config
         self._session_handler = session_handler
@@ -698,13 +736,18 @@ class WebTransportServer:
         if not self._started:
             return
         self._started = False
-        # Tear down all in-flight handlers first so they don't race the
-        # server shutdown.
-        for task in list(self._handler_tasks):
+        # Tear down in-flight handlers, but never await the current task
+        # (which can happen if a handler calls back into ``stop()``).
+        current = asyncio.current_task()
+        others = [t for t in self._handler_tasks if t is not current]
+        for task in others:
             task.cancel()
-        if self._handler_tasks:
-            await asyncio.gather(*self._handler_tasks, return_exceptions=True)
-        self._handler_tasks.clear()
+        if others:
+            await asyncio.gather(*others, return_exceptions=True)
+        # ``current`` is removed from the set via its own done-callback when
+        # it eventually exits; don't clear() blindly or we'd lose that
+        # bookkeeping.
+        self._handler_tasks.difference_update(others)
 
         if self._server is not None:
             self._server.close()
@@ -817,7 +860,7 @@ class WebTransportTransport(_AudioQueueMixin):
             pass
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
-        if self._active is None:
+        if not self._connected or self._active is None:
             return False
         try:
             self._out_queue.put_nowait(chunk)
@@ -834,6 +877,9 @@ class WebTransportTransport(_AudioQueueMixin):
             except asyncio.QueueEmpty:
                 break
             drained += 1
+        active = self._active
+        if active is not None:
+            await active.clear_audio()
         if drained:
             logger.debug("Cleared %d pending WebTransport TTS frames", drained)
 
@@ -846,6 +892,11 @@ class WebTransportTransport(_AudioQueueMixin):
                     logger.warning("Inbound WebTransport audio queue full — dropping frame")
         except asyncio.CancelledError:
             raise
+        finally:
+            # Propagate end-of-stream so a downstream consumer iterating
+            # ``WebTransportTransport.receive_audio()`` exits when the inner
+            # session terminates, instead of blocking forever on the queue.
+            self._enqueue_sentinel()
 
     async def _pump_outbound(self, sink: WebTransportConnectionTransport) -> None:
         try:

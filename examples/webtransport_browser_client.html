@@ -85,13 +85,15 @@ var TAG_AUDIO   = 0x01;
 var TAG_CONTROL = 0x02;
 
 // ── State ────────────────────────────────────────────────────────
+// Note: the server writes TTS audio and control frames on **server-initiated**
+// bidirectional streams (see `acceptServerStreams` below).  We only write on
+// our client-opened streams and don't read from them, so no client-side
+// reader is needed for the streams we create here.
 var transport = null;
 var audioStream = null;
 var audioWriter = null;
-var audioReader = null;
 var controlStream = null;
 var controlWriter = null;
-var controlReader = null;
 var micCtx = null;
 var playCtx = null;
 var mediaStream = null;
@@ -206,55 +208,6 @@ function makeControlDecoder() {
   };
 }
 
-async function readAudioStream(reader) {
-  var sawTag = false;
-  while (true) {
-    var { value, done } = await reader.read();
-    if (done) return;
-    if (!sawTag) {
-      // First byte is the tag — verify and skip it.
-      if (value.length === 0) continue;
-      if (value[0] !== TAG_AUDIO) {
-        console.warn("Unexpected audio stream tag", value[0]);
-        return;
-      }
-      sawTag = true;
-      if (value.length > 1) {
-        playAudio(value.slice(1).buffer);
-      }
-    } else {
-      playAudio(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
-    }
-  }
-}
-
-async function readControlStream(reader) {
-  var sawTag = false;
-  var decode = makeControlDecoder();
-  while (true) {
-    var { value, done } = await reader.read();
-    if (done) return;
-    var payload = value;
-    if (!sawTag) {
-      if (value.length === 0) continue;
-      if (value[0] !== TAG_CONTROL) {
-        console.warn("Unexpected control stream tag", value[0]);
-        return;
-      }
-      sawTag = true;
-      payload = value.subarray(1);
-    }
-    var msgs = decode(payload);
-    for (var i = 0; i < msgs.length; i++) {
-      var msg = msgs[i];
-      if (msg.type === "audio_format" && msg.sample_rate) {
-        serverPlaybackRate = msg.sample_rate;
-        console.log("Server playback rate:", serverPlaybackRate, "Hz");
-      }
-    }
-  }
-}
-
 async function acceptServerStreams(transport) {
   var inc = transport.incomingBidirectionalStreams.getReader();
   while (true) {
@@ -341,20 +294,19 @@ async function start() {
     await transport.ready;
 
     // Open audio + control bidirectional streams and write the tag bytes.
+    // Server reads from the write half of each and writes TTS audio /
+    // control frames back on server-initiated streams (see
+    // acceptServerStreams below).
     audioStream = await transport.createBidirectionalStream();
     audioWriter = audioStream.writable.getWriter();
-    audioReader = audioStream.readable.getReader();
     await audioWriter.write(new Uint8Array([TAG_AUDIO]));
 
     controlStream = await transport.createBidirectionalStream();
     controlWriter = controlStream.writable.getWriter();
-    controlReader = controlStream.readable.getReader();
     await controlWriter.write(new Uint8Array([TAG_CONTROL]));
     await controlWriter.write(encodeControl({ type: "config", sample_rate: captureRate }));
 
-    // Begin reading from server-opened and client-opened streams.
-    readAudioStream(audioReader).catch(function (e) { console.warn(e); });
-    readControlStream(controlReader).catch(function (e) { console.warn(e); });
+    // Server-initiated streams carry TTS audio and control frames.
     acceptServerStreams(transport).catch(function (e) { console.warn(e); });
 
     // Wire mic -> worklet -> WebTransport
@@ -398,8 +350,8 @@ function cleanup() {
   if (workletNode) try { workletNode.disconnect(); } catch (_) {}
   if (micCtx) try { micCtx.close(); } catch (_) {}
   if (playCtx) try { playCtx.close(); } catch (_) {}
-  transport = audioStream = audioWriter = audioReader = null;
-  controlStream = controlWriter = controlReader = null;
+  transport = audioStream = audioWriter = null;
+  controlStream = controlWriter = null;
   micCtx = playCtx = mediaStream = workletNode = analyser = null;
   startBtn.disabled = false;
   stopBtn.disabled = true;
