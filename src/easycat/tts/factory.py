@@ -61,6 +61,10 @@ def create_tts_provider(config: TTSProviderConfig) -> TTSProvider:
     Raises:
         ValueError: If the provider name is unknown or settings are invalid.
     """
+    if not isinstance(config.provider, str) or not config.provider:
+        available = ", ".join(sorted(_PROVIDERS.keys()))
+        raise ValueError(f"Unknown TTS provider: {config.provider!r}. Available: {available}")
+
     provider_name = config.provider.lower()
 
     if provider_name not in _PROVIDERS:
@@ -74,6 +78,9 @@ def create_tts_provider(config: TTSProviderConfig) -> TTSProvider:
         provider_config = config_cls(**settings)
     except TypeError as exc:
         raise ValueError(f"Invalid settings for {config.provider!r} TTS provider: {exc}") from exc
+
+    if not provider_config.api_key:
+        raise ValueError(f"API key is required for TTS provider '{config.provider}'")
 
     return provider_cls(provider_config)
 

@@ -6,7 +6,14 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from easycat.vad._base import _DEFAULT_VAD_SENSITIVITY, VADBackend, _validate_vad_backend
+from easycat.vad._base import (
+    _DEFAULT_VAD_SENSITIVITY,
+    VADBackend,
+    _validate_non_negative_ms,
+    _validate_positive_int,
+    _validate_vad_backend,
+    _validate_vad_sensitivity,
+)
 from easycat.vad.funasr import _FUNASR_DEFAULT_CHUNK_MS, _FUNASR_DEFAULT_MODEL, FunASROnnxVAD
 from easycat.vad.krisp import KrispVAD
 from easycat.vad.silero import SileroVAD
@@ -40,6 +47,14 @@ class VADConfig:
 
     def __post_init__(self) -> None:
         self.backend = _validate_vad_backend(self.backend)
+        _validate_positive_int("funasr_chunk_size_ms", self.funasr_chunk_size_ms)
+        _validate_positive_int("funasr_intra_op_num_threads", self.funasr_intra_op_num_threads)
+        _validate_non_negative_ms("min_speech_duration_ms", self.min_speech_duration_ms)
+        _validate_non_negative_ms("min_silence_duration_ms", self.min_silence_duration_ms)
+        _validate_non_negative_ms("pre_roll_ms", self.pre_roll_ms)
+        _validate_non_negative_ms("post_roll_ms", self.post_roll_ms)
+        if self.sensitivity is not None:
+            _validate_vad_sensitivity(self.sensitivity)
 
 
 def create_vad(config: VADConfig | None = None) -> Any:

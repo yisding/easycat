@@ -64,6 +64,7 @@ from easycat.runtime.capabilities import (
     PlaybackAcknowledgements,
     aclose_if_supported,
     clear_audio_if_supported,
+    close_if_supported,
     health_checkable,
     is_active_provider,
     is_passthrough_provider,
@@ -1374,6 +1375,7 @@ class Session:
                 await aclose_if_supported(self.agent)
             except Exception:
                 pass
+            await self._close_audio_providers()
             self._turn = None
             self.destroy()
             self._mark_closed()
@@ -1406,9 +1408,6 @@ class Session:
             if self._pipeline_task and not self._pipeline_task.done():
                 self._pipeline_task.cancel()
                 tasks.append(self._pipeline_task)
-            if self._stt_task and not self._stt_task.done():
-                self._stt_task.cancel()
-                tasks.append(self._stt_task)
             if self._current_tts_task and not self._current_tts_task.done():
                 self._current_tts_task.cancel()
                 tasks.append(self._current_tts_task)
@@ -1425,6 +1424,7 @@ class Session:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+            await self._cancel_stt()
             # RuntimeScope-owned work currently covers heartbeat, greeting,
             # and STT segment commit/pause tasks. These can outlive the
             # pipeline/STT consumer handles above, so shutdown drains the
@@ -1447,6 +1447,7 @@ class Session:
                 await aclose_if_supported(self.agent)
             except Exception:
                 pass
+            await self._close_audio_providers()
             self._turn = None
             self.destroy()
             self._mark_closed()
@@ -1808,6 +1809,26 @@ class Session:
                 helper.stop()
             except Exception:
                 logger.debug("Error stopping session helper", exc_info=True)
+
+    async def _close_audio_providers(self) -> None:
+        """Release optional resources owned by audio providers."""
+        providers = (
+            ("stt", self.stt),
+            ("tts", self.tts),
+            ("vad", self.vad),
+            ("noise_reducer", self.noise_reducer),
+            ("echo_canceller", self.echo_canceller),
+        )
+        closed: set[int] = set()
+        for name, provider in providers:
+            provider_id = id(provider)
+            if provider_id in closed:
+                continue
+            closed.add(provider_id)
+            try:
+                await close_if_supported(provider)
+            except Exception:
+                logger.debug("Error closing %s provider", name, exc_info=True)
 
     def _schedule_turn_ended(self, event: TurnEnded) -> None:
         """Schedule end-of-turn processing without blocking other handlers.

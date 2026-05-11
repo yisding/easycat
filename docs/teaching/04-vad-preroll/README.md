@@ -30,7 +30,7 @@ It classifies a small audio frame (10-30 ms) as **speech** or
 **not-speech**. That's all. VAD is not a turn detector; it is the
 primitive that makes a turn detector possible.
 
-`easycat.create_vad()` picks a backend automatically:
+`easycat.vad.factory.create_vad()` picks a backend automatically:
 Silero → FunASR → TEN → Krisp. Silero is the default; its ONNX
 model is bundled.
 
@@ -87,7 +87,7 @@ question) and run the script **twice** — once with pre-roll on,
 once with `--no-preroll`. Open both bundles:
 
 ```python
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 for which in ("preroll", "nopreroll"):
     for b in Path("docs/teaching/04-vad-preroll/runs/").glob(
         f"ch04-vad-{which}-*.bundle"

@@ -46,6 +46,26 @@ def _reject_traversal(name: str) -> None:
         )
 
 
+def _read_zip_member(
+    zf: zipfile.ZipFile,
+    name: str,
+    *,
+    missing_reason_code: str,
+) -> bytes:
+    try:
+        return zf.read(name)
+    except KeyError as exc:
+        raise BundleValidationError(
+            f"Bundle is missing {name}",
+            reason_code=missing_reason_code,
+        ) from exc
+    except zipfile.BadZipFile as exc:
+        raise BundleValidationError(
+            f"Invalid bundle member {name!r}: {exc}",
+            reason_code="BAD_ZIP",
+        ) from exc
+
+
 FORMAT_VERSION = 1
 
 
@@ -280,9 +300,29 @@ class RunBundle:
         if not path.exists():
             raise FileNotFoundError(f"Bundle not found: {path}")
 
-        with zipfile.ZipFile(path, "r") as zf:
+        try:
+            zf = zipfile.ZipFile(path, "r")
+        except zipfile.BadZipFile as exc:
+            raise BundleValidationError(
+                f"Invalid bundle archive: {path}",
+                reason_code="BAD_ZIP",
+            ) from exc
+
+        with zf:
             # Read manifest
-            manifest_data = json.loads(zf.read("manifest.json"))
+            try:
+                manifest_data = json.loads(
+                    _read_zip_member(
+                        zf,
+                        "manifest.json",
+                        missing_reason_code="MISSING_MANIFEST",
+                    )
+                )
+            except json.JSONDecodeError as exc:
+                raise BundleValidationError(
+                    "Bundle manifest is not valid JSON",
+                    reason_code="INVALID_MANIFEST_JSON",
+                ) from exc
             fmt_ver = manifest_data.get("format_version", 0)
             if fmt_ver > FORMAT_VERSION:
                 raise BundleVersionError(
@@ -303,7 +343,11 @@ class RunBundle:
             )
 
             # Read journal
-            journal_ndjson = zf.read("journal.ndjson")
+            journal_ndjson = _read_zip_member(
+                zf,
+                "journal.ndjson",
+                missing_reason_code="MISSING_JOURNAL",
+            )
 
             # Read artifacts.  Check each entry's declared uncompressed
             # size before reading so a zip bomb can't force a massive
@@ -329,7 +373,11 @@ class RunBundle:
                         "Total artifact size exceeds 500MB cap",
                         reason_code="SIZE_EXCEEDED",
                     )
-                data = zf.read(name)
+                data = _read_zip_member(
+                    zf,
+                    name,
+                    missing_reason_code="MISSING_ARTIFACT",
+                )
                 if len(data) > declared or total_size + len(data) > _ARTIFACT_SIZE_CAP:
                     raise BundleValidationError(
                         "Total artifact size exceeds 500MB cap",
@@ -531,8 +579,11 @@ def discover_bundles(data_dir: str | None = None) -> list[Path]:
         search = data_path / subdir
         if search.exists():
             for f in search.iterdir():
-                if f.suffix in (".zip", ".easycat-bundle", ".sqlite") or f.name.endswith(
-                    ".easycat-bundle"
-                ):
+                if f.suffix in (
+                    ".zip",
+                    ".bundle",
+                    ".easycat-bundle",
+                    ".sqlite",
+                ) or f.name.endswith(".easycat-bundle"):
                     bundles.append(f)
     return sorted(bundles)

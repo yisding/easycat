@@ -32,7 +32,7 @@ and writes a debug bundle to `docs/teaching/02-transcribe/runs/`.
 Same STT provider, two usage patterns:
 
 - **batch** — record first, transcribe in one call. The helper
-  `easycat.transcribe_file(path)` wraps everything in ~30 lines.
+  `easycat.quick.transcribe_file(path)` wraps everything in ~30 lines.
 - **streaming** — start the STT stream, push audio as it arrives,
   consume events concurrently. When the stream ends, partials and a
   final flow back.
@@ -112,7 +112,7 @@ If batch works, why bother? Two reasons:
 Both scripts write a `RunBundle` to `runs/`. Open one:
 
 ```python
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 b = load_bundle("docs/teaching/02-transcribe/runs/<file>.bundle")
 for rec in b.records():
     print(rec["sequence"], rec["name"], rec["data"])

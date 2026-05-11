@@ -79,6 +79,18 @@ class TestReconnectingWebSocket:
         assert ws.is_connected
         assert ws._ws is fake_conn
 
+    async def test_connect_when_already_connected_is_noop(self):
+        ws = self._make_ws()
+        fake_conn = FakeWSConnection()
+        ws._ws = fake_conn
+
+        with patch("easycat.reconnecting_ws.websockets.connect", new_callable=AsyncMock) as mock:
+            await ws.connect()
+
+        mock.assert_not_called()
+        assert ws._ws is fake_conn
+        fake_conn.close.assert_not_called()
+
     async def test_connect_retry_on_failure(self):
         ws = self._make_ws(base_delay=0.01, max_retries=2, jitter_factor=0.0)
         fake_conn = FakeWSConnection()

@@ -2,6 +2,9 @@
 
 from collections.abc import AsyncIterator
 
+import pytest
+
+from easycat._provider_catalog import ProviderCatalog
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
     Event,
@@ -140,3 +143,24 @@ def test_stub_noise_reducer_is_noise_reducer():
 
 def test_stub_transport_is_transport():
     assert isinstance(StubTransport(), Transport)
+
+
+def test_provider_catalog_rejects_mismatched_provider_and_env_var_keys():
+    class _Provider:
+        pass
+
+    class _Config:
+        pass
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Test provider catalog keys must match env var keys; "
+            "missing env_vars for: known; env_vars without providers: extra"
+        ),
+    ):
+        ProviderCatalog(
+            providers={"known": (_Provider, _Config)},
+            env_vars={"extra": "EXTRA_API_KEY"},
+            kind="Test",
+        )

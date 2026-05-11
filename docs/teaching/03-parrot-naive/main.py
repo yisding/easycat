@@ -20,17 +20,14 @@ import time
 import types
 from pathlib import Path
 
-from easycat import (
-    LocalTransport,
-    LocalTransportConfig,
-    create_stt_provider,
-    speak,
-)
+from easycat import LocalTransportConfig
 from easycat.audio_format import PCM16_MONO_24K
 from easycat.debug.export import export_debug_bundle
 from easycat.events import EventBus, STTEventType
+from easycat.quick import speak
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
-from easycat.stt.factory import STTProviderConfig
+from easycat.stt.factory import STTProviderConfig, create_stt_provider
+from easycat.transports.local import LocalTransport
 
 SILENCE_TIMEOUT_S = 0.5  # ← the magic number we will watch break things
 RUNS_DIR = Path(__file__).parent / "runs"

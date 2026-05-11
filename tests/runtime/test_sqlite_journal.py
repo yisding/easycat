@@ -249,6 +249,105 @@ class TestCrashRecovery:
         assert len(recovery) == 0
         j2.close()
 
+    def test_append_after_finalize_clears_clean_marker(self, tmp_path):
+        j1 = SqliteJournal("sess", data_dir=tmp_path)
+        j1.append(kind=JournalRecordKind.EVENT, name="before_finalize", session_id="sess")
+        j1.finalize()
+
+        marker = j1._conn.execute(
+            "SELECT value FROM session_state WHERE key = 'clean_close'"
+        ).fetchone()
+        assert marker == ("1",)
+
+        j1.append(kind=JournalRecordKind.EVENT, name="after_finalize", session_id="sess")
+        marker = j1._conn.execute(
+            "SELECT value FROM session_state WHERE key = 'clean_close'"
+        ).fetchone()
+        assert marker is None
+
+        # Simulate a crash after the post-finalize write was committed, but
+        # before close() could write a new clean_close marker.
+        j1._conn.execute("COMMIT")
+        j1._conn.close()
+        j1._closed = True
+
+        j2 = SqliteJournal("sess", data_dir=tmp_path)
+        assert j2._recovered is True
+        records = j2.read(start=0)
+        recovery = [r for r in records if r.kind == JournalRecordKind.RECOVERY]
+        assert len(recovery) == 1
+        assert [r.name for r in records if r.kind == JournalRecordKind.EVENT] == [
+            "before_finalize",
+            "after_finalize",
+        ]
+        j2.close()
+
+    def test_uncommitted_append_after_finalize_keeps_clean_marker(self, tmp_path):
+        j1 = SqliteJournal("sess", data_dir=tmp_path)
+        j1.append(kind=JournalRecordKind.EVENT, name="before_finalize", session_id="sess")
+        j1.finalize()
+
+        j1.append(kind=JournalRecordKind.EVENT, name="after_finalize", session_id="sess")
+
+        # Simulate a crash before the post-finalize transaction commits.
+        # SQLite rolls back both the new record and the clean_close marker
+        # deletion, so the durable database should still look clean.
+        j1._conn.close()
+        j1._closed = True
+
+        conn = sqlite3.connect(str(tmp_path / "journals" / "sess.sqlite"))
+        marker = conn.execute(
+            "SELECT value FROM session_state WHERE key = 'clean_close'"
+        ).fetchone()
+        durable_events = [
+            row[0] for row in conn.execute("SELECT name FROM journal ORDER BY sequence").fetchall()
+        ]
+        conn.close()
+        assert marker == ("1",)
+        assert durable_events == ["before_finalize"]
+
+        j2 = SqliteJournal("sess", data_dir=tmp_path)
+        assert j2._recovered is False
+        assert [r for r in j2.read(start=0) if r.kind == JournalRecordKind.RECOVERY] == []
+        assert not (tmp_path / "crash-dumps" / "sess.sqlite").exists()
+        j2.close()
+
+    def test_failed_append_after_finalize_keeps_clean_marker(self, tmp_path):
+        j1 = SqliteJournal("sess", data_dir=tmp_path)
+        j1.append(kind=JournalRecordKind.EVENT, name="before_finalize", session_id="sess")
+        j1.finalize()
+
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        assert (
+            j1.append(
+                kind=JournalRecordKind.EVENT,
+                name="after_finalize",
+                session_id="sess",
+                data=circular,
+            )
+            == -1
+        )
+        j1.flush()
+        j1._conn.close()
+        j1._closed = True
+
+        conn = sqlite3.connect(str(tmp_path / "journals" / "sess.sqlite"))
+        marker = conn.execute(
+            "SELECT value FROM session_state WHERE key = 'clean_close'"
+        ).fetchone()
+        durable_events = [
+            row[0] for row in conn.execute("SELECT name FROM journal ORDER BY sequence").fetchall()
+        ]
+        conn.close()
+        assert marker == ("1",)
+        assert durable_events == ["before_finalize"]
+
+        j2 = SqliteJournal("sess", data_dir=tmp_path)
+        assert j2._recovered is False
+        assert not (tmp_path / "crash-dumps" / "sess.sqlite").exists()
+        j2.close()
+
     @pytest.mark.skipif(
         sys.platform == "win32",
         reason="SIGKILL not available on Windows",

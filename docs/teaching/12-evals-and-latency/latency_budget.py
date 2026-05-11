@@ -13,7 +13,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 
 # Target: <1000 ms STT-final → bot-done-speaking.
 BUDGET_MS = {

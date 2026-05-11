@@ -17,7 +17,7 @@ from easycat.audio_format import AudioChunk
 from easycat.audio_utils import resample_chunk
 from easycat.events import Event
 from easycat.extras import require_module
-from easycat.vad._base import _VADBase
+from easycat.vad._base import _VADBase, _validate_positive_int
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +67,8 @@ class FunASROnnxVAD(_VADBase):
         cache_dir: str | None = None,
     ) -> None:
         super().__init__()
-        if chunk_size_ms <= 0:
-            raise ValueError("chunk_size_ms must be positive")
+        _validate_positive_int("chunk_size_ms", chunk_size_ms)
+        _validate_positive_int("intra_op_num_threads", intra_op_num_threads)
 
         self._model_dir = model_dir
         self._chunk_size_ms = chunk_size_ms

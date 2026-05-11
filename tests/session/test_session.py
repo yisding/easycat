@@ -396,6 +396,81 @@ async def test_session_teardown_finalizes_and_closes_journal(method_name: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method_name", ["stop", "shutdown"])
+async def test_session_teardown_closes_audio_providers(method_name: str):
+    calls: list[str] = []
+
+    class CloseSTT(FakeSTT):
+        def close(self) -> None:
+            calls.append("stt.close")
+
+    class AsyncCloseTTS(FakeTTS):
+        async def aclose(self) -> None:
+            calls.append("tts.aclose")
+
+    class AsyncCloseVAD(FakeVAD):
+        async def close(self) -> None:
+            calls.append("vad.close")
+
+    class CloseNoiseReducer:
+        async def process(self, chunk: AudioChunk) -> AudioChunk:
+            return chunk
+
+        def close(self) -> None:
+            calls.append("noise.close")
+
+    class AsyncCloseEchoCanceller:
+        async def process(self, chunk: AudioChunk) -> AudioChunk:
+            return chunk
+
+        def feed_reference(self, chunk: AudioChunk) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            calls.append("echo.aclose")
+
+    session = Session(
+        _full_config(
+            stt=CloseSTT(),
+            tts=AsyncCloseTTS(),
+            vad=AsyncCloseVAD(),
+            noise_reducer=CloseNoiseReducer(),
+            echo_canceller=AsyncCloseEchoCanceller(),
+        )
+    )
+
+    await getattr(session, method_name)()
+
+    assert calls == [
+        "stt.close",
+        "tts.aclose",
+        "vad.close",
+        "noise.close",
+        "echo.aclose",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_ends_active_stt_stream_without_close_hook():
+    class EndOnlySTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__()
+            self.end_calls = 0
+
+        async def end_stream(self) -> None:
+            self.end_calls += 1
+            await self._queue.put(None)
+
+    stt = EndOnlySTT()
+    session = Session(_full_config(stt=stt))
+    session._stt_active = True
+
+    await session.shutdown()
+
+    assert stt.end_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
 async def test_external_outbound_queue_survives_session_teardown(method_name: str):
     transport = FakeTransport()
     queue = BoundedAudioQueue()

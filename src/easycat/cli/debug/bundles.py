@@ -2,6 +2,10 @@
 
 Two commands land here:
 
+Bundle files are ZIP archives regardless of whether they use ``.zip``,
+``.bundle``, or ``.easycat-bundle``. The ``--json`` flag controls CLI
+summary output; it is not a separate bundle file format.
+
 ``bundles list``
     Print every bundle found in ``.easycat/recordings`` and
     ``.easycat/crash-dumps`` (or an explicit ``--path`` directory) with
@@ -14,7 +18,7 @@ Two commands land here:
     Summarize a single bundle: session id, turn count, error count,
     provider versions, first + last record timestamps. Deliberately
     avoids printing raw journal lines — that's what
-    ``bundles export --for=claude-code`` (M3 follow-up) is for.
+    ``--json`` is for when a machine-readable summary is needed.
 """
 
 from __future__ import annotations
@@ -231,7 +235,9 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
 
 @cli_command
 def show_bundle(
-    bundle_path: Path = typer.Argument(..., help="Path to a ``.zip`` bundle."),
+    bundle_path: Path = typer.Argument(
+        ..., help="Path to a ZIP bundle archive (``.zip``, ``.bundle``, or ``.easycat-bundle``)."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     """Summarise a single bundle: turns, errors, timings, provider versions."""
@@ -240,14 +246,18 @@ def show_bundle(
 
 @cli_command
 def inspect_bundle(
-    bundle_path: Path = typer.Argument(..., help="Path to a ``.zip`` bundle."),
+    bundle_path: Path = typer.Argument(
+        ..., help="Path to a ZIP bundle archive (``.zip``, ``.bundle``, or ``.easycat-bundle``)."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     """Friendly alias for ``easycat bundles show``."""
     _show_bundle_summary(bundle_path, json_output=json_output)
 
 
-bundles_app.command(name="list", help="List captured bundles under .easycat/.")(list_bundles)
+bundles_app.command(name="list", help="List captured bundles and crash dumps under .easycat/.")(
+    list_bundles
+)
 bundles_app.command(name="show", help="Summarise a single bundle.")(show_bundle)
 
 
