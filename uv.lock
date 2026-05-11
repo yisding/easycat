@@ -916,6 +916,18 @@ wheels = [
 ]
 
 [[package]]
+name = "deprecated"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/49/85/12f0a49a7c4ffb70572b6c2ef13c90c88fd190debda93b23f026b25f9634/deprecated-1.3.1.tar.gz", hash = "sha256:b1b50e0ff0c1fddaa5708a2c6b0a6588bb09b892825ab2b214ac9ea9d92a5223", size = 2932523, upload-time = "2025-10-30T08:19:02.757Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/84/d0/205d54408c08b13550c733c4b85429e7ead111c7f0014309637425520a9a/deprecated-1.3.1-py2.py3-none-any.whl", hash = "sha256:597bfef186b6f60181535a29fbe44865ce137a5079f295b479886c82729d5f3f", size = 11298, upload-time = "2025-10-30T08:19:00.758Z" },
+]
+
+[[package]]
 name = "distlib"
 version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -983,6 +995,8 @@ all = [
     { name = "elevenlabs" },
     { name = "fastapi" },
     { name = "livekit" },
+    { name = "llama-agents-client" },
+    { name = "llama-index-workflows" },
     { name = "numpy" },
     { name = "onnxruntime" },
     { name = "openai" },
@@ -1009,6 +1023,10 @@ funasr-vad = [
     { name = "modelscope" },
     { name = "numpy" },
     { name = "onnxruntime" },
+]
+llama-agents = [
+    { name = "llama-agents-client" },
+    { name = "llama-index-workflows" },
 ]
 local = [
     { name = "sounddevice" },
@@ -1085,6 +1103,10 @@ requires-dist = [
     { name = "jieba", marker = "extra == 'funasr-vad'", specifier = ">=0.42.1" },
     { name = "livekit", marker = "extra == 'aec'", specifier = ">=1.0.0" },
     { name = "livekit", marker = "extra == 'all'", specifier = ">=1.0.0" },
+    { name = "llama-agents-client", marker = "extra == 'all'", specifier = ">=0.3.0,<1.0.0" },
+    { name = "llama-agents-client", marker = "extra == 'llama-agents'", specifier = ">=0.3.0,<1.0.0" },
+    { name = "llama-index-workflows", marker = "extra == 'all'", specifier = ">=2.15.0,<3.0.0" },
+    { name = "llama-index-workflows", marker = "extra == 'llama-agents'", specifier = ">=2.15.0,<3.0.0" },
     { name = "modelscope", marker = "extra == 'funasr-vad'", specifier = ">=1.17.1" },
     { name = "numpy", marker = "extra == 'all'", specifier = ">=1.24.0" },
     { name = "numpy", marker = "extra == 'funasr-vad'", specifier = ">=1.24.0" },
@@ -1126,7 +1148,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'telephony'", specifier = ">=0.29.0" },
     { name = "websockets", specifier = ">=16.0" },
 ]
-provides-extras = ["openai-agents", "pydantic-ai", "openai", "deepgram", "elevenlabs", "cartesia", "telephony", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "funasr-vad", "smart-turn", "debugger", "webrtc", "quickstart", "all"]
+provides-extras = ["openai-agents", "pydantic-ai", "llama-agents", "openai", "deepgram", "elevenlabs", "cartesia", "telephony", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "funasr-vad", "smart-turn", "debugger", "webrtc", "quickstart", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2248,6 +2270,46 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/29/59/ac6a3987bfd11687f86156627a8c7f6a0047a72877748facbd427e63b157/livekit-1.1.2-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:a20e681d8a4929e27df69f818888ae649700c9d52a262abbec296c84937bc337", size = 14085891, upload-time = "2026-02-17T01:18:38.561Z" },
     { url = "https://files.pythonhosted.org/packages/0a/a5/680548ef7bf5034144ae01f1f742a6c49e4428942b3119ac6553207fea9b/livekit-1.1.2-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:0e4d8105a0c317b513a118b48340b5773239103cb6305768451ef99ac7567823", size = 11448902, upload-time = "2026-02-17T01:18:42.006Z" },
     { url = "https://files.pythonhosted.org/packages/00/05/e484f8fc079c5de7690e58ed48f44e77436b8732c3050da742bdfca51a5c/livekit-1.1.2-py3-none-win_amd64.whl", hash = "sha256:dd4a436fa16de589353bfbabde91068ab64241afd05b04f21fb1f22bfe155dc0", size = 10394562, upload-time = "2026-02-17T01:18:44.589Z" },
+]
+
+[[package]]
+name = "llama-agents-client"
+version = "0.3.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "llama-index-workflows" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/62/51/83b5157daca809c867be378b227921a2cf54fbcc9b5a616c16dba4bca152/llama_agents_client-0.3.7.tar.gz", hash = "sha256:66efd438e7248790a0ea4129eedf6229a4c7ef1f608dec5d41a940e3780c4175", size = 7975, upload-time = "2026-04-24T14:54:47.39Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9c/0e/cf7aaf2fe1fcefdb7f37eb94d76ddaf1cd9dc135315866df1fab20c519c8/llama_agents_client-0.3.7-py3-none-any.whl", hash = "sha256:35d989d1855c500e0b34b6227a00e7e9b9b3347b9e505ab60f50a131a3519236", size = 10185, upload-time = "2026-04-24T14:54:45.903Z" },
+]
+
+[[package]]
+name = "llama-index-instrumentation"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "deprecated" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4e/d0/671b23ccff255c9bce132a84ffd5a6f4541ceefdeab9c1786b08c9722f2e/llama_index_instrumentation-0.5.0.tar.gz", hash = "sha256:eeb724648b25d149de882a5ac9e21c5acb1ce780da214bda2b075341af29ad8e", size = 43831, upload-time = "2026-03-12T20:17:06.742Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c3/45/6dcaccef44e541ffa138e4b45e33e0d40ab2a7d845338483954fcf77bc75/llama_index_instrumentation-0.5.0-py3-none-any.whl", hash = "sha256:aaab83cddd9dd434278891012d8995f47a3bc7ed1736a371db90965348c56a21", size = 16444, upload-time = "2026-03-12T20:17:05.957Z" },
+]
+
+[[package]]
+name = "llama-index-workflows"
+version = "2.20.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "llama-index-instrumentation" },
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c4/ec/05f3db99a2e6e252e3939e7751cad2fb1322dc6d32f4cf5c795cf7ddcad3/llama_index_workflows-2.20.0.tar.gz", hash = "sha256:df2760fea9e100c97a4e919d255461e344413acac4382d17d8217337806e4772", size = 97410, upload-time = "2026-04-24T14:54:41.524Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/5f/385231406d777cb4b608fd8ebe3577dbd90962770717181e6b91b44fb1b8/llama_index_workflows-2.20.0-py3-none-any.whl", hash = "sha256:36f6b6ace77f837d9907078aea7e830251afe96a58daecff5ed090c88c55095d", size = 121238, upload-time = "2026-04-24T14:54:40.455Z" },
 ]
 
 [[package]]

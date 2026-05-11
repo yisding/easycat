@@ -21,6 +21,7 @@ easycat = "easycat.debug._pytest_plugin"
 [project.optional-dependencies]
 openai-agents = ["openai-agents>=0.6.2"]
 pydantic-ai = ["pydantic-ai>=0.1"]
+llama-agents = ["llama-index-workflows>=2.15.0,<3.0.0", "llama-agents-client>=0.3.0,<1.0.0"]
 openai = ["openai>=1.0.0"]
 deepgram = ["deepgram-sdk>=3.0.0"]
 elevenlabs = ["elevenlabs>=1.0.0"]
@@ -63,6 +64,8 @@ all = [
     "fastapi>=0.110.0",
     "openai>=1.0.0",
     "openai-agents>=0.6.2",
+    "llama-index-workflows>=2.15.0,<3.0.0",
+    "llama-agents-client>=0.3.0,<1.0.0",
     "python-multipart>=0.0.9",
     "sounddevice>=0.4.6",
     "pyrnnoise>=0.3.0",
