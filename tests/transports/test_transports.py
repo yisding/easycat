@@ -289,6 +289,20 @@ class TestWebSocketTransport:
         await transport.disconnect()
 
     @pytest.mark.asyncio
+    async def test_invalid_sample_rate_config_is_ignored(self):
+        """Invalid config messages must not poison the negotiated audio format."""
+        transport = WebSocketTransport()
+
+        for sample_rate in (True, False, 0, -16000, 384001, 16000.0, "16000", None):
+            transport._handle_control_message(
+                json.dumps({"type": "config", "sample_rate": sample_rate})
+            )
+            assert transport._audio_format.sample_rate == 16000
+
+        transport._handle_control_message(json.dumps({"type": "config", "sample_rate": 44100}))
+        assert transport._audio_format.sample_rate == 44100
+
+    @pytest.mark.asyncio
     async def test_client_disconnect_signals_end(self):
         """When client disconnects, receive_audio iterator should end."""
         port = _find_free_port()
@@ -683,6 +697,35 @@ class TestTwilioTransport:
 
         await transport.disconnect()
         assert marks_received == ["mark_1", "mark_2"]
+
+    @pytest.mark.asyncio
+    async def test_control_events_ignore_wrong_stream_sid(self):
+        """stop/mark/dtmf are scoped to the active Twilio streamSid."""
+        event_bus = EventBus()
+        transport = TwilioTransport(event_bus=event_bus)
+        digits_received: list[str] = []
+        marks_received: list[str] = []
+        event_bus.subscribe(DTMF, lambda e: digits_received.append(e.digit))
+        event_bus.subscribe(PlaybackMarkAck, lambda e: marks_received.append(e.mark_name))
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(_twilio_dtmf_msg("5", stream_sid="WRONG"))
+        await transport._handle_message(_twilio_mark_msg("mark_1", stream_sid="WRONG"))
+        await transport._handle_message(_twilio_stop_msg(stream_sid="WRONG"))
+
+        assert digits_received == []
+        assert marks_received == []
+        assert transport.stream_sid == "STREAM1"
+        assert transport.call_sid == "CALL1"
+
+        await transport._handle_message(_twilio_dtmf_msg("6", stream_sid="STREAM1"))
+        await transport._handle_message(_twilio_mark_msg("mark_2", stream_sid="STREAM1"))
+        await transport._handle_message(_twilio_stop_msg(stream_sid="STREAM1"))
+
+        assert digits_received == ["6"]
+        assert marks_received == ["mark_2"]
+        assert transport.stream_sid is None
+        assert transport.call_sid is None
 
     @pytest.mark.asyncio
     async def test_stream_metadata(self):

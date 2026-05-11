@@ -636,6 +636,7 @@ class SqliteJournal:
         self._degraded = False
         self._closed = False
         self._recovered = False
+        self._clean_close_marked = False
 
         # ── Check for prior unclean shutdown ─────────────────────
         existed = self._db_path.exists()
@@ -824,6 +825,7 @@ class SqliteJournal:
                 self._conn.execute(
                     "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
                 )
+                self._clean_close_marked = True
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
             try:
@@ -870,6 +872,7 @@ class SqliteJournal:
                     "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
                 )
                 self._conn.commit()
+                self._clean_close_marked = True
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
             try:
@@ -912,35 +915,58 @@ class SqliteJournal:
         now_wall = time.time_ns()
         now_mono = time.monotonic_ns()
         now_cpu = time.process_time_ns()
+        data_json = json.dumps(data or {}, default=str)
+        error_notes = error.notes if error else None
+        tags_csv = ",".join(sorted(tags)) if tags else ""
+
         with self._lock:
-            self._seq += 1
-            seq = self._seq
-            self._conn.execute(
-                "INSERT INTO journal "
-                "(sequence, session_id, kind, name, wall_ns, mono_ns, cpu_ns, "
-                "turn_id, data, error_type, error_msg, error_tb, error_notes, "
-                "input_ref, output_ref, tags) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    seq,
-                    session_id,
-                    kind.value,
-                    name,
-                    now_wall,
-                    now_mono,
-                    now_cpu,
-                    turn_id,
-                    json.dumps(data or {}, default=str),
-                    error.type if error else None,
-                    error.message if error else None,
-                    error.traceback if error else None,
-                    error.notes if error else None,
-                    input_ref,
-                    output_ref,
-                    ",".join(sorted(tags)) if tags else "",
-                ),
-            )
+            clear_clean_close = self._clean_close_marked
+            if clear_clean_close:
+                self._conn.execute("SAVEPOINT post_finalize_append")
+            try:
+                if clear_clean_close:
+                    self._clear_clean_close_marker_before_write()
+                self._seq += 1
+                seq = self._seq
+                self._conn.execute(
+                    "INSERT INTO journal "
+                    "(sequence, session_id, kind, name, wall_ns, mono_ns, cpu_ns, "
+                    "turn_id, data, error_type, error_msg, error_tb, error_notes, "
+                    "input_ref, output_ref, tags) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        seq,
+                        session_id,
+                        kind.value,
+                        name,
+                        now_wall,
+                        now_mono,
+                        now_cpu,
+                        turn_id,
+                        data_json,
+                        error.type if error else None,
+                        error.message if error else None,
+                        error.traceback if error else None,
+                        error_notes,
+                        input_ref,
+                        output_ref,
+                        tags_csv,
+                    ),
+                )
+            except Exception:
+                if clear_clean_close:
+                    try:
+                        self._conn.execute("ROLLBACK TO SAVEPOINT post_finalize_append")
+                    finally:
+                        self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
+                raise
+            if clear_clean_close:
+                self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
+                self._clean_close_marked = False
         return seq
+
+    def _clear_clean_close_marker_before_write(self) -> None:
+        self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
 
     def _enter_degraded(self, session_id: str, exc: Exception) -> None:
         self._degraded = True

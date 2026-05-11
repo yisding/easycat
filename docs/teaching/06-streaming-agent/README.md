@@ -78,7 +78,7 @@ the same prompt:
 
 ```python
 from pathlib import Path
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 
 def first_audio_gap_ms(bundle_path):
     b = load_bundle(bundle_path)

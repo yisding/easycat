@@ -168,6 +168,30 @@ def _accepted_twilio_media(
     return media
 
 
+def _is_active_twilio_stream_event(
+    msg: dict[str, Any],
+    *,
+    active_stream_sid: str | None,
+    event_name: str,
+) -> bool:
+    """Return True only when a Twilio control event belongs to the active stream."""
+    if active_stream_sid is None:
+        logger.debug("Ignoring Twilio %s before start", event_name)
+        return False
+
+    stream_sid = msg.get("streamSid")
+    if stream_sid != active_stream_sid:
+        logger.debug(
+            "Ignoring Twilio %s for streamSid=%s while active streamSid=%s",
+            event_name,
+            stream_sid,
+            active_stream_sid,
+        )
+        return False
+
+    return True
+
+
 class TwilioTransport(_ServerTransportBase):
     """Transport for Twilio Media Streams bidirectional WebSocket.
 
@@ -358,6 +382,12 @@ class TwilioTransport(_ServerTransportBase):
         elif event == "media":
             await self._handle_media(msg)
         elif event == "stop":
+            if not _is_active_twilio_stream_event(
+                msg,
+                active_stream_sid=self._stream_sid,
+                event_name="stop",
+            ):
+                return
             logger.info("Twilio stream stopped (streamSid=%s)", self._stream_sid)
             # Emit the inbound-direction mirror of the outbound call
             # manager's ``CallEnded`` event so observers like
@@ -370,6 +400,12 @@ class TwilioTransport(_ServerTransportBase):
             self._answered_at = None
             self._enqueue_sentinel()
         elif event == "mark":
+            if not _is_active_twilio_stream_event(
+                msg,
+                active_stream_sid=self._stream_sid,
+                event_name="mark",
+            ):
+                return
             mark_name = msg.get("mark", {}).get("name", "")
             logger.debug("Twilio mark acknowledged: %s", mark_name)
             if mark_name and self._event_bus is not None:
@@ -464,6 +500,12 @@ class TwilioTransport(_ServerTransportBase):
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
         """Emit a DTMF event for the pressed digit."""
+        if not _is_active_twilio_stream_event(
+            msg,
+            active_stream_sid=self._stream_sid,
+            event_name="dtmf",
+        ):
+            return
         dtmf_data = msg.get("dtmf", {})
         digit = dtmf_data.get("digit", "")
         if digit and self._event_bus is not None:
@@ -722,12 +764,24 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         elif event == "media":
             await self._handle_media(msg)
         elif event == "stop":
+            if not _is_active_twilio_stream_event(
+                msg,
+                active_stream_sid=self._stream_sid,
+                event_name="stop",
+            ):
+                return
             await self._emit_call_ended_once()
             self._stream_sid = None
             self._call_sid = None
             self._answered_at = None
             self._enqueue_sentinel()
         elif event == "mark":
+            if not _is_active_twilio_stream_event(
+                msg,
+                active_stream_sid=self._stream_sid,
+                event_name="mark",
+            ):
+                return
             mark_name = msg.get("mark", {}).get("name", "")
             if mark_name and self._event_bus is not None:
                 await self._event_bus.emit(PlaybackMarkAck(mark_name=mark_name))
@@ -787,6 +841,12 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         )
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
+        if not _is_active_twilio_stream_event(
+            msg,
+            active_stream_sid=self._stream_sid,
+            event_name="dtmf",
+        ):
+            return
         dtmf_data = msg.get("dtmf", {})
         digit = dtmf_data.get("digit", "")
         if digit and self._event_bus is not None:

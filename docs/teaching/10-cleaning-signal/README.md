@@ -121,7 +121,7 @@ Every run writes an `audio.config` record with the live backends:
 
 ```python
 from pathlib import Path
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 for b in Path("docs/teaching/10-cleaning-signal/runs/").glob("*.bundle"):
     bundle = load_bundle(b)
     for r in bundle.records():

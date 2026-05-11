@@ -76,6 +76,8 @@ class ReconnectingWebSocket:
         async with self._connect_lock:
             if self._closed:
                 raise RuntimeError("WebSocket has been closed")
+            if self.is_connected:
+                return
             await self._connect_with_retry()
 
     def _compute_delay(self, base_delay: float) -> float:

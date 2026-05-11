@@ -25,7 +25,7 @@ import statistics
 import sys
 from pathlib import Path
 
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 
 
 def _wer_words(ref: str, hyp: str) -> tuple[int, int]:

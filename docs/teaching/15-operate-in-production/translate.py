@@ -26,7 +26,7 @@ import argparse
 import json
 from pathlib import Path
 
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 
 
 def translate(bundle_path: Path) -> list[dict]:

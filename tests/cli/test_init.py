@@ -115,6 +115,24 @@ def test_init_force_overwrites_existing(
     assert (target / "leftover.txt").exists()
 
 
+def test_init_escapes_agent_literals(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "agent_name": 'Sales "A\\B"',
+            "agent_instructions": 'Line one\\path\nLine two says "hi"',
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    agent_py = tmp_path / "demo" / "agent.py"
+    compile(agent_py.read_text(encoding="utf-8"), str(agent_py), "exec")
+
+
 # ── Error paths ──────────────────────────────────────────────────────
 
 

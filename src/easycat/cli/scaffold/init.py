@@ -7,6 +7,7 @@ coding-agent scaffolding).
 
 from __future__ import annotations
 
+import json
 import subprocess
 from difflib import get_close_matches
 from importlib.resources import files
@@ -187,23 +188,22 @@ def _validate_provider_spec(spec: str, available: list[str], *, kind: str) -> No
 def _config_extra_kwargs(cfg: InitConfig) -> str:
     """Render extra ``EasyConfig(...)`` kwargs (or empty string).
 
-    Comma-prefixed inline form so a single placeholder works in both the
-    multi-line ``openai-agents`` template and the single-line
-    ``pydantic-ai`` template; ruff format will reflow long lines after
-    the developer runs it.
+    The templates use the parseable sentinel ``**__EASYCAT_CONFIG_EXTRA__``.
+    Rendering replaces that sentinel with this comma-separated keyword
+    argument fragment.
     """
     if cfg.template not in _VOICE_TEMPLATES:
         return ""
     parts: list[str] = []
     if cfg.stt:
-        parts.append(f'stt="{cfg.stt}"')
+        parts.append(f"stt={json.dumps(cfg.stt)}")
     if cfg.tts:
-        parts.append(f'tts="{cfg.tts}"')
+        parts.append(f"tts={json.dumps(cfg.tts)}")
     if cfg.mcp_servers:
         parts.append(f"mcp_servers={cfg.mcp_servers!r}")
     if not parts:
         return ""
-    return ", " + ", ".join(parts)
+    return ", ".join(parts)
 
 
 def _extras_for(cfg: InitConfig) -> str:
@@ -241,10 +241,19 @@ def _extra_env_vars(cfg: InitConfig) -> str:
     return "\n" + "\n".join(extra) + "\n"
 
 
+def _python_string_literal_contents(value: str) -> str:
+    """Render escaped contents for a double-quoted Python string literal."""
+    return json.dumps(value)[1:-1]
+
+
 def _substitutions(cfg: InitConfig, project_name: str) -> dict[str, str]:
     return {
-        "AGENT_NAME": cfg.agent_name or _SCAFFOLD_DEFAULTS["AGENT_NAME"],
-        "AGENT_INSTRUCTIONS": (cfg.agent_instructions or _SCAFFOLD_DEFAULTS["AGENT_INSTRUCTIONS"]),
+        "AGENT_NAME": _python_string_literal_contents(
+            cfg.agent_name or _SCAFFOLD_DEFAULTS["AGENT_NAME"]
+        ),
+        "AGENT_INSTRUCTIONS": _python_string_literal_contents(
+            cfg.agent_instructions or _SCAFFOLD_DEFAULTS["AGENT_INSTRUCTIONS"]
+        ),
         "PROJECT_NAME": project_name,
         "EASYCAT_CONFIG_EXTRA": _config_extra_kwargs(cfg),
         "EXTRAS": _extras_for(cfg),
@@ -259,11 +268,23 @@ def _should_template(source: Path) -> bool:
     return False
 
 
+def _render_text(text: str, mapping: dict[str, str]) -> str:
+    rendered = Template(text).safe_substitute(mapping)
+    extra_kwargs = mapping["EASYCAT_CONFIG_EXTRA"]
+    rendered = rendered.replace(
+        "        **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n",
+        f"        {extra_kwargs},\n" if extra_kwargs else "",
+    )
+    rendered = rendered.replace("**__EASYCAT_CONFIG_EXTRA__", extra_kwargs)
+    rendered = rendered.replace("  # noqa: F821", "")
+    return rendered.replace("agent=voice_agent, )", "agent=voice_agent)")
+
+
 def _render_file(source: Path, dest: Path, mapping: dict[str, str]) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if _should_template(source):
         text = source.read_text(encoding="utf-8")
-        rendered = Template(text).safe_substitute(mapping)
+        rendered = _render_text(text, mapping)
         dest.write_text(rendered, encoding="utf-8")
     else:
         dest.write_bytes(source.read_bytes())

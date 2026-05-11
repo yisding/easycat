@@ -78,7 +78,7 @@ def transport_config(name: str):
         # Requires `uv sync --extra telephony`. A live phone call connects
         # via Twilio Media Streams over WebSocket; see
         # `examples/twilio_app.py` for the Flask app that wires this up.
-        from easycat import TwilioTransportConfig
+        from easycat.transports.twilio_media import TwilioTransportConfig
 
         return TwilioTransportConfig()
     raise SystemExit(f"Unknown transport: {name}")

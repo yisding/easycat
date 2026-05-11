@@ -22,6 +22,7 @@ from easycat.vad import funasr as vad_funasr_module
 from easycat.vad import krisp as vad_krisp_module
 from easycat.vad import silero as vad_silero_module
 from easycat.vad import ten as vad_ten_module
+from easycat.vad._base import _VADBase
 
 
 def _make_chunk(value: int = 0, n_samples: int = 512) -> AudioChunk:
@@ -543,6 +544,56 @@ def test_vad_factory_revalidates_mutated_backend():
 
     with pytest.raises(ValueError, match="Unknown VAD backend 'silreo'"):
         create_vad(config)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("min_speech_duration_ms", -1, "min_speech_duration_ms must be non-negative"),
+        ("min_silence_duration_ms", -1, "min_silence_duration_ms must be non-negative"),
+        ("pre_roll_ms", -1, "pre_roll_ms must be non-negative"),
+        ("post_roll_ms", -1, "post_roll_ms must be non-negative"),
+        ("min_speech_duration_ms", float("nan"), "min_speech_duration_ms"),
+        ("min_silence_duration_ms", float("inf"), "min_silence_duration_ms"),
+        ("pre_roll_ms", float("-inf"), "pre_roll_ms"),
+        ("sensitivity", -0.1, "sensitivity must be between 0 and 1"),
+        ("sensitivity", 1.1, "sensitivity must be between 0 and 1"),
+        ("sensitivity", float("nan"), "sensitivity must be a number between 0 and 1"),
+        ("sensitivity", float("inf"), "sensitivity must be a number between 0 and 1"),
+        ("funasr_chunk_size_ms", 0, "funasr_chunk_size_ms must be a positive integer"),
+        (
+            "funasr_intra_op_num_threads",
+            0,
+            "funasr_intra_op_num_threads must be a positive integer",
+        ),
+    ],
+)
+def test_vad_config_validates_numeric_knobs(field: str, value: object, message: str):
+    kwargs = {field: value}
+    with pytest.raises(ValueError, match=message):
+        VADConfig(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"min_speech_duration_ms": -1}, "min_speech_duration_ms must be non-negative"),
+        ({"min_silence_duration_ms": -1}, "min_silence_duration_ms must be non-negative"),
+        ({"pre_roll_ms": -1}, "pre_roll_ms must be non-negative"),
+        ({"post_roll_ms": -1}, "post_roll_ms must be non-negative"),
+        ({"min_speech_duration_ms": float("nan")}, "min_speech_duration_ms"),
+        ({"min_silence_duration_ms": float("inf")}, "min_silence_duration_ms"),
+        ({"post_roll_ms": float("-inf")}, "post_roll_ms"),
+        ({"sensitivity": -0.1}, "sensitivity must be between 0 and 1"),
+        ({"sensitivity": 1.1}, "sensitivity must be between 0 and 1"),
+        ({"sensitivity": float("nan")}, "sensitivity must be a number between 0 and 1"),
+        ({"sensitivity": float("inf")}, "sensitivity must be a number between 0 and 1"),
+    ],
+)
+def test_vad_base_configure_validates_numeric_knobs(kwargs: dict[str, object], message: str):
+    vad = _VADBase()
+    with pytest.raises(ValueError, match=message):
+        vad.configure(**kwargs)
 
 
 def test_vad_factory_no_backends(monkeypatch: pytest.MonkeyPatch):

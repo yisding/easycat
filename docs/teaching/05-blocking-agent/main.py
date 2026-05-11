@@ -22,13 +22,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from easycat import (
-    LocalTransport,
-    LocalTransportConfig,
-    create_stt_provider,
-    create_vad,
-    speak,
-)
+from easycat import LocalTransportConfig
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk
 from easycat.debug.export import export_debug_bundle
 from easycat.events import (
@@ -37,9 +31,12 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
+from easycat.quick import speak
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
-from easycat.stt.factory import STTProviderConfig
+from easycat.stt.factory import STTProviderConfig, create_stt_provider
+from easycat.transports.local import LocalTransport
 from easycat.vad import VADConfig
+from easycat.vad.factory import create_vad
 
 PREROLL_FRAMES = 15
 MODEL = "gpt-4o-mini"

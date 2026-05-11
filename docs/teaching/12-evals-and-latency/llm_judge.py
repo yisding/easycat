@@ -24,7 +24,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 
 JUDGE_MODEL = "gpt-4o-mini"
 

@@ -53,12 +53,20 @@ def _twilio_mark_msg(name: str, stream_sid: str = "MZ123") -> str:
     return json.dumps({"event": "mark", "streamSid": stream_sid, "mark": {"name": name}})
 
 
-def _twilio_dtmf_msg(digit: str) -> str:
-    return json.dumps({"event": "dtmf", "dtmf": {"digit": digit}})
+def _twilio_dtmf_msg(digit: str, stream_sid: str = "MZ123") -> str:
+    return json.dumps({"event": "dtmf", "streamSid": stream_sid, "dtmf": {"digit": digit}})
 
 
-def _twilio_stop_msg() -> str:
-    return json.dumps({"event": "stop"})
+def _twilio_stop_msg(stream_sid: str = "MZ123") -> str:
+    return json.dumps({"event": "stop", "streamSid": stream_sid})
+
+
+class _DummyTwilioWebSocket:
+    async def send(self, _message: str) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
 
 
 # ── WebSocketConnectionTransport tests ────────────────────────────
@@ -168,6 +176,19 @@ class TestWebSocketConnectionTransport:
 
         server.close()
         await server.wait_closed()
+
+    @pytest.mark.asyncio
+    async def test_invalid_sample_rate_config_is_ignored(self):
+        transport = WebSocketConnectionTransport(object())  # type: ignore[arg-type]
+
+        for sample_rate in (True, False, 0, -16000, 384001, 16000.0, "16000", None):
+            transport._handle_control_message(
+                json.dumps({"type": "config", "sample_rate": sample_rate})
+            )
+            assert transport._audio_format.sample_rate == 16000
+
+        transport._handle_control_message(json.dumps({"type": "config", "sample_rate": 48000}))
+        assert transport._audio_format.sample_rate == 48000
 
     @pytest.mark.asyncio
     async def test_client_disconnect_ends_receive(self):
@@ -461,6 +482,34 @@ class TestTwilioConnectionTransport:
         server.close()
         await server.wait_closed()
         assert marks == ["m1", "m2"]
+
+    @pytest.mark.asyncio
+    async def test_control_events_ignore_wrong_stream_sid(self):
+        event_bus = EventBus()
+        digits: list[str] = []
+        marks: list[str] = []
+        event_bus.subscribe(DTMF, lambda e: digits.append(e.digit))
+        event_bus.subscribe(PlaybackMarkAck, lambda e: marks.append(e.mark_name))
+        transport = TwilioConnectionTransport(_DummyTwilioWebSocket(), event_bus=event_bus)
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(_twilio_dtmf_msg("5", stream_sid="WRONG"))
+        await transport._handle_message(_twilio_mark_msg("mark_1", stream_sid="WRONG"))
+        await transport._handle_message(_twilio_stop_msg(stream_sid="WRONG"))
+
+        assert digits == []
+        assert marks == []
+        assert transport.stream_sid == "STREAM1"
+        assert transport.call_sid == "CALL1"
+
+        await transport._handle_message(_twilio_dtmf_msg("6", stream_sid="STREAM1"))
+        await transport._handle_message(_twilio_mark_msg("mark_2", stream_sid="STREAM1"))
+        await transport._handle_message(_twilio_stop_msg(stream_sid="STREAM1"))
+
+        assert digits == ["6"]
+        assert marks == ["mark_2"]
+        assert transport.stream_sid is None
+        assert transport.call_sid is None
 
     @pytest.mark.asyncio
     async def test_stop_message_ends_receive(self):

@@ -40,6 +40,20 @@ class ProviderCatalog:
     config_to_provider: dict[type, type] = field(init=False)
 
     def __post_init__(self) -> None:
+        provider_keys = set(self.providers)
+        env_var_keys = set(self.env_vars)
+        if provider_keys != env_var_keys:
+            missing_env_vars = sorted(provider_keys - env_var_keys)
+            unknown_env_vars = sorted(env_var_keys - provider_keys)
+            details: list[str] = []
+            if missing_env_vars:
+                details.append(f"missing env_vars for: {', '.join(missing_env_vars)}")
+            if unknown_env_vars:
+                details.append(f"env_vars without providers: {', '.join(unknown_env_vars)}")
+            raise ValueError(
+                f"{self.kind} provider catalog keys must match env var keys; " + "; ".join(details)
+            )
+
         # Frozen dataclasses block normal attribute assignment, so the
         # reverse map is set via object.__setattr__ — same pattern the
         # standard library uses for derived fields.

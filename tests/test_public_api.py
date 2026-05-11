@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import ast
+import re
+from collections.abc import Iterable
+from pathlib import Path
+
 import easycat
 
 PUBLIC_API_SNAPSHOT = (
@@ -124,3 +129,53 @@ def test_culled_symbols_remain_available_from_modules() -> None:
     assert speak.__name__ == "speak"
     assert transcribe_file.__name__ == "transcribe_file"
     assert split_at_sentence_boundaries("Hello world. ") == ("Hello world. ", "")
+
+
+def _easycat_imports_from_ast(source: str, filename: str) -> Iterable[tuple[int, str]]:
+    tree = ast.parse(source, filename=filename)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "easycat":
+            for alias in node.names:
+                if alias.name != "*":
+                    yield node.lineno, alias.name
+
+
+def _easycat_imports_from_markdown(path: Path) -> Iterable[tuple[int, str]]:
+    text = path.read_text(encoding="utf-8")
+    for match in re.finditer(r"```(?:python|py)?\n(?P<code>.*?)```", text, flags=re.DOTALL):
+        code = match.group("code")
+        if "from easycat import" not in code:
+            continue
+        start_line = text[: match.start("code")].count("\n") + 1
+        try:
+            for line, name in _easycat_imports_from_ast(code, f"{path}:{start_line}"):
+                yield start_line + line - 1, name
+        except SyntaxError:
+            for offset, line in enumerate(code.splitlines(), start=start_line):
+                stripped = line.strip()
+                if not stripped.startswith("from easycat import "):
+                    continue
+                imported = stripped.removeprefix("from easycat import ").strip("()")
+                for part in imported.split(","):
+                    name = part.strip().split(" as ", 1)[0]
+                    if name:
+                        yield offset, name
+
+
+def test_docs_and_examples_use_only_public_top_level_imports() -> None:
+    public = set(easycat.__all__)
+    violations: list[str] = []
+
+    for root in (Path("docs"), Path("examples")):
+        for path in sorted(root.rglob("*.py")):
+            for line, name in _easycat_imports_from_ast(
+                path.read_text(encoding="utf-8"), str(path)
+            ):
+                if name not in public:
+                    violations.append(f"{path}:{line}: {name}")
+        for path in sorted(root.rglob("*.md")):
+            for line, name in _easycat_imports_from_markdown(path):
+                if name not in public:
+                    violations.append(f"{path}:{line}: {name}")
+
+    assert not violations, "Non-public `from easycat import ...` usages:\n" + "\n".join(violations)

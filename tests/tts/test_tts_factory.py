@@ -92,6 +92,16 @@ class TestCreateTTSProvider:
         with pytest.raises(ValueError, match="Unknown TTS provider"):
             create_tts_provider(config)
 
+    def test_rejects_non_string_provider(self):
+        config = TTSProviderConfig(provider=None, settings={"api_key": "test"})  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="Unknown TTS provider"):
+            create_tts_provider(config)
+
+    def test_rejects_empty_provider(self):
+        config = TTSProviderConfig(provider="", settings={"api_key": "test"})
+        with pytest.raises(ValueError, match="Unknown TTS provider"):
+            create_tts_provider(config)
+
     def test_error_message_lists_available(self):
         config = TTSProviderConfig(provider="bad")
         with pytest.raises(ValueError, match="deepgram.*elevenlabs.*openai"):
@@ -105,15 +115,20 @@ class TestCreateTTSProvider:
         with pytest.raises(ValueError, match="Invalid settings"):
             create_tts_provider(config)
 
-    def test_empty_settings_uses_defaults(self):
+    def test_empty_settings_rejects_missing_api_key(self):
         config = TTSProviderConfig(provider="openai", settings={})
-        provider = create_tts_provider(config)
-        assert isinstance(provider, OpenAITTS)
+        with pytest.raises(ValueError, match="API key is required"):
+            create_tts_provider(config)
 
-    def test_none_settings_uses_defaults(self):
+    def test_none_settings_rejects_missing_api_key(self):
         config = TTSProviderConfig(provider="openai")
-        provider = create_tts_provider(config)
-        assert isinstance(provider, OpenAITTS)
+        with pytest.raises(ValueError, match="API key is required"):
+            create_tts_provider(config)
+
+    def test_rejects_empty_api_key(self):
+        config = TTSProviderConfig(provider="openai", settings={"api_key": ""})
+        with pytest.raises(ValueError, match="API key is required"):
+            create_tts_provider(config)
 
     def test_openai_with_custom_settings(self):
         config = TTSProviderConfig(

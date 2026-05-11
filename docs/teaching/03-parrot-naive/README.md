@@ -79,7 +79,7 @@ timeout, you will get either **false fires** (low number) or a
 Open the bundle in `runs/`:
 
 ```python
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 b = load_bundle("docs/teaching/03-parrot-naive/runs/<file>.bundle")
 for r in b.records():
     if r["name"].startswith(("stt.", "parrot.")):

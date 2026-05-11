@@ -59,7 +59,7 @@ speaking. Open the bundle and list them:
 
 ```python
 from pathlib import Path
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 b = next(iter(Path("docs/teaching/05-blocking-agent/runs/").glob("*.bundle")))
 bundle = load_bundle(b)
 for r in bundle.records():

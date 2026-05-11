@@ -19,6 +19,7 @@ run(
             name="$AGENT_NAME",
             instructions="$AGENT_INSTRUCTIONS",
             tools=[current_time],
-        )$EASYCAT_CONFIG_EXTRA
+        ),
+        **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821
     )
 )

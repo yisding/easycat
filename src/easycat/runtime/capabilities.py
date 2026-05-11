@@ -6,6 +6,7 @@ without depending on concrete EasyCat implementation classes.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Protocol, cast, runtime_checkable
 
 
@@ -134,6 +135,19 @@ async def aclose_if_supported(provider: Any) -> None:
     aclose = getattr(provider, "aclose", None)
     if callable(aclose):
         await aclose()
+
+
+async def close_if_supported(provider: Any) -> None:
+    """Close provider resources when ``aclose`` or ``close`` is exposed."""
+    close = getattr(provider, "aclose", None)
+    if not callable(close):
+        close = getattr(provider, "close", None)
+    if not callable(close):
+        return
+
+    result = close()
+    if inspect.isawaitable(result):
+        await result
 
 
 def default_echo_cancellation_enabled(provider_or_config: Any) -> bool:
