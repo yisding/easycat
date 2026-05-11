@@ -132,6 +132,12 @@ class LangChainBridge:
         # by LangChain ``run_id`` so start/end always pair even when the
         # runnable interleaves multiple model calls.
         open_cursors: dict[str, ExecutionCursor] = {}
+        # Run ids whose ``_end`` event arrived while a sibling cursor was
+        # still on top of the recorder stack — closed in LIFO order once
+        # the obstructing sibling(s) also end, preserving the recorder's
+        # strict stack invariant for ``RunnableParallel`` / concurrent
+        # runs.
+        ended_runs: set[str] = set()
         # Track the top-level chain's ``run_id`` so we can capture its
         # ``on_chain_end.data.output`` as ``structured_output`` — non-text
         # runnables (``RunnableLambda(lambda _: {"answer": 42})``,
@@ -176,7 +182,9 @@ class LangChainBridge:
                         captured_output = data_dict.get("output") if data_dict else None
                         captured_output_set = True
 
-                self._handle_cursor_lifecycle(event, recorder, agent_cursor, open_cursors)
+                self._handle_cursor_lifecycle(
+                    event, recorder, agent_cursor, open_cursors, ended_runs
+                )
                 for bridge_event in translate_stream_event(event, recorder, state=tool_state):
                     if bridge_event.kind == "text_delta":
                         accumulated += bridge_event.text
@@ -398,13 +406,16 @@ class LangChainBridge:
         recorder: AgentRecorder,
         agent_cursor: ExecutionCursor,
         open_cursors: dict[str, ExecutionCursor],
+        ended_runs: set[str],
     ) -> None:
         """Open / close ``model_node`` cursors from chat-model events.
 
         Tool calls are recorded as ``tool_phase_changed`` records by the
-        translator; they don't open a cursor.  With the default
-        ``include_types=("chat_model", "tool")`` filter these are the only
-        events we see, so the whole lifecycle fits in a dozen lines.
+        translator; they don't open a cursor.  ``_end`` events that arrive
+        out of LIFO order (e.g. ``RunnableParallel`` running two chat
+        models concurrently) are deferred via ``ended_runs`` and flushed
+        through ``_close_top_ended_cursors`` so the recorder's strict
+        stack invariant holds.
         """
         event_type = event.get("event")
         if event_type in ("on_chat_model_start", "on_llm_start"):
@@ -423,12 +434,36 @@ class LangChainBridge:
             open_cursors[run_id] = cursor
         elif event_type in ("on_chat_model_end", "on_llm_end"):
             run_id = str(event.get("run_id") or "")
-            cursor = open_cursors.pop(run_id, None)
-            if cursor is not None:
-                recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+            if run_id and run_id in open_cursors:
+                ended_runs.add(run_id)
+                _close_top_ended_cursors(recorder, open_cursors, ended_runs)
 
 
 # ── Helpers ──────────────────────────────────────────────────────
+
+
+def _close_top_ended_cursors(
+    recorder: AgentRecorder,
+    open_cursors: dict[str, ExecutionCursor],
+    ended_runs: set[str],
+) -> None:
+    """Pop cursors from the top of the stack while they're marked ended.
+
+    LangChain emits start/end events in chronological order, so for
+    parallel branches (``RunnableParallel``, parallel LangGraph nodes)
+    an ``_end`` event can arrive while a sibling cursor is still the
+    top of ``JournalAgentRecorder``'s stack.  We hold each non-top close
+    in ``ended_runs`` and flush them in LIFO order once the obstructing
+    siblings above also end, so the recorder's strict stack invariant
+    is preserved without dropping the cursor.
+    """
+    while open_cursors:
+        last_run_id = next(reversed(open_cursors))
+        if last_run_id not in ended_runs:
+            break
+        cursor = open_cursors.pop(last_run_id)
+        ended_runs.discard(last_run_id)
+        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
 
 
 def _role_of(msg: Any) -> str:

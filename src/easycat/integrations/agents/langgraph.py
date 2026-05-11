@@ -53,6 +53,7 @@ from easycat.integrations.agents.base import (
     InterruptionPlan,
     UnitKind,
 )
+from easycat.integrations.agents.langchain import _close_top_ended_cursors
 from easycat.runtime.records import ErrorInfo
 
 # ``stream_mode`` values whose payloads LangGraph folds into top-level
@@ -167,6 +168,12 @@ class LangGraphBridge:
         # call opens a model_node cursor.  Closing is driven by the
         # matching ``_end`` event for the same run_id.
         open_cursors: dict[str, ExecutionCursor] = {}
+        # Run ids whose ``_end`` event arrived while a sibling cursor
+        # was still on top of the recorder stack (parallel nodes / models
+        # running concurrently) — closed in LIFO order once the
+        # obstructing sibling(s) also end so the recorder's strict stack
+        # invariant holds.
+        ended_runs: set[str] = set()
         # Previously seen node at each subgraph namespace depth, so we
         # can emit handoff triples when a node changes at the same level.
         last_node_by_ns: dict[tuple[str, ...], str] = {}
@@ -210,7 +217,12 @@ class LangGraphBridge:
                     continue
 
                 for bridge_event in self._handle_cursor_lifecycle(
-                    event, recorder, agent_cursor, open_cursors, last_node_by_ns
+                    event,
+                    recorder,
+                    agent_cursor,
+                    open_cursors,
+                    last_node_by_ns,
+                    ended_runs,
                 ):
                     yield bridge_event
 
@@ -498,6 +510,7 @@ class LangGraphBridge:
         agent_cursor: ExecutionCursor,
         open_cursors: dict[str, ExecutionCursor],
         last_node_by_ns: dict[tuple[str, ...], str],
+        ended_runs: set[str],
     ) -> list[AgentBridgeEvent]:
         """Open / close workflow_node + model_node cursors for one event.
 
@@ -511,7 +524,10 @@ class LangGraphBridge:
         Chat-model calls open a ``model_node`` cursor nested inside the
         enclosing workflow_node (or the outer agent_cursor for
         plain-runnable events).  ``_end`` events close the matching
-        cursor by ``run_id``.
+        cursor by ``run_id`` — parallel branches whose ends arrive while
+        a sibling cursor is still the stack top are deferred via
+        ``ended_runs`` and flushed in LIFO order so the recorder's
+        strict stack invariant is preserved.
         """
         events: list[AgentBridgeEvent] = []
         event_type = event.get("event")
@@ -585,9 +601,9 @@ class LangGraphBridge:
 
         elif event_type in ("on_chain_end", "on_chat_model_end", "on_llm_end"):
             run_id = str(event.get("run_id") or "")
-            cursor = open_cursors.pop(run_id, None)
-            if cursor is not None:
-                recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+            if run_id and run_id in open_cursors:
+                ended_runs.add(run_id)
+                _close_top_ended_cursors(recorder, open_cursors, ended_runs)
 
         return events
 

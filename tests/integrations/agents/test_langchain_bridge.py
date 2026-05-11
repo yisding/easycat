@@ -307,6 +307,58 @@ class TestStreamEventTranslator:
         # End event must NOT re-emit text — the stream already covered it.
         assert end_out == []
 
+    def test_on_chat_model_end_emits_text_for_non_streaming_chat_model(self):
+        """Non-streaming chat models (any chat model that doesn't override
+        ``_stream`` / ``_astream``) only surface their AIMessage via
+        ``on_chat_model_end`` — no ``on_chat_model_stream`` events fire and
+        the parent chain's stream chunks carrying the same message are
+        suppressed by ``chains_with_model_descendants``.  Without the
+        ``on_chat_model_end`` fallback the assistant goes silent."""
+        state: dict[str, Any] = {}
+        start_event = {
+            "event": "on_chat_model_start",
+            "name": "ChatOpenAI",
+            "run_id": "m1",
+            "parent_ids": ["seq"],
+            "data": {},
+        }
+        end_event = {
+            "event": "on_chat_model_end",
+            "name": "ChatOpenAI",
+            "run_id": "m1",
+            "parent_ids": ["seq"],
+            "data": {"output": _MockAIMessageChunk(content="hello world")},
+        }
+        list(translate_stream_event(start_event, state=state))
+        end_out = list(translate_stream_event(end_event, state=state))
+        assert [e.kind for e in end_out] == ["text_delta"]
+        assert end_out[0].text == "hello world"
+
+    def test_on_chat_model_end_skipped_after_streaming(self):
+        """Streaming chat models emit ``on_chat_model_stream`` deltas
+        plus a terminal ``on_chat_model_end`` carrying the full message.
+        The end-of-model fallback must dedupe by ``run_id`` so the
+        response isn't doubled on top of the already-streamed tokens."""
+        state: dict[str, Any] = {}
+        stream_event = {
+            "event": "on_chat_model_stream",
+            "name": "ChatOpenAI",
+            "run_id": "m1",
+            "parent_ids": ["seq"],
+            "data": {"chunk": _MockAIMessageChunk(content="hi ")},
+        }
+        end_event = {
+            "event": "on_chat_model_end",
+            "name": "ChatOpenAI",
+            "run_id": "m1",
+            "parent_ids": ["seq"],
+            "data": {"output": _MockAIMessageChunk(content="hi there")},
+        }
+        stream_out = list(translate_stream_event(stream_event, state=state))
+        end_out = list(translate_stream_event(end_event, state=state))
+        assert [e.text for e in stream_out] == ["hi "]
+        assert end_out == []
+
     def test_same_name_parallel_tool_calls_preserve_ids_fifo(self):
         """When the model fires the same tool more than once in one
         response, each ``on_tool_start`` must match the *next* queued
@@ -541,6 +593,88 @@ class TestLangChainBridgeInvoke:
         assert names[0] == "unit_entered"
         assert names[-1] == "unit_exited"
         assert names.count("unit_entered") == names.count("unit_exited")
+
+    @pytest.mark.asyncio
+    async def test_parallel_model_runs_do_not_violate_recorder_stack(self):
+        """``RunnableParallel`` can start two chat-model runs before either
+        finishes, so the recorder's strict LIFO closure has to tolerate an
+        ``on_chat_model_end`` arriving while a sibling cursor is still the
+        stack top.  The bridge defers each non-top close until the
+        obstructing sibling(s) end so the recorder doesn't raise
+        ``RecorderInvariantError`` mid-turn."""
+        chunk_a = _MockAIMessageChunk(content="A")
+        chunk_b = _MockAIMessageChunk(content="B")
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chat_model_start",
+                    "name": "ChatA",
+                    "run_id": "m-a",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_chat_model_start",
+                    "name": "ChatB",
+                    "run_id": "m-b",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatA",
+                    "run_id": "m-a",
+                    "parent_ids": [],
+                    "data": {"chunk": chunk_a},
+                },
+                {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatB",
+                    "run_id": "m-b",
+                    "parent_ids": [],
+                    "data": {"chunk": chunk_b},
+                },
+                # ``m-a`` ends first while ``m-b`` is still on top of the
+                # recorder stack — naive ``record_unit_exited`` here would
+                # raise ``RecorderInvariantError``.
+                {
+                    "event": "on_chat_model_end",
+                    "name": "ChatA",
+                    "run_id": "m-a",
+                    "parent_ids": [],
+                    "data": {"output": chunk_a},
+                },
+                {
+                    "event": "on_chat_model_end",
+                    "name": "ChatB",
+                    "run_id": "m-b",
+                    "parent_ids": [],
+                    "data": {"output": chunk_b},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), rec):
+            events.append(ev)
+
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        assert text == "AB"
+
+        records = journal.read()
+        names = [r.name for r in records]
+        # Both model cursors entered and exited, paired with the outer
+        # agent cursor.  No invariant errors raised.
+        assert names.count("unit_entered") == names.count("unit_exited") == 3
+        # Exit order is LIFO: agent encloses both models, and ``m-b``
+        # (top of stack) closes before ``m-a`` even though ``m-a`` ended
+        # first chronologically.
+        exit_records = [r for r in records if r.name == "unit_exited"]
+        exit_ids = [r.data["unit_id"] for r in exit_records]
+        assert exit_ids == ["model-m-b", "model-m-a", exit_ids[-1]]
+        assert exit_ids[-1].startswith("agent-")
 
     @pytest.mark.asyncio
     async def test_cancel_token_short_circuits(self):
@@ -958,6 +1092,68 @@ class TestLangChainBridgeInvoke:
         # lambda chain streams are siblings of the model and would
         # otherwise duplicate its tokens.
         assert text == "abc"
+
+    @pytest.mark.asyncio
+    async def test_chain_wrapping_non_streaming_chat_model_emits_text(self):
+        """Non-streaming chat models (any chat model that doesn't override
+        ``_stream`` / ``_astream``) skip ``on_chat_model_stream`` and only
+        surface their AIMessage via ``on_chat_model_end``.  The parent
+        chain re-yields the same AIMessage through ``on_chain_stream``,
+        which the bridge suppresses — without the end-of-model fallback
+        the assistant goes silent and history records an empty turn."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_chat_model_start",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                {
+                    "event": "on_chat_model_end",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {"output": _MockAIMessageChunk(content="hello world")},
+                },
+                # Parent chain re-yields the AIMessage — must be suppressed
+                # so we don't double-emit on top of the end-of-model text.
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"chunk": _MockAIMessageChunk(content="hello world")},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"output": "hello world"},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        done = [e for e in events if e.kind == "done"]
+        # End-of-model fallback emits exactly once; chain stream suppressed.
+        assert text == "hello world"
+        assert done and done[0].text == "hello world"
+        # History records the assistant turn — empty text would skip the
+        # AIMessage append and leave the next turn without context.
+        assert any(_content_of_history_item(m) == "hello world" for m in bridge._message_history)
 
     @pytest.mark.asyncio
     async def test_turn_context_flows_into_history_payload(self):

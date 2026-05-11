@@ -264,6 +264,74 @@ class TestLangGraphBridgeInvoke:
         assert {r.data["display_name"] for r in workflow_nodes} == {"research", "write"}
 
     @pytest.mark.asyncio
+    async def test_parallel_nodes_do_not_violate_recorder_stack(self):
+        """A ``StateGraph`` fan-out can start two parallel nodes (each
+        invoking a model) before either finishes, so ``on_chain_end`` /
+        ``on_chat_model_end`` events can arrive while a sibling cursor
+        is still on the recorder's stack top.  The bridge defers each
+        non-top close until the obstructing sibling(s) end so the
+        recorder's strict LIFO invariant is preserved."""
+        scripted = [
+            _node_start("research", "n-a"),
+            _node_start("write", "n-b"),
+            {
+                "event": "on_chat_model_start",
+                "name": "ChatOpenAI",
+                "run_id": "m-a",
+                "parent_ids": ["n-a"],
+                "data": {},
+                "metadata": {"langgraph_node": "research", "checkpoint_id": "cp-1"},
+            },
+            {
+                "event": "on_chat_model_start",
+                "name": "ChatOpenAI",
+                "run_id": "m-b",
+                "parent_ids": ["n-b"],
+                "data": {},
+                "metadata": {"langgraph_node": "write", "checkpoint_id": "cp-1"},
+            },
+            _model_stream("A", run_id="m-a", parent="n-a", node="research"),
+            _model_stream("B", run_id="m-b", parent="n-b", node="write"),
+            # ``m-a`` and ``n-a`` end first, while ``n-b`` / ``m-b`` are
+            # still on the stack — naive close would raise
+            # ``RecorderInvariantError``.
+            {
+                "event": "on_chat_model_end",
+                "name": "ChatOpenAI",
+                "run_id": "m-a",
+                "parent_ids": ["n-a"],
+                "data": {"output": _MockAIMessageChunk(content="A")},
+                "metadata": {"langgraph_node": "research", "checkpoint_id": "cp-1"},
+            },
+            _node_end("research", "n-a"),
+            {
+                "event": "on_chat_model_end",
+                "name": "ChatOpenAI",
+                "run_id": "m-b",
+                "parent_ids": ["n-b"],
+                "data": {"output": _MockAIMessageChunk(content="B")},
+                "metadata": {"langgraph_node": "write", "checkpoint_id": "cp-1"},
+            },
+            _node_end("write", "n-b"),
+        ]
+        graph = _MockCompiledGraph(scripted)
+        bridge = LangGraphBridge(graph)
+
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), rec):
+            events.append(ev)
+
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        assert text == "AB"
+
+        records = journal.read()
+        names = [r.name for r in records]
+        # Agent + 2 nodes + 2 models all entered and exited — no raises.
+        assert names.count("unit_entered") == names.count("unit_exited") == 5
+
+    @pytest.mark.asyncio
     async def test_cancel_token_short_circuits(self):
         scripted = [_model_stream("suppressed", run_id="m")]
         graph = _MockCompiledGraph(scripted)

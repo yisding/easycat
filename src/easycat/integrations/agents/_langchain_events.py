@@ -194,6 +194,17 @@ def translate_stream_event(
         if chunk is None:
             return
         text = _chunk_text(chunk)
+        if text and state is not None and run_id:
+            # Track that this run actually streamed text so the
+            # ``on_chat_model_end`` fallback doesn't double-emit on top
+            # of the already-streamed tokens.  Tool-call-only chunks
+            # (no text content) don't count: a model that only yields
+            # tool calls and no text should still fall back to its
+            # ``on_chat_model_end`` AIMessage text, which is normally
+            # empty for pure tool calls anyway.
+            streamed = state.setdefault("chat_streamed_run_ids", set())
+            if isinstance(streamed, set):
+                streamed.add(run_id)
         if text:
             yield AgentBridgeEvent(kind="text_delta", text=text)
 
@@ -263,6 +274,24 @@ def translate_stream_event(
             streamed = state.setdefault("llm_streamed_run_ids", set())
             if isinstance(streamed, set):
                 streamed.add(run_id)
+        if text:
+            yield AgentBridgeEvent(kind="text_delta", text=text)
+
+    elif event_type == "on_chat_model_end":
+        # Non-streaming chat models (any chat model that doesn't override
+        # ``_stream`` / ``_astream``) only surface their AIMessage via
+        # ``on_chat_model_end`` — no ``on_chat_model_stream`` events fire
+        # and the parent chain's stream chunks carrying the same message
+        # are suppressed by ``chains_with_model_descendants``.  Without
+        # this handler the assistant's text is dropped entirely and the
+        # voice stays silent.  Skip runs that already streamed text so we
+        # don't double-emit on top of their stream chunks.
+        if state is not None and run_id:
+            streamed = state.get("chat_streamed_run_ids")
+            if isinstance(streamed, set) and run_id in streamed:
+                return
+        output = data.get("output") if isinstance(data, dict) else None
+        text = _chunk_text(output) if output is not None else ""
         if text:
             yield AgentBridgeEvent(kind="text_delta", text=text)
 
