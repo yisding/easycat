@@ -71,10 +71,13 @@ from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
+    from easycat.providers import STTProvider
     from easycat.session._audio_router import AudioRouter
     from easycat.session._cancel_orchestrator import CancelOrchestrator
     from easycat.session._stt_committer import STTCommitter
     from easycat.session._tts_scheduler import TTSScheduler
+    from easycat.session._types import Agent
+    from easycat.stages.stt import STTStage
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +100,11 @@ class TurnRunner:
         runtime_scope: RuntimeScope,
         timeout_config: TimeoutConfig,
         turn_handle: TurnHandle,
-        stt_stage: Any,
-        stt_provider: Callable[[], Any],
+        stt_stage: STTStage,
+        stt_provider: Callable[[], STTProvider],
         is_running: Callable[[], bool],
         is_gated: Callable[[], bool],
-        agent: Callable[[], Any],
+        agent: Callable[[], Agent],
         drain_session_actions: Callable[[], Awaitable[bool]],
         caller_id_system_message: Callable[[], str | None],
         stop: Callable[[], Awaitable[None]],

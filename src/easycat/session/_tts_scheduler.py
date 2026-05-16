@@ -141,6 +141,16 @@ class TTSScheduler:
         """
         return self._synth
 
+    def replace_outbound_queue(self, queue: BoundedAudioQueue) -> None:
+        """Point the underlying synthesizer at a rebuilt outbound queue.
+
+        Session.start() re-creates the queue after a prior teardown; this
+        keeps the producer side (the synthesizer) pointed at the same
+        instance the :class:`AudioRouter` drains, without Session reaching
+        into synthesizer internals.
+        """
+        self._synth.replace_outbound_queue(queue)
+
     # ── Payload preparation ────────────────────────────────────
 
     def prepare(self, text: str, *, is_streaming: bool, is_final: bool) -> TTSInput:

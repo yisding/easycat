@@ -1165,7 +1165,7 @@ class Session:
                     name=self._outbound_queue_name,
                     on_drop=self._on_queue_drop,
                 )
-                self._tts_scheduler.synthesizer._outbound_queue = self._outbound_queue
+                self._tts_scheduler.replace_outbound_queue(self._outbound_queue)
                 self._audio_router.replace_outbound_queue(self._outbound_queue)
 
             for name, provider in (

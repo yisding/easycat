@@ -60,6 +60,15 @@ class TTSSynthesizer:
         self._run_ctx_getter: Callable[[], Any] | None = None
         self._turn_getter: Callable[[], Any] | None = None
 
+    def replace_outbound_queue(self, queue: BoundedAudioQueue) -> None:
+        """Swap the outbound queue (used by Session.start when re-creating it).
+
+        Mirrors :meth:`AudioRouter.replace_outbound_queue`; both the
+        synthesizer (producer) and the router (drain) must point at the
+        same instance after Session rebuilds the queue post-teardown.
+        """
+        self._outbound_queue = queue
+
     def bind_stage(
         self,
         stage: Any,
