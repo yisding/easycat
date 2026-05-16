@@ -473,9 +473,19 @@ class LlamaAgentsBridge:
 
             if cancel_token is not None and cancel_token.is_cancelled:
                 cancelled = True
+                # The cancellation race in _aiter_with_cancellation drops the
+                # envelope that arrived alongside the barge-in, so the loop
+                # body above never advanced _remote_event_sequence for it even
+                # though event_stream.last_sequence has already moved past it.
+                # Refresh from last_sequence here so the next preserve_context
+                # turn resumes *after* the dropped interrupted delta instead
+                # of replaying it.
+                self._remote_event_sequence = getattr(
+                    event_stream, "last_sequence", self._remote_event_sequence
+                )
                 await self._cancel_remote_handler(handler_id)
-                # Keep _remote_handler_id and the event cursor. The handler
-                # is now terminal but stays persisted server-side
+                # Keep _remote_handler_id and the (now-advanced) event cursor.
+                # The handler is now terminal but stays persisted server-side
                 # (cancel_handler defaults to purge=False), so the next
                 # preserve_context turn continues from it via handler_id --
                 # exactly like a completed handler. This is the only

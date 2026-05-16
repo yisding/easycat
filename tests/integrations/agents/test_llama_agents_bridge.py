@@ -424,6 +424,38 @@ class _BlockingRemoteStream:
         self._never.set()
 
 
+class _AdvanceThenBlockStream:
+    """Delivers event 0, then advances ``last_sequence`` to 1 and blocks
+    *before* yielding event 1.
+
+    A barge-in during the block drops the undelivered event 1 even though
+    ``last_sequence`` has already moved past it -- mirroring the
+    ``_aiter_with_cancellation`` race where the loop body never runs for an
+    event whose sequence the stream already counted.
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.last_sequence = -1
+        self.first_delivered = asyncio.Event()
+        self._never = asyncio.Event()
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return self._iterate()
+
+    async def _iterate(self) -> AsyncIterator[Any]:
+        self.last_sequence = 0
+        yield _RemoteEnvelope(_TextEvent("first delta"))
+        self.first_delivered.set()
+        self.last_sequence = 1
+        await self._never.wait()
+        yield _RemoteEnvelope(_TextEvent("interrupted second delta"))
+
+    async def aclose(self) -> None:
+        self.closed = True
+        self._never.set()
+
+
 class _RemoteClient:
     def __init__(self) -> None:
         self.run_calls: list[dict[str, Any]] = []
@@ -573,6 +605,59 @@ class TestRemoteLlamaAgentsBridge:
         # handler's accumulating event log is not replayed.
         assert client.run_calls[1]["handler_id"] == "h1"
         assert client.stream_calls[1]["after_sequence"] == 0
+
+    @pytest.mark.asyncio
+    async def test_remote_cancellation_advances_cursor_past_dropped_event(
+        self, fake_workflows_modules
+    ):
+        """A barge-in that drops an event must still advance the cursor.
+
+        When the stream's ``last_sequence`` has already moved past an event
+        that the cancellation race never delivered to the loop body, the next
+        preserve_context turn must resume *after* that dropped interrupted
+        delta. Otherwise the stale cursor replays it as fresh speech.
+        """
+        first_stream = _AdvanceThenBlockStream()
+
+        class _CancelThenResumeClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> Any:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                if len(self.stream_calls) == 1:
+                    return first_stream
+                return _RemoteStream([_TextEvent("second turn"), _StopEvent("done")])
+
+        client = _CancelThenResumeClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+        token = CancelToken()
+        first_turn: list[Any] = []
+
+        async def _consume() -> None:
+            async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder(), token):
+                first_turn.append(event)
+
+        async def _cancel_when_blocked() -> None:
+            await first_stream.first_delivered.wait()
+            token.cancel()
+
+        await asyncio.wait_for(asyncio.gather(_consume(), _cancel_when_blocked()), timeout=2.0)
+
+        # Only the delivered event 0 was spoken; the undelivered event 1 was
+        # dropped by the cancellation race.
+        assert [e.text for e in first_turn if e.kind == "text_delta"] == ["first delta"]
+        assert client.cancelled == ["h1"]
+
+        second_turn: list[Any] = []
+        async for event in bridge.invoke(AgentTurnInput.from_text("again"), _recorder()):
+            second_turn.append(event)
+
+        # The cursor advanced to the stream's last_sequence (1) even though the
+        # loop body never ran for event 1, so the resumed handler streams from
+        # after the dropped delta instead of replaying it.
+        assert client.run_calls[1]["handler_id"] == "h1"
+        assert client.stream_calls[1]["after_sequence"] == 1
+        assert "interrupted second delta" not in [
+            e.text for e in second_turn if e.kind == "text_delta"
+        ]
 
     @pytest.mark.asyncio
     async def test_remote_failed_handler_status_raises(self, fake_workflows_modules):
