@@ -447,6 +447,16 @@ class _WebTransportSession:
         finally:
             self._outbound_audio_stream_id = None
 
+    def close_connection(self, *, reason: str = "") -> None:
+        """Send CONNECTION_CLOSE and tear down the QUIC connection.
+
+        ``QuicConnectionProtocol.close`` flushes the close frame itself.
+        """
+        try:
+            self._quic_protocol.close(error_code=0, reason_phrase=reason)
+        except Exception:
+            logger.debug("Error closing WebTransport QUIC connection", exc_info=True)
+
     async def _outbound_writer(self) -> None:
         try:
             while True:
@@ -690,6 +700,28 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
             pass
         self._on_close.set()
 
+    def force_close(self, *, reason: str = "") -> None:
+        """Actively terminate the QUIC connection, even before ``connect()``.
+
+        :meth:`disconnect` early-returns when ``_connected`` is False, so it
+        cannot tear down a session that was accepted at the HTTP/3 layer but
+        never handed to a handler (e.g. one rejected by the
+        ``max_concurrent_sessions`` cap).  This sends CONNECTION_CLOSE so the
+        over-cap connection is released immediately instead of lingering
+        until its idle timeout.  Safe to call regardless of connect state and
+        idempotent (the eventual ``connection_lost`` is a no-op once closed).
+        """
+        self._connected = False
+        self._client_connected.clear()
+        if self._session is not None:
+            self._session.close_connection(reason=reason)
+        self._enqueue_sentinel()
+        try:
+            self._out_queue.put_nowait(None)
+        except asyncio.QueueFull:
+            pass
+        self._on_close.set()
+
     async def send_audio(self, chunk: AudioChunk) -> bool:
         if not self._connected:
             return False
@@ -791,30 +823,35 @@ class WebTransportServer:
         self._handler_tasks: set[asyncio.Task[None]] = set()
         self._started = False
 
+    def _dispatch_session(self, transport: WebTransportConnectionTransport) -> None:
+        """Accept a new session or reject it when the concurrency cap is hit.
+
+        Invoked synchronously from the aioquic protocol when a CONNECT-
+        webtransport handshake completes.
+        """
+        if len(self._handler_tasks) >= self._config.max_concurrent_sessions:
+            logger.warning(
+                "Rejecting WebTransport session — %d concurrent cap reached",
+                self._config.max_concurrent_sessions,
+            )
+            # ``disconnect()`` is a no-op pre-``connect()`` (it early-returns
+            # on ``_connected is False``), so it would leave the over-cap
+            # connection alive until idle timeout.  Force a CONNECTION_CLOSE
+            # now so the cap is actually enforced.
+            transport.force_close(reason="session cap reached")
+            return
+        task = asyncio.create_task(self._run_handler(transport))
+        self._handler_tasks.add(task)
+        task.add_done_callback(self._handler_tasks.discard)
+
     async def start(self) -> None:
         if self._started:
             return
         quic_config = _build_quic_configuration(self._config.certfile, self._config.keyfile)
 
-        def _on_session(transport: WebTransportConnectionTransport) -> None:
-            if len(self._handler_tasks) >= self._config.max_concurrent_sessions:
-                logger.warning(
-                    "Rejecting WebTransport session — %d concurrent cap reached",
-                    self._config.max_concurrent_sessions,
-                )
-                # Close the half-built transport without ever invoking the
-                # user's handler.  ``disconnect`` enqueues sentinels and
-                # signals ``_on_close``; the connection is then GC'd when
-                # the QUIC peer drops, or when its own idle timeout fires.
-                asyncio.create_task(transport.disconnect())
-                return
-            task = asyncio.create_task(self._run_handler(transport))
-            self._handler_tasks.add(task)
-            task.add_done_callback(self._handler_tasks.discard)
-
         factory = _protocol_factory(
             accept_path=self._config.path,
-            on_session=_on_session,
+            on_session=self._dispatch_session,
             session_config=self._config,
         )
         aioquic_server = require_module(

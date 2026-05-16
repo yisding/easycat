@@ -112,9 +112,13 @@ class _FakeQuicProtocol:
     def __init__(self) -> None:
         self.transmit_calls = 0
         self._quic = _FakeQuicConnection()
+        self.close_calls: list[tuple[int, str]] = []
 
     def transmit(self) -> None:
         self.transmit_calls += 1
+
+    def close(self, error_code: int = 0, reason_phrase: str = "") -> None:
+        self.close_calls.append((error_code, reason_phrase))
 
 
 def _make_session(
@@ -430,6 +434,30 @@ class TestWebTransportConnectionTransport:
         result = await t.send_audio(AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K))
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_force_close_terminates_quic_before_connect(self) -> None:
+        """Regression: overflow rejection must actively close the QUIC
+        connection.  ``disconnect()`` early-returns pre-``connect()`` so it
+        cannot — ``force_close()`` must send CONNECTION_CLOSE regardless.
+        """
+        proto = _FakeQuicProtocol()
+        t = WebTransportConnectionTransport(
+            _h3=_FakeH3(),  # type: ignore[arg-type]
+            _quic_protocol=proto,  # type: ignore[arg-type]
+            _session_id=0,
+        )
+        # Never connected — disconnect() would be a no-op here.
+        await t.disconnect()
+        assert proto.close_calls == []
+
+        t.force_close(reason="session cap reached")
+        assert proto.close_calls == [(0, "session cap reached")]
+        # Sentinel enqueued so any consumer iterating receive_audio() exits.
+        chunks = []
+        async for c in t.receive_audio():
+            chunks.append(c)
+        assert chunks == []
+
 
 # ── WebTransportTransport conformance ─────────────────────────────
 
@@ -545,41 +573,45 @@ class TestWebTransportServerWiring:
         await asyncio.wait_for(server.stop(), timeout=1)
 
     @pytest.mark.asyncio
-    async def test_max_concurrent_sessions_rejects_overflow(self) -> None:
-        """Once ``max_concurrent_sessions`` handlers are active, additional
-        accepted sessions are disconnected without invoking the user handler.
+    async def test_max_concurrent_sessions_force_closes_overflow(self) -> None:
+        """The real dispatch path must accept up to the cap and **force-close**
+        the over-cap connection (regression: ``disconnect()`` was a no-op
+        pre-``connect()`` so the cap wasn't actually enforced).
         """
         cfg = WebTransportTransportConfig(
             certfile="cert.pem",
             keyfile="key.pem",
             max_concurrent_sessions=2,
         )
-        handler_calls: list[int] = []
+        handler_started = asyncio.Event()
 
         async def _handler(_t: WebTransportConnectionTransport) -> None:
-            handler_calls.append(1)
+            handler_started.set()
             await asyncio.sleep(10)  # hold the slot
 
         server = WebTransportServer(cfg, _handler)
-        # Pretend we're started, then drive _on_session directly with three
-        # synthetic transports.  We need to access the closure built inside
-        # start(), so re-derive the gate logic with the same condition.
-        server._started = True  # noqa: SLF001
-        # First two should accept and spawn a handler task.
-        for _ in range(2):
+
+        def _make_transport() -> tuple[WebTransportConnectionTransport, _FakeQuicProtocol]:
+            proto = _FakeQuicProtocol()
             t = WebTransportConnectionTransport(
                 _h3=_FakeH3(),  # type: ignore[arg-type]
-                _quic_protocol=_FakeQuicProtocol(),  # type: ignore[arg-type]
+                _quic_protocol=proto,  # type: ignore[arg-type]
                 _session_id=0,
             )
-            await t.connect()
-            assert len(server._handler_tasks) < cfg.max_concurrent_sessions  # noqa: SLF001
-            task = asyncio.create_task(_handler(t))
-            server._handler_tasks.add(task)  # noqa: SLF001
-        # Third should be rejected — assert the gate predicate matches.
-        assert len(server._handler_tasks) >= cfg.max_concurrent_sessions  # noqa: SLF001
+            return t, proto
 
-        # Cleanup
+        accepted = [_make_transport() for _ in range(2)]
+        for t, _proto in accepted:
+            server._dispatch_session(t)  # noqa: SLF001 — exercise the real path
+        await asyncio.sleep(0)
+        assert len(server._handler_tasks) == 2  # noqa: SLF001
+
+        # Third session is over the cap → force-closed, handler not invoked.
+        overflow, overflow_proto = _make_transport()
+        server._dispatch_session(overflow)  # noqa: SLF001
+        assert overflow_proto.close_calls == [(0, "session cap reached")]
+        assert len(server._handler_tasks) == 2  # noqa: SLF001 — unchanged
+
         for task in list(server._handler_tasks):  # noqa: SLF001
             task.cancel()
         await asyncio.gather(*server._handler_tasks, return_exceptions=True)  # noqa: SLF001
