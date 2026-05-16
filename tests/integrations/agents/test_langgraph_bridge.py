@@ -1083,3 +1083,151 @@ class TestLangGraphBridgeState:
         # The model started while both siblings were open is parented to
         # the sibling its parent_ids points at (write = node-n-b).
         assert entered["ChatOpenAI"]["parent_unit_id"] == "node-n-b"
+
+
+# ── Partial-turn preservation + reducer guard ────────────────────
+
+
+def _id_of(m: Any) -> Any:
+    return getattr(m, "id", None) or (m.get("id") if isinstance(m, dict) else None)
+
+
+def _content(m: Any) -> Any:
+    return m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
+
+
+class LastValue:
+    """Duck-types LangGraph's plain (no-reducer) ``LastValue`` channel.
+
+    Named exactly ``LastValue`` because the bridge positively
+    identifies a no-reducer channel by ``type(channel).__name__``.
+    """
+
+
+class _ReducerChannel:
+    """Duck-types an ``Annotated[list, add_messages]`` reducer channel."""
+
+    def __init__(self) -> None:
+        self.operator = lambda a, b: a + b
+
+
+class TestLangGraphBridgePartialTurnOnCancel:
+    """A turn cancelled mid-stream (timeout / barge-in ``aclose()``)
+    never lets its node return, so the partial assistant output the
+    caller already heard is missing from the checkpoint.  The bridge
+    must commit it so a follow-up ``apply_interruption()`` truncates
+    *this* turn rather than corrupting the previous one."""
+
+    @pytest.mark.asyncio
+    async def test_partial_committed_then_interruption_truncates_this_turn(self):
+        class _HangingGraph(_MockCompiledGraph):
+            def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+                async def _gen() -> AsyncIterator[dict[str, Any]]:
+                    yield _node_start("answer", "n1")
+                    yield _model_stream("partial reply", run_id="m1", parent="n1", node="answer")
+                    await asyncio.sleep(999)
+                    yield _node_end("answer", "n1")  # pragma: no cover
+
+                return _gen()
+
+        prior_ai = _MockMessage("assistant", "previous turn", message_id="prev")
+        graph = _HangingGraph(state=_MockState(values={"messages": [prior_ai]}))
+        bridge = LangGraphBridge(graph)
+        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=0.05))
+
+        with pytest.raises(AgentTimeoutError):
+            async for _ in runner.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+                pass
+
+        # Partial output landed in graph state as the new last AI message.
+        msgs = graph._state.values["messages"]
+        assert msgs[0] is prior_ai
+        assert _content(msgs[-1]) == "partial reply"
+        assert msgs[-1] is not prior_ai
+
+        # The interruption rewrite now targets *this* turn, not the
+        # previous one.
+        bridge.apply_interruption("partial reply", CancellationMode.IMMEDIATE_STOP)
+        msgs = graph._state.values["messages"]
+        assert _content(msgs[-1]) == "partial reply..."
+        assert _content(msgs[0]) == "previous turn"  # prior turn untouched
+
+    @pytest.mark.asyncio
+    async def test_no_partial_commit_when_nothing_streamed(self):
+        class _HangingGraph(_MockCompiledGraph):
+            def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+                async def _gen() -> AsyncIterator[dict[str, Any]]:
+                    yield _node_start("answer", "n1")
+                    await asyncio.sleep(999)
+                    yield _node_end("answer", "n1")  # pragma: no cover
+
+                return _gen()
+
+        graph = _HangingGraph(state=_MockState(values={"messages": []}))
+        bridge = LangGraphBridge(graph)
+        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=0.05))
+
+        with pytest.raises(AgentTimeoutError):
+            async for _ in runner.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+                pass
+
+        # Nothing streamed → no empty AI message injected.
+        assert graph._state.values["messages"] == []
+        assert graph.update_state_calls == []
+
+
+class TestLangGraphBridgeReducerGuard:
+    """``RemoveMessage`` purges and id-keyed rewrites only *merge* into
+    an ``add_messages`` reducer channel.  On a plain ``LastValue``
+    channel ``update_state`` *replaces* the whole list, so the
+    transient-context purge there would wipe the checkpointed
+    conversation — the bridge must skip the machinery."""
+
+    def test_messages_key_has_reducer_detection(self):
+        graph = _MockCompiledGraph()
+        bridge = LangGraphBridge(graph)
+        # No introspectable channels → assume reducer (preserve behaviour).
+        assert bridge._messages_key_has_reducer() is True
+
+        graph.channels = {"messages": _ReducerChannel()}
+        assert bridge._messages_key_has_reducer() is True
+
+        graph.channels = {"messages": LastValue()}
+        assert bridge._messages_key_has_reducer() is False
+
+    @pytest.mark.asyncio
+    async def test_plain_list_channel_skips_destructive_purge(self):
+        graph = _MockCompiledGraph([_node_start("p", "n1"), _node_end("p", "n1")])
+        graph.channels = {"messages": LastValue()}
+        graph._state.values["messages"] = [_MockMessage("assistant", "kept")]
+        bridge = LangGraphBridge(graph)
+        turn = AgentTurnInput.from_text(
+            "hi", context=[{"role": "system", "content": "Caller id: +1"}]
+        )
+        async for _ in bridge.invoke(turn, _recorder()):
+            pass
+
+        # No RemoveMessage update_state was issued (it would have
+        # replaced — wiped — the whole messages list).
+        assert graph.update_state_calls == []
+        assert [_content(m) for m in graph._state.values["messages"]] == ["kept"]
+        # Context was still forwarded for the turn, just untracked.
+        assert bridge._transient_context_ids == []
+
+    @pytest.mark.asyncio
+    async def test_reducer_channel_still_purges(self):
+        graph = _MockCompiledGraph([_node_start("p", "n1"), _node_end("p", "n1")])
+        graph.channels = {"messages": _ReducerChannel()}
+        bridge = LangGraphBridge(graph)
+        turn = AgentTurnInput.from_text(
+            "hi", context=[{"role": "system", "content": "Caller id: +1"}]
+        )
+        async for _ in bridge.invoke(turn, _recorder()):
+            pass
+
+        assert graph.update_state_calls
+        _cfg, values = graph.update_state_calls[-1]
+        # The forwarded context carried a tracked id; the purge issued a
+        # removal marker for it.
+        assert values["messages"]
+        assert all(_id_of(m) for m in values["messages"])

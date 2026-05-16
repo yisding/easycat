@@ -173,6 +173,33 @@ class LangGraphBridge:
     def _config(self) -> dict[str, Any]:
         return {"configurable": {"thread_id": self._thread_id}}
 
+    def _messages_key_has_reducer(self) -> bool:
+        """Whether the graph's messages channel uses a reducer.
+
+        The transient-context purge, the partial-turn commit and the
+        interruption rewrites all rely on ``add_messages`` semantics:
+        ``RemoveMessage`` markers and id-keyed re-sends only *merge*
+        into a reducer channel.  On a plain ``LastValue`` channel
+        (``messages: list`` with no ``Annotated[..., add_messages]``)
+        ``update_state`` *replaces* the whole list, so issuing those
+        markers there would wipe the checkpointed conversation.
+
+        ``Annotated[list, add_messages]`` compiles to a reducer channel
+        exposing ``.operator``; a plain key compiles to ``LastValue``.
+        When the channel can't be introspected (duck-typed test graphs,
+        older/newer LangGraph internals) assume a reducer so existing
+        ``add_messages`` behaviour is preserved — only a positively
+        identified ``LastValue`` channel disables the machinery.
+        """
+        key = self._messages_key or "messages"
+        channels = getattr(self._graph, "channels", None)
+        if not isinstance(channels, dict) or key not in channels:
+            return True
+        channel = channels[key]
+        if hasattr(channel, "operator"):
+            return True
+        return type(channel).__name__ != "LastValue"
+
     async def invoke(
         self,
         turn_input: AgentTurnInput,
@@ -314,6 +341,13 @@ class LangGraphBridge:
                 recorder.record_unit_exited(agent_cursor, reason="error")
             except Exception:
                 logger.debug("Failed to close agent cursor during cancel cleanup", exc_info=True)
+            # The cancelled node never returned, so its partial assistant
+            # output isn't in the checkpoint.  Commit it now (before the
+            # purge) so a follow-up ``apply_interruption()`` truncates
+            # *this* turn's AI message — without this the rewrite targets
+            # the previous turn's last AI message and barge-in corrupts
+            # prior conversation state.
+            self._commit_partial_assistant(accumulated)
             self._purge_transient_context()
             raise
 
@@ -495,6 +529,11 @@ class LangGraphBridge:
 
     def append_interruption_note(self, note: str) -> None:
         """Append an interruption note to graph history so the next turn sees it."""
+        # On a plain ``LastValue`` channel ``update_state`` would replace
+        # the whole messages list with just this note, dropping the
+        # conversation; only append when the channel accumulates.
+        if not self._messages_key_has_reducer():
+            return
         try:
             from langchain_core.messages import SystemMessage
 
@@ -539,11 +578,22 @@ class LangGraphBridge:
         # the later ``RemoveMessage`` removal possible.
         context_msgs = normalize_context_messages(context, own_history=True)
         self._transient_context_ids = []
+        # Only track ids for a later ``RemoveMessage`` purge when the
+        # channel actually accumulates via a reducer.  On a plain
+        # ``LastValue`` messages channel ``add_messages`` semantics don't
+        # apply (the graph manages/overwrites its own list and nothing
+        # leaks forward), and a ``RemoveMessage`` purge there would
+        # *replace* — wipe — the whole conversation.  Still forward the
+        # per-turn context for this turn, just untracked.
+        track = self._messages_key_has_reducer()
         messages: list[Any] = []
         for item in context_msgs:
-            msg_id = f"easycat-ctx-{uuid4().hex}"
-            self._transient_context_ids.append(msg_id)
-            messages.append({"role": item["role"], "content": item["content"], "id": msg_id})
+            msg: dict[str, Any] = {"role": item["role"], "content": item["content"]}
+            if track:
+                msg_id = f"easycat-ctx-{uuid4().hex}"
+                self._transient_context_ids.append(msg_id)
+                msg["id"] = msg_id
+            messages.append(msg)
         messages.append(("user", text))
         return {self._messages_key: messages}
 
@@ -562,6 +612,13 @@ class LangGraphBridge:
         if not ids:
             return
         self._transient_context_ids = []
+        # Belt-and-suspenders: ids are only assigned when the channel has
+        # a reducer (see :meth:`_build_input`), but never issue a bare
+        # ``RemoveMessage`` list against a plain ``LastValue`` channel —
+        # ``update_state`` would replace the whole messages list with the
+        # markers and lose the checkpointed conversation.
+        if not self._messages_key_has_reducer():
+            return
         try:
             from langchain_core.messages import RemoveMessage
 
@@ -576,6 +633,37 @@ class LangGraphBridge:
             self._graph.update_state(self._config(), {self._messages_key or "messages": removals})
         except Exception:
             logger.debug("Failed to purge transient context from LangGraph", exc_info=True)
+
+    def _commit_partial_assistant(self, text: str) -> None:
+        """Append the cancelled turn's partial assistant text to state.
+
+        A turn cancelled mid-stream never let its node return, so the
+        partial output the caller already heard isn't in the checkpoint.
+        Writing it as an ``AIMessage`` (with a stable id so the
+        ``add_messages`` reducer dedupe-replaces it) makes it the last AI
+        message, so a follow-up :meth:`apply_interruption` truncates
+        *this* turn rather than rewriting the previous turn's reply.
+
+        Skipped on a plain ``LastValue`` channel — ``update_state`` there
+        replaces the whole list, which would drop prior turns; and
+        best-effort, so a transient checkpointer error can't mask the
+        cancellation being propagated.
+        """
+        if not text:
+            return
+        if not self._messages_key_has_reducer():
+            return
+        msg_id = f"easycat-partial-{uuid4().hex}"
+        try:
+            from langchain_core.messages import AIMessage
+
+            msg: Any = AIMessage(content=text, id=msg_id)
+        except ImportError:
+            msg = {"role": "assistant", "content": text, "id": msg_id}
+        try:
+            self._graph.update_state(self._config(), {self._messages_key or "messages": [msg]})
+        except Exception:
+            logger.debug("Failed to commit partial LangGraph turn on cancel", exc_info=True)
 
     def _extract_graph_stream_chunk(self, event: dict[str, Any]) -> tuple[str, Any] | None:
         """Return ``(mode_name, payload)`` when ``event`` carries a graph-level
@@ -895,7 +983,14 @@ class LangGraphBridge:
         field replaces it in place instead of appending.  If no AI
         message exists yet (e.g. the graph hasn't produced one), this
         is a no-op.
+
+        Skipped on a plain ``LastValue`` channel: re-sending ``[msg]``
+        there would *replace* the whole messages list (dropping every
+        other turn) instead of dedupe-replacing by id.
         """
+        if not self._messages_key_has_reducer():
+            logger.debug("rewrite_last_ai: messages channel has no reducer; skipping")
+            return
         try:
             state = self._graph.get_state(self._config())
         except Exception:

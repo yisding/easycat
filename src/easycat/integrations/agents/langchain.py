@@ -147,6 +147,12 @@ class LangChainBridge:
         self._fallback_session_id = f"easycat-{uuid4().hex}"
         self._message_history: list[Any] = []
         self._last_output: Any = None
+        # The ``configurable.session_id`` resolved on the first turn.
+        # ``RunnableWithMessageHistory`` keys its own message store by
+        # this id; cached so post-hoc history edits can be mirrored into
+        # that store (see :meth:`_history_store`) even though
+        # ``replace_last_assistant_text`` / ``reset`` get no recorder.
+        self._resolved_session_id: str | None = None
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 
@@ -178,6 +184,9 @@ class LangChainBridge:
         configurable = dict(config.get("configurable") or {})
         configurable.setdefault("session_id", resolved)
         config["configurable"] = configurable
+        # Remember the id the wrapped history runnable (if any) stores
+        # under, so later shadow-list edits can be mirrored into it.
+        self._resolved_session_id = configurable.get("session_id")
         return config
 
     async def invoke(
@@ -290,6 +299,18 @@ class LangChainBridge:
                 recorder.record_unit_exited(agent_cursor, reason="error")
             except Exception:
                 logger.debug("Failed to close agent cursor during cancel cleanup", exc_info=True)
+            # The normal completion path below records this turn into
+            # history; a mid-stream cancel (timeout / barge-in aclose())
+            # skips it.  Persist the partial turn here — mirroring the
+            # OpenAI/PydanticAI bridges, which keep partial output on
+            # cancellation — so a follow-up ``apply_interruption()``
+            # truncates *this* turn's assistant message instead of
+            # rewriting the previous turn's (or no-opping on turn one),
+            # which would corrupt/lose conversation history on barge-in.
+            try:
+                self._append_to_history(turn_input.text, accumulated)
+            except Exception:
+                logger.debug("Failed to preserve partial LangChain turn on cancel", exc_info=True)
             raise
 
         for cursor in reversed(list(open_cursors.values())):
@@ -391,6 +412,12 @@ class LangChainBridge:
     def reset(self) -> None:
         self._message_history.clear()
         self._last_output = None
+        store = self._history_store()
+        if store is not None:
+            try:
+                store.clear()
+            except Exception:
+                logger.debug("Failed to clear wrapped history store on reset", exc_info=True)
 
     # ── History post-processing ───────────────────────────────────
 
@@ -408,11 +435,27 @@ class LangChainBridge:
         try:
             from langchain_core.messages import SystemMessage
 
-            self._message_history.append(SystemMessage(content=note))
+            new_msg: Any = SystemMessage(content=note)
+            self._message_history.append(new_msg)
         except ImportError:
-            self._message_history.append({"role": "system", "content": note})
+            new_msg = {"role": "system", "content": note}
+            self._message_history.append(new_msg)
         except Exception:
             logger.debug("Failed to append interruption note to LangChain history", exc_info=True)
+            return
+        # ``RunnableWithMessageHistory`` rebuilds the prompt from its own
+        # session store and overwrites the bridge's ``history`` key, so
+        # the shadow-list append above is invisible to the next turn
+        # unless the note is also added to that store.
+        store = self._history_store()
+        if store is not None:
+            try:
+                store.add_message(new_msg)
+            except Exception:
+                logger.debug(
+                    "Failed to mirror interruption note into wrapped history store",
+                    exc_info=True,
+                )
 
     # ── Internal ─────────────────────────────────────────────────
 
@@ -472,25 +515,58 @@ class LangChainBridge:
                 self._message_history.append({"role": "assistant", "content": assistant_text})
 
     def _rewrite_last_ai_content(self, replacement: str) -> None:
-        for i in range(len(self._message_history) - 1, -1, -1):
-            msg = self._message_history[i]
-            role = _role_of(msg)
-            if role != "assistant":
-                continue
-            content = _content_of(msg)
-            if isinstance(content, list):
-                text_parts = [
-                    p for p in content if isinstance(p, dict) and p.get("type") == "text"
-                ]
-                if text_parts:
-                    originals = [str(p.get("text", "")) for p in text_parts]
-                    splits = split_replacement_by_original_parts(originals, replacement)
-                    for part, repl in zip(text_parts, splits):
-                        part["text"] = repl
-                    return
-            # Plain string or empty content — overwrite.
-            _set_content(msg, replacement)
+        _rewrite_last_ai_in(self._message_history, replacement)
+        # ``RunnableWithMessageHistory`` ignores the shadow list above —
+        # it reloads the prompt's history from its own per-session store
+        # and overwrites the bridge's ``history`` key.  Markdown cleanup
+        # and interruption truncation both flow through here, so mirror
+        # the rewrite into that store or later turns keep conditioning on
+        # the raw / un-truncated assistant text.
+        store = self._history_store()
+        if store is None:
             return
+        try:
+            msgs = getattr(store, "messages", None)
+            if isinstance(msgs, list):
+                _rewrite_last_ai_in(msgs, replacement)
+        except Exception:
+            logger.debug("Failed to mirror rewrite into wrapped history store", exc_info=True)
+
+    def _history_store(self) -> Any | None:
+        """Best-effort underlying chat-message store for a
+        ``RunnableWithMessageHistory``-wrapped runnable, else ``None``.
+
+        Such a runnable rebuilds the prompt history from this
+        per-session store every turn (it overwrites the bridge's
+        ``history`` key), so post-hoc shadow-list edits are invisible to
+        the next turn unless mirrored here.  Plain runnables expose no
+        ``get_session_history`` and take the shadow-list-only path.
+        Entirely defensive: any failure (no wrapper, custom multi-field
+        ``history_factory_config``, store backend error) yields ``None``
+        so plain-runnable behaviour is never regressed.
+        """
+        factory = getattr(self._runnable, "get_session_history", None)
+        sid = self._resolved_session_id
+        if not callable(factory) or sid is None:
+            return None
+        try:
+            return factory(sid)
+        except TypeError:
+            # Custom ``history_factory_config`` expecting keyword args.
+            specs = getattr(self._runnable, "history_factory_config", None) or []
+            try:
+                ids = [getattr(s, "id", None) for s in specs]
+            except TypeError:
+                return None
+            if ids == ["session_id"]:
+                try:
+                    return factory(session_id=sid)
+                except Exception:
+                    return None
+            return None
+        except Exception:
+            logger.debug("Failed to resolve wrapped history store", exc_info=True)
+            return None
 
     def _serialize_framework_state(self) -> bytes:
         try:
@@ -584,6 +660,32 @@ def _close_top_ended_cursors(
         cursor = open_cursors.pop(last_run_id)
         ended_runs.discard(last_run_id)
         recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+
+
+def _rewrite_last_ai_in(messages: list[Any], replacement: str) -> None:
+    """Rewrite the last assistant message in ``messages`` in place.
+
+    Shared by the bridge's shadow history and a wrapped
+    ``RunnableWithMessageHistory`` store so both stay consistent after
+    markdown cleanup / interruption truncation.  List-content messages
+    have their text parts re-split; plain/empty content is overwritten.
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if _role_of(msg) != "assistant":
+            continue
+        content = _content_of(msg)
+        if isinstance(content, list):
+            text_parts = [p for p in content if isinstance(p, dict) and p.get("type") == "text"]
+            if text_parts:
+                originals = [str(p.get("text", "")) for p in text_parts]
+                splits = split_replacement_by_original_parts(originals, replacement)
+                for part, repl in zip(text_parts, splits):
+                    part["text"] = repl
+                return
+        # Plain string or empty content — overwrite.
+        _set_content(msg, replacement)
+        return
 
 
 def _role_of(msg: Any) -> str:

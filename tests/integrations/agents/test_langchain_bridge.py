@@ -1850,3 +1850,167 @@ class TestLangChainBridgeStreamConfig:
             pass
         second = runnable.invoked_with[1]["config"]["configurable"]["session_id"]
         assert first and first == second
+
+
+# ── Partial-turn preservation on cancellation ────────────────────
+
+
+class TestLangChainBridgePartialTurnOnCancel:
+    """A turn cancelled mid-stream (AgentRunner timeout / barge-in
+    ``aclose()``) lands in the ``BaseException`` cleanup path, which is
+    skipped by the normal history-recording code below it.  The bridge
+    must persist the partial turn there so a follow-up
+    ``apply_interruption()`` truncates *this* turn — not the previous
+    turn's assistant message (or a no-op on turn one)."""
+
+    @pytest.mark.asyncio
+    async def test_partial_preserved_and_interruption_truncates_this_turn(self):
+        class _HangingRunnable:
+            async def astream_events(
+                self, input: Any, **kwargs: Any
+            ) -> AsyncIterator[dict[str, Any]]:
+                yield {
+                    "event": "on_chat_model_start",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": [],
+                    "data": {},
+                }
+                yield {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": [],
+                    "data": {"chunk": _MockAIMessageChunk(content="Hello world")},
+                }
+                await asyncio.sleep(999)
+
+            async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
+
+        bridge = LangChainBridge(_HangingRunnable())
+        # A prior, completed turn already in history.
+        bridge._message_history = [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+        ]
+        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=0.05))
+
+        with pytest.raises(AgentTimeoutError):
+            async for _ in runner.invoke(AgentTurnInput.from_text("q2"), _recorder()):
+                pass
+
+        # The partial turn was recorded (not lost on cancel).
+        assert _content_of_history_item(bridge._message_history[-2]) == "q2"
+        assert _content_of_history_item(bridge._message_history[-1]) == "Hello world"
+
+        # Interruption truncates *this* turn; the prior turn is untouched.
+        bridge.apply_interruption("Hello world", CancellationMode.IMMEDIATE_STOP)
+        assert _content_of_history_item(bridge._message_history[-1]) == "Hello world..."
+        assert _content_of_history_item(bridge._message_history[1]) == "a1"
+
+
+# ── RunnableWithMessageHistory store sync ────────────────────────
+
+
+class _InMemoryStore:
+    def __init__(self) -> None:
+        self.messages: list[Any] = []
+
+    def add_message(self, m: Any) -> None:
+        self.messages.append(m)
+
+    def add_messages(self, ms: list[Any]) -> None:
+        self.messages.extend(ms)
+
+    def clear(self) -> None:
+        self.messages.clear()
+
+
+class _FakeHistoryRunnable:
+    """Duck-types ``RunnableWithMessageHistory``: each turn persists the
+    user input + model output into a per-session store and (the real
+    wrapper) rebuilds the prompt history from it, *overwriting* the
+    bridge's ``history`` key.  So shadow-list-only edits are invisible
+    to the next turn unless mirrored into this store."""
+
+    def __init__(self, reply: str) -> None:
+        self._reply = reply
+        self.history_factory_config: list[Any] = []
+        self._stores: dict[str, _InMemoryStore] = {}
+
+    def get_session_history(self, session_id: str) -> _InMemoryStore:
+        return self._stores.setdefault(session_id, _InMemoryStore())
+
+    async def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        sid = kwargs["config"]["configurable"]["session_id"]
+        store = self.get_session_history(sid)
+        store.add_message({"role": "user", "content": "q"})
+        yield {
+            "event": "on_chat_model_stream",
+            "name": "ChatOpenAI",
+            "run_id": "m",
+            "parent_ids": [],
+            "data": {"chunk": _MockAIMessageChunk(content=self._reply)},
+        }
+        store.add_message({"role": "assistant", "content": self._reply})
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class TestLangChainBridgeHistoryStoreSync:
+    async def _bridge_after_turn(self, reply: str = "raw reply") -> tuple[Any, Any]:
+        runnable = _FakeHistoryRunnable(reply)
+        bridge = LangChainBridge(runnable)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            pass
+        store = runnable.get_session_history("s1")  # _recorder() → session_id="s1"
+        return bridge, store
+
+    @pytest.mark.asyncio
+    async def test_markdown_cleanup_mirrored_into_store(self):
+        bridge, store = await self._bridge_after_turn()
+        bridge.replace_last_assistant_text("cleaned reply")
+        assert _content_of_history_item(store.messages[-1]) == "cleaned reply"
+
+    @pytest.mark.asyncio
+    async def test_interruption_truncation_mirrored_into_store(self):
+        bridge, store = await self._bridge_after_turn()
+        bridge.apply_interruption("raw", CancellationMode.IMMEDIATE_STOP)
+        assert _content_of_history_item(store.messages[-1]) == "raw..."
+
+    @pytest.mark.asyncio
+    async def test_interruption_note_mirrored_into_store(self):
+        bridge, store = await self._bridge_after_turn()
+        bridge.append_interruption_note("[user interrupted]")
+        last = store.messages[-1]
+        assert _content_of_history_item(last) == "[user interrupted]"
+        role = last.get("role") if isinstance(last, dict) else getattr(last, "type", None)
+        assert role in ("system",)
+
+    @pytest.mark.asyncio
+    async def test_reset_clears_store(self):
+        bridge, store = await self._bridge_after_turn()
+        assert store.messages  # populated by the turn
+        bridge.reset()
+        assert store.messages == []
+
+    @pytest.mark.asyncio
+    async def test_plain_runnable_has_no_store_and_is_unaffected(self):
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": [],
+                    "data": {"chunk": _MockAIMessageChunk(content="hi")},
+                }
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("x"), _recorder()):
+            pass
+        assert bridge._history_store() is None
+        # Post-hoc edits still work on the shadow list.
+        bridge.replace_last_assistant_text("clean")
+        assert _content_of_history_item(bridge._message_history[-1]) == "clean"
