@@ -825,6 +825,92 @@ class TestRemoteLlamaAgentsBridge:
         assert [e.text for e in events if e.kind == "text_delta"] == []
         assert [e.text for e in events if e.kind == "done"] == [""]
 
+    @pytest.mark.asyncio
+    async def test_remote_opaque_input_required_subclass_is_hitl_pause(
+        self, fake_workflows_modules
+    ):
+        """A server-only InputRequiredEvent subclass envelope must pause.
+
+        ``load_event()`` fails (the subclass isn't importable client-side) so
+        the bridge keeps the envelope; its ``type`` is the subclass name but
+        ``types`` advertises InputRequiredEvent. The bridge must still treat
+        it as a HITL prompt and send the next user turn back as a
+        HumanResponseEvent instead of starting a fresh workflow run.
+        """
+
+        class _OpaqueInputEnvelope:
+            type = "acme.CustomInputRequiredEvent"
+            types = ["workflows.events.InputRequiredEvent", "workflows.events.Event"]
+            value = {"prefix": "Remote subclass prompt"}
+            qualified_name = "acme.CustomInputRequiredEvent"
+
+            def load_event(self) -> Any:
+                raise RuntimeError("CustomInputRequiredEvent not importable on client")
+
+        class _OpaqueInputClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> Any:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                if len(self.stream_calls) == 1:
+                    return _RawStream([_OpaqueInputEnvelope()])
+                return _RemoteStream(
+                    [_TextEvent("Remote "), _TextEvent("done"), _StopEvent("done")]
+                )
+
+        client = _OpaqueInputClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        first_turn = []
+        async for event in bridge.invoke(AgentTurnInput.from_text("start"), _recorder()):
+            first_turn.append(event)
+
+        assert [e.text for e in first_turn if e.kind == "text_delta"] == ["Remote subclass prompt"]
+        # The prompt paused the run; no new workflow was started for it.
+        assert len(client.run_calls) == 1
+
+        second_turn = []
+        async for event in bridge.invoke(AgentTurnInput.from_text("Ada"), _recorder()):
+            second_turn.append(event)
+
+        # The pause resumed the same handler with a HumanResponseEvent
+        # instead of running the workflow again.
+        assert len(client.run_calls) == 1
+        assert client.sent_events[-1][0] == "h1"
+        assert client.sent_events[-1][1].response == "Ada"
+        assert [e.text for e in second_turn if e.kind == "done"] == ["Remote done"]
+
+    @pytest.mark.asyncio
+    async def test_remote_result_envelope_unwrapped_for_structured_output(
+        self, fake_workflows_modules
+    ):
+        """structured_output must be StopEvent.result, not the envelope.
+
+        The real WorkflowClient stores the final StopEvent wrapped in an
+        EventEnvelope; local mode exposes the StopEvent's raw ``result``.
+        Remote mode must match by unwrapping the envelope rather than
+        leaking serialization metadata into structured_output.
+        """
+
+        class _StructuredClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> _RemoteStream:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                return _RemoteStream([_StopEvent("ignored")])
+
+            async def get_handler(self, handler_id: str) -> _HandlerData:
+                envelope = _RemoteEnvelope(_StopEvent(result={"score": 0.9}))
+                return _HandlerData(handler_id, result=envelope)
+
+        client = _StructuredClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        done = [
+            event
+            async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())
+            if event.kind == "done"
+        ]
+
+        assert len(done) == 1
+        assert done[0].structured_output == {"score": 0.9}
+
 
 class TestAutoAdapt:
     def test_auto_adapt_llama_workflow(self, fake_workflows_modules):

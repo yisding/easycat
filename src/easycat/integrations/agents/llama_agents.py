@@ -546,7 +546,7 @@ class LlamaAgentsBridge:
         # is a no-op there and continuity rides on handler_id reuse. It only
         # populates with clients/fakes that do expose a context.
         self._remote_context = getattr(result_data, "context", self._remote_context)
-        self._last_output = getattr(result_data, "result", None)
+        self._last_output = _unwrap_remote_result(getattr(result_data, "result", None))
         if not self._preserve_context:
             # With preserve_context the handler (and its event log) survives
             # into the next turn, so keep the cursor to avoid replaying this
@@ -829,7 +829,14 @@ def _is_input_required_event(event: Any) -> bool:
         return True
     event_type = getattr(event, "type", None)
     if isinstance(event_type, str):
-        return event_type.rsplit(".", 1)[-1] == "InputRequiredEvent"
+        if event_type.rsplit(".", 1)[-1] == "InputRequiredEvent":
+            return True
+        # A remote envelope wrapping a server-only InputRequiredEvent
+        # subclass keeps ``type`` set to the subclass name (which won't
+        # match above) but lists the serializable base classes in
+        # ``types``; fall through to that check so the HITL prompt is still
+        # recognised and the next user turn is sent back as a
+        # HumanResponseEvent instead of being treated as plain text.
     types = getattr(event, "types", None)
     if isinstance(types, list):
         return "InputRequiredEvent" in {str(t).rsplit(".", 1)[-1] for t in types}
@@ -920,6 +927,26 @@ def _unwrap_remote_envelope(value: Any) -> Any:
         logger.debug("Failed to load LlamaAgents remote result event", exc_info=True)
         return value
     return loaded if loaded is not None else value
+
+
+def _unwrap_remote_result(value: Any) -> Any:
+    """Resolve a remote ``HandlerData.result`` to the workflow's return value.
+
+    The real ``WorkflowClient`` stores the final event wrapped in an
+    ``EventEnvelopeWithMetadata``; for a normal completion that inner event is
+    the ``StopEvent``. Local mode instead exposes ``StopEvent.result`` (the
+    value the workflow returned) by awaiting the handler. Unwrap the envelope
+    and, when the inner event is a ``StopEvent``, return its ``result`` so
+    remote ``structured_output`` matches local mode rather than leaking
+    serialization metadata. Clients/fakes that already store the raw value
+    (no ``load_event``) pass through unchanged.
+    """
+    if value is None:
+        return None
+    unwrapped = _unwrap_remote_envelope(value)
+    if _is_stop_event(unwrapped):
+        return getattr(unwrapped, "result", unwrapped)
+    return unwrapped
 
 
 def _extract_output_text(result: Any) -> str:
