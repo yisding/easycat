@@ -161,6 +161,27 @@ class LangGraphBridge:
         # turns aren't re-recorded — without an extra ``get_state``
         # round-trip to the checkpointer at turn start.
         self._last_checkpoint_id: str | None = None
+        # Resuming an existing thread: the checkpointer may already hold
+        # an arbitrarily long history.  Seed the trail baseline from the
+        # thread's current checkpoint *now* (one-time, at construction)
+        # so the first turn's ``_record_checkpoint_trail`` walk stops at
+        # the already-persisted history instead of re-recording every
+        # prior checkpoint as if this turn created it (O(total history)
+        # work + duplicate snapshots on a persistent checkpointer).
+        # Best-effort: a transient/missing-thread checkpointer error just
+        # leaves the baseline ``None`` (degrades to the pre-fix
+        # behaviour, not a hard failure).  Skipped for a fresh thread
+        # (no ``thread_id``) — there is no prior history, so ``None`` is
+        # already correct and the round-trip would be wasted.
+        if thread_id is not None:
+            try:
+                existing_state = self._graph.get_state(self._config())
+                self._last_checkpoint_id = _get_checkpoint_id(existing_state)
+            except Exception:
+                logger.debug(
+                    "Failed to seed checkpoint baseline for resumed thread",
+                    exc_info=True,
+                )
         # Message ids of the transient per-turn context (caller-id /
         # system-prefix) injected for the *current* turn.  Tracked so it
         # can be deleted from checkpointed graph state once the turn
@@ -289,6 +310,18 @@ class LangGraphBridge:
                         mode=CancellationMode.IMMEDIATE_STOP,
                         reason="cancel_token_set",
                     )
+                    # A cancel token set mid-stream (barge-in) breaks out
+                    # through the *normal* completion path below, not the
+                    # ``BaseException`` cleanup — so the cancelled node's
+                    # partial assistant text the caller already heard would
+                    # never be written to the checkpoint.  Commit it now
+                    # (before the post-loop transient-context purge and
+                    # checkpoint-trail walk, mirroring the BaseException
+                    # path) so a follow-up ``apply_interruption()``
+                    # truncates *this* turn's AI message instead of
+                    # rewriting the previous turn's and corrupting prior
+                    # LangGraph conversation state.
+                    self._commit_partial_assistant(accumulated)
                     break
 
                 graph_chunk = self._extract_graph_stream_chunk(event)

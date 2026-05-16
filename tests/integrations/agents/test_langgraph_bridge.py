@@ -1329,3 +1329,117 @@ class TestLangGraphBridgeReducerGuard:
         # removal marker for it.
         assert values["messages"]
         assert all(_id_of(m) for m in values["messages"])
+
+
+# ── Partial commit on cancel-token break ─────────────────────────
+
+
+class _CancelAfter:
+    """Cancel-token double whose ``is_cancelled`` returns ``False`` for
+    the first ``n`` checks, then ``True`` — deterministically simulating
+    a barge-in tripped *after* some text has already streamed (the real
+    ``CancelToken`` would set its event asynchronously)."""
+
+    def __init__(self, n: int) -> None:
+        self._remaining = n
+
+    @property
+    def is_cancelled(self) -> bool:
+        if self._remaining > 0:
+            self._remaining -= 1
+            return False
+        return True
+
+
+class TestLangGraphBridgePartialCommitOnCancelToken:
+    """A cancel token tripped mid-stream breaks out through the *normal*
+    completion path (not the ``BaseException`` cleanup), so the partial
+    assistant text must still be committed to the checkpoint there — or a
+    follow-up ``apply_interruption()`` rewrites the *previous* turn's AI
+    message and corrupts prior LangGraph conversation state."""
+
+    @pytest.mark.asyncio
+    async def test_partial_committed_so_interruption_targets_this_turn(self):
+        prior_ai = _MockMessage("assistant", "prior reply", message_id="m-prev")
+        state = _MockState(values={"messages": [_MockMessage("user", "q1"), prior_ai]})
+        scripted = [
+            _model_stream("Hello partial", run_id="m"),
+            _model_stream(" suppressed", run_id="m"),
+        ]
+        graph = _MockCompiledGraph(scripted, state=state)
+        bridge = LangGraphBridge(graph)
+
+        token = _CancelAfter(1)  # trips on the 2nd loop check
+        async for _ in bridge.invoke(
+            AgentTurnInput.from_text("q2"), _recorder(), cancel_token=token
+        ):
+            pass
+
+        # The partial assistant text the caller heard was committed as
+        # the new last AI message (not lost on the cancel-token break).
+        msgs = graph._state.values["messages"]
+        assert _content(msgs[-1]) == "Hello partial"
+
+        # apply_interruption() therefore truncates *this* turn; the
+        # previous turn's AI message stays intact.
+        bridge.apply_interruption("Hello partial", CancellationMode.IMMEDIATE_STOP)
+        assert _content(graph._state.values["messages"][-1]) == "Hello partial..."
+        assert _content(prior_ai) == "prior reply"
+
+
+# ── Resume-thread checkpoint baseline ────────────────────────────
+
+
+class TestLangGraphBridgeResumeBaseline:
+    """Constructing with an explicit ``thread_id`` resumes an existing
+    thread whose checkpointer may already hold a long history.  The
+    trail baseline must be seeded from the thread's current checkpoint at
+    construction so the first turn records only its *own* new checkpoints
+    instead of re-walking (and duplicating) the entire persisted
+    history."""
+
+    def test_fresh_thread_has_no_seeded_baseline(self):
+        graph = _MockCompiledGraph([], state=_MockState(checkpoint_id="cp-1"))
+        bridge = LangGraphBridge(graph)
+        assert bridge._last_checkpoint_id is None
+
+    def test_resumed_thread_seeds_baseline_at_construction(self):
+        graph = _MockCompiledGraph([], state=_MockState(checkpoint_id="cp-prev"))
+        bridge = LangGraphBridge(graph, thread_id="existing-thread")
+        assert bridge._last_checkpoint_id == "cp-prev"
+
+    def test_resume_seed_failure_degrades_to_none(self):
+        class _NoStateGraph(_MockCompiledGraph):
+            def get_state(self, config: dict[str, Any]) -> _MockState:
+                raise RuntimeError("transient checkpointer error")
+
+        bridge = LangGraphBridge(_NoStateGraph([]), thread_id="existing-thread")
+        assert bridge._last_checkpoint_id is None
+
+    @pytest.mark.asyncio
+    async def test_seeded_baseline_excludes_preexisting_history(self):
+        graph = _MockCompiledGraph(
+            [_node_start("p", "n1"), _node_end("p", "n1")],
+            state=_MockState(checkpoint_id="cp-prev"),
+            state_history=[
+                _MockState(checkpoint_id="cp-prev"),
+                _MockState(checkpoint_id="cp-old"),
+            ],
+        )
+        bridge = LangGraphBridge(graph, thread_id="existing-thread")
+        assert bridge._last_checkpoint_id == "cp-prev"
+
+        # First turn produces cp-new; only it is recorded — cp-prev /
+        # cp-old already existed on the resumed thread and must not be
+        # re-recorded as if this turn created them.
+        graph._state = _MockState(checkpoint_id="cp-new")
+        graph.state_history = [
+            _MockState(checkpoint_id="cp-new"),
+            _MockState(checkpoint_id="cp-prev"),
+            _MockState(checkpoint_id="cp-old"),
+        ]
+        j = InMemoryRingBuffer(capacity=1000)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("x"), _recorder(j)):
+            pass
+        refs = [r.data["state_ref"] for r in j.read() if r.name == "state_snapshot"]
+        assert refs == ["langgraph:cp-new"]
