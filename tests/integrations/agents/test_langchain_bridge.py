@@ -2112,6 +2112,95 @@ class TestLangChainBridgeHistoryStoreSync:
         assert _content_of_history_item(store.messages[1]) == "a1"
 
 
+# ── Copy-returning backing store persistence ─────────────────────
+
+
+class _CopyReturningStore:
+    """Duck-types a backend-backed ``BaseChatMessageHistory`` (SQL /
+    Redis / file): ``.messages`` rebuilds a *fresh copy* (new list, new
+    dict objects) from the backend on every access, so an in-place edit
+    of the returned list never reaches the backend.  Only ``clear()`` +
+    ``add_messages()`` mutate the backend."""
+
+    def __init__(self) -> None:
+        self._backend: list[Any] = []
+
+    @property
+    def messages(self) -> list[Any]:
+        return [dict(m) if isinstance(m, dict) else m for m in self._backend]
+
+    def add_message(self, m: Any) -> None:
+        self._backend.append(dict(m) if isinstance(m, dict) else m)
+
+    def add_messages(self, ms: list[Any]) -> None:
+        for m in ms:
+            self.add_message(m)
+
+    def clear(self) -> None:
+        self._backend.clear()
+
+
+class _CopyStoreHistoryRunnable:
+    """``RunnableWithMessageHistory`` double whose backing store returns
+    a fetched copy from ``.messages`` (mirrors real DB-backed stores)."""
+
+    def __init__(self, reply: str) -> None:
+        self._reply = reply
+        self.history_factory_config: list[Any] = []
+        self._stores: dict[str, _CopyReturningStore] = {}
+
+    def get_session_history(self, session_id: str) -> _CopyReturningStore:
+        return self._stores.setdefault(session_id, _CopyReturningStore())
+
+    async def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        sid = kwargs["config"]["configurable"]["session_id"]
+        store = self.get_session_history(sid)
+        store.add_message({"role": "user", "content": "q"})
+        yield {
+            "event": "on_chat_model_stream",
+            "name": "ChatOpenAI",
+            "run_id": "m",
+            "parent_ids": [],
+            "data": {"chunk": _MockAIMessageChunk(content=self._reply)},
+        }
+        store.add_message({"role": "assistant", "content": self._reply})
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class TestLangChainBridgeCopyReturningStore:
+    """A backing store whose ``.messages`` returns a fetched copy must
+    still see markdown-cleanup / interruption rewrites: editing the
+    temporary copy in place is lost, so the bridge persists the rewrite
+    through the store's own ``clear()`` + ``add_messages()`` API."""
+
+    async def _bridge_after_turn(self, reply: str = "raw reply") -> tuple[Any, Any]:
+        runnable = _CopyStoreHistoryRunnable(reply)
+        bridge = LangChainBridge(runnable)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            pass
+        return bridge, runnable.get_session_history("s1")
+
+    @pytest.mark.asyncio
+    async def test_markdown_cleanup_persisted_through_backend(self):
+        bridge, store = await self._bridge_after_turn()
+        bridge.replace_last_assistant_text("cleaned reply")
+        # A *fresh* fetch (what the next turn reloads) reflects the edit.
+        assert _content_of_history_item(store.messages[-1]) == "cleaned reply"
+
+    @pytest.mark.asyncio
+    async def test_interruption_truncation_persisted_through_backend(self):
+        bridge, store = await self._bridge_after_turn()
+        bridge.apply_interruption("raw", CancellationMode.IMMEDIATE_STOP)
+        assert _content_of_history_item(store.messages[-1]) == "raw..."
+        # The user turn is untouched and not duplicated by the re-add.
+        roles = [
+            (m.get("role") if isinstance(m, dict) else getattr(m, "type", None))
+            for m in store.messages
+        ]
+        assert roles == ["user", "assistant"]
+
+
 # ── Custom history_factory_config store resolution ───────────────
 
 

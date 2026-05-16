@@ -194,32 +194,48 @@ class LangGraphBridge:
     def _config(self) -> dict[str, Any]:
         return {"configurable": {"thread_id": self._thread_id}}
 
-    def _messages_key_has_reducer(self) -> bool:
-        """Whether the graph's messages channel uses a reducer.
+    def _messages_key_uses_add_messages(self) -> bool:
+        """Whether the messages channel uses LangGraph's ``add_messages``.
 
         The transient-context purge, the partial-turn commit and the
-        interruption rewrites all rely on ``add_messages`` semantics:
-        ``RemoveMessage`` markers and id-keyed re-sends only *merge*
-        into a reducer channel.  On a plain ``LastValue`` channel
-        (``messages: list`` with no ``Annotated[..., add_messages]``)
-        ``update_state`` *replaces* the whole list, so issuing those
-        markers there would wipe the checkpointed conversation.
+        interruption rewrites all rely on ``add_messages`` *merge*
+        semantics: a ``RemoveMessage`` marker deletes the message with
+        that id and an id-keyed re-send replaces it in place.  Those
+        semantics are unique to ``add_messages``:
 
-        ``Annotated[list, add_messages]`` compiles to a reducer channel
-        exposing ``.operator``; a plain key compiles to ``LastValue``.
-        When the channel can't be introspected (duck-typed test graphs,
-        older/newer LangGraph internals) assume a reducer so existing
-        ``add_messages`` behaviour is preserved — only a positively
-        identified ``LastValue`` channel disables the machinery.
+        * A plain ``LastValue`` channel (``messages: list`` with no
+          ``Annotated[...]``) makes ``update_state`` *replace* the whole
+          list, so issuing those markers there wipes the conversation.
+        * A *generic* reducer (``Annotated[list, operator.add]`` or any
+          custom accumulator) only ever *appends* what it is given, so a
+          ``RemoveMessage`` marker / id-keyed re-send is appended as a
+          fresh list tail — polluting checkpointed history and possibly
+          leaving the marker itself as the final message (an empty
+          ``done.text``).
+
+        Only a positively identified ``add_messages`` channel may use
+        the machinery.  ``Annotated[list, add_messages]`` compiles to a
+        ``BinaryOperatorAggregate`` whose ``.operator`` *is* LangGraph's
+        ``add_messages`` reducer.  When the channel can't be introspected
+        (duck-typed test graphs, older/newer LangGraph internals) assume
+        ``add_messages`` so existing behaviour is preserved — only a
+        positively identified non-``add_messages`` channel disables it.
         """
         key = self._messages_key or "messages"
         channels = getattr(self._graph, "channels", None)
         if not isinstance(channels, dict) or key not in channels:
             return True
         channel = channels[key]
-        if hasattr(channel, "operator"):
+        if type(channel).__name__ == "LastValue":
+            return False
+        operator = getattr(channel, "operator", None)
+        if operator is None:
+            # No reducer operator and not a recognised ``LastValue`` —
+            # an opaque/duck-typed channel.  Assume ``add_messages`` so
+            # existing behaviour is preserved (only a positively
+            # identified non-``add_messages`` channel disables it).
             return True
-        return type(channel).__name__ != "LastValue"
+        return _is_add_messages_reducer(operator)
 
     async def invoke(
         self,
@@ -276,15 +292,17 @@ class LangGraphBridge:
         # Checkpoint ids we've already emitted state_snapshot records
         # for, so the post-turn history walk records each id once.
         seen_checkpoints: set[str] = set()
-        # Shared state for tool-call deduplication — see
-        # :func:`translate_stream_event` for details.  ``skip_root_chain_dedup``
-        # opts out of the translator's LangChain-LCEL root-chain dedup:
-        # under LangGraph the outermost ``on_chain_start`` is the graph,
-        # not an LCEL root, so that heuristic would drop every node-level
-        # ``on_chain_stream`` (plain ``RunnableLambda`` / LCEL nodes).
-        # Model double-speak is still handled by
+        # Shared state for tool-call deduplication and LCEL root-chain
+        # dedup — see :func:`translate_stream_event` for details.  Under
+        # LangGraph the outermost ``on_chain_start`` is the graph (not an
+        # LCEL root), so the translator instead treats each LangGraph
+        # *node entry* as root-equivalent: a plain ``RunnableLambda`` /
+        # LCEL node's own composed stream reaches the translator while
+        # the node's deeper LCEL children stay deduped (so a node that is
+        # ``RunnableLambda(f) | RunnableLambda(g)`` doesn't narrate its
+        # intermediate value).  Model double-speak is still handled by
         # ``chains_with_model_descendants``.
-        tool_state: dict[str, Any] = {"skip_root_chain_dedup": True}
+        tool_state: dict[str, Any] = {}
 
         config = self._config()
         # Pre-turn baseline for the post-turn checkpoint trail: the
@@ -571,7 +589,7 @@ class LangGraphBridge:
         # On a plain ``LastValue`` channel ``update_state`` would replace
         # the whole messages list with just this note, dropping the
         # conversation; only append when the channel accumulates.
-        if not self._messages_key_has_reducer():
+        if not self._messages_key_uses_add_messages():
             return
         try:
             from langchain_core.messages import SystemMessage
@@ -624,7 +642,7 @@ class LangGraphBridge:
         # leaks forward), and a ``RemoveMessage`` purge there would
         # *replace* — wipe — the whole conversation.  Still forward the
         # per-turn context for this turn, just untracked.
-        track = self._messages_key_has_reducer()
+        track = self._messages_key_uses_add_messages()
         messages: list[Any] = []
         for item in context_msgs:
             msg: dict[str, Any] = {"role": item["role"], "content": item["content"]}
@@ -662,7 +680,7 @@ class LangGraphBridge:
         # ``RemoveMessage`` list against a plain ``LastValue`` channel —
         # ``update_state`` would replace the whole messages list with the
         # markers and lose the checkpointed conversation.
-        if not self._messages_key_has_reducer():
+        if not self._messages_key_uses_add_messages():
             return
         try:
             from langchain_core.messages import RemoveMessage
@@ -696,7 +714,7 @@ class LangGraphBridge:
         """
         if not text:
             return
-        if not self._messages_key_has_reducer():
+        if not self._messages_key_uses_add_messages():
             return
         msg_id = f"easycat-partial-{uuid4().hex}"
         try:
@@ -1045,7 +1063,7 @@ class LangGraphBridge:
         there would *replace* the whole messages list (dropping every
         other turn) instead of dedupe-replacing by id.
         """
-        if not self._messages_key_has_reducer():
+        if not self._messages_key_uses_add_messages():
             logger.debug("rewrite_last_ai: messages channel has no reducer; skipping")
             return
         try:
@@ -1081,6 +1099,32 @@ class LangGraphBridge:
 
 
 # ── Helpers ──────────────────────────────────────────────────────
+
+
+def _is_add_messages_reducer(operator: Any) -> bool:
+    """Whether ``operator`` is LangGraph's ``add_messages`` reducer.
+
+    ``Annotated[list, add_messages]`` compiles to a channel whose
+    ``.operator`` is *identically* LangGraph's ``add_messages`` function
+    (``langgraph.graph.message``), so an identity check is exact for the
+    supported path.  Fall back to a module/name match so a re-exported
+    or lightly wrapped ``add_messages`` (and the duck-typed test
+    reducer) is still recognised, while a generic ``operator.add`` or a
+    custom accumulator is not — those only append, so the
+    ``RemoveMessage`` / id-keyed-replace machinery must stay off.
+    """
+    try:
+        from langgraph.graph.message import add_messages
+
+        if operator is add_messages:
+            return True
+    except Exception:
+        pass
+    if getattr(operator, "__module__", "") == "langgraph.graph.message":
+        return True
+    name = getattr(operator, "__name__", "") or ""
+    qualname = getattr(operator, "__qualname__", "") or ""
+    return "add_messages" in name or "add_messages" in qualname
 
 
 def _pending_interrupts(state: Any) -> tuple[Any, ...]:

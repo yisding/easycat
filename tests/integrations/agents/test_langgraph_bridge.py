@@ -993,6 +993,76 @@ class TestLangGraphBridgeState:
         assert text_deltas == ["hello from node"]
 
     @pytest.mark.asyncio
+    async def test_nested_lcel_node_intermediate_not_spoken(self):
+        """A node that is itself an LCEL sequence
+        (``RunnableLambda(f) | RunnableLambda(g)``) emits a child
+        ``on_chain_stream`` for ``f``'s intermediate value and a
+        node-entry ``on_chain_stream`` for the composed result.  Only
+        the node entry is root-equivalent, so the intermediate must be
+        deduped — otherwise the caller hears the intermediate rather
+        than the final node response."""
+        scripted = [
+            {  # graph root (no parent) → LCEL root run id
+                "event": "on_chain_start",
+                "name": "LangGraph",
+                "run_id": "graph",
+                "parent_ids": [],
+                "data": {},
+                "metadata": {},
+            },
+            {  # node entry: name == langgraph_node → node root
+                "event": "on_chain_start",
+                "name": "answer",
+                "run_id": "n1",
+                "parent_ids": ["graph"],
+                "data": {},
+                "metadata": {"langgraph_node": "answer", "langgraph_step": 1},
+            },
+            {  # inner child runnable ``f`` (not the node entry)
+                "event": "on_chain_start",
+                "name": "f",
+                "run_id": "c1",
+                "parent_ids": ["graph", "n1"],
+                "data": {},
+                "metadata": {"langgraph_node": "answer"},
+            },
+            {  # f's intermediate value — must be deduped
+                "event": "on_chain_stream",
+                "name": "f",
+                "run_id": "c1",
+                "parent_ids": ["graph", "n1"],
+                "data": {"chunk": "INTERMEDIATE"},
+                "metadata": {"langgraph_node": "answer"},
+            },
+            {  # node-entry composed output — forwarded
+                "event": "on_chain_stream",
+                "name": "answer",
+                "run_id": "n1",
+                "parent_ids": ["graph"],
+                "data": {"chunk": "the real answer"},
+                "metadata": {"langgraph_node": "answer"},
+            },
+            {
+                "event": "on_chain_end",
+                "name": "answer",
+                "run_id": "n1",
+                "parent_ids": ["graph"],
+                "data": {},
+                "metadata": {"langgraph_node": "answer"},
+            },
+        ]
+        graph = _MockCompiledGraph(scripted)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("x"), _recorder()):
+            events.append(ev)
+
+        text_deltas = [e.text for e in events if e.kind == "text_delta"]
+        assert text_deltas == ["the real answer"]
+        assert "INTERMEDIATE" not in "".join(text_deltas)
+
+    @pytest.mark.asyncio
     async def test_transformed_final_message_overrides_streamed_model_text(self):
         """A node may stream a child model call and then write a
         *transformed* ``AIMessage`` to state
@@ -1203,10 +1273,28 @@ class LastValue:
 
 
 class _ReducerChannel:
-    """Duck-types an ``Annotated[list, add_messages]`` reducer channel."""
+    """Duck-types an ``Annotated[list, add_messages]`` reducer channel.
+
+    Its ``.operator`` is LangGraph's real ``add_messages`` reducer (the
+    bridge only enables the ``RemoveMessage`` / id-keyed-replace
+    machinery for that specific reducer)."""
 
     def __init__(self) -> None:
-        self.operator = lambda a, b: a + b
+        from langgraph.graph.message import add_messages
+
+        self.operator = add_messages
+
+
+class _GenericReducerChannel:
+    """Duck-types ``Annotated[list, operator.add]`` (a non-``add_messages``
+    accumulator): it only ever *appends*, so a ``RemoveMessage`` marker
+    or id-keyed re-send would be appended as a fresh tail rather than
+    merged — the bridge must treat it like a no-reducer channel."""
+
+    def __init__(self) -> None:
+        import operator
+
+        self.operator = operator.add
 
 
 class TestLangGraphBridgePartialTurnOnCancel:
@@ -1281,17 +1369,23 @@ class TestLangGraphBridgeReducerGuard:
     transient-context purge there would wipe the checkpointed
     conversation — the bridge must skip the machinery."""
 
-    def test_messages_key_has_reducer_detection(self):
+    def test_messages_key_add_messages_detection(self):
         graph = _MockCompiledGraph()
         bridge = LangGraphBridge(graph)
-        # No introspectable channels → assume reducer (preserve behaviour).
-        assert bridge._messages_key_has_reducer() is True
+        # No introspectable channels → assume add_messages (preserve
+        # behaviour).
+        assert bridge._messages_key_uses_add_messages() is True
 
         graph.channels = {"messages": _ReducerChannel()}
-        assert bridge._messages_key_has_reducer() is True
+        assert bridge._messages_key_uses_add_messages() is True
+
+        # A generic (non-add_messages) reducer only appends, so the
+        # RemoveMessage / id-keyed-replace machinery must stay off.
+        graph.channels = {"messages": _GenericReducerChannel()}
+        assert bridge._messages_key_uses_add_messages() is False
 
         graph.channels = {"messages": LastValue()}
-        assert bridge._messages_key_has_reducer() is False
+        assert bridge._messages_key_uses_add_messages() is False
 
     @pytest.mark.asyncio
     async def test_plain_list_channel_skips_destructive_purge(self):
@@ -1329,6 +1423,27 @@ class TestLangGraphBridgeReducerGuard:
         # removal marker for it.
         assert values["messages"]
         assert all(_id_of(m) for m in values["messages"])
+
+    @pytest.mark.asyncio
+    async def test_generic_reducer_channel_skips_destructive_purge(self):
+        # ``Annotated[list, operator.add]`` only appends, so a
+        # ``RemoveMessage`` marker would be appended as a fresh tail
+        # (polluting checkpointed history / emptying ``done.text``)
+        # rather than removing the injected context — the bridge must
+        # treat it like a no-reducer channel and skip the purge.
+        graph = _MockCompiledGraph([_node_start("p", "n1"), _node_end("p", "n1")])
+        graph.channels = {"messages": _GenericReducerChannel()}
+        graph._state.values["messages"] = [_MockMessage("assistant", "kept")]
+        bridge = LangGraphBridge(graph)
+        turn = AgentTurnInput.from_text(
+            "hi", context=[{"role": "system", "content": "Caller id: +1"}]
+        )
+        async for _ in bridge.invoke(turn, _recorder()):
+            pass
+
+        assert graph.update_state_calls == []
+        assert [_content(m) for m in graph._state.values["messages"]] == ["kept"]
+        assert bridge._transient_context_ids == []
 
 
 # ── Partial commit on cancel-token break ─────────────────────────

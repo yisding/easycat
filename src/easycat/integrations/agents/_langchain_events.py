@@ -202,6 +202,24 @@ def translate_stream_event(
         and run_id
     ):
         state["root_chain_run_id"] = run_id
+    # LangGraph drives every graph node as a child runnable of the
+    # graph's own root chain, so the LCEL root-chain dedup below would
+    # silently drop *all* node-level ``on_chain_stream`` text (a plain
+    # ``RunnableLambda`` / LCEL node with no chat model produces no
+    # other ``text_delta``).  A node entry is the ``on_chain_start``
+    # whose run ``name`` equals its ``metadata["langgraph_node"]``;
+    # record it as a *node root* so its own composed stream is treated
+    # as root-equivalent (forwarded) while the node's deeper LCEL
+    # children (``RunnableLambda(f) | RunnableLambda(g)`` intermediates)
+    # are still deduped — otherwise the caller hears an intermediate
+    # value instead of the final node response.
+    if state is not None and event_type == "on_chain_start" and run_id:
+        metadata = event.get("metadata")
+        node = metadata.get("langgraph_node") if isinstance(metadata, dict) else None
+        if node and name == node:
+            node_roots = state.setdefault("langgraph_node_run_ids", set())
+            if isinstance(node_roots, set):
+                node_roots.add(run_id)
     if event_type == "on_chain_stream" and state is not None:
         bag = state.get("chains_with_model_descendants")
         if isinstance(bag, set) and bag:
@@ -303,21 +321,26 @@ def translate_stream_event(
         # A bare ``translate_stream_event`` call with no ``state`` (the
         # standalone-translator contract used by the unit tests) keeps
         # emitting unconditionally.
-        # The root-chain dedup below is a LangChain-LCEL heuristic: in a
-        # plain chain only the outermost run forwards the final composed
+        #
+        # The root-chain dedup is a LangChain-LCEL heuristic: in a plain
+        # chain only the outermost run forwards the final composed
         # output, so non-root child streams are redundant.  Under
         # ``LangGraphBridge`` the outermost ``on_chain_start`` is the
-        # graph itself and every node runs as a non-root child, so this
-        # heuristic would silently drop all node-level text streams
-        # (plain ``RunnableLambda`` / LCEL nodes without a chat model,
-        # which produce no other ``text_delta``).  The LangGraph bridge
-        # sets ``skip_root_chain_dedup`` so those node streams reach the
-        # translator; model-token double-speak is still prevented by the
+        # graph itself and every node runs as a non-root child, so the
+        # bare heuristic would silently drop all node-level text streams.
+        # Each LangGraph node entry is therefore registered as a *node
+        # root* above and treated as root-equivalent here: the node's
+        # own composed stream is forwarded while the node's deeper LCEL
+        # children remain deduped (so an ``RunnableLambda(f) |
+        # RunnableLambda(g)`` node doesn't narrate its intermediate
+        # value).  Model-token double-speak is still prevented by the
         # ``chains_with_model_descendants`` suppression above, which
         # applies to both bridges.
-        if state is not None and not state.get("skip_root_chain_dedup"):
+        if state is not None:
             root = state.get("root_chain_run_id")
-            if isinstance(root, str) and root and run_id and run_id != root:
+            node_roots = state.get("langgraph_node_run_ids")
+            is_node_root = isinstance(node_roots, set) and run_id in node_roots
+            if isinstance(root, str) and root and run_id and run_id != root and not is_node_root:
                 return
         chunk = data.get("chunk") if isinstance(data, dict) else None
         text = _plain_chunk_text(chunk)

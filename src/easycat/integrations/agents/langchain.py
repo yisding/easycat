@@ -607,7 +607,34 @@ class LangChainBridge:
             return
         try:
             msgs = getattr(store, "messages", None)
-            if isinstance(msgs, list):
+            if not isinstance(msgs, list) or not msgs:
+                return
+            # ``BaseChatMessageHistory.messages`` is frequently a
+            # *fetched copy* (SQL / Redis / file-backed stores rebuild
+            # the list from the backend on every access), so editing it
+            # in place never reaches the backend and the next turn
+            # reloads the raw / un-truncated assistant text.  Rewrite a
+            # private snapshot and persist it through the store's own
+            # ``clear()`` + ``add_messages()`` API.  Snapshot into a new
+            # list *before* ``clear()`` because some stores' ``clear()``
+            # empties the very list object ``.messages`` returned, which
+            # would otherwise wipe the snapshot too.
+            rewritten = list(msgs)
+            if not _rewrite_last_ai_in(rewritten, replacement):
+                return
+            clear = getattr(store, "clear", None)
+            add_messages = getattr(store, "add_messages", None)
+            add_message = getattr(store, "add_message", None)
+            if callable(clear) and (callable(add_messages) or callable(add_message)):
+                clear()
+                if callable(add_messages):
+                    add_messages(rewritten)
+                else:
+                    for message in rewritten:
+                        add_message(message)
+            else:
+                # No persistence API — best effort: an in-place edit
+                # still takes effect for in-memory / live-list stores.
                 _rewrite_last_ai_in(msgs, replacement)
         except Exception:
             logger.debug("Failed to mirror rewrite into wrapped history store", exc_info=True)
@@ -792,13 +819,18 @@ def _close_top_ended_cursors(
         recorder.record_unit_exited(cursor.with_committable(True), reason=None)
 
 
-def _rewrite_last_ai_in(messages: list[Any], replacement: str) -> None:
+def _rewrite_last_ai_in(messages: list[Any], replacement: str) -> bool:
     """Rewrite the last assistant message in ``messages`` in place.
 
     Shared by the bridge's shadow history and a wrapped
     ``RunnableWithMessageHistory`` store so both stay consistent after
     markdown cleanup / interruption truncation.  List-content messages
     have their text parts re-split; plain/empty content is overwritten.
+
+    Returns ``True`` when an assistant message was found and rewritten,
+    ``False`` otherwise — so callers can skip a needless (and, for a
+    real backend store, destructive) clear + re-add when there was
+    nothing to rewrite.
     """
     for i in range(len(messages) - 1, -1, -1):
         msg = messages[i]
@@ -812,10 +844,11 @@ def _rewrite_last_ai_in(messages: list[Any], replacement: str) -> None:
                 splits = split_replacement_by_original_parts(originals, replacement)
                 for part, repl in zip(text_parts, splits):
                     part["text"] = repl
-                return
+                return True
         # Plain string or empty content — overwrite.
         _set_content(msg, replacement)
-        return
+        return True
+    return False
 
 
 def _role_of(msg: Any) -> str:
