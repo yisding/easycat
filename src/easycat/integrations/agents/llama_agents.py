@@ -675,6 +675,17 @@ class LlamaAgentsBridge:
                         delta = self._extract_event_text(envelope)
                     if delta:
                         yield AgentBridgeEvent(kind="text_delta", text=delta)
+                    # A HITL pause returns from invoke() with the event
+                    # stream closed by the finally below, so the handler is
+                    # no longer actively running -- only
+                    # _pending_remote_handler_id tracks it for resume. This
+                    # return exits the function before the tail that normally
+                    # clears _active_handler_id, so clear it here or
+                    # snapshot_state() reports a stale active handler
+                    # alongside waiting_for_input until the next turn/reset.
+                    # (Local mode clears the equivalent marker in its
+                    # finally, which runs on the same return.)
+                    self._active_handler_id = None
                     return
                 if _is_stop_event(workflow_event) or _is_stop_event(envelope):
                     continue
@@ -724,6 +735,15 @@ class LlamaAgentsBridge:
                     event_stream, "last_sequence", self._remote_event_sequence
                 )
             await self._best_effort_cancel(self._cancel_remote_handler(handler_id))
+            # If the close/cancel arrived right after the InputRequiredEvent
+            # prompt was yielded above, _pending_remote_handler_id was
+            # already set. The handler is now cancelled, so leaving the
+            # marker would make the next turn send_event() a
+            # HumanResponseEvent to a dead handler instead of starting or
+            # resuming cleanly -- clear it (preserve_context continuity still
+            # rides on the retained _remote_handler_id, mirroring the
+            # cooperative cancel path and local mode's finally).
+            self._pending_remote_handler_id = None
             self._active_handler_id = None
             raise
         except Exception:
