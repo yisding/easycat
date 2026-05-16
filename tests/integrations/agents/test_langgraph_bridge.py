@@ -540,10 +540,26 @@ class TestLangGraphBridgeInvoke:
         assert graph.update_state_calls
         _cfg, values = graph.update_state_calls[-1]
         removals = values["messages"]
-        assert [getattr(m, "id", None) for m in removals] == [injected_id]
-        from langchain_core.messages import RemoveMessage
 
-        assert all(isinstance(m, RemoveMessage) for m in removals)
+        def _id_of(m: Any) -> Any:
+            return getattr(m, "id", None) or (m.get("id") if isinstance(m, dict) else None)
+
+        assert [_id_of(m) for m in removals] == [injected_id]
+        # ``_purge_transient_context`` emits ``RemoveMessage`` when
+        # ``langchain-core`` is importable and id-bearing dict markers
+        # otherwise.  The ``dev`` group omits ``langchain-core`` (the
+        # rest of this suite is duck-typed and runs after a bare
+        # ``uv sync --group dev``), so assert whichever shape this
+        # environment produced rather than hard-importing.
+        try:
+            from langchain_core.messages import RemoveMessage
+        except ImportError:
+            assert all(
+                isinstance(m, dict) and m.get("role") == "system" and not m.get("content")
+                for m in removals
+            )
+        else:
+            assert all(isinstance(m, RemoveMessage) for m in removals)
         # No context to forward → nothing to purge → no update_state call.
         graph2 = _MockCompiledGraph([_node_start("p", "n1"), _node_end("p", "n1")])
         bridge2 = LangGraphBridge(graph2)

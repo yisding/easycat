@@ -89,6 +89,22 @@ class LangChainBridge:
         ``on_custom_event`` from ``dispatch_custom_event``, which would
         silently disable the custom-event TTS path.  Pass an explicit
         tuple only when performance demands it for very chatty chains.
+    session_id:
+        Explicit ``configurable.session_id`` threaded into every
+        ``astream_events`` call.  ``RunnableWithMessageHistory`` (and any
+        runnable carrying a ``history_factory_config``) *requires* this
+        key — without it the first turn raises ``ValueError: Missing
+        keys ['session_id']`` before any event is produced.  Defaults to
+        the recorder's session/run id (stable for the life of a
+        Session); plain runnables ignore the unknown ``configurable``
+        key, so threading it through is always safe.
+    config:
+        Optional base ``RunnableConfig`` merged into every
+        ``astream_events`` call.  Use it for runnables wrapped with a
+        custom ``history_factory_config`` (e.g. ``user_id`` /
+        ``conversation_id`` instead of ``session_id``); a
+        caller-supplied ``configurable.session_id`` is preserved rather
+        than overwritten by the resolved default.
     """
 
     COMMITTABLE_BOUNDARIES = {
@@ -106,6 +122,8 @@ class LangChainBridge:
         history_key: str | None = "history",
         messages_input: bool = False,
         include_types: Sequence[str] | None = _DEFAULT_INCLUDE_TYPES,
+        session_id: str | None = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         if runnable is None:
             raise BridgeInputError("LangChainBridge requires a non-None runnable=")
@@ -120,10 +138,47 @@ class LangChainBridge:
         self._history_key = history_key
         self._messages_input = messages_input
         self._include_types = list(include_types) if include_types is not None else None
+        self._session_id = session_id
+        self._base_config = dict(config) if config else None
+        # Stable per-bridge fallback so a ``RunnableWithMessageHistory``
+        # still threads its history correctly across turns when the
+        # bridge is driven without a journal (NullAgentRecorder →
+        # ``session_id`` is "").
+        self._fallback_session_id = f"easycat-{uuid4().hex}"
         self._message_history: list[Any] = []
         self._last_output: Any = None
 
     # ── ExternalAgentBridge interface ─────────────────────────────
+
+    def _stream_config(self, recorder: AgentRecorder) -> dict[str, Any]:
+        """Build the ``astream_events`` config for one turn.
+
+        ``RunnableWithMessageHistory`` — explicitly called out as a
+        supported runnable — requires ``configurable.session_id`` on
+        *every* invoke/stream; without it the first turn raises
+        ``ValueError: Missing keys ['session_id']`` before any event is
+        produced.  We resolve a stable id (explicit ``session_id=``
+        override → recorder session/run id → per-bridge fallback) and
+        thread it through.  Plain runnables ignore unknown
+        ``configurable`` keys, so this is always safe.
+
+        A caller-supplied ``config=`` is the merge base; we only fill in
+        ``session_id`` when the caller didn't already provide one, so
+        runnables wrapped with a custom ``history_factory_config`` keep
+        their own keys.
+        """
+        ctx = recorder.context
+        resolved = (
+            self._session_id
+            or (ctx.session_id or None)
+            or (ctx.run_id or None)
+            or self._fallback_session_id
+        )
+        config: dict[str, Any] = dict(self._base_config) if self._base_config else {}
+        configurable = dict(config.get("configurable") or {})
+        configurable.setdefault("session_id", resolved)
+        config["configurable"] = configurable
+        return config
 
     async def invoke(
         self,
@@ -167,7 +222,10 @@ class LangChainBridge:
         tool_state: dict[str, Any] = {}
 
         input_payload = self._build_input(turn_input.text, turn_input.context)
-        stream_kwargs: dict[str, Any] = {"version": "v2"}
+        stream_kwargs: dict[str, Any] = {
+            "version": "v2",
+            "config": self._stream_config(recorder),
+        }
         if self._include_types is not None:
             stream_kwargs["include_types"] = self._include_types
 

@@ -18,6 +18,7 @@ from easycat.cancel import CancelToken
 from easycat.integrations.agents._langchain_events import translate_stream_event
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
+    NULL_RECORDER,
     AgentTurnInput,
     BridgeInputError,
     CancellationMode,
@@ -1576,3 +1577,81 @@ class TestLangChainBridgeMessagesInput:
         assert contents == ["first", "reply", "second"]
         roles = [_role_of_msg(m) for m in payload]
         assert roles[-1] in ("user", "human")
+
+
+class TestLangChainBridgeStreamConfig:
+    """``astream_events`` must carry ``configurable.session_id``.
+
+    ``RunnableWithMessageHistory`` (called out as a supported runnable)
+    requires it on *every* invoke/stream — without a config the first
+    turn raises ``ValueError: Missing keys ['session_id']`` before any
+    event is produced.  Plain runnables ignore the unknown key.
+    """
+
+    @staticmethod
+    def _runnable() -> _MockRunnable:
+        return _MockRunnable(
+            [
+                {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": [],
+                    "data": {"chunk": _MockAIMessageChunk(content="hi")},
+                }
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_default_threads_recorder_session_id(self):
+        runnable = self._runnable()
+        bridge = LangChainBridge(runnable)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("x"), _recorder()):
+            pass
+        config = runnable.invoked_with[1]["config"]
+        # ``_recorder()`` builds RecorderContext(session_id="s1").
+        assert config["configurable"]["session_id"] == "s1"
+
+    @pytest.mark.asyncio
+    async def test_explicit_session_id_overrides_recorder(self):
+        runnable = self._runnable()
+        bridge = LangChainBridge(runnable, session_id="explicit-sid")
+        async for _ in bridge.invoke(AgentTurnInput.from_text("x"), _recorder()):
+            pass
+        config = runnable.invoked_with[1]["config"]
+        assert config["configurable"]["session_id"] == "explicit-sid"
+
+    @pytest.mark.asyncio
+    async def test_base_config_keys_preserved_and_session_id_not_clobbered(self):
+        """Caller ``config=`` is the merge base; a caller-supplied
+        ``configurable.session_id`` (custom ``history_factory_config``)
+        is preserved, other keys pass through untouched."""
+        runnable = self._runnable()
+        bridge = LangChainBridge(
+            runnable,
+            config={
+                "configurable": {"session_id": "caller-sid", "user_id": "u1"},
+                "tags": ["voice"],
+            },
+        )
+        async for _ in bridge.invoke(AgentTurnInput.from_text("x"), _recorder()):
+            pass
+        config = runnable.invoked_with[1]["config"]
+        assert config["configurable"]["session_id"] == "caller-sid"
+        assert config["configurable"]["user_id"] == "u1"
+        assert config["tags"] == ["voice"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_session_id_stable_across_turns_without_journal(self):
+        """Driven via NULL_RECORDER (session_id="") the bridge must still
+        thread a *stable* id so a wrapped history runnable accumulates
+        correctly across turns."""
+        runnable = self._runnable()
+        bridge = LangChainBridge(runnable)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("a"), NULL_RECORDER):
+            pass
+        first = runnable.invoked_with[1]["config"]["configurable"]["session_id"]
+        async for _ in bridge.invoke(AgentTurnInput.from_text("b"), NULL_RECORDER):
+            pass
+        second = runnable.invoked_with[1]["config"]["configurable"]["session_id"]
+        assert first and first == second
