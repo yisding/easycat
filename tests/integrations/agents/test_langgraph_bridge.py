@@ -124,7 +124,9 @@ class _MockCompiledGraph:
         return {"configurable": {"thread_id": "t-1", "checkpoint_id": "cp-2"}}
 
 
-def _node_start(node: str, run_id: str, checkpoint_id: str = "cp-1") -> dict[str, Any]:
+def _node_start(
+    node: str, run_id: str, checkpoint_id: str = "cp-1", step: int = 1
+) -> dict[str, Any]:
     return {
         "event": "on_chain_start",
         "name": node,
@@ -133,7 +135,7 @@ def _node_start(node: str, run_id: str, checkpoint_id: str = "cp-1") -> dict[str
         "data": {},
         "metadata": {
             "langgraph_node": node,
-            "langgraph_step": 1,
+            "langgraph_step": step,
             "langgraph_checkpoint_ns": "",
             "checkpoint_id": checkpoint_id,
             "thread_id": "t-1",
@@ -227,7 +229,8 @@ class TestLangGraphBridgeInvoke:
             _node_start("research", "n1"),
             _model_stream("R text ", run_id="m1", parent="n1", node="research"),
             _node_end("research", "n1"),
-            _node_start("write", "n2", checkpoint_id="cp-2"),
+            # Sequential successor runs in the next super-step.
+            _node_start("write", "n2", checkpoint_id="cp-2", step=2),
             _model_stream("W text", run_id="m2", parent="n2", node="write"),
             _node_end("write", "n2", checkpoint_id="cp-2"),
         ]
@@ -330,6 +333,52 @@ class TestLangGraphBridgeInvoke:
         names = [r.name for r in records]
         # Agent + 2 nodes + 2 models all entered and exited — no raises.
         assert names.count("unit_entered") == names.count("unit_exited") == 5
+        # ``research`` and ``write`` fan out in the *same* super-step;
+        # they share a parent namespace but have no edge between them, so
+        # no ``research → write`` handoff must be invented.
+        assert [r for r in records if r.name == "framework_handoff"] == []
+
+    @pytest.mark.asyncio
+    async def test_fanout_join_records_step_crossing_handoffs_only(self):
+        """A fan-out (``a`` → parallel ``b``, ``c``) followed by a join
+        (``d``) must not invent a ``b → c`` handoff between the parallel
+        siblings (same super-step, no edge), while the real edges that
+        cross super-steps still record handoffs."""
+        scripted = [
+            _node_start("a", "n-a", step=1),
+            _node_end("a", "n-a"),
+            # Fan-out: b and c run together in super-step 2.
+            _node_start("b", "n-b", step=2),
+            _node_start("c", "n-c", step=2),
+            _node_end("b", "n-b"),
+            _node_end("c", "n-c"),
+            # Join in super-step 3.
+            _node_start("d", "n-d", step=3),
+            _node_end("d", "n-d"),
+        ]
+        graph = _MockCompiledGraph(scripted)
+        bridge = LangGraphBridge(graph)
+
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), rec):
+            events.append(ev)
+
+        pairs = [
+            (r.data["from_unit"], r.data["to_unit"])
+            for r in journal.read()
+            if r.name == "framework_handoff"
+        ]
+        # a→b crosses step 1→2 (real edge); b→c is the same-step sibling
+        # pair and must be suppressed; the surviving fan-out node → d
+        # crosses step 2→3 (real edge).
+        assert ("b", "c") not in pairs
+        assert ("a", "b") in pairs
+        assert ("c", "d") in pairs
+        # The bridge-level handoff events mirror the journal records.
+        ev_pairs = [(e.from_unit, e.to_unit) for e in events if e.kind == "handoff"]
+        assert ev_pairs == pairs
 
     @pytest.mark.asyncio
     async def test_cancel_token_short_circuits(self):
@@ -692,6 +741,42 @@ class TestLangGraphBridgeState:
         assert text_deltas == []  # node did not stream
         assert done and done[0].text == "the actual reply"
         assert done[0].structured_output is ai_msg
+
+    @pytest.mark.asyncio
+    async def test_transformed_final_message_overrides_streamed_model_text(self):
+        """A node may stream a child model call and then write a
+        *transformed* ``AIMessage`` to state
+        (``AIMessage(content=f"Final: {reply.content}")``).  The raw
+        model tokens still stream live (speculative streaming can't be
+        un-spoken), but ``done.text``/``structured_output`` must record
+        the graph's actual final message, not the internal model
+        output."""
+        final_msg = _MockMessage("assistant", "Final: Hello world", message_id="m-1")
+        state = _MockState(
+            values={"messages": [_MockMessage("user", "hi"), final_msg]},
+            checkpoint_id="cp-final",
+        )
+        scripted = [
+            _node_start("answer", "n1"),
+            _model_stream("Hello ", run_id="m1", parent="n1", node="answer"),
+            _model_stream("world", run_id="m1", parent="n1", node="answer"),
+            _node_end("answer", "n1"),
+        ]
+        graph = _MockCompiledGraph(scripted, state=state)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+
+        # The raw model tokens streamed live and were already spoken;
+        # the transformed final message is NOT re-emitted as a delta
+        # (that would double-speak).
+        text_deltas = [e.text for e in events if e.kind == "text_delta"]
+        assert text_deltas == ["Hello ", "world"]
+        done = [e for e in events if e.kind == "done"]
+        assert done and done[0].text == "Final: Hello world"
+        assert done[0].structured_output is final_msg
 
     @pytest.mark.asyncio
     async def test_done_text_is_empty_when_tail_is_not_ai_message(self):

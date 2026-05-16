@@ -195,9 +195,13 @@ class LangGraphBridge:
         # obstructing sibling(s) also end so the recorder's strict stack
         # invariant holds.
         ended_runs: set[str] = set()
-        # Previously seen node at each subgraph namespace depth, so we
-        # can emit handoff triples when a node changes at the same level.
-        last_node_by_ns: dict[tuple[str, ...], str] = {}
+        # Previously seen ``(node, langgraph_step)`` at each subgraph
+        # namespace, so we can emit handoff triples when a node changes
+        # at the same level *across* super-steps.  The step is tracked
+        # alongside the node so a fan-out's sibling nodes — which share a
+        # parent namespace within one super-step but have no edge between
+        # them — don't get an invented prev→sibling handoff.
+        last_node_by_ns: dict[tuple[str, ...], tuple[str, Any]] = {}
         # Checkpoint ids we've already emitted state_snapshot records
         # for, to avoid duplicates when the same id appears on multiple
         # events within a super-step.
@@ -297,16 +301,36 @@ class LangGraphBridge:
         except Exception:  # pragma: no cover — best-effort.
             logger.debug("Failed to fetch final LangGraph state", exc_info=True)
 
-        # Nodes that return a final ``AIMessage`` without streaming
-        # chat-model tokens (or that transform model output before
-        # writing it to state) leave ``model_text_streamed`` False.  Fall
-        # back to the final message's text only when it's actually an AI
-        # message — for graphs that complete without appending an
-        # assistant reply (a conditional path returning ``{}``, an edge
-        # straight to END), ``_messages_tail`` would surface the user's
-        # own utterance and TTS would repeat the caller's voice back.
+        # Decide the recorded ``done.text`` (and the text consumers fall
+        # back to when nothing streamed).  Three shapes:
+        #
+        # * Chat-model tokens streamed.  Usually those *are* the answer,
+        #   but a node can stream a model call and then write a
+        #   *transformed* ``AIMessage`` to state
+        #   (``AIMessage(content=f"Final: {reply.content}")``).  When the
+        #   graph's final AI message differs from the raw streamed text
+        #   the streamed tokens were internal model output, so prefer the
+        #   final message — otherwise ``done.text``/``structured_output``
+        #   record the unmodified internal output instead of the graph's
+        #   actual reply.  (Live TTS already spoke the raw tokens; that
+        #   speculative-streaming gap is unavoidable without buffering
+        #   every node's output, and re-emitting here would double-speak,
+        #   so we only correct the recorded transcript.)
+        # * Nothing streamed but a node wrote a final ``AIMessage``
+        #   (synchronous LLM, transformed output, plain
+        #   ``RunnableLambda``).  Fall back to that message's text — but
+        #   only when the tail is actually an AI message, else a graph
+        #   that completes without appending an assistant reply (a
+        #   conditional path returning ``{}``, an edge straight to END)
+        #   would surface the user's own utterance and TTS would repeat
+        #   the caller's voice back.
+        # * Otherwise speak whatever streamed (custom chunks, or nothing).
         if model_text_streamed:
-            spoken_text = accumulated
+            if _message_is_ai(self._last_output):
+                final_text = _extract_message_text(self._last_output)
+                spoken_text = final_text if final_text else accumulated
+            else:
+                spoken_text = accumulated
         elif _message_is_ai(self._last_output):
             final_text = _extract_message_text(self._last_output)
             if accumulated:
@@ -620,6 +644,7 @@ class LangGraphBridge:
         event_type = event.get("event")
         metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
         node_name = metadata.get("langgraph_node")
+        step = metadata.get("langgraph_step")
         ns_raw = metadata.get("langgraph_checkpoint_ns", "")
         # Each ``|``-separated segment in ``langgraph_checkpoint_ns`` looks like
         # ``<node>:<run_uuid>``, so two sequential top-level nodes get distinct
@@ -643,21 +668,34 @@ class LangGraphBridge:
                 if run_id in open_cursors:
                     return events
 
-                prev = last_node_by_ns.get(parent_ns)
-                if prev and prev != node_name:
-                    recorder.record_framework_handoff(
-                        from_unit=prev,
-                        to_unit=node_name,
-                        reason="langgraph_edge",
+                prev_entry = last_node_by_ns.get(parent_ns)
+                if prev_entry is not None:
+                    prev_node, prev_step = prev_entry
+                    # A real LangGraph edge moves between super-steps.
+                    # Sibling nodes fanned out in the *same* super-step
+                    # share this parent namespace but have no edge
+                    # between them, so emitting prev→current there would
+                    # invent a handoff that never happened.  Suppress it
+                    # when both steps are known and equal; still emit
+                    # when the step advanced (a real edge) or when step
+                    # metadata is absent (preserve prior behaviour).
+                    same_step_sibling = (
+                        prev_step is not None and step is not None and prev_step == step
                     )
-                    events.append(
-                        AgentBridgeEvent(
-                            kind="handoff",
-                            from_unit=prev,
+                    if prev_node != node_name and not same_step_sibling:
+                        recorder.record_framework_handoff(
+                            from_unit=prev_node,
                             to_unit=node_name,
                             reason="langgraph_edge",
                         )
-                    )
+                        events.append(
+                            AgentBridgeEvent(
+                                kind="handoff",
+                                from_unit=prev_node,
+                                to_unit=node_name,
+                                reason="langgraph_edge",
+                            )
+                        )
 
                 cursor = ExecutionCursor(
                     unit_id=f"node-{run_id}",
@@ -671,7 +709,7 @@ class LangGraphBridge:
                 )
                 recorder.record_unit_entered(cursor)
                 open_cursors[run_id] = cursor
-                last_node_by_ns[parent_ns] = node_name
+                last_node_by_ns[parent_ns] = (node_name, step)
 
         elif event_type in ("on_chat_model_start", "on_llm_start"):
             run_id = str(event.get("run_id") or uuid4().hex[:8])
