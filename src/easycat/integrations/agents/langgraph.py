@@ -26,6 +26,7 @@ it replaces instead of appending.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import time
@@ -161,7 +162,13 @@ class LangGraphBridge:
                 "checkpointer) before passing it to LangGraphBridge."
             )
         self._graph = graph
-        self._thread_id = thread_id or str(uuid.uuid4())
+        # An explicit ``thread_id=`` wins; otherwise fall back to a
+        # thread id the caller bound onto the graph via
+        # ``graph.with_config(configurable={"thread_id": ...})`` (a
+        # common resume pattern that ``auto_adapt_agent`` cannot
+        # otherwise carry through) before minting a fresh UUID.
+        bound_thread_id = _bound_thread_id(graph)
+        self._thread_id = thread_id or bound_thread_id or str(uuid.uuid4())
         self._messages_key = messages_key
         self._display_name = display_name or type(graph).__name__
         self._include_types = list(include_types) if include_types is not None else None
@@ -181,10 +188,12 @@ class LangGraphBridge:
         # work + duplicate snapshots on a persistent checkpointer).
         # Best-effort: a transient/missing-thread checkpointer error just
         # leaves the baseline ``None`` (degrades to the pre-fix
-        # behaviour, not a hard failure).  Skipped for a fresh thread
-        # (no ``thread_id``) — there is no prior history, so ``None`` is
-        # already correct and the round-trip would be wasted.
-        if thread_id is not None:
+        # behaviour, not a hard failure).  Skipped only for a genuinely
+        # fresh thread (no explicit *and* no graph-bound ``thread_id``) —
+        # there is no prior history, so ``None`` is already correct and
+        # the round-trip would be wasted.  A graph-bound thread id is a
+        # resume just like an explicit one, so seed its baseline too.
+        if thread_id is not None or bound_thread_id is not None:
             try:
                 existing_state = self._graph.get_state(self._config())
                 self._last_checkpoint_id = _get_checkpoint_id(existing_state)
@@ -1161,7 +1170,18 @@ def _is_add_messages_reducer(operator: Any) -> bool:
     reducer) is still recognised, while a generic ``operator.add`` or a
     custom accumulator is not — those only append, so the
     ``RemoveMessage`` / id-keyed-replace machinery must stay off.
+
+    The documented ``Annotated[..., add_messages(format="langchain-openai")]``
+    form calls ``add_messages`` with only keyword args, which returns a
+    ``functools.partial(add_messages, ...)`` — still genuine
+    ``add_messages`` merge semantics — so unwrap the partial chain
+    before matching, otherwise a valid channel is misread as a generic
+    reducer and the machinery is wrongly disabled.
     """
+    for _ in range(5):  # bounded unwrap of nested functools.partial wrappers
+        if not isinstance(operator, functools.partial):
+            break
+        operator = operator.func
     try:
         from langgraph.graph.message import add_messages
 
@@ -1197,6 +1217,34 @@ def _pending_interrupts(state: Any) -> tuple[Any, ...]:
     except Exception:
         return ()
     return tuple(collected)
+
+
+def _bound_thread_id(graph: Any) -> str | None:
+    """Thread id bound onto the graph via ``graph.with_config(...)``.
+
+    ``CompiledStateGraph.with_config(configurable={"thread_id": ...})``
+    returns a copy of the graph carrying the merged config on
+    ``graph.config``; LangChain's generic ``RunnableBinding`` wrapper
+    stores it the same way and nests the real graph under ``.bound``.
+    Resuming a conversation by binding the thread id this way is a
+    common LangGraph pattern and the *only* channel ``auto_adapt_agent``
+    has to carry a resume thread through — so honour it instead of
+    minting a fresh UUID and writing to an empty checkpoint.  Returns
+    ``None`` (fresh-thread behaviour) when nothing is bound.
+    """
+    obj = graph
+    for _ in range(5):  # bounded walk through nested RunnableBinding wrappers
+        if obj is None:
+            break
+        config = getattr(obj, "config", None)
+        if isinstance(config, dict):
+            configurable = config.get("configurable")
+            if isinstance(configurable, dict):
+                tid = configurable.get("thread_id")
+                if isinstance(tid, str) and tid:
+                    return tid
+        obj = getattr(obj, "bound", None)
+    return None
 
 
 def _get_checkpoint_id(state: Any) -> str | None:

@@ -1632,3 +1632,69 @@ class TestLangGraphBridgeResumeBaseline:
             pass
         refs = [r.data["state_ref"] for r in j.read() if r.name == "state_snapshot"]
         assert refs == ["langgraph:cp-new"]
+
+
+# ── Graph-bound thread id (graph.with_config resume) ─────────────
+
+
+class _BoundConfigGraph(_MockCompiledGraph):
+    """Duck-types a graph carrying a config bound via
+    ``graph.with_config(configurable={"thread_id": ...})`` — LangGraph
+    stores the merged config on ``graph.config``."""
+
+    def __init__(self, thread_id: str, **kwargs: Any) -> None:
+        super().__init__([], **kwargs)
+        self.config = {"configurable": {"thread_id": thread_id}}
+
+
+class TestLangGraphBridgeBoundThreadId:
+    """A caller resuming via ``graph.with_config(configurable=...)`` is
+    the only way ``auto_adapt_agent`` can carry a resume thread through.
+    The bridge must honour that bound id instead of minting a fresh UUID
+    (which would write to an empty checkpoint and lose the history)."""
+
+    def test_bound_thread_id_is_honoured(self):
+        graph = _BoundConfigGraph("resume-thread")
+        bridge = LangGraphBridge(graph=graph)
+        assert bridge._thread_id == "resume-thread"
+
+    def test_explicit_thread_id_wins_over_bound(self):
+        graph = _BoundConfigGraph("bound-thread")
+        bridge = LangGraphBridge(graph=graph, thread_id="explicit-thread")
+        assert bridge._thread_id == "explicit-thread"
+
+    def test_fresh_graph_still_mints_uuid(self):
+        bridge = LangGraphBridge(graph=_MockCompiledGraph([]))
+        assert bridge._thread_id and bridge._thread_id != "resume-thread"
+
+    def test_bound_thread_seeds_resume_baseline(self):
+        # A bound thread id is a resume just like an explicit one: its
+        # prior-history checkpoint baseline must be seeded too, so the
+        # first turn doesn't re-walk the whole persisted history.
+        graph = _BoundConfigGraph("resume-thread", state=_MockState(checkpoint_id="cp-prev"))
+        bridge = LangGraphBridge(graph=graph)
+        assert bridge._last_checkpoint_id == "cp-prev"
+
+
+class _FormattedAddMessagesChannel:
+    """Duck-types ``Annotated[list, add_messages(format="langchain-openai")]``
+    — LangGraph stores the reducer as ``functools.partial(add_messages,
+    ...)``, which is still genuine ``add_messages`` merge semantics."""
+
+    def __init__(self) -> None:
+        from langgraph.graph.message import add_messages
+
+        self.operator = add_messages(format="langchain-openai")
+
+
+class TestLangGraphBridgeFormattedAddMessages:
+    """``add_messages(format=...)`` is the documented way to request a
+    message format; it compiles to a ``functools.partial`` the bridge
+    must still recognise as ``add_messages`` so the transient-context
+    purge and interruption/markdown rewrites stay enabled."""
+
+    def test_partial_add_messages_is_recognised(self):
+        graph = _MockCompiledGraph()
+        bridge = LangGraphBridge(graph)
+        graph.channels = {"messages": _FormattedAddMessagesChannel()}
+        assert bridge._messages_key_uses_add_messages() is True
