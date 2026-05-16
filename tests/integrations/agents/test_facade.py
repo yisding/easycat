@@ -229,3 +229,70 @@ class TestAutoAdaptLangChain:
         events = [ev async for ev in adapted.invoke(AgentTurnInput.from_text("question"), rec)]
         done = [e for e in events if e.kind == "done"]
         assert done and done[0].text == "the answer"
+
+
+class TestAutoAdaptLangGraph:
+    """A compiled LangGraph graph — bare or wrapped by a generic
+    Runnable combinator — must route to ``LangGraphBridge``, never the
+    plain ``LangChainBridge`` (which would feed it
+    ``configurable.session_id`` instead of LangGraph's required
+    ``thread_id`` and crash a checkpointed graph on the first turn)."""
+
+    @staticmethod
+    def _compiled_graph(*, checkpointer: bool = True):
+        pytest.importorskip("langgraph")
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langgraph.graph import END, START, StateGraph
+
+        # ``dict`` state schema keeps the graph free of forward-ref
+        # annotations — the tests only exercise bridge *selection*.
+        g = StateGraph(dict)
+        g.add_node("n", lambda s: {})
+        g.add_edge(START, "n")
+        g.add_edge("n", END)
+        return g.compile(checkpointer=InMemorySaver() if checkpointer else None)
+
+    def test_bare_compiled_graph_routes_to_langgraph_bridge(self):
+        from easycat.integrations.agents.langgraph import LangGraphBridge
+
+        adapted = auto_adapt_agent(self._compiled_graph())
+        assert isinstance(adapted, LangGraphBridge)
+
+    def test_with_types_wrapped_graph_routes_to_langgraph_bridge(self):
+        """``graph.with_types(...)`` returns a ``RunnableBinding`` whose
+        ``isinstance(CompiledStateGraph)`` is False — its ``.bound`` must
+        be peeled so a checkpointed graph isn't sent to LangChainBridge
+        and crashed with ``KeyError: 'thread_id'``."""
+        from easycat.integrations.agents.langgraph import LangGraphBridge
+
+        wrapped = self._compiled_graph().with_types(input_type=dict, output_type=dict)
+        adapted = auto_adapt_agent(wrapped)
+        assert isinstance(adapted, LangGraphBridge)
+
+    def test_retried_wrapped_graph_routes_to_langgraph_bridge(self):
+        """``.with_retry()`` returns a ``RunnableRetry`` — a
+        ``RunnableBindingBase`` that does *not* proxy attribute access,
+        so the peeled graph (not the wrapper) must reach the bridge or
+        its ``graph.checkpointer`` probe wrongly sees ``None``."""
+        from easycat.integrations.agents.langgraph import LangGraphBridge
+
+        adapted = auto_adapt_agent(self._compiled_graph().with_retry())
+        assert isinstance(adapted, LangGraphBridge)
+
+    def test_bound_then_retried_graph_routes_to_langgraph_bridge(self):
+        from easycat.integrations.agents.langgraph import LangGraphBridge
+
+        adapted = auto_adapt_agent(self._compiled_graph().bind().with_retry())
+        assert isinstance(adapted, LangGraphBridge)
+
+    def test_bound_thread_id_survives_wrapper(self):
+        """``graph.with_config(configurable={"thread_id": ...})`` is the
+        common resume pattern; a later ``.with_types(...)`` must not lose
+        it (the peeled graph copy still carries ``.config``)."""
+        graph = self._compiled_graph().with_config(configurable={"thread_id": "resume-1"})
+        adapted = auto_adapt_agent(graph.with_types(input_type=dict))
+        assert adapted._thread_id == "resume-1"
+
+    def test_wrapped_checkpointerless_graph_still_raises(self):
+        with pytest.raises(BridgeInputError, match="checkpointer"):
+            auto_adapt_agent(self._compiled_graph(checkpointer=False).with_types(input_type=dict))

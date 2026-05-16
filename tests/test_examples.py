@@ -276,16 +276,39 @@ _REQUIRES_LANGGRAPH = frozenset(
 )
 # The two AgentExecutor examples import ``langchain.agents`` — the full
 # ``langchain`` package, not just ``langchain-openai``.  Mirrors the
-# ``pytest.importorskip("langchain")`` guard in their import tests so an
-# env with ``langchain-openai`` but no ``langchain`` skips them instead
-# of running scripts that exit with the LangChain-install message and
-# fail the stderr assertion below.
+# ``_skip_unless_langchain_v0()`` guard in their import tests so an env
+# with ``langchain-openai`` but no ``langchain`` (or LangChain 1.x)
+# skips them instead of running scripts that exit with the
+# LangChain-install message and fail the stderr assertion below.
 _REQUIRES_LANGCHAIN = frozenset(
     {
         "examples/function_tools_langchain.py",
         "examples/session_actions_langchain.py",
     }
 )
+
+
+def _skip_unless_langchain_v0() -> None:
+    """Skip unless ``langchain`` is importable *and* <1.0.
+
+    The two AgentExecutor examples build their agent with
+    ``langchain.agents.create_tool_calling_agent``, which LangChain 1.x
+    removed (its replacement ``langchain.agents.create_agent`` returns a
+    LangGraph ``CompiledStateGraph`` — covered by the langgraph
+    examples).  Their import guard therefore raises ``SystemExit`` under
+    1.x and the scripts exit with the install message instead of the
+    expected ``OPENAI_API_KEY`` / ``STT configuration`` error.
+    ``importorskip`` alone only proves ``langchain`` is importable —
+    1.x is — so add an explicit major-version check.
+    """
+    langchain = pytest.importorskip("langchain")
+    raw = getattr(langchain, "__version__", "0")
+    head = "".join(c for c in str(raw).split(".")[0] if c.isdigit())
+    if int(head or "0") >= 1:
+        pytest.skip(
+            f"AgentExecutor examples require langchain<1 "
+            f"(create_tool_calling_agent removed in 1.x); found {raw}"
+        )
 
 
 def test_langchain_voice_example_imports(monkeypatch: pytest.MonkeyPatch):
@@ -298,7 +321,7 @@ def test_langgraph_voice_example_imports(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_function_tools_langchain_example_imports(monkeypatch: pytest.MonkeyPatch):
-    pytest.importorskip("langchain")
+    _skip_unless_langchain_v0()
     _load_slim_example(
         monkeypatch, "examples.function_tools_langchain", framework="langchain_openai"
     )
@@ -312,7 +335,7 @@ def test_function_tools_langgraph_example_imports(monkeypatch: pytest.MonkeyPatc
 
 
 def test_session_actions_langchain_example_imports(monkeypatch: pytest.MonkeyPatch):
-    pytest.importorskip("langchain")
+    _skip_unless_langchain_v0()
     _load_slim_example(
         monkeypatch, "examples.session_actions_langchain", framework="langchain_openai"
     )
@@ -384,7 +407,7 @@ def test_examples_can_run_as_scripts_without_package_import_errors(script_path: 
     if script_path in _REQUIRES_LANGCHAIN_OPENAI:
         pytest.importorskip("langchain_openai")
     if script_path in _REQUIRES_LANGCHAIN:
-        pytest.importorskip("langchain")
+        _skip_unless_langchain_v0()
     if script_path in _REQUIRES_LANGGRAPH:
         pytest.importorskip("langgraph")
 

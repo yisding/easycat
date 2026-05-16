@@ -146,22 +146,25 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
     # 6b. LangGraph compiled graph -> LangGraphBridge (check before
     # plain LangChain Runnable since CompiledStateGraph *is* a Runnable).
-    try:
-        from langgraph.graph.state import CompiledStateGraph  # type: ignore[import-untyped]
+    # A graph wrapped by a generic Runnable combinator
+    # (``graph.with_types(...)`` / ``.with_retry(...)``) is a
+    # ``RunnableBinding`` / ``RunnableRetry`` whose real graph sits on
+    # ``.bound`` — peel those so it still routes here instead of falling
+    # through to the plain LangChainBridge, which would feed it
+    # ``configurable.session_id`` instead of LangGraph's required
+    # ``thread_id`` and crash a checkpointed graph on the first turn.
+    compiled_graph = _unwrap_compiled_state_graph(agent)
+    if compiled_graph is not None:
+        if getattr(compiled_graph, "checkpointer", None) is None:
+            raise BridgeInputError(
+                "LangGraph graphs must be compiled with a checkpointer "
+                "to be auto-adapted. Call graph.compile("
+                "checkpointer=InMemorySaver()) or construct "
+                "LangGraphBridge(graph=..., ...) explicitly."
+            )
+        from easycat.integrations.agents.langgraph import LangGraphBridge
 
-        if isinstance(agent, CompiledStateGraph):
-            if getattr(agent, "checkpointer", None) is None:
-                raise BridgeInputError(
-                    "LangGraph graphs must be compiled with a checkpointer "
-                    "to be auto-adapted. Call graph.compile("
-                    "checkpointer=InMemorySaver()) or construct "
-                    "LangGraphBridge(graph=..., ...) explicitly."
-                )
-            from easycat.integrations.agents.langgraph import LangGraphBridge
-
-            return LangGraphBridge(graph=agent)
-    except ImportError:
-        pass
+        return LangGraphBridge(graph=compiled_graph)
 
     # 6c. LangChain Runnable -> LangChainBridge.
     try:
@@ -196,6 +199,62 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     # :class:`AgentRunnerConfig`; ``AgentStage`` provides a default-config
     # safety wrap for callers that construct ``Session`` directly.
     return agent
+
+
+def _unwrap_compiled_state_graph(agent: Any) -> Any | None:
+    """Return the ``CompiledStateGraph`` behind ``agent``, peeling any
+    ``RunnableBindingBase`` wrappers, else ``None``.
+
+    A compiled LangGraph graph is a ``CompiledStateGraph``, but wrapping
+    it in a generic ``Runnable`` combinator — ``graph.with_types(...)``,
+    ``graph.with_retry(...)``, ``graph.with_listeners(...)``,
+    ``graph.bind(...)`` — hides it inside a ``RunnableBinding`` /
+    ``RunnableRetry`` whose real graph sits on ``.bound``.  Both subclass
+    ``RunnableBindingBase``, so peel ``.bound`` layers (bounded, with a
+    self-reference guard) and report the underlying graph so it routes
+    through :class:`LangGraphBridge` instead of falling through to the
+    plain :class:`LangChainBridge` — that bridge supplies
+    ``configurable.session_id`` where LangGraph requires ``thread_id``,
+    so a checkpointed graph would crash on the first turn with
+    ``KeyError: 'thread_id'``.
+
+    The *unwrapped* graph (not the wrapper) is returned because only
+    ``RunnableBinding`` proxies attribute access to ``.bound`` — a
+    ``RunnableRetry`` does not, so ``LangGraphBridge``'s
+    ``graph.checkpointer`` probe would wrongly see ``None`` and reject a
+    checkpointed graph.  Config bound the common way
+    (``graph.with_config(configurable={"thread_id": ...})`` returns a
+    ``CompiledStateGraph`` *copy* carrying ``.config``, so a later
+    ``.with_types(...)`` still nests that config-bearing copy on
+    ``.bound``) is preserved; ``LangGraphBridge`` reads it back off the
+    peeled graph.  Returns ``None`` (caller falls back to the plain
+    Runnable branch) when ``langgraph`` is unavailable.
+    """
+    try:
+        from langgraph.graph.state import (  # type: ignore[import-untyped]
+            CompiledStateGraph,
+        )
+    except ImportError:
+        return None
+    try:
+        from langchain_core.runnables.base import (  # type: ignore[import-untyped]
+            RunnableBindingBase,
+        )
+    except ImportError:
+        RunnableBindingBase = ()  # type: ignore[assignment]
+    # ``RunnableBindingBase`` may nest (e.g.
+    # ``graph.bind(...).with_retry()``); ``seen`` guards against a
+    # pathological self-referential ``.bound``.
+    seen: set[int] = set()
+    while agent is not None and id(agent) not in seen:
+        seen.add(id(agent))
+        if isinstance(agent, CompiledStateGraph):
+            return agent
+        if isinstance(agent, RunnableBindingBase):
+            agent = getattr(agent, "bound", None)
+            continue
+        break
+    return None
 
 
 def _is_language_model(agent: Any) -> bool:
