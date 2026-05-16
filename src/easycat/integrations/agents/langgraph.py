@@ -135,7 +135,15 @@ class LangGraphBridge:
                 "astream_events() — got: " + type(graph).__name__
             )
         checkpointer = getattr(graph, "checkpointer", None)
-        if checkpointer is None:
+        # ``graph.compile(checkpointer=False)`` explicitly disables
+        # persistence (used for subgraphs): LangGraph sets
+        # ``graph.checkpointer`` to ``False``, not ``None``, but
+        # ``get_state()`` / ``update_state()`` still raise "No
+        # checkpointer set".  Treat ``False`` (and any other falsy
+        # value) the same as a missing checkpointer so the bridge fails
+        # loudly at construction instead of later producing empty
+        # ``done`` output and silently dropping interruption rewrites.
+        if not checkpointer:
             raise BridgeInputError(
                 "LangGraphBridge requires a graph compiled with a checkpointer. "
                 "Call graph.compile(checkpointer=InMemorySaver()) (or another "
@@ -147,6 +155,12 @@ class LangGraphBridge:
         self._display_name = display_name or type(graph).__name__
         self._include_types = list(include_types) if include_types is not None else None
         self._last_output: Any = None
+        # Final checkpoint id captured at the end of the previous turn.
+        # Used as the pre-turn baseline for the post-turn checkpoint
+        # trail walk (see :meth:`_record_checkpoint_trail`) so prior
+        # turns aren't re-recorded — without an extra ``get_state``
+        # round-trip to the checkpointer at turn start.
+        self._last_checkpoint_id: str | None = None
         # Message ids of the transient per-turn context (caller-id /
         # system-prefix) injected for the *current* turn.  Tracked so it
         # can be deleted from checkpointed graph state once the turn
@@ -212,14 +226,19 @@ class LangGraphBridge:
         # them — don't get an invented prev→sibling handoff.
         last_node_by_ns: dict[tuple[str, ...], tuple[str, Any]] = {}
         # Checkpoint ids we've already emitted state_snapshot records
-        # for, to avoid duplicates when the same id appears on multiple
-        # events within a super-step.
+        # for, so the post-turn history walk records each id once.
         seen_checkpoints: set[str] = set()
         # Shared state for tool-call deduplication — see
         # :func:`translate_stream_event` for details.
         tool_state: dict[str, Any] = {}
 
         config = self._config()
+        # Pre-turn baseline for the post-turn checkpoint trail: the
+        # checkpoint that already existed when this turn started (this
+        # bridge's prior-turn final, or ``None`` on the first turn).
+        # Read from instance state rather than a ``get_state`` probe so
+        # the turn doesn't pay an extra checkpointer round-trip.
+        baseline_checkpoint_id = self._last_checkpoint_id
         input_payload = self._build_input(turn_input.text, turn_input.context)
         stream_kwargs: dict[str, Any] = {
             "version": "v2",
@@ -265,8 +284,6 @@ class LangGraphBridge:
                         accumulated += bridge_event.text
                         model_text_streamed = True
                     yield bridge_event
-
-                self._maybe_record_checkpoint(event, recorder, seen_checkpoints)
         except Exception as exc:
             for cursor in reversed(list(open_cursors.values())):
                 try:
@@ -282,24 +299,28 @@ class LangGraphBridge:
             recorder.record_unit_exited(cursor.with_committable(True), reason=None)
         open_cursors.clear()
         # Drop this turn's transient context from checkpointed state
-        # before the final snapshot so the recorded post-turn state (and
-        # every following turn) is free of the per-turn system prefix.
+        # before the checkpoint trail is read so the recorded post-turn
+        # state (and every following turn) is free of the per-turn
+        # system prefix.
         self._purge_transient_context()
 
-        # Surface the final checkpoint + capture the last message for
-        # ``structured_output``.  Best-effort: a graph compiled without
-        # a checkpointer would have been rejected at construction, but
-        # ``get_state`` can still fail on transient checkpointer errors.
-        # Also belt-and-suspenders: if the graph paused on ``interrupt()``
-        # in a path that didn't surface through the ``updates`` channel
-        # (custom checkpointers, older LangGraph versions), inspect
-        # ``state.tasks[i].interrupts`` and fail loudly so the voice
-        # doesn't go silently dead.
+        # Record the real per-step checkpoint trail + capture the last
+        # message for ``structured_output``.  Best-effort: a graph
+        # compiled without a checkpointer would have been rejected at
+        # construction, but ``get_state`` can still fail on transient
+        # checkpointer errors.  Also belt-and-suspenders: if the graph
+        # paused on ``interrupt()`` in a path that didn't surface
+        # through the ``updates`` channel (custom checkpointers, older
+        # LangGraph versions), inspect ``state.tasks[i].interrupts`` and
+        # fail loudly so the voice doesn't go silently dead.
         try:
             final_state = self._graph.get_state(config)
-            checkpoint_id = _get_checkpoint_id(final_state)
-            if checkpoint_id and checkpoint_id not in seen_checkpoints:
-                recorder.record_state_snapshot(ref=f"langgraph:{checkpoint_id}")
+            self._record_checkpoint_trail(
+                config, baseline_checkpoint_id, recorder, seen_checkpoints
+            )
+            # Advance the baseline so the *next* turn's trail starts
+            # after this turn's last checkpoint.
+            self._last_checkpoint_id = _get_checkpoint_id(final_state)
             self._last_output = _messages_tail(final_state, self._messages_key or "messages")
             pending = _pending_interrupts(final_state)
             if pending:
@@ -437,6 +458,9 @@ class LangGraphBridge:
     def reset(self) -> None:
         self._thread_id = str(uuid.uuid4())
         self._last_output = None
+        # New thread → no prior checkpoint, so the next turn's trail
+        # starts from scratch instead of stopping at a stale baseline.
+        self._last_checkpoint_id = None
         # Drop any not-yet-purged ids: they belonged to the old thread,
         # and a later purge against the rotated thread_id would be wrong.
         self._transient_context_ids = []
@@ -770,26 +794,44 @@ class LangGraphBridge:
                 return cursor.unit_id
         return default
 
-    def _maybe_record_checkpoint(
+    def _record_checkpoint_trail(
         self,
-        event: dict[str, Any],
+        config: dict[str, Any],
+        baseline_checkpoint_id: str | None,
         recorder: AgentRecorder,
         seen: set[str],
     ) -> None:
-        """Emit a ``state_snapshot`` record when a new checkpoint_id appears.
+        """Record a ``state_snapshot`` per real checkpoint created this turn.
 
-        Each LangGraph event's ``metadata`` dict carries the current
-        ``checkpoint_id`` (populated when a checkpointer is configured,
-        which the bridge enforces at construction).  We dedupe against
-        ids we've already recorded so each checkpoint shows up once.
+        The locked LangGraph 1.1.x ``astream_events`` schema puts
+        ``langgraph_step`` / ``langgraph_checkpoint_ns`` on node-event
+        ``metadata`` but no ``checkpoint_id``, so per-step snapshots
+        cannot be derived from the event stream (the previous
+        event-metadata approach only ever recorded the final
+        ``get_state`` snapshot for multi-node graphs).  Instead we read
+        the checkpointer's real history: ``get_state_history`` yields
+        ``StateSnapshot`` objects newest→oldest, each carrying its real
+        ``checkpoint_id``.  We walk back only as far as the checkpoint
+        that already existed when the turn started so prior turns aren't
+        re-recorded, then emit this turn's checkpoints in chronological
+        order.  Dedupe via ``seen`` keeps each id to one record.
         """
-        metadata = event.get("metadata")
-        if not isinstance(metadata, dict):
+        try:
+            history = list(self._graph.get_state_history(config))
+        except Exception:  # pragma: no cover — best-effort; duck-typed graph.
+            logger.debug("get_state_history unavailable; skipping checkpoint trail", exc_info=True)
             return
-        checkpoint_id = metadata.get("checkpoint_id")
-        if isinstance(checkpoint_id, str) and checkpoint_id and checkpoint_id not in seen:
-            seen.add(checkpoint_id)
-            recorder.record_state_snapshot(ref=f"langgraph:{checkpoint_id}")
+        turn_ids: list[str] = []
+        for snapshot in history:  # newest → oldest
+            cid = _get_checkpoint_id(snapshot)
+            if not cid or cid == baseline_checkpoint_id:
+                break
+            turn_ids.append(cid)
+        for cid in reversed(turn_ids):  # chronological
+            if cid in seen:
+                continue
+            seen.add(cid)
+            recorder.record_state_snapshot(ref=f"langgraph:{cid}")
 
     def _serialize_framework_state(self) -> bytes:
         try:

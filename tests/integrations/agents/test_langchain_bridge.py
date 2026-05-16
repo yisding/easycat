@@ -1153,6 +1153,79 @@ class TestLangChainBridgeInvoke:
         assert text == "abc"
 
     @pytest.mark.asyncio
+    async def test_downstream_transform_overrides_done_text_and_history(self):
+        """``model | StrOutputParser() | RunnableLambda(str.upper)``:
+        the transforming downstream sibling's ``on_chain_stream`` is
+        suppressed (it would double-speak the model tokens), so the
+        streamed text is the raw lowercase model output.  The final
+        ``done.text`` and next-turn history must instead be the
+        top-level chain's real transformed output, not the unmodified
+        internal model tokens."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_chat_model_start",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": _MockAIMessageChunk(content="abc")},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableLambda",
+                    "run_id": "lambda",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": "ABC"},
+                },
+                {
+                    "event": "on_chat_model_end",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {"output": _MockAIMessageChunk(content="abc")},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"output": "ABC"},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+
+        # Live stream is the raw model tokens (downstream transform
+        # suppressed to avoid double-speak).
+        streamed = "".join(e.text for e in events if e.kind == "text_delta")
+        assert streamed == "abc"
+
+        # ...but the recorded final answer + history are the chain's
+        # real transformed output.
+        done = [e for e in events if e.kind == "done"]
+        assert done and done[0].text == "ABC"
+        assert done[0].structured_output == "ABC"
+        ai_msgs = [m for m in bridge._message_history if getattr(m, "type", None) == "ai"]
+        assert ai_msgs and ai_msgs[-1].content == "ABC"
+
+    @pytest.mark.asyncio
     async def test_chain_wrapping_non_streaming_chat_model_emits_text(self):
         """Non-streaming chat models (any chat model that doesn't override
         ``_stream`` / ``_astream``) skip ``on_chat_model_stream`` and only

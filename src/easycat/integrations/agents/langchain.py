@@ -20,7 +20,10 @@ from uuid import uuid4
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._context import normalize_context_messages
 from easycat.integrations.agents._helpers import split_replacement_by_original_parts
-from easycat.integrations.agents._langchain_events import translate_stream_event
+from easycat.integrations.agents._langchain_events import (
+    _plain_chunk_text,
+    translate_stream_event,
+)
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -218,11 +221,31 @@ class LangChainBridge:
         # accumulated text only when no ``on_chain_end`` was observed — e.g.
         # bare-chat-model runnables that never emit a chain event.
         self._last_output = captured_output if captured_output_set else accumulated
-        self._append_to_history(turn_input.text, accumulated)
+
+        # When the top-level chain output is text that differs from the
+        # raw model tokens, an LCEL stage *after* the model transformed
+        # it — e.g. ``model | StrOutputParser() | RunnableLambda(str.upper)``.
+        # Those downstream-sibling ``on_chain_stream`` chunks are
+        # suppressed (they'd otherwise double-speak the model tokens),
+        # so ``accumulated`` holds the pre-transform text.  Record the
+        # chain's real output as the final ``done.text`` and history so
+        # the response and next-turn conditioning aren't the unmodified
+        # internal model output.  Live TTS already streamed the raw
+        # tokens; re-emitting here would double-speak, so (like the
+        # LangGraph bridge) we only correct the recorded transcript —
+        # except when nothing streamed, where ``done.text`` is the
+        # consumer's only spoken text and must carry the real answer.
+        final_text = accumulated
+        if captured_output_set:
+            output_text = _plain_chunk_text(captured_output)
+            if output_text and output_text != accumulated:
+                final_text = output_text
+
+        self._append_to_history(turn_input.text, final_text)
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(
             kind="done",
-            text=accumulated,
+            text=final_text,
             structured_output=self._last_output,
         )
 

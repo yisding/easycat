@@ -70,6 +70,7 @@ class _MockTwoNodeGraph:
     def __init__(self) -> None:
         self.checkpointer = object()
         self._state = _MockStateSnapshot("cp-final", [])
+        self._get_state_calls = 0
         self.update_state_calls: list[Any] = []
 
     def astream_events(
@@ -123,7 +124,25 @@ class _MockTwoNodeGraph:
         return _gen()
 
     def get_state(self, config: dict[str, Any]) -> _MockStateSnapshot:
+        self._get_state_calls += 1
+        # First call is the bridge's pre-turn baseline probe — a fresh
+        # thread has no prior checkpoint, so report no id.  Later calls
+        # return the post-turn final state.
+        if self._get_state_calls == 1:
+            return _MockStateSnapshot("", [])
         return self._state
+
+    def get_state_history(self, config: dict[str, Any]) -> Any:
+        # Real per-super-step checkpoints, newest→oldest, as LangGraph
+        # yields them; LangGraph 1.1.x node-event metadata carries no
+        # ``checkpoint_id`` so the trail must come from real history.
+        return iter(
+            [
+                _MockStateSnapshot("cp-final", []),
+                _MockStateSnapshot("cp-step-2", []),
+                _MockStateSnapshot("cp-step-1", []),
+            ]
+        )
 
     def update_state(self, config: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
         self.update_state_calls.append((config, values))
@@ -160,12 +179,16 @@ class TestLangGraphExample:
         assert handoffs[0].from_unit == "research"
         assert handoffs[0].to_unit == "write"
 
-        # Journal invariants.
+        # The full per-step checkpoint trail is reconstructed from the
+        # checkpointer's real history (fresh thread → all three), in
+        # chronological order.
         records = journal.read()
         state_refs = [r.data["state_ref"] for r in records if r.name == "state_snapshot"]
-        assert "langgraph:cp-step-1" in state_refs
-        assert "langgraph:cp-step-2" in state_refs
-        assert "langgraph:cp-final" in state_refs
+        assert state_refs == [
+            "langgraph:cp-step-1",
+            "langgraph:cp-step-2",
+            "langgraph:cp-final",
+        ]
 
     def test_committable_boundaries_published(self):
         assert LangGraphBridge.COMMITTABLE_BOUNDARIES

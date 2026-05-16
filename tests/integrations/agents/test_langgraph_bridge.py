@@ -78,10 +78,15 @@ class _MockCompiledGraph:
         scripted: list[dict[str, Any]] | None = None,
         *,
         state: _MockState | None = None,
+        state_history: list[_MockState] | None = None,
     ) -> None:
         self._scripted = scripted or []
         self.checkpointer = _MockCheckpointer()
         self._state = state or _MockState(values={"messages": []})
+        # ``get_state_history`` payload, newest→oldest (as real
+        # LangGraph yields).  Mutable so multi-turn tests can grow it
+        # between invocations.  Defaults to just the final state.
+        self.state_history = state_history
         self.update_state_calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
     def astream_events(
@@ -97,6 +102,10 @@ class _MockCompiledGraph:
 
     def get_state(self, config: dict[str, Any]) -> _MockState:
         return self._state
+
+    def get_state_history(self, config: dict[str, Any]) -> Any:
+        history = self.state_history if self.state_history is not None else [self._state]
+        return iter(list(history))
 
     def update_state(self, config: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
         self.update_state_calls.append((config, values))
@@ -211,6 +220,21 @@ class TestLangGraphBridgeConstruction:
 
         with pytest.raises(BridgeInputError):
             LangGraphBridge(GraphNoCP())
+
+    def test_rejects_graph_with_false_checkpointer(self):
+        """``graph.compile(checkpointer=False)`` disables persistence and
+        sets ``graph.checkpointer`` to ``False`` (not ``None``), but
+        ``get_state()`` / ``update_state()`` still raise.  The bridge
+        must reject it at construction the same as a missing one."""
+
+        class GraphFalseCP:
+            checkpointer = False
+
+            def astream_events(self, *args: Any, **kwargs: Any) -> Any:
+                return iter(())
+
+        with pytest.raises(BridgeInputError):
+            LangGraphBridge(GraphFalseCP())
 
     def test_committable_boundaries_published(self):
         assert LangGraphBridge.COMMITTABLE_BOUNDARIES[UnitKind.WORKFLOW_NODE] == (
@@ -400,27 +424,47 @@ class TestLangGraphBridgeInvoke:
         assert any(r.name == "cancellation_boundary" for r in records)
 
     @pytest.mark.asyncio
-    async def test_checkpoint_snapshot_recorded_from_event_metadata(self):
-        """Checkpoint ids arrive inline on event metadata; the final
-        ``get_state`` snapshot adds the post-turn checkpoint once."""
-        scripted = [
-            _node_start("planner", "n1", checkpoint_id="cp-mid"),
-            _node_end("planner", "n1", checkpoint_id="cp-mid"),
-        ]
-        graph = _MockCompiledGraph(scripted, state=_MockState(checkpoint_id="cp-final"))
+    async def test_checkpoint_trail_recorded_from_real_history(self):
+        """LangGraph 1.1.x node events carry ``langgraph_step`` but no
+        ``checkpoint_id``, so the per-step trail is reconstructed from
+        the checkpointer's real ``get_state_history`` after the turn.
+        Across turns the bridge remembers its prior-turn final
+        checkpoint and walks history back only to that boundary, so
+        each turn records exactly its own checkpoints — once, in
+        chronological order — without re-recording earlier turns or
+        paying an extra pre-turn ``get_state`` round-trip."""
+        scripted = [_node_start("planner", "n1"), _node_end("planner", "n1")]
+        graph = _MockCompiledGraph(
+            scripted,
+            state=_MockState(checkpoint_id="cp-prev"),
+            state_history=[_MockState(checkpoint_id="cp-prev")],
+        )
         bridge = LangGraphBridge(graph)
 
-        journal = InMemoryRingBuffer(capacity=1000)
-        rec = _recorder(journal)
-        async for _ in bridge.invoke(AgentTurnInput.from_text("x"), rec):
+        # Turn 1: fresh thread (no prior baseline) → records its lone
+        # checkpoint and remembers it as the next turn's baseline.
+        j1 = InMemoryRingBuffer(capacity=1000)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("x"), _recorder(j1)):
             pass
+        refs1 = [r.data["state_ref"] for r in j1.read() if r.name == "state_snapshot"]
+        assert refs1 == ["langgraph:cp-prev"]
 
-        refs = [r.data["state_ref"] for r in journal.read() if r.name == "state_snapshot"]
-        assert "langgraph:cp-mid" in refs
-        assert "langgraph:cp-final" in refs
-        # Dedupe: cp-mid appears on both node_start and node_end events
-        # but is recorded only once.
-        assert refs.count("langgraph:cp-mid") == 1
+        # Turn 2: history has grown (newest→oldest); a checkpoint id
+        # repeats and the prior-turn baseline (cp-prev) plus anything
+        # older must be excluded.
+        graph._state = _MockState(checkpoint_id="cp-final")
+        graph.state_history = [
+            _MockState(checkpoint_id="cp-final"),
+            _MockState(checkpoint_id="cp-final"),
+            _MockState(checkpoint_id="cp-mid"),
+            _MockState(checkpoint_id="cp-prev"),
+            _MockState(checkpoint_id="cp-older"),
+        ]
+        j2 = InMemoryRingBuffer(capacity=1000)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("y"), _recorder(j2)):
+            pass
+        refs2 = [r.data["state_ref"] for r in j2.read() if r.name == "state_snapshot"]
+        assert refs2 == ["langgraph:cp-mid", "langgraph:cp-final"]
 
     @pytest.mark.asyncio
     async def test_turn_context_prepended_to_messages_input(self):
