@@ -145,6 +145,9 @@ class LlamaAgentsBridge:
         self._last_output: Any = None
         self._last_output_text = ""
         self._run_count = 0
+        # Strong refs to background cancel/aclose tasks scheduled by reset()
+        # so they are not garbage-collected before they run to completion.
+        self._reset_cleanup_tasks: set[asyncio.Task[None]] = set()
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 
@@ -169,10 +172,24 @@ class LlamaAgentsBridge:
                 stream = self._invoke_remote(turn_input, cancel_token)
             else:
                 stream = self._invoke_local(turn_input, cancel_token)
-            async for event in stream:
-                if event.kind == "text_delta":
-                    accumulated += event.text
-                yield event
+            try:
+                async for event in stream:
+                    if event.kind == "text_delta":
+                        accumulated += event.text
+                    yield event
+            finally:
+                # If the consumer closes invoke() early -- a text-session
+                # interruption aclose()s the generator (GeneratorExit), or
+                # the invoke task itself is cancelled -- the async for above
+                # is abandoned without closing the inner stream, so
+                # _invoke_local/_invoke_remote never reach their
+                # cancel_run()/cancel_handler() teardown and the underlying
+                # workflow keeps running and contaminates later turns despite
+                # the bridge state reporting idle. Closing the stream
+                # propagates the shutdown into those generators. On normal
+                # completion the stream is already exhausted and aclose() is
+                # a harmless no-op.
+                await stream.aclose()
         except Exception as exc:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(cursor, reason="error")
@@ -276,6 +293,12 @@ class LlamaAgentsBridge:
                     logger.debug("LlamaAgents append_interruption_note failed", exc_info=True)
 
     def reset(self) -> None:
+        # A reset after an InputRequiredEvent pause must not just drop the
+        # paused handler reference: the workflow is still waiting locally or
+        # on the workflow server and would leak (and could later resume into
+        # a "fresh" session) if nobody cancels it. Tear it down before the
+        # references are cleared below.
+        self._teardown_pending_handlers()
         for target in (self._workflow, self._client):
             fn = getattr(target, "reset", None)
             if callable(fn):
@@ -296,6 +319,45 @@ class LlamaAgentsBridge:
         self._last_output = None
         self._last_output_text = ""
         self._run_count = 0
+
+    def _teardown_pending_handlers(self) -> None:
+        """Cancel any handler/stream left paused by a HITL InputRequiredEvent.
+
+        reset() runs synchronously (Session.reset_state() calls it inside the
+        event loop), so the paused handler's cancel_run()/cancel_handler() and
+        the suspended stream's aclose() can only be driven on a background
+        task -- but they must run, or the workflow keeps waiting locally / on
+        the workflow server after the bridge has forgotten about it.
+        """
+        handler = self._pending_local_handler
+        if handler is not None:
+            self._fire_and_forget(self._cancel_local_handler(handler))
+        stream = self._pending_local_stream
+        if stream is not None:
+            aclose = getattr(stream, "aclose", None)
+            if callable(aclose):
+                self._fire_and_forget(aclose())
+        handler_id = self._pending_remote_handler_id
+        if handler_id is not None and self._client is not None:
+            self._fire_and_forget(self._cancel_remote_handler(handler_id))
+
+    def _fire_and_forget(self, awaitable: Any) -> None:
+        """Best-effort drive an async teardown started from sync reset()."""
+        if awaitable is None or not inspect.isawaitable(awaitable):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop -- close the coroutine so it does not emit a
+            # "coroutine was never awaited" warning; cleanup cannot be driven.
+            close = getattr(awaitable, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    close()
+            return
+        task = loop.create_task(_swallow(awaitable))
+        self._reset_cleanup_tasks.add(task)
+        task.add_done_callback(self._reset_cleanup_tasks.discard)
 
     # ── Local workflow mode ───────────────────────────────────────
 
@@ -371,12 +433,14 @@ class LlamaAgentsBridge:
                 text = _extract_output_text(result)
                 if text:
                     yield AgentBridgeEvent(kind="text_delta", text=text)
-        except asyncio.CancelledError:
-            # Hard task cancellation: a barge-in / text-turn cancel that
-            # cancels the invoke task itself instead of only setting the
-            # cancel_token. Without this the finally below runs with
-            # cancelled=False, preserves the interrupted Context, and never
-            # calls cancel_run() -- the workflow keeps running and
+        except (asyncio.CancelledError, GeneratorExit):
+            # Hard task cancellation (asyncio.CancelledError) or an early
+            # consumer close of invoke() (GeneratorExit -- e.g. a text-session
+            # interruption that aclose()s the generator right after a delta
+            # was delivered). Either way the turn is being torn down without
+            # the cooperative cancel_token. Without this the finally below
+            # runs with cancelled=False, preserves the interrupted Context,
+            # and never calls cancel_run() -- the workflow keeps running and
             # contaminates the next turn.
             cancelled = True
             await self._best_effort_cancel(self._cancel_local_handler(handler))
@@ -577,14 +641,16 @@ class LlamaAgentsBridge:
                 # field, so _remote_context never populates from get_handler,
                 # and dropping the handler id here would silently lose all
                 # conversation state after every barge-in.
-        except asyncio.CancelledError:
-            # Hard task cancellation (the invoke task itself is cancelled,
-            # not just the cancel_token). Without this the workflow keeps
-            # running server-side -- cancel_handler() is never called -- and
-            # the next preserve_context turn resumes a contaminated handler.
-            # Mirror the cooperative path: advance the cursor past whatever
-            # the dropped envelope already consumed, stop the remote handler,
-            # and keep _remote_handler_id so the next turn still resumes it.
+        except (asyncio.CancelledError, GeneratorExit):
+            # Hard task cancellation (asyncio.CancelledError) or an early
+            # consumer close of invoke() (GeneratorExit) -- the turn is torn
+            # down without the cooperative cancel_token. Without this the
+            # workflow keeps running server-side -- cancel_handler() is never
+            # called -- and the next preserve_context turn resumes a
+            # contaminated handler. Mirror the cooperative path: advance the
+            # cursor past whatever the dropped envelope already consumed, stop
+            # the remote handler, and keep _remote_handler_id so the next turn
+            # still resumes it.
             cancelled = True
             if event_stream is not None:
                 self._remote_event_sequence = getattr(
@@ -735,6 +801,12 @@ def _string_or_none(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+async def _swallow(awaitable: Any) -> None:
+    """Await ``awaitable`` for its side effects, discarding any error."""
+    with contextlib.suppress(Exception):
+        await awaitable
 
 
 async def _aiter_with_cancellation(
@@ -1008,8 +1080,24 @@ def _unwrap_remote_result(value: Any) -> Any:
     if value is None:
         return None
     unwrapped = _unwrap_remote_envelope(value)
-    if _is_stop_event(unwrapped):
-        return getattr(unwrapped, "result", unwrapped)
+    if not _is_stop_event(unwrapped):
+        return unwrapped
+    if hasattr(unwrapped, "result"):
+        return unwrapped.result
+    # load_event() failed because the StopEvent subclass is only importable
+    # on the workflow server, so _unwrap_remote_envelope returned the raw
+    # envelope; _is_stop_event() still matched it via ``types``. The real
+    # workflow return value is the serialized event's ``result`` field
+    # inside the envelope, not an attribute on it -- dig it out so
+    # structured_output matches local mode rather than leaking the
+    # envelope's serialization metadata.
+    serialized = getattr(unwrapped, "value", None)
+    if isinstance(serialized, dict):
+        if "result" in serialized:
+            return serialized["result"]
+        nested = serialized.get("value")
+        if isinstance(nested, dict) and "result" in nested:
+            return nested["result"]
     return unwrapped
 
 

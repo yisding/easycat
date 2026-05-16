@@ -213,6 +213,23 @@ class _HitlWorkflow(_FakeWorkflowBase):
         return self.handler
 
 
+class _CancelTrackingHitlHandler(_HitlHandler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancelled = False
+
+    async def cancel_run(self) -> None:
+        self.cancelled = True
+
+
+class _CancelTrackingHitlWorkflow(_FakeWorkflowBase):
+    def __init__(self) -> None:
+        self.handler = _CancelTrackingHitlHandler()
+
+    def run(self, **kwargs: Any) -> _CancelTrackingHitlHandler:
+        return self.handler
+
+
 class TestLocalLlamaAgentsBridge:
     @pytest.mark.asyncio
     async def test_streams_workflow_events_and_records_cursor(self, fake_workflows_modules):
@@ -315,6 +332,45 @@ class TestLocalLlamaAgentsBridge:
         assert handler.cancelled is True
         # The interrupted Context is dropped, not carried into the next turn.
         assert bridge.snapshot_state().fields["has_context"] is False
+
+    @pytest.mark.asyncio
+    async def test_early_generator_close_cancels_running_workflow(self, fake_workflows_modules):
+        """Closing invoke() mid-stream (GeneratorExit) must stop the workflow.
+
+        A text-session interruption aclose()s the invoke generator instead of
+        setting the cancel_token; without propagating that close into the
+        inner stream the workflow keeps running and contaminates later turns.
+        """
+        workflow = _BlockingWorkflow()
+        handler = workflow.handler
+        bridge = LlamaAgentsBridge(workflow=workflow)
+
+        agen = bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())
+        first = await agen.__anext__()
+        assert first.kind == "text_delta" and first.text == "partial "
+
+        await asyncio.wait_for(agen.aclose(), timeout=2.0)
+
+        assert handler.cancelled is True
+        assert bridge.snapshot_state().fields["has_context"] is False
+
+    @pytest.mark.asyncio
+    async def test_reset_cancels_paused_local_hitl_handler(self, fake_workflows_modules):
+        """reset() after a HITL pause must cancel the paused handler/stream,
+        not just drop the references and leak the waiting workflow."""
+        workflow = _CancelTrackingHitlWorkflow()
+        handler = workflow.handler
+        bridge = LlamaAgentsBridge(workflow=workflow)
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("start"), _recorder()):
+            pass
+        assert bridge.snapshot_state().fields["waiting_for_input"] is True
+
+        bridge.reset()
+        await asyncio.gather(*list(bridge._reset_cleanup_tasks))
+
+        assert handler.cancelled is True
+        assert bridge.snapshot_state().fields["waiting_for_input"] is False
 
     @pytest.mark.asyncio
     async def test_human_input_event_pauses_and_resumes_handler(self, fake_workflows_modules):
@@ -1009,6 +1065,87 @@ class TestRemoteLlamaAgentsBridge:
 
         assert len(done) == 1
         assert done[0].structured_output == {"score": 0.9}
+
+    @pytest.mark.asyncio
+    async def test_remote_opaque_stop_subclass_result_unwrapped(self, fake_workflows_modules):
+        """structured_output must be the workflow result for an opaque
+        StopEvent subclass too.
+
+        ``load_event()`` fails (the subclass is only importable on the
+        workflow server) so the envelope is kept; ``_is_stop_event()`` still
+        matches it via ``types``. The real return value lives in the
+        envelope's serialized ``value['result']`` -- it must be dug out
+        instead of leaking the envelope's serialization metadata.
+        """
+
+        class _OpaqueStopEnvelope:
+            type = "acme.CustomStopEvent"
+            types = ["workflows.events.StopEvent", "workflows.events.Event"]
+            value = {"result": {"score": 0.9}}
+            qualified_name = "acme.CustomStopEvent"
+
+            def load_event(self) -> Any:
+                raise RuntimeError("CustomStopEvent not importable on client")
+
+        class _OpaqueResultClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> _RemoteStream:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                return _RemoteStream([_StopEvent("ignored")])
+
+            async def get_handler(self, handler_id: str) -> _HandlerData:
+                return _HandlerData(handler_id, result=_OpaqueStopEnvelope())
+
+        client = _OpaqueResultClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        done = [
+            event
+            async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())
+            if event.kind == "done"
+        ]
+
+        assert len(done) == 1
+        assert done[0].structured_output == {"score": 0.9}
+
+    @pytest.mark.asyncio
+    async def test_remote_early_generator_close_cancels_handler(self, fake_workflows_modules):
+        """Closing invoke() mid-stream (GeneratorExit) must cancel the remote
+        handler so the workflow does not keep running server-side."""
+        stream = _BlockingRemoteStream()
+
+        class _BlockingRemoteClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> Any:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                return stream
+
+        client = _BlockingRemoteClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        agen = bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())
+        first = await agen.__anext__()
+        assert first.kind == "text_delta" and first.text == "remote partial"
+
+        await asyncio.wait_for(agen.aclose(), timeout=2.0)
+
+        assert client.cancelled == ["h1"]
+        assert stream.closed is True
+
+    @pytest.mark.asyncio
+    async def test_reset_cancels_paused_remote_hitl_handler(self, fake_workflows_modules):
+        """reset() after a remote HITL pause must cancel the server-side
+        handler, not just drop the handler id and leak the paused workflow."""
+        client = _RemoteHitlClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("start"), _recorder()):
+            pass
+        assert bridge.snapshot_state().fields["waiting_for_input"] is True
+
+        bridge.reset()
+        await asyncio.gather(*list(bridge._reset_cleanup_tasks))
+
+        assert client.cancelled == ["h1"]
+        assert bridge.snapshot_state().fields["waiting_for_input"] is False
 
 
 class TestAutoAdapt:
