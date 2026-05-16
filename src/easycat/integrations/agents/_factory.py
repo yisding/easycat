@@ -199,7 +199,8 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
 
 def _is_language_model(agent: Any) -> bool:
-    """True for a (possibly bound) LangChain language model.
+    """True for a (possibly bound) LangChain language model — or a
+    model-first LCEL sequence whose first step is one.
 
     A bare ``BaseChatModel`` / ``BaseLLM`` — and the same model wrapped
     by ``.bind(...)`` / ``.bind_tools(...)`` / ``.with_config(...)``
@@ -210,9 +211,20 @@ def _is_language_model(agent: Any) -> bool:
     families subclass ``RunnableBindingBase`` and expose the wrapped
     model on ``.bound``, so we peel any ``RunnableBindingBase`` layers
     off ``.bound`` — a bound *and* retried chat/LLM is still recognised
-    and fed a message sequence on the first turn.  Returns ``False``
-    (rather than raising) if ``langchain_core`` is unavailable so the
-    caller falls back to the default dict payload.
+    and fed a message sequence on the first turn.
+
+    The same crash hits *model-first* LCEL compositions: the **first**
+    step of a ``RunnableSequence`` receives the runnable's raw input, so
+    ``ChatOpenAI() | StrOutputParser()`` and
+    ``ChatOpenAI().with_structured_output(...)`` (which compiles to a
+    sequence whose head is a bound model) feed the model directly and
+    reject the dict payload just like a bare model.  We descend into a
+    sequence's first step (peeling binding layers around it too) and
+    recognise it the same way — while a ``prompt | model`` chain keeps
+    the dict payload because its head is the prompt template, which
+    *wants* the prompt variables dict.  Returns ``False`` (rather than
+    raising) if ``langchain_core`` is unavailable so the caller falls
+    back to the default dict payload.
     """
     try:
         from langchain_core.language_models import (  # type: ignore[import-untyped]
@@ -224,14 +236,28 @@ def _is_language_model(agent: Any) -> bool:
     try:
         from langchain_core.runnables.base import (  # type: ignore[import-untyped]
             RunnableBindingBase,
+            RunnableSequence,
         )
     except ImportError:
         RunnableBindingBase = ()  # type: ignore[assignment]
+        RunnableSequence = ()  # type: ignore[assignment]
     # ``RunnableBindingBase`` may nest (e.g.
-    # ``.bind_tools(...).with_config(...).with_retry()``); ``seen``
-    # guards against a pathological self-referential ``.bound``.
+    # ``.bind_tools(...).with_config(...).with_retry()``) and a
+    # model-first sequence may itself sit under a binding or nest another
+    # sequence as its head; ``seen`` guards against a pathological
+    # self-referential ``.bound`` / ``.first``.
     seen: set[int] = set()
-    while isinstance(agent, RunnableBindingBase) and id(agent) not in seen:
+    while agent is not None and id(agent) not in seen:
         seen.add(id(agent))
-        agent = getattr(agent, "bound", None)
+        if isinstance(agent, RunnableBindingBase):
+            agent = getattr(agent, "bound", None)
+            continue
+        if isinstance(agent, RunnableSequence):
+            first = getattr(agent, "first", None)
+            if first is None:
+                steps = getattr(agent, "steps", None)
+                first = steps[0] if steps else None
+            agent = first
+            continue
+        break
     return isinstance(agent, (BaseChatModel, BaseLLM))

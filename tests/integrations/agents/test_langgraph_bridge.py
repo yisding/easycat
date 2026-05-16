@@ -1778,3 +1778,89 @@ class TestLangGraphBridgeFormattedAddMessages:
         bridge = LangGraphBridge(graph)
         graph.channels = {"messages": _FormattedAddMessagesChannel()}
         assert bridge._messages_key_uses_add_messages() is True
+
+
+# ── Checkpoint baseline after between-turn state writes ───────────
+
+
+class TestLangGraphBridgeBaselineAfterStateWrite:
+    """``replace_last_assistant_text`` / ``apply_interruption`` /
+    ``append_interruption_note`` call ``update_state`` *between* turns,
+    creating a fresh checkpoint.  The trail baseline must advance to it
+    so the next turn's checkpoint trail doesn't re-record that
+    rewrite/interruption checkpoint as a ``state_snapshot`` belonging to
+    the *following* user turn."""
+
+    def _turn_one_graph(self) -> _MockCompiledGraph:
+        state = _MockState(
+            values={
+                "messages": [
+                    _MockMessage("user", "q1"),
+                    _MockMessage("assistant", "raw **md**", message_id="m1"),
+                ]
+            },
+            checkpoint_id="cp-1",
+        )
+        scripted = [
+            _node_start("agent", "n1"),
+            _model_stream("raw md"),
+            _node_end("agent", "n1"),
+        ]
+        return _MockCompiledGraph(scripted, state=state)
+
+    @pytest.mark.asyncio
+    async def test_replace_last_assistant_text_advances_baseline(self):
+        graph = self._turn_one_graph()
+        bridge = LangGraphBridge(graph)
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("q1"), _recorder()):
+            pass
+        assert bridge._last_checkpoint_id == "cp-1"
+
+        # Markdown cleanup writes a new checkpoint between turns; the
+        # baseline must move to it (``update_state`` → cp-2).
+        bridge.replace_last_assistant_text("raw md")
+        assert graph.update_state_calls  # the rewrite actually fired
+        assert bridge._last_checkpoint_id == "cp-2"
+
+        # Turn 2: history grew to [cp-3, cp-2, cp-1] (newest→oldest).
+        # With the advanced baseline the walk stops at cp-2, so only
+        # this turn's cp-3 is recorded — the rewrite's cp-2 is *not*
+        # misattributed to turn 2.
+        graph._state = _MockState(checkpoint_id="cp-3")
+        graph.state_history = [
+            _MockState(checkpoint_id="cp-3"),
+            _MockState(checkpoint_id="cp-2"),
+            _MockState(checkpoint_id="cp-1"),
+        ]
+        j2 = InMemoryRingBuffer(capacity=1000)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("q2"), _recorder(j2)):
+            pass
+        refs2 = [r.data["state_ref"] for r in j2.read() if r.name == "state_snapshot"]
+        assert refs2 == ["langgraph:cp-3"]
+
+    @pytest.mark.asyncio
+    async def test_apply_interruption_advances_baseline(self):
+        graph = self._turn_one_graph()
+        bridge = LangGraphBridge(graph)
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("q1"), _recorder()):
+            pass
+        assert bridge._last_checkpoint_id == "cp-1"
+
+        bridge.apply_interruption("raw", CancellationMode.IMMEDIATE_STOP)
+        assert graph.update_state_calls
+        assert bridge._last_checkpoint_id == "cp-2"
+
+    @pytest.mark.asyncio
+    async def test_append_interruption_note_advances_baseline(self):
+        graph = self._turn_one_graph()
+        bridge = LangGraphBridge(graph)
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("q1"), _recorder()):
+            pass
+        assert bridge._last_checkpoint_id == "cp-1"
+
+        bridge.append_interruption_note("[user interrupted]")
+        assert graph.update_state_calls
+        assert bridge._last_checkpoint_id == "cp-2"

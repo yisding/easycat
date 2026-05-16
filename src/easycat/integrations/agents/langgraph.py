@@ -663,15 +663,19 @@ class LangGraphBridge:
             from langchain_core.messages import SystemMessage
 
             new_msg = SystemMessage(content=note)
-            self._graph.update_state(self._config(), {self._messages_key or "messages": [new_msg]})
+            updated = self._graph.update_state(
+                self._config(), {self._messages_key or "messages": [new_msg]}
+            )
+            self._advance_checkpoint_baseline(updated)
         except ImportError:
             # Fallback — use a plain dict message; LangGraph accepts these
             # for the ``add_messages`` reducer too.
             try:
-                self._graph.update_state(
+                updated = self._graph.update_state(
                     self._config(),
                     {self._messages_key or "messages": [{"role": "system", "content": note}]},
                 )
+                self._advance_checkpoint_baseline(updated)
             except Exception:
                 logger.debug("Failed to append interruption note via update_state", exc_info=True)
         except Exception:
@@ -1195,8 +1199,48 @@ class LangGraphBridge:
                         _set_content(msg, replacement)
                 else:
                     _set_content(msg, replacement)
-                self._graph.update_state(self._config(), {key: [msg]})
+                updated = self._graph.update_state(self._config(), {key: [msg]})
+                self._advance_checkpoint_baseline(updated)
                 return
+
+    def _advance_checkpoint_baseline(self, updated_config: Any) -> None:
+        """Move the checkpoint-trail baseline past a between-turn write.
+
+        ``replace_last_assistant_text`` / ``apply_interruption`` (via
+        :meth:`_rewrite_last_ai_message`) and :meth:`append_interruption_note`
+        call ``update_state`` *between* turns, which creates a fresh
+        checkpoint.  ``_last_checkpoint_id`` still points at the prior
+        turn's final checkpoint, so the next turn's
+        :meth:`_record_checkpoint_trail` walk — which stops at that
+        baseline — would re-emit this rewrite/interruption checkpoint as
+        a ``state_snapshot`` belonging to the *following* user turn (and
+        the interruption already recorded its own snapshot via the
+        recorder, so it would be a duplicate).  Advancing the baseline to
+        the just-created checkpoint keeps the trail correctly attributed.
+
+        ``update_state`` returns the new ``RunnableConfig`` carrying the
+        new ``checkpoint_id``; prefer it to avoid an extra checkpointer
+        round-trip, fall back to a ``get_state`` probe for duck-typed
+        graphs, and leave the baseline untouched on any failure (degrades
+        to the pre-fix behaviour, never a hard error).
+        """
+        cid: str | None = None
+        if isinstance(updated_config, dict):
+            configurable = updated_config.get("configurable")
+            if isinstance(configurable, dict):
+                cp = configurable.get("checkpoint_id")
+                cid = str(cp) if cp else None
+        if cid is None:
+            try:
+                cid = _get_checkpoint_id(self._graph.get_state(self._config()))
+            except Exception:
+                logger.debug(
+                    "Failed to refresh checkpoint baseline after state write",
+                    exc_info=True,
+                )
+                return
+        if cid:
+            self._last_checkpoint_id = cid
 
 
 # ── Helpers ──────────────────────────────────────────────────────

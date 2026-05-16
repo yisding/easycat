@@ -172,6 +172,43 @@ class TestAutoAdaptLangChain:
         assert isinstance(adapted, LangChainBridge)
         assert adapted._messages_input is False
 
+    def test_model_first_sequence_uses_messages_input(self):
+        """``ChatOpenAI() | StrOutputParser()`` feeds the model the raw
+        input — the default dict payload would crash its first step with
+        ``Invalid input type <class 'dict'>``, so it must use messages
+        mode just like a bare model.  Also covers a bound model head
+        (``model.bind(...) | parser``), the shape ``with_structured_output``
+        compiles to."""
+        pytest.importorskip("langchain_core")
+        from langchain_core.language_models.fake_chat_models import FakeListChatModel
+        from langchain_core.output_parsers import StrOutputParser
+
+        from easycat.integrations.agents.langchain import LangChainBridge
+
+        model = FakeListChatModel(responses=["hi"])
+        for runnable in (
+            model | StrOutputParser(),
+            model.bind(stop=["x"]) | StrOutputParser(),
+        ):
+            adapted = auto_adapt_agent(runnable)
+            assert isinstance(adapted, LangChainBridge)
+            assert adapted._messages_input is True
+
+    def test_prompt_first_sequence_keeps_dict_payload(self):
+        """A ``prompt | model`` chain's first step is the prompt
+        template, which *wants* the prompt-variables dict — it must keep
+        the default dict payload, not be misdetected as model-first."""
+        pytest.importorskip("langchain_core")
+        from langchain_core.language_models.fake_chat_models import FakeListChatModel
+        from langchain_core.prompts import ChatPromptTemplate
+
+        from easycat.integrations.agents.langchain import LangChainBridge
+
+        chain = ChatPromptTemplate.from_template("{input}") | FakeListChatModel(responses=["hi"])
+        adapted = auto_adapt_agent(chain)
+        assert isinstance(adapted, LangChainBridge)
+        assert adapted._messages_input is False
+
     @pytest.mark.asyncio
     async def test_bare_chat_model_invokes_without_dict_crash(self):
         """End-to-end: ``EasyConfig.mic(agent=ChatOpenAI(...))`` shape —
