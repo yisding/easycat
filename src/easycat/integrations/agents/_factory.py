@@ -202,45 +202,63 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
 
 def _unwrap_compiled_state_graph(agent: Any) -> Any | None:
-    """Return the ``CompiledStateGraph`` behind ``agent``, peeling any
-    ``RunnableBindingBase`` wrappers, else ``None``.
+    """Return the object :class:`LangGraphBridge` should drive for a
+    (possibly wrapped) ``CompiledStateGraph``, else ``None``.
 
     A compiled LangGraph graph is a ``CompiledStateGraph``, but wrapping
-    it in a generic ``Runnable`` combinator — ``graph.with_types(...)``,
-    ``graph.with_retry(...)``, ``graph.with_listeners(...)``,
-    ``graph.bind(...)`` — hides it inside a ``RunnableBinding`` /
-    ``RunnableRetry`` whose real graph sits on ``.bound``.  Both subclass
-    ``RunnableBindingBase``, so peel ``.bound`` layers (bounded, with a
-    self-reference guard) and report the underlying graph so it routes
-    through :class:`LangGraphBridge` instead of falling through to the
-    plain :class:`LangChainBridge` — that bridge supplies
-    ``configurable.session_id`` where LangGraph requires ``thread_id``,
-    so a checkpointed graph would crash on the first turn with
-    ``KeyError: 'thread_id'``.
+    it in a generic ``Runnable`` combinator — ``graph.bind(...)``,
+    ``graph.with_listeners(...)``, ``graph.with_config(...)``,
+    ``graph.with_types(...)``, ``graph.with_retry(...)`` — hides it
+    inside a ``RunnableBinding`` / ``RunnableRetry`` whose real graph
+    sits on ``.bound``.  It must still route through
+    :class:`LangGraphBridge` (not the plain :class:`LangChainBridge`,
+    which supplies ``configurable.session_id`` where LangGraph requires
+    ``thread_id`` and crashes a checkpointed graph on the first turn),
+    *without silently dropping the wrapper's behaviour*.
 
-    The *unwrapped* graph (not the wrapper) is returned because only
-    ``RunnableBinding`` proxies attribute access to ``.bound`` — a
-    ``RunnableRetry`` does not, so ``LangGraphBridge``'s
-    ``graph.checkpointer`` probe would wrongly see ``None`` and reject a
-    checkpointed graph.  Config bound the common way
-    (``graph.with_config(configurable={"thread_id": ...})`` returns a
-    ``CompiledStateGraph`` *copy* carrying ``.config``, so a later
-    ``.with_types(...)`` still nests that config-bearing copy on
-    ``.bound``) is preserved; ``LangGraphBridge`` reads it back off the
-    peeled graph.
+    The two wrapper families differ:
 
-    Config bound *outside* a non-config wrapper — e.g.
-    ``graph.with_retry().with_config(configurable={"thread_id": ...})``
-    or ``graph.with_types(...).with_config(...)`` — instead lands as a
-    ``RunnableBinding.config`` on a peeled layer, not on the graph copy,
-    so it would be discarded.  Collect ``.config`` from every peeled
-    wrapper layer and re-apply the merge onto the unwrapped graph via
-    ``CompiledStateGraph.with_config(...)`` (which returns a config-
-    bearing graph copy ``LangGraphBridge`` reads natively).  Layers are
-    merged innermost→outermost so an outer wrapper's value wins and
-    ``configurable`` sub-dicts deep-merge — matching LangChain
-    ``with_config`` and :func:`~easycat.integrations.agents.langgraph._bound_config`
-    precedence.  Returns ``None`` (caller falls back to the plain
+    * ``RunnableBinding`` (``bind`` / ``with_config`` / ``with_listeners``
+      / ``with_types``) overrides ``astream_events`` to apply its bound
+      kwargs + merged config (listeners included) and proxies *every
+      other* attribute to ``.bound``.  So when the chain from a binding
+      down to the graph is **all** ``RunnableBinding``, the bridge can
+      drive that binding directly: ``astream_events`` honours the
+      binding while ``graph.checkpointer`` / ``get_state`` / ``channels``
+      proxy through to the real graph.  We therefore return that
+      outermost preservable binding — peeling here would drop bound
+      kwargs and listeners.
+    * ``RunnableRetry`` (``with_retry``) does *not* proxy attribute
+      access (so the bridge's ``graph.checkpointer`` probe would see
+      ``None``) and does *not* override the streaming path the bridge
+      uses — its retry only wraps ``invoke``/``batch``, so it is inert
+      on ``astream_events`` and nothing is lost by peeling it.  A retry
+      anywhere in the chain also breaks the binding proxy for everything
+      above it.
+
+    So peel only the non-preservable prefix (an outer ``RunnableRetry``,
+    or a ``RunnableBinding`` sitting *above* a ``RunnableRetry`` whose
+    proxy is broken by it) and execute through the deepest object whose
+    descent to the graph is all-``RunnableBinding`` — or the bare graph
+    when no binding directly wraps it.
+
+    A peeled layer that carries only ``.config`` (a ``with_config`` /
+    ``with_types`` / inert ``with_retry``) loses nothing material: its
+    config is collected and re-applied onto the returned object via
+    ``.with_config(...)`` (innermost→outermost so an outer wrapper's
+    value wins and ``configurable`` sub-dicts deep-merge — matching
+    LangChain ``with_config`` and
+    :func:`~easycat.integrations.agents.langgraph._bound_config`).  But a
+    peeled layer carrying *behaviour* re-applying ``.config`` cannot
+    reproduce — non-empty bound ``.kwargs`` (a ``bind(**kwargs)``) or
+    ``.config_factories`` (a ``with_listeners(...)``) stranded above a
+    ``RunnableRetry`` — would be **silently dropped**.  Rather than do
+    that we raise :class:`BridgeInputError`: the only honest options for
+    a wrapper whose semantics cannot be preserved are to reject it or
+    drive it with a custom bridge, and ``with_retry()`` interposed
+    between such a binding and the graph makes pure-proxy execution
+    impossible (the retry neither proxies the state API nor retries the
+    streaming path).  Returns ``None`` (caller falls back to the plain
     Runnable branch) when ``langgraph`` is unavailable.
     """
     try:
@@ -251,31 +269,61 @@ def _unwrap_compiled_state_graph(agent: Any) -> Any | None:
         return None
     try:
         from langchain_core.runnables.base import (  # type: ignore[import-untyped]
+            RunnableBinding,
             RunnableBindingBase,
         )
     except ImportError:
+        RunnableBinding = ()  # type: ignore[assignment]
         RunnableBindingBase = ()  # type: ignore[assignment]
-    # ``RunnableBindingBase`` may nest (e.g.
-    # ``graph.bind(...).with_retry()``); ``seen`` guards against a
-    # pathological self-referential ``.bound``.  ``wrapper_configs``
-    # collects ``.config`` peeled off each binding layer (outermost
-    # first) so config bound outside the wrapper survives unwrapping.
+    # Walk outer→inner collecting wrapper layers (``seen`` guards a
+    # pathological self-referential ``.bound``) until the real graph.
     seen: set[int] = set()
-    wrapper_configs: list[dict[str, Any]] = []
-    while agent is not None and id(agent) not in seen:
-        seen.add(id(agent))
-        if isinstance(agent, CompiledStateGraph):
-            if not wrapper_configs:
-                return agent
-            return agent.with_config(_merge_wrapper_configs(wrapper_configs))
-        if isinstance(agent, RunnableBindingBase):
-            layer = getattr(agent, "config", None)
-            if isinstance(layer, dict) and layer:
-                wrapper_configs.append(layer)
-            agent = getattr(agent, "bound", None)
+    layers: list[tuple[Any, bool]] = []  # (wrapper, is_runnable_binding)
+    graph: Any = None
+    node = agent
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        if isinstance(node, CompiledStateGraph):
+            graph = node
+            break
+        if isinstance(node, RunnableBindingBase):
+            layers.append((node, isinstance(node, RunnableBinding)))
+            node = getattr(node, "bound", None)
             continue
         break
-    return None
+    if graph is None:
+        return None
+
+    # The longest innermost run of consecutive ``RunnableBinding`` layers
+    # (those directly above the graph) is drivable through-the-wrapper:
+    # its ``astream_events`` applies every binding and ``__getattr__``
+    # proxies the state API down to the graph.  ``j`` = index of the
+    # outermost such binding; everything before ``j`` is non-preservable
+    # (a retry, or a binding whose proxy a retry below it has broken).
+    j = len(layers)
+    while j > 0 and layers[j - 1][1]:
+        j -= 1
+    target = layers[j][0] if j < len(layers) else graph
+
+    peeled_configs: list[dict[str, Any]] = []
+    for wrapper, _ in layers[:j]:
+        if getattr(wrapper, "kwargs", None) or getattr(wrapper, "config_factories", None):
+            raise BridgeInputError(
+                "Cannot auto-adapt a LangGraph graph whose .bind(**kwargs) / "
+                ".with_listeners(...) wrapper is interposed by .with_retry(): "
+                "RunnableRetry neither exposes the graph's state API nor "
+                "retries the streaming path the voice bridge drives, so the "
+                "wrapper's behaviour would be silently dropped. Compile that "
+                "behaviour into the graph (or drop the .with_retry()), or "
+                "construct LangGraphBridge(graph=...) yourself and drive the "
+                "wrapper explicitly."
+            )
+        cfg = getattr(wrapper, "config", None)
+        if isinstance(cfg, dict) and cfg:
+            peeled_configs.append(cfg)
+    if not peeled_configs:
+        return target
+    return target.with_config(_merge_wrapper_configs(peeled_configs))
 
 
 def _merge_wrapper_configs(layers: list[dict[str, Any]]) -> dict[str, Any]:

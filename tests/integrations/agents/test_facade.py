@@ -331,3 +331,81 @@ class TestAutoAdaptLangGraph:
     def test_wrapped_checkpointerless_graph_still_raises(self):
         with pytest.raises(BridgeInputError, match="checkpointer"):
             auto_adapt_agent(self._compiled_graph(checkpointer=False).with_types(input_type=dict))
+
+    # ── Wrapper behaviour must survive, not be silently dropped ──────
+
+    def test_bind_kwargs_survive_via_wrapper(self):
+        """``graph.bind(**kwargs)`` is a ``RunnableBinding`` whose
+        ``astream_events`` passes the bound kwargs through.  Peeling to
+        the bare graph would silently drop them; the bridge must instead
+        drive the wrapper (its attribute proxy still exposes the graph's
+        checkpointer/state API)."""
+        from langchain_core.runnables.base import RunnableBinding
+
+        bound = self._compiled_graph().bind(configurable={"flag": "on"})
+        adapted = auto_adapt_agent(bound)
+        assert isinstance(adapted._graph, RunnableBinding)
+        assert adapted._graph.kwargs == {"configurable": {"flag": "on"}}
+        # State API still reachable through the binding's proxy.
+        assert adapted._graph.checkpointer is not None
+
+    def test_listeners_survive_via_wrapper(self):
+        """``graph.with_listeners(...)`` carries the listener on the
+        ``RunnableBinding`` (as a ``config_factories`` entry, not in
+        ``.config``), so the old peel-and-reapply-``.config`` path
+        dropped it.  Driving the wrapper preserves it."""
+        from langchain_core.runnables.base import RunnableBinding
+
+        calls: list[str] = []
+        wrapped = self._compiled_graph().with_listeners(on_start=lambda run: calls.append("start"))
+        adapted = auto_adapt_agent(wrapped)
+        assert isinstance(adapted._graph, RunnableBinding)
+        assert getattr(adapted._graph, "config_factories", None)
+
+    def test_retry_is_peeled_to_bare_graph(self):
+        """``RunnableRetry`` neither proxies attribute access nor wraps
+        the streaming path the bridge drives (its retry only covers
+        ``invoke``/``batch``), so it is inert here and must be peeled to
+        the bare graph rather than driven."""
+        from langgraph.graph.state import CompiledStateGraph
+
+        adapted = auto_adapt_agent(self._compiled_graph().with_retry())
+        assert isinstance(adapted._graph, CompiledStateGraph)
+
+    def test_empty_bind_under_retry_still_routes(self):
+        """``graph.bind().with_retry()`` carries no behaviour to lose
+        (empty kwargs), so it keeps peeling to the bare graph and routes
+        — not rejected."""
+        from langgraph.graph.state import CompiledStateGraph
+
+        adapted = auto_adapt_agent(self._compiled_graph().bind().with_retry())
+        assert isinstance(adapted._graph, CompiledStateGraph)
+
+    def test_bind_kwargs_under_retry_rejected(self):
+        """``graph.bind(tag="x").with_retry()`` re-nests as
+        ``RunnableBinding(kwargs) → RunnableRetry → graph``: the retry
+        breaks the binding's state proxy, so the bound kwargs can be
+        neither preserved nor silently dropped — reject loudly."""
+        with pytest.raises(BridgeInputError, match="with_retry"):
+            auto_adapt_agent(self._compiled_graph().bind(tag="x").with_retry())
+
+    def test_listeners_under_retry_rejected(self):
+        with pytest.raises(BridgeInputError, match="with_retry"):
+            auto_adapt_agent(
+                self._compiled_graph().with_listeners(on_start=lambda run: None).with_retry()
+            )
+
+    def test_bind_kwargs_with_config_no_retry_survive(self):
+        """Without an interposing retry the chain is all-``RunnableBinding``:
+        the bind kwargs *and* an outer ``with_config`` thread id are both
+        preserved by driving the wrapper."""
+        from langchain_core.runnables.base import RunnableBinding
+
+        chain = (
+            self._compiled_graph().bind(k=1).with_config(configurable={"thread_id": "resume-x"})
+        )
+        adapted = auto_adapt_agent(chain)
+        assert isinstance(adapted._graph, RunnableBinding)
+        assert adapted._thread_id == "resume-x"
+        assert adapted._graph.kwargs == {"k": 1}
+        assert adapted._graph.checkpointer is not None

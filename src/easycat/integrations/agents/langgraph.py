@@ -188,6 +188,16 @@ class LangGraphBridge:
         # turns aren't re-recorded — without an extra ``get_state``
         # round-trip to the checkpointer at turn start.
         self._last_checkpoint_id: str | None = None
+        # A caller can bind ``configurable.checkpoint_id`` onto the graph
+        # via ``graph.with_config(...)`` (a LangGraph resume / time-travel
+        # config: "run from this checkpoint").  It is a *one-shot* resume
+        # cursor: honoured for the construction-time baseline seed and the
+        # first turn's stream, then dropped.  Carrying it into every later
+        # ``invoke()`` / ``get_state()`` would make LangGraph keep forking
+        # from that original snapshot and read stale state, losing all
+        # conversation progress after the first resumed turn.  Cleared in
+        # :meth:`invoke` once consumed (and in :meth:`reset`).
+        self._resume_checkpoint_id: str | None = _bound_checkpoint_id(graph)
         # Resuming an existing thread: the checkpointer may already hold
         # an arbitrarily long history.  Seed the trail baseline from the
         # thread's current checkpoint *now* (one-time, at construction)
@@ -204,7 +214,10 @@ class LangGraphBridge:
         # resume just like an explicit one, so seed its baseline too.
         if thread_id is not None or bound_thread_id is not None:
             try:
-                existing_state = self._graph.get_state(self._config())
+                # Seed against the resume cursor (if any) so a time-travel
+                # resume baselines at the pinned checkpoint — otherwise the
+                # first turn's trail walk re-records the forked-from history.
+                existing_state = self._graph.get_state(self._resume_config())
                 self._last_checkpoint_id = _get_checkpoint_id(existing_state)
             except Exception:
                 logger.debug(
@@ -240,11 +253,46 @@ class LangGraphBridge:
         # so rebuilding it with only ``thread_id`` would silently drop
         # those values and make such graphs fail or run with defaults.
         # Override only the thread id (already resolved with the correct
-        # explicit > bound > fresh-UUID precedence in ``__init__``).
+        # explicit > bound > fresh-UUID precedence in ``__init__``) and
+        # neutralise any bound ``checkpoint_id``.
+        #
+        # A bound ``configurable.checkpoint_id`` is LangGraph's one-shot
+        # resume/time-travel cursor ("run from this checkpoint").  This is
+        # the *current-state* config used by every post-turn
+        # ``get_state`` / ``update_state`` / ``get_state_history`` read,
+        # which must always target the thread's *latest* checkpoint — pin
+        # it and later turns keep forking the original snapshot and
+        # ``get_state`` reads stale state, losing all conversation
+        # progress after the first resumed turn.  The resume cursor is
+        # applied (one-shot) only by :meth:`_resume_config` for the
+        # construction baseline seed and the first turn's stream.
+        #
+        # Set ``checkpoint_id`` to ``None`` rather than dropping the key:
+        # when the graph is a ``RunnableBinding`` wrapper its attribute
+        # proxy re-merges the wrapper's bound config (re-injecting the
+        # pinned id) for an *omitted* key, but an explicit ``None`` wins
+        # the merge and LangGraph treats it as "latest checkpoint".
         config = _bound_config(self._graph)
         configurable = dict(config.get("configurable") or {})
         configurable["thread_id"] = self._thread_id
+        configurable["checkpoint_id"] = None
         config["configurable"] = configurable
+        return config
+
+    def _resume_config(self) -> dict[str, Any]:
+        """:meth:`_config` plus the one-shot bound resume ``checkpoint_id``.
+
+        Used only for the construction-time baseline seed and the first
+        turn's ``astream_events`` input, so a resume/time-travel run forks
+        from the caller-pinned checkpoint.  Once :meth:`invoke` consumes
+        the cursor (clears ``self._resume_checkpoint_id``) this is
+        identical to :meth:`_config` (latest checkpoint).
+        """
+        config = self._config()
+        if self._resume_checkpoint_id is not None:
+            configurable = dict(config.get("configurable") or {})
+            configurable["checkpoint_id"] = self._resume_checkpoint_id
+            config["configurable"] = configurable
         return config
 
     def _messages_key_uses_add_messages(self) -> bool:
@@ -368,9 +416,18 @@ class LangGraphBridge:
         # the turn doesn't pay an extra checkpointer round-trip.
         baseline_checkpoint_id = self._last_checkpoint_id
         input_payload = self._build_input(turn_input.text, turn_input.context)
+        # Honour a caller-pinned resume/time-travel checkpoint for *this*
+        # turn's stream only, then consume the cursor: LangGraph treats
+        # ``configurable.checkpoint_id`` as "run from this checkpoint", so
+        # carrying it forward (or into this turn's post-stream
+        # ``get_state``) would keep forking the original snapshot and read
+        # stale state.  ``config`` (from ``_config()``, unpinned) is used
+        # for every post-turn read so they see the freshly forked head.
+        stream_config = self._resume_config()
+        self._resume_checkpoint_id = None
         stream_kwargs: dict[str, Any] = {
             "version": "v2",
-            "config": config,
+            "config": stream_config,
             "stream_mode": list(_DEFAULT_STREAM_MODES),
         }
         if self._include_types is not None:
@@ -638,6 +695,9 @@ class LangGraphBridge:
 
     def reset(self) -> None:
         self._thread_id = str(uuid.uuid4())
+        # New thread → the old thread's one-shot resume cursor must not
+        # apply (it would pin the fresh thread to a foreign checkpoint).
+        self._resume_checkpoint_id = None
         self._last_output = None
         # New thread → no prior checkpoint, so the next turn's trail
         # starts from scratch instead of stopping at a stale baseline.
@@ -1368,6 +1428,24 @@ def _bound_config(graph: Any) -> dict[str, Any]:
     if configurable:
         merged["configurable"] = configurable
     return merged
+
+
+def _bound_checkpoint_id(graph: Any) -> str | None:
+    """``checkpoint_id`` bound onto the graph via ``graph.with_config(...)``.
+
+    A bound ``configurable.checkpoint_id`` is LangGraph's resume /
+    time-travel cursor.  Derived from :func:`_bound_config` so it is
+    found whether the caller bound it on the graph copy or on an
+    enclosing ``RunnableBinding`` wrapper.  Returns ``None`` (fresh-run
+    behaviour) when nothing is bound.  The bridge treats it as one-shot
+    (see :class:`LangGraphBridge` ``_resume_checkpoint_id``).
+    """
+    configurable = _bound_config(graph).get("configurable")
+    if isinstance(configurable, dict):
+        cp = configurable.get("checkpoint_id")
+        if cp:
+            return str(cp)
+    return None
 
 
 def _get_checkpoint_id(state: Any) -> str | None:

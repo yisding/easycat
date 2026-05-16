@@ -1756,6 +1756,90 @@ class TestLangGraphBridgeBoundThreadId:
         assert bridge._last_checkpoint_id == "cp-prev"
 
 
+# ── Bound checkpoint_id is a one-shot resume cursor ──────────────
+
+
+class _ConfigRecordingGraph(_MockCompiledGraph):
+    """Duck-types a graph bound via ``graph.with_config(configurable=
+    {"thread_id": ..., "checkpoint_id": ...})`` — LangGraph's resume /
+    time-travel config.  Records the ``checkpoint_id`` seen on every
+    ``get_state`` and ``astream_events`` call."""
+
+    def __init__(self, thread_id: str, checkpoint_id: str, **kwargs: Any) -> None:
+        super().__init__([], **kwargs)
+        self.config = {"configurable": {"thread_id": thread_id, "checkpoint_id": checkpoint_id}}
+        self.get_state_cps: list[Any] = []
+        self.astream_cps: list[Any] = []
+
+    @staticmethod
+    def _cp(config: dict[str, Any]) -> Any:
+        return (config.get("configurable") or {}).get("checkpoint_id")
+
+    def get_state(self, config: dict[str, Any]) -> _MockState:
+        self.get_state_cps.append(self._cp(config))
+        return super().get_state(config)
+
+    def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        self.astream_cps.append(self._cp(kwargs.get("config") or {}))
+        return super().astream_events(input, **kwargs)
+
+
+class TestLangGraphBridgeBoundCheckpointId:
+    """A caller may bind ``configurable.checkpoint_id`` (a LangGraph
+    resume/time-travel config: "run from this checkpoint").  LangGraph
+    treats a pinned ``checkpoint_id`` as "fork from here", so reusing it
+    every turn keeps forking the original snapshot and ``get_state``
+    reads stale state — losing all conversation progress after the first
+    resumed turn.  It must be a one-shot cursor: the construction
+    baseline seed + first turn's stream, then dropped."""
+
+    def test_resume_cursor_captured_at_construction(self):
+        graph = _ConfigRecordingGraph("t-resume", "cp-pinned")
+        bridge = LangGraphBridge(graph=graph)
+        assert bridge._thread_id == "t-resume"
+        assert bridge._resume_checkpoint_id == "cp-pinned"
+        # Baseline seed read the pinned checkpoint (so a time-travel
+        # resume doesn't re-walk the forked-from history).
+        assert graph.get_state_cps == ["cp-pinned"]
+
+    def test_config_does_not_pin_bound_checkpoint(self):
+        # _config() is the current-state config: it must neutralise the
+        # bound checkpoint_id (explicit None == latest) so post-turn
+        # reads see the latest checkpoint, not the pinned snapshot.
+        bridge = LangGraphBridge(graph=_ConfigRecordingGraph("t", "cp-pinned"))
+        assert bridge._config()["configurable"]["checkpoint_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_resume_cursor_is_one_shot_across_turns(self):
+        graph = _ConfigRecordingGraph(
+            "t-resume", "cp-pinned", state=_MockState(checkpoint_id="cp-new")
+        )
+        bridge = LangGraphBridge(graph=graph)
+        graph.get_state_cps.clear()  # drop the construction-seed read
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("one"), _recorder()):
+            pass
+        # First turn forks from the pinned checkpoint…
+        assert graph.astream_cps == ["cp-pinned"]
+        # …but its post-stream get_state reads the latest (not the pin),
+        # and the cursor is consumed.
+        assert graph.get_state_cps and all(cp is None for cp in graph.get_state_cps)
+        assert bridge._resume_checkpoint_id is None
+
+        graph.astream_cps.clear()
+        graph.get_state_cps.clear()
+        async for _ in bridge.invoke(AgentTurnInput.from_text("two"), _recorder()):
+            pass
+        # Second turn must NOT re-fork the original snapshot.
+        assert graph.astream_cps == [None]
+        assert all(cp is None for cp in graph.get_state_cps)
+
+    def test_reset_clears_resume_cursor(self):
+        bridge = LangGraphBridge(graph=_ConfigRecordingGraph("t", "cp-pinned"))
+        bridge.reset()
+        assert bridge._resume_checkpoint_id is None
+
+
 class _FormattedAddMessagesChannel:
     """Duck-types ``Annotated[list, add_messages(format="langchain-openai")]``
     — LangGraph stores the reducer as ``functools.partial(add_messages,
