@@ -468,10 +468,21 @@ class LlamaAgentsBridge:
 
         streamed_text = False
         cancelled = False
+        # _aiter_with_cancellation aclose()s its source on every
+        # non-exhaustive exit (cancel/teardown leak prevention). A HITL
+        # pause exits this generator via ``return`` while the source is only
+        # suspended, so without this adapter the abandoned wrapper's
+        # finalizer would close the very stream we save below as
+        # _pending_local_stream -- dropping the workflow's post-response
+        # deltas on resume. The adapter forwards the close on real
+        # cancel/teardown but absorbs it once the pause has marked it
+        # suspended.
+        guarded_events = _SuspendableSource(events) if events is not None else None
         try:
-            if events is not None:
-                async for workflow_event in _aiter_with_cancellation(events, cancel_token):
+            if guarded_events is not None:
+                async for workflow_event in _aiter_with_cancellation(guarded_events, cancel_token):
                     if _is_input_required_event(workflow_event):
+                        guarded_events.suspend()
                         self._pending_local_handler = handler
                         self._pending_local_stream = events
                         self._last_output = workflow_event
@@ -932,6 +943,42 @@ async def _aclose_iterator(iterator: Any) -> None:
             await aclose()
 
 
+class _SuspendableSource:
+    """Lets a HITL pause keep its underlying event stream open.
+
+    ``_invoke_local`` pauses on an ``InputRequiredEvent`` by ``return``-ing
+    out of its ``async for`` over ``_aiter_with_cancellation(...)``. That
+    abandons the cancellation wrapper, whose finalizer aclose()s its source
+    on any non-exhaustive exit -- which would close the live stream the
+    bridge saved as ``_pending_local_stream`` for the next turn to resume,
+    so the workflow's post-response deltas are dropped and a workflow that
+    returns ``StopEvent()`` after streaming produces an empty answer.
+
+    Wrapping the source in this adapter and calling ``suspend()`` before the
+    pause return makes that finalizer-driven aclose() a harmless no-op while
+    still forwarding the close on a genuine cancel/teardown, so the
+    cancellation wrapper's leak prevention is preserved.
+    """
+
+    def __init__(self, source: AsyncIterator[Any]) -> None:
+        self._iter = source.__aiter__()
+        self._suspended = False
+
+    def __aiter__(self) -> _SuspendableSource:
+        return self
+
+    async def __anext__(self) -> Any:
+        return await self._iter.__anext__()
+
+    def suspend(self) -> None:
+        self._suspended = True
+
+    async def aclose(self) -> None:
+        if self._suspended:
+            return
+        await _aclose_iterator(self._iter)
+
+
 async def _aiter_with_cancellation(
     source: AsyncIterator[Any],
     cancel_token: CancelToken | None,
@@ -1270,16 +1317,37 @@ def _extract_output_text(result: Any) -> str:
     return str(result)
 
 
+def _scrub_secret_keys(value: Any) -> Any:
+    """Drop secret-looking keys from a workflow Context snapshot.
+
+    A Llama workflow ``Context`` stores arbitrary values under user-chosen
+    keys, so a raw ``to_dict()`` dump can carry credentials (e.g.
+    ``api_key``, an auth header) into the shareable debug bundle. Recurse
+    through dicts/lists/tuples and drop any key whose name matches a secret
+    fragment, mirroring the journal's own bridge-record scrubbing and
+    ``GenericWorkflowBridge``'s ``__dict__`` filtering.
+    """
+    from easycat.runtime.safe_defaults import _is_secret_name
+
+    if isinstance(value, dict):
+        return {k: _scrub_secret_keys(v) for k, v in value.items() if not _is_secret_name(str(k))}
+    if isinstance(value, list):
+        return [_scrub_secret_keys(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_secret_keys(item) for item in value)
+    return value
+
+
 def _jsonable_context(ctx: Any) -> Any:
     if ctx is None:
         return None
     to_dict = getattr(ctx, "to_dict", None)
     if callable(to_dict):
         try:
-            return to_dict()
+            return _scrub_secret_keys(to_dict())
         except Exception:
             return type(ctx).__name__
-    return ctx
+    return _scrub_secret_keys(ctx)
 
 
 def is_llama_workflow_instance(agent: Any) -> bool:

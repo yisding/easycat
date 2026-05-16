@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import sys
 import types
 from collections.abc import AsyncIterator
@@ -20,6 +21,7 @@ from easycat.integrations.agents.base import (
     RecorderContext,
 )
 from easycat.integrations.agents.llama_agents import LlamaAgentsBridge
+from easycat.runtime.artifacts import InMemoryArtifactStore
 from easycat.runtime.journal import InMemoryRingBuffer
 
 
@@ -71,6 +73,23 @@ class _FakeContext:
 
     def to_dict(self) -> dict[str, str]:
         return {"label": self.label}
+
+
+class _SecretContext:
+    """A workflow Context whose to_dict() carries credentials under
+    user-chosen keys, both top-level and nested."""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "state": {
+                "username": "ada-lovelace",
+                "api_key": "sk-super-secret-value",
+                "nested": {
+                    "auth_token": "bearer-leak-me",
+                    "keep": "non-secret-ok",
+                },
+            }
+        }
 
 
 class _FakeHandler:
@@ -421,6 +440,47 @@ class TestLocalLlamaAgentsBridge:
         # opening a second stream that would replay the prompt forever.
         assert workflow.handler.stream_calls == 1
 
+    @pytest.mark.asyncio
+    async def test_paused_local_stream_survives_wrapper_finalization(self, fake_workflows_modules):
+        """A HITL pause must keep the saved live stream open even after the
+        abandoned cancellation wrapper is finalized.
+
+        On the normal Session path invoke() runs with a cancel_token and many
+        awaits elapse between user turns, so the abandoned
+        _aiter_with_cancellation wrapper is garbage-collected and its
+        finalizer aclose()s its source. Before the fix that closed the very
+        stream saved as _pending_local_stream, so the resumed turn streamed
+        nothing from the post-response cursor and the workflow's answer was
+        lost.
+        """
+        workflow = _HitlWorkflow()
+        bridge = LlamaAgentsBridge(workflow=workflow)
+
+        token1 = CancelToken()
+        async for _ in bridge.invoke(AgentTurnInput.from_text("start"), _recorder(), token1):
+            pass
+        assert bridge.snapshot_state().fields["waiting_for_input"] is True
+
+        # Mirror the real Session path: the event loop keeps running between
+        # user turns, so the abandoned wrapper is finalized before resume.
+        for _ in range(10):
+            gc.collect()
+            await asyncio.sleep(0)
+
+        token2 = CancelToken()
+        second_turn = []
+        async for event in bridge.invoke(AgentTurnInput.from_text("Ada"), _recorder(), token2):
+            second_turn.append(event)
+
+        assert workflow.handler.sent_events[-1].response == "Ada"
+        assert [e.text for e in second_turn if e.kind == "text_delta"] == [
+            "Thanks ",
+            "Ada",
+        ]
+        assert [e.text for e in second_turn if e.kind == "done"] == ["Thanks Ada"]
+        # Resumed the same live cursor rather than re-streaming the prompt.
+        assert workflow.handler.stream_calls == 1
+
     def test_apply_interruption_uses_atomic_recorder_and_delegate(self, fake_workflows_modules):
         workflow = _LocalWorkflow(result="ok")
         bridge = LlamaAgentsBridge(workflow=workflow)
@@ -432,6 +492,39 @@ class TestLocalLlamaAgentsBridge:
         names = [record.name for record in journal.read()]
         assert "state_committed" in names
         assert "cancellation_boundary" in names
+
+    @pytest.mark.asyncio
+    async def test_interruption_snapshot_scrubs_context_secrets(self, fake_workflows_modules):
+        """An interrupted workflow's Context must not leak credentials into
+        the debug-bundle artifact written by record_state_snapshot()."""
+        workflow = _LocalWorkflow(events=[_TextEvent("hi"), _StopEvent("hi")])
+        bridge = LlamaAgentsBridge(workflow=workflow)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            pass
+        bridge._ctx = _SecretContext()
+
+        journal = InMemoryRingBuffer(capacity=1000)
+        store = InMemoryArtifactStore()
+        recorder = JournalAgentRecorder(
+            journal=journal,
+            artifact_store=store,
+            context=RecorderContext(run_id="r1", session_id="s1", turn_id="t1"),
+        )
+
+        bridge.apply_interruption("part", CancellationMode.IMMEDIATE_STOP, recorder)
+
+        refs = [
+            r.output_ref for r in journal.read() if r.name == "state_snapshot" and r.output_ref
+        ]
+        assert refs, "expected a state snapshot artifact to be written"
+        blob = b"".join(store.get(ref) or b"" for ref in refs).decode()
+        assert "api_key" not in blob
+        assert "sk-super-secret-value" not in blob
+        assert "auth_token" not in blob
+        assert "bearer-leak-me" not in blob
+        # Non-secret context state is preserved for debugging.
+        assert "ada-lovelace" in blob
+        assert "non-secret-ok" in blob
 
     def test_constructor_requires_single_mode(self):
         with pytest.raises(BridgeInputError, match="requires"):
