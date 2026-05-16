@@ -269,6 +269,28 @@ class LangChainBridge:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
             raise
+        except BaseException:
+            # The default ``AgentRunner`` enforces its timeout by
+            # cancelling the pending ``__anext__()`` (and then calling
+            # ``aclose()``), injecting ``asyncio.CancelledError`` /
+            # ``GeneratorExit`` here — neither is an ``Exception`` so the
+            # block above is skipped and the still-open agent/model
+            # cursors would be left without ``unit_exited`` records,
+            # breaking the recorder's stack invariant for the postmortem
+            # journal.  Close them (defensively, so a recorder error
+            # can't mask the cancellation) before re-raising.  No
+            # ``record_framework_error``: a cancelled turn isn't a
+            # framework fault.
+            for cursor in reversed(list(open_cursors.values())):
+                try:
+                    recorder.record_unit_exited(cursor, reason="error")
+                except Exception:
+                    logger.debug("Failed to close cursor during cancel cleanup", exc_info=True)
+            try:
+                recorder.record_unit_exited(agent_cursor, reason="error")
+            except Exception:
+                logger.debug("Failed to close agent cursor during cancel cleanup", exc_info=True)
+            raise
 
         for cursor in reversed(list(open_cursors.values())):
             recorder.record_unit_exited(cursor.with_committable(True), reason=None)

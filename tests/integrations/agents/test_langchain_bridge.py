@@ -9,12 +9,14 @@ LangChain ``astream_events(version="v2")`` contract.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.integrations.agents._langchain_events import translate_stream_event
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
@@ -28,6 +30,7 @@ from easycat.integrations.agents.base import (
 )
 from easycat.integrations.agents.langchain import LangChainBridge
 from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.timeouts import AgentTimeoutError
 
 # ── Mock LangChain objects ───────────────────────────────────────
 
@@ -280,6 +283,62 @@ class TestStreamEventTranslator:
         }
         out = list(translate_stream_event(event))
         assert out == []
+
+    def test_nested_chain_streams_dedupe_to_root_run(self):
+        """``RunnableLambda(f) | RunnableLambda(g)`` (no model
+        descendant) emits ``on_chain_stream`` for each child *and* for
+        the parent that forwards the composed result.  Only the root
+        run's stream is the final answer; child streams would
+        double-speak intermediate values (``"a"``, ``"ab"``, ``"ab"``)."""
+        state: dict[str, Any] = {}
+        events = [
+            {
+                "event": "on_chain_start",
+                "name": "RunnableSequence",
+                "run_id": "seq",
+                "parent_ids": [],
+                "data": {},
+            },
+            {
+                "event": "on_chain_stream",
+                "name": "RunnableLambda",
+                "run_id": "f",
+                "parent_ids": ["seq"],
+                "data": {"chunk": "a"},
+            },
+            {
+                "event": "on_chain_stream",
+                "name": "RunnableLambda",
+                "run_id": "g",
+                "parent_ids": ["seq"],
+                "data": {"chunk": "ab"},
+            },
+            {
+                "event": "on_chain_stream",
+                "name": "RunnableSequence",
+                "run_id": "seq",
+                "parent_ids": [],
+                "data": {"chunk": "ab"},
+            },
+        ]
+        out: list[Any] = []
+        for ev in events:
+            out.extend(translate_stream_event(ev, state=state))
+        assert [e.text for e in out if e.kind == "text_delta"] == ["ab"]
+
+    def test_on_chain_stream_emits_without_state(self):
+        """The standalone-translator contract: a bare call with no
+        ``state`` keeps emitting every chain chunk (the dedupe only
+        engages once the bridge threads root-run bookkeeping)."""
+        event = {
+            "event": "on_chain_stream",
+            "name": "RunnableLambda",
+            "run_id": "child",
+            "parent_ids": ["seq"],
+            "data": {"chunk": "hi"},
+        }
+        out = list(translate_stream_event(event))
+        assert [e.text for e in out] == ["hi"]
 
     def test_on_llm_stream_generation_chunk_yields_text_delta(self):
         """Non-chat ``BaseLLM`` runnables (text-completion models,
@@ -841,6 +900,142 @@ class TestLangChainBridgeInvoke:
         done = [e for e in events if e.kind == "done"]
         assert text == "hello world"
         assert done and done[0].text == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_nested_lambda_chain_does_not_double_speak(self):
+        """``RunnableLambda(f) | RunnableLambda(g)`` with no model
+        descendant: LangChain emits a chain stream for child ``f``
+        (``"a"``), child ``g`` (``"ab"``) and the parent that forwards
+        the composed result (``"ab"``).  Speaking every chunk would
+        narrate ``"a" + "ab" + "ab"``; only the final ``"ab"`` is the
+        real answer."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableLambda",
+                    "run_id": "f",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableLambda",
+                    "run_id": "f",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": "a"},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableLambda",
+                    "run_id": "f",
+                    "parent_ids": ["seq"],
+                    "data": {"output": "a"},
+                },
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableLambda",
+                    "run_id": "g",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableLambda",
+                    "run_id": "g",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": "ab"},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableLambda",
+                    "run_id": "g",
+                    "parent_ids": ["seq"],
+                    "data": {"output": "ab"},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"chunk": "ab"},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"output": "ab"},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        done = [e for e in events if e.kind == "done"]
+        assert text == "ab"
+        assert done and done[0].text == "ab"
+
+    @pytest.mark.asyncio
+    async def test_agent_runner_timeout_closes_open_cursors(self):
+        """The default ``AgentRunner`` enforces its timeout by
+        cancelling the bridge's pending ``__anext__``
+        (``asyncio.CancelledError``) and then ``aclose()``-ing it
+        (``GeneratorExit``).  Neither is an ``Exception``, so the
+        ``except Exception`` cleanup is skipped — the agent + model
+        cursors opened before the hang must still get ``unit_exited``
+        records or the recorder's stack invariant breaks for the
+        postmortem journal."""
+
+        class _HangingRunnable:
+            async def astream_events(
+                self, input: Any, **kwargs: Any
+            ) -> AsyncIterator[dict[str, Any]]:
+                yield {
+                    "event": "on_chain_start",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {},
+                }
+                yield {
+                    "event": "on_chat_model_start",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                }
+                await asyncio.sleep(999)
+                yield {  # pragma: no cover — cancelled before this fires
+                    "event": "on_chain_end",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {},
+                }
+
+            async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
+
+        bridge = LangChainBridge(_HangingRunnable())
+        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=0.05))
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+
+        with pytest.raises(AgentTimeoutError):
+            async for _ in runner.invoke(AgentTurnInput.from_text("hi"), rec):
+                pass
+
+        names = [r.name for r in journal.read()]
+        assert names.count("unit_entered") == names.count("unit_exited") == 2
 
     @pytest.mark.asyncio
     async def test_chain_wrapping_text_llm_streams_text(self):

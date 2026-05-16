@@ -182,6 +182,26 @@ def translate_stream_event(
         if isinstance(bag, set):
             for pid in event.get("parent_ids") or ():
                 bag.add(str(pid))
+    # Track the root chain run — the outermost runnable, whose
+    # ``on_chain_start`` carries no ``parent_ids``.  For an LCEL chain
+    # *without* a model descendant
+    # (``RunnableLambda(f) | RunnableLambda(g)``) LangChain emits an
+    # ``on_chain_stream`` for every child runnable *and* for the parent
+    # that forwards the composed result, so speaking every chunk narrates
+    # intermediate values (``"a"``, ``"ab"``, then the final ``"ab"``
+    # again).  Only the root run's stream carries the final composed
+    # output, so non-root chain streams are deduped in the
+    # ``on_chain_stream`` branch below.  (A chain *with* a model
+    # descendant is instead deduped by the suppression just below — the
+    # model stream is the canonical token source there.)
+    if (
+        state is not None
+        and event_type == "on_chain_start"
+        and "root_chain_run_id" not in state
+        and not (event.get("parent_ids") or ())
+        and run_id
+    ):
+        state["root_chain_run_id"] = run_id
     if event_type == "on_chain_stream" and state is not None:
         bag = state.get("chains_with_model_descendants")
         if isinstance(bag, set) and bag:
@@ -276,6 +296,17 @@ def translate_stream_event(
         # rather than ``on_chat_model_stream``.  Extract a string chunk
         # when one is present; skip silently for non-text chunks so chain
         # events that carry dicts / state objects don't leak into TTS.
+        #
+        # Dedupe nested LCEL streams: once the root chain run is known,
+        # only it forwards the final composed output — child runnables
+        # re-yield intermediate/duplicate values that would double-speak.
+        # A bare ``translate_stream_event`` call with no ``state`` (the
+        # standalone-translator contract used by the unit tests) keeps
+        # emitting unconditionally.
+        if state is not None:
+            root = state.get("root_chain_run_id")
+            if isinstance(root, str) and root and run_id and run_id != root:
+                return
         chunk = data.get("chunk") if isinstance(data, dict) else None
         text = _plain_chunk_text(chunk)
         if text:

@@ -11,12 +11,14 @@ same dict-shaped events as ``LangChainBridge`` plus the LangGraph
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
     AgentTurnInput,
@@ -28,6 +30,7 @@ from easycat.integrations.agents.base import (
 )
 from easycat.integrations.agents.langgraph import LangGraphBridge
 from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.timeouts import AgentTimeoutError
 
 # ── Mocks ────────────────────────────────────────────────────────
 
@@ -289,6 +292,48 @@ class TestLangGraphBridgeInvoke:
             if r.name == "unit_entered" and r.data["unit_kind"] == "workflow_node"
         ]
         assert {r.data["display_name"] for r in workflow_nodes} == {"research", "write"}
+
+    @pytest.mark.asyncio
+    async def test_agent_runner_timeout_closes_open_cursors(self):
+        """The default ``AgentRunner`` enforces its timeout by
+        cancelling the bridge's pending ``__anext__``
+        (``asyncio.CancelledError``) and then ``aclose()``-ing it
+        (``GeneratorExit``).  Neither is an ``Exception``, so the
+        ``except Exception`` cleanup is skipped — open workflow/model
+        and agent cursors must still get ``unit_exited`` records so the
+        recorder's stack invariant holds."""
+
+        class _HangingGraph(_MockCompiledGraph):
+            def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+                async def _gen() -> AsyncIterator[dict[str, Any]]:
+                    yield _node_start("research", "n1")
+                    yield {
+                        "event": "on_chat_model_start",
+                        "name": "ChatOpenAI",
+                        "run_id": "m1",
+                        "parent_ids": ["n1"],
+                        "data": {},
+                        "metadata": {"langgraph_node": "research", "checkpoint_id": "cp-1"},
+                    }
+                    yield _model_stream("partial ", run_id="m1", parent="n1", node="research")
+                    await asyncio.sleep(999)
+                    yield _node_end("research", "n1")  # pragma: no cover
+
+                return _gen()
+
+        graph = _HangingGraph(state=_MockState(values={"messages": []}))
+        bridge = LangGraphBridge(graph)
+        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=0.05))
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+
+        with pytest.raises(AgentTimeoutError):
+            async for _ in runner.invoke(AgentTurnInput.from_text("hi"), rec):
+                pass
+
+        names = [r.name for r in journal.read()]
+        # agent + research workflow_node + model cursors, all paired.
+        assert names.count("unit_entered") == names.count("unit_exited") == 3
 
     @pytest.mark.asyncio
     async def test_parallel_nodes_do_not_violate_recorder_stack(self):

@@ -294,6 +294,28 @@ class LangGraphBridge:
             recorder.record_unit_exited(agent_cursor, reason="error")
             self._purge_transient_context()
             raise
+        except BaseException:
+            # The default ``AgentRunner`` enforces its timeout by
+            # cancelling the pending ``__anext__()`` (and then calling
+            # ``aclose()``), injecting ``asyncio.CancelledError`` /
+            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
+            # block above is skipped and any open workflow/model/agent
+            # cursors would be left unexited (breaking the recorder's
+            # stack invariant) and this turn's transient context would
+            # leak into the checkpointed graph state.  Clean both up
+            # defensively before re-raising; no ``record_framework_error``
+            # since a cancelled turn isn't a framework fault.
+            for cursor in reversed(list(open_cursors.values())):
+                try:
+                    recorder.record_unit_exited(cursor, reason="error")
+                except Exception:
+                    logger.debug("Failed to close cursor during cancel cleanup", exc_info=True)
+            try:
+                recorder.record_unit_exited(agent_cursor, reason="error")
+            except Exception:
+                logger.debug("Failed to close agent cursor during cancel cleanup", exc_info=True)
+            self._purge_transient_context()
+            raise
 
         for cursor in reversed(list(open_cursors.values())):
             recorder.record_unit_exited(cursor.with_committable(True), reason=None)
