@@ -285,6 +285,31 @@ class TestStreamEventTranslator:
         out = list(translate_stream_event(event))
         assert out == []
 
+    def test_on_chain_stream_dict_output_key_is_spoken(self):
+        """A conventional ``{"output": "..."}`` chain-result dict
+        (``AgentExecutor`` / ``return_direct`` tool) must surface its
+        string answer instead of being treated as structured-only."""
+        event = {
+            "event": "on_chain_stream",
+            "name": "AgentExecutor",
+            "run_id": "c1",
+            "data": {"chunk": {"output": "the answer"}},
+        }
+        out = list(translate_stream_event(event))
+        assert out and out[0].kind == "text_delta" and out[0].text == "the answer"
+
+    def test_on_chain_stream_dict_non_string_output_is_ignored(self):
+        """A structured payload under a conventional key (``{"answer":
+        42}``, ``with_structured_output(...)``) is still kept out of the
+        audio stream — only string values are spoken."""
+        event = {
+            "event": "on_chain_stream",
+            "name": "RunnableLambda",
+            "run_id": "c1",
+            "data": {"chunk": {"answer": 42, "sources": ["a", "b"]}},
+        }
+        assert list(translate_stream_event(event)) == []
+
     def test_nested_chain_streams_dedupe_to_root_run(self):
         """``RunnableLambda(f) | RunnableLambda(g)`` (no model
         descendant) emits ``on_chain_stream`` for each child *and* for
@@ -1579,6 +1604,61 @@ class TestLangChainBridgeStructuredOutput:
         assert done[0].text == ""  # no text chunks streamed
 
     @pytest.mark.asyncio
+    async def test_dict_output_chain_speaks_answer_when_nothing_streamed(self):
+        """An ``AgentExecutor`` / ``return_direct`` tool finishes with
+        ``{"output": "..."}`` and never streams a model text token (its
+        chain streams are suppressed as a model-descendant).  ``done.text``
+        is the consumer's only spoken text and must carry the real answer
+        — not the empty accumulated string."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "AgentExecutor",
+                    "run_id": "agent",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    # Marks "agent" as a chain with a model descendant, so
+                    # its forwarded {"output": ...} chain stream below is
+                    # suppressed (would otherwise double-speak).
+                    "event": "on_chat_model_start",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": ["agent"],
+                    "data": {},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "AgentExecutor",
+                    "run_id": "agent",
+                    "parent_ids": [],
+                    "data": {"chunk": {"output": "the answer"}},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "AgentExecutor",
+                    "run_id": "agent",
+                    "parent_ids": [],
+                    "data": {"output": {"output": "the answer"}},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+        # Nothing streamed (chain stream suppressed as a model-descendant,
+        # no model text token), so there is no double-speak and the answer
+        # rides only on done.text — the consumer's nothing-streamed
+        # fallback — instead of the previously-empty string.
+        assert [e for e in events if e.kind == "text_delta"] == []
+        done = [e for e in events if e.kind == "done"]
+        assert done and done[0].text == "the answer"
+        assert done[0].structured_output == {"output": "the answer"}
+
+    @pytest.mark.asyncio
     async def test_dispatch_custom_event_drives_text_delta_by_default(self):
         """LCEL ``dispatch_custom_event`` payloads must reach the
         translator under the default include_types — narrowing the
@@ -2471,3 +2551,70 @@ class TestLangChainBridgeCancelTokenStoreMirror:
         bridge.apply_interruption("Hello world", CancellationMode.IMMEDIATE_STOP)
         assert _content_of_history_item(store.messages[-1]) == "Hello world..."
         assert _content_of_history_item(store.messages[1]) == "a1"
+
+
+# ── reset() before the first turn resolves the store ─────────────
+
+
+class TestLangChainBridgeResetBeforeFirstTurn:
+    """``reset()`` can fire before any turn (a fresh session reused
+    immediately).  ``_resolved_session_id`` / ``_resolved_configurable``
+    are only populated by the first ``_stream_config``, so the store
+    lookup must fall back to the turn-independent constructor args
+    (explicit ``session_id=`` / custom ``config=`` keys) — otherwise the
+    backing store is left intact and the wrapped runnable reloads stale
+    persisted messages on its first invoke."""
+
+    @pytest.mark.asyncio
+    async def test_reset_clears_store_with_explicit_session_id(self):
+        runnable = _FakeHistoryRunnable("raw reply")
+        # An earlier session under this id left persisted history behind.
+        store = runnable.get_session_history("sess-A")
+        store.add_message({"role": "user", "content": "old q"})
+        store.add_message({"role": "assistant", "content": "old a"})
+
+        bridge = LangChainBridge(runnable, session_id="sess-A")
+        # No turn has run yet → _resolved_* are still unset.
+        assert bridge._resolved_session_id is None
+        bridge.reset()
+        assert store.messages == []
+
+    @pytest.mark.asyncio
+    async def test_reset_clears_store_with_custom_configurable_keys(self):
+        runnable = _CustomKeyHistoryRunnable("raw reply")
+        store = runnable.get_session_history(user_id="u1", conversation_id="c1")
+        store.add_message({"role": "user", "content": "old q"})
+        store.add_message({"role": "assistant", "content": "old a"})
+
+        bridge = LangChainBridge(
+            runnable,
+            config={"configurable": {"user_id": "u1", "conversation_id": "c1"}},
+        )
+        assert bridge._resolved_configurable is None
+        bridge.reset()
+        assert store.messages == []
+
+    @pytest.mark.asyncio
+    async def test_reset_clears_store_with_single_custom_key(self):
+        runnable = _SingleCustomKeyHistoryRunnable("raw reply")
+        store = runnable.get_session_history("c1")
+        store.add_message({"role": "user", "content": "old q"})
+        store.add_message({"role": "assistant", "content": "old a"})
+
+        bridge = LangChainBridge(
+            runnable,
+            config={"configurable": {"conversation_id": "c1"}},
+        )
+        bridge.reset()
+        assert store.messages == []
+        # No spurious store created under a synthesized session_id.
+        assert set(runnable._stores) == {"c1"}
+
+    @pytest.mark.asyncio
+    async def test_plain_runnable_reset_before_turn_is_safe(self):
+        """A plain runnable exposes no store; a pre-turn ``reset()`` must
+        still be a no-op (no crash, only the shadow list cleared)."""
+        bridge = LangChainBridge(_MockRunnable([]))
+        bridge.reset()
+        assert bridge._history_store() is None
+        assert bridge._message_history == []

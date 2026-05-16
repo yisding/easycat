@@ -639,6 +639,28 @@ class LangChainBridge:
         except Exception:
             logger.debug("Failed to mirror rewrite into wrapped history store", exc_info=True)
 
+    def _config_fallback_configurable(self) -> dict[str, Any]:
+        """The ``configurable`` a turn *would* resolve from constructor args.
+
+        ``_history_store`` / ``reset()`` can run before the first turn,
+        when ``_stream_config`` has not yet populated
+        ``_resolved_configurable`` / ``_resolved_session_id``.  The
+        turn-independent inputs (an explicit ``session_id=`` and a custom
+        ``config=``'s ``configurable`` keys) are exactly the ones the
+        reviewer flagged, so rebuild the same lookup ``_stream_config``
+        would: the base ``configurable`` with ``session_id`` defaulted to
+        the explicit override (or the stable per-bridge fallback when none
+        was given — ``ctx.session_id`` is unknowable without a recorder,
+        but the explicit / custom-key cases don't depend on it).  Without
+        this, a pre-first-turn ``reset()`` resolves no store and the
+        wrapped runnable reloads stale persisted messages on its first
+        invoke.
+        """
+        config = dict(self._base_config) if self._base_config else {}
+        configurable = dict(config.get("configurable") or {})
+        configurable.setdefault("session_id", self._session_id or self._fallback_session_id)
+        return configurable
+
     def _history_store(self) -> Any | None:
         """Best-effort underlying chat-message store for a
         ``RunnableWithMessageHistory``-wrapped runnable, else ``None``.
@@ -675,7 +697,7 @@ class LangChainBridge:
         factory = getattr(self._runnable, "get_session_history", None)
         if not callable(factory):
             return None
-        configurable = self._resolved_configurable or {}
+        configurable = self._resolved_configurable or self._config_fallback_configurable()
         specs = getattr(self._runnable, "history_factory_config", None)
         if specs:
             try:
@@ -713,6 +735,11 @@ class LangChainBridge:
             # from ``configurable``): fall through to the single-arg
             # ``session_id`` probe below.
         sid = self._resolved_session_id
+        if sid is None:
+            # Pre-first-turn (``reset()`` before any invoke): fall back to
+            # the id a turn would resolve from constructor args so the
+            # backing store is still cleared instead of left intact.
+            sid = configurable.get("session_id")
         if sid is None:
             return None
         try:

@@ -66,13 +66,40 @@ def _custom_event_text(payload: Any) -> str:
     return ""
 
 
+# Conventional single-string output keys used by LangChain chains /
+# agents (``AgentExecutor`` → ``output``, ``LLMChain`` → ``text``,
+# ``ConversationChain`` → ``response``, ``RetrievalQA`` → ``result``,
+# QA-with-sources / retrieval chains → ``answer``).  A ``return_direct``
+# tool surfaces its result through the same ``{"output": ...}`` shape.
+_CHAIN_OUTPUT_KEYS = ("output", "text", "response", "answer", "result")
+
+
+def _dict_output_text(payload: dict[Any, Any]) -> str:
+    """Extract the conventional string answer from a chain-output dict.
+
+    LangChain ``AgentExecutor`` / ``LLMChain`` / ``RetrievalQA`` and a
+    ``return_direct`` tool finish with a single-key dict such as
+    ``{"output": "..."}`` rather than a bare string.  Speak the value of
+    the first conventional output key that holds a non-empty string;
+    structured/state dicts (numeric, list, nested-dict, or unrecognized
+    keys — graph state, ``with_structured_output(...)`` payloads) match
+    nothing and stay out of the audio stream as before.
+    """
+    for key in _CHAIN_OUTPUT_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _plain_chunk_text(chunk: Any) -> str:
     """Extract a string text delta from a non-chat ``on_chain_stream`` chunk.
 
     ``RunnableLambda`` / generic LCEL stages stream whatever value they
-    yield — a ``str``, an ``AIMessageChunk``-like object, or arbitrary
-    state (dict, BaseModel, ...).  Only the first two shapes carry TTS-
-    safe text; returning ``""`` for everything else keeps non-text chain
+    yield — a ``str``, an ``AIMessageChunk``-like object, a conventional
+    ``{"output": "..."}`` chain-result dict, or arbitrary state (state
+    dict, BaseModel, ...).  Only the first three shapes carry TTS-safe
+    text; returning ``""`` for everything else keeps non-text chain
     payloads (graph state dicts, Pydantic models, ...) out of the audio
     stream.
     """
@@ -82,6 +109,8 @@ def _plain_chunk_text(chunk: Any) -> str:
         return chunk
     if hasattr(chunk, "content"):
         return _chunk_text(chunk)
+    if isinstance(chunk, dict):
+        return _dict_output_text(chunk)
     return ""
 
 
