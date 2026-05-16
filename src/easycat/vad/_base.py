@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator
+from numbers import Real
 from typing import Literal, TypeAlias, cast
 
 from easycat.events import Event, VADStartSpeaking, VADStopSpeaking
@@ -18,6 +20,29 @@ def _validate_vad_backend(backend: str) -> VADBackend:
         allowed = ", ".join(_VALID_VAD_BACKENDS)
         raise ValueError(f"Unknown VAD backend '{backend}'. Expected one of: {allowed}.")
     return cast(VADBackend, backend)
+
+
+def _validate_vad_sensitivity(sensitivity: float) -> None:
+    if (
+        not isinstance(sensitivity, Real)
+        or isinstance(sensitivity, bool)
+        or not math.isfinite(float(sensitivity))
+    ):
+        raise ValueError("sensitivity must be a number between 0 and 1")
+    if not 0 <= sensitivity <= 1:
+        raise ValueError("sensitivity must be between 0 and 1")
+
+
+def _validate_non_negative_ms(name: str, value: int) -> None:
+    if not isinstance(value, Real) or isinstance(value, bool) or not math.isfinite(float(value)):
+        raise ValueError(f"{name} must be a non-negative number")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+
+
+def _validate_positive_int(name: str, value: int) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
 
 
 # ── VAD base class ────────────────────────────────────────────────
@@ -53,6 +78,12 @@ class _VADBase:
         post_roll_ms: int = 100,
     ) -> None:
         """Configure VAD thresholds and buffering parameters."""
+        _validate_non_negative_ms("min_speech_duration_ms", min_speech_duration_ms)
+        _validate_non_negative_ms("min_silence_duration_ms", min_silence_duration_ms)
+        _validate_vad_sensitivity(sensitivity)
+        _validate_non_negative_ms("pre_roll_ms", pre_roll_ms)
+        _validate_non_negative_ms("post_roll_ms", post_roll_ms)
+
         self._min_speech_duration_ms = min_speech_duration_ms
         self._min_silence_duration_ms = min_silence_duration_ms
         # Sensitivity maps inversely to threshold: higher sensitivity = lower threshold

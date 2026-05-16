@@ -22,6 +22,16 @@ from easycat.audio_utils import resample_chunk
 from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
 
 logger = logging.getLogger(__name__)
+_MAX_NEGOTIATED_SAMPLE_RATE = 384000
+
+
+def _valid_config_sample_rate(value: object) -> int | None:
+    """Return a negotiated sample rate only for sane integer values."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value <= 0 or value > _MAX_NEGOTIATED_SAMPLE_RATE:
+        return None
+    return value
 
 
 @dataclass
@@ -151,8 +161,8 @@ class WebSocketTransport(_ServerTransportBase):
 
         msg_type = msg.get("type")
         if msg_type == "config":
-            sample_rate = msg.get("sample_rate")
-            if sample_rate and isinstance(sample_rate, int):
+            sample_rate = _valid_config_sample_rate(msg.get("sample_rate"))
+            if sample_rate is not None:
                 self._audio_format = AudioFormat(
                     sample_rate=sample_rate,
                     channels=self._audio_format.channels,
@@ -160,6 +170,8 @@ class WebSocketTransport(_ServerTransportBase):
                     encoding=self._audio_format.encoding,
                 )
                 logger.info("Client negotiated audio format: %s", self._audio_format)
+            elif "sample_rate" in msg:
+                logger.warning("Ignoring invalid WebSocket sample_rate: %r", msg["sample_rate"])
         elif msg_type == "start":
             logger.debug("Client sent start signal")
         elif msg_type == "stop":
@@ -283,14 +295,16 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
             return
 
         if msg.get("type") == "config":
-            sample_rate = msg.get("sample_rate")
-            if sample_rate and isinstance(sample_rate, int):
+            sample_rate = _valid_config_sample_rate(msg.get("sample_rate"))
+            if sample_rate is not None:
                 self._audio_format = AudioFormat(
                     sample_rate=sample_rate,
                     channels=self._audio_format.channels,
                     sample_width=self._audio_format.sample_width,
                     encoding=self._audio_format.encoding,
                 )
+            elif "sample_rate" in msg:
+                logger.warning("Ignoring invalid WebSocket sample_rate: %r", msg["sample_rate"])
 
     def version_info(self) -> dict[str, str]:
         try:

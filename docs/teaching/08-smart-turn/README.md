@@ -97,7 +97,7 @@ journal with `probability`, `prediction`, `confirmed`, and
 
 ```python
 from pathlib import Path
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 for b in sorted(Path("docs/teaching/08-smart-turn/runs/").glob("*.bundle")):
     bundle = load_bundle(b)
     for r in bundle.records():

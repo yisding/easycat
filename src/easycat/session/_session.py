@@ -51,6 +51,7 @@ from easycat.runtime.artifacts import SnapshotArtifactStore
 from easycat.runtime.capabilities import (
     aclose_if_supported,
     clear_audio_if_supported,
+    close_if_supported,
     health_checkable,
     is_active_provider,
     is_passthrough_provider,
@@ -1279,6 +1280,7 @@ class Session:
                 await aclose_if_supported(self.agent)
             except Exception:
                 pass
+            await self._close_audio_providers()
             self._turn = None
             self.destroy()
             self._mark_closed()
@@ -1314,10 +1316,10 @@ class Session:
             if pipeline_task and not pipeline_task.done():
                 pipeline_task.cancel()
                 tasks.append(pipeline_task)
-            stt_task = self._stt_committer.stt_task
-            if stt_task and not stt_task.done():
-                stt_task.cancel()
-                tasks.append(stt_task)
+            # STT teardown is delegated to STTCommitter.cancel() below
+            # (it cancels the consumer task, ends the stream, and drains
+            # scoped commit/pause tasks) — matching 92f8ebf's move away
+            # from an ad-hoc stt_task cancel here.
             current_tts_task = self._tts_scheduler.current_task
             if current_tts_task and not current_tts_task.done():
                 current_tts_task.cancel()
@@ -1336,6 +1338,7 @@ class Session:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+            await self._stt_committer.cancel(turn)
             # RuntimeScope-owned work currently covers heartbeat, greeting,
             # and STT segment commit/pause tasks. These can outlive the
             # pipeline/STT consumer handles above, so shutdown drains the
@@ -1357,6 +1360,7 @@ class Session:
                 await aclose_if_supported(self.agent)
             except Exception:
                 pass
+            await self._close_audio_providers()
             self._turn = None
             self.destroy()
             self._mark_closed()
@@ -1668,6 +1672,26 @@ class Session:
                 helper.stop()
             except Exception:
                 logger.debug("Error stopping session helper", exc_info=True)
+
+    async def _close_audio_providers(self) -> None:
+        """Release optional resources owned by audio providers."""
+        providers = (
+            ("stt", self.stt),
+            ("tts", self.tts),
+            ("vad", self.vad),
+            ("noise_reducer", self.noise_reducer),
+            ("echo_canceller", self.echo_canceller),
+        )
+        closed: set[int] = set()
+        for name, provider in providers:
+            provider_id = id(provider)
+            if provider_id in closed:
+                continue
+            closed.add(provider_id)
+            try:
+                await close_if_supported(provider)
+            except Exception:
+                logger.debug("Error closing %s provider", name, exc_info=True)
 
     # ── Test-compat shims ──────────────────────────────────────
     #

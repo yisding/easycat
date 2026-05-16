@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
-from easycat import LocalTransport, LocalTransportConfig
+from easycat import LocalTransportConfig
+from easycat.transports.local import LocalTransport
 
 
 async def echo(transport) -> None:

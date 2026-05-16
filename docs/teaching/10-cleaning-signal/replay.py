@@ -24,18 +24,14 @@ import types
 import wave
 from pathlib import Path
 
-from easycat import (
-    EchoCancellationConfig,
-    NoiseReducerConfig,
-    create_echo_canceller,
-    create_noise_reducer,
-    create_vad,
-)
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.debug.export import export_debug_bundle
+from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.events import VADStartSpeaking
+from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 from easycat.vad import VADConfig
+from easycat.vad.factory import create_vad
 
 FRAME_MS = 20
 RUNS_DIR = Path(__file__).parent / "runs"

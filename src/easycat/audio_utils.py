@@ -157,8 +157,21 @@ def chunk_frames(
     partial frame (shorter than the requested duration) is yielded if
     there are leftover bytes.
     """
+    for name, value in (
+        ("frame_duration_ms", frame_duration_ms),
+        ("sample_rate", sample_rate),
+        ("sample_width", sample_width),
+        ("channels", channels),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{name} must be an integer")
+        if value <= 0:
+            raise ValueError(f"{name} must be positive")
+
     frame_samples = (sample_rate * frame_duration_ms) // 1000
     frame_bytes = frame_samples * sample_width * channels
+    if frame_bytes <= 0:
+        raise ValueError("frame_duration_ms is too small for sample_rate")
 
     offset = 0
     while offset < len(audio):

@@ -127,7 +127,7 @@ production version once you understand why each correction exists.
 
 ```python
 from pathlib import Path
-from easycat import load_bundle
+from easycat.debug.testing import load_bundle
 
 for b in Path("docs/teaching/09-interruption/runs/").glob("*.bundle"):
     bundle = load_bundle(b)

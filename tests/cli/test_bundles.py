@@ -39,12 +39,12 @@ def test_bundles_list_finds_recordings(cli: CliRunner, tmp_path: Path) -> None:
     recordings = tmp_path / "recordings"
     recordings.mkdir()
     _make_bundle(recordings / "sess-a.zip", [{"sequence": 1, "name": "TurnStarted"}])
-    _make_bundle(recordings / "sess-b.zip", [{"sequence": 1, "name": "TurnStarted"}])
+    _make_bundle(recordings / "sess-b.bundle", [{"sequence": 1, "name": "TurnStarted"}])
 
     result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path)])
     assert result.exit_code == 0
     assert "sess-a.zip" in result.stdout
-    assert "sess-b.zip" in result.stdout
+    assert "sess-b.bundle" in result.stdout
 
 
 def test_bundles_list_json(cli: CliRunner, tmp_path: Path) -> None:
@@ -169,6 +169,35 @@ def test_bundles_show_corrupt(cli: CliRunner, tmp_path: Path) -> None:
     corrupt = tmp_path / "not-a-zip.zip"
     corrupt.write_text("definitely not a zip archive")
     result = cli.invoke(app, ["bundles", "show", str(corrupt)])
-    assert result.exit_code != 0
-    # Either BundleError (5) or Python's BadZipFile — both must not crash.
-    assert result.exit_code in {1, 5}
+    assert result.exit_code == 5
+    assert "corrupt or unreadable" in result.stderr
+
+
+def test_bundles_show_corrupt_member(cli: CliRunner, tmp_path: Path) -> None:
+    """A ZIP with a damaged member CRC should use the bundle error path."""
+    corrupt = tmp_path / "bad-member.zip"
+    journal_payload = json.dumps({"sequence": 1, "name": "TurnStarted"}).encode()
+    with zipfile.ZipFile(corrupt, "w", zipfile.ZIP_STORED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps({"format_version": FORMAT_VERSION}),
+        )
+        zf.writestr("journal.ndjson", journal_payload)
+
+    raw = corrupt.read_bytes()
+    assert b"TurnStarted" in raw
+    corrupt.write_bytes(raw.replace(b"TurnStarted", b"XurnStarted", 1))
+
+    result = cli.invoke(app, ["bundles", "show", str(corrupt)])
+    assert result.exit_code == 5
+    assert "corrupt or unreadable" in result.stderr
+
+
+def test_bundles_show_missing_journal(cli: CliRunner, tmp_path: Path) -> None:
+    corrupt = tmp_path / "missing-journal.zip"
+    with zipfile.ZipFile(corrupt, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
+
+    result = cli.invoke(app, ["bundles", "show", str(corrupt)])
+    assert result.exit_code == 5
+    assert "corrupt or unreadable" in result.stderr

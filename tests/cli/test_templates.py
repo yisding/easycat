@@ -20,16 +20,15 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from string import Template
 
 import pytest
 
 from easycat.cli.scaffold._schema import InitConfig, available_templates
-from easycat.cli.scaffold.init import _substitutions, _templates_root
+from easycat.cli.scaffold.init import _render_text, _substitutions, _templates_root
 
 # ``agent.py`` line budget per template (counts *all* lines including blanks).
 _LINE_BUDGETS: dict[str, int] = {
-    "openai-agents": 24,
+    "openai-agents": 25,
     "pydantic-ai": 22,
     "text-chat": 18,
 }
@@ -90,10 +89,37 @@ def test_agent_py_renders_and_parses(name: str) -> None:
     )
     mapping = _substitutions(cfg, project_name="demo")
     agent_src = (_template_dir(name) / "agent.py").read_text(encoding="utf-8")
-    rendered = Template(agent_src).safe_substitute(mapping)
+    rendered = _render_text(agent_src, mapping)
     assert "$AGENT_NAME" not in rendered
     assert "$AGENT_INSTRUCTIONS" not in rendered
     ast.parse(rendered)  # raises on syntax error
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_agent_py_escapes_string_literal_substitutions(name: str) -> None:
+    """Quotes, backslashes, and newlines in agent text must stay valid Python."""
+    cfg = InitConfig(
+        template=name,
+        agent_name='Support "A\\B"',
+        agent_instructions='Line one\\path\nLine two says "hi"',
+    )
+    mapping = _substitutions(cfg, project_name="demo")
+    agent_src = (_template_dir(name) / "agent.py").read_text(encoding="utf-8")
+    rendered = _render_text(agent_src, mapping)
+    ast.parse(rendered)
+
+
+@pytest.mark.parametrize("name", ["openai-agents", "pydantic-ai"])
+def test_agent_py_escapes_provider_shortcut_substitutions(name: str) -> None:
+    cfg = InitConfig(
+        template=name,
+        stt='openai/"bad',
+        tts="openai/path\\voice",
+    )
+    mapping = _substitutions(cfg, project_name="demo")
+    agent_src = (_template_dir(name) / "agent.py").read_text(encoding="utf-8")
+    rendered = _render_text(agent_src, mapping)
+    ast.parse(rendered)
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
@@ -119,6 +145,11 @@ def test_env_example_mentions_openai(name: str) -> None:
     """Every template today needs at least ``OPENAI_API_KEY`` by default."""
     env_example = (_template_dir(name) / ".env.example").read_text(encoding="utf-8")
     assert "OPENAI_API_KEY" in env_example
+
+
+def test_pydantic_ai_readme_does_not_reference_missing_workflow_template() -> None:
+    readme = (_template_dir("pydantic-ai") / "README.md").read_text(encoding="utf-8")
+    assert "pydantic-ai-workflow" not in readme
 
 
 def test_no_placeholder_leak_in_non_templated_files() -> None:

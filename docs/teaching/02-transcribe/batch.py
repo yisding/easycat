@@ -20,8 +20,8 @@ from pathlib import Path
 
 import sounddevice as sd
 
-from easycat import transcribe_file
 from easycat.debug.export import export_debug_bundle
+from easycat.quick import transcribe_file
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 
 SAMPLE_RATE = 16_000  # OpenAI + most STT providers default to 16 kHz.
