@@ -1404,6 +1404,37 @@ class TestLangGraphBridgePartialTurnOnCancel:
         assert graph._state.values["messages"] == []
         assert graph.update_state_calls == []
 
+    @pytest.mark.asyncio
+    async def test_early_cancel_does_not_rewrite_prior_turn(self):
+        """Cancelled before the first token with a prior turn already in
+        the checkpoint: nothing is committed for this turn, so a
+        follow-up ``apply_interruption("")`` must no-op rather than walk
+        back and truncate the *previous* turn's AI message."""
+
+        class _HangingGraph(_MockCompiledGraph):
+            def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+                async def _gen() -> AsyncIterator[dict[str, Any]]:
+                    yield _node_start("answer", "n1")
+                    await asyncio.sleep(999)
+                    yield _node_end("answer", "n1")  # pragma: no cover
+
+                return _gen()
+
+        prior_ai = _MockMessage("assistant", "previous turn", message_id="prev")
+        graph = _HangingGraph(state=_MockState(values={"messages": [prior_ai]}))
+        bridge = LangGraphBridge(graph)
+        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=0.05))
+
+        with pytest.raises(AgentTimeoutError):
+            async for _ in runner.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+                pass
+
+        bridge.apply_interruption("", CancellationMode.IMMEDIATE_STOP)
+
+        # The prior turn's reply is untouched and no rewrite was issued.
+        assert _content(graph._state.values["messages"][-1]) == "previous turn"
+        assert graph.update_state_calls == []
+
 
 class TestLangGraphBridgeReducerGuard:
     """``RemoveMessage`` purges and id-keyed rewrites only *merge* into

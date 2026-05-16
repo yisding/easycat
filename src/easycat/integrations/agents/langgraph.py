@@ -199,6 +199,17 @@ class LangGraphBridge:
         # ends — otherwise ``add_messages`` persists a fresh system
         # message every turn and stale/duplicated context leaks forward.
         self._transient_context_ids: list[str] = []
+        # Set when the most recent turn ended having produced no
+        # assistant output at all (cancelled before its first token).
+        # The cancelled node never wrote an ``AIMessage`` and
+        # ``_commit_partial_assistant`` skips an empty commit, so the
+        # checkpoint holds no current-turn AI message — a follow-up
+        # ``apply_interruption`` rewrite must *not* walk back and
+        # truncate the *previous* turn's already-delivered reply.  Reset
+        # at each turn start; left ``False`` for a direct
+        # ``apply_interruption`` with no preceding turn so the
+        # standalone-call behaviour is preserved.
+        self._turn_produced_no_assistant = False
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 
@@ -271,6 +282,9 @@ class LangGraphBridge:
         # turn's response — the fallback degrades to this turn's streamed
         # text instead.
         self._last_output = None
+        # Cleared each turn; re-armed only if this turn ends before it
+        # produces any assistant output (see the cancel paths below).
+        self._turn_produced_no_assistant = False
 
         accumulated = ""
         # Whether the *model/chain* path (``translate_stream_event``)
@@ -351,6 +365,12 @@ class LangGraphBridge:
                     # rewriting the previous turn's and corrupting prior
                     # LangGraph conversation state.
                     self._commit_partial_assistant(accumulated)
+                    if not accumulated:
+                        # Nothing committed (cancelled before the first
+                        # token): there is no current-turn AI message,
+                        # so the follow-up interruption rewrite must
+                        # no-op rather than hit the previous turn.
+                        self._turn_produced_no_assistant = True
                     break
 
                 graph_chunk = self._extract_graph_stream_chunk(event)
@@ -416,6 +436,12 @@ class LangGraphBridge:
             # the previous turn's last AI message and barge-in corrupts
             # prior conversation state.
             self._commit_partial_assistant(accumulated)
+            if not accumulated:
+                # Cancelled before the first token: nothing committed and
+                # the node never wrote an AIMessage, so a follow-up
+                # interruption rewrite must no-op (the only AI message in
+                # the checkpoint belongs to the *previous* turn).
+                self._turn_produced_no_assistant = True
             self._purge_transient_context()
             raise
 
@@ -1073,7 +1099,19 @@ class LangGraphBridge:
         Skipped on a plain ``LastValue`` channel: re-sending ``[msg]``
         there would *replace* the whole messages list (dropping every
         other turn) instead of dedupe-replacing by id.
+
+        Also skipped when the most recent turn produced no assistant
+        output at all (cancelled before its first token): the checkpoint
+        holds no current-turn AI message, so the backward walk below
+        would otherwise truncate the *previous* turn's already-delivered
+        reply and corrupt prior conversation state.
         """
+        if self._turn_produced_no_assistant:
+            logger.debug(
+                "rewrite_last_ai: last turn produced no assistant output; "
+                "skipping so the prior turn's reply isn't corrupted"
+            )
+            return
         if not self._messages_key_uses_add_messages():
             logger.debug("rewrite_last_ai: messages channel has no reducer; skipping")
             return

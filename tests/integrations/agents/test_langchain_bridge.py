@@ -1951,6 +1951,48 @@ class TestLangChainBridgePartialTurnOnCancel:
         assert _content_of_history_item(bridge._message_history[-1]) == "Hello world..."
         assert _content_of_history_item(bridge._message_history[1]) == "a1"
 
+    @pytest.mark.asyncio
+    async def test_early_cancel_before_any_token_leaves_prior_reply_intact(self):
+        """Cancelled before the first token: only the user message is
+        recorded, so a follow-up ``apply_interruption("")`` must no-op
+        rather than walk back and overwrite the *previous* turn's reply."""
+
+        class _HangingRunnable:
+            async def astream_events(
+                self, input: Any, **kwargs: Any
+            ) -> AsyncIterator[dict[str, Any]]:
+                yield {
+                    "event": "on_chat_model_start",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": [],
+                    "data": {},
+                }
+                await asyncio.sleep(999)  # never emits a token
+
+            async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
+
+        bridge = LangChainBridge(_HangingRunnable())
+        bridge._message_history = [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+        ]
+        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=0.05))
+
+        with pytest.raises(AgentTimeoutError):
+            async for _ in runner.invoke(AgentTurnInput.from_text("q2"), _recorder()):
+                pass
+
+        # Only the user message was recorded for the cancelled turn.
+        assert _content_of_history_item(bridge._message_history[-1]) == "q2"
+        assert _role_of_msg(bridge._message_history[-1]) in ("user", "human")
+
+        # apply_interruption("") must not reach back into the prior turn.
+        bridge.apply_interruption("", CancellationMode.IMMEDIATE_STOP)
+        assert _content_of_history_item(bridge._message_history[1]) == "a1"
+        # No phantom assistant message was injected either.
+        assert len(bridge._message_history) == 3
+
 
 # ── RunnableWithMessageHistory store sync ────────────────────────
 

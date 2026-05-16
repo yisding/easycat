@@ -827,14 +827,26 @@ def _rewrite_last_ai_in(messages: list[Any], replacement: str) -> bool:
     markdown cleanup / interruption truncation.  List-content messages
     have their text parts re-split; plain/empty content is overwritten.
 
+    The backward scan stops at the most recent *user* message: that
+    marks the current turn's boundary, so reaching it without seeing an
+    assistant reply means this turn produced no assistant output (a
+    barge-in / timeout cancelled before the first token, so
+    ``_append_to_history`` recorded only the user message).  Returning
+    here is a deliberate no-op — walking past the user message would
+    rewrite the *previous* turn's already-delivered reply and corrupt
+    conversation history.
+
     Returns ``True`` when an assistant message was found and rewritten,
     ``False`` otherwise — so callers can skip a needless (and, for a
     real backend store, destructive) clear + re-add when there was
-    nothing to rewrite.
+    nothing to rewrite (or nothing in *this* turn to rewrite).
     """
     for i in range(len(messages) - 1, -1, -1):
         msg = messages[i]
-        if _role_of(msg) != "assistant":
+        role = _role_of(msg)
+        if role == "user":
+            return False
+        if role != "assistant":
             continue
         content = _content_of(msg)
         if isinstance(content, list):
