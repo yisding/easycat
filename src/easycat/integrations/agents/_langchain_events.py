@@ -357,7 +357,15 @@ def translate_stream_event(
         # be silently dropped.
         chunk = data.get("chunk") if isinstance(data, dict) else None
         text = _generation_chunk_text(chunk)
-        if state is not None and run_id:
+        if text and state is not None and run_id:
+            # Only mark the run as streamed once it has actually yielded
+            # text.  Some non-chat LLMs emit an ``on_llm_stream`` with an
+            # empty/metadata-only chunk and then deliver the completion
+            # in ``on_llm_end``; marking the run streamed on the empty
+            # chunk would make the ``on_llm_end`` fallback return early
+            # and — with the parent chain stream suppressed for model
+            # descendants — leave the response empty.  Mirrors the
+            # ``on_chat_model_stream`` path above.
             streamed = state.setdefault("llm_streamed_run_ids", set())
             if isinstance(streamed, set):
                 streamed.add(run_id)

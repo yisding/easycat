@@ -223,7 +223,20 @@ class LangGraphBridge:
     # ── ExternalAgentBridge interface ─────────────────────────────
 
     def _config(self) -> dict[str, Any]:
-        return {"configurable": {"thread_id": self._thread_id}}
+        # Start from whatever the caller bound onto the graph via
+        # ``graph.with_config(...)`` — tags, recursion_limit, and *every*
+        # ``configurable`` key (tenant ids, auth tokens, feature flags
+        # consumed by nodes), not just the thread id.  ``astream_events``
+        # uses this supplied config *instead of* the graph's bound one,
+        # so rebuilding it with only ``thread_id`` would silently drop
+        # those values and make such graphs fail or run with defaults.
+        # Override only the thread id (already resolved with the correct
+        # explicit > bound > fresh-UUID precedence in ``__init__``).
+        config = _bound_config(self._graph)
+        configurable = dict(config.get("configurable") or {})
+        configurable["thread_id"] = self._thread_id
+        config["configurable"] = configurable
+        return config
 
     def _messages_key_uses_add_messages(self) -> bool:
         """Whether the messages channel uses LangGraph's ``add_messages``.
@@ -1266,6 +1279,42 @@ def _bound_thread_id(graph: Any) -> str | None:
                     return tid
         obj = getattr(obj, "bound", None)
     return None
+
+
+def _bound_config(graph: Any) -> dict[str, Any]:
+    """Full config bound onto the graph via ``graph.with_config(...)``.
+
+    The sibling of :func:`_bound_thread_id`, but returns the *entire*
+    bound config (tags, recursion_limit, and every ``configurable`` key —
+    tenant ids, auth tokens, feature flags read by nodes) rather than
+    just the thread id.  Walks the same bounded ``RunnableBinding``
+    chain; configs are merged inner→outer so an outer wrapper's value
+    wins (matching the outer-first precedence of :func:`_bound_thread_id`
+    and LangChain ``with_config`` merge order), and the ``configurable``
+    sub-dicts are deep-merged rather than replaced.  Returns a fresh,
+    independently-mutable ``{}`` when nothing is bound.
+    """
+    layers: list[dict[str, Any]] = []
+    obj = graph
+    for _ in range(5):  # bounded walk through nested RunnableBinding wrappers
+        if obj is None:
+            break
+        config = getattr(obj, "config", None)
+        if isinstance(config, dict):
+            layers.append(config)
+        obj = getattr(obj, "bound", None)
+    merged: dict[str, Any] = {}
+    configurable: dict[str, Any] = {}
+    # Innermost first so an outer wrapper's value overrides an inner one.
+    for config in reversed(layers):
+        for key, value in config.items():
+            if key == "configurable" and isinstance(value, dict):
+                configurable.update(value)
+            else:
+                merged[key] = value
+    if configurable:
+        merged["configurable"] = configurable
+    return merged
 
 
 def _get_checkpoint_id(state: Any) -> str | None:

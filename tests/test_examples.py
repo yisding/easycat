@@ -274,6 +274,18 @@ _REQUIRES_LANGGRAPH = frozenset(
         "examples/session_actions_langgraph.py",
     }
 )
+# The two AgentExecutor examples import ``langchain.agents`` — the full
+# ``langchain`` package, not just ``langchain-openai``.  Mirrors the
+# ``pytest.importorskip("langchain")`` guard in their import tests so an
+# env with ``langchain-openai`` but no ``langchain`` skips them instead
+# of running scripts that exit with the LangChain-install message and
+# fail the stderr assertion below.
+_REQUIRES_LANGCHAIN = frozenset(
+    {
+        "examples/function_tools_langchain.py",
+        "examples/session_actions_langchain.py",
+    }
+)
 
 
 def test_langchain_voice_example_imports(monkeypatch: pytest.MonkeyPatch):
@@ -371,6 +383,8 @@ def test_examples_can_run_as_scripts_without_package_import_errors(script_path: 
         pytest.importorskip("pydantic_ai")
     if script_path in _REQUIRES_LANGCHAIN_OPENAI:
         pytest.importorskip("langchain_openai")
+    if script_path in _REQUIRES_LANGCHAIN:
+        pytest.importorskip("langchain")
     if script_path in _REQUIRES_LANGGRAPH:
         pytest.importorskip("langgraph")
 
