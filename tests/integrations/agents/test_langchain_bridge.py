@@ -1852,6 +1852,48 @@ class TestLangChainBridgeStreamConfig:
         second = runnable.invoked_with[1]["config"]["configurable"]["session_id"]
         assert first and first == second
 
+    @pytest.mark.asyncio
+    async def test_rotating_run_id_does_not_rekey_history(self):
+        """``AgentStage`` mints a fresh ``run-<hex>`` every turn and, used
+        directly, leaves ``session_id`` empty.  The resolved id must stay
+        the stable per-bridge fallback across turns — not the rotating
+        ``run_id`` — or a wrapped ``RunnableWithMessageHistory`` would be
+        re-keyed each turn and drop prior conversation."""
+        runnable = self._runnable()
+        bridge = LangChainBridge(runnable)
+
+        def _rec(run_id: str) -> JournalAgentRecorder:
+            return JournalAgentRecorder(
+                journal=InMemoryRingBuffer(capacity=1000),
+                artifact_store=None,
+                context=RecorderContext(run_id=run_id, session_id=""),
+            )
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("a"), _rec("run-a")):
+            pass
+        first = runnable.invoked_with[1]["config"]["configurable"]["session_id"]
+        async for _ in bridge.invoke(AgentTurnInput.from_text("b"), _rec("run-b")):
+            pass
+        second = runnable.invoked_with[1]["config"]["configurable"]["session_id"]
+        assert first == second == bridge._fallback_session_id
+        assert first not in ("run-a", "run-b")
+
+    @pytest.mark.asyncio
+    async def test_independent_bridges_do_not_collide_without_session_id(self):
+        """Two independent bridges driven via ``NULL_RECORDER`` (shared
+        literal ``run_id="null"``) must resolve *distinct* ids so their
+        wrapped history stores can't cross-contaminate."""
+        bridge_a = LangChainBridge(self._runnable())
+        bridge_b = LangChainBridge(self._runnable())
+        async for _ in bridge_a.invoke(AgentTurnInput.from_text("a"), NULL_RECORDER):
+            pass
+        async for _ in bridge_b.invoke(AgentTurnInput.from_text("b"), NULL_RECORDER):
+            pass
+        sid_a = bridge_a._resolved_session_id
+        sid_b = bridge_b._resolved_session_id
+        assert sid_a and sid_b and sid_a != sid_b
+        assert "null" not in (sid_a, sid_b)
+
 
 # ── Partial-turn preservation on cancellation ────────────────────
 

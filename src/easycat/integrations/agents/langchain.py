@@ -171,9 +171,18 @@ class LangChainBridge:
         *every* invoke/stream; without it the first turn raises
         ``ValueError: Missing keys ['session_id']`` before any event is
         produced.  We resolve a stable id (explicit ``session_id=``
-        override → recorder session/run id → per-bridge fallback) and
+        override → recorder session id → per-bridge fallback) and
         thread it through.  Plain runnables ignore unknown
         ``configurable`` keys, so this is always safe.
+
+        The recorder ``run_id`` is deliberately *not* in the chain: it
+        rotates every turn (``AgentStage`` mints a fresh ``run-<hex>``
+        per turn) and is the shared literal ``"null"`` under
+        ``NULL_RECORDER``.  Using it would re-key a wrapped
+        ``RunnableWithMessageHistory`` each turn (losing prior
+        conversation) and let independent bridges collide.  Whenever
+        there is no real session id we fall back to the stable
+        per-bridge id instead.
 
         A caller-supplied ``config=`` is the merge base; we only fill in
         ``session_id`` when the caller didn't already provide one, so
@@ -181,12 +190,7 @@ class LangChainBridge:
         their own keys.
         """
         ctx = recorder.context
-        resolved = (
-            self._session_id
-            or (ctx.session_id or None)
-            or (ctx.run_id or None)
-            or self._fallback_session_id
-        )
+        resolved = self._session_id or (ctx.session_id or None) or self._fallback_session_id
         config: dict[str, Any] = dict(self._base_config) if self._base_config else {}
         configurable = dict(config.get("configurable") or {})
         configurable.setdefault("session_id", resolved)
