@@ -633,7 +633,13 @@ class LangGraphBridge:
                 self._transient_context_ids.append(msg_id)
                 msg["id"] = msg_id
             messages.append(msg)
-        messages.append(("user", text))
+        # Use a dict message rather than a ``("user", text)`` tuple so the
+        # user turn matches the dict-form context items above.  On a plain
+        # ``LastValue`` messages channel LangGraph stores the value
+        # verbatim (no ``add_messages`` normalization), so a raw tuple
+        # would crash nodes that read ``state["messages"][-1]["content"]``;
+        # a reducer channel normalizes a dict and a tuple identically.
+        messages.append({"role": "user", "content": text})
         return {self._messages_key: messages}
 
     def _purge_transient_context(self) -> None:

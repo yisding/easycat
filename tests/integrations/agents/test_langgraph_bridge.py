@@ -595,7 +595,7 @@ class TestLangGraphBridgeInvoke:
         assert ctx_msg["role"] == "system"
         assert ctx_msg["content"] == "Caller id: +15551234"
         assert ctx_msg["id"].startswith("easycat-ctx-")
-        assert messages[1] == ("user", "ping")
+        assert messages[1] == {"role": "user", "content": "ping"}
 
     @pytest.mark.asyncio
     async def test_transient_context_purged_after_turn(self):
