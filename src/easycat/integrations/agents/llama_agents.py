@@ -359,6 +359,66 @@ class LlamaAgentsBridge:
         self._reset_cleanup_tasks.add(task)
         task.add_done_callback(self._reset_cleanup_tasks.discard)
 
+    async def aclose(self) -> None:
+        """Release HITL-paused handlers when the session tears down.
+
+        Session.stop()/shutdown() call aclose_if_supported(self.agent) but
+        not reset(), so a workflow that paused on an InputRequiredEvent
+        before the session ended would otherwise leave its live local
+        WorkflowHandler or remote server handler waiting forever. Unlike
+        reset()'s fire-and-forget teardown (reset() runs synchronously
+        inside the event loop), aclose() is async and awaits the cleanup so
+        those resources are actually released before teardown returns.
+        """
+        await self._aclose_pending_handlers()
+        # reset() may have scheduled fire-and-forget teardown that has not
+        # finished yet; await it too so aclose() does not return while a
+        # paused handler is still being cancelled in the background.
+        pending = list(self._reset_cleanup_tasks)
+        if pending:
+            with contextlib.suppress(Exception):
+                await asyncio.gather(*pending, return_exceptions=True)
+        for target in (self._workflow, self._client):
+            fn = getattr(target, "aclose", None)
+            if callable(fn):
+                try:
+                    result = fn()
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:
+                    logger.debug("LlamaAgents aclose delegate failed", exc_info=True)
+        self._ctx = None
+        self._remote_context = None
+        self._remote_handler_id = None
+        self._active_handler = None
+        self._active_handler_id = None
+        self._pending_local_handler = None
+        self._pending_local_stream = None
+        self._pending_remote_handler_id = None
+
+    async def _aclose_pending_handlers(self) -> None:
+        """Await teardown of a handler/stream left paused by a HITL pause.
+
+        The async counterpart of _teardown_pending_handlers(): aclose() runs
+        in an async context and must actually wait for the paused local
+        WorkflowHandler / remote server handler to be cancelled before the
+        session releases backends, rather than fire-and-forget like reset().
+        The cancels are bounded by _best_effort_cancel() so a non-cooperative
+        workflow step cannot wedge session teardown.
+        """
+        handler = self._pending_local_handler
+        if handler is not None:
+            await self._best_effort_cancel(self._cancel_local_handler(handler))
+        stream = self._pending_local_stream
+        if stream is not None:
+            aclose = getattr(stream, "aclose", None)
+            if callable(aclose):
+                with contextlib.suppress(Exception):
+                    await aclose()
+        handler_id = self._pending_remote_handler_id
+        if handler_id is not None and self._client is not None:
+            await self._best_effort_cancel(self._cancel_remote_handler(handler_id))
+
     # ── Local workflow mode ───────────────────────────────────────
 
     async def _invoke_local(

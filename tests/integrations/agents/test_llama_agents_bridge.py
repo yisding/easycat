@@ -373,6 +373,24 @@ class TestLocalLlamaAgentsBridge:
         assert bridge.snapshot_state().fields["waiting_for_input"] is False
 
     @pytest.mark.asyncio
+    async def test_aclose_cancels_paused_local_hitl_handler(self, fake_workflows_modules):
+        """Session.stop()/shutdown() call aclose_if_supported(self.agent), not
+        reset(), so aclose() must tear down a HITL-paused local handler too --
+        and await it so the workflow is released before teardown returns."""
+        workflow = _CancelTrackingHitlWorkflow()
+        handler = workflow.handler
+        bridge = LlamaAgentsBridge(workflow=workflow)
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("start"), _recorder()):
+            pass
+        assert bridge.snapshot_state().fields["waiting_for_input"] is True
+
+        await asyncio.wait_for(bridge.aclose(), timeout=2.0)
+
+        assert handler.cancelled is True
+        assert bridge.snapshot_state().fields["waiting_for_input"] is False
+
+    @pytest.mark.asyncio
     async def test_human_input_event_pauses_and_resumes_handler(self, fake_workflows_modules):
         workflow = _HitlWorkflow()
         bridge = LlamaAgentsBridge(workflow=workflow)
@@ -1143,6 +1161,22 @@ class TestRemoteLlamaAgentsBridge:
 
         bridge.reset()
         await asyncio.gather(*list(bridge._reset_cleanup_tasks))
+
+        assert client.cancelled == ["h1"]
+        assert bridge.snapshot_state().fields["waiting_for_input"] is False
+
+    @pytest.mark.asyncio
+    async def test_aclose_cancels_paused_remote_hitl_handler(self, fake_workflows_modules):
+        """aclose() (the session stop/shutdown path) must cancel the paused
+        server-side handler too, not just reset() between turns."""
+        client = _RemoteHitlClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("start"), _recorder()):
+            pass
+        assert bridge.snapshot_state().fields["waiting_for_input"] is True
+
+        await asyncio.wait_for(bridge.aclose(), timeout=2.0)
 
         assert client.cancelled == ["h1"]
         assert bridge.snapshot_state().fields["waiting_for_input"] is False
