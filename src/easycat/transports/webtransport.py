@@ -61,7 +61,7 @@ import json
 import logging
 import struct
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
@@ -163,6 +163,11 @@ def _build_quic_configuration(certfile: str, keyfile: str) -> QuicConfiguration:
     config = quic_config_mod.QuicConfiguration(
         alpn_protocols=["h3"],
         is_client=False,
+        # Required, not optional: aioquic's H3 settings validation rejects
+        # ENABLE_WEBTRANSPORT unless H3_DATAGRAM is also negotiated, and
+        # H3_DATAGRAM in turn requires the max_datagram_frame_size transport
+        # parameter.  We still don't *send* datagrams (v1 is all-reliable
+        # streams); this only satisfies the handshake contract.
         max_datagram_frame_size=65536,
         idle_timeout=_IDLE_TIMEOUT_SEC,
     )
@@ -301,10 +306,20 @@ class _WebTransportSession:
             self._dispatch_untagged_stream(stream_id, data, ended)
 
         if ended:
-            # Drop any pending tag buffer for this stream so a half-tagged
-            # client can't pin entries in ``_pending_tags`` forever.
+            # A single data stream closing does NOT end the WebTransport
+            # session — the session lives as long as the QUIC connection /
+            # CONNECT stream.  Tearing the whole session down here would let
+            # a client that half-closes just its audio (or control) stream
+            # kill an otherwise healthy session.  Session teardown happens in
+            # ``connection_lost`` -> ``_mark_connection_lost``.  Here we only
+            # release per-stream bookkeeping: drop any pending tag buffer (so
+            # a half-tagged client can't pin ``_pending_tags`` entries) and
+            # forget the inbound stream id so a re-opened stream is accepted.
             self._pending_tags.pop(stream_id, None)
-            self._on_close.set()
+            if stream_id == self._inbound_audio_stream_id:
+                self._inbound_audio_stream_id = None
+            elif stream_id == self._inbound_control_stream_id:
+                self._inbound_control_stream_id = None
 
     def _dispatch_untagged_stream(self, stream_id: int, data: bytes, ended: bool) -> None:
         """Identify a stream by its leading tag byte and route it.
@@ -404,29 +419,39 @@ class _WebTransportSession:
         else:
             logger.debug("Unknown WebTransport control message type: %s", _trunc_for_log(msg_type))
 
+    def _send_stream_bytes(self, stream_id: int, data: bytes) -> None:
+        """Write raw bytes onto a WebTransport stream.
+
+        ``H3Connection.create_webtransport_stream`` emits the
+        ``WEBTRANSPORT_STREAM`` frame header; everything after it is opaque
+        payload that must go out as plain QUIC stream data.  Using
+        ``H3Connection.send_data`` here would wrap the bytes in an HTTP/3
+        ``DATA`` frame, which the peer rejects with ``FrameUnexpected`` ("DATA
+        frame is not allowed in this state") because no response headers were
+        sent on a WebTransport stream.
+        """
+        quic = getattr(self._quic_protocol, "_quic", None)
+        if quic is None:
+            return
+        quic.send_stream_data(stream_id, data, end_stream=False)
+
     def _send_control(self, msg: dict[str, Any]) -> None:
         if self._outbound_control_stream_id is None:
             self._outbound_control_stream_id = self._h3.create_webtransport_stream(
                 self._session_id
             )
-            self._h3.send_data(
-                self._outbound_control_stream_id, bytes([_TAG_CONTROL]), end_stream=False
-            )
-        self._h3.send_data(
-            self._outbound_control_stream_id,
-            _ControlCodec.encode(msg),
-            end_stream=False,
-        )
+            self._send_stream_bytes(self._outbound_control_stream_id, bytes([_TAG_CONTROL]))
+        self._send_stream_bytes(self._outbound_control_stream_id, _ControlCodec.encode(msg))
         self._quic_protocol.transmit()
 
     def reset_audio_stream(self) -> None:
         """Abort the server→client audio stream so already-buffered bytes are
         discarded (barge-in semantics).
 
-        ``H3Connection.send_data`` writes into aioquic's per-stream buffer
-        immediately; once handed off, bytes are transmitted as flow control
-        permits — draining the application queue alone is not sufficient to
-        stop the client from hearing the next ~2 s of TTS (the
+        ``QuicConnection.send_stream_data`` writes into aioquic's per-stream
+        buffer immediately; once handed off, bytes are transmitted as flow
+        control permits — draining the application queue alone is not
+        sufficient to stop the client from hearing the next ~2 s of TTS (the
         ``max_stream_data`` window).  Resetting the stream via the underlying
         :class:`QuicConnection` aborts in-flight bytes and frees the slot;
         the next outbound chunk opens a fresh stream.
@@ -471,10 +496,8 @@ class _WebTransportSession:
                     self._outbound_audio_stream_id = self._h3.create_webtransport_stream(
                         self._session_id
                     )
-                    self._h3.send_data(
-                        self._outbound_audio_stream_id, bytes([_TAG_AUDIO]), end_stream=False
-                    )
-                self._h3.send_data(self._outbound_audio_stream_id, chunk.data, end_stream=False)
+                    self._send_stream_bytes(self._outbound_audio_stream_id, bytes([_TAG_AUDIO]))
+                self._send_stream_bytes(self._outbound_audio_stream_id, chunk.data)
                 self._quic_protocol.transmit()
         except asyncio.CancelledError:
             raise
@@ -525,7 +548,13 @@ def _get_protocol_class() -> type:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             self._h3 = None
-            self._transport: WebTransportConnectionTransport | None = None
+            # NOTE: do *not* name this ``self._wt_transport`` — the aioquic
+            # ``QuicConnectionProtocol`` base class already owns that attribute
+            # for the asyncio ``DatagramTransport`` (assigned in
+            # ``connection_made``).  Shadowing it both breaks QUIC sending and
+            # makes the "already have a session" check below always true, so
+            # every CONNECT is rejected with 409.
+            self._wt_transport: WebTransportConnectionTransport | None = None
             # Populated by the protocol factory before events flow.
             self._accept_path: str = ""
             self._on_session: Callable[[WebTransportConnectionTransport], None] = lambda _t: None
@@ -542,9 +571,9 @@ def _get_protocol_class() -> type:
             if isinstance(event, h3_events.HeadersReceived):
                 self._handle_headers(event)
             elif isinstance(event, h3_events.WebTransportStreamDataReceived):
-                if self._transport is None:
+                if self._wt_transport is None:
                     return
-                self._transport._feed_stream_data(  # noqa: SLF001
+                self._wt_transport._feed_stream_data(  # noqa: SLF001
                     event.stream_id, event.data, event.stream_ended
                 )
 
@@ -565,7 +594,7 @@ def _get_protocol_class() -> type:
                 self.transmit()
                 return
 
-            if self._transport is not None:
+            if self._wt_transport is not None:
                 # Reject additional WT sessions on the same QUIC connection.
                 self._h3.send_headers(event.stream_id, [(b":status", b"409")], end_stream=True)
                 self.transmit()
@@ -584,12 +613,12 @@ def _get_protocol_class() -> type:
                 _quic_protocol=self,
                 _session_id=event.stream_id,
             )
-            self._transport = transport
+            self._wt_transport = transport
             self._on_session(transport)
 
         def connection_lost(self, exc: BaseException | None) -> None:
-            if self._transport is not None:
-                self._transport._mark_connection_lost()  # noqa: SLF001
+            if self._wt_transport is not None:
+                self._wt_transport._mark_connection_lost()  # noqa: SLF001
             super().connection_lost(exc)
 
     _PROTOCOL_CLASS_CACHE = _EasyCatH3Protocol
@@ -699,6 +728,10 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
         self._client_connected.clear()
         if self._session is not None:
             await self._session.stop()
+            # Actively tear the QUIC connection down so a server-initiated
+            # end-of-session reaches the client immediately rather than
+            # lingering until the idle timeout.
+            self._session.close_connection(reason="session ended")
         self._enqueue_sentinel()
         try:
             self._out_queue.put_nowait(None)
@@ -982,7 +1015,11 @@ class WebTransportTransport(_AudioQueueMixin):
             finally:
                 self._active = None
 
-        self._server = WebTransportServer(self._config, handle)
+        # Pin the wrapped server to a single session so an over-cap client is
+        # rejected at accept time (the server force-closes it) instead of
+        # lingering behind the one-session ``handle`` closure above.
+        single_client_config = replace(self._config, max_concurrent_sessions=1)
+        self._server = WebTransportServer(single_client_config, handle)
         await self._server.start()
         self._connected = True
 

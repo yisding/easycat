@@ -13,6 +13,7 @@ Coverage strategy:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import struct
 from pathlib import Path
@@ -86,11 +87,7 @@ class TestControlCodec:
 
 class _FakeH3:
     def __init__(self) -> None:
-        self.sent: list[tuple[int, bytes]] = []
         self.next_stream_id = 1000
-
-    def send_data(self, stream_id: int, data: bytes, end_stream: bool) -> None:  # noqa: FBT001
-        self.sent.append((stream_id, data))
 
     def create_webtransport_stream(self, session_id: int, is_unidirectional: bool = False) -> int:
         sid = self.next_stream_id
@@ -99,13 +96,21 @@ class _FakeH3:
 
 
 class _FakeQuicConnection:
-    """Records ``reset_stream`` calls so tests can assert barge-in semantics."""
+    """Records ``reset_stream`` and raw WebTransport stream sends.
+
+    WebTransport stream payload goes out as raw QUIC stream data (not H3
+    ``DATA`` frames), so outbound framing assertions read ``sent`` here.
+    """
 
     def __init__(self) -> None:
         self.resets: list[tuple[int, int]] = []
+        self.sent: list[tuple[int, bytes]] = []
 
     def reset_stream(self, stream_id: int, error_code: int) -> None:
         self.resets.append((stream_id, error_code))
+
+    def send_stream_data(self, stream_id: int, data: bytes, end_stream: bool = False) -> None:  # noqa: FBT001, FBT002
+        self.sent.append((stream_id, data))
 
 
 class _FakeQuicProtocol:
@@ -192,7 +197,7 @@ class TestWebTransportSession:
 
     @pytest.mark.asyncio
     async def test_outbound_writer_emits_audio_format_then_data(self) -> None:
-        session, fake_h3, _in_q, out_q = _make_session()
+        session, _fake_h3, _in_q, out_q = _make_session()
         await session.start()
         try:
             chunk = AudioChunk(data=b"\x00\x01" * 4, format=PCM16_MONO_16K)
@@ -201,7 +206,8 @@ class TestWebTransportSession:
         finally:
             await session.stop()
 
-        bodies = [data for _sid, data in fake_h3.sent]
+        sent = session._quic_protocol._quic.sent  # noqa: SLF001
+        bodies = [data for _sid, data in sent]
         decoded_control = []
         for data in bodies:
             if len(data) >= 4:
@@ -245,15 +251,15 @@ class TestWebTransportSession:
     async def test_outbound_writer_signals_close_on_unexpected_error(self) -> None:
         """A crash in the writer must set ``on_close`` so the owning transport
         tears down instead of silently wedging."""
-        session, fake_h3, _in_q, out_q = _make_session()
+        session, _fake_h3, _in_q, out_q = _make_session()
         await session.start()
         try:
-            # Sabotage send_data after the initial ``ready`` control frame
-            # so the next outbound audio chunk explodes inside the writer.
+            # Sabotage the raw stream send after the initial ``ready`` control
+            # frame so the next outbound audio chunk explodes inside the writer.
             def _explode(*_args, **_kwargs):
-                raise RuntimeError("simulated send_data failure")
+                raise RuntimeError("simulated send_stream_data failure")
 
-            fake_h3.send_data = _explode  # type: ignore[assignment]
+            session._quic_protocol._quic.send_stream_data = _explode  # type: ignore[assignment]  # noqa: SLF001
             await out_q.put(AudioChunk(data=b"\x00\x01" * 4, format=PCM16_MONO_16K))
             await asyncio.wait_for(session._on_close.wait(), timeout=1)  # noqa: SLF001
         finally:
@@ -718,6 +724,54 @@ def _aioquic_available() -> bool:
     return importlib.util.find_spec("aioquic") is not None
 
 
+@contextlib.asynccontextmanager
+async def _wt_client(port: int, cert_path: Path):
+    """Connect a WebTransport client whose protocol owns its own H3 layer.
+
+    The stock ``QuicConnectionProtocol`` + a post-hoc ``quic_event_received``
+    monkeypatch lets aioquic's default stream handling build (and then GC)
+    asyncio ``StreamWriter`` objects for the server's QPACK/control
+    unidirectional streams, which raise "Cannot send data on peer-initiated
+    unidirectional stream" from ``StreamWriter.__del__``.  A protocol that
+    owns H3 from construction and never chains to the base handler avoids that
+    entirely (this mirrors the server's ``_EasyCatH3Protocol``).
+
+    Yields the connected protocol; use ``client.h3`` and ``client.events``.
+    """
+    from aioquic.asyncio.client import connect as quic_connect
+    from aioquic.asyncio.protocol import QuicConnectionProtocol
+    from aioquic.h3.connection import H3Connection
+    from aioquic.quic.configuration import QuicConfiguration
+
+    cfg = QuicConfiguration(
+        alpn_protocols=["h3"],
+        is_client=True,
+        max_datagram_frame_size=65536,
+    )
+    cfg.load_verify_locations(str(cert_path))
+    # The self-signed cert's SAN is ``localhost``; we dial the 127.0.0.1
+    # bind, so pin the TLS server name to what the cert actually attests.
+    cfg.server_name = "localhost"
+
+    class _ClientProtocol(QuicConnectionProtocol):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.h3 = H3Connection(self._quic, enable_webtransport=True)
+            self.events: asyncio.Queue = asyncio.Queue()
+
+        def quic_event_received(self, event: Any) -> None:
+            for h3_event in self.h3.handle_event(event):
+                self.events.put_nowait(h3_event)
+
+    async with quic_connect(
+        "127.0.0.1",
+        port,
+        configuration=cfg,
+        create_protocol=_ClientProtocol,
+    ) as client:
+        yield client
+
+
 @pytest.mark.integration_socket
 @pytest.mark.skipif(
     not _aioquic_available(),
@@ -740,36 +794,14 @@ class TestWebTransportServerLoopback:
         result_audio: asyncio.Future[bytes],
     ) -> None:
         """Open one WebTransport session and send/recv one PCM frame."""
-        from aioquic.asyncio.client import connect as quic_connect
-        from aioquic.h3.connection import H3Connection
         from aioquic.h3.events import HeadersReceived as ClientHeadersReceived
         from aioquic.h3.events import WebTransportStreamDataReceived as ClientStreamData
-        from aioquic.quic.configuration import QuicConfiguration
 
-        client_quic_config = QuicConfiguration(
-            alpn_protocols=["h3"],
-            is_client=True,
-            max_datagram_frame_size=65536,
-        )
-        client_quic_config.load_verify_locations(str(cert_path))
+        async with _wt_client(port, cert_path) as client:
+            client_h3 = client.h3
+            events_q = client.events
 
-        async with quic_connect(
-            "127.0.0.1",
-            port,
-            configuration=client_quic_config,
-        ) as client_protocol:
-            client_h3 = H3Connection(client_protocol._quic, enable_webtransport=True)
-            events_q: asyncio.Queue = asyncio.Queue()
-            original = client_protocol.quic_event_received
-
-            def _dispatch(event):
-                original(event)
-                for h3_event in client_h3.handle_event(event):
-                    events_q.put_nowait(h3_event)
-
-            client_protocol.quic_event_received = _dispatch  # type: ignore[assignment]
-
-            connect_stream_id = client_protocol._quic.get_next_available_stream_id()
+            connect_stream_id = client._quic.get_next_available_stream_id()
             client_h3.send_headers(
                 connect_stream_id,
                 [
@@ -782,7 +814,7 @@ class TestWebTransportServerLoopback:
                 ],
                 end_stream=False,
             )
-            client_protocol.transmit()
+            client.transmit()
 
             async def _await_status_ok() -> None:
                 while True:
@@ -795,8 +827,12 @@ class TestWebTransportServerLoopback:
             await asyncio.wait_for(_await_status_ok(), timeout=5)
 
             audio_sid = client_h3.create_webtransport_stream(connect_stream_id)
-            client_h3.send_data(audio_sid, bytes([_TAG_AUDIO]) + pcm_in, end_stream=False)
-            client_protocol.transmit()
+            # WebTransport stream payload is raw QUIC stream data, not an H3
+            # DATA frame — mirror what the server/browser do.
+            client._quic.send_stream_data(
+                audio_sid, bytes([_TAG_AUDIO]) + pcm_in, end_stream=False
+            )
+            client.transmit()
 
             received = bytearray()
             deadline = asyncio.get_event_loop().time() + 5

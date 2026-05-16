@@ -226,27 +226,33 @@ async function acceptServerStreams(transport) {
 }
 
 async function dispatchServerStream(reader) {
-  // Peek the first byte to know whether it's audio or control.
-  var first = await reader.read();
-  if (first.done || first.value.length === 0) return;
-  var tag = first.value[0];
-  if (tag === TAG_AUDIO) {
-    if (first.value.length > 1) playAudio(first.value.slice(1).buffer);
-    while (true) {
-      var r = await reader.read();
-      if (r.done) return;
-      playAudio(r.value.buffer.slice(r.value.byteOffset, r.value.byteOffset + r.value.byteLength));
+  try {
+    // Peek the first byte to know whether it's audio or control.
+    var first = await reader.read();
+    if (first.done || first.value.length === 0) return;
+    var tag = first.value[0];
+    if (tag === TAG_AUDIO) {
+      if (first.value.length > 1) playAudio(first.value.slice(1).buffer);
+      while (true) {
+        var r = await reader.read();
+        if (r.done) return;
+        playAudio(r.value.buffer.slice(r.value.byteOffset, r.value.byteOffset + r.value.byteLength));
+      }
+    } else if (tag === TAG_CONTROL) {
+      var decode = makeControlDecoder();
+      if (first.value.length > 1) {
+        decode(first.value.subarray(1)).forEach(handleControlMessage);
+      }
+      while (true) {
+        var r2 = await reader.read();
+        if (r2.done) return;
+        decode(r2.value).forEach(handleControlMessage);
+      }
     }
-  } else if (tag === TAG_CONTROL) {
-    var decode = makeControlDecoder();
-    if (first.value.length > 1) {
-      decode(first.value.subarray(1)).forEach(handleControlMessage);
-    }
-    while (true) {
-      var r2 = await reader.read();
-      if (r2.done) return;
-      decode(r2.value).forEach(handleControlMessage);
-    }
+  } catch (e) {
+    // Expected on barge-in: the server resets the audio stream to drop
+    // already-buffered TTS, which rejects the pending reader.read().  A
+    // fresh server-initiated stream follows, so just stop reading this one.
   }
 }
 
