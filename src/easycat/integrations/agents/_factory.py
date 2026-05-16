@@ -227,7 +227,20 @@ def _unwrap_compiled_state_graph(agent: Any) -> Any | None:
     ``CompiledStateGraph`` *copy* carrying ``.config``, so a later
     ``.with_types(...)`` still nests that config-bearing copy on
     ``.bound``) is preserved; ``LangGraphBridge`` reads it back off the
-    peeled graph.  Returns ``None`` (caller falls back to the plain
+    peeled graph.
+
+    Config bound *outside* a non-config wrapper — e.g.
+    ``graph.with_retry().with_config(configurable={"thread_id": ...})``
+    or ``graph.with_types(...).with_config(...)`` — instead lands as a
+    ``RunnableBinding.config`` on a peeled layer, not on the graph copy,
+    so it would be discarded.  Collect ``.config`` from every peeled
+    wrapper layer and re-apply the merge onto the unwrapped graph via
+    ``CompiledStateGraph.with_config(...)`` (which returns a config-
+    bearing graph copy ``LangGraphBridge`` reads natively).  Layers are
+    merged innermost→outermost so an outer wrapper's value wins and
+    ``configurable`` sub-dicts deep-merge — matching LangChain
+    ``with_config`` and :func:`~easycat.integrations.agents.langgraph._bound_config`
+    precedence.  Returns ``None`` (caller falls back to the plain
     Runnable branch) when ``langgraph`` is unavailable.
     """
     try:
@@ -244,17 +257,42 @@ def _unwrap_compiled_state_graph(agent: Any) -> Any | None:
         RunnableBindingBase = ()  # type: ignore[assignment]
     # ``RunnableBindingBase`` may nest (e.g.
     # ``graph.bind(...).with_retry()``); ``seen`` guards against a
-    # pathological self-referential ``.bound``.
+    # pathological self-referential ``.bound``.  ``wrapper_configs``
+    # collects ``.config`` peeled off each binding layer (outermost
+    # first) so config bound outside the wrapper survives unwrapping.
     seen: set[int] = set()
+    wrapper_configs: list[dict[str, Any]] = []
     while agent is not None and id(agent) not in seen:
         seen.add(id(agent))
         if isinstance(agent, CompiledStateGraph):
-            return agent
+            if not wrapper_configs:
+                return agent
+            return agent.with_config(_merge_wrapper_configs(wrapper_configs))
         if isinstance(agent, RunnableBindingBase):
+            layer = getattr(agent, "config", None)
+            if isinstance(layer, dict) and layer:
+                wrapper_configs.append(layer)
             agent = getattr(agent, "bound", None)
             continue
         break
     return None
+
+
+def _merge_wrapper_configs(layers: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge ``RunnableBinding`` config layers (outermost first) into one
+    config dict, innermost→outermost so an outer wrapper's value wins and
+    ``configurable`` sub-dicts deep-merge rather than replace."""
+    merged: dict[str, Any] = {}
+    configurable: dict[str, Any] = {}
+    for layer in reversed(layers):
+        for key, value in layer.items():
+            if key == "configurable" and isinstance(value, dict):
+                configurable.update(value)
+            else:
+                merged[key] = value
+    if configurable:
+        merged["configurable"] = configurable
+    return merged
 
 
 def _is_language_model(agent: Any) -> bool:

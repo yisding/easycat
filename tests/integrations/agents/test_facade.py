@@ -293,6 +293,41 @@ class TestAutoAdaptLangGraph:
         adapted = auto_adapt_agent(graph.with_types(input_type=dict))
         assert adapted._thread_id == "resume-1"
 
+    def test_config_bound_outside_retry_wrapper_survives(self):
+        """``graph.with_retry().with_config(configurable={"thread_id"...})``
+        lands the config on the *outer* ``RunnableBinding``, not on a
+        graph copy; peeling ``.bound`` must re-apply it onto the unwrapped
+        graph rather than minting a fresh thread."""
+        graph = self._compiled_graph().with_retry()
+        adapted = auto_adapt_agent(graph.with_config(configurable={"thread_id": "resume-2"}))
+        assert adapted._thread_id == "resume-2"
+
+    def test_config_bound_outside_with_types_wrapper_survives(self):
+        graph = self._compiled_graph().with_types(input_type=dict)
+        adapted = auto_adapt_agent(graph.with_config(configurable={"thread_id": "resume-3"}))
+        assert adapted._thread_id == "resume-3"
+
+    def test_non_thread_configurable_keys_survive_wrapper(self):
+        """Non-``thread_id`` ``configurable`` keys (tenant ids, feature
+        flags read by nodes) bound outside a wrapper must reach the
+        graph's run config too, not just the thread id."""
+        graph = self._compiled_graph().bind().with_retry()
+        adapted = auto_adapt_agent(
+            graph.with_config(configurable={"thread_id": "resume-4", "tenant": "acme"})
+        )
+        assert adapted._thread_id == "resume-4"
+        assert adapted._config()["configurable"]["tenant"] == "acme"
+
+    def test_outer_wrapper_config_wins_over_inner_graph_copy(self):
+        """When both an inner ``with_config`` graph copy and an outer
+        wrapper bind ``thread_id``, the outer value wins (matching
+        LangChain ``with_config`` merge precedence)."""
+        graph = self._compiled_graph().with_config(configurable={"thread_id": "inner"})
+        adapted = auto_adapt_agent(
+            graph.with_retry().with_config(configurable={"thread_id": "outer"})
+        )
+        assert adapted._thread_id == "outer"
+
     def test_wrapped_checkpointerless_graph_still_raises(self):
         with pytest.raises(BridgeInputError, match="checkpointer"):
             auto_adapt_agent(self._compiled_graph(checkpointer=False).with_types(input_type=dict))
