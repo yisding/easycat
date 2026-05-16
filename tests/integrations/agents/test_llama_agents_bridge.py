@@ -380,6 +380,26 @@ class _RemoteStream:
         self.closed = True
 
 
+class _RawStream:
+    """Yields pre-built envelopes verbatim (no _RemoteEnvelope wrapping)."""
+
+    def __init__(self, items: list[Any]) -> None:
+        self._items = items
+        self.closed = False
+        self.last_sequence = -1
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return self._iterate()
+
+    async def _iterate(self) -> AsyncIterator[Any]:
+        for sequence, item in enumerate(self._items):
+            self.last_sequence = sequence
+            yield item
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 class _BlockingRemoteStream:
     """Yields one envelope, then blocks forever on the next item."""
 
@@ -606,6 +626,73 @@ class TestRemoteLlamaAgentsBridge:
             pass
 
         assert streams and streams[0].closed is True
+
+    @pytest.mark.asyncio
+    async def test_remote_opaque_stop_subclass_envelope_is_terminal(self, fake_workflows_modules):
+        """A server-only StopEvent subclass envelope must not be re-streamed.
+
+        ``load_event()`` fails (the subclass isn't importable client-side) so
+        the bridge keeps the envelope; it advertises StopEvent via ``types``
+        and must be treated as terminal instead of having its result appended
+        as a duplicate text delta after the streamed progress.
+        """
+
+        class _OpaqueStopEnvelope:
+            type = "acme.CustomStopEvent"
+            types = ["workflows.events.StopEvent", "workflows.events.Event"]
+            value = {"result": "the answer"}
+            qualified_name = "acme.CustomStopEvent"
+
+            def load_event(self) -> Any:
+                raise RuntimeError("CustomStopEvent not importable on client")
+
+        class _OpaqueClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> Any:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                return _RawStream(
+                    [_RemoteEnvelope(_TextEvent("the answer")), _OpaqueStopEnvelope()]
+                )
+
+        client = _OpaqueClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        events = []
+        async for event in bridge.invoke(AgentTurnInput.from_text("q"), _recorder()):
+            events.append(event)
+
+        assert [e.text for e in events if e.kind == "text_delta"] == ["the answer"]
+        assert [e.text for e in events if e.kind == "done"] == ["the answer"]
+
+    @pytest.mark.asyncio
+    async def test_remote_empty_result_envelope_is_not_spoken(self, fake_workflows_modules):
+        """A silent StopEvent() result must not leak envelope repr to TTS."""
+
+        class _EmptyEnvelope:
+            type = "StopEvent"
+            types = ["workflows.events.StopEvent"]
+            value: dict[str, Any] = {}
+            qualified_name = "workflows.events.StopEvent"
+
+            def load_event(self) -> Any:
+                return _StopEvent()
+
+        class _SilentClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> _RemoteStream:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                return _RemoteStream([_StopEvent()])
+
+            async def get_handler(self, handler_id: str) -> _HandlerData:
+                return _HandlerData(handler_id, result=_EmptyEnvelope())
+
+        client = _SilentClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        events = []
+        async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(event)
+
+        assert [e.text for e in events if e.kind == "text_delta"] == []
+        assert [e.text for e in events if e.kind == "done"] == [""]
 
 
 class TestAutoAdapt:

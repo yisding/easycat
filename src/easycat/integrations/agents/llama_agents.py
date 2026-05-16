@@ -711,6 +711,17 @@ def _load_remote_event(envelope: Any) -> Any:
     return envelope
 
 
+_TERMINAL_EVENT_NAMES = frozenset(
+    {
+        "StopEvent",
+        "WorkflowTimedOutEvent",
+        "WorkflowCancelledEvent",
+        "WorkflowFailedEvent",
+        "IdleReleasedEvent",
+    }
+)
+
+
 def _is_stop_event(event: Any) -> bool:
     for path in (
         ("workflows.events", "StopEvent"),
@@ -724,25 +735,21 @@ def _is_stop_event(event: Any) -> bool:
         except ImportError:
             pass
 
-    cls_name = type(event).__name__
-    if cls_name in {
-        "StopEvent",
-        "WorkflowTimedOutEvent",
-        "WorkflowCancelledEvent",
-        "WorkflowFailedEvent",
-        "IdleReleasedEvent",
-    }:
+    if type(event).__name__ in _TERMINAL_EVENT_NAMES:
         return True
     event_type = getattr(event, "type", None)
     if isinstance(event_type, str):
-        leaf = event_type.rsplit(".", 1)[-1]
-        return leaf in {
-            "StopEvent",
-            "WorkflowTimedOutEvent",
-            "WorkflowCancelledEvent",
-            "WorkflowFailedEvent",
-            "IdleReleasedEvent",
-        }
+        if event_type.rsplit(".", 1)[-1] in _TERMINAL_EVENT_NAMES:
+            return True
+    # A remote envelope wrapping a server-only StopEvent subclass keeps
+    # ``type`` set to the subclass (not in the set above) but lists the
+    # serializable base classes in ``types``; treat the base StopEvent as
+    # terminal so the final result isn't re-streamed as a text delta.
+    types = getattr(event, "types", None)
+    if isinstance(types, list):
+        leaves = {str(t).rsplit(".", 1)[-1] for t in types}
+        if leaves & _TERMINAL_EVENT_NAMES:
+            return True
     return False
 
 
@@ -836,7 +843,31 @@ def _event_mapping(event: Any) -> dict[str, Any]:
     return data
 
 
+def _unwrap_remote_envelope(value: Any) -> Any:
+    """Unwrap a remote ``EventEnvelope[WithMetadata]`` to its inner event.
+
+    The remote WorkflowClient returns results wrapped in an envelope that
+    carries serialization metadata (``qualified_name``, ``value``,
+    ``type``/``types``). Stringifying that envelope leaks repr noise like
+    ``value={} qualified_name=...`` into TTS, so resolve the real event
+    first; if the underlying class is server-only, ``load_event()`` raises
+    and we keep the envelope so callers can still inspect ``type``/``types``.
+    """
+    load_event = getattr(value, "load_event", None)
+    if not callable(load_event):
+        return value
+    try:
+        loaded = load_event()
+    except Exception:
+        logger.debug("Failed to load LlamaAgents remote result event", exc_info=True)
+        return value
+    return loaded if loaded is not None else value
+
+
 def _extract_output_text(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    result = _unwrap_remote_envelope(result)
     if isinstance(result, str):
         return result
     text = _extract_text_field(result)
@@ -846,7 +877,13 @@ def _extract_output_text(result: Any) -> str:
         for key in ("result", "value"):
             if key in result:
                 return _extract_output_text(result[key])
-    return str(result) if result is not None else ""
+    if result is None:
+        return ""
+    # A terminal event with no extractable text means the workflow finished
+    # silently -- speaking its repr (or the envelope's) would be wrong.
+    if _is_stop_event(result):
+        return ""
+    return str(result)
 
 
 def _jsonable_context(ctx: Any) -> Any:
