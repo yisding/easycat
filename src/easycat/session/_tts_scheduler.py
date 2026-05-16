@@ -12,12 +12,12 @@ Responsibilities:
 - Reserve the future :meth:`synthesize_sentences` hook for
   sentence-level pipelining (see workstream-tts-pipelining when it lands).
 
-Outbound queue ownership note: today the :class:`BoundedAudioQueue`
-that carries TTS audio out to the transport lives on :class:`Session`
+Outbound queue ownership note: the :class:`BoundedAudioQueue` that
+carries TTS audio out to the transport lives on :class:`Session`
 because :class:`Session.start` may rebuild it when the previous queue
 was closed.  :class:`AudioRouter` holds the live reference for draining
 and :class:`TTSSynthesizer` (owned by this scheduler) holds the same
-reference for writing.  We keep that arrangement intact in this phase.
+reference for writing.
 """
 
 from __future__ import annotations
@@ -193,13 +193,11 @@ class TTSScheduler:
         if not gated:
             await self._turn_manager.bot_started_speaking()
         try:
-            effective_is_active = is_active
-            if effective_is_active is None:
-                effective_is_active = (
-                    None
-                    if gated
-                    else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                )
+            effective_is_active = is_active or (
+                None
+                if gated
+                else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+            )
             result = await self._synth.synthesize(
                 payload,
                 token,

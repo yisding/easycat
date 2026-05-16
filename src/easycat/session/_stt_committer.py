@@ -44,6 +44,7 @@ from easycat.providers import STTProvider
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.timeouts import STTTimeoutError, TimeoutConfig
+from easycat.turn_manager import TurnManagerState
 
 if TYPE_CHECKING:
     from easycat.session._turn_context import TurnContext
@@ -65,6 +66,7 @@ class STTCommitter:
         timeout_config: TimeoutConfig,
         segment_silence_ms: int,
         no_turn: TurnContext,
+        current_turn: Callable[[], TurnContext | None],
         turn_manager: TurnManager,
         emit: Callable[[Any], Awaitable[None]],
         auto_turn_from_stt_final: Callable[[], bool],
@@ -77,6 +79,7 @@ class STTCommitter:
         self._timeout_config = timeout_config
         self._segment_silence_ms = segment_silence_ms
         self._no_turn = no_turn
+        self._current_turn = current_turn
         self._turn_manager = turn_manager
         self._emit = emit
         self._auto_turn_from_stt_final = auto_turn_from_stt_final
@@ -146,6 +149,8 @@ class STTCommitter:
         turn: TurnContext | None = None,
     ) -> None:
         """Finalize the current STT segment on a shorter pause than turn end."""
+        if turn is None:
+            turn = self._current_turn()
         if not self._active or turn is None or self._auto_turn_from_stt_final():
             return
         self.cancel_scheduled()
@@ -155,11 +160,9 @@ class STTCommitter:
             name="stt_pause_commit",
             journal_sink=self._journal_sink,
         )
-        self._pause_commit_task.add_done_callback(self._log_task_exception)
+        self._pause_commit_task.add_done_callback(self._runtime_scope.log_task_exception)
 
     async def _commit_segment_after(self, delay_s: float, turn: TurnContext | None) -> None:
-        from easycat.turn_manager import TurnManagerState
-
         if delay_s > 0:
             await asyncio.sleep(delay_s)
         if self._turn_manager.state != TurnManagerState.USER_PAUSED:
@@ -183,7 +186,7 @@ class STTCommitter:
             journal_sink=self._journal_sink,
             turn_id=turn.id,
         )
-        self._segment_commit_task.add_done_callback(self._log_task_exception)
+        self._segment_commit_task.add_done_callback(self._runtime_scope.log_task_exception)
 
     async def commit_now(self, turn: TurnContext | None) -> None:
         commit_segment = getattr(self._stt_getter(), "commit_segment", None)
@@ -366,14 +369,3 @@ class STTCommitter:
             if turn.stt_final_future and not turn.stt_final_future.done():
                 turn.stt_final_future.set_result("")
             turn.stt_final_future = None
-
-    # ── Helpers ───────────────────────────────────────────────────
-
-    @staticmethod
-    def _log_task_exception(task: asyncio.Task[object]) -> None:
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("Background task failed")

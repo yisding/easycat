@@ -4,7 +4,7 @@ Responsibilities:
 
 - React to ``TurnStarted`` / ``TurnEnded`` events emitted by the
   ``TurnManager``.  Subscriptions are wired by ``Session.__init__``
-  *after* the runner has been constructed (Phase 5 Risk 4, Option A).
+  after the runner has been constructed.
 - ``handle_end_of_speech``: drain pending STT segments, fetch the
   final transcript, dispatch to the agent.
 - ``run_streaming_agent``: drive the agent stream through
@@ -135,7 +135,7 @@ class TurnRunner:
         self._session_id = session_id
         self._journal_enabled = journal_enabled
 
-        # Active text-turn tracking (was Session._active_text_turn etc.).
+        # Active text-turn tracking.
         self._active_text_turn: asyncio.Task[str] | None = None
         self._text_turn_cancel_token: CancelToken | None = None
         self._text_turn_accumulated: str = ""
@@ -215,7 +215,7 @@ class TurnRunner:
             turn_id=event.turn_id,
         )
         self._tts.current_task = new_task
-        new_task.add_done_callback(self._log_task_exception)
+        new_task.add_done_callback(self._runtime_scope.log_task_exception)
 
     async def on_turn_ended(
         self,
@@ -658,29 +658,3 @@ class TurnRunner:
         finally:
             await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn_id))
         return response
-
-    # ── Internal helpers ───────────────────────────────────────────
-
-    @staticmethod
-    def _log_task_exception(task: asyncio.Task[object]) -> None:
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("Background task failed")
-
-    # ── Per-turn reset (Phase 5 — shutdown / restart hooks) ──
-
-    def reset(self) -> None:
-        """Clear runner-owned per-turn state.
-
-        Called by ``Session._reset_turn_state`` once all collaborators
-        have been signalled — keeps the text-turn machinery in sync
-        with whatever cleanup the orchestrator has just done.
-        """
-        # Text-turn tasks are tied to a single ``send_text`` call; their
-        # cancellation is driven explicitly by ``Session.stop`` /
-        # ``shutdown`` rather than the per-turn reset path.  Nothing to
-        # tear down here.
-        return

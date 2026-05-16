@@ -139,10 +139,6 @@ class _SessionTurnHandle:
         if turn is not None:
             self._session._turn_generation = turn.generation
 
-    def bump_generation(self) -> int:
-        self._session._turn_generation += 1
-        return self._session._turn_generation
-
 
 def _ensure_bridge(agent: Any) -> ExternalAgentBridge:
     """Guarantee ``agent`` implements :class:`ExternalAgentBridge`.
@@ -253,13 +249,11 @@ class Session:
         # Interruption-config knobs are owned by the CancelOrchestrator
         # (see ``self._cancel`` below).  Session exposes read-only
         # property delegates so external readers keep working.
-        # _strip_markdown and _output_processors moved to TTSScheduler.
 
         # Turn manager — single source of truth for turn state.  The
         # barge-in cancel callback is installed later via
-        # :meth:`TurnManager.set_cancel_callback` because Phase 4 of the
-        # session decomposition wires the callback through
-        # ``CancelOrchestrator`` which does not yet exist at this point.
+        # :meth:`TurnManager.set_cancel_callback` because it is wired
+        # through ``CancelOrchestrator``, constructed below.
         self._turn_manager = cfg.turn_manager or TurnManager(
             self.event_bus,
             config=cfg.turn_manager_config,
@@ -268,11 +262,11 @@ class Session:
         # every state transition so bundle readers can answer "why did
         # it go to PROCESSING" from the journal alone.
         self._turn_manager.bind_journal_hook(self._on_turn_state_changed)
-        # Phase 5 Risk 4 (Option A): TurnStarted/TurnEnded subscriptions
-        # are deferred until after ``self._turn_runner`` is constructed
-        # below, because the handlers now live on the runner.
-        # PlaybackMarkAck and TransportAudioDelivered are wired to
-        # AudioRouter below — see the audio_router construction site.
+        # TurnStarted/TurnEnded subscriptions are deferred until after
+        # ``self._turn_runner`` is constructed below, because the
+        # handlers live on the runner.  PlaybackMarkAck and
+        # TransportAudioDelivered are wired to AudioRouter below — see
+        # the audio_router construction site.
 
         # Opt-out auto-wiring.  Runs on every STT final; on a match it
         # emits ``OptOutDetected``, adds the caller to an attached DNC
@@ -348,8 +342,6 @@ class Session:
         self._heartbeat_task: asyncio.Task[None] | None = None
         # STT futures live on TurnContext (per-turn so a stale callback
         # from the previous turn cannot resolve a future on the next turn).
-        # ``_current_tts_task`` and ``_tts_playback_suppressed`` moved to
-        # :class:`TTSScheduler`.
 
         # Per-turn state — created fresh at each turn start.
         # _turn_generation is a monotonic counter that increases each time a
@@ -362,9 +354,6 @@ class Session:
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
-        # Text-turn state (``_active_text_turn``, ``_text_turn_cancel_token``,
-        # ``_text_turn_accumulated``, ``_text_turn_lock``) is owned by
-        # :class:`TurnRunner` after the Phase 5 decomposition.
         self._turn_manager.bind_session(self.session_id)
         self._journal_sink = SessionJournalSink(
             event_bus=self.event_bus,
@@ -448,6 +437,7 @@ class Session:
             timeout_config=self._timeout_config,
             segment_silence_ms=stt_segment_silence_ms,
             no_turn=self._no_turn,
+            current_turn=lambda: self._turn,
             turn_manager=self._turn_manager,
             emit=self._emit,
             auto_turn_from_stt_final=lambda: self._auto_turn_from_stt_final,
@@ -511,10 +501,10 @@ class Session:
         # Install the orchestrator's barge-in callback now that it exists.
         self._turn_manager.set_cancel_callback(self._cancel.for_barge_in)
 
-        # Turn runner — owns the per-turn agent loop.  Construction order:
-        # depends on every collaborator above (STTCommitter, TTSScheduler,
-        # AudioRouter, CancelOrchestrator, AgentStage).  Event subscriptions
-        # are deferred to after construction (Risk 4 Option A).
+        # Turn runner — owns the per-turn agent loop.  Depends on every
+        # collaborator above (STTCommitter, TTSScheduler, AudioRouter,
+        # CancelOrchestrator, AgentStage), so its event subscriptions are
+        # deferred until after it is constructed.
         self._turn_runner = TurnRunner(
             stt_committer=self._stt_committer,
             tts_scheduler=self._tts_scheduler,
@@ -544,7 +534,7 @@ class Session:
             journal_enabled=self._journal is not None,
         )
         # Wire TurnStarted / TurnEnded subscriptions now that the runner
-        # exists (Phase 5 Risk 4 Option A — deferred subscription).
+        # exists (its handlers are the subscribers).
         self.event_bus.subscribe(TurnStarted, self._turn_runner.on_turn_started)
         self.event_bus.subscribe(TurnEnded, self._turn_runner.schedule_turn_ended)
 
@@ -694,10 +684,9 @@ class Session:
         """Whether the classification gate is currently buffering TTS audio."""
         return self._audio_gate is not None and self._audio_gate()
 
-    # Read-only delegates for the interruption-config knobs that moved
-    # onto :class:`CancelOrchestrator` in Phase 4 of the session
-    # decomposition.  External tests/tools that read these off Session
-    # keep working.
+    # Read-only delegates for the interruption-config knobs owned by
+    # :class:`CancelOrchestrator`, so external tests/tools that read
+    # these off Session keep working.
     @property
     def _interruption_mode(self) -> str:
         return self._cancel.interruption_mode
@@ -1680,12 +1669,11 @@ class Session:
             except Exception:
                 logger.debug("Error stopping session helper", exc_info=True)
 
-    # ── Test-compat shims for migrated turn methods ────────────
+    # ── Test-compat shims ──────────────────────────────────────
     #
-    # The six turn-loop methods migrated to :class:`TurnRunner` in
-    # Phase 5 of the session decomposition.  These thin delegates
-    # forward to the runner so existing tests that poke the private
-    # surface continue to work without touching their bodies.
+    # The turn-loop logic lives on :class:`TurnRunner`.  These thin
+    # delegates exist only so tests that poke Session's private turn
+    # surface keep working — don't add logic here.
 
     async def _on_turn_started(self, event: TurnStarted) -> None:
         await self._turn_runner.on_turn_started(event)

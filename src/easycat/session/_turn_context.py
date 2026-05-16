@@ -41,8 +41,6 @@ class TurnHandle(Protocol):
 
     def set(self, turn: TurnContext | None) -> None: ...
 
-    def bump_generation(self) -> int: ...
-
 
 class TurnContext:
     """Holds all mutable state scoped to a single conversational turn."""

@@ -7,8 +7,8 @@ Responsibilities:
   stage a chance to observe and record the signal via
   ``Stage.handle_upstream``.
 - Compose ``STTCommitter.cancel()`` and ``TTSScheduler.cancel()``
-  during a turn cancel (kept on Session for now; the orchestrator
-  participates by owning the signal-propagation tail of that path).
+  during a turn cancel (Session drives the composition; the
+  orchestrator owns the signal-propagation tail of that path).
 - Implement the barge-in suppression policy: if a queued session
   action declares ``no_interrupt=True`` (e.g. an end-call
   announcement), barge-in is suppressed and the orchestrator returns
@@ -60,7 +60,7 @@ class CancelOrchestrator:
         # Context
         run_ctx: RunContext,
         journal_sink: SessionJournalSink,
-        # Interruption config (was 4 fields on Session)
+        # Interruption config
         interruption_mode: str,
         interruption_latency_compensation_ms: int,
         interruption_ack_stale_ms: int,

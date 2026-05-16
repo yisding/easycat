@@ -66,10 +66,9 @@ class AudioRouter:
     the gated-replay book-keeping used when the classification gate
     flushes buffered TTS audio.
 
-    Note: the WebRTC transport's ``_handle_offer`` swaps its outbound
-    queue on reconnect; the router takes the queue by reference at
-    construction and does not handle that swap.  Fixing it is out of
-    scope for the Session decomposition (separate workstream).
+    Known limitation: the WebRTC transport's ``_handle_offer`` swaps
+    its outbound queue on reconnect; the router takes the queue by
+    reference at construction and does not handle that swap.
     """
 
     def __init__(
@@ -86,12 +85,12 @@ class AudioRouter:
         run_ctx: RunContext,
         no_turn: TurnContext,
         echo_canceller: Any,
-        # Capability flags (callables so test code that mutates them on
-        # Session after construction stays in sync with the router).
-        enable_noise_reduction: Callable[[], bool] | bool,
-        enable_aec: Callable[[], bool] | bool,
-        enable_vad: Callable[[], bool] | bool,
-        auto_turn_from_stt_final: Callable[[], bool] | bool,
+        # Capability flags as callables so the loop body reads live
+        # values even when Session mutates them after construction.
+        enable_noise_reduction: Callable[[], bool],
+        enable_aec: Callable[[], bool],
+        enable_vad: Callable[[], bool],
+        auto_turn_from_stt_final: Callable[[], bool],
         # Callbacks
         emit: Callable[[Any], Awaitable[None]],
         is_running: Callable[[], bool],
@@ -99,9 +98,9 @@ class AudioRouter:
         current_turn: Callable[[], TurnContext | None],
         is_stt_active: Callable[[], bool],
         with_correlation: Callable[[Any], Any] | None = None,
-        # Outbound queue (already constructed by Session for now;
-        # router receives the same instance so external supplies and
-        # the TTSSynthesizer keep their references valid).
+        # Outbound queue is constructed by Session; the router receives
+        # the same instance so external supplies and the TTSSynthesizer
+        # keep their references valid.
         outbound_queue: BoundedAudioQueue,
     ) -> None:
         self._transport = transport
@@ -116,24 +115,10 @@ class AudioRouter:
         self._no_turn = no_turn
         self._echo_canceller = echo_canceller
 
-        # Normalize each flag into a zero-arg callable so the loop body
-        # always reads "live" values.  Bool literals get wrapped.
-        self._enable_noise_reduction: Callable[[], bool] = (
-            enable_noise_reduction
-            if callable(enable_noise_reduction)
-            else (lambda v=enable_noise_reduction: v)
-        )
-        self._enable_aec: Callable[[], bool] = (
-            enable_aec if callable(enable_aec) else (lambda v=enable_aec: v)
-        )
-        self._enable_vad: Callable[[], bool] = (
-            enable_vad if callable(enable_vad) else (lambda v=enable_vad: v)
-        )
-        self._auto_turn_from_stt_final: Callable[[], bool] = (
-            auto_turn_from_stt_final
-            if callable(auto_turn_from_stt_final)
-            else (lambda v=auto_turn_from_stt_final: v)
-        )
+        self._enable_noise_reduction = enable_noise_reduction
+        self._enable_aec = enable_aec
+        self._enable_vad = enable_vad
+        self._auto_turn_from_stt_final = auto_turn_from_stt_final
 
         self._emit = emit
         self._is_running = is_running
@@ -454,6 +439,11 @@ class AudioRouter:
 
     async def _send_playback_mark(self, turn: TurnContext) -> None:
         if self._playback_ack_transport is None:
+            return
+        # on_playback_ack only ever clears the active turn's dict, never
+        # the long-lived _no_turn singleton — marks recorded against it
+        # would accumulate for the session's lifetime.
+        if turn is self._no_turn:
             return
 
         self._playback_mark_seq += 1

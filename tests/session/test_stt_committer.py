@@ -67,6 +67,7 @@ def _make_committer(
     timeout_config: TimeoutConfig | None = None,
     segment_silence_ms: int = 0,
     auto_turn: bool = False,
+    current_turn=lambda: None,
     on_speech_detection_reset=lambda: None,
 ) -> tuple[STTCommitter, _RecordingSTT, list, TurnContext, TurnManager]:
     stt = stt or _RecordingSTT()
@@ -98,6 +99,7 @@ def _make_committer(
         timeout_config=timeout_config,
         segment_silence_ms=segment_silence_ms,
         no_turn=no_turn,
+        current_turn=current_turn,
         turn_manager=tm,
         emit=_emit,
         auto_turn_from_stt_final=lambda: auto_turn,
@@ -127,6 +129,25 @@ async def test_schedule_then_cancel_scheduled_cancels_task() -> None:
     await asyncio.sleep(0.01)
     assert task.cancelled()
     assert committer._pause_commit_task is None
+
+
+@pytest.mark.asyncio
+async def test_schedule_resolves_current_turn_when_called_like_event_bus() -> None:
+    # EventBus.emit invokes handlers as handler(event) — a single positional
+    # arg, no turn. schedule() must resolve the active turn itself.
+    turn = _new_turn()
+    committer, _stt, _emitted, _no_turn, tm = _make_committer(
+        segment_silence_ms=200, current_turn=lambda: turn
+    )
+    committer.mark_active()
+    tm._state = TurnManagerState.USER_PAUSED
+
+    committer.schedule(VADStopSpeaking())
+
+    task = committer._pause_commit_task
+    assert task is not None and not task.done()
+    committer.cancel_scheduled()
+    await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio
@@ -201,6 +222,7 @@ async def test_await_pending_returns_false_on_timeout_and_emits_error() -> None:
         timeout_config=TimeoutConfig(stt_timeout=0.05),
         segment_silence_ms=0,
         no_turn=no_turn,
+        current_turn=lambda: None,
         turn_manager=tm,
         emit=_emit,
         auto_turn_from_stt_final=lambda: False,

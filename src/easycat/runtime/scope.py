@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     from easycat.session._journal_sink import SessionJournalSink
+
+logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
@@ -96,6 +99,20 @@ class RuntimeScope:
 
         task.add_done_callback(_on_done)
         return self.add_task(name, task)
+
+    @staticmethod
+    def log_task_exception(task: asyncio.Task[object]) -> None:
+        """Done-callback that logs an unhandled task exception.
+
+        Pair with :meth:`create_journaled_task`: the journal records the
+        terminal record for bundles; this surfaces the traceback in logs.
+        """
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Background task failed")
 
     def add_task(self, name: str, task: asyncio.Task[_T]) -> asyncio.Task[_T]:
         """Track an existing task under *name*.
