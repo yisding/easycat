@@ -468,6 +468,7 @@ class LlamaAgentsBridge:
 
         streamed_text = False
         cancelled = False
+        failed = False
         # _aiter_with_cancellation aclose()s its source on every
         # non-exhaustive exit (cancel/teardown leak prevention). A HITL
         # pause exits this generator via ``return`` while the source is only
@@ -523,8 +524,22 @@ class LlamaAgentsBridge:
             cancelled = True
             await self._best_effort_cancel(self._cancel_local_handler(handler))
             raise
+        except Exception:
+            # A regular error from stream_events() or while awaiting the
+            # handler -- e.g. the workflow itself raised. Unlike a barge-in
+            # this is a hard failure with no continuity to preserve: only the
+            # cancellation branch above sets cancelled, so without this the
+            # finally would take the else branch and save handler.ctx, and the
+            # next preserve_context turn would feed partial state written by
+            # this aborted turn back into workflow.run(). Stop the handler so
+            # the workflow does not keep running, then let the finally drop the
+            # Context/pending markers (failed) -- mirroring the remote path's
+            # except Exception.
+            failed = True
+            await self._best_effort_cancel(self._cancel_local_handler(handler))
+            raise
         finally:
-            if cancelled or (cancel_token is not None and cancel_token.is_cancelled):
+            if cancelled or failed or (cancel_token is not None and cancel_token.is_cancelled):
                 # The barge-in closed stream_events() before the terminal
                 # event, and cancel_run() may have returned on its own
                 # timeout without actually stopping the run. Reusing this
@@ -808,7 +823,21 @@ class LlamaAgentsBridge:
                 # handler -- reset to -1.
                 self._remote_event_sequence = -1
             if not cancelled:
-                _raise_if_remote_failed(result_data, self._workflow_name)
+                try:
+                    _raise_if_remote_failed(result_data, self._workflow_name)
+                except Exception:
+                    # The remote handler reached a failed/cancelled terminal
+                    # status. _remote_handler_id is still pinned, so a later
+                    # preserve_context turn would feed this dead handler back
+                    # into run_workflow_nowait() instead of starting cleanly.
+                    # Drop the handler references -- mirroring the stream-
+                    # failure except Exception above -- so the next turn opens
+                    # a fresh run. (_active_handler_id is cleared by the
+                    # finally below; the handler is already terminal server-
+                    # side so there is nothing to cancel.)
+                    self._remote_handler_id = None
+                    self._pending_remote_handler_id = None
+                    raise
             if not streamed_text and not cancelled:
                 text = _extract_output_text(self._last_output)
                 if text:
