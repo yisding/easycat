@@ -405,7 +405,14 @@ class LlamaAgentsBridge:
         assert self._workflow_name is not None
 
         handler_id = self._pending_remote_handler_id
-        after_sequence = self._remote_event_sequence if handler_id is not None else -1
+        # We reuse an existing remote handler when resuming a HITL pause, or
+        # when preserve_context keeps the prior handler alive. In both cases
+        # the server's event log keeps accumulating, so streaming from -1
+        # would replay earlier turns -- carry the cursor forward instead.
+        reusing_handler = handler_id is not None or (
+            self._preserve_context and self._remote_handler_id is not None
+        )
+        after_sequence = self._remote_event_sequence if reusing_handler else -1
         if handler_id is not None:
             self._pending_remote_handler_id = None
             await self._send_remote_human_response(handler_id, turn_input)
@@ -468,15 +475,25 @@ class LlamaAgentsBridge:
                 cancelled = True
                 await self._cancel_remote_handler(handler_id)
         finally:
-            if cancelled and event_stream is not None:
+            # The real WorkflowClient spins up a background SSE reader for
+            # get_workflow_events. Close it on every exit path -- cancellation,
+            # a HITL pause (early return above), or normal completion -- so a
+            # paused conversation does not leak a stream/task while the next
+            # user turn opens another one.
+            if event_stream is not None:
                 aclose = getattr(event_stream, "aclose", None)
                 if callable(aclose):
-                    await aclose()
+                    with contextlib.suppress(Exception):
+                        await aclose()
 
         result_data = await self._client.get_handler(handler_id)
         self._remote_context = getattr(result_data, "context", self._remote_context)
         self._last_output = getattr(result_data, "result", None)
-        self._remote_event_sequence = -1
+        if not self._preserve_context:
+            # With preserve_context the handler (and its event log) survives
+            # into the next turn, so keep the cursor to avoid replaying this
+            # turn. Otherwise each turn gets a fresh handler -- reset to -1.
+            self._remote_event_sequence = -1
         if not cancelled:
             _raise_if_remote_failed(result_data, self._workflow_name)
         if not streamed_text and not cancelled:

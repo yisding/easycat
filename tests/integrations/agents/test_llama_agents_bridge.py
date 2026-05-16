@@ -550,6 +550,63 @@ class TestRemoteLlamaAgentsBridge:
         ]
         assert [event.text for event in events if event.kind == "done"] == ["Hello from envelope"]
 
+    @pytest.mark.asyncio
+    async def test_remote_preserve_context_carries_event_cursor(self, fake_workflows_modules):
+        """A preserved second turn resumes after the first turn's events.
+
+        With preserve_context the handler (and its server-side event log)
+        survives into the next turn, so streaming from -1 again would replay
+        the first turn before the new response.
+        """
+
+        class _PreservingClient(_RemoteClient):
+            async def run_workflow_nowait(self, workflow_name: str, **kwargs: Any) -> _HandlerData:
+                self.run_calls.append({"workflow_name": workflow_name, **kwargs})
+                return _HandlerData("h1")
+
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> _RemoteStream:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                n = len(self.stream_calls)
+                return _RemoteStream([_TextEvent(f"turn {n}"), _StopEvent(f"r{n}")])
+
+            async def get_handler(self, handler_id: str) -> _HandlerData:
+                return _HandlerData(handler_id, result="ok", context={"saved": True})
+
+        client = _PreservingClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("one"), _recorder()):
+            pass
+        async for _ in bridge.invoke(AgentTurnInput.from_text("two"), _recorder()):
+            pass
+
+        # First turn streams from the beginning; the preserved second turn
+        # resumes after the first turn's last event instead of replaying it.
+        assert client.stream_calls[0]["after_sequence"] == -1
+        assert client.stream_calls[1]["after_sequence"] == 1
+        # The handler is reused (preserve_context), not recreated.
+        assert client.run_calls[1]["handler_id"] == "h1"
+
+    @pytest.mark.asyncio
+    async def test_remote_hitl_pause_closes_event_stream(self, fake_workflows_modules):
+        """A HITL pause must close the SSE stream, not leak it until cancel."""
+        streams: list[_RemoteStream] = []
+
+        class _PausingClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> _RemoteStream:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                stream = _RemoteStream([_InputRequiredEvent(prefix="name?")])
+                streams.append(stream)
+                return stream
+
+        client = _PausingClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("start"), _recorder()):
+            pass
+
+        assert streams and streams[0].closed is True
+
 
 class TestAutoAdapt:
     def test_auto_adapt_llama_workflow(self, fake_workflows_modules):
