@@ -298,30 +298,24 @@ class TestWebTransportSession:
             session.handle_stream_data(stream_id=sid, data=b"", ended=False)
         assert len(session._pending_tags) <= 4  # noqa: SLF001 — matches _MAX_PENDING_TAG_STREAMS
 
-    def test_pending_tag_buffer_is_capped_per_stream(self) -> None:
-        """A single stream that sends bytes but never a recognizable tag must
-        be dropped before its pending buffer grows without bound."""
-        session, _h3, _in_q, _out_q = _make_session()
-        # Empty first byte slot then a flood of bytes.  After the first byte
-        # is consumed as a tag, we'd be in the "known stream" branch, so we
-        # write an *unknown* tag and keep sending: the unknown branch logs
-        # and drops, so test the pre-tag case by issuing only zero-length
-        # events first to keep `buf` empty, then one large junk payload.
-        for _ in range(100):
-            session.handle_stream_data(stream_id=99, data=b"", ended=False)
-        # Now feed a single payload that is larger than the cap.
-        huge = bytes(8192)  # 8 KiB > _MAX_PENDING_TAG_BYTES (4 KiB)
-        # Use a tag byte the dispatcher won't recognize so the bytes accumulate
-        # as a pending buffer (recognized tags consume the buffer immediately).
-        session.handle_stream_data(stream_id=99, data=b"", ended=False)
-        # Use stream_data without a tag in the first byte yet by sending no
-        # data via an empty event; then send one huge chunk that has no tag
-        # prefix yet (the very first byte of the chunk *is* the tag, but the
-        # dispatcher will recognize unknown 0x00 and warn rather than buffer).
-        # The realistic adversary case: send length=cap bytes, then never finish.
-        session.handle_stream_data(stream_id=99, data=huge, ended=False)
-        # Entry should have been pruned because length exceeded the cap.
-        assert 99 not in session._pending_tags  # noqa: SLF001
+    def test_large_first_delivery_is_dispatched_not_dropped(self) -> None:
+        """A batched first delivery of ``[tag] + multi-KiB PCM`` in a single
+        event must be routed to the audio handler, not dropped.
+
+        Regression for the Copilot review: an earlier per-stream byte cap
+        discarded the tag along with the payload and left the stream
+        permanently mis-routed.  WebTransport write-batching / back-pressure
+        can easily produce a >4 KiB first delivery.
+        """
+        session, _h3, in_q, _out_q = _make_session(in_max=4)
+        big_pcm = b"\x00\x01" * 4096  # 8 KiB of PCM (> the old 4 KiB cap)
+        session.handle_stream_data(stream_id=7, data=bytes([_TAG_AUDIO]) + big_pcm, ended=False)
+        chunk = in_q.get_nowait()
+        assert chunk.data == big_pcm
+        # Stream is now identified; a follow-up event routes without re-tagging.
+        session.handle_stream_data(stream_id=7, data=b"\x02\x03", ended=False)
+        assert in_q.get_nowait().data == b"\x02\x03"
+        assert 7 not in session._pending_tags  # noqa: SLF001
 
 
 # ── Conformance: protocol shape and types ─────────────────────────

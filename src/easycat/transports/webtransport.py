@@ -101,12 +101,13 @@ _IDLE_TIMEOUT_SEC = 30.0
 # and pin app-side buffers indefinitely while bytes trickle in).
 _MAX_CONTROL_FRAME_BYTES = 64 * 1024
 
-# Bounds on streams whose purpose tag has not yet arrived.  A malicious
-# client can open many bidi streams and never write the first byte, growing
-# ``_pending_tags`` unboundedly; cap both the dict size and the per-stream
-# buffer.
+# Cap on the number of streams whose purpose tag has not yet arrived.  A
+# malicious client can open many bidi streams and never write the first byte;
+# this bounds ``_pending_tags``.  No per-stream byte cap is needed — the tag
+# is byte 0, so a stream is dispatched (and forgotten) the instant any byte
+# arrives, and a single delivery is already bounded by the QUIC flow-control
+# window (``_MAX_STREAM_DATA``).
 _MAX_PENDING_TAG_STREAMS = 4
-_MAX_PENDING_TAG_BYTES = 4096
 
 # Truncation cap for user-controlled values that end up in log messages.
 _LOG_TRUNC = 64
@@ -306,11 +307,22 @@ class _WebTransportSession:
             self._on_close.set()
 
     def _dispatch_untagged_stream(self, stream_id: int, data: bytes, ended: bool) -> None:
-        """Handle the first bytes on a stream whose purpose we haven't yet learned.
+        """Identify a stream by its leading tag byte and route it.
 
-        Caps both the number of concurrent untagged streams and the per-stream
-        buffer size so a malicious client can't open many streams and never
-        send a tag byte (or send a tag byte forever-prefixed by junk).
+        The purpose tag is always byte 0, so there is never a reason to
+        accumulate bytes waiting for it — ``_pending_tags`` exists only to
+        bridge zero-byte deliveries (an event with empty ``data`` before the
+        first real byte).  As soon as any byte is present we dispatch the
+        whole buffer (tag + however much payload arrived in the same event)
+        and forget the stream.
+
+        Memory is bounded without a per-stream byte cap: the number of
+        not-yet-tagged streams is capped by ``_MAX_PENDING_TAG_STREAMS``, and
+        a single delivery is bounded by the QUIC per-stream flow-control
+        window (``_MAX_STREAM_DATA``).  A per-byte cap here would instead
+        drop a legitimate large first delivery (e.g. a batched ``[0x01]`` +
+        multi-KiB PCM frame) and, by discarding the tag with it, leave the
+        stream permanently mis-routed.
         """
         if stream_id not in self._pending_tags:
             if len(self._pending_tags) >= _MAX_PENDING_TAG_STREAMS:
@@ -320,15 +332,9 @@ class _WebTransportSession:
                 return
         buf = self._pending_tags.setdefault(stream_id, bytearray())
         buf.extend(data)
-        if len(buf) > _MAX_PENDING_TAG_BYTES:
-            logger.warning(
-                "Dropping untagged WebTransport stream %d — exceeded %d-byte buffer",
-                stream_id,
-                _MAX_PENDING_TAG_BYTES,
-            )
-            del self._pending_tags[stream_id]
-            return
         if not buf:
+            # Zero-byte delivery; wait for the next event. Bounded by the
+            # pending-stream count cap above and the QUIC idle timeout.
             return
         tag = buf[0]
         payload = bytes(buf[1:])
