@@ -492,8 +492,13 @@ class LlamaAgentsBridge:
         )
         after_sequence = self._remote_event_sequence if reusing_handler else -1
         if handler_id is not None:
-            self._pending_remote_handler_id = None
+            # Clear the pending marker only after the response is actually
+            # delivered. If send_event raises (e.g. a transient network or
+            # server error), the bridge must stay "waiting for input" so a
+            # retry resends the HumanResponseEvent instead of falling through
+            # to run_workflow_nowait() and leaving the paused workflow stuck.
             await self._send_remote_human_response(handler_id, turn_input)
+            self._pending_remote_handler_id = None
         else:
             start_payload = self._build_start_payload(turn_input)
             start_event: Any

@@ -564,6 +564,47 @@ class TestRemoteLlamaAgentsBridge:
         assert [event.text for event in second_turn if event.kind == "done"] == ["Remote done"]
 
     @pytest.mark.asyncio
+    async def test_remote_hitl_retry_after_send_failure(self, fake_workflows_modules):
+        """A transient send_event failure must keep the bridge waiting for
+        input so a retry resends the HumanResponseEvent instead of starting
+        a fresh run that leaves the paused workflow stuck."""
+
+        class _FlakySendClient(_RemoteHitlClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.send_attempts = 0
+
+            async def send_event(
+                self, handler_id: str, event: Any, step: str | None = None
+            ) -> None:
+                self.send_attempts += 1
+                if self.send_attempts == 1:
+                    raise RuntimeError("transient network error")
+                await super().send_event(handler_id, event, step=step)
+
+        client = _FlakySendClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("start"), _recorder()):
+            pass
+
+        with pytest.raises(RuntimeError, match="transient network error"):
+            async for _ in bridge.invoke(AgentTurnInput.from_text("Ada"), _recorder()):
+                pass
+
+        retry_turn = []
+        async for event in bridge.invoke(AgentTurnInput.from_text("Ada"), _recorder()):
+            retry_turn.append(event)
+
+        # Only the initial start spun up a run -- the retry resent the
+        # human response to the same paused handler rather than launching
+        # a second run_workflow_nowait().
+        assert len(client.run_calls) == 1
+        assert client.sent_events[-1][0] == "h1"
+        assert client.sent_events[-1][1].response == "Ada"
+        assert [event.text for event in retry_turn if event.kind == "done"] == ["Remote done"]
+
+    @pytest.mark.asyncio
     async def test_remote_cancellation_during_idle_stream_is_prompt(self, fake_workflows_modules):
         stream = _BlockingRemoteStream()
 
