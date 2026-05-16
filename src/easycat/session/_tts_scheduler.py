@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from easycat.bounded_queue import BoundedAudioQueue
@@ -74,7 +74,7 @@ class TTSScheduler:
         # Callbacks
         current_turn: Callable[[], TurnContext | None],
         is_gated: Callable[[], bool],
-        drain_session_actions: Callable[[], asyncio.Future[bool] | object],
+        drain_session_actions: Callable[[], Awaitable[bool]],
         clear_turn: Callable[[], None],
     ) -> None:
         self._tts_getter = tts

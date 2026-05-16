@@ -67,9 +67,10 @@ class RuntimeScope:
             label: str = name,
             tid: str | None = resolved_turn,
         ) -> None:
-            # Pick the right terminal record kind.  We look at exception
-            # first so a task that's both cancelled *and* had raised in
-            # finally-cleanup reports the raise (more actionable).
+            # Pick the right terminal record kind.  A cancelled task is
+            # reported as ``task_cancelled`` even if it also raised during
+            # finally-cleanup: ``t.cancelled()`` is checked first and
+            # short-circuits before ``t.exception()`` is consulted.
             try:
                 if t.cancelled():
                     journal_sink.append_record(
