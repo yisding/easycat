@@ -734,6 +734,64 @@ class TestRemoteLlamaAgentsBridge:
         assert stream.closed is True
 
     @pytest.mark.asyncio
+    async def test_remote_stream_failure_cancels_handler_and_clears_state(
+        self, fake_workflows_modules
+    ):
+        """A non-cancellation error from the remote event stream (e.g. a
+        connection failure that outlived the client's reconnect attempts)
+        must stop the server-side handler and drop the handler references so
+        the next turn starts fresh instead of resuming an abandoned handler,
+        and snapshots must stop advertising the failed handler."""
+
+        class _FailingStream:
+            def __init__(self) -> None:
+                self.closed = False
+                self.last_sequence = -1
+
+            def __aiter__(self) -> AsyncIterator[Any]:
+                return self._iterate()
+
+            async def _iterate(self) -> AsyncIterator[Any]:
+                self.last_sequence = 0
+                yield _RemoteEnvelope(_TextEvent("remote partial"))
+                raise RuntimeError("remote stream connection lost")
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        failing_stream = _FailingStream()
+
+        class _FailingStreamClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> Any:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                if len(self.stream_calls) == 1:
+                    return failing_stream
+                return _RemoteStream([_TextEvent("second turn"), _StopEvent("done")])
+
+        client = _FailingStreamClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        with pytest.raises(RuntimeError, match="remote stream connection lost"):
+            async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+                pass
+
+        # Server-side workflow stopped and the SSE reader closed.
+        assert client.cancelled == ["h1"]
+        assert failing_stream.closed is True
+
+        # snapshot_state() no longer advertises the failed handler.
+        fields = bridge.snapshot_state().fields
+        assert fields["active_handler_id"] is None
+        assert fields["remote_handler_id"] is None
+        assert fields["waiting_for_input"] is False
+
+        # The next turn starts a fresh run rather than resuming the dead
+        # (abandoned/contaminated) handler.
+        async for _ in bridge.invoke(AgentTurnInput.from_text("again"), _recorder()):
+            pass
+        assert client.run_calls[1]["handler_id"] is None
+
+    @pytest.mark.asyncio
     async def test_remote_cancelled_handler_continues_next_turn(self, fake_workflows_modules):
         """A barge-in must preserve the server-side handler reference.
 

@@ -726,6 +726,24 @@ class LlamaAgentsBridge:
             await self._best_effort_cancel(self._cancel_remote_handler(handler_id))
             self._active_handler_id = None
             raise
+        except Exception:
+            # The remote SSE/event iterator raised a regular error after
+            # run_workflow_nowait() created the handler -- e.g. a connection
+            # failure that outlived the client's reconnect attempts. Unlike a
+            # barge-in this is a hard failure with no continuity to preserve:
+            # invoke() aborts with the exception and the tail below (which
+            # otherwise clears _active_handler_id and calls cancel_handler via
+            # get_handler/_raise_if_remote_failed) never runs. Stop the
+            # server-side workflow so it does not keep running, then drop the
+            # handler references so the next preserve_context turn starts a
+            # fresh run instead of resuming an abandoned/contaminated handler,
+            # and clear the active marker so snapshot_state() stops advertising
+            # a handler that invoke() has already failed out of.
+            await self._best_effort_cancel(self._cancel_remote_handler(handler_id))
+            self._remote_handler_id = None
+            self._pending_remote_handler_id = None
+            self._active_handler_id = None
+            raise
         finally:
             # The real WorkflowClient spins up a background SSE reader for
             # get_workflow_events. Close it on every exit path -- cancellation,
