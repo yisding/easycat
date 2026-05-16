@@ -529,6 +529,49 @@ class TestRemoteLlamaAgentsBridge:
         assert [e.text for e in collected if e.kind == "text_delta"] == ["remote partial"]
 
     @pytest.mark.asyncio
+    async def test_remote_cancelled_handler_not_reused_next_turn(self, fake_workflows_modules):
+        """A barge-in must not leave a terminal handler id behind.
+
+        After cancellation the next default (preserve_context) turn has to
+        start a fresh server-side handler -- resuming the cancelled one would
+        fail, since the client API only resumes completed handlers -- while
+        still carrying the saved conversation context forward.
+        """
+        first_stream = _BlockingRemoteStream()
+
+        class _CancelThenResumeClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> Any:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                if len(self.stream_calls) == 1:
+                    return first_stream
+                return _RemoteStream([_TextEvent("second turn"), _StopEvent("done")])
+
+        client = _CancelThenResumeClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+        token = CancelToken()
+
+        async def _consume() -> None:
+            async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder(), token):
+                pass
+
+        async def _cancel_when_blocked() -> None:
+            await first_stream.streaming_blocked.wait()
+            token.cancel()
+
+        await asyncio.wait_for(asyncio.gather(_consume(), _cancel_when_blocked()), timeout=2.0)
+        assert client.cancelled == ["h1"]
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("again"), _recorder()):
+            pass
+
+        # The cancelled handler must not be resumed; a fresh handler is
+        # started (handler_id=None) with the preserved context, and the
+        # event cursor is reset so the new handler streams from the start.
+        assert client.run_calls[1]["handler_id"] is None
+        assert client.run_calls[1]["context"] == {"saved": True}
+        assert client.stream_calls[1]["after_sequence"] == -1
+
+    @pytest.mark.asyncio
     async def test_remote_failed_handler_status_raises(self, fake_workflows_modules):
         class _FailingClient(_RemoteClient):
             async def get_handler(self, handler_id: str) -> _HandlerData:

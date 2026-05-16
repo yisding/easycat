@@ -474,6 +474,14 @@ class LlamaAgentsBridge:
             if cancel_token is not None and cancel_token.is_cancelled:
                 cancelled = True
                 await self._cancel_remote_handler(handler_id)
+                # The server-side handler is now terminal. Drop the saved
+                # handler id and cursor so the next preserve_context turn
+                # starts a fresh handler instead of trying to resume this
+                # cancelled one (the client API only resumes completed
+                # handlers). Conversation continuity still rides on
+                # _remote_context, which is captured below.
+                self._remote_handler_id = None
+                self._remote_event_sequence = -1
         finally:
             # The real WorkflowClient spins up a background SSE reader for
             # get_workflow_events. Close it on every exit path -- cancellation,
