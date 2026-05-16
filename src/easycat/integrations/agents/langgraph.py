@@ -1114,6 +1114,14 @@ class LangGraphBridge:
         holds no current-turn AI message, so the backward walk below
         would otherwise truncate the *previous* turn's already-delivered
         reply and corrupt prior conversation state.
+
+        As a further guard the backward walk stops at the most recent
+        human message: a *successful* turn can also leave no AI message
+        in the checkpoint (a router branch that only emits custom
+        ``get_stream_writer`` text or returns ``{}``), which the
+        cancelled-turn flag above does not cover.  Bounding the scan at
+        the latest user turn keeps the rewrite from reaching back into a
+        prior turn's reply in that case too.
         """
         if self._turn_produced_no_assistant:
             logger.debug(
@@ -1137,6 +1145,19 @@ class LangGraphBridge:
 
         for i in range(len(messages) - 1, -1, -1):
             msg = messages[i]
+            if _message_is_human(msg):
+                # Reached the latest user turn without finding an AI
+                # message after it: this turn appended no assistant
+                # message (e.g. a router branch that only emits custom
+                # ``get_stream_writer`` text or returns ``{}``).  The
+                # newest AI message belongs to a prior, already-delivered
+                # turn — rewriting it would corrupt checkpointed history
+                # that future turns condition on.  No-op instead.
+                logger.debug(
+                    "rewrite_last_ai: no AI message after the latest user "
+                    "message; skipping so prior history isn't corrupted"
+                )
+                return
             if _message_is_ai(msg):
                 content = _content_of(msg)
                 if isinstance(content, list):
@@ -1302,6 +1323,15 @@ def _message_is_ai(msg: Any) -> bool:
         return True
     if isinstance(msg, dict):
         return msg.get("role") == "assistant" or msg.get("type") == "ai"
+    return False
+
+
+def _message_is_human(msg: Any) -> bool:
+    msg_type = getattr(msg, "type", None)
+    if msg_type == "human":
+        return True
+    if isinstance(msg, dict):
+        return msg.get("role") == "user" or msg.get("type") == "human"
     return False
 
 

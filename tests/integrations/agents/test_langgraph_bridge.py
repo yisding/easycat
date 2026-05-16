@@ -1576,6 +1576,69 @@ class TestLangGraphBridgePartialCommitOnCancelToken:
         assert _content(prior_ai) == "prior reply"
 
 
+class TestLangGraphBridgeNoAiMessageThisTurn:
+    """A *successful* turn can leave the checkpoint ending at the user's
+    message — a router branch that only narrates via
+    ``get_stream_writer`` or returns ``{}`` appends no ``AIMessage``.
+    The cancelled-turn flag does not cover this, so the history rewrite
+    must bound its backward scan at the latest user turn and no-op
+    rather than reach back and corrupt the *previous* turn's reply."""
+
+    def _custom_only_turn_state(self) -> tuple[_MockCompiledGraph, _MockMessage]:
+        prior_ai = _MockMessage("assistant", "prior reply", message_id="m-prev")
+        # What the checkpoint holds after a custom-only turn: the new
+        # user message is appended but no AI message follows it.
+        state = _MockState(
+            values={
+                "messages": [
+                    _MockMessage("user", "q1"),
+                    prior_ai,
+                    _MockMessage("user", "q2"),
+                ]
+            }
+        )
+        custom_chunk = {
+            "event": "on_chain_stream",
+            "name": "LangGraph",
+            "run_id": "g1",
+            "data": {"chunk": ("custom", {"text": "**progress**"})},
+            "metadata": {},
+        }
+        scripted = [
+            _node_start("route", "n1"),
+            custom_chunk,
+            _node_end("route", "n1"),
+        ]
+        return _MockCompiledGraph(scripted, state=state), prior_ai
+
+    @pytest.mark.asyncio
+    async def test_replace_last_assistant_text_does_not_touch_prior_turn(self):
+        graph, prior_ai = self._custom_only_turn_state()
+        bridge = LangGraphBridge(graph)
+
+        events = [ev async for ev in bridge.invoke(AgentTurnInput.from_text("q2"), _recorder())]
+        assert [e.text for e in events if e.kind == "text_delta"] == ["**progress**"]
+
+        bridge.replace_last_assistant_text("progress")
+
+        # Prior turn's reply is untouched and no rewrite was issued.
+        assert _content(prior_ai) == "prior reply"
+        assert graph.update_state_calls == []
+
+    @pytest.mark.asyncio
+    async def test_apply_interruption_does_not_touch_prior_turn(self):
+        graph, prior_ai = self._custom_only_turn_state()
+        bridge = LangGraphBridge(graph)
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("q2"), _recorder()):
+            pass
+
+        bridge.apply_interruption("**progress**", CancellationMode.IMMEDIATE_STOP)
+
+        assert _content(prior_ai) == "prior reply"
+        assert graph.update_state_calls == []
+
+
 # ── Resume-thread checkpoint baseline ────────────────────────────
 
 
