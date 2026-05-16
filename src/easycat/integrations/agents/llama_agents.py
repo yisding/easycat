@@ -6,6 +6,8 @@ the optional ``llama-agents-client`` remote workflow server API.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -319,11 +321,7 @@ class LlamaAgentsBridge:
         try:
             events = self._stream_local_events(handler)
             if events is not None:
-                async for workflow_event in events:
-                    if cancel_token is not None and cancel_token.is_cancelled:
-                        cancelled = True
-                        await self._cancel_local_handler(handler)
-                        break
+                async for workflow_event in _aiter_with_cancellation(events, cancel_token):
                     if _is_input_required_event(workflow_event):
                         self._pending_local_handler = handler
                         self._last_output = workflow_event
@@ -337,6 +335,10 @@ class LlamaAgentsBridge:
                     if delta:
                         streamed_text = True
                         yield AgentBridgeEvent(kind="text_delta", text=delta)
+
+            if cancel_token is not None and cancel_token.is_cancelled:
+                cancelled = True
+                await self._cancel_local_handler(handler)
 
             if cancelled:
                 self._last_output = await self._await_handler_best_effort(handler)
@@ -439,14 +441,10 @@ class LlamaAgentsBridge:
                 include_internal_events=self._include_internal_events,
                 after_sequence=after_sequence,
             )
-            async for envelope in event_stream:
+            async for envelope in _aiter_with_cancellation(event_stream, cancel_token):
                 self._remote_event_sequence = getattr(
                     event_stream, "last_sequence", self._remote_event_sequence
                 )
-                if cancel_token is not None and cancel_token.is_cancelled:
-                    cancelled = True
-                    await self._cancel_remote_handler(handler_id)
-                    break
                 workflow_event = _load_remote_event(envelope)
                 if _is_input_required_event(workflow_event) or _is_input_required_event(envelope):
                     self._pending_remote_handler_id = handler_id
@@ -465,6 +463,10 @@ class LlamaAgentsBridge:
                 if delta:
                     streamed_text = True
                     yield AgentBridgeEvent(kind="text_delta", text=delta)
+
+            if cancel_token is not None and cancel_token.is_cancelled:
+                cancelled = True
+                await self._cancel_remote_handler(handler_id)
         finally:
             if cancelled and event_stream is not None:
                 aclose = getattr(event_stream, "aclose", None)
@@ -594,6 +596,59 @@ def _string_or_none(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+async def _aiter_with_cancellation(
+    source: AsyncIterator[Any],
+    cancel_token: CancelToken | None,
+) -> AsyncIterator[Any]:
+    """Yield from ``source``, stopping promptly when ``cancel_token`` fires.
+
+    A plain ``async for`` only observes cancellation *between* items, so a
+    barge-in while the workflow is busy on a long step (and the event stream
+    is idle waiting for the next item) would not be seen until the next
+    event is emitted -- often the final ``StopEvent``, by which point the
+    work has already finished.  Racing each ``__anext__()`` against
+    ``cancel_token.wait()`` lets the caller react while the stream is still
+    blocked.  Cancellation takes priority: a just-arrived item is dropped if
+    the token is already set, mirroring a top-of-loop cancel check.
+    """
+    if cancel_token is None:
+        async for item in source:
+            yield item
+        return
+
+    iterator = source.__aiter__()
+    cancel_wait: asyncio.Task[None] = asyncio.ensure_future(cancel_token.wait())
+    stopped_early = False
+    try:
+        while not cancel_token.is_cancelled:
+            next_item: asyncio.Task[Any] = asyncio.ensure_future(iterator.__anext__())
+            await asyncio.wait(
+                (next_item, cancel_wait),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancel_token.is_cancelled:
+                stopped_early = True
+                if not next_item.done():
+                    next_item.cancel()
+                with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
+                    await next_item
+                return
+            try:
+                yield next_item.result()
+            except StopAsyncIteration:
+                return
+        stopped_early = True
+    finally:
+        cancel_wait.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cancel_wait
+        if stopped_early:
+            aclose = getattr(iterator, "aclose", None)
+            if callable(aclose):
+                with contextlib.suppress(Exception):
+                    await aclose()
 
 
 _REMOTE_FAILURE_STATUSES = frozenset(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from collections.abc import AsyncIterator
@@ -132,6 +133,46 @@ class _LocalWorkflow(_FakeWorkflowBase):
         self.interruption = (delivered_text, mode)
 
 
+class _BlockingHandler:
+    """Streams one event, then blocks forever on the next item.
+
+    Mirrors a local workflow stuck on a long step while
+    ``stream_events()`` is idle waiting for the next event.
+    """
+
+    def __init__(self) -> None:
+        self.ctx = _FakeContext("ctx")
+        self.run_id = "block-1"
+        self.cancelled = False
+        self.streaming_blocked = asyncio.Event()
+        self._never = asyncio.Event()
+
+    def __await__(self):
+        async def _result() -> Any:
+            await self._never.wait()
+            return "blocked-result"
+
+        return _result().__await__()
+
+    async def stream_events(self) -> AsyncIterator[Any]:
+        yield _TextEvent("partial ")
+        self.streaming_blocked.set()
+        await self._never.wait()
+        yield _StopEvent("done")
+
+    async def cancel_run(self) -> None:
+        self.cancelled = True
+        self._never.set()
+
+
+class _BlockingWorkflow(_FakeWorkflowBase):
+    def __init__(self) -> None:
+        self.handler = _BlockingHandler()
+
+    def run(self, **kwargs: Any) -> _BlockingHandler:
+        return self.handler
+
+
 class _HitlHandler:
     def __init__(self) -> None:
         self.ctx = self
@@ -225,6 +266,29 @@ class TestLocalLlamaAgentsBridge:
         assert [event.text for event in events if event.kind == "text_delta"] == []
 
     @pytest.mark.asyncio
+    async def test_cancellation_during_idle_stream_is_prompt(self, fake_workflows_modules):
+        workflow = _BlockingWorkflow()
+        handler = workflow.handler
+        bridge = LlamaAgentsBridge(workflow=workflow)
+        token = CancelToken()
+        collected: list[Any] = []
+
+        async def _consume() -> None:
+            async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder(), token):
+                collected.append(event)
+
+        async def _cancel_when_blocked() -> None:
+            await handler.streaming_blocked.wait()
+            token.cancel()
+
+        # Without racing the stream wait against cancellation this would hang
+        # on the blocked step until the timeout fires.
+        await asyncio.wait_for(asyncio.gather(_consume(), _cancel_when_blocked()), timeout=2.0)
+
+        assert handler.cancelled is True
+        assert [e.text for e in collected if e.kind == "text_delta"] == ["partial "]
+
+    @pytest.mark.asyncio
     async def test_human_input_event_pauses_and_resumes_handler(self, fake_workflows_modules):
         workflow = _HitlWorkflow()
         bridge = LlamaAgentsBridge(workflow=workflow)
@@ -316,6 +380,30 @@ class _RemoteStream:
         self.closed = True
 
 
+class _BlockingRemoteStream:
+    """Yields one envelope, then blocks forever on the next item."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.last_sequence = -1
+        self.streaming_blocked = asyncio.Event()
+        self._never = asyncio.Event()
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return self._iterate()
+
+    async def _iterate(self) -> AsyncIterator[Any]:
+        self.last_sequence = 0
+        yield _RemoteEnvelope(_TextEvent("remote partial"))
+        self.streaming_blocked.set()
+        await self._never.wait()
+        yield _RemoteEnvelope(_StopEvent("done"))
+
+    async def aclose(self) -> None:
+        self.closed = True
+        self._never.set()
+
+
 class _RemoteClient:
     def __init__(self) -> None:
         self.run_calls: list[dict[str, Any]] = []
@@ -391,6 +479,34 @@ class TestRemoteLlamaAgentsBridge:
         assert client.sent_events[-1][1].response == "Ada"
         assert client.stream_calls[1]["after_sequence"] == 0
         assert [event.text for event in second_turn if event.kind == "done"] == ["Remote done"]
+
+    @pytest.mark.asyncio
+    async def test_remote_cancellation_during_idle_stream_is_prompt(self, fake_workflows_modules):
+        stream = _BlockingRemoteStream()
+
+        class _BlockingRemoteClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> Any:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                return stream
+
+        client = _BlockingRemoteClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+        token = CancelToken()
+        collected: list[Any] = []
+
+        async def _consume() -> None:
+            async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder(), token):
+                collected.append(event)
+
+        async def _cancel_when_blocked() -> None:
+            await stream.streaming_blocked.wait()
+            token.cancel()
+
+        await asyncio.wait_for(asyncio.gather(_consume(), _cancel_when_blocked()), timeout=2.0)
+
+        assert client.cancelled == ["h1"]
+        assert stream.closed is True
+        assert [e.text for e in collected if e.kind == "text_delta"] == ["remote partial"]
 
     @pytest.mark.asyncio
     async def test_remote_failed_handler_status_raises(self, fake_workflows_modules):
