@@ -10,6 +10,7 @@ frameworks.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import time
@@ -624,19 +625,25 @@ class LangChainBridge:
         error) yields ``None`` so plain-runnable behaviour is never
         regressed.
 
-        ``RunnableWithMessageHistory`` resolves the store by its
-        ``history_factory_config`` ids pulled from the turn's
-        ``configurable`` (``langchain_core.runnables.history``): a
-        *single* spec is passed positionally as
-        ``get_session_history(configurable[id])``, multiple specs as
-        keyword args ``get_session_history(**{id: configurable[id]})``.
-        We mirror that exact convention so post-hoc edits / ``reset()``
-        hit the *same* store LangChain writes to.  Probing with the
-        synthesized ``session_id`` instead (the prior approach) silently
-        resolved a *different* store whenever a custom single key such
-        as ``conversation_id`` was configured — ``factory(session_id)``
+        ``RunnableWithMessageHistory`` resolves the store by dispatching
+        on the *factory's signature*, not the spec count
+        (``langchain_core.runnables.history._merge_configs``): a single
+        spec whose factory takes ≥1 parameter is passed positionally as
+        ``get_session_history(configurable[id])``; a single spec whose
+        factory takes **no** parameters is called as
+        ``get_session_history()`` (LangChain still advertises the default
+        ``session_id`` spec but ignores its value); multiple specs are
+        passed as keyword args
+        ``get_session_history(**{id: configurable[id]})``.  We mirror
+        that exact convention so post-hoc edits / ``reset()`` hit the
+        *same* store LangChain writes to.  Probing with the synthesized
+        ``session_id`` instead (the prior approach) silently resolved a
+        *different* store whenever a custom single key such as
+        ``conversation_id`` was configured — ``factory(session_id)``
         succeeds for any one-arg factory, so the keyed store kept the
-        raw/untruncated assistant message.
+        raw/untruncated assistant message — and outright failed for a
+        zero-arg factory (``TypeError``), stranding edits in the shadow
+        list while the wrapped runnable reloaded the stale store.
         """
         factory = getattr(self._runnable, "get_session_history", None)
         if not callable(factory):
@@ -649,12 +656,25 @@ class LangChainBridge:
             except TypeError:
                 spec_ids = []
             if spec_ids and all(isinstance(k, str) for k in spec_ids):
-                values = [configurable.get(k) for k in spec_ids]
-                if all(v is not None for v in values):
+                # Dispatch on factory arity exactly as LangChain does.
+                try:
+                    parameter_names = list(inspect.signature(factory).parameters)
+                except (TypeError, ValueError):
+                    parameter_names = None
+                if parameter_names is not None:
                     try:
                         if len(spec_ids) == 1:
-                            return factory(values[0])
-                        return factory(**dict(zip(spec_ids, values)))
+                            if not parameter_names:
+                                # Zero-arg factory: LangChain ignores the
+                                # advertised ``session_id`` value.
+                                return factory()
+                            value = configurable.get(spec_ids[0])
+                            if value is not None:
+                                return factory(value)
+                        else:
+                            values = {k: configurable.get(k) for k in spec_ids}
+                            if all(v is not None for v in values.values()):
+                                return factory(**values)
                     except Exception:
                         logger.debug(
                             "Failed to resolve wrapped history store from history_factory_config",
@@ -662,8 +682,9 @@ class LangChainBridge:
                         )
                         return None
             # ``history_factory_config`` present but unusable (no ids,
-            # non-str id, or a value missing from ``configurable``): fall
-            # through to the single-arg ``session_id`` probe below.
+            # non-str id, an uninspectable factory, or a value missing
+            # from ``configurable``): fall through to the single-arg
+            # ``session_id`` probe below.
         sid = self._resolved_session_id
         if sid is None:
             return None

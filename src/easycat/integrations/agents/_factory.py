@@ -199,13 +199,18 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
 
 def _is_language_model(agent: Any) -> bool:
-    """True for a bare LangChain language model (``BaseChatModel`` / ``BaseLLM``).
+    """True for a (possibly bound) LangChain language model.
 
-    These are Runnables but, unlike chains/agents, only accept a string
-    or message sequence as input — not the ``LangChainBridge`` default
-    payload dict.  Returns ``False`` (rather than raising) if
-    ``langchain_core`` is unavailable so the caller falls back to the
-    default dict payload.
+    A bare ``BaseChatModel`` / ``BaseLLM`` — and the same model wrapped
+    by ``.bind(...)`` / ``.bind_tools(...)`` / ``.with_config(...)``,
+    each of which returns a ``RunnableBinding`` around it — only accept a
+    string or message sequence as input, not the ``LangChainBridge``
+    default payload dict (they reject it with
+    ``Invalid input type <class 'dict'>``).  We peel any
+    ``RunnableBinding`` layers off ``.bound`` so a bound chat/LLM is
+    still recognised and fed a message sequence on the first turn.
+    Returns ``False`` (rather than raising) if ``langchain_core`` is
+    unavailable so the caller falls back to the default dict payload.
     """
     try:
         from langchain_core.language_models import (  # type: ignore[import-untyped]
@@ -214,4 +219,16 @@ def _is_language_model(agent: Any) -> bool:
         )
     except ImportError:
         return False
+    try:
+        from langchain_core.runnables import (  # type: ignore[import-untyped]
+            RunnableBinding,
+        )
+    except ImportError:
+        RunnableBinding = ()  # type: ignore[assignment]
+    # ``RunnableBinding`` may nest (e.g. ``.bind_tools(...).with_config(...)``);
+    # ``seen`` guards against a pathological self-referential ``.bound``.
+    seen: set[int] = set()
+    while isinstance(agent, RunnableBinding) and id(agent) not in seen:
+        seen.add(id(agent))
+        agent = getattr(agent, "bound", None)
     return isinstance(agent, (BaseChatModel, BaseLLM))
