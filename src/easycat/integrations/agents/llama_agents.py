@@ -430,8 +430,15 @@ class LlamaAgentsBridge:
 
         handler = self._pending_local_handler
         if handler is not None:
-            self._pending_local_handler = None
+            # Deliver the human response before clearing the pending
+            # markers. If send_event raises (e.g. a misconfigured
+            # human_response_step or a paused context that rejects the
+            # event) the bridge must stay "waiting for input" so
+            # reset()/aclose() can still cancel the paused handler and a
+            # retry resends the HumanResponseEvent instead of falling
+            # through to a fresh workflow.run() -- mirroring the remote path.
             self._send_local_human_response(handler, turn_input)
+            self._pending_local_handler = None
             # Resume the *same* live stream cursor instead of calling
             # stream_events() again. A real WorkflowHandler replays the
             # already-yielded InputRequiredEvent on a fresh stream, so a new
@@ -731,24 +738,34 @@ class LlamaAgentsBridge:
                     with contextlib.suppress(Exception):
                         await aclose()
 
-        result_data = await self._client.get_handler(handler_id)
-        # Best-effort: the real HandlerData carries no context field, so this
-        # is a no-op there and continuity rides on handler_id reuse. It only
-        # populates with clients/fakes that do expose a context.
-        self._remote_context = getattr(result_data, "context", self._remote_context)
-        self._last_output = _unwrap_remote_result(getattr(result_data, "result", None))
-        if not self._preserve_context:
-            # With preserve_context the handler (and its event log) survives
-            # into the next turn, so keep the cursor to avoid replaying this
-            # turn. Otherwise each turn gets a fresh handler -- reset to -1.
-            self._remote_event_sequence = -1
-        if not cancelled:
-            _raise_if_remote_failed(result_data, self._workflow_name)
-        if not streamed_text and not cancelled:
-            text = _extract_output_text(self._last_output)
-            if text:
-                yield AgentBridgeEvent(kind="text_delta", text=text)
-        self._active_handler_id = None
+        # Clear the active-handler marker on every exit from the remote
+        # invocation tail, not just the success path. get_handler() or
+        # _raise_if_remote_failed() can raise here after the streaming loop
+        # already unwound; without the finally snapshot_state() would keep
+        # advertising a handler that invoke() has abandoned. (The
+        # cancellation/GeneratorExit branch above clears it on its own
+        # before re-raising and never reaches this tail.)
+        try:
+            result_data = await self._client.get_handler(handler_id)
+            # Best-effort: the real HandlerData carries no context field, so
+            # this is a no-op there and continuity rides on handler_id reuse.
+            # It only populates with clients/fakes that do expose a context.
+            self._remote_context = getattr(result_data, "context", self._remote_context)
+            self._last_output = _unwrap_remote_result(getattr(result_data, "result", None))
+            if not self._preserve_context:
+                # With preserve_context the handler (and its event log)
+                # survives into the next turn, so keep the cursor to avoid
+                # replaying this turn. Otherwise each turn gets a fresh
+                # handler -- reset to -1.
+                self._remote_event_sequence = -1
+            if not cancelled:
+                _raise_if_remote_failed(result_data, self._workflow_name)
+            if not streamed_text and not cancelled:
+                text = _extract_output_text(self._last_output)
+                if text:
+                    yield AgentBridgeEvent(kind="text_delta", text=text)
+        finally:
+            self._active_handler_id = None
 
     async def _cancel_remote_handler(self, handler_id: str) -> None:
         cancel_handler = getattr(self._client, "cancel_handler", None)
