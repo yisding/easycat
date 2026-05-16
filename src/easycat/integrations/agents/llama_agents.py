@@ -949,10 +949,12 @@ async def _aiter_with_cancellation(
 
     On any non-exhaustive exit -- a cooperative cancel, a hard task cancel,
     or the consumer closing ``invoke()`` mid-stream (``GeneratorExit`` from
-    ``aclose()``, the text-session interruption path) -- the underlying
-    ``source`` iterator is closed so a local workflow's ``stream_events()``
-    generator and any background resources it owns are not leaked.  Only a
-    fully drained source is left alone: it has already run its own cleanup.
+    ``aclose()``, the text-session interruption path) -- any in-flight
+    ``__anext__()`` read is cancelled and awaited and the underlying
+    ``source`` iterator is closed, so a local workflow's ``stream_events()``
+    generator and any background resources it owns are not leaked even if the
+    consumer is hard-cancelled while a read is still pending.  Only a fully
+    drained source is left alone: it has already run its own cleanup.
     """
     iterator = source.__aiter__()
     exhausted = False
@@ -972,25 +974,34 @@ async def _aiter_with_cancellation(
         return
 
     cancel_wait: asyncio.Task[None] = asyncio.ensure_future(cancel_token.wait())
+    next_item: asyncio.Task[Any] | None = None
     try:
         while not cancel_token.is_cancelled:
-            next_item: asyncio.Task[Any] = asyncio.ensure_future(iterator.__anext__())
+            next_item = asyncio.ensure_future(iterator.__anext__())
             await asyncio.wait(
                 (next_item, cancel_wait),
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if cancel_token.is_cancelled:
-                if not next_item.done():
-                    next_item.cancel()
-                with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
-                    await next_item
                 return
             try:
-                yield next_item.result()
+                item = next_item.result()
             except StopAsyncIteration:
                 exhausted = True
                 return
+            # Read consumed; clear so the finally does not re-handle it and a
+            # hard cancel during ``yield`` is not mistaken for a pending read.
+            next_item = None
+            yield item
     finally:
+        # A hard task cancel can land on ``asyncio.wait()`` above while the
+        # read is still pending; closing the iterator is not enough while
+        # ``__anext__()`` runs, so cancel and await it first.
+        if next_item is not None:
+            if not next_item.done():
+                next_item.cancel()
+            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
+                await next_item
         cancel_wait.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await cancel_wait
