@@ -3,7 +3,9 @@
 > **Goal:** lift coordination logic out of
 > `src/easycat/session/_session.py` (2,820 lines, 102 methods, 157
 > instance attributes) into five focused collaborators, leaving
-> `Session` as a thin lifecycle + user-facing surface (~1,250 lines).
+> `Session` as a thin lifecycle + user-facing surface (~1,770 lines
+> as landed — the ~1,250 estimate below proved optimistic; see note
+> under the phase table).
 >
 > **Non-goal:** introducing a new public pipeline-graph API. Stages
 > already exist (`AudioStage`, `VADStage`, `STTStage`, `TTSStage`,
@@ -80,6 +82,14 @@ and testable in isolation.
 | 4 | `session/_cancel_orchestrator.py` | ~140 | 1,870 | medium |
 | 5 | `session/_turn_runner.py` | ~620 | **~1,250** | high |
 
+> **As-landed note:** Session is **~1,770 lines** after Phase 5, not
+> the projected ~1,250. The "Lands at" column was an estimate; the
+> ~520-line gap is real Session-resident concern (lifecycle teardown,
+> telephony/screening state, the full public event surface, action
+> drain, collaborator construction/wiring) that the estimate
+> under-counted. The decomposition goal (coordination logic lifted
+> into five collaborators, behaviour preserved) still holds.
+
 Phases 0–4 are independently revertible. Phase 5 depends on 0–4.
 
 ## Architecture after Phase 5
@@ -146,7 +156,7 @@ Every phase PR must include:
 1. **No public API change.** `git diff origin/main -- src/easycat/__init__.py` is empty.
 2. **Test suite green.** `uv run pytest` passes unchanged.
 3. **Lint clean.** `uv run ruff check .` passes.
-4. **Journal record names unchanged.** `grep -h 'name=' src/easycat/session/*.py | sort -u` before/after diff is empty.
+4. **Journal record names unchanged.** `grep -h 'name=' src/easycat/session/*.py src/easycat/runtime/scope.py | sort -u` before/after diff is empty. (The `task_*` records moved from Session to `runtime/scope.py` in Phase 0; scoping the grep to only `session/*.py` yields a false-positive 4-name diff.)
 5. **Bundle round-trip parity.** A captured pre-phase bundle replays without errors against the post-phase code (Workstream 4 replay tests).
 6. **Perf gate passes.** P50/P90 turn latency unchanged within
    noise band (see `perf/`).
@@ -189,7 +199,7 @@ authors can proceed without re-investigating:
 
 ## What stays on Session permanently
 
-After Phase 5, Session is ~1,250 lines and owns:
+After Phase 5, Session is ~1,770 lines (see as-landed note above) and owns:
 
 - **Lifecycle.** `__init__`, `start`, `stop`, `shutdown`, `close`,
   `destroy`, `_preserve_*_after_destroy`, `_mark_closed`,
