@@ -1166,9 +1166,12 @@ class TestLangGraphBridgeState:
     @pytest.mark.asyncio
     async def test_default_include_types_surface_non_chat_llm(self):
         """A node that calls a non-chat ``BaseLLM`` only emits
-        ``on_llm_*`` events.  The default ``include_types`` must keep
-        ``llm`` so the answer isn't filtered out before translation —
-        otherwise the turn ends silent with an empty ``done.text``."""
+        ``on_llm_*`` events.  The default (no ``include_types`` filter)
+        must surface those so the answer isn't filtered out before
+        translation — otherwise the turn ends silent with an empty
+        ``done.text``.  A narrow tuple must not be silently re-added:
+        LangChain keys ``on_custom_event`` on the event name, so any
+        ``include_types`` would also drop the custom-event TTS path."""
 
         class _GenerationChunk:
             def __init__(self, text: str) -> None:
@@ -1200,9 +1203,49 @@ class TestLangGraphBridgeState:
         async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
             events.append(ev)
 
-        assert "llm" in captured["kwargs"]["include_types"]
+        assert "include_types" not in captured["kwargs"]
         text = "".join(e.text for e in events if e.kind == "text_delta")
         assert text == "completion text"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_custom_event_drives_text_delta_by_default(self):
+        """A graph node using LangChain's ``dispatch_custom_event`` emits
+        ``on_custom_event`` through ``astream_events``.  LangChain keys
+        that event on its *name* (not a runnable type), so a non-``None``
+        ``include_types`` would silently drop it.  Under the default
+        (unfiltered) the speakable payload must reach the translator."""
+
+        captured: dict[str, Any] = {}
+
+        class _CapturingGraph(_MockCompiledGraph):
+            def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+                captured["kwargs"] = kwargs
+                return super().astream_events(input, **kwargs)
+
+        scripted = [
+            _node_start("answer", "n1"),
+            {
+                "event": "on_custom_event",
+                "name": "status",
+                "run_id": "c1",
+                "parent_ids": ["n1"],
+                "data": {"text": "thinking..."},
+                "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
+            },
+            _node_end("answer", "n1"),
+        ]
+        graph = _CapturingGraph(scripted)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+
+        # The bridge must not silently re-add a filter that would strip
+        # the event upstream before the translator sees it.
+        assert "include_types" not in captured["kwargs"]
+        text_events = [e for e in events if e.kind == "text_delta"]
+        assert text_events and text_events[0].text == "thinking..."
 
     @pytest.mark.asyncio
     async def test_parallel_siblings_parented_to_agent_not_each_other(self):

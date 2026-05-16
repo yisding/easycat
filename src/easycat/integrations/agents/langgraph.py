@@ -72,15 +72,23 @@ _DEFAULT_STREAM_MODES: tuple[str, ...] = ("custom", "updates")
 logger = logging.getLogger(__name__)
 
 
-# ``chain`` is needed so every node execution emits ``on_chain_start`` /
-# ``on_chain_end`` events from which we build workflow_node cursors.
-# ``chat_model`` and ``tool`` give token + tool visibility.  ``llm`` is
-# required so nodes that call a non-chat ``BaseLLM`` (text-completion
-# models) still surface their ``on_llm_*`` tokens — without it a graph
-# that answers from a ``BaseLLM`` and returns the text outside the
-# messages list completes with no ``text_delta`` and an empty
-# ``done.text`` (the voice goes silent).
-_DEFAULT_INCLUDE_TYPES: tuple[str, ...] = ("chat_model", "llm", "tool", "chain")
+# No default ``include_types`` filter.  LangChain's ``astream_events``
+# filter keys ``on_custom_event`` on the *custom event's name* (not a
+# runnable ``run_type``), so any non-``None`` ``include_types`` silently
+# drops every ``dispatch_custom_event`` / ``adispatch_custom_event``
+# payload — breaking the speakable custom-event TTS path a graph node
+# can use for progress/status narration (see :func:`_custom_event_text`).
+# An unfiltered stream is a strict superset that still surfaces the
+# events the bridge depends on: ``on_chain_start`` / ``on_chain_end``
+# (workflow_node cursors), ``on_chat_model_*`` / ``on_tool_*`` (token +
+# tool visibility) and ``on_llm_*`` (without these a graph answering
+# from a non-chat ``BaseLLM`` completes with an empty ``done.text`` and
+# the voice goes silent).  ``translate_stream_event`` dispatches on the
+# event *type* string, so the extra unfiltered events are harmless
+# no-ops.  ``LangChainBridge`` makes the same tradeoff; callers that
+# need to narrow the surface for performance on a very chatty graph can
+# still opt in via ``include_types=``.
+_DEFAULT_INCLUDE_TYPES: tuple[str, ...] | None = None
 
 
 class LangGraphBridge:
@@ -104,11 +112,14 @@ class LangGraphBridge:
         Optional label for the outer ``agent`` cursor (defaults to
         ``type(graph).__name__``).
     include_types:
-        Runnable types to surface via ``astream_events(include_types=
-        ...)``.  Defaults to ``("chat_model", "llm", "tool", "chain")``
-        — ``chain`` is needed so every node entry is observable for
-        workflow_node cursors and ``llm`` so non-chat ``BaseLLM`` nodes
-        aren't silently dropped.  Pass ``None`` to surface every event.
+        Optional ``astream_events(include_types=...)`` filter.  Defaults
+        to ``None`` (surface every event) — narrowing the filter drops
+        ``on_custom_event`` from ``dispatch_custom_event`` (LangChain
+        keys it on the event name, not a runnable type), silently
+        disabling the custom-event TTS path, and would also have to keep
+        ``chain`` / ``llm`` or workflow_node cursors and non-chat
+        ``BaseLLM`` nodes are lost.  Pass an explicit tuple only when
+        performance demands it for a very chatty graph.
     """
 
     COMMITTABLE_BOUNDARIES = {
