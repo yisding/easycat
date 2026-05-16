@@ -529,13 +529,15 @@ class TestRemoteLlamaAgentsBridge:
         assert [e.text for e in collected if e.kind == "text_delta"] == ["remote partial"]
 
     @pytest.mark.asyncio
-    async def test_remote_cancelled_handler_not_reused_next_turn(self, fake_workflows_modules):
-        """A barge-in must not leave a terminal handler id behind.
+    async def test_remote_cancelled_handler_continues_next_turn(self, fake_workflows_modules):
+        """A barge-in must preserve the server-side handler reference.
 
-        After cancellation the next default (preserve_context) turn has to
-        start a fresh server-side handler -- resuming the cancelled one would
-        fail, since the client API only resumes completed handlers -- while
-        still carrying the saved conversation context forward.
+        ``cancel_handler`` keeps the handler persisted (purge defaults to
+        False), so the next default (preserve_context) turn continues from it
+        via ``handler_id`` -- the only server-side state reference, since the
+        real ``llama-agents-client`` ``HandlerData`` model exposes no context
+        field. Dropping it would silently lose all conversation state after
+        every barge-in.
         """
         first_stream = _BlockingRemoteStream()
 
@@ -564,12 +566,13 @@ class TestRemoteLlamaAgentsBridge:
         async for _ in bridge.invoke(AgentTurnInput.from_text("again"), _recorder()):
             pass
 
-        # The cancelled handler must not be resumed; a fresh handler is
-        # started (handler_id=None) with the preserved context, and the
-        # event cursor is reset so the new handler streams from the start.
-        assert client.run_calls[1]["handler_id"] is None
-        assert client.run_calls[1]["context"] == {"saved": True}
-        assert client.stream_calls[1]["after_sequence"] == -1
+        # The next turn continues from the preserved (terminal but still
+        # persisted) handler instead of starting a fresh one and losing all
+        # workflow state. The event cursor is carried forward -- exactly like
+        # the completed-handler preserve_context path -- so the resumed
+        # handler's accumulating event log is not replayed.
+        assert client.run_calls[1]["handler_id"] == "h1"
+        assert client.stream_calls[1]["after_sequence"] == 0
 
     @pytest.mark.asyncio
     async def test_remote_failed_handler_status_raises(self, fake_workflows_modules):

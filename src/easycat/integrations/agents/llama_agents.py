@@ -474,14 +474,16 @@ class LlamaAgentsBridge:
             if cancel_token is not None and cancel_token.is_cancelled:
                 cancelled = True
                 await self._cancel_remote_handler(handler_id)
-                # The server-side handler is now terminal. Drop the saved
-                # handler id and cursor so the next preserve_context turn
-                # starts a fresh handler instead of trying to resume this
-                # cancelled one (the client API only resumes completed
-                # handlers). Conversation continuity still rides on
-                # _remote_context, which is captured below.
-                self._remote_handler_id = None
-                self._remote_event_sequence = -1
+                # Keep _remote_handler_id and the event cursor. The handler
+                # is now terminal but stays persisted server-side
+                # (cancel_handler defaults to purge=False), so the next
+                # preserve_context turn continues from it via handler_id --
+                # exactly like a completed handler. This is the only
+                # server-side state reference we have: the pinned
+                # llama-agents-client HandlerData model exposes no context
+                # field, so _remote_context never populates from get_handler,
+                # and dropping the handler id here would silently lose all
+                # conversation state after every barge-in.
         finally:
             # The real WorkflowClient spins up a background SSE reader for
             # get_workflow_events. Close it on every exit path -- cancellation,
@@ -495,6 +497,9 @@ class LlamaAgentsBridge:
                         await aclose()
 
         result_data = await self._client.get_handler(handler_id)
+        # Best-effort: the real HandlerData carries no context field, so this
+        # is a no-op there and continuity rides on handler_id reuse. It only
+        # populates with clients/fakes that do expose a context.
         self._remote_context = getattr(result_data, "context", self._remote_context)
         self._last_output = getattr(result_data, "result", None)
         if not self._preserve_context:
