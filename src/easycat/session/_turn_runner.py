@@ -71,12 +71,12 @@ from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
+    from easycat.integrations.agents.base import ExternalAgentBridge
     from easycat.providers import STTProvider
     from easycat.session._audio_router import AudioRouter
     from easycat.session._cancel_orchestrator import CancelOrchestrator
     from easycat.session._stt_committer import STTCommitter
     from easycat.session._tts_scheduler import TTSScheduler
-    from easycat.session._types import Agent
     from easycat.stages.stt import STTStage
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ class TurnRunner:
         stt_provider: Callable[[], STTProvider],
         is_running: Callable[[], bool],
         is_gated: Callable[[], bool],
-        agent: Callable[[], Agent],
+        agent: Callable[[], ExternalAgentBridge],
         drain_session_actions: Callable[[], Awaitable[bool]],
         caller_id_system_message: Callable[[], str | None],
         stop: Callable[[], Awaitable[None]],
@@ -341,6 +341,12 @@ class TurnRunner:
             nonlocal tts_should_stop
             nonlocal tts_playback_started
             started = False
+            # Snapshot the gate state at first-payload time and reuse it in
+            # the post-loop branch.  ``_is_gated`` is time-varying (the
+            # classification gate can flush mid-synthesis); re-reading it
+            # live below would tear down the turn pointer the gated replay
+            # still needs for mark accounting.
+            gated = False
             try:
                 while True:
                     payload = await tts_queue.get()
@@ -407,7 +413,7 @@ class TurnRunner:
                 if self._turn.current is turn and self._turn.generation == turn_gen:
                     self._turn.set(None)
             elif started and not tts_playback_started:
-                if self._is_gated():
+                if gated:
                     # Keep current turn alive for gated replay mark accounting
                     self._audio.reset_speech_detection()
                     self._turn_manager.reset()

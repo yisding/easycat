@@ -262,6 +262,58 @@ async def test_run_streaming_agent_action_drain_triggers_stop() -> None:
     session.stop.assert_awaited_once()
 
 
+class _Gate:
+    """Stateful classification gate: buffering until flushed."""
+
+    def __init__(self) -> None:
+        self.buffering = True
+
+    def __call__(self) -> bool:
+        return self.buffering
+
+
+class _GateFlushingTTS(FakeTTS):
+    """Flips the gate to flushed right after synthesizing a payload.
+
+    Models the answering-machine/human classifier completing mid-turn:
+    ``_is_gated()`` is True when the first TTS payload is snapshotted but
+    False by the time the post-loop branch runs.
+    """
+
+    def __init__(self, gate: _Gate) -> None:
+        super().__init__()
+        self._gate = gate
+
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+        async for event in super().synthesize(payload):
+            yield event
+        self._gate.buffering = False
+
+
+@pytest.mark.asyncio
+async def test_gated_opener_preserves_turn_when_gate_flushes_mid_synthesis() -> None:
+    """Regression: a gated opener whose gate flushes mid-synthesis must
+    keep ``session._turn`` alive for gated-replay mark accounting.
+
+    ``_process_tts`` snapshots ``gated`` at first-payload time; re-reading
+    ``_is_gated()`` live in the post-loop branch would (after the gate
+    flushed) take the ``_reset_turn_state()`` path and null the turn
+    pointer the gated replay still needs.
+    """
+    gate = _Gate()
+    tts = _GateFlushingTTS(gate)
+    session = Session(_config(tts=tts, audio_gate=gate))
+    turn = TurnContext("turn-gated", CancelToken())
+    session._turn = turn
+
+    await session._turn_runner.run_streaming_agent("hello", token=None)
+
+    assert tts.synthesized_texts == ["Reply."]  # synthesis ran while gated
+    assert gate.buffering is False  # gate flushed mid/post synthesis
+    # The turn pointer must survive for gated replay mark accounting.
+    assert session._turn is turn
+
+
 class _CancelMidStreamAgent(_TestBridgeBase):
     """Streams a delta and waits forever — barge-in is observed when cancelled."""
 
