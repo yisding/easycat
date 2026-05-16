@@ -140,6 +140,65 @@ class TestStreamEventTranslator:
         assert "start" in phases
         assert phases.count("delta") == 2
 
+    def test_tool_call_chunks_args_only_continuations_keep_id_and_name(self):
+        """Streaming providers (OpenAI, ...) put the tool-call ``id`` /
+        ``name`` only on the first ``ToolCallChunk``; later argument
+        chunks carry just ``index``.  The translator must back-fill the
+        id/name from a per-(run_id, index) cache so ``tool_delta`` events
+        stay associated with the originating ``tool_started`` instead of
+        getting empty strings — and must not re-announce a second start
+        when the back-filled name reappears."""
+        state: dict[str, Any] = {}
+        first = {
+            "event": "on_chat_model_stream",
+            "name": "ChatOpenAI",
+            "run_id": "m1",
+            "data": {
+                "chunk": _MockAIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {"name": "get_weather", "args": "", "id": "call-1", "index": 0}
+                    ],
+                )
+            },
+        }
+        cont1 = {
+            "event": "on_chat_model_stream",
+            "name": "ChatOpenAI",
+            "run_id": "m1",
+            "data": {
+                "chunk": _MockAIMessageChunk(
+                    content="",
+                    tool_call_chunks=[{"name": None, "args": '{"city":', "id": None, "index": 0}],
+                )
+            },
+        }
+        cont2 = {
+            "event": "on_chat_model_stream",
+            "name": "ChatOpenAI",
+            "run_id": "m1",
+            "data": {
+                "chunk": _MockAIMessageChunk(
+                    content="",
+                    tool_call_chunks=[{"name": None, "args": '"Tokyo"}', "id": None, "index": 0}],
+                )
+            },
+        }
+        out = (
+            list(translate_stream_event(first, state=state))
+            + list(translate_stream_event(cont1, state=state))
+            + list(translate_stream_event(cont2, state=state))
+        )
+        started = [e for e in out if e.kind == "tool_started"]
+        deltas = [e for e in out if e.kind == "tool_delta"]
+        assert len(started) == 1  # only the first chunk announces a start
+        assert started[0].tool_name == "get_weather"
+        assert started[0].call_id == "call-1"
+        # Continuation deltas keep the id+name from the first chunk.
+        assert len(deltas) == 2
+        assert all(d.tool_name == "get_weather" and d.call_id == "call-1" for d in deltas)
+        assert [d.text for d in deltas] == ['{"city":', '"Tokyo"}']
+
     def test_on_tool_start_and_end(self):
         start = {
             "event": "on_tool_start",

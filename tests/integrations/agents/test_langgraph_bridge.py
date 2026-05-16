@@ -379,7 +379,9 @@ class TestLangGraphBridgeInvoke:
         graph's ``messages`` input so messages-state graphs see
         session-provided instructions (caller-id, system prefix, etc.).
         Filtering out user/assistant items avoids duplicating state that
-        the graph's checkpointer already owns."""
+        the graph's checkpointer already owns.  The injected context
+        carries a stable ``id`` so it can be removed afterwards (see
+        ``test_transient_context_purged_after_turn``)."""
 
         captured: dict[str, Any] = {}
 
@@ -404,11 +406,57 @@ class TestLangGraphBridgeInvoke:
         async for _ in bridge.invoke(turn, _recorder()):
             pass
         messages = captured["input"]["messages"]
-        # System message survived; caller-provided user message was dropped.
-        assert messages == [
-            ("system", "Caller id: +15551234"),
-            ("user", "ping"),
-        ]
+        # System message survived (as an id-bearing dict so it can later
+        # be removed); caller-provided user message was dropped.
+        assert len(messages) == 2
+        ctx_msg = messages[0]
+        assert ctx_msg["role"] == "system"
+        assert ctx_msg["content"] == "Caller id: +15551234"
+        assert ctx_msg["id"].startswith("easycat-ctx-")
+        assert messages[1] == ("user", "ping")
+
+    @pytest.mark.asyncio
+    async def test_transient_context_purged_after_turn(self):
+        """The per-turn system/developer context is *transient* — leaving
+        it in the ``messages`` state would let ``add_messages`` checkpoint
+        a fresh copy every turn.  After the turn the bridge must delete it
+        from graph state by id so it doesn't accumulate / leak forward."""
+        captured: dict[str, Any] = {}
+
+        class _CapturingGraph(_MockCompiledGraph):
+            def astream_events(
+                self,
+                input: Any,
+                **kwargs: Any,
+            ) -> AsyncIterator[dict[str, Any]]:
+                captured["input"] = input
+                return super().astream_events(input, **kwargs)
+
+        graph = _CapturingGraph([_node_start("p", "n1"), _node_end("p", "n1")])
+        bridge = LangGraphBridge(graph)
+        turn = AgentTurnInput.from_text(
+            "hi",
+            context=[{"role": "system", "content": "Caller id: +15551234"}],
+        )
+        async for _ in bridge.invoke(turn, _recorder()):
+            pass
+
+        injected_id = captured["input"]["messages"][0]["id"]
+        # The bridge issued an update_state carrying a removal marker for
+        # exactly the injected id.
+        assert graph.update_state_calls
+        _cfg, values = graph.update_state_calls[-1]
+        removals = values["messages"]
+        assert [getattr(m, "id", None) for m in removals] == [injected_id]
+        from langchain_core.messages import RemoveMessage
+
+        assert all(isinstance(m, RemoveMessage) for m in removals)
+        # No context to forward → nothing to purge → no update_state call.
+        graph2 = _MockCompiledGraph([_node_start("p", "n1"), _node_end("p", "n1")])
+        bridge2 = LangGraphBridge(graph2)
+        async for _ in bridge2.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            pass
+        assert graph2.update_state_calls == []
 
     @pytest.mark.asyncio
     async def test_non_node_chain_events_ignored(self):
@@ -672,3 +720,129 @@ class TestLangGraphBridgeState:
         # structured_output still reflects the (non-AI) tail so callers
         # introspecting the raw graph state aren't surprised.
         assert done[0].structured_output is user_msg
+
+    @pytest.mark.asyncio
+    async def test_custom_chunk_then_final_ai_message_both_spoken(self):
+        """A graph that narrates progress via ``get_stream_writer({"text":
+        ...})`` and then writes its real answer as a final ``AIMessage``
+        without streaming model tokens must speak *both*: the progress
+        chunk leaves ``accumulated`` non-empty, but the final answer must
+        still be emitted (not dropped because ``accumulated`` is truthy)."""
+        ai_msg = _MockMessage("assistant", "Here is the answer.", message_id="m-1")
+        state = _MockState(
+            values={"messages": [_MockMessage("user", "hi"), ai_msg]},
+            checkpoint_id="cp-final",
+        )
+        custom_chunk = {
+            "event": "on_chain_stream",
+            "name": "LangGraph",
+            "run_id": "g1",
+            "data": {"chunk": ("custom", {"text": "Looking that up... "})},
+            "metadata": {},
+        }
+        scripted = [
+            _node_start("plan", "n1"),
+            custom_chunk,
+            _node_end("plan", "n1"),
+        ]
+        graph = _MockCompiledGraph(scripted, state=state)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+
+        text_deltas = [e.text for e in events if e.kind == "text_delta"]
+        done = [e for e in events if e.kind == "done"]
+        assert text_deltas == ["Looking that up... ", "Here is the answer."]
+        assert done and done[0].text == "Looking that up... Here is the answer."
+        assert done[0].structured_output is ai_msg
+
+    @pytest.mark.asyncio
+    async def test_default_include_types_surface_non_chat_llm(self):
+        """A node that calls a non-chat ``BaseLLM`` only emits
+        ``on_llm_*`` events.  The default ``include_types`` must keep
+        ``llm`` so the answer isn't filtered out before translation —
+        otherwise the turn ends silent with an empty ``done.text``."""
+
+        class _GenerationChunk:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        captured: dict[str, Any] = {}
+
+        class _CapturingGraph(_MockCompiledGraph):
+            def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+                captured["kwargs"] = kwargs
+                return super().astream_events(input, **kwargs)
+
+        scripted = [
+            _node_start("answer", "n1"),
+            {
+                "event": "on_llm_stream",
+                "name": "OpenAI",
+                "run_id": "l1",
+                "parent_ids": ["n1"],
+                "data": {"chunk": _GenerationChunk("completion text")},
+                "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
+            },
+            _node_end("answer", "n1"),
+        ]
+        graph = _CapturingGraph(scripted)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+
+        assert "llm" in captured["kwargs"]["include_types"]
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        assert text == "completion text"
+
+    @pytest.mark.asyncio
+    async def test_parallel_siblings_parented_to_agent_not_each_other(self):
+        """During a fan-out two top-level sibling nodes are open at once.
+        Each must be parented to the agent cursor (not to the previously
+        opened sibling), and a model running inside one sibling must be
+        parented to *that* sibling — driven by the event ``parent_ids``,
+        not the open-cursor stack top."""
+        scripted = [
+            _node_start("research", "n-a"),  # parent_ids=[]
+            _node_start("write", "n-b"),  # parent_ids=[] (sibling, still open)
+            {
+                "event": "on_chat_model_start",
+                "name": "ChatOpenAI",
+                "run_id": "m-b",
+                "parent_ids": ["n-b"],
+                "data": {},
+                "metadata": {"langgraph_node": "write", "checkpoint_id": "cp-1"},
+            },
+            {
+                "event": "on_chat_model_end",
+                "name": "ChatOpenAI",
+                "run_id": "m-b",
+                "parent_ids": ["n-b"],
+                "data": {"output": _MockAIMessageChunk(content="W")},
+                "metadata": {"langgraph_node": "write", "checkpoint_id": "cp-1"},
+            },
+            _node_end("write", "n-b"),
+            _node_end("research", "n-a"),
+        ]
+        graph = _MockCompiledGraph(scripted)
+        bridge = LangGraphBridge(graph)
+
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), rec):
+            pass
+
+        entered = {
+            r.data["display_name"]: r.data for r in journal.read() if r.name == "unit_entered"
+        }
+        agent_id = entered[bridge._display_name]["unit_id"]
+        # Both siblings hang off the agent — not off each other.
+        assert entered["research"]["parent_unit_id"] == agent_id
+        assert entered["write"]["parent_unit_id"] == agent_id
+        # The model started while both siblings were open is parented to
+        # the sibling its parent_ids points at (write = node-n-b).
+        assert entered["ChatOpenAI"]["parent_unit_id"] == "node-n-b"

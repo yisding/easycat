@@ -74,8 +74,13 @@ logger = logging.getLogger(__name__)
 
 # ``chain`` is needed so every node execution emits ``on_chain_start`` /
 # ``on_chain_end`` events from which we build workflow_node cursors.
-# ``chat_model`` and ``tool`` give token + tool visibility.
-_DEFAULT_INCLUDE_TYPES: tuple[str, ...] = ("chat_model", "tool", "chain")
+# ``chat_model`` and ``tool`` give token + tool visibility.  ``llm`` is
+# required so nodes that call a non-chat ``BaseLLM`` (text-completion
+# models) still surface their ``on_llm_*`` tokens — without it a graph
+# that answers from a ``BaseLLM`` and returns the text outside the
+# messages list completes with no ``text_delta`` and an empty
+# ``done.text`` (the voice goes silent).
+_DEFAULT_INCLUDE_TYPES: tuple[str, ...] = ("chat_model", "llm", "tool", "chain")
 
 
 class LangGraphBridge:
@@ -100,9 +105,10 @@ class LangGraphBridge:
         ``type(graph).__name__``).
     include_types:
         Runnable types to surface via ``astream_events(include_types=
-        ...)``.  Defaults to ``("chat_model", "tool", "chain")`` —
-        ``chain`` is needed so every node entry is observable for
-        workflow_node cursors.  Pass ``None`` to surface every event.
+        ...)``.  Defaults to ``("chat_model", "llm", "tool", "chain")``
+        — ``chain`` is needed so every node entry is observable for
+        workflow_node cursors and ``llm`` so non-chat ``BaseLLM`` nodes
+        aren't silently dropped.  Pass ``None`` to surface every event.
     """
 
     COMMITTABLE_BOUNDARIES = {
@@ -141,6 +147,12 @@ class LangGraphBridge:
         self._display_name = display_name or type(graph).__name__
         self._include_types = list(include_types) if include_types is not None else None
         self._last_output: Any = None
+        # Message ids of the transient per-turn context (caller-id /
+        # system-prefix) injected for the *current* turn.  Tracked so it
+        # can be deleted from checkpointed graph state once the turn
+        # ends — otherwise ``add_messages`` persists a fresh system
+        # message every turn and stale/duplicated context leaks forward.
+        self._transient_context_ids: list[str] = []
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 
@@ -163,6 +175,15 @@ class LangGraphBridge:
         recorder.record_unit_entered(agent_cursor)
 
         accumulated = ""
+        # Whether the *model/chain* path (``translate_stream_event``)
+        # streamed any text, tracked separately from ``get_stream_writer``
+        # custom-chunk text.  A graph can speak a progress chunk via
+        # ``get_stream_writer({"text": ...})`` and then write its real
+        # answer as a final ``AIMessage`` without streaming model tokens;
+        # ``accumulated`` would be non-empty (the progress text) so the
+        # final-message fallback below would be skipped and the caller
+        # would only hear the progress narration.
+        model_text_streamed = False
         # Cursors open inside this turn, keyed by LangChain ``run_id``.
         # Each node entry opens a workflow_node cursor; each chat_model
         # call opens a model_node cursor.  Closing is driven by the
@@ -229,6 +250,7 @@ class LangGraphBridge:
                 for bridge_event in translate_stream_event(event, recorder, state=tool_state):
                     if bridge_event.kind == "text_delta":
                         accumulated += bridge_event.text
+                        model_text_streamed = True
                     yield bridge_event
 
                 self._maybe_record_checkpoint(event, recorder, seen_checkpoints)
@@ -240,11 +262,16 @@ class LangGraphBridge:
                     logger.debug("Failed to close cursor during error cleanup", exc_info=True)
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
+            self._purge_transient_context()
             raise
 
         for cursor in reversed(list(open_cursors.values())):
             recorder.record_unit_exited(cursor.with_committable(True), reason=None)
         open_cursors.clear()
+        # Drop this turn's transient context from checkpointed state
+        # before the final snapshot so the recorded post-turn state (and
+        # every following turn) is free of the per-turn system prefix.
+        self._purge_transient_context()
 
         # Surface the final checkpoint + capture the last message for
         # ``structured_output``.  Best-effort: a graph compiled without
@@ -265,24 +292,37 @@ class LangGraphBridge:
             if pending:
                 self._raise_hitl_unsupported(pending, agent_cursor, open_cursors, recorder)
         except BridgeInputError:
+            self._purge_transient_context()
             raise
         except Exception:  # pragma: no cover — best-effort.
             logger.debug("Failed to fetch final LangGraph state", exc_info=True)
 
         # Nodes that return a final ``AIMessage`` without streaming
         # chat-model tokens (or that transform model output before
-        # writing it to state) leave ``accumulated`` empty.  Fall back
-        # to the final message's text only when it's actually an AI
+        # writing it to state) leave ``model_text_streamed`` False.  Fall
+        # back to the final message's text only when it's actually an AI
         # message — for graphs that complete without appending an
         # assistant reply (a conditional path returning ``{}``, an edge
         # straight to END), ``_messages_tail`` would surface the user's
         # own utterance and TTS would repeat the caller's voice back.
-        if accumulated:
+        if model_text_streamed:
             spoken_text = accumulated
         elif _message_is_ai(self._last_output):
-            spoken_text = _extract_message_text(self._last_output)
+            final_text = _extract_message_text(self._last_output)
+            if accumulated:
+                # Custom progress chunks were already streamed/spoken but
+                # the model answer never streamed — emit the final AI
+                # text as a delta so the real answer is also spoken (the
+                # consumer only falls back to ``done.text`` when *nothing*
+                # streamed, so a non-empty ``done.text`` alone would be
+                # silently dropped here).
+                if final_text:
+                    yield AgentBridgeEvent(kind="text_delta", text=final_text)
+                spoken_text = accumulated + final_text
+            else:
+                spoken_text = final_text
         else:
-            spoken_text = ""
+            spoken_text = accumulated
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(
             kind="done",
@@ -364,6 +404,9 @@ class LangGraphBridge:
     def reset(self) -> None:
         self._thread_id = str(uuid.uuid4())
         self._last_output = None
+        # Drop any not-yet-purged ids: they belonged to the old thread,
+        # and a later purge against the rotated thread_id would be wrong.
+        self._transient_context_ids = []
 
     # ── History post-processing ───────────────────────────────────
 
@@ -406,10 +449,54 @@ class LangGraphBridge:
         # conversation history via its checkpointer, so user/assistant items
         # from the caller's context are filtered to avoid duplicating state
         # that will land via ``add_messages`` anyway.
+        #
+        # This context is *transient* — it describes the current turn's
+        # environment, not durable history.  ``add_messages`` would
+        # checkpoint it permanently (and a fresh one would be appended
+        # every turn), so each injected message gets a stable id we track
+        # and delete from graph state once the turn ends (see
+        # :meth:`_purge_transient_context`).  ``add_messages`` preserves
+        # an explicit ``id`` on dict-form messages, which is what makes
+        # the later ``RemoveMessage`` removal possible.
         context_msgs = normalize_context_messages(context, own_history=True)
-        messages: list[Any] = [(item["role"], item["content"]) for item in context_msgs]
+        self._transient_context_ids = []
+        messages: list[Any] = []
+        for item in context_msgs:
+            msg_id = f"easycat-ctx-{uuid4().hex}"
+            self._transient_context_ids.append(msg_id)
+            messages.append({"role": item["role"], "content": item["content"], "id": msg_id})
         messages.append(("user", text))
         return {self._messages_key: messages}
+
+    def _purge_transient_context(self) -> None:
+        """Delete this turn's injected transient context from graph state.
+
+        The per-turn system/developer context forwarded by
+        :meth:`_build_input` would otherwise be checkpointed permanently
+        by ``add_messages``, so every turn would append another stale
+        copy.  LangGraph's reducer deletes a message when a
+        ``RemoveMessage`` carrying its id is applied, so we re-send one
+        per injected id.  Best-effort: a transient checkpointer error
+        must not fail an otherwise-successful turn.
+        """
+        ids = self._transient_context_ids
+        if not ids:
+            return
+        self._transient_context_ids = []
+        try:
+            from langchain_core.messages import RemoveMessage
+
+            removals: list[Any] = [RemoveMessage(id=mid) for mid in ids]
+        except ImportError:
+            # ``langgraph`` always installs ``langchain-core``; this only
+            # trips under duck-typed tests, where the mock graph's
+            # ``update_state`` dedupes by id and the removal markers are
+            # still observable for assertions.
+            removals = [{"role": "system", "content": "", "id": mid} for mid in ids]
+        try:
+            self._graph.update_state(self._config(), {self._messages_key or "messages": removals})
+        except Exception:
+            logger.debug("Failed to purge transient context from LangGraph", exc_info=True)
 
     def _extract_graph_stream_chunk(self, event: dict[str, Any]) -> tuple[str, Any] | None:
         """Return ``(mode_name, payload)`` when ``event`` carries a graph-level
@@ -576,7 +663,9 @@ class LangGraphBridge:
                     unit_id=f"node-{run_id}",
                     unit_kind=UnitKind.WORKFLOW_NODE,
                     display_name=node_name,
-                    parent_unit_id=self._nearest_parent_id(open_cursors, ns, agent_cursor.unit_id),
+                    parent_unit_id=self._nearest_parent_id(
+                        open_cursors, event.get("parent_ids") or (), agent_cursor.unit_id
+                    ),
                     entered_at=time.monotonic_ns(),
                     committable=False,
                 )
@@ -592,7 +681,9 @@ class LangGraphBridge:
                 unit_id=f"model-{run_id}",
                 unit_kind=UnitKind.MODEL_NODE,
                 display_name=str(event.get("name") or "model"),
-                parent_unit_id=self._nearest_parent_id(open_cursors, ns, agent_cursor.unit_id),
+                parent_unit_id=self._nearest_parent_id(
+                    open_cursors, event.get("parent_ids") or (), agent_cursor.unit_id
+                ),
                 entered_at=time.monotonic_ns(),
                 committable=False,
             )
@@ -610,12 +701,25 @@ class LangGraphBridge:
     def _nearest_parent_id(
         self,
         open_cursors: dict[str, ExecutionCursor],
-        _ns: tuple[str, ...],
+        parent_ids: Sequence[Any],
         default: str,
     ) -> str:
-        """Parent for a new cursor = the most recent open workflow_node, else agent."""
-        for cursor in reversed(open_cursors.values()):
-            if cursor.unit_kind == UnitKind.WORKFLOW_NODE:
+        """Parent for a new cursor = the deepest ancestor with an open cursor.
+
+        LangChain/LangGraph events carry ``parent_ids`` ordered
+        root→leaf.  During a fan-out two sibling nodes (or a sibling
+        node and a model) can be open at the same time, so picking "the
+        most recent open workflow_node" would parent parallel top-level
+        siblings to *each other* and could attach a model run to the
+        wrong sibling.  ``open_cursors`` is keyed by LangChain
+        ``run_id``; walking ``parent_ids`` from the immediate parent
+        outward and matching against it picks the real enclosing node
+        (internal runnables aren't in ``open_cursors`` so they're
+        skipped), falling back to the agent cursor for top-level runs.
+        """
+        for pid in reversed(list(parent_ids or ())):
+            cursor = open_cursors.get(str(pid))
+            if cursor is not None:
                 return cursor.unit_id
         return default
 

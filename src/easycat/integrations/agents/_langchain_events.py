@@ -215,7 +215,28 @@ def translate_stream_event(
             tc_name = tc_chunk.get("name") or ""
             tc_args = tc_chunk.get("args") or ""
             tc_id = tc_chunk.get("id") or ""
-            if tc_name:
+            tc_index = tc_chunk.get("index")
+            is_call_start = bool(tc_chunk.get("name"))
+            # Most streaming providers (OpenAI, Anthropic, ...) put the
+            # tool-call ``id``/``name`` only on the *first* ToolCallChunk
+            # of a call; subsequent argument chunks carry just ``index``.
+            # Cache the id/name by (run_id, index) on first sight and
+            # back-fill it onto the args-only chunks so ``tool_delta``
+            # events and the journal delta phase stay associated with the
+            # originating ``tool_started`` instead of getting empty
+            # id/name.  The gate below still keys ``tool_started`` off the
+            # raw ``name`` so a back-filled name never re-announces a
+            # second start for the same call.
+            if state is not None and tc_index is not None:
+                idmap = state.setdefault("tool_chunk_id_by_index", {})
+                ikey = (run_id, tc_index)
+                if tc_id or tc_name:
+                    cached_id, cached_name = idmap.get(ikey, ("", ""))
+                    idmap[ikey] = (tc_id or cached_id, tc_name or cached_name)
+                cached_id, cached_name = idmap.get(ikey, (tc_id, tc_name))
+                tc_id = tc_id or cached_id
+                tc_name = tc_name or cached_name
+            if is_call_start:
                 if state is not None and tc_name and tc_id:
                     # FIFO queue per tool name so parallel calls to the
                     # same tool (e.g. two ``search`` calls in one
