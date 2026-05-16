@@ -1442,3 +1442,64 @@ class TestLangChainBridgeSnapshot:
         assert snap.kind == "langchain"
         assert snap.fields["runnable"] == "MyChain"
         assert snap.fields["history_length"] == 0
+
+
+def _role_of_msg(item: Any) -> Any:
+    """Tolerate dict-shaped and typed-message items (role accessor)."""
+    if isinstance(item, dict):
+        return item.get("role")
+    return getattr(item, "type", None)  # langchain messages expose ``.type``
+
+
+class TestLangChainBridgeMessagesInput:
+    """``messages_input=True`` — for bare ``BaseChatModel`` / ``BaseLLM``."""
+
+    @pytest.mark.asyncio
+    async def test_passes_message_sequence_not_dict(self):
+        """Bare language-model runnables reject dict inputs.  The bridge
+        must hand them a message sequence ending with the user turn."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": [],
+                    "data": {"chunk": _MockAIMessageChunk(content="hi!")},
+                }
+            ]
+        )
+        bridge = LangChainBridge(runnable, messages_input=True)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("hello"), _recorder()):
+            pass
+        payload = runnable.invoked_with[0]
+        assert isinstance(payload, list)  # not a dict — would crash a chat model
+        assert _content_of_history_item(payload[-1]) == "hello"
+
+    @pytest.mark.asyncio
+    async def test_threads_history_as_messages(self):
+        """History still threads through — as messages, not a dict key."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": [],
+                    "data": {"chunk": _MockAIMessageChunk(content="reply")},
+                }
+            ]
+        )
+        bridge = LangChainBridge(runnable, messages_input=True)
+        rec = _recorder()
+        async for _ in bridge.invoke(AgentTurnInput.from_text("first"), rec):
+            pass
+        async for _ in bridge.invoke(AgentTurnInput.from_text("second"), rec):
+            pass
+        payload = runnable.invoked_with[0]
+        assert isinstance(payload, list)
+        contents = [_content_of_history_item(m) for m in payload]
+        # prior user + assistant turn, then the new user turn
+        assert contents == ["first", "reply", "second"]
+        roles = [_role_of_msg(m) for m in payload]
+        assert roles[-1] in ("user", "human")

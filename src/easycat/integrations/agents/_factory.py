@@ -170,7 +170,14 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
         if isinstance(agent, Runnable):
             from easycat.integrations.agents.langchain import LangChainBridge
 
-            return LangChainBridge(runnable=agent)
+            # Bare language models (``ChatOpenAI(...)``, any
+            # ``BaseChatModel`` / ``BaseLLM``) are Runnables too, but they
+            # reject the default ``{"input": ..., "history": ...}`` dict
+            # with ``Invalid input type <class 'dict'>``.  Feed them a
+            # message sequence instead so ``EasyConfig.mic(agent=...)``
+            # works on the first turn while history still threads through.
+            messages_input = _is_language_model(agent)
+            return LangChainBridge(runnable=agent, messages_input=messages_input)
     except ImportError:
         pass
 
@@ -189,3 +196,22 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     # :class:`AgentRunnerConfig`; ``AgentStage`` provides a default-config
     # safety wrap for callers that construct ``Session`` directly.
     return agent
+
+
+def _is_language_model(agent: Any) -> bool:
+    """True for a bare LangChain language model (``BaseChatModel`` / ``BaseLLM``).
+
+    These are Runnables but, unlike chains/agents, only accept a string
+    or message sequence as input — not the ``LangChainBridge`` default
+    payload dict.  Returns ``False`` (rather than raising) if
+    ``langchain_core`` is unavailable so the caller falls back to the
+    default dict payload.
+    """
+    try:
+        from langchain_core.language_models import (  # type: ignore[import-untyped]
+            BaseChatModel,
+            BaseLLM,
+        )
+    except ImportError:
+        return False
+    return isinstance(agent, (BaseChatModel, BaseLLM))

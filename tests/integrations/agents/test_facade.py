@@ -107,3 +107,60 @@ class TestAutoAdaptBridgeSelection:
 
         with pytest.raises(BridgeInputError, match="realtime"):
             auto_adapt_agent(_Client())
+
+
+class TestAutoAdaptLangChain:
+    """Bare language models vs. composed Runnables route differently."""
+
+    def test_bare_chat_model_uses_messages_input(self):
+        pytest.importorskip("langchain_core")
+        from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+        from easycat.integrations.agents.langchain import LangChainBridge
+
+        adapted = auto_adapt_agent(FakeListChatModel(responses=["hi"]))
+        assert isinstance(adapted, LangChainBridge)
+        # Default dict payload would crash a chat model with
+        # "Invalid input type <class 'dict'>"; messages mode avoids it.
+        assert adapted._messages_input is True
+
+    def test_bare_llm_uses_messages_input(self):
+        pytest.importorskip("langchain_core")
+        from langchain_core.language_models.fake import FakeListLLM
+
+        from easycat.integrations.agents.langchain import LangChainBridge
+
+        adapted = auto_adapt_agent(FakeListLLM(responses=["hi"]))
+        assert isinstance(adapted, LangChainBridge)
+        assert adapted._messages_input is True
+
+    def test_composed_runnable_keeps_dict_payload(self):
+        pytest.importorskip("langchain_core")
+        from langchain_core.runnables import RunnableLambda
+
+        from easycat.integrations.agents.langchain import LangChainBridge
+
+        adapted = auto_adapt_agent(RunnableLambda(lambda x: x))
+        assert isinstance(adapted, LangChainBridge)
+        assert adapted._messages_input is False
+
+    @pytest.mark.asyncio
+    async def test_bare_chat_model_invokes_without_dict_crash(self):
+        """End-to-end: ``EasyConfig.mic(agent=ChatOpenAI(...))`` shape —
+        the first turn must not raise ``Invalid input type``."""
+        pytest.importorskip("langchain_core")
+        from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+        from easycat.integrations.agents._recorder import JournalAgentRecorder
+        from easycat.integrations.agents.base import RecorderContext
+        from easycat.runtime.journal import InMemoryRingBuffer
+
+        adapted = auto_adapt_agent(FakeListChatModel(responses=["the answer"]))
+        rec = JournalAgentRecorder(
+            journal=InMemoryRingBuffer(capacity=1000),
+            artifact_store=None,
+            context=RecorderContext(run_id="r1", session_id="s1", turn_id="t1"),
+        )
+        events = [ev async for ev in adapted.invoke(AgentTurnInput.from_text("question"), rec)]
+        done = [e for e in events if e.kind == "done"]
+        assert done and done[0].text == "the answer"

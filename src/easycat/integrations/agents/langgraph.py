@@ -174,6 +174,15 @@ class LangGraphBridge:
         )
         recorder.record_unit_entered(agent_cursor)
 
+        # Drop the previous turn's captured tail.  ``_last_output`` is only
+        # re-set below when ``get_state()`` succeeds; clearing it here means
+        # a transient/custom checkpointer failure on this turn can't make
+        # ``done.text``/``structured_output`` (or the fallback that speaks
+        # the final ``AIMessage`` when nothing streamed) replay the prior
+        # turn's response — the fallback degrades to this turn's streamed
+        # text instead.
+        self._last_output = None
+
         accumulated = ""
         # Whether the *model/chain* path (``translate_stream_event``)
         # streamed any text, tracked separately from ``get_stream_writer``

@@ -72,6 +72,14 @@ class LangChainBridge:
     history_key:
         Key under which the prior turn messages are placed.  Defaults
         to ``"history"``.  Set to ``None`` to disable history passing.
+    messages_input:
+        When ``True`` the runnable is fed a bare message *sequence*
+        (``[*history, HumanMessage(text)]``) instead of a dict or string.
+        Bare LangChain language models (``BaseChatModel`` / ``BaseLLM``
+        such as ``ChatOpenAI(...)``) reject dict inputs, so
+        ``auto_adapt_agent()`` enables this for them; ``input_key`` /
+        ``history_key`` are ignored in this mode (history is threaded as
+        messages instead).
     include_types:
         Optional ``astream_events(include_types=...)`` filter.  Defaults
         to ``None`` (surface every event) — narrowing the filter drops
@@ -93,6 +101,7 @@ class LangChainBridge:
         display_name: str | None = None,
         input_key: str | None = "input",
         history_key: str | None = "history",
+        messages_input: bool = False,
         include_types: Sequence[str] | None = _DEFAULT_INCLUDE_TYPES,
     ) -> None:
         if runnable is None:
@@ -106,6 +115,7 @@ class LangChainBridge:
         self._display_name = display_name or type(runnable).__name__
         self._input_key = input_key
         self._history_key = history_key
+        self._messages_input = messages_input
         self._include_types = list(include_types) if include_types is not None else None
         self._message_history: list[Any] = []
         self._last_output: Any = None
@@ -308,6 +318,13 @@ class LangChainBridge:
         text: str,
         context: list[dict[str, str]] | None = None,
     ) -> Any:
+        if self._messages_input:
+            # Bare ``BaseChatModel`` / ``BaseLLM`` runnables only accept a
+            # string or a message sequence — a dict raises ``Invalid input
+            # type``.  Thread prior turns (and per-turn context) as
+            # messages so the auto-adapted model stays conversational.
+            history = self._history_with_context(context)
+            return [*history, _context_to_message({"role": "user", "content": text})]
         if self._input_key is None:
             return text
         payload: dict[str, Any] = {self._input_key: text}

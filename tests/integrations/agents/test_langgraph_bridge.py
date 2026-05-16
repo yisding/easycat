@@ -540,6 +540,53 @@ class TestLangGraphBridgeInvoke:
         assert len(workflow_nodes) == 1
         assert workflow_nodes[0].data["display_name"] == "planner"
 
+    @pytest.mark.asyncio
+    async def test_state_fetch_failure_does_not_replay_previous_turn(self):
+        """A non-streaming graph whose ``get_state()`` fails on a later
+        turn (transient/custom checkpointer error) must not surface the
+        *previous* turn's final ``AIMessage`` as this turn's
+        ``done.text``/``structured_output``.  The stale tail is cleared
+        at turn start, so the fallback degrades to this turn's output
+        instead of speaking the prior reply again."""
+
+        class _FlakyGraph(_MockCompiledGraph):
+            def __init__(self, scripted: list[dict[str, Any]], *, state: _MockState) -> None:
+                super().__init__(scripted, state=state)
+                self._get_state_calls = 0
+
+            def get_state(self, config: dict[str, Any]) -> _MockState:
+                self._get_state_calls += 1
+                if self._get_state_calls >= 2:
+                    raise RuntimeError("checkpointer unavailable")
+                return self._state
+
+        ai_msg = _MockMessage("assistant", "first turn reply", message_id="m-1")
+        state = _MockState(
+            values={"messages": [_MockMessage("user", "hi"), ai_msg]},
+            checkpoint_id="cp-final",
+        )
+        scripted = [_node_start("answer", "n1"), _node_end("answer", "n1")]
+        graph = _FlakyGraph(scripted, state=state)
+        bridge = LangGraphBridge(graph)
+
+        # Turn 1 succeeds and captures the final AIMessage.
+        done1 = [
+            e
+            async for e in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())
+            if e.kind == "done"
+        ]
+        assert done1 and done1[0].text == "first turn reply"
+        assert done1[0].structured_output is ai_msg
+
+        # Turn 2: get_state() raises.  Must NOT replay turn 1's reply.
+        done2 = [
+            e
+            async for e in bridge.invoke(AgentTurnInput.from_text("again"), _recorder())
+            if e.kind == "done"
+        ]
+        assert done2 and done2[0].text == ""
+        assert done2[0].structured_output is None
+
 
 # ── State / interruption ─────────────────────────────────────────
 
