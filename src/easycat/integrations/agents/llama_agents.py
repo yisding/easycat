@@ -50,6 +50,12 @@ _TEXT_FIELDS = (
     "result",
 )
 
+# Upper bound on the best-effort await of a cancelled local handler. The
+# real WorkflowHandler.cancel_run() already gave the workflow time to honor
+# cancellation; this is only a safety net so a non-cooperative step can
+# never wedge the interrupted turn.
+_POST_CANCEL_AWAIT_TIMEOUT = 2.0
+
 
 class LlamaAgentsBridge:
     """Bridge for LlamaAgents / LlamaIndex Workflows.
@@ -351,7 +357,20 @@ class LlamaAgentsBridge:
                 if text:
                     yield AgentBridgeEvent(kind="text_delta", text=text)
         finally:
-            self._ctx = getattr(handler, "ctx", self._ctx)
+            if cancelled:
+                # The barge-in closed stream_events() before the terminal
+                # event, and cancel_run() may have returned on its own
+                # timeout without actually stopping the run. Reusing this
+                # handler's Context on the next preserve_context turn would
+                # either raise ContextStateError (Context._workflow_run
+                # rejects a still-running context) or replay the cancelled
+                # response's buffered stream deltas before the new answer.
+                # Drop it so the next turn starts from a clean Context;
+                # assistant-text continuity is carried by apply_interruption()
+                # / append_interruption_note(), not the workflow Context.
+                self._ctx = None
+            else:
+                self._ctx = getattr(handler, "ctx", self._ctx)
             self._active_handler = None
             self._active_handler_id = None
 
@@ -389,8 +408,24 @@ class LlamaAgentsBridge:
     async def _await_handler_best_effort(self, handler: Any) -> Any:
         if not inspect.isawaitable(handler):
             return None
-        try:
+        is_done = getattr(handler, "is_done", None)
+        if callable(is_done):
+            try:
+                cancellation_completed = bool(is_done())
+            except Exception:
+                cancellation_completed = True
+            if not cancellation_completed:
+                # cancel_run() returned on its own timeout while the
+                # workflow is still on a non-cooperative step. Awaiting the
+                # handler here would block the barge-in indefinitely on the
+                # never-completing result, so abandon the post-cancel output.
+                return None
+
+        async def _await() -> Any:
             return await handler
+
+        try:
+            return await asyncio.wait_for(_await(), timeout=_POST_CANCEL_AWAIT_TIMEOUT)
         except Exception:
             return None
 
