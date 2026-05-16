@@ -435,6 +435,27 @@ class TestWebTransportConnectionTransport:
         assert result is False
 
     @pytest.mark.asyncio
+    async def test_connect_preserves_frames_fed_before_connect(self) -> None:
+        """Regression: mic frames the aioquic protocol enqueues between
+        session-accept and the task-scheduled ``connect()`` must survive.
+        ``connect()`` must not reset the inbound queue.
+        """
+        t = _build_connection_transport()
+        # Simulate the protocol feeding early audio before connect() runs:
+        # client opens its audio stream (tag 0x01) and writes a frame.
+        early = b"\x11\x22\x33\x44"
+        t._feed_stream_data(  # noqa: SLF001
+            stream_id=12, data=bytes([_TAG_AUDIO]) + early, ended=False
+        )
+        await t.connect()
+        try:
+            chunk = await asyncio.wait_for(t._in_queue.get(), timeout=1)  # noqa: SLF001
+            assert chunk is not None
+            assert chunk.data == early
+        finally:
+            await t.disconnect()
+
+    @pytest.mark.asyncio
     async def test_force_close_terminates_quic_before_connect(self) -> None:
         """Regression: overflow rejection must actively close the QUIC
         connection.  ``disconnect()`` early-returns pre-``connect()`` so it

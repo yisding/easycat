@@ -76,7 +76,10 @@
 
 <script>
 // ── Configuration ────────────────────────────────────────────────
-var WT_URL = "https://" + location.hostname + ":4433/easycat";
+// When opened directly as a file:// URL, location.hostname is empty —
+// fall back to localhost so the example works as written.
+var WT_HOST = location.hostname || "localhost";
+var WT_URL = "https://" + WT_HOST + ":4433/easycat";
 var DESIRED_RATE = 16000;
 var serverPlaybackRate = 16000;
 
@@ -213,32 +216,37 @@ async function acceptServerStreams(transport) {
   while (true) {
     var { value: stream, done } = await inc.read();
     if (done) return;
-    var reader = stream.readable.getReader();
-    // Peek the first byte to know whether it's audio or control.
-    (async function dispatch() {
-      var first = await reader.read();
-      if (first.done || first.value.length === 0) return;
-      var tag = first.value[0];
-      if (tag === TAG_AUDIO) {
-        if (first.value.length > 1) playAudio(first.value.slice(1).buffer);
-        // Continue reading more chunks.
-        while (true) {
-          var r = await reader.read();
-          if (r.done) return;
-          playAudio(r.value.buffer.slice(r.value.byteOffset, r.value.byteOffset + r.value.byteLength));
-        }
-      } else if (tag === TAG_CONTROL) {
-        var decode = makeControlDecoder();
-        if (first.value.length > 1) {
-          decode(first.value.subarray(1)).forEach(handleControlMessage);
-        }
-        while (true) {
-          var r2 = await reader.read();
-          if (r2.done) return;
-          decode(r2.value).forEach(handleControlMessage);
-        }
-      }
-    })();
+    // Pass the reader as a parameter so each dispatch keeps its own
+    // binding — a function-scoped `var` here would be clobbered by the
+    // next incoming stream and mix audio/control processing.
+    dispatchServerStream(stream.readable.getReader()).catch(function (e) {
+      console.warn(e);
+    });
+  }
+}
+
+async function dispatchServerStream(reader) {
+  // Peek the first byte to know whether it's audio or control.
+  var first = await reader.read();
+  if (first.done || first.value.length === 0) return;
+  var tag = first.value[0];
+  if (tag === TAG_AUDIO) {
+    if (first.value.length > 1) playAudio(first.value.slice(1).buffer);
+    while (true) {
+      var r = await reader.read();
+      if (r.done) return;
+      playAudio(r.value.buffer.slice(r.value.byteOffset, r.value.byteOffset + r.value.byteLength));
+    }
+  } else if (tag === TAG_CONTROL) {
+    var decode = makeControlDecoder();
+    if (first.value.length > 1) {
+      decode(first.value.subarray(1)).forEach(handleControlMessage);
+    }
+    while (true) {
+      var r2 = await reader.read();
+      if (r2.done) return;
+      decode(r2.value).forEach(handleControlMessage);
+    }
   }
 }
 

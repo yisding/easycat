@@ -676,7 +676,13 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
                 "WebTransportConnectionTransport has no underlying session. "
                 "Use WebTransportServer or pass _h3/_quic_protocol/_session_id."
             )
-        self._reset_audio_queue()
+        # Do NOT reset the inbound queue here.  This transport is built
+        # fresh per accepted CONNECT session, and the aioquic protocol can
+        # feed early mic frames via ``_feed_stream_data`` into ``_in_queue``
+        # before this coroutine — scheduled as a task by the server — runs.
+        # Resetting would discard the start of the user's first utterance.
+        # There is no stale per-session state to clear (a fresh queue was
+        # created in ``__init__``; sentinels are only enqueued at teardown).
         while not self._out_queue.empty():
             try:
                 self._out_queue.get_nowait()
