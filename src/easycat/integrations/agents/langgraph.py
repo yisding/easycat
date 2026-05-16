@@ -155,7 +155,16 @@ class LangGraphBridge:
         # value) the same as a missing checkpointer so the bridge fails
         # loudly at construction instead of later producing empty
         # ``done`` output and silently dropping interruption rewrites.
-        if not checkpointer:
+        #
+        # ``graph.compile(checkpointer=True)`` is the *inherit-from-parent*
+        # sentinel: LangGraph stores the literal ``True`` (not a real
+        # checkpointer) so a subgraph reuses its parent's persistence.
+        # As a root graph it has no parent, so ``invoke()`` raises
+        # ``RuntimeError: checkpointer=True cannot be used for root
+        # graphs``.  ``not True`` is ``False``, so reject ``True``
+        # explicitly here with the same actionable error rather than
+        # letting the first turn blow up.
+        if not checkpointer or checkpointer is True:
             raise BridgeInputError(
                 "LangGraphBridge requires a graph compiled with a checkpointer. "
                 "Call graph.compile(checkpointer=InMemorySaver()) (or another "

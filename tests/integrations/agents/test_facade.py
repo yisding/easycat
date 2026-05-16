@@ -134,6 +134,34 @@ class TestAutoAdaptLangChain:
         assert isinstance(adapted, LangChainBridge)
         assert adapted._messages_input is True
 
+    def test_retried_chat_model_uses_messages_input(self):
+        """``.with_retry()`` returns a ``RunnableRetry`` (a
+        ``RunnableBindingBase`` sibling of ``RunnableBinding``, *not* a
+        subclass).  Its ``.bound`` must still be peeled so the bare chat
+        model is recognised and fed messages, not the dict payload that
+        crashes with ``Invalid input type <class 'dict'>``."""
+        pytest.importorskip("langchain_core")
+        from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+        from easycat.integrations.agents.langchain import LangChainBridge
+
+        model = FakeListChatModel(responses=["hi"]).with_retry()
+        adapted = auto_adapt_agent(model)
+        assert isinstance(adapted, LangChainBridge)
+        assert adapted._messages_input is True
+
+    def test_bound_then_retried_chat_model_uses_messages_input(self):
+        """Nested wrappers (``.bind(...).with_retry()``) must all peel."""
+        pytest.importorskip("langchain_core")
+        from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+        from easycat.integrations.agents.langchain import LangChainBridge
+
+        model = FakeListChatModel(responses=["hi"]).bind(stop=["x"]).with_retry()
+        adapted = auto_adapt_agent(model)
+        assert isinstance(adapted, LangChainBridge)
+        assert adapted._messages_input is True
+
     def test_composed_runnable_keeps_dict_payload(self):
         pytest.importorskip("langchain_core")
         from langchain_core.runnables import RunnableLambda

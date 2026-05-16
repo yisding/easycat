@@ -239,6 +239,23 @@ class TestLangGraphBridgeConstruction:
         with pytest.raises(BridgeInputError):
             LangGraphBridge(GraphFalseCP())
 
+    def test_rejects_graph_with_true_checkpointer(self):
+        """``graph.compile(checkpointer=True)`` is the inherit-from-parent
+        sentinel: ``graph.checkpointer`` is the literal ``True`` (no real
+        checkpointer).  ``not True`` is ``False`` so a naive falsy check
+        accepts it, but the first ``invoke()`` raises ``RuntimeError:
+        checkpointer=True cannot be used for root graphs``.  The bridge
+        must reject it at construction with its actionable error."""
+
+        class GraphTrueCP:
+            checkpointer = True
+
+            def astream_events(self, *args: Any, **kwargs: Any) -> Any:
+                return iter(())
+
+        with pytest.raises(BridgeInputError, match="checkpointer"):
+            LangGraphBridge(GraphTrueCP())
+
     def test_committable_boundaries_published(self):
         assert LangGraphBridge.COMMITTABLE_BOUNDARIES[UnitKind.WORKFLOW_NODE] == (
             CommitRule.BETWEEN_NODES
