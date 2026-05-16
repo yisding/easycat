@@ -924,6 +924,14 @@ async def _swallow(awaitable: Any) -> None:
         await awaitable
 
 
+async def _aclose_iterator(iterator: Any) -> None:
+    """Best-effort close of ``iterator`` if it exposes ``aclose()``."""
+    aclose = getattr(iterator, "aclose", None)
+    if callable(aclose):
+        with contextlib.suppress(Exception):
+            await aclose()
+
+
 async def _aiter_with_cancellation(
     source: AsyncIterator[Any],
     cancel_token: CancelToken | None,
@@ -938,15 +946,32 @@ async def _aiter_with_cancellation(
     ``cancel_token.wait()`` lets the caller react while the stream is still
     blocked.  Cancellation takes priority: a just-arrived item is dropped if
     the token is already set, mirroring a top-of-loop cancel check.
+
+    On any non-exhaustive exit -- a cooperative cancel, a hard task cancel,
+    or the consumer closing ``invoke()`` mid-stream (``GeneratorExit`` from
+    ``aclose()``, the text-session interruption path) -- the underlying
+    ``source`` iterator is closed so a local workflow's ``stream_events()``
+    generator and any background resources it owns are not leaked.  Only a
+    fully drained source is left alone: it has already run its own cleanup.
     """
+    iterator = source.__aiter__()
+    exhausted = False
+
     if cancel_token is None:
-        async for item in source:
-            yield item
+        try:
+            while True:
+                try:
+                    item = await iterator.__anext__()
+                except StopAsyncIteration:
+                    exhausted = True
+                    return
+                yield item
+        finally:
+            if not exhausted:
+                await _aclose_iterator(iterator)
         return
 
-    iterator = source.__aiter__()
     cancel_wait: asyncio.Task[None] = asyncio.ensure_future(cancel_token.wait())
-    stopped_early = False
     try:
         while not cancel_token.is_cancelled:
             next_item: asyncio.Task[Any] = asyncio.ensure_future(iterator.__anext__())
@@ -955,7 +980,6 @@ async def _aiter_with_cancellation(
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if cancel_token.is_cancelled:
-                stopped_early = True
                 if not next_item.done():
                     next_item.cancel()
                 with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
@@ -964,17 +988,14 @@ async def _aiter_with_cancellation(
             try:
                 yield next_item.result()
             except StopAsyncIteration:
+                exhausted = True
                 return
-        stopped_early = True
     finally:
         cancel_wait.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await cancel_wait
-        if stopped_early:
-            aclose = getattr(iterator, "aclose", None)
-            if callable(aclose):
-                with contextlib.suppress(Exception):
-                    await aclose()
+        if not exhausted:
+            await _aclose_iterator(iterator)
 
 
 _REMOTE_FAILURE_STATUSES = frozenset(

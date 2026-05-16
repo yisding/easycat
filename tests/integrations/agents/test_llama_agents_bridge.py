@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 import types
 from collections.abc import AsyncIterator
@@ -1248,3 +1249,94 @@ class TestAutoAdapt:
         adapted = auto_adapt_agent(workflow)
 
         assert isinstance(adapted, LlamaAgentsBridge)
+
+
+class _TrackingSource:
+    """Async iterator whose generator runs a ``finally`` only when closed.
+
+    Mirrors a local workflow ``stream_events()`` generator: it yields one
+    item, then blocks idle waiting for the next step (so it is never
+    naturally drained). ``closed`` flips True only if the generator's
+    cleanup actually runs -- i.e. only if the wrapper closed the iterator.
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.exhausted = False
+        self._never = asyncio.Event()
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return self._iterate()
+
+    async def _iterate(self) -> AsyncIterator[Any]:
+        try:
+            yield "first"
+            await self._never.wait()
+            yield "second"
+            self.exhausted = True
+        finally:
+            self.closed = True
+
+
+class TestAiterWithCancellation:
+    """Regression coverage for the event-stream leak: a consumer that
+    closes the wrapper mid-stream (the text-session interruption path
+    aclose()s invoke(), raising GeneratorExit) must propagate that close
+    into the wrapped ``stream_events()`` iterator so its cleanup runs."""
+
+    @pytest.mark.asyncio
+    async def test_generator_close_closes_source_with_cancel_token(self):
+        from easycat.integrations.agents.llama_agents import _aiter_with_cancellation
+
+        source = _TrackingSource()
+        token = CancelToken()  # present but never fired -- the reviewed path
+        agen = _aiter_with_cancellation(source, token)
+
+        assert await agen.__anext__() == "first"
+        await asyncio.wait_for(agen.aclose(), timeout=2.0)
+
+        assert source.closed is True
+        assert source.exhausted is False
+
+    @pytest.mark.asyncio
+    async def test_generator_close_closes_source_without_cancel_token(self):
+        from easycat.integrations.agents.llama_agents import _aiter_with_cancellation
+
+        source = _TrackingSource()
+        agen = _aiter_with_cancellation(source, None)
+
+        assert await agen.__anext__() == "first"
+        await asyncio.wait_for(agen.aclose(), timeout=2.0)
+
+        assert source.closed is True
+        assert source.exhausted is False
+
+    @pytest.mark.asyncio
+    async def test_cancel_token_win_still_closes_source(self):
+        from easycat.integrations.agents.llama_agents import _aiter_with_cancellation
+
+        source = _TrackingSource()
+        token = CancelToken()
+        agen = _aiter_with_cancellation(source, token)
+
+        assert await agen.__anext__() == "first"
+        token.cancel()
+        with contextlib.suppress(StopAsyncIteration):
+            await asyncio.wait_for(agen.__anext__(), timeout=2.0)
+        await agen.aclose()
+
+        assert source.closed is True
+        assert source.exhausted is False
+
+    @pytest.mark.asyncio
+    async def test_full_drain_yields_all_items(self):
+        from easycat.integrations.agents.llama_agents import _aiter_with_cancellation
+
+        async def _source() -> AsyncIterator[Any]:
+            yield "a"
+            yield "b"
+
+        token = CancelToken()
+        collected = [item async for item in _aiter_with_cancellation(_source(), token)]
+
+        assert collected == ["a", "b"]
