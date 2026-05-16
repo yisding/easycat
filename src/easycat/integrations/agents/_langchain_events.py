@@ -303,7 +303,19 @@ def translate_stream_event(
         # A bare ``translate_stream_event`` call with no ``state`` (the
         # standalone-translator contract used by the unit tests) keeps
         # emitting unconditionally.
-        if state is not None:
+        # The root-chain dedup below is a LangChain-LCEL heuristic: in a
+        # plain chain only the outermost run forwards the final composed
+        # output, so non-root child streams are redundant.  Under
+        # ``LangGraphBridge`` the outermost ``on_chain_start`` is the
+        # graph itself and every node runs as a non-root child, so this
+        # heuristic would silently drop all node-level text streams
+        # (plain ``RunnableLambda`` / LCEL nodes without a chat model,
+        # which produce no other ``text_delta``).  The LangGraph bridge
+        # sets ``skip_root_chain_dedup`` so those node streams reach the
+        # translator; model-token double-speak is still prevented by the
+        # ``chains_with_model_descendants`` suppression above, which
+        # applies to both bridges.
+        if state is not None and not state.get("skip_root_chain_dedup"):
             root = state.get("root_chain_run_id")
             if isinstance(root, str) and root and run_id and run_id != root:
                 return

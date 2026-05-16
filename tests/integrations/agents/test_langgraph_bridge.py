@@ -512,6 +512,50 @@ class TestLangGraphBridgeInvoke:
         assert refs2 == ["langgraph:cp-mid", "langgraph:cp-final"]
 
     @pytest.mark.asyncio
+    async def test_checkpoint_trail_iterates_history_lazily(self):
+        """``get_state_history`` may be backed by a persistent/remote
+        checkpointer that fetches each checkpoint lazily.  The trail walk
+        must stop at the prior-turn baseline instead of materializing the
+        whole thread, so a long/resumed thread pays O(this turn) — not
+        O(total history) — fetches and memory every turn."""
+        consumed: list[str] = []
+
+        class _LazyHistoryGraph(_MockCompiledGraph):
+            def get_state_history(self, config: dict[str, Any]) -> Any:
+                def _gen() -> Any:
+                    for st in self.state_history or []:
+                        consumed.append(st.config["configurable"]["checkpoint_id"])
+                        yield st
+
+                return _gen()
+
+        # newest → oldest: this turn's 2 new checkpoints, the prior-turn
+        # baseline, then a long tail that must never be fetched.
+        history = [
+            _MockState(checkpoint_id="cp-final"),
+            _MockState(checkpoint_id="cp-mid"),
+            _MockState(checkpoint_id="cp-prev"),
+            *(_MockState(checkpoint_id=f"old-{i}") for i in range(1000)),
+        ]
+        graph = _LazyHistoryGraph(
+            [_node_start("p", "n1"), _node_end("p", "n1")],
+            state=_MockState(checkpoint_id="cp-final"),
+            state_history=history,
+        )
+        bridge = LangGraphBridge(graph)
+        bridge._last_checkpoint_id = "cp-prev"  # prior-turn baseline
+
+        j = InMemoryRingBuffer(capacity=1000)
+        async for _ in bridge.invoke(AgentTurnInput.from_text("y"), _recorder(j)):
+            pass
+
+        refs = [r.data["state_ref"] for r in j.read() if r.name == "state_snapshot"]
+        assert refs == ["langgraph:cp-mid", "langgraph:cp-final"]
+        # Only this turn's 2 checkpoints + the baseline were pulled from
+        # the lazy iterator; the 1000-entry tail behind it was not.
+        assert consumed == ["cp-final", "cp-mid", "cp-prev"]
+
+    @pytest.mark.asyncio
     async def test_turn_context_prepended_to_messages_input(self):
         """Per-turn system/developer context must be forwarded into the
         graph's ``messages`` input so messages-state graphs see
@@ -893,6 +937,60 @@ class TestLangGraphBridgeState:
         assert text_deltas == []  # node did not stream
         assert done and done[0].text == "the actual reply"
         assert done[0].structured_output is ai_msg
+
+    @pytest.mark.asyncio
+    async def test_plain_runnable_node_chain_stream_reaches_translator(self):
+        """A LangGraph node that is a plain ``RunnableLambda`` (no chat
+        model) surfaces its text only through node-level
+        ``on_chain_stream``.  Under LangGraph the outermost
+        ``on_chain_start`` is the graph itself, so the translator's
+        LangChain root-chain dedup must NOT drop the node stream just
+        because its run id differs from the graph's."""
+        scripted = [
+            # The graph's outermost chain start (no parent) — without the
+            # LangGraph opt-out this becomes the dedup's root run id.
+            {
+                "event": "on_chain_start",
+                "name": "LangGraph",
+                "run_id": "graph",
+                "parent_ids": [],
+                "data": {},
+                "metadata": {},
+            },
+            {
+                "event": "on_chain_start",
+                "name": "echo",
+                "run_id": "n1",
+                "parent_ids": ["graph"],
+                "data": {},
+                "metadata": {"langgraph_node": "echo", "langgraph_step": 1},
+            },
+            {
+                "event": "on_chain_stream",
+                "name": "echo",
+                "run_id": "n1",
+                "parent_ids": ["graph"],
+                "data": {"chunk": "hello from node"},
+                "metadata": {"langgraph_node": "echo"},
+            },
+            {
+                "event": "on_chain_end",
+                "name": "echo",
+                "run_id": "n1",
+                "parent_ids": ["graph"],
+                "data": {},
+                "metadata": {"langgraph_node": "echo"},
+            },
+        ]
+        graph = _MockCompiledGraph(scripted)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("x"), _recorder()):
+            events.append(ev)
+
+        text_deltas = [e.text for e in events if e.kind == "text_delta"]
+        assert text_deltas == ["hello from node"]
 
     @pytest.mark.asyncio
     async def test_transformed_final_message_overrides_streamed_model_text(self):

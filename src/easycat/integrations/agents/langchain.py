@@ -153,6 +153,13 @@ class LangChainBridge:
         # that store (see :meth:`_history_store`) even though
         # ``replace_last_assistant_text`` / ``reset`` get no recorder.
         self._resolved_session_id: str | None = None
+        # The full ``configurable`` dict resolved on the first turn.
+        # ``RunnableWithMessageHistory`` wrapped with a custom
+        # ``history_factory_config`` (e.g. ``user_id`` /
+        # ``conversation_id``) calls ``get_session_history`` with those
+        # spec ids as keyword args; cached so :meth:`_history_store` can
+        # rebuild that exact call and reach the real backing store.
+        self._resolved_configurable: dict[str, Any] | None = None
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 
@@ -184,9 +191,12 @@ class LangChainBridge:
         configurable = dict(config.get("configurable") or {})
         configurable.setdefault("session_id", resolved)
         config["configurable"] = configurable
-        # Remember the id the wrapped history runnable (if any) stores
-        # under, so later shadow-list edits can be mirrored into it.
+        # Remember the id (and the full configurable) the wrapped history
+        # runnable (if any) stores under, so later shadow-list edits can
+        # be mirrored into it — including custom multi-key
+        # ``history_factory_config`` setups (see :meth:`_history_store`).
         self._resolved_session_id = configurable.get("session_id")
+        self._resolved_configurable = configurable
         return config
 
     async def invoke(
@@ -309,6 +319,12 @@ class LangChainBridge:
             # which would corrupt/lose conversation history on barge-in.
             try:
                 self._append_to_history(turn_input.text, accumulated)
+                # ``RunnableWithMessageHistory`` reloads its own per-session
+                # store next turn (ignoring the shadow list); the wrapper's
+                # save listener never ran on this cancelled turn, so also
+                # persist the partial turn there or the store-mirrored
+                # ``apply_interruption()`` rewrite would hit the prior turn.
+                self._mirror_partial_turn_to_store(turn_input.text, accumulated)
             except Exception:
                 logger.debug("Failed to preserve partial LangChain turn on cancel", exc_info=True)
             raise
@@ -514,6 +530,45 @@ class LangChainBridge:
             if assistant_text:
                 self._message_history.append({"role": "assistant", "content": assistant_text})
 
+    def _mirror_partial_turn_to_store(self, user_text: str, assistant_text: str) -> None:
+        """Persist a cancel-interrupted turn into a wrapped history store.
+
+        A *completed* turn is written to a ``RunnableWithMessageHistory``
+        store by the wrapper's own end-of-run save listener; a mid-stream
+        cancel (timeout / barge-in ``aclose()``) aborts before that
+        listener fires, so the partial user/assistant turn never reaches
+        the backing store.  Without mirroring it here the next turn
+        reloads stale history and a follow-up ``apply_interruption()``
+        (which mirrors its rewrite into the same store) truncates the
+        *previous* turn's assistant message — or no-ops on turn one —
+        corrupting/losing conversation history on barge-in.  Plain
+        runnables expose no store (``_history_store`` → ``None``) and are
+        unaffected.  Best-effort: any store failure is swallowed.  Uses
+        typed messages when ``langchain_core`` is importable, falling
+        back to plain dicts (matching :meth:`_append_to_history`) for
+        duck-typed stores.
+        """
+        store = self._history_store()
+        if store is None:
+            return
+        try:
+            try:
+                from langchain_core.messages import AIMessage, HumanMessage
+
+                user_msg: Any = HumanMessage(content=user_text)
+                assistant_msg: Any = AIMessage(content=assistant_text)
+            except ImportError:
+                user_msg = {"role": "user", "content": user_text}
+                assistant_msg = {"role": "assistant", "content": assistant_text}
+            store.add_message(user_msg)
+            if assistant_text:
+                store.add_message(assistant_msg)
+        except Exception:
+            logger.debug(
+                "Failed to mirror partial turn into wrapped history store",
+                exc_info=True,
+            )
+
     def _rewrite_last_ai_content(self, replacement: str) -> None:
         _rewrite_last_ai_in(self._message_history, replacement)
         # ``RunnableWithMessageHistory`` ignores the shadow list above —
@@ -552,18 +607,37 @@ class LangChainBridge:
         try:
             return factory(sid)
         except TypeError:
-            # Custom ``history_factory_config`` expecting keyword args.
+            # ``factory`` isn't a 1-positional-arg
+            # ``get_session_history(session_id)``.
+            # ``RunnableWithMessageHistory`` wrapped with a custom
+            # ``history_factory_config`` (e.g. ``user_id`` /
+            # ``conversation_id``, or a keyword-only ``session_id``)
+            # instead calls it with the spec ids as keyword args, their
+            # values pulled from the turn's ``configurable``.
+            # Reconstruct that exact call so markdown cleanup,
+            # interruption truncation, and ``reset()`` reach the real
+            # backing store rather than only the shadow list.
             specs = getattr(self._runnable, "history_factory_config", None) or []
             try:
-                ids = [getattr(s, "id", None) for s in specs]
+                spec_ids = [getattr(s, "id", None) for s in specs]
             except TypeError:
                 return None
-            if ids == ["session_id"]:
-                try:
-                    return factory(session_id=sid)
-                except Exception:
+            configurable = self._resolved_configurable or {}
+            kwargs: dict[str, Any] = {}
+            for key in spec_ids:
+                if not isinstance(key, str):
                     return None
-            return None
+                value = sid if key == "session_id" else configurable.get(key)
+                if value is None:
+                    return None
+                kwargs[key] = value
+            if not kwargs:
+                return None
+            try:
+                return factory(**kwargs)
+            except Exception:
+                logger.debug("Failed to resolve custom wrapped history store", exc_info=True)
+                return None
         except Exception:
             logger.debug("Failed to resolve wrapped history store", exc_info=True)
             return None

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -2014,3 +2015,130 @@ class TestLangChainBridgeHistoryStoreSync:
         # Post-hoc edits still work on the shadow list.
         bridge.replace_last_assistant_text("clean")
         assert _content_of_history_item(bridge._message_history[-1]) == "clean"
+
+    @pytest.mark.asyncio
+    async def test_partial_turn_mirrored_into_store_on_cancel(self):
+        """A mid-stream cancel skips the wrapper's end-of-run save
+        listener, so the partial turn never lands in the backing store.
+        The bridge must mirror it there or a follow-up
+        ``apply_interruption()`` (which mirrors its rewrite into the same
+        store) would truncate the *previous* turn's assistant message."""
+
+        class _HangingHistoryRunnable:
+            def __init__(self) -> None:
+                self.history_factory_config: list[Any] = []
+                self._stores: dict[str, _InMemoryStore] = {}
+
+            def get_session_history(self, session_id: str) -> _InMemoryStore:
+                return self._stores.setdefault(session_id, _InMemoryStore())
+
+            async def astream_events(
+                self, input: Any, **kwargs: Any
+            ) -> AsyncIterator[dict[str, Any]]:
+                yield {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": [],
+                    "data": {"chunk": _MockAIMessageChunk(content="Hello world")},
+                }
+                # Run never ends → wrapper's save listener never fires.
+                await asyncio.sleep(999)
+
+            async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
+
+        runnable = _HangingHistoryRunnable()
+        # A prior, completed turn already persisted in the real store.
+        store = runnable.get_session_history("s1")  # _recorder() → session_id="s1"
+        store.add_message({"role": "user", "content": "q1"})
+        store.add_message({"role": "assistant", "content": "a1"})
+
+        bridge = LangChainBridge(runnable)
+        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=0.05))
+
+        with pytest.raises(AgentTimeoutError):
+            async for _ in runner.invoke(AgentTurnInput.from_text("q2"), _recorder()):
+                pass
+
+        # The partial turn was mirrored into the wrapped store...
+        assert _content_of_history_item(store.messages[-2]) == "q2"
+        assert _content_of_history_item(store.messages[-1]) == "Hello world"
+        # ...so apply_interruption() truncates *this* turn in the store,
+        # leaving the prior turn's assistant message intact.
+        bridge.apply_interruption("Hello world", CancellationMode.IMMEDIATE_STOP)
+        assert _content_of_history_item(store.messages[-1]) == "Hello world..."
+        assert _content_of_history_item(store.messages[1]) == "a1"
+
+
+# ── Custom history_factory_config store resolution ───────────────
+
+
+class _CustomKeyHistoryRunnable:
+    """Duck-types ``RunnableWithMessageHistory`` wrapped with a custom
+    ``history_factory_config`` (``user_id`` / ``conversation_id`` instead
+    of ``session_id``): ``get_session_history`` is keyword-only and the
+    store is keyed by the tuple of those configurable values."""
+
+    def __init__(self, reply: str) -> None:
+        self._reply = reply
+        self.history_factory_config = [
+            SimpleNamespace(id="user_id"),
+            SimpleNamespace(id="conversation_id"),
+        ]
+        self._stores: dict[tuple[str, str], _InMemoryStore] = {}
+
+    def get_session_history(self, *, user_id: str, conversation_id: str) -> _InMemoryStore:
+        return self._stores.setdefault((user_id, conversation_id), _InMemoryStore())
+
+    async def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        cfg = kwargs["config"]["configurable"]
+        store = self.get_session_history(
+            user_id=cfg["user_id"], conversation_id=cfg["conversation_id"]
+        )
+        store.add_message({"role": "user", "content": "q"})
+        yield {
+            "event": "on_chat_model_stream",
+            "name": "ChatOpenAI",
+            "run_id": "m",
+            "parent_ids": [],
+            "data": {"chunk": _MockAIMessageChunk(content=self._reply)},
+        }
+        store.add_message({"role": "assistant", "content": self._reply})
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class TestLangChainBridgeCustomHistoryFactoryConfig:
+    """A custom multi-key ``history_factory_config`` must still resolve
+    the real backing store from the configurable, so markdown cleanup /
+    interruption truncation / ``reset()`` mutate it (not just the shadow
+    list the wrapper ignores on the next turn)."""
+
+    async def _bridge_after_turn(self) -> tuple[Any, Any]:
+        runnable = _CustomKeyHistoryRunnable("raw reply")
+        bridge = LangChainBridge(
+            runnable,
+            config={"configurable": {"user_id": "u1", "conversation_id": "c1"}},
+        )
+        async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            pass
+        store = runnable.get_session_history(user_id="u1", conversation_id="c1")
+        return bridge, store
+
+    @pytest.mark.asyncio
+    async def test_store_resolved_from_custom_keys(self):
+        bridge, store = await self._bridge_after_turn()
+        assert bridge._history_store() is store
+
+    @pytest.mark.asyncio
+    async def test_markdown_cleanup_mirrored_into_custom_store(self):
+        bridge, store = await self._bridge_after_turn()
+        bridge.replace_last_assistant_text("cleaned reply")
+        assert _content_of_history_item(store.messages[-1]) == "cleaned reply"
+
+    @pytest.mark.asyncio
+    async def test_reset_clears_custom_store(self):
+        bridge, store = await self._bridge_after_turn()
+        assert store.messages
+        bridge.reset()
+        assert store.messages == []

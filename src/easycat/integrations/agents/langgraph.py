@@ -256,8 +256,14 @@ class LangGraphBridge:
         # for, so the post-turn history walk records each id once.
         seen_checkpoints: set[str] = set()
         # Shared state for tool-call deduplication — see
-        # :func:`translate_stream_event` for details.
-        tool_state: dict[str, Any] = {}
+        # :func:`translate_stream_event` for details.  ``skip_root_chain_dedup``
+        # opts out of the translator's LangChain-LCEL root-chain dedup:
+        # under LangGraph the outermost ``on_chain_start`` is the graph,
+        # not an LCEL root, so that heuristic would drop every node-level
+        # ``on_chain_stream`` (plain ``RunnableLambda`` / LCEL nodes).
+        # Model double-speak is still handled by
+        # ``chains_with_model_descendants``.
+        tool_state: dict[str, Any] = {"skip_root_chain_dedup": True}
 
         config = self._config()
         # Pre-turn baseline for the post-turn checkpoint trail: the
@@ -927,16 +933,28 @@ class LangGraphBridge:
         order.  Dedupe via ``seen`` keeps each id to one record.
         """
         try:
-            history = list(self._graph.get_state_history(config))
+            history_iter = iter(self._graph.get_state_history(config))
         except Exception:  # pragma: no cover — best-effort; duck-typed graph.
             logger.debug("get_state_history unavailable; skipping checkpoint trail", exc_info=True)
             return
+        # ``get_state_history`` yields newest→oldest and may be backed by
+        # a persistent/remote checkpointer that fetches each checkpoint
+        # lazily.  Iterate (don't ``list()``) and stop at the turn's
+        # baseline so a long or resumed thread doesn't pay O(total
+        # history) fetches and memory every turn — only this turn's new
+        # checkpoints are read.
         turn_ids: list[str] = []
-        for snapshot in history:  # newest → oldest
-            cid = _get_checkpoint_id(snapshot)
-            if not cid or cid == baseline_checkpoint_id:
-                break
-            turn_ids.append(cid)
+        try:
+            for snapshot in history_iter:  # newest → oldest
+                cid = _get_checkpoint_id(snapshot)
+                if not cid or cid == baseline_checkpoint_id:
+                    break
+                turn_ids.append(cid)
+        except Exception:  # pragma: no cover — best-effort; remote checkpointer error.
+            logger.debug(
+                "Checkpoint history walk failed; recording partial trail",
+                exc_info=True,
+            )
         for cid in reversed(turn_ids):  # chronological
             if cid in seen:
                 continue
