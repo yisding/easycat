@@ -139,6 +139,7 @@ class LlamaAgentsBridge:
         self._active_handler: Any = None
         self._active_handler_id: str | None = None
         self._pending_local_handler: Any = None
+        self._pending_local_stream: AsyncIterator[Any] | None = None
         self._pending_remote_handler_id: str | None = None
         self._pending_interruption_note: str | None = None
         self._last_output: Any = None
@@ -289,6 +290,7 @@ class LlamaAgentsBridge:
         self._active_handler = None
         self._active_handler_id = None
         self._pending_local_handler = None
+        self._pending_local_stream = None
         self._pending_remote_handler_id = None
         self._pending_interruption_note = None
         self._last_output = None
@@ -308,6 +310,18 @@ class LlamaAgentsBridge:
         if handler is not None:
             self._pending_local_handler = None
             self._send_local_human_response(handler, turn_input)
+            # Resume the *same* live stream cursor instead of calling
+            # stream_events() again. A real WorkflowHandler replays the
+            # already-yielded InputRequiredEvent on a fresh stream, so a new
+            # iterator would re-trigger the pause below and never reach the
+            # HumanResponseEvent/StopEvent -- local HITL would loop forever.
+            # The original generator is suspended right after the prompt, so
+            # continuing it picks up the post-response events (and naturally
+            # handles a genuinely new pause later in the same conversation).
+            events = self._pending_local_stream
+            self._pending_local_stream = None
+            if events is None:
+                events = self._stream_local_events(handler)
         else:
             kwargs = dict(self._run_kwargs)
             start_payload = self._build_start_payload(turn_input)
@@ -319,17 +333,18 @@ class LlamaAgentsBridge:
                 kwargs["ctx"] = self._ctx
 
             handler = self._workflow.run(**kwargs)
+            events = self._stream_local_events(handler)
         self._active_handler = handler
         self._active_handler_id = _string_or_none(getattr(handler, "run_id", None))
 
         streamed_text = False
         cancelled = False
         try:
-            events = self._stream_local_events(handler)
             if events is not None:
                 async for workflow_event in _aiter_with_cancellation(events, cancel_token):
                     if _is_input_required_event(workflow_event):
                         self._pending_local_handler = handler
+                        self._pending_local_stream = events
                         self._last_output = workflow_event
                         text = self._extract_event_text(workflow_event)
                         if text:
@@ -356,8 +371,18 @@ class LlamaAgentsBridge:
                 text = _extract_output_text(result)
                 if text:
                     yield AgentBridgeEvent(kind="text_delta", text=text)
+        except asyncio.CancelledError:
+            # Hard task cancellation: a barge-in / text-turn cancel that
+            # cancels the invoke task itself instead of only setting the
+            # cancel_token. Without this the finally below runs with
+            # cancelled=False, preserves the interrupted Context, and never
+            # calls cancel_run() -- the workflow keeps running and
+            # contaminates the next turn.
+            cancelled = True
+            await self._best_effort_cancel(self._cancel_local_handler(handler))
+            raise
         finally:
-            if cancelled:
+            if cancelled or (cancel_token is not None and cancel_token.is_cancelled):
                 # The barge-in closed stream_events() before the terminal
                 # event, and cancel_run() may have returned on its own
                 # timeout without actually stopping the run. Reusing this
@@ -367,8 +392,12 @@ class LlamaAgentsBridge:
                 # response's buffered stream deltas before the new answer.
                 # Drop it so the next turn starts from a clean Context;
                 # assistant-text continuity is carried by apply_interruption()
-                # / append_interruption_note(), not the workflow Context.
+                # / append_interruption_note(), not the workflow Context. A
+                # pending HITL handler/stream is interrupted state too, so
+                # drop it rather than resume a cancelled conversation.
                 self._ctx = None
+                self._pending_local_handler = None
+                self._pending_local_stream = None
             else:
                 self._ctx = getattr(handler, "ctx", self._ctx)
             self._active_handler = None
@@ -393,6 +422,20 @@ class LlamaAgentsBridge:
             raise BridgeInputError("Paused Llama workflow handler has no ctx.send_event()")
         event = self._build_human_response_event(turn_input)
         send_event(event, step=self._human_response_step)
+
+    async def _best_effort_cancel(self, coro: Any) -> None:
+        """Drive a handler-cancel to completion while this task is torn down.
+
+        On hard task cancellation we still must stop the underlying
+        workflow, but a plain ``await`` here would itself be cancelled
+        before ``cancel_run()``/``cancel_handler()`` is delivered. Shield
+        the cancel and bound it with the post-cancel timeout so a
+        non-cooperative handler cannot wedge task teardown; anything still
+        running past the timeout is abandoned best-effort.
+        """
+        task = asyncio.ensure_future(coro)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(asyncio.shield(task), timeout=_POST_CANCEL_AWAIT_TIMEOUT)
 
     async def _cancel_local_handler(self, handler: Any) -> None:
         cancel_run = getattr(handler, "cancel_run", None)
@@ -529,6 +572,22 @@ class LlamaAgentsBridge:
                 # field, so _remote_context never populates from get_handler,
                 # and dropping the handler id here would silently lose all
                 # conversation state after every barge-in.
+        except asyncio.CancelledError:
+            # Hard task cancellation (the invoke task itself is cancelled,
+            # not just the cancel_token). Without this the workflow keeps
+            # running server-side -- cancel_handler() is never called -- and
+            # the next preserve_context turn resumes a contaminated handler.
+            # Mirror the cooperative path: advance the cursor past whatever
+            # the dropped envelope already consumed, stop the remote handler,
+            # and keep _remote_handler_id so the next turn still resumes it.
+            cancelled = True
+            if event_stream is not None:
+                self._remote_event_sequence = getattr(
+                    event_stream, "last_sequence", self._remote_event_sequence
+                )
+            await self._best_effort_cancel(self._cancel_remote_handler(handler_id))
+            self._active_handler_id = None
+            raise
         finally:
             # The real WorkflowClient spins up a background SSE reader for
             # get_workflow_events. Close it on every exit path -- cancellation,

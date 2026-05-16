@@ -179,6 +179,7 @@ class _HitlHandler:
         self.run_id = "hitl-1"
         self.sent_events: list[Any] = []
         self.stream_calls = 0
+        self._response_ready = asyncio.Event()
 
     def __await__(self):
         async def _result() -> Any:
@@ -187,16 +188,21 @@ class _HitlHandler:
         return _result().__await__()
 
     async def stream_events(self, expose_internal: bool = False) -> AsyncIterator[Any]:
+        # A real WorkflowHandler exposes a single live event stream: it
+        # yields the prompt, stays suspended until ctx.send_event() delivers
+        # the human response, then yields the post-response events. It does
+        # NOT restart from the prompt on a second stream_events() call, so
+        # the bridge must resume this same cursor rather than re-stream.
         self.stream_calls += 1
-        if self.stream_calls == 1:
-            yield _InputRequiredEvent(prefix="What is your name?")
-            return
+        yield _InputRequiredEvent(prefix="What is your name?")
+        await self._response_ready.wait()
         yield _TextEvent("Thanks ")
         yield _TextEvent(self.sent_events[-1].response)
         yield _StopEvent("done")
 
     def send_event(self, event: Any, step: str | None = None) -> None:
         self.sent_events.append(event)
+        self._response_ready.set()
 
 
 class _HitlWorkflow(_FakeWorkflowBase):
@@ -289,6 +295,28 @@ class TestLocalLlamaAgentsBridge:
         assert [e.text for e in collected if e.kind == "text_delta"] == ["partial "]
 
     @pytest.mark.asyncio
+    async def test_hard_task_cancel_stops_handler_and_drops_ctx(self, fake_workflows_modules):
+        """Cancelling the invoke task (not just the token) must still stop the
+        workflow and not preserve the interrupted Context."""
+        workflow = _BlockingWorkflow()
+        handler = workflow.handler
+        bridge = LlamaAgentsBridge(workflow=workflow)
+
+        async def _consume() -> None:
+            async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+                pass
+
+        task = asyncio.ensure_future(_consume())
+        await asyncio.wait_for(handler.streaming_blocked.wait(), timeout=2.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert handler.cancelled is True
+        # The interrupted Context is dropped, not carried into the next turn.
+        assert bridge.snapshot_state().fields["has_context"] is False
+
+    @pytest.mark.asyncio
     async def test_human_input_event_pauses_and_resumes_handler(self, fake_workflows_modules):
         workflow = _HitlWorkflow()
         bridge = LlamaAgentsBridge(workflow=workflow)
@@ -314,6 +342,9 @@ class TestLocalLlamaAgentsBridge:
             "Ada",
         ]
         assert [event.text for event in second_turn if event.kind == "done"] == ["Thanks Ada"]
+        # The pause resumed the original live stream cursor instead of
+        # opening a second stream that would replay the prompt forever.
+        assert workflow.handler.stream_calls == 1
 
     def test_apply_interruption_uses_atomic_recorder_and_delegate(self, fake_workflows_modules):
         workflow = _LocalWorkflow(result="ok")
@@ -559,6 +590,33 @@ class TestRemoteLlamaAgentsBridge:
         assert client.cancelled == ["h1"]
         assert stream.closed is True
         assert [e.text for e in collected if e.kind == "text_delta"] == ["remote partial"]
+
+    @pytest.mark.asyncio
+    async def test_remote_hard_task_cancel_calls_cancel_handler(self, fake_workflows_modules):
+        """Cancelling the invoke task (not just the token) must still stop the
+        remote handler so it does not keep running server-side."""
+        stream = _BlockingRemoteStream()
+
+        class _BlockingRemoteClient(_RemoteClient):
+            def get_workflow_events(self, handler_id: str, **kwargs: Any) -> Any:
+                self.stream_calls.append({"handler_id": handler_id, **kwargs})
+                return stream
+
+        client = _BlockingRemoteClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+
+        async def _consume() -> None:
+            async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+                pass
+
+        task = asyncio.ensure_future(_consume())
+        await asyncio.wait_for(stream.streaming_blocked.wait(), timeout=2.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert client.cancelled == ["h1"]
+        assert stream.closed is True
 
     @pytest.mark.asyncio
     async def test_remote_cancelled_handler_continues_next_turn(self, fake_workflows_modules):
