@@ -102,6 +102,8 @@ var mediaStream = null;
 var workletNode = null;
 var analyser = null;
 var nextPlayTime = 0;
+// Scheduled/playing TTS sources, so barge-in can stop already-buffered audio.
+var pendingSources = [];
 var levelRAF = 0;
 var manualStop = false;
 
@@ -172,10 +174,30 @@ function playAudio(pcm16Buf, rate) {
   var src = playCtx.createBufferSource();
   src.buffer = buffer;
   src.connect(playCtx.destination);
+  pendingSources.push(src);
+  src.onended = function () {
+    var i = pendingSources.indexOf(src);
+    if (i !== -1) pendingSources.splice(i, 1);
+  };
   var now = playCtx.currentTime;
   if (nextPlayTime < now) nextPlayTime = now;
   src.start(nextPlayTime);
   nextPlayTime += buffer.duration;
+}
+
+// Stop and discard every scheduled/playing TTS source, then reset the
+// playback clock.  On barge-in the server resets the audio stream to drop
+// buffered TTS, but chunks it already sent are scheduled on the
+// AudioContext timeline and would keep playing otherwise.
+function stopPlayback() {
+  for (var i = 0; i < pendingSources.length; i++) {
+    try {
+      pendingSources[i].onended = null;
+      pendingSources[i].stop();
+    } catch (_) { /* already stopped or ended */ }
+  }
+  pendingSources = [];
+  nextPlayTime = 0;
 }
 
 // ── Control frame helpers (4-byte BE length + UTF-8 JSON) ────────
@@ -266,8 +288,10 @@ async function dispatchServerStream(reader) {
     }
   } catch (e) {
     // Expected on barge-in: the server resets the audio stream to drop
-    // already-buffered TTS, which rejects the pending reader.read().  A
-    // fresh server-initiated stream follows, so just stop reading this one.
+    // already-buffered TTS, which rejects the pending reader.read().  The
+    // chunks we already received are scheduled on the playback timeline,
+    // so stop those too; a fresh server-initiated stream follows.
+    if (tag === TAG_AUDIO) stopPlayback();
   }
 }
 
@@ -316,6 +340,7 @@ async function start() {
 
     playCtx = new AudioContext();
     nextPlayTime = 0;
+    pendingSources = [];
 
     setStatus("Connecting to server...", "connecting");
     transport = new WebTransport(WT_URL);
@@ -383,6 +408,7 @@ function cleanup() {
   if (workletNode) try { workletNode.disconnect(); } catch (_) {}
   if (micCtx) try { micCtx.close(); } catch (_) {}
   if (playCtx) try { playCtx.close(); } catch (_) {}
+  pendingSources = [];
   transport = audioStream = audioWriter = null;
   controlStream = controlWriter = null;
   micCtx = playCtx = mediaStream = workletNode = analyser = null;

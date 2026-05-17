@@ -1317,6 +1317,16 @@ class WebTransportTransport(_AudioQueueMixin):
                 await transport.wait_closed()
             finally:
                 self._active = None
+                # The client went away while we're still serving. Reset
+                # the "client connected" signal so a later
+                # ``wait_for_client()`` blocks for the *next* client and
+                # ``receive_audio()`` doesn't wake up to a cleared
+                # ``_active`` and return early. Skip this when
+                # ``disconnect()`` is tearing us down: it deliberately
+                # sets the event (with ``_connected`` already False) to
+                # release waiters, and clearing it here would re-block them.
+                if self._connected:
+                    self._client_connected.clear()
 
         # Pin the wrapped server to a single session so an over-cap client is
         # rejected at accept time (the server force-closes it) instead of
