@@ -1086,6 +1086,110 @@ def test_termination_paths_are_noop_without_accepted_session() -> None:
     # No transport to mark, no crash.
 
 
+# ── Protocol CONNECT accept path ──────────────────────────────────
+
+
+class _RecordingH3:
+    """Records ``send_headers`` so accept/reject decisions can be asserted."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[int, list[tuple[bytes, bytes]], bool]] = []
+
+    def send_headers(
+        self, stream_id: int, headers: list[tuple[bytes, bytes]], end_stream: bool = False
+    ) -> None:  # noqa: FBT001, FBT002
+        self.sent.append((stream_id, headers, end_stream))
+
+
+@pytest.mark.skipif(
+    not _aioquic_available(),
+    reason="aioquic not installed ([webtransport] extra)",
+)
+def test_connect_with_end_stream_is_rejected_without_session() -> None:
+    """A CONNECT whose HEADERS arrive with END_STREAM set is malformed for
+    WebTransport (the CONNECT stream must stay open).  aioquic surfaces that
+    only as ``HeadersReceived(stream_ended=True)`` — no later ``DataReceived``
+    FIN ever fires — so accepting it would create a transport whose
+    ``wait_closed()`` only unblocks at the QUIC idle timeout, pinning a
+    session slot.  It must be rejected (400) with no transport created.
+    """
+    from aioquic.h3.events import HeadersReceived
+
+    cls = _get_protocol_class()
+    proto = cls.__new__(cls)  # skip QUIC-bound __init__
+    h3 = _RecordingH3()
+    proto._h3 = h3  # type: ignore[assignment]  # noqa: SLF001
+    proto._accept_path = "/easycat"  # noqa: SLF001
+    proto._wt_transport = None  # noqa: SLF001
+    proto._accepted_session_id = None  # noqa: SLF001
+    on_session_calls: list[Any] = []
+    proto._on_session = on_session_calls.append  # noqa: SLF001
+    proto._can_accept = lambda: True  # noqa: SLF001
+    proto.transmit = lambda: None  # type: ignore[method-assign]
+
+    proto._handle_h3_event(  # noqa: SLF001
+        HeadersReceived(
+            headers=[
+                (b":method", b"CONNECT"),
+                (b":protocol", b"webtransport"),
+                (b":path", b"/easycat"),
+            ],
+            stream_id=0,
+            stream_ended=True,
+        )
+    )
+
+    assert proto._wt_transport is None  # noqa: SLF001 — no session resources held
+    assert on_session_calls == []  # handler never invoked
+    assert len(h3.sent) == 1
+    sid, hdrs, end = h3.sent[0]
+    assert sid == 0
+    assert dict(hdrs).get(b":status") == b"400"
+    assert end is True
+
+
+@pytest.mark.skipif(
+    not _aioquic_available(),
+    reason="aioquic not installed ([webtransport] extra)",
+)
+def test_connect_without_end_stream_is_accepted() -> None:
+    """Sanity counterpart: a well-formed CONNECT (HEADERS without END_STREAM)
+    is accepted with a 200 and creates the per-session transport.
+    """
+    from aioquic.h3.events import HeadersReceived
+
+    cls = _get_protocol_class()
+    proto = cls.__new__(cls)  # skip QUIC-bound __init__
+    h3 = _RecordingH3()
+    proto._h3 = h3  # type: ignore[assignment]  # noqa: SLF001
+    proto._accept_path = "/easycat"  # noqa: SLF001
+    proto._wt_transport = None  # noqa: SLF001
+    proto._accepted_session_id = None  # noqa: SLF001
+    on_session_calls: list[Any] = []
+    proto._on_session = on_session_calls.append  # noqa: SLF001
+    proto._can_accept = lambda: True  # noqa: SLF001
+    proto._session_config = WebTransportTransportConfig()  # noqa: SLF001
+    proto.transmit = lambda: None  # type: ignore[method-assign]
+
+    proto._handle_h3_event(  # noqa: SLF001
+        HeadersReceived(
+            headers=[
+                (b":method", b"CONNECT"),
+                (b":protocol", b"webtransport"),
+                (b":path", b"/easycat"),
+            ],
+            stream_id=0,
+            stream_ended=False,
+        )
+    )
+
+    assert proto._wt_transport is not None  # noqa: SLF001
+    assert len(on_session_calls) == 1
+    sid, hdrs, end = h3.sent[0]
+    assert dict(hdrs).get(b":status") == b"200"
+    assert end is False
+
+
 # ── Top-level lazy exports ────────────────────────────────────────
 
 

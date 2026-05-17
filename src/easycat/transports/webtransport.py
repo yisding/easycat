@@ -907,6 +907,22 @@ def _get_protocol_class() -> type:
                 self.transmit()
                 return
 
+            if event.stream_ended:
+                # A valid WebTransport CONNECT keeps its stream open for the
+                # lifetime of the session.  If the HEADERS arrive with
+                # END_STREAM set the client has already half-closed the
+                # CONNECT stream, and aioquic surfaces that *only* here (no
+                # later ``DataReceived`` FIN ever fires for an empty
+                # half-closed stream).  Accepting it would create a
+                # transport whose ``wait_closed()`` never unblocks until the
+                # QUIC idle timeout, pinning a session slot and letting a
+                # malformed client exhaust ``max_concurrent_sessions``.
+                # Reject before allocating any session resources.
+                logger.warning("Rejecting WebTransport CONNECT — HEADERS arrived with END_STREAM")
+                self._h3.send_headers(event.stream_id, [(b":status", b"400")], end_stream=True)
+                self.transmit()
+                return
+
             if self._wt_transport is not None:
                 # Reject additional WT sessions on the same QUIC connection.
                 self._h3.send_headers(event.stream_id, [(b":status", b"409")], end_stream=True)
