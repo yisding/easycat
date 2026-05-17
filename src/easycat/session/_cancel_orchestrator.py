@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from easycat.runtime.context import RunContext
 from easycat.runtime.records import JournalRecordKind
@@ -71,7 +71,7 @@ class CancelOrchestrator:
         telephony_helpers_present: Callable[[], bool],
         cancel_turn_impl: Callable[..., Awaitable[None]],
     ) -> None:
-        self._stages: tuple[Any, ...] = (
+        self._stages: tuple[Stage, ...] = (
             transport_stage,
             tts_stage,
             agent_stage,

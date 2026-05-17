@@ -310,7 +310,7 @@ class STTCommitter:
                     if stt_event.type == STTEventType.PARTIAL:
                         await self._emit(STTPartial(text=stt_event.text, track=stt_event.track))
                     elif stt_event.type == STTEventType.FINAL:
-                        if turn:
+                        if turn and turn is not self._no_turn:
                             if not turn.pending_stt_segment_futures:
                                 turn.stt_has_uncommitted_audio = False
                             turn.append_stt_segment(stt_event.text, track=stt_event.track)
@@ -325,7 +325,7 @@ class STTCommitter:
                                 },
                             )
                         await self._emit(STTFinal(text=stt_event.text, track=stt_event.track))
-                        if turn and turn.pending_stt_segment_futures:
+                        if turn and turn is not self._no_turn and turn.pending_stt_segment_futures:
                             future = turn.pending_stt_segment_futures.pop(0)
                             if not future.done():
                                 future.set_result(stt_event.text)

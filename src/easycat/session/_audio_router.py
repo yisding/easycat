@@ -66,9 +66,16 @@ class AudioRouter:
     the gated-replay book-keeping used when the classification gate
     flushes buffered TTS audio.
 
-    Known limitation: the WebRTC transport's ``_handle_offer`` swaps
-    its outbound queue on reconnect; the router takes the queue by
-    reference at construction and does not handle that swap.
+    Outbound-queue ownership: the single :class:`BoundedAudioQueue`
+    lives on :class:`Session`; the router and the
+    :class:`TTSSynthesizer` both hold the same reference (drain side
+    and write side).  ``Session.start`` is the only place it is
+    rebuilt (after a prior teardown) and pushes the new instance to
+    both via ``replace_outbound_queue``.  Transport reconnect does
+    *not* affect this: e.g. the WebRTC transport resets only its own
+    transport-internal outbound source on reconnect — the router
+    interacts with the transport solely via ``send_audio`` and never
+    holds that internal queue.
     """
 
     def __init__(
@@ -327,10 +334,6 @@ class AudioRouter:
                             await self._turn_manager.start_turn()
                             self._auto_turn_speech_frames = 0
                             started_turn_from_chunk = self._is_stt_active()
-
-                        # Re-snapshot in case start_turn() installed a new turn
-                        # that the subsequent STT feed should target.
-                        turn = self._current_turn() or self._no_turn
                     else:
                         self._auto_turn_speech_frames = 0
 
@@ -419,7 +422,11 @@ class AudioRouter:
             self._echo_canceller.feed_reference(chunk)
 
         sent_size = len(chunk.data)
-        if turn is None:
+        # Never accrue byte counters on the long-lived _no_turn singleton
+        # (it is created once and never replaced).  Real callers always
+        # pass current_turn() (real-or-None); this keeps _no_turn inert
+        # and consistent with the guards in STTCommitter.
+        if turn is None or turn is self._no_turn:
             return
 
         turn.record_audio_sent(sent_size, chunk.duration_ms)
