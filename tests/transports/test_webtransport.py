@@ -920,6 +920,97 @@ def test_protocol_rejects_stream_data_for_other_session() -> None:
     assert rec.fed == [(8, b"hi", False)]
 
 
+# ── Protocol QUIC/session termination ─────────────────────────────
+
+
+class _LostRecorder:
+    """Stand-in transport that records ``_mark_connection_lost`` calls."""
+
+    def __init__(self) -> None:
+        self.lost_calls = 0
+
+    def _mark_connection_lost(self) -> None:
+        self.lost_calls += 1
+
+
+@pytest.mark.skipif(
+    not _aioquic_available(),
+    reason="aioquic not installed ([webtransport] extra)",
+)
+def test_quic_connection_terminated_marks_session_lost() -> None:
+    """A peer QUIC CONNECTION_CLOSE / idle timeout arrives as a
+    ``ConnectionTerminated`` QUIC event (never as asyncio
+    ``connection_lost()`` on the per-connection protocol).  It must still mark
+    the transport disconnected so ``wait_closed()`` unblocks.
+    """
+    from aioquic.quic.events import ConnectionTerminated
+
+    cls = _get_protocol_class()
+    proto = cls.__new__(cls)  # skip QUIC-bound __init__
+    rec = _LostRecorder()
+    proto._wt_transport = rec  # type: ignore[assignment]  # noqa: SLF001
+
+    proto.quic_event_received(  # noqa: SLF001
+        ConnectionTerminated(error_code=0, frame_type=None, reason_phrase="bye")
+    )
+    assert rec.lost_calls == 1
+
+
+@pytest.mark.skipif(
+    not _aioquic_available(),
+    reason="aioquic not installed ([webtransport] extra)",
+)
+def test_connect_stream_fin_marks_session_lost() -> None:
+    """A browser ``transport.close()`` FINs the CONNECT stream; aioquic
+    surfaces that as a ``DataReceived`` with ``stream_ended`` on the accepted
+    session/CONNECT stream id.  That must tear the session down — a FIN on a
+    *different* stream, or a non-final DATA frame, must not.
+    """
+    from aioquic.h3.events import DataReceived
+
+    cls = _get_protocol_class()
+    proto = cls.__new__(cls)  # skip QUIC-bound __init__
+    proto._h3 = object()  # only asserted non-None  # noqa: SLF001
+    rec = _LostRecorder()
+    proto._wt_transport = rec  # type: ignore[assignment]  # noqa: SLF001
+    proto._accepted_session_id = 5  # noqa: SLF001
+
+    # FIN on an unrelated stream id → not our session.
+    proto._handle_h3_event(DataReceived(data=b"", stream_id=9, stream_ended=True))  # noqa: SLF001
+    # Non-final data on the CONNECT stream → session still open.
+    proto._handle_h3_event(  # noqa: SLF001
+        DataReceived(data=b"x", stream_id=5, stream_ended=False)
+    )
+    assert rec.lost_calls == 0
+
+    # Lone FIN on the accepted CONNECT/session stream → session closed.
+    proto._handle_h3_event(DataReceived(data=b"", stream_id=5, stream_ended=True))  # noqa: SLF001
+    assert rec.lost_calls == 1
+
+
+@pytest.mark.skipif(
+    not _aioquic_available(),
+    reason="aioquic not installed ([webtransport] extra)",
+)
+def test_termination_paths_are_noop_without_accepted_session() -> None:
+    """Termination events for a connection that never had an accepted session
+    (e.g. a CONNECT rejected with 503) must be safe no-ops."""
+    from aioquic.h3.events import DataReceived
+    from aioquic.quic.events import ConnectionTerminated
+
+    cls = _get_protocol_class()
+    proto = cls.__new__(cls)  # skip QUIC-bound __init__
+    proto._h3 = object()  # noqa: SLF001
+    proto._wt_transport = None  # noqa: SLF001
+    proto._accepted_session_id = None  # noqa: SLF001
+
+    proto.quic_event_received(  # noqa: SLF001
+        ConnectionTerminated(error_code=0, frame_type=None, reason_phrase="")
+    )
+    proto._handle_h3_event(DataReceived(data=b"", stream_id=7, stream_ended=True))  # noqa: SLF001
+    # No transport to mark, no crash.
+
+
 # ── Top-level lazy exports ────────────────────────────────────────
 
 

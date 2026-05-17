@@ -119,8 +119,17 @@ _DEFAULT_INBOUND_MAX_PENDING = 500
 # intentionally lower than inbound so we drop TTS more readily under pressure.
 _DEFAULT_OUTBOUND_MAX_PENDING = 300
 
-# Per-QUIC-stream flow-control window (~2 s of 16 kHz PCM16 audio).
+# Per-QUIC-stream flow-control window (~2 s of 16 kHz PCM16 audio).  This is
+# the *initial* receive window we advertise per stream; aioquic auto-grows it
+# as we actually consume, so a slow legitimate stream is never starved while a
+# burst from a stalled/malicious peer is still bounded.
 _MAX_STREAM_DATA = 64 * 1024
+# Connection-wide initial receive window.  A client opens at most an inbound
+# audio + control stream (each capped at ``_MAX_STREAM_DATA``); four windows
+# leaves headroom for a re-opened audio stream during a sample-rate change
+# while keeping the connection-level bound well under aioquic's 1 MiB default
+# (aioquic auto-doubles this as data is consumed, so long sessions are fine).
+_MAX_CONNECTION_DATA = 4 * _MAX_STREAM_DATA
 # High-water mark (bytes) on aioquic's *unsent + unacked* per-stream send
 # buffer for the server→client audio stream.  ``send_stream_data`` only
 # appends to that buffer; bytes leave only as QUIC flow control / congestion
@@ -215,9 +224,15 @@ def _build_quic_configuration(certfile: str, keyfile: str) -> QuicConfiguration:
         idle_timeout=_IDLE_TIMEOUT_SEC,
     )
     config.load_cert_chain(certfile, keyfile)
-    config.max_stream_data_bidi_local = _MAX_STREAM_DATA
-    config.max_stream_data_bidi_remote = _MAX_STREAM_DATA
-    config.max_stream_data_uni = _MAX_STREAM_DATA
+    # aioquic 1.x exposes a single ``max_stream_data`` field that seeds the
+    # bidi-local / bidi-remote / uni per-stream windows; the older
+    # ``max_stream_data_bidi_local`` / ``_remote`` / ``_uni`` names are NOT
+    # ``QuicConfiguration`` attributes, so assigning them only created unused
+    # attributes and left the default 1 MiB window in place.  Set the real
+    # fields so the intended 64 KiB per-stream and bounded connection-wide
+    # windows are actually advertised.
+    config.max_stream_data = _MAX_STREAM_DATA
+    config.max_data = _MAX_CONNECTION_DATA
     return config
 
 
@@ -713,6 +728,9 @@ def _get_protocol_class() -> type:
     h3_events = require_module(
         "aioquic.h3.events", extra="webtransport", purpose="WebTransport transport"
     )
+    quic_events = require_module(
+        "aioquic.quic.events", extra="webtransport", purpose="WebTransport transport"
+    )
 
     class _EasyCatH3Protocol(aioquic_proto.QuicConnectionProtocol):
         """aioquic protocol that dispatches WebTransport sessions.
@@ -749,10 +767,31 @@ def _get_protocol_class() -> type:
             self._session_config: WebTransportTransportConfig = WebTransportTransportConfig()
 
         def quic_event_received(self, event: Any) -> None:
+            if isinstance(event, quic_events.ConnectionTerminated):
+                # A peer QUIC CONNECTION_CLOSE (or idle timeout) is delivered
+                # here as a QUIC event, NOT as asyncio ``connection_lost()``:
+                # the aioquic server demultiplexes one UDP socket across many
+                # connections, so ``connection_lost()`` is never called per
+                # connection.  Surface it so ``wait_closed()`` unblocks and the
+                # session slot is released instead of lingering until server
+                # shutdown.
+                self._mark_session_lost()
+                return
             if self._h3 is None:
                 self._h3 = h3_conn.H3Connection(self._quic, enable_webtransport=True)
             for h3_event in self._h3.handle_event(event):
                 self._handle_h3_event(h3_event)
+
+        def _mark_session_lost(self) -> None:
+            """Tell the per-session transport its QUIC connection is gone.
+
+            Idempotent (``_mark_connection_lost`` only sets state / enqueues
+            teardown sentinels), so the multiple termination paths —
+            ``ConnectionTerminated``, the CONNECT-stream FIN, and asyncio
+            ``connection_lost`` — can all funnel through here safely.
+            """
+            if self._wt_transport is not None:
+                self._wt_transport._mark_connection_lost()  # noqa: SLF001
 
         def _handle_h3_event(self, event: Any) -> None:
             assert self._h3 is not None
@@ -776,6 +815,20 @@ def _get_protocol_class() -> type:
                 self._wt_transport._feed_stream_data(  # noqa: SLF001
                     event.stream_id, event.data, event.stream_ended
                 )
+            elif isinstance(event, h3_events.DataReceived):
+                # A browser ``transport.close()`` closes the WebTransport
+                # session by FINning the CONNECT stream; aioquic surfaces that
+                # as a ``DataReceived`` with ``stream_ended`` on the CONNECT /
+                # session stream id (the same id as the accepted session).
+                # This does not go through ``connection_lost()`` either, so
+                # without handling it here ``wait_closed()`` hangs and the
+                # session slot leaks until the QUIC idle timeout.
+                if (
+                    event.stream_ended
+                    and self._accepted_session_id is not None
+                    and event.stream_id == self._accepted_session_id
+                ):
+                    self._mark_session_lost()
 
         def _handle_headers(self, event: Any) -> None:
             assert self._h3 is not None
@@ -830,8 +883,7 @@ def _get_protocol_class() -> type:
             self._on_session(transport)
 
         def connection_lost(self, exc: BaseException | None) -> None:
-            if self._wt_transport is not None:
-                self._wt_transport._mark_connection_lost()  # noqa: SLF001
+            self._mark_session_lost()
             super().connection_lost(exc)
 
     _PROTOCOL_CLASS_CACHE = _EasyCatH3Protocol
