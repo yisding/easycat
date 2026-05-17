@@ -24,6 +24,7 @@ import pytest
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.providers import Transport
 from easycat.transports.webtransport import (
+    _MAX_REJECTED_STREAMS,
     _OUTBOUND_SEND_BUFFER_HIGH_WATER,
     _TAG_AUDIO,
     _TAG_CONTROL,
@@ -498,6 +499,80 @@ class TestWebTransportSession:
         session.handle_stream_data(stream_id=999, data=_audio_frame(pcm), ended=False)
         assert in_q.get_nowait().data == pcm
         assert len(session._pending_tags) == 4  # noqa: SLF001 — unchanged
+
+    def test_rejected_duplicate_audio_stream_stays_rejected(self) -> None:
+        """Regression: a duplicate audio stream is rejected with its
+        tag/header byte already consumed.  Later chunks on it must keep being
+        ignored — not re-dispatched, where a PCM byte equal to 0x01 could be
+        misread as a fresh audio header once the original stream has ended.
+        """
+        session, _h3, in_q, _out_q = _make_session(target_rate=16000)
+        session.handle_stream_data(stream_id=4, data=_audio_frame(b"\xaa\xbb"), ended=False)
+        assert session._inbound_audio_stream_id == 4  # noqa: SLF001
+        in_q.get_nowait()  # drain the legit chunk
+
+        # A second audio stream opened while the first is active is rejected.
+        # Its payload deliberately looks like a fresh audio tag+rate header so
+        # the pre-fix code would later misroute it.
+        poison = bytes([_TAG_AUDIO]) + struct.pack(">I", 16000) + b"\x01\x02"
+        session.handle_stream_data(stream_id=8, data=poison, ended=False)
+        assert 8 in session._rejected_stream_ids  # noqa: SLF001
+        assert in_q.empty()
+
+        # The original audio stream ends — no audio stream is now active.
+        session.handle_stream_data(stream_id=4, data=b"", ended=True)
+        assert session._inbound_audio_stream_id is None  # noqa: SLF001
+
+        # A full audio frame on the rejected stream must NOT be accepted as a
+        # fresh audio stream just because none is currently active (pre-fix it
+        # would be: tag re-read, PCM enqueued, stream id re-bound).
+        session.handle_stream_data(stream_id=8, data=_audio_frame(b"\x33\x44"), ended=False)
+        assert in_q.empty()
+        assert session._inbound_audio_stream_id is None  # noqa: SLF001
+
+        # A FIN on the rejected stream clears its bookkeeping.
+        session.handle_stream_data(stream_id=8, data=b"", ended=True)
+        assert 8 not in session._rejected_stream_ids  # noqa: SLF001
+
+    def test_rejected_stream_flood_tears_down_session(self) -> None:
+        """A flood of rejected streams is a malicious-peer signal: past the
+        cap the session is torn down (mirrors the poisoned-codec path) rather
+        than silently dropping tracking and reopening the misroute.
+        """
+        session, _h3, _in_q, _out_q = _make_session()
+        # One legit audio stream so every later audio stream is a duplicate.
+        session.handle_stream_data(stream_id=2, data=_audio_frame(b"\x00\x00"), ended=False)
+        for sid in range(_MAX_REJECTED_STREAMS + 1):
+            session.handle_stream_data(
+                stream_id=100 + sid, data=_audio_frame(b"\x00\x00"), ended=False
+            )
+        assert session._on_close.is_set()  # noqa: SLF001
+        assert session._quic_protocol.close_calls == [  # noqa: SLF001
+            (0, "too many rejected streams")
+        ]
+
+    @pytest.mark.asyncio
+    async def test_control_stream_end_resets_codec(self) -> None:
+        """Regression: a control stream that closes mid-frame must not leave
+        stale length/payload bytes that corrupt — and here poison — the first
+        frame of a re-opened control stream.
+        """
+        session, _h3, _in_q, _out_q = _make_session()
+        # Open a control stream, feed an *incomplete* frame (4-byte length
+        # announcing a 10-byte body, only 3 body bytes), then FIN it.
+        partial = struct.pack(">I", 10) + b"abc"
+        session.handle_stream_data(stream_id=12, data=bytes([_TAG_CONTROL]) + partial, ended=True)
+        assert session._inbound_control_stream_id is None  # noqa: SLF001
+
+        # A re-opened control stream sends a clean frame.  Without the codec
+        # reset, the stale 7 bytes would shift framing and the trailing bytes
+        # decode to an oversized length that poisons the codec and tears the
+        # session down.
+        msg = _ControlCodec.encode({"type": "start"})
+        session.handle_stream_data(stream_id=16, data=bytes([_TAG_CONTROL]) + msg, ended=False)
+        assert session._inbound_control_stream_id == 16  # noqa: SLF001
+        assert session._control_codec.poisoned is False  # noqa: SLF001
+        assert not session._on_close.is_set()  # noqa: SLF001
 
 
 # ── Conformance: protocol shape and types ─────────────────────────

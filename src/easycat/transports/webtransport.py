@@ -161,6 +161,17 @@ _MAX_CONTROL_FRAME_BYTES = 64 * 1024
 # window (``_MAX_STREAM_DATA``).
 _MAX_PENDING_TAG_STREAMS = 4
 
+# Cap on the number of classified-but-rejected client streams tracked at
+# once (duplicate audio/control streams, or streams with an unknown tag).  A
+# rejected id must stay ignored until its QUIC stream FINs — see
+# ``_reject_stream`` — so a misbehaving client that opens and abandons many
+# such streams could otherwise grow this set without bound.  A legitimate
+# client never produces a single rejected stream; a flood is a malicious-peer
+# signal, so the session is torn down past this cap (mirrors the poisoned
+# control-codec path) rather than silently dropping tracking and reopening
+# the misroute the set exists to prevent.
+_MAX_REJECTED_STREAMS = 32
+
 # Truncation cap for user-controlled values that end up in log messages.
 _LOG_TRUNC = 64
 
@@ -349,6 +360,11 @@ class _WebTransportSession:
         self._outbound_control_stream_id: int | None = None
         self._control_codec = _ControlCodec()
         self._pending_tags: dict[int, bytearray] = {}
+        # Client stream ids we classified and rejected (duplicate
+        # audio/control, or unknown tag).  Their leading tag/header byte was
+        # already consumed by the rejecting dispatch, so later chunks must be
+        # ignored — not re-dispatched — until the stream FINs.
+        self._rejected_stream_ids: set[int] = set()
         self._writer_task: asyncio.Task[None] | None = None
 
     @property
@@ -369,7 +385,15 @@ class _WebTransportSession:
         self._writer_task = None
 
     def handle_stream_data(self, stream_id: int, data: bytes, ended: bool) -> None:
-        if stream_id == self._inbound_audio_stream_id:
+        if stream_id in self._rejected_stream_ids:
+            # Already classified and rejected (duplicate audio/control
+            # stream, or an unknown tag).  The rejecting dispatch consumed
+            # this stream's leading tag/header byte, so routing the
+            # remainder back through ``_dispatch_untagged_stream`` could
+            # misread a PCM byte that happens to equal 0x01/0x02 as a fresh
+            # audio/control header.  Keep ignoring every chunk until FIN.
+            pass
+        elif stream_id == self._inbound_audio_stream_id:
             self._handle_audio_bytes(data)
         elif stream_id == self._inbound_control_stream_id:
             self._handle_control_bytes(data)
@@ -387,6 +411,7 @@ class _WebTransportSession:
             # a half-tagged client can't pin ``_pending_tags`` entries) and
             # forget the inbound stream id so a re-opened stream is accepted.
             self._pending_tags.pop(stream_id, None)
+            self._rejected_stream_ids.discard(stream_id)
             if stream_id == self._inbound_audio_stream_id:
                 self._inbound_audio_stream_id = None
                 # A re-opened audio stream is a fresh, self-describing
@@ -395,6 +420,13 @@ class _WebTransportSession:
                 self._inbound_rate_hdr.clear()
             elif stream_id == self._inbound_control_stream_id:
                 self._inbound_control_stream_id = None
+                # A control stream that closes mid-frame leaves a partial
+                # length/payload in the codec.  A re-opened control stream
+                # must start from clean framing state, or its first frame is
+                # parsed against the previous stream's stale bytes — silently
+                # dropped, or (if the stale prefix decodes to an oversized
+                # length) poisoning the codec and tearing the session down.
+                self._control_codec = _ControlCodec()
 
     def _dispatch_untagged_stream(self, stream_id: int, data: bytes, ended: bool) -> None:
         """Identify a stream by its leading tag byte and route it.
@@ -445,6 +477,7 @@ class _WebTransportSession:
                     stream_id,
                     self._inbound_audio_stream_id,
                 )
+                self._reject_stream(stream_id)
                 return
             self._inbound_audio_stream_id = stream_id
             if payload:
@@ -456,12 +489,39 @@ class _WebTransportSession:
                     stream_id,
                     self._inbound_control_stream_id,
                 )
+                self._reject_stream(stream_id)
                 return
             self._inbound_control_stream_id = stream_id
             if payload:
                 self._handle_control_bytes(payload)
         else:
             logger.warning("Unknown WebTransport stream tag 0x%02x on %d", tag, stream_id)
+            self._reject_stream(stream_id)
+
+    def _reject_stream(self, stream_id: int) -> None:
+        """Remember a classified-but-unusable stream so every later chunk on
+        it is ignored until it FINs.
+
+        The rejecting branch in :meth:`_dispatch_untagged_stream` has already
+        consumed (and discarded) this stream's leading tag/header byte.  Left
+        untracked, a later chunk would re-enter ``_dispatch_untagged_stream``
+        with the tag gone, so a PCM byte that happens to equal
+        ``0x01``/``0x02`` could be misread as a fresh audio/control header —
+        accepted as a real stream once the original one has ended.  A
+        legitimate client never produces a rejected stream; a flood is a
+        malicious-peer signal, so the session is torn down past
+        ``_MAX_REJECTED_STREAMS`` (mirrors the poisoned control-codec path)
+        rather than silently dropping tracking and reopening that misroute.
+        """
+        self._rejected_stream_ids.add(stream_id)
+        if len(self._rejected_stream_ids) > _MAX_REJECTED_STREAMS:
+            logger.warning(
+                "WebTransport session %d exceeded %d rejected streams — closing",
+                self._session_id,
+                _MAX_REJECTED_STREAMS,
+            )
+            self.close_connection(reason="too many rejected streams")
+            self._on_close.set()
 
     def _handle_audio_bytes(self, data: bytes) -> None:
         if not data:
