@@ -21,9 +21,10 @@ from typing import Any
 
 import pytest
 
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.providers import Transport
 from easycat.transports.webtransport import (
+    _OUTBOUND_SEND_BUFFER_HIGH_WATER,
     _TAG_AUDIO,
     _TAG_CONTROL,
     WebTransportConnectionTransport,
@@ -31,10 +32,27 @@ from easycat.transports.webtransport import (
     WebTransportTransport,
     WebTransportTransportConfig,
     _ControlCodec,
+    _get_protocol_class,
     _WebTransportSession,
 )
 
 from .conftest import find_free_port
+
+
+def _audio_frame(pcm: bytes, rate: int = 16000) -> bytes:
+    """Client→server audio framing: ``[tag][4-byte BE sample-rate][PCM]``.
+
+    Symmetric with the server→client framing — the mic rate is inline so it
+    can't race a ``config`` control frame on an independent QUIC stream.
+    """
+    return bytes([_TAG_AUDIO]) + struct.pack(">I", rate) + pcm
+
+
+def _aioquic_available() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("aioquic") is not None
+
 
 # ── _ControlCodec ─────────────────────────────────────────────────
 
@@ -113,6 +131,22 @@ class _FakeQuicConnection:
         self.sent.append((stream_id, data))
 
 
+class _FakeStreamSender:
+    """Stand-in for ``aioquic.quic.stream.QuicStreamSender``.
+
+    Only ``_buffer`` (unsent + unacked bytes) is read by the outbound
+    backpressure gate.
+    """
+
+    def __init__(self, buffer: bytearray) -> None:
+        self._buffer = buffer
+
+
+class _FakeStream:
+    def __init__(self, buffer: bytearray) -> None:
+        self.sender = _FakeStreamSender(buffer)
+
+
 class _FakeQuicProtocol:
     def __init__(self) -> None:
         self.transmit_calls = 0
@@ -153,30 +187,61 @@ class TestWebTransportSession:
     async def test_audio_tag_dispatches_inbound_pcm(self) -> None:
         session, _h3, in_q, _out_q = _make_session()
         pcm = b"\x00\x02\x00\x03\x00\x04"
-        session.handle_stream_data(stream_id=4, data=bytes([_TAG_AUDIO]) + pcm, ended=False)
+        session.handle_stream_data(stream_id=4, data=_audio_frame(pcm), ended=False)
         chunk = in_q.get_nowait()
         assert isinstance(chunk, AudioChunk)
         assert chunk.data == pcm
 
     @pytest.mark.asyncio
-    async def test_control_config_negotiates_sample_rate(self) -> None:
+    async def test_inline_rate_resamples_inbound_audio(self) -> None:
+        """The mic rate is carried inline on the audio stream (not a
+        ``config`` control frame), so it can't race the PCM bytes."""
         session, _h3, in_q, _out_q = _make_session(target_rate=16000)
-        msg = _ControlCodec.encode({"type": "config", "sample_rate": 48000})
-        session.handle_stream_data(stream_id=8, data=bytes([_TAG_CONTROL]) + msg, ended=False)
         # 48 samples @ 48 kHz → 16 samples @ 16 kHz (32 bytes).
         pcm_48k = b"\x00\x00" * 48
-        session.handle_stream_data(stream_id=4, data=bytes([_TAG_AUDIO]) + pcm_48k, ended=False)
+        session.handle_stream_data(stream_id=4, data=_audio_frame(pcm_48k, 48000), ended=False)
         chunk = in_q.get_nowait()
         assert chunk.format.sample_rate == 16000
         assert len(chunk.data) == 32
 
     @pytest.mark.asyncio
-    async def test_invalid_sample_rate_is_ignored(self) -> None:
+    async def test_inline_rate_header_split_across_deliveries(self) -> None:
+        """The 4-byte rate header may be fragmented across stream-data
+        deliveries (even split from the tag byte)."""
         session, _h3, in_q, _out_q = _make_session(target_rate=16000)
-        msg = _ControlCodec.encode({"type": "config", "sample_rate": -1})
-        session.handle_stream_data(stream_id=8, data=bytes([_TAG_CONTROL]) + msg, ended=False)
+        frame = _audio_frame(b"\x00\x00" * 48, 48000)
+        session.handle_stream_data(stream_id=4, data=frame[:1], ended=False)  # tag
+        session.handle_stream_data(stream_id=4, data=frame[1:3], ended=False)  # 2/4 rate
+        assert in_q.empty()  # header still incomplete
+        session.handle_stream_data(stream_id=4, data=frame[3:], ended=False)  # rest
+        chunk = in_q.get_nowait()
+        assert chunk.format.sample_rate == 16000
+        assert len(chunk.data) == 32
+
+    @pytest.mark.asyncio
+    async def test_reopened_audio_stream_rereads_inline_rate(self) -> None:
+        """A re-opened audio stream is fresh and self-describing — its
+        inline rate header must be parsed again, not carried over."""
+        session, _h3, in_q, _out_q = _make_session(target_rate=16000)
+        session.handle_stream_data(
+            stream_id=4, data=_audio_frame(b"\x00\x00" * 48, 48000), ended=True
+        )
+        first = in_q.get_nowait()
+        assert first.format.sample_rate == 16000
+        assert len(first.data) == 32
+        # Same stream id reused for a brand-new stream: header re-read.
+        session.handle_stream_data(
+            stream_id=4, data=_audio_frame(b"\x01\x02" * 8, 16000), ended=False
+        )
+        second = in_q.get_nowait()
+        assert second.data == b"\x01\x02" * 8
+
+    @pytest.mark.asyncio
+    async def test_invalid_inline_rate_falls_back_to_target(self) -> None:
+        session, _h3, in_q, _out_q = _make_session(target_rate=16000)
         pcm = b"\x00\x01" * 8
-        session.handle_stream_data(stream_id=4, data=bytes([_TAG_AUDIO]) + pcm, ended=False)
+        # rate 0 is invalid → fall back to the server target (no resample).
+        session.handle_stream_data(stream_id=4, data=_audio_frame(pcm, 0), ended=False)
         chunk = in_q.get_nowait()
         assert chunk.format.sample_rate == 16000
         assert chunk.data == pcm
@@ -185,7 +250,7 @@ class TestWebTransportSession:
     async def test_inbound_queue_full_drops_frame(self) -> None:
         session, _h3, in_q, _out_q = _make_session(in_max=1)
         pcm = b"\x00\x00" * 4
-        session.handle_stream_data(stream_id=4, data=bytes([_TAG_AUDIO]) + pcm, ended=False)
+        session.handle_stream_data(stream_id=4, data=_audio_frame(pcm), ended=False)
         session.handle_stream_data(stream_id=4, data=pcm, ended=False)
         assert in_q.qsize() == 1
 
@@ -196,7 +261,12 @@ class TestWebTransportSession:
         assert in_q.empty()
 
     @pytest.mark.asyncio
-    async def test_outbound_writer_emits_audio_format_then_data(self) -> None:
+    async def test_outbound_audio_stream_is_self_describing(self) -> None:
+        """The server→client audio stream carries its sample rate inline as
+        ``[0x01][4-byte BE rate][PCM]``.  There is deliberately **no**
+        ``audio_format`` control frame — on independent QUIC streams it would
+        race the audio bytes and play TTS at the wrong rate.
+        """
         session, _fake_h3, _in_q, out_q = _make_session()
         await session.start()
         try:
@@ -207,19 +277,50 @@ class TestWebTransportSession:
             await session.stop()
 
         sent = session._quic_protocol._quic.sent  # noqa: SLF001
-        bodies = [data for _sid, data in sent]
-        decoded_control = []
-        for data in bodies:
-            if len(data) >= 4:
-                (length,) = struct.unpack_from(">I", data, 0)
-                if length + 4 == len(data):
-                    try:
-                        decoded_control.append(json.loads(data[4:].decode()))
-                    except (UnicodeDecodeError, json.JSONDecodeError):
-                        pass
-        assert {"type": "ready"} in decoded_control
-        assert {"type": "audio_format", "sample_rate": 16000} in decoded_control
-        assert any(chunk.data in body for body in bodies)
+        by_stream: dict[int, bytearray] = {}
+        for sid, data in sent:
+            by_stream.setdefault(sid, bytearray()).extend(data)
+
+        # Control stream: [0x02] then a length-prefixed {"type":"ready"}.
+        ctrl = next(b for b in by_stream.values() if b and b[0] == _TAG_CONTROL)
+        (clen,) = struct.unpack_from(">I", ctrl, 1)
+        assert json.loads(bytes(ctrl[5 : 5 + clen]).decode()) == {"type": "ready"}
+
+        # Audio stream: [0x01][BE 16000][chunk.data], no JSON framing.
+        audio = next(b for b in by_stream.values() if b and b[0] == _TAG_AUDIO)
+        (rate,) = struct.unpack_from(">I", audio, 1)
+        assert rate == 16000
+        assert bytes(audio[5:]) == chunk.data
+
+        # No audio_format control frame anywhere on the wire.
+        assert b"audio_format" not in b"".join(bytes(b) for b in by_stream.values())
+
+    @pytest.mark.asyncio
+    async def test_rate_change_opens_fresh_audio_stream(self) -> None:
+        """A TTS sample-rate change FINs the old stream and opens a new one
+        whose inline header carries the new rate."""
+        session, _fake_h3, _in_q, out_q = _make_session(target_rate=16000)
+        await session.start()
+        try:
+            await out_q.put(AudioChunk(data=b"\x00\x01" * 4, format=PCM16_MONO_16K))
+            await asyncio.sleep(0.05)
+            first_sid = session._outbound_audio_stream_id  # noqa: SLF001
+            assert first_sid is not None
+
+            hi = AudioFormat(sample_rate=24000, channels=1, sample_width=2)
+            await out_q.put(AudioChunk(data=b"\x02\x03" * 4, format=hi))
+            await asyncio.sleep(0.05)
+            second_sid = session._outbound_audio_stream_id  # noqa: SLF001
+            assert second_sid is not None and second_sid != first_sid
+        finally:
+            await session.stop()
+
+        by_stream: dict[int, bytearray] = {}
+        for sid, data in session._quic_protocol._quic.sent:  # noqa: SLF001
+            by_stream.setdefault(sid, bytearray()).extend(data)
+        # Old stream header advertises 16k; new one advertises 24k.
+        assert struct.unpack_from(">I", by_stream[first_sid], 1)[0] == 16000
+        assert struct.unpack_from(">I", by_stream[second_sid], 1)[0] == 24000
 
     @pytest.mark.asyncio
     async def test_reset_audio_stream_aborts_in_flight_bytes(self) -> None:
@@ -266,32 +367,72 @@ class TestWebTransportSession:
             await session.stop()
 
     @pytest.mark.asyncio
+    async def test_outbound_backpressure_pauses_until_send_buffer_drains(self) -> None:
+        """The writer must stop draining ``_out_queue`` while aioquic's
+        per-stream send buffer is over the high-water mark, then resume once
+        it drains — otherwise a stalled client grows memory unbounded.
+        """
+        session, _h3, _in_q, _out_q = _make_session()
+        sid = 1000
+        session._outbound_audio_stream_id = sid  # noqa: SLF001
+        buf = bytearray(_OUTBOUND_SEND_BUFFER_HIGH_WATER + 1)
+        session._quic_protocol._quic._streams = {sid: _FakeStream(buf)}  # noqa: SLF001
+        task = asyncio.create_task(session._await_outbound_capacity())  # noqa: SLF001
+        await asyncio.sleep(0.15)
+        assert not task.done()  # still backpressured
+        buf.clear()  # client caught up
+        await asyncio.wait_for(task, timeout=1)
+
+    @pytest.mark.asyncio
+    async def test_outbound_backpressure_returns_on_close(self) -> None:
+        """A backpressured writer must still unwedge when the connection is
+        lost, so the owning transport can tear down."""
+        session, _h3, _in_q, _out_q = _make_session()
+        sid = 1000
+        session._outbound_audio_stream_id = sid  # noqa: SLF001
+        buf = bytearray(_OUTBOUND_SEND_BUFFER_HIGH_WATER + 1)
+        session._quic_protocol._quic._streams = {sid: _FakeStream(buf)}  # noqa: SLF001
+        task = asyncio.create_task(session._await_outbound_capacity())  # noqa: SLF001
+        await asyncio.sleep(0.1)
+        assert not task.done()
+        session._on_close.set()  # noqa: SLF001
+        await asyncio.wait_for(task, timeout=1)
+
+    @pytest.mark.asyncio
+    async def test_outbound_capacity_no_audio_stream_returns_immediately(self) -> None:
+        """No open audio stream → nothing buffered → no backpressure."""
+        session, _h3, _in_q, _out_q = _make_session()
+        assert session._outbound_audio_stream_id is None  # noqa: SLF001
+        await asyncio.wait_for(session._await_outbound_capacity(), timeout=1)  # noqa: SLF001
+
+    @pytest.mark.asyncio
     async def test_server_send_does_not_block_client_control_reception(self) -> None:
         """Regression: ``_send_control`` from ``start()`` must not poison the
         inbound control stream id.  Without distinct in/out tracking, the
         client's tag byte on its control stream is rejected as an "extra
-        control stream" and ``{"type": "config"}`` is silently dropped.
+        control stream" and its frames are silently dropped.
         """
         session, _h3, in_q, _out_q = _make_session(target_rate=16000)
         await session.start()
         try:
-            # Now the server has allocated its outbound control stream.
-            # Simulate the client opening *its* control stream and writing
-            # a config message; inbound state must update.
+            # The server has now allocated its *outbound* control stream.
+            # The client opening its *own* control stream must still be
+            # accepted (distinct in/out stream-id tracking).
             client_ctrl_sid = 16  # arbitrary, distinct from server-initiated 1000+
-            msg = _ControlCodec.encode({"type": "config", "sample_rate": 48000})
+            msg = _ControlCodec.encode({"type": "start"})
             session.handle_stream_data(
                 stream_id=client_ctrl_sid,
                 data=bytes([_TAG_CONTROL]) + msg,
                 ended=False,
             )
-            # An inbound 48k audio chunk on its own client stream should now be
-            # resampled down to 16k.
+            assert session._inbound_control_stream_id == client_ctrl_sid  # noqa: SLF001
+            # An inbound 48k audio chunk on its own client stream is resampled
+            # down to 16k via the inline rate header.
             client_audio_sid = 20
             pcm_48k = b"\x00\x00" * 48
             session.handle_stream_data(
                 stream_id=client_audio_sid,
-                data=bytes([_TAG_AUDIO]) + pcm_48k,
+                data=_audio_frame(pcm_48k, 48000),
                 ended=False,
             )
             chunk = in_q.get_nowait()
@@ -299,6 +440,19 @@ class TestWebTransportSession:
             assert len(chunk.data) == 32
         finally:
             await session.stop()
+
+    @pytest.mark.asyncio
+    async def test_poisoned_control_codec_tears_down_session(self) -> None:
+        """An oversized control length prefix must close the session, not just
+        silently disable control (the codec's documented contract)."""
+        session, _h3, _in_q, _out_q = _make_session()
+        oversized = struct.pack(">I", 1 << 30) + b"X"  # 1 GiB advertised
+        session.handle_stream_data(
+            stream_id=8, data=bytes([_TAG_CONTROL]) + oversized, ended=False
+        )
+        assert session._control_codec.poisoned is True  # noqa: SLF001
+        assert session._on_close.is_set()  # noqa: SLF001
+        assert session._quic_protocol.close_calls == [(0, "control framing violation")]  # noqa: SLF001
 
     def test_pending_tags_dict_is_capped(self) -> None:
         """A flood of untagged streams must not grow ``_pending_tags`` past the cap."""
@@ -319,13 +473,31 @@ class TestWebTransportSession:
         """
         session, _h3, in_q, _out_q = _make_session(in_max=4)
         big_pcm = b"\x00\x01" * 4096  # 8 KiB of PCM (> the old 4 KiB cap)
-        session.handle_stream_data(stream_id=7, data=bytes([_TAG_AUDIO]) + big_pcm, ended=False)
+        session.handle_stream_data(stream_id=7, data=_audio_frame(big_pcm), ended=False)
         chunk = in_q.get_nowait()
         assert chunk.data == big_pcm
         # Stream is now identified; a follow-up event routes without re-tagging.
         session.handle_stream_data(stream_id=7, data=b"\x02\x03", ended=False)
         assert in_q.get_nowait().data == b"\x02\x03"
         assert 7 not in session._pending_tags  # noqa: SLF001
+
+    def test_nonempty_first_delivery_dispatched_even_when_cap_full(self) -> None:
+        """The pending-tag cap must never refuse a *non-empty* first delivery
+        (that would drop the tag byte and permanently mis-route the stream).
+        Only zero-byte pending streams count against the cap.
+        """
+        session, _h3, in_q, _out_q = _make_session(in_max=8)
+        # Saturate the cap with zero-byte streams.
+        for sid in range(10):
+            session.handle_stream_data(stream_id=sid, data=b"", ended=False)
+        assert len(session._pending_tags) == 4  # noqa: SLF001
+
+        # A brand-new stream that arrives *with* its tag+payload must still be
+        # dispatched despite the cap being full.
+        pcm = b"\x07\x07" * 4
+        session.handle_stream_data(stream_id=999, data=_audio_frame(pcm), ended=False)
+        assert in_q.get_nowait().data == pcm
+        assert len(session._pending_tags) == 4  # noqa: SLF001 — unchanged
 
 
 # ── Conformance: protocol shape and types ─────────────────────────
@@ -451,7 +623,7 @@ class TestWebTransportConnectionTransport:
         # client opens its audio stream (tag 0x01) and writes a frame.
         early = b"\x11\x22\x33\x44"
         t._feed_stream_data(  # noqa: SLF001
-            stream_id=12, data=bytes([_TAG_AUDIO]) + early, ended=False
+            stream_id=12, data=_audio_frame(early), ended=False
         )
         await t.connect()
         try:
@@ -484,6 +656,43 @@ class TestWebTransportConnectionTransport:
         async for c in t.receive_audio():
             chunks.append(c)
         assert chunks == []
+
+    @pytest.mark.asyncio
+    async def test_connection_lost_marks_disconnected_and_wakes_writer(self) -> None:
+        """On QUIC loss the transport must mark itself disconnected (so
+        ``send_audio`` stops accepting undeliverable TTS) and still deliver
+        the writer sentinel even when ``_out_queue`` is full.
+        """
+        t = WebTransportConnectionTransport(
+            config=WebTransportTransportConfig(outbound_max_pending=2),
+            _h3=_FakeH3(),  # type: ignore[arg-type]
+            _quic_protocol=_FakeQuicProtocol(),  # type: ignore[arg-type]
+            _session_id=0,
+        )
+        await t.connect()
+        try:
+            # Stop the writer so it cannot drain, then fill the queue.
+            await t._session.stop()  # noqa: SLF001
+            assert await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
+            assert await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
+            assert not await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
+
+            t._mark_connection_lost()  # noqa: SLF001
+
+            assert t._connected is False  # noqa: SLF001
+            assert not t._client_connected.is_set()  # noqa: SLF001
+            assert t._on_close.is_set()  # noqa: SLF001
+            # The writer sentinel must have been delivered despite the
+            # full queue (one chunk dropped to make room).
+            seen_sentinel = False
+            while not t._out_queue.empty():  # noqa: SLF001
+                if t._out_queue.get_nowait() is None:  # noqa: SLF001
+                    seen_sentinel = True
+            assert seen_sentinel
+            # send_audio now refuses — the transport is marked disconnected.
+            assert await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K)) is False
+        finally:
+            await t.disconnect()
 
 
 # ── WebTransportTransport conformance ─────────────────────────────
@@ -643,6 +852,73 @@ class TestWebTransportServerWiring:
             task.cancel()
         await asyncio.gather(*server._handler_tasks, return_exceptions=True)  # noqa: SLF001
 
+    @pytest.mark.asyncio
+    async def test_can_accept_session_gate_reflects_cap(self) -> None:
+        """``_can_accept_session`` is the pre-200 gate: the protocol consults
+        it before sending the 200 so an over-cap CONNECT gets a clean 503
+        instead of 200-then-CONNECTION_CLOSE.
+        """
+        cfg = WebTransportTransportConfig(
+            certfile="cert.pem", keyfile="key.pem", max_concurrent_sessions=2
+        )
+
+        async def _noop(transport: WebTransportConnectionTransport) -> None:
+            await transport.wait_closed()
+
+        server = WebTransportServer(cfg, _noop)
+        assert server._can_accept_session() is True  # noqa: SLF001
+
+        held = [asyncio.create_task(asyncio.sleep(10)) for _ in range(2)]
+        server._handler_tasks.update(held)  # noqa: SLF001
+        try:
+            # At the cap → the protocol would send 503 and create no transport.
+            assert server._can_accept_session() is False  # noqa: SLF001
+        finally:
+            for task in held:
+                task.cancel()
+            await asyncio.gather(*held, return_exceptions=True)
+            server._handler_tasks.difference_update(held)  # noqa: SLF001
+        assert server._can_accept_session() is True  # noqa: SLF001 — slots freed
+
+
+# ── Protocol session-id isolation ─────────────────────────────────
+
+
+@pytest.mark.skipif(
+    not _aioquic_available(),
+    reason="aioquic not installed ([webtransport] extra)",
+)
+def test_protocol_rejects_stream_data_for_other_session() -> None:
+    """A QUIC connection accepts exactly one WebTransport session.  Stream
+    data tagged with a *different* ``session_id`` (e.g. a stream opened
+    against a CONNECT we rejected with 409) must never be fed into the one
+    accepted session.
+    """
+    from aioquic.h3.events import WebTransportStreamDataReceived
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.fed: list[tuple[int, bytes, bool]] = []
+
+        def _feed_stream_data(self, stream_id: int, data: bytes, ended: bool) -> None:
+            self.fed.append((stream_id, data, ended))
+
+    cls = _get_protocol_class()
+    proto = cls.__new__(cls)  # skip QUIC-bound __init__
+    proto._h3 = object()  # only asserted non-None  # noqa: SLF001
+    rec = _Recorder()
+    proto._wt_transport = rec  # type: ignore[assignment]  # noqa: SLF001
+    proto._accepted_session_id = 5  # noqa: SLF001
+
+    proto._handle_h3_event(  # noqa: SLF001
+        WebTransportStreamDataReceived(data=b"hi", stream_id=8, stream_ended=False, session_id=5)
+    )
+    proto._handle_h3_event(  # noqa: SLF001
+        WebTransportStreamDataReceived(data=b"x", stream_id=12, stream_ended=False, session_id=9)
+    )
+    # Only the matching-session frame was dispatched.
+    assert rec.fed == [(8, b"hi", False)]
+
 
 # ── Top-level lazy exports ────────────────────────────────────────
 
@@ -716,12 +992,6 @@ def _udp_loopback_available() -> bool:
             return False
         s.close()
     return True
-
-
-def _aioquic_available() -> bool:
-    import importlib.util
-
-    return importlib.util.find_spec("aioquic") is not None
 
 
 @contextlib.asynccontextmanager
@@ -828,13 +1098,20 @@ class TestWebTransportServerLoopback:
 
             audio_sid = client_h3.create_webtransport_stream(connect_stream_id)
             # WebTransport stream payload is raw QUIC stream data, not an H3
-            # DATA frame — mirror what the server/browser do.
+            # DATA frame — mirror what the server/browser do.  Client→server
+            # audio is self-describing: [tag][4-byte BE rate][PCM].
             client._quic.send_stream_data(
-                audio_sid, bytes([_TAG_AUDIO]) + pcm_in, end_stream=False
+                audio_sid,
+                bytes([_TAG_AUDIO]) + struct.pack(">I", 16000) + pcm_in,
+                end_stream=False,
             )
             client.transmit()
 
-            received = bytearray()
+            # Server→client audio is [0x01][4-byte BE rate][PCM]; the header
+            # may be split across stream-data events, so accumulate per
+            # stream id and strip the 5-byte header once enough has arrived.
+            audio_sid: int | None = None
+            audio_buf = bytearray()
             deadline = asyncio.get_event_loop().time() + 5
             while asyncio.get_event_loop().time() < deadline:
                 try:
@@ -842,13 +1119,14 @@ class TestWebTransportServerLoopback:
                 except TimeoutError:
                     continue
                 if isinstance(ev, ClientStreamData):
-                    if not received and ev.data and ev.data[0] == _TAG_AUDIO:
-                        received.extend(ev.data[1:])
-                    elif received:
-                        received.extend(ev.data)
-                    if len(received) >= len(pcm_in):
+                    if audio_sid is None and ev.data and ev.data[0] == _TAG_AUDIO:
+                        audio_sid = ev.stream_id
+                        audio_buf.extend(ev.data)
+                    elif ev.stream_id == audio_sid:
+                        audio_buf.extend(ev.data)
+                    if len(audio_buf) >= 5 + len(pcm_in):
                         break
-            result_audio.set_result(bytes(received))
+            result_audio.set_result(bytes(audio_buf[5 : 5 + len(pcm_in)]))
 
     @pytest.mark.asyncio
     async def test_two_concurrent_clients(self, tmp_path: Path) -> None:

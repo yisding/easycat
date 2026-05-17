@@ -29,7 +29,21 @@ Each peer opens its **own** bidirectional QUIC streams; we never share a
 stream's two halves between application directions.  The first byte on every
 stream is a 1-byte tag that identifies its purpose:
 
-``0x01`` — **audio stream** — raw PCM16 bytes (no further framing).
+``0x01`` — **audio stream**
+
+  * server→client: ``[1-byte 0x01][4-byte BE sample-rate][raw PCM16…]``.  The
+    rate is **inline** (not a separate control message) so the client can
+    never play TTS at the wrong rate by racing a cross-stream
+    ``audio_format`` against the audio bytes.  The rate is constant for a
+    stream's lifetime; a TTS sample-rate change FINs the current stream and
+    opens a fresh one whose header carries the new rate.
+  * client→server: ``[1-byte 0x01][4-byte BE sample-rate][raw PCM16…]``.
+    Symmetric with server→client: the mic rate is **inline**, not a separate
+    ``config`` control message, so it can never race the audio bytes on an
+    independent QUIC stream and have early mic PCM wrapped at the wrong rate.
+    The rate is constant for a stream's lifetime; a re-opened audio stream
+    re-reads its own header.
+
 ``0x02`` — **control stream** — repeated ``[4-byte BE length][UTF-8 JSON]`` frames.
 
 The client opens two streams (audio + control) and writes mic PCM /
@@ -37,12 +51,16 @@ client-side control messages there.  The server, in turn, opens its own audio
 and control streams via :meth:`H3Connection.create_webtransport_stream` and
 writes TTS audio / server-side control messages there.  The browser
 demultiplexes server-opened streams via ``incomingBidirectionalStreams`` and
-reads the tag byte to dispatch.  Message shapes mirror
+reads the tag byte to dispatch.  Control message shapes mirror
 :class:`~easycat.transports.websocket.WebSocketTransport`:
 
-* server→client: ``{"type":"ready"}``, ``{"type":"audio_format","sample_rate":N}``
-* client→server: ``{"type":"config","sample_rate":N}``, ``{"type":"start"}``,
-  ``{"type":"stop"}``
+* server→client: ``{"type":"ready"}`` (the outbound sample rate travels
+  inline on the audio stream, see above — there is no ``audio_format``
+  control message)
+* client→server: ``{"type":"start"}``, ``{"type":"stop"}``.  A
+  ``{"type":"config","sample_rate":N}`` frame is still accepted for
+  backward tolerance but is informational only — the mic rate travels
+  inline on the audio stream (see above), not via this frame.
 
 Loss behaviour (v1)
 -------------------
@@ -51,7 +69,19 @@ stream, a packet loss costs ~1 RTT to recover (typically 30-100 ms), which is
 what an application-level NACK round-trip would cost anyway.  The win over
 WebSocket is that audio and control are independent QUIC streams: control
 traffic never stalls audio (or vice versa), and each direction of a
-bidirectional stream has independent flow control.
+bidirectional stream has independent flow control.  The flip side of
+independent streams is that there is **no cross-stream ordering**, which is
+why the sample rate is carried inline on the audio stream — in *both*
+directions — rather than as a separate control frame.
+
+Connection bounding
+-------------------
+``max_concurrent_sessions`` bounds accepted WebTransport *sessions* (each
+backed by a handler task + queues).  A QUIC connection that completes the
+TLS/QUIC handshake but never sends a valid CONNECT (or targets a wrong
+``:path`` and gets a 404/503) holds no session resources and is torn down by
+QUIC's ``idle_timeout`` (``_IDLE_TIMEOUT_SEC``); that timeout is the only
+bound on such lingering connections.
 """
 
 from __future__ import annotations
@@ -91,6 +121,19 @@ _DEFAULT_OUTBOUND_MAX_PENDING = 300
 
 # Per-QUIC-stream flow-control window (~2 s of 16 kHz PCM16 audio).
 _MAX_STREAM_DATA = 64 * 1024
+# High-water mark (bytes) on aioquic's *unsent + unacked* per-stream send
+# buffer for the server→client audio stream.  ``send_stream_data`` only
+# appends to that buffer; bytes leave only as QUIC flow control / congestion
+# permit.  A stalled or slow-reading client lets the buffer grow without
+# bound, so the outbound writer pauses draining ``_out_queue`` once it crosses
+# this mark — restoring ``outbound_max_pending`` as the real memory bound.
+# Four windows tolerates a healthy bandwidth-delay product while still capping
+# a stalled client at ~256 KiB of buffered TTS.
+_OUTBOUND_SEND_BUFFER_HIGH_WATER = 4 * _MAX_STREAM_DATA
+# Poll interval while waiting for the per-stream send buffer to drain below
+# the high-water mark.  Short enough to stay responsive to a recovering
+# client; cheap because it only runs while actually backpressured.
+_OUTBOUND_BACKPRESSURE_POLL_SEC = 0.05
 # Voice turns can have multi-second silences between user/bot exchanges, so
 # don't tear the QUIC connection down on short idle periods.
 _IDLE_TIMEOUT_SEC = 30.0
@@ -263,7 +306,20 @@ class _WebTransportSession:
         self._session_id = session_id
         self._target_rate = target_sample_rate
         self._audio_format = audio_format
+        # Placeholder until the inline mic-rate header is parsed; never used
+        # to wrap audio before then (see ``_handle_audio_bytes``).
         self._inbound_format = audio_format
+        # Inbound (mic) audio streams are self-describing: each carries a
+        # 4-byte BE sample-rate header right after its tag byte, mirroring
+        # the server→client framing.  This removes the cross-stream race
+        # where mic PCM overtakes a ``config`` control frame and gets
+        # wrapped at the wrong rate.  Parsed once per inbound audio stream;
+        # reset when that stream ends so a re-opened one re-reads its header.
+        self._inbound_rate: int | None = None
+        self._inbound_rate_hdr = bytearray()
+        # Sample rate of the currently-open server→client audio stream, or
+        # None when no audio stream is open.  A change opens a fresh stream
+        # (see ``_outbound_writer`` / ``_end_audio_stream``).
         self._outbound_rate: int | None = None
         self._in_queue = in_queue
         self._out_queue = out_queue
@@ -318,6 +374,10 @@ class _WebTransportSession:
             self._pending_tags.pop(stream_id, None)
             if stream_id == self._inbound_audio_stream_id:
                 self._inbound_audio_stream_id = None
+                # A re-opened audio stream is a fresh, self-describing
+                # stream; force its inline rate header to be re-read.
+                self._inbound_rate = None
+                self._inbound_rate_hdr.clear()
             elif stream_id == self._inbound_control_stream_id:
                 self._inbound_control_stream_id = None
 
@@ -331,29 +391,38 @@ class _WebTransportSession:
         whole buffer (tag + however much payload arrived in the same event)
         and forget the stream.
 
-        Memory is bounded without a per-stream byte cap: the number of
-        not-yet-tagged streams is capped by ``_MAX_PENDING_TAG_STREAMS``, and
-        a single delivery is bounded by the QUIC per-stream flow-control
-        window (``_MAX_STREAM_DATA``).  A per-byte cap here would instead
-        drop a legitimate large first delivery (e.g. a batched ``[0x01]`` +
-        multi-KiB PCM frame) and, by discarding the tag with it, leave the
-        stream permanently mis-routed.
+        The ``_MAX_PENDING_TAG_STREAMS`` cap is applied **only** to zero-byte
+        pending streams — exactly the unbounded-growth vector (a client that
+        opens many bidi streams and never writes).  A *non-empty* first
+        delivery is always dispatched immediately and never refused, so the
+        tag byte can never be dropped for a well-behaved client (a per-stream
+        byte cap, or refusing a non-empty delivery here, would discard the
+        tag with the payload and leave the stream permanently mis-routed).
+        A single delivery is itself bounded by the QUIC per-stream
+        flow-control window (``_MAX_STREAM_DATA``).
         """
-        if stream_id not in self._pending_tags:
-            if len(self._pending_tags) >= _MAX_PENDING_TAG_STREAMS:
-                logger.warning(
-                    "Refusing untagged WebTransport stream %d — too many pending", stream_id
-                )
+        buf = self._pending_tags.pop(stream_id, None)
+        if buf is None:
+            if not data:
+                # Zero-byte delivery before the first real byte: this is the
+                # only path that consumes a (capped) pending slot.
+                if len(self._pending_tags) >= _MAX_PENDING_TAG_STREAMS:
+                    logger.warning(
+                        "Refusing untagged WebTransport stream %d — too many pending",
+                        stream_id,
+                    )
+                    return
+                self._pending_tags[stream_id] = bytearray()
                 return
-        buf = self._pending_tags.setdefault(stream_id, bytearray())
-        buf.extend(data)
-        if not buf:
-            # Zero-byte delivery; wait for the next event. Bounded by the
-            # pending-stream count cap above and the QUIC idle timeout.
-            return
+            buf = bytearray(data)
+        else:
+            buf.extend(data)
+            if not buf:
+                # Still zero-byte; re-park (slot already counted).
+                self._pending_tags[stream_id] = buf
+                return
         tag = buf[0]
         payload = bytes(buf[1:])
-        del self._pending_tags[stream_id]
         if tag == _TAG_AUDIO:
             if self._inbound_audio_stream_id is not None:
                 logger.warning(
@@ -382,6 +451,35 @@ class _WebTransportSession:
     def _handle_audio_bytes(self, data: bytes) -> None:
         if not data:
             return
+        if self._inbound_rate is None:
+            # Consume the inline [4-byte BE sample-rate] header that
+            # prefixes every client→server audio stream (symmetric with the
+            # server→client framing).  It may be split across deliveries.
+            self._inbound_rate_hdr.extend(data)
+            if len(self._inbound_rate_hdr) < 4:
+                return
+            (rate,) = struct.unpack_from(">I", self._inbound_rate_hdr, 0)
+            pcm = bytes(self._inbound_rate_hdr[4:])
+            self._inbound_rate_hdr.clear()
+            valid = _valid_config_sample_rate(rate)
+            if valid is None:
+                logger.warning(
+                    "Invalid WebTransport inbound sample rate %s — assuming %d",
+                    _trunc_for_log(rate),
+                    self._target_rate,
+                )
+                valid = self._target_rate
+            self._inbound_rate = valid
+            self._inbound_format = AudioFormat(
+                sample_rate=valid,
+                channels=self._audio_format.channels,
+                sample_width=self._audio_format.sample_width,
+                encoding=self._audio_format.encoding,
+            )
+            logger.info("Client WebTransport mic format: %s", self._inbound_format)
+            if not pcm:
+                return
+            data = pcm
         chunk = AudioChunk(data=data, format=self._inbound_format)
         if chunk.format.sample_rate != self._target_rate:
             chunk = resample_chunk(chunk, self._target_rate)
@@ -393,27 +491,25 @@ class _WebTransportSession:
     def _handle_control_bytes(self, data: bytes) -> None:
         for msg in self._control_codec.feed(data):
             self._handle_control_message(msg)
+        if self._control_codec.poisoned:
+            # An oversized length prefix is a malicious-peer signal.  Honor
+            # the codec's documented contract: tear the session down rather
+            # than silently swallowing all further control frames.
+            logger.warning(
+                "WebTransport control codec poisoned (oversized frame) — closing session %d",
+                self._session_id,
+            )
+            self.close_connection(reason="control framing violation")
+            self._on_close.set()
 
     def _handle_control_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type")
         if msg_type == "config":
-            sample_rate = _valid_config_sample_rate(msg.get("sample_rate"))
-            if sample_rate is not None:
-                self._inbound_format = AudioFormat(
-                    sample_rate=sample_rate,
-                    channels=self._audio_format.channels,
-                    sample_width=self._audio_format.sample_width,
-                    encoding=self._audio_format.encoding,
-                )
-                logger.info(
-                    "Client negotiated WebTransport audio format: %s",
-                    self._inbound_format,
-                )
-            elif "sample_rate" in msg:
-                logger.warning(
-                    "Ignoring invalid WebTransport sample_rate: %s",
-                    _trunc_for_log(msg["sample_rate"]),
-                )
+            # The mic sample rate now travels inline on the audio stream
+            # (see ``_handle_audio_bytes``) so it can't race this frame on
+            # an independent QUIC stream.  ``config`` is still accepted for
+            # backward tolerance but no longer drives inbound resampling.
+            logger.debug("Client sent WebTransport config: %s", _trunc_for_log(msg))
         elif msg_type in ("start", "stop"):
             logger.debug("Client sent WebTransport %s signal", msg_type)
         else:
@@ -444,6 +540,27 @@ class _WebTransportSession:
         self._send_stream_bytes(self._outbound_control_stream_id, _ControlCodec.encode(msg))
         self._quic_protocol.transmit()
 
+    def _end_audio_stream(self) -> None:
+        """FIN the current server→client audio stream (clean end, keep
+        already-buffered bytes flowing).
+
+        Used on a TTS sample-rate change: the old-rate bytes still in flight
+        should finish playing, so we don't ``reset`` — we FIN, the client
+        drains and closes that reader, and the next chunk opens a fresh,
+        self-describing stream carrying the new rate in its header.
+        """
+        if self._outbound_audio_stream_id is None:
+            return
+        quic = getattr(self._quic_protocol, "_quic", None)
+        if quic is not None:
+            try:
+                quic.send_stream_data(self._outbound_audio_stream_id, b"", end_stream=True)
+                self._quic_protocol.transmit()
+            except Exception:
+                logger.warning("ending WebTransport audio stream failed", exc_info=True)
+        self._outbound_audio_stream_id = None
+        self._outbound_rate = None
+
     def reset_audio_stream(self) -> None:
         """Abort the server→client audio stream so already-buffered bytes are
         discarded (barge-in semantics).
@@ -461,6 +578,7 @@ class _WebTransportSession:
         quic = getattr(self._quic_protocol, "_quic", None)
         if quic is None:
             self._outbound_audio_stream_id = None
+            self._outbound_rate = None
             return
         try:
             quic.reset_stream(self._outbound_audio_stream_id, error_code=0)
@@ -471,6 +589,9 @@ class _WebTransportSession:
             logger.warning("reset_stream failed for audio stream", exc_info=True)
         finally:
             self._outbound_audio_stream_id = None
+            # Next chunk opens a fresh stream; force it to re-emit the inline
+            # rate header even if the rate is unchanged.
+            self._outbound_rate = None
 
     def close_connection(self, *, reason: str = "") -> None:
         """Send CONNECTION_CLOSE and tear down the QUIC connection.
@@ -482,21 +603,79 @@ class _WebTransportSession:
         except Exception:
             logger.debug("Error closing WebTransport QUIC connection", exc_info=True)
 
+    async def _await_outbound_capacity(self) -> None:
+        """Block while aioquic's per-stream send buffer for the current
+        server→client audio stream is over the high-water mark.
+
+        ``QuicConnection.send_stream_data`` only appends to that buffer; the
+        bytes leave the process only as QUIC flow control / congestion
+        permit.  When a client stops reading (or its flow-control window
+        closes), nothing drains it, so without this gate the writer would
+        keep pulling from ``_out_queue`` and aioquic's unsent buffer — and
+        process memory — would grow without bound, defeating
+        ``outbound_max_pending``.
+
+        Polling happens here, *before* the queue ``get()`` in
+        :meth:`_outbound_writer`, so the documented no-await invariant
+        between ``get()`` and ``transmit()`` stays intact: a barge-in
+        (:meth:`reset_audio_stream`) still can't race a half-written chunk
+        because the writer is parked here, not suspended mid-send.  While we
+        wait, ``_out_queue`` fills and ``send_audio`` starts returning False
+        — i.e. TTS is dropped under sustained backpressure, which is the
+        documented behaviour.  ``aioquic``'s private ``_streams`` /
+        ``sender._buffer`` are read defensively (``getattr``); there is no
+        public accessor for per-stream buffered bytes.
+        """
+        quic = getattr(self._quic_protocol, "_quic", None)
+        if quic is None:
+            return
+        while not self._on_close.is_set():
+            sid = self._outbound_audio_stream_id
+            if sid is None:
+                return
+            streams = getattr(quic, "_streams", None)
+            stream = streams.get(sid) if isinstance(streams, dict) else None
+            if stream is None:
+                return
+            sender = getattr(stream, "sender", None)
+            buffered = len(getattr(sender, "_buffer", b"")) if sender is not None else 0
+            if buffered <= _OUTBOUND_SEND_BUFFER_HIGH_WATER:
+                return
+            await asyncio.sleep(_OUTBOUND_BACKPRESSURE_POLL_SEC)
+
     async def _outbound_writer(self) -> None:
         try:
             while True:
+                # Apply QUIC send-capacity backpressure *before* taking the
+                # next chunk so a slow/stalled client can't grow memory
+                # without bound (see _await_outbound_capacity).
+                await self._await_outbound_capacity()
                 chunk = await self._out_queue.get()
                 if chunk is None:
                     return
+                # INVARIANT: there must be no ``await`` between the queue
+                # ``get()`` above and the ``transmit()`` below.  ``clear_audio``
+                # / ``reset_audio_stream`` run synchronously (no await) and rely
+                # on this task always being parked at ``get()`` (or in the
+                # capacity gate above) — never suspended mid-send — so a
+                # barge-in can't race a half-written audio chunk onto the wire.
                 rate = chunk.format.sample_rate
-                if rate != self._outbound_rate:
-                    self._send_control({"type": "audio_format", "sample_rate": rate})
-                    self._outbound_rate = rate
+                if self._outbound_audio_stream_id is not None and rate != self._outbound_rate:
+                    # TTS sample rate changed mid-session: FIN the current
+                    # (old-rate) stream so the client closes that reader, then
+                    # fall through to open a fresh stream whose inline header
+                    # carries the new rate.  Each audio stream is thus
+                    # self-describing and rate-constant for its lifetime.
+                    self._end_audio_stream()
                 if self._outbound_audio_stream_id is None:
                     self._outbound_audio_stream_id = self._h3.create_webtransport_stream(
                         self._session_id
                     )
-                    self._send_stream_bytes(self._outbound_audio_stream_id, bytes([_TAG_AUDIO]))
+                    self._outbound_rate = rate
+                    self._send_stream_bytes(
+                        self._outbound_audio_stream_id,
+                        bytes([_TAG_AUDIO]) + struct.pack(">I", rate),
+                    )
                 self._send_stream_bytes(self._outbound_audio_stream_id, chunk.data)
                 self._quic_protocol.transmit()
         except asyncio.CancelledError:
@@ -555,9 +734,18 @@ def _get_protocol_class() -> type:
             # makes the "already have a session" check below always true, so
             # every CONNECT is rejected with 409.
             self._wt_transport: WebTransportConnectionTransport | None = None
+            # CONNECT stream id of the one accepted WebTransport session on
+            # this QUIC connection.  Stream-data events carry their own
+            # ``session_id``; anything not matching this is for a different
+            # (e.g. 409-rejected) session and must not be fed into ours.
+            self._accepted_session_id: int | None = None
             # Populated by the protocol factory before events flow.
             self._accept_path: str = ""
             self._on_session: Callable[[WebTransportConnectionTransport], None] = lambda _t: None
+            # Capacity gate, checked *before* the 200 is sent so an over-cap
+            # client gets a clean HTTP/3 503 instead of a 200 immediately
+            # followed by CONNECTION_CLOSE.
+            self._can_accept: Callable[[], bool] = lambda: True
             self._session_config: WebTransportTransportConfig = WebTransportTransportConfig()
 
         def quic_event_received(self, event: Any) -> None:
@@ -572,6 +760,18 @@ def _get_protocol_class() -> type:
                 self._handle_headers(event)
             elif isinstance(event, h3_events.WebTransportStreamDataReceived):
                 if self._wt_transport is None:
+                    return
+                if event.session_id != self._accepted_session_id:
+                    # Stream data targeting a different WebTransport session
+                    # on this QUIC connection (e.g. a stream opened against a
+                    # CONNECT we rejected with 409).  Never feed another
+                    # session's bytes into the one accepted session.
+                    logger.warning(
+                        "Ignoring WebTransport stream %d for session %s (accepted session is %s)",
+                        event.stream_id,
+                        event.session_id,
+                        self._accepted_session_id,
+                    )
                     return
                 self._wt_transport._feed_stream_data(  # noqa: SLF001
                     event.stream_id, event.data, event.stream_ended
@@ -600,6 +800,18 @@ def _get_protocol_class() -> type:
                 self.transmit()
                 return
 
+            if not self._can_accept():
+                # At the concurrent-session cap.  Reject *before* the 200 so
+                # the client sees a clean rejection rather than an accepted
+                # session that is force-closed a moment later.  No transport
+                # is created and ``_on_session`` is not called, so this
+                # connection holds no session resources (only QUIC idle
+                # timeout bounds it).
+                logger.warning("Rejecting WebTransport CONNECT — session cap reached")
+                self._h3.send_headers(event.stream_id, [(b":status", b"503")], end_stream=True)
+                self.transmit()
+                return
+
             self._h3.send_headers(
                 event.stream_id,
                 [(b":status", b"200"), (b"sec-webtransport-http3-draft", b"draft02")],
@@ -614,6 +826,7 @@ def _get_protocol_class() -> type:
                 _session_id=event.stream_id,
             )
             self._wt_transport = transport
+            self._accepted_session_id = event.stream_id
             self._on_session(transport)
 
         def connection_lost(self, exc: BaseException | None) -> None:
@@ -629,6 +842,7 @@ def _protocol_factory(
     *,
     accept_path: str,
     on_session: Callable[[WebTransportConnectionTransport], None],
+    can_accept: Callable[[], bool],
     session_config: WebTransportTransportConfig,
 ) -> Callable[..., Any]:
     """Build the ``create_protocol`` callable for :func:`aioquic.asyncio.serve`."""
@@ -639,6 +853,7 @@ def _protocol_factory(
         proto = protocol_cls(*args, **kwargs)
         proto._accept_path = accept_path
         proto._on_session = on_session
+        proto._can_accept = can_accept
         proto._session_config = session_config
         return proto
 
@@ -733,10 +948,7 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
             # lingering until the idle timeout.
             self._session.close_connection(reason="session ended")
         self._enqueue_sentinel()
-        try:
-            self._out_queue.put_nowait(None)
-        except asyncio.QueueFull:
-            pass
+        self._enqueue_out_sentinel()
         self._on_close.set()
 
     def force_close(self, *, reason: str = "") -> None:
@@ -755,10 +967,7 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
         if self._session is not None:
             self._session.close_connection(reason=reason)
         self._enqueue_sentinel()
-        try:
-            self._out_queue.put_nowait(None)
-        except asyncio.QueueFull:
-            pass
+        self._enqueue_out_sentinel()
         self._on_close.set()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
@@ -800,14 +1009,42 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
         if self._session is not None:
             self._session.handle_stream_data(stream_id, data, ended)
 
-    def _mark_connection_lost(self) -> None:
-        self._on_close.set()
-        # Unblock receive_audio() and the outbound writer.
-        self._enqueue_sentinel()
+    def _enqueue_out_sentinel(self) -> None:
+        """Put the ``None`` writer sentinel on the outbound queue, making
+        room if it is full.
+
+        The sentinel is what lets
+        :meth:`_WebTransportSession._outbound_writer` exit; a full
+        ``_out_queue`` (e.g. a stalled client) must not be allowed to
+        swallow it, otherwise the writer wedges.  Mirrors
+        :meth:`_AudioQueueMixin._enqueue_sentinel`.
+        """
+        try:
+            self._out_queue.put_nowait(None)
+            return
+        except asyncio.QueueFull:
+            pass
+        try:
+            self._out_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
         try:
             self._out_queue.put_nowait(None)
         except asyncio.QueueFull:
-            pass
+            logger.debug("Outbound queue full when enqueueing writer sentinel; ignoring")
+
+    def _mark_connection_lost(self) -> None:
+        # The QUIC connection is gone: bytes can no longer reach the peer,
+        # so mark this transport disconnected.  Leaving ``_connected`` True
+        # would let ``send_audio()`` keep returning True and enqueuing TTS
+        # that can never be delivered, and would leave handlers that watch
+        # transport state wedged until a later explicit ``disconnect()``.
+        self._connected = False
+        self._client_connected.clear()
+        self._on_close.set()
+        # Unblock receive_audio() and the outbound writer.
+        self._enqueue_sentinel()
+        self._enqueue_out_sentinel()
 
     def version_info(self) -> dict[str, str]:
         try:
@@ -862,11 +1099,24 @@ class WebTransportServer:
         self._handler_tasks: set[asyncio.Task[None]] = set()
         self._started = False
 
+    def _can_accept_session(self) -> bool:
+        """Capacity gate consulted by the protocol *before* it sends the 200.
+
+        Single-threaded event loop + synchronous CONNECT handling means the
+        check and the subsequent ``_dispatch_session`` task creation are
+        atomic relative to each other (no TOCTOU).
+        """
+        return len(self._handler_tasks) < self._config.max_concurrent_sessions
+
     def _dispatch_session(self, transport: WebTransportConnectionTransport) -> None:
         """Accept a new session or reject it when the concurrency cap is hit.
 
         Invoked synchronously from the aioquic protocol when a CONNECT-
-        webtransport handshake completes.
+        webtransport handshake completes.  The protocol already gates on
+        :meth:`_can_accept_session` *before* the 200, so a healthy path never
+        reaches the cap branch below — it is kept purely as defense-in-depth
+        (and for the direct unit test) in case this is ever driven without
+        the pre-200 check.
         """
         if len(self._handler_tasks) >= self._config.max_concurrent_sessions:
             logger.warning(
@@ -891,6 +1141,7 @@ class WebTransportServer:
         factory = _protocol_factory(
             accept_path=self._config.path,
             on_session=self._dispatch_session,
+            can_accept=self._can_accept_session,
             session_config=self._config,
         )
         aioquic_server = require_module(

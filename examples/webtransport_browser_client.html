@@ -81,7 +81,6 @@
 var WT_HOST = location.hostname || "localhost";
 var WT_URL = "https://" + WT_HOST + ":4433/easycat";
 var DESIRED_RATE = 16000;
-var serverPlaybackRate = 16000;
 
 // ── Stream tags (must match server) ──────────────────────────────
 var TAG_AUDIO   = 0x01;
@@ -161,14 +160,14 @@ function stopLevelMeter() {
 }
 
 // ── Playback ─────────────────────────────────────────────────────
-function playAudio(pcm16Buf) {
+function playAudio(pcm16Buf, rate) {
   if (!playCtx) return;
   var int16 = new Int16Array(pcm16Buf);
   var float32 = new Float32Array(int16.length);
   for (var i = 0; i < int16.length; i++) {
     float32[i] = int16[i] / 32768.0;
   }
-  var buffer = playCtx.createBuffer(1, float32.length, serverPlaybackRate);
+  var buffer = playCtx.createBuffer(1, float32.length, rate);
   buffer.getChannelData(0).set(float32);
   var src = playCtx.createBufferSource();
   src.buffer = buffer;
@@ -232,11 +231,27 @@ async function dispatchServerStream(reader) {
     if (first.done || first.value.length === 0) return;
     var tag = first.value[0];
     if (tag === TAG_AUDIO) {
-      if (first.value.length > 1) playAudio(first.value.slice(1).buffer);
+      // Audio header is [0x01][4-byte BE sample rate], possibly split across
+      // reads.  The rate is inline (not a control message) so it can never
+      // race the audio bytes; it is constant for this stream's lifetime.
+      var hdr = first.value;
+      while (hdr.length < 5) {
+        var hr = await reader.read();
+        if (hr.done) return;
+        var merged = new Uint8Array(hdr.length + hr.value.length);
+        merged.set(hdr, 0);
+        merged.set(hr.value, hdr.length);
+        hdr = merged;
+      }
+      var rate = new DataView(hdr.buffer, hdr.byteOffset, hdr.byteLength).getUint32(1, false);
+      if (hdr.length > 5) playAudio(hdr.slice(5).buffer, rate);
       while (true) {
         var r = await reader.read();
         if (r.done) return;
-        playAudio(r.value.buffer.slice(r.value.byteOffset, r.value.byteOffset + r.value.byteLength));
+        playAudio(
+          r.value.buffer.slice(r.value.byteOffset, r.value.byteOffset + r.value.byteLength),
+          rate
+        );
       }
     } else if (tag === TAG_CONTROL) {
       var decode = makeControlDecoder();
@@ -257,10 +272,9 @@ async function dispatchServerStream(reader) {
 }
 
 function handleControlMessage(msg) {
-  if (msg.type === "audio_format" && msg.sample_rate) {
-    serverPlaybackRate = msg.sample_rate;
-    console.log("Server playback rate:", serverPlaybackRate, "Hz");
-  }
+  // Server→client control is currently just {"type":"ready"} — the outbound
+  // sample rate now travels inline on the audio stream (see dispatchServerStream).
+  if (msg.type === "ready") console.log("Server ready");
 }
 
 // ── Start / Stop ─────────────────────────────────────────────────
@@ -311,14 +325,19 @@ async function start() {
     // Server reads from the write half of each and writes TTS audio /
     // control frames back on server-initiated streams (see
     // acceptServerStreams below).
+    // Audio stream is self-describing: [tag][4-byte BE sample rate][PCM].
+    // The rate is inline (not the `config` control frame) so it can never
+    // race the mic PCM on an independent QUIC stream.
     audioStream = await transport.createBidirectionalStream();
     audioWriter = audioStream.writable.getWriter();
-    await audioWriter.write(new Uint8Array([TAG_AUDIO]));
+    var audioHdr = new Uint8Array(5);
+    audioHdr[0] = TAG_AUDIO;
+    new DataView(audioHdr.buffer).setUint32(1, captureRate, false);
+    await audioWriter.write(audioHdr);
 
     controlStream = await transport.createBidirectionalStream();
     controlWriter = controlStream.writable.getWriter();
     await controlWriter.write(new Uint8Array([TAG_CONTROL]));
-    await controlWriter.write(encodeControl({ type: "config", sample_rate: captureRate }));
 
     // Server-initiated streams carry TTS audio and control frames.
     acceptServerStreams(transport).catch(function (e) { console.warn(e); });
