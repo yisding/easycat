@@ -820,18 +820,27 @@ class TestNoToolRegistryAfterMCP:
             )
 
         # Regex patterns for broader coverage (AC2B.11 full set).
+        # ``AudioRouter`` is the session-decomposition collaborator that
+        # routes audio between transport and pipeline stages; it is not
+        # a tool router and is whitelisted here.
         regex_patterns = [
             r"class \w*Registry",
             r"class \w*Router",
         ]
+        whitelist = {"class AudioRouter"}
         for pattern in regex_patterns:
             result = subprocess.run(
                 ["grep", "-rE", pattern, "src/easycat/"],
                 capture_output=True,
                 text=True,
             )
-            assert result.stdout.strip() == "", (
-                f"Found tool pattern {pattern!r} in src/easycat/:\n{result.stdout}"
+            offending = [
+                line
+                for line in result.stdout.strip().splitlines()
+                if not any(allowed in line for allowed in whitelist)
+            ]
+            assert offending == [], (
+                f"Found tool pattern {pattern!r} in src/easycat/:\n" + "\n".join(offending)
             )
 
 

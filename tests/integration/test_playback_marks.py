@@ -65,7 +65,7 @@ async def test_playback_transport_full_turn(monkeypatch: pytest.MonkeyPatch) -> 
         assert agent_final.text == "HELLO"
 
         # The session should have detected the transport's send_playback_mark capability.
-        assert session._playback_ack_transport is transport
+        assert session._audio_router._playback_ack_transport is transport
     finally:
         await transport.finish_input()
         await session.stop()
