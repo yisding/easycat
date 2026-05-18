@@ -2872,7 +2872,7 @@ async def test_synthesize_tts_does_not_clear_newer_turn_id() -> None:
     )
 
     session._turn = TurnContext("turn-old", CancelToken())
-    task = asyncio.create_task(session._synthesize_tts("hello", token=CancelToken()))
+    task = asyncio.create_task(session._tts_scheduler.synthesize("hello", token=CancelToken()))
     await asyncio.sleep(0.01)
     session._turn = TurnContext("turn-new", CancelToken())
 
