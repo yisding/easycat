@@ -4,14 +4,42 @@ Each turn (user speaks → agent responds → bot speaks) gets its own
 ``TurnContext``.  Session creates one at turn start and discards it at
 turn end, replacing the 15+ per-turn instance variables that previously
 lived on Session.
+
+Per-turn STT futures (``stt_final_future`` and
+``pending_stt_segment_futures``) also live here so that a stale
+callback from the previous turn cannot resolve a future on the next
+turn — the futures naturally die when the ``TurnContext`` is replaced.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import deque
+from typing import Protocol, runtime_checkable
 
 from easycat.cancel import CancelToken
+
+
+@runtime_checkable
+class TurnHandle(Protocol):
+    """The contract between Session and turn-running collaborators.
+
+    Session is the single authority on the active turn pointer and
+    turn generation.  Collaborators read and write through this handle
+    rather than holding ``Session`` refs.
+    """
+
+    @property
+    def current(self) -> TurnContext | None: ...
+
+    @property
+    def generation(self) -> int: ...
+
+    @property
+    def no_turn(self) -> TurnContext: ...
+
+    def set(self, turn: TurnContext | None) -> None: ...
 
 
 class TurnContext:
@@ -36,6 +64,8 @@ class TurnContext:
         "playback_ack_log",
         "bytes_since_last_mark",
         "last_barge_in_time",
+        "stt_final_future",
+        "pending_stt_segment_futures",
     )
 
     def __init__(self, turn_id: str, cancel_token: CancelToken) -> None:
@@ -64,6 +94,11 @@ class TurnContext:
         self.bytes_since_last_mark: int = 0
 
         self.last_barge_in_time: float | None = None
+
+        # STT future plumbing — per-turn so a stale callback cannot resolve
+        # a future on the next turn (the futures die with the TurnContext).
+        self.stt_final_future: asyncio.Future[str] | None = None
+        self.pending_stt_segment_futures: list[asyncio.Future[str]] = []
 
     def record_barge_in(self) -> None:
         self.last_barge_in_time = time.monotonic()

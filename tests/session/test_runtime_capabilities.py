@@ -224,8 +224,8 @@ def test_transport_capabilities_are_detected_structurally() -> None:
     transport = _CapabilityTransport()
     session = Session(_config(transport=transport))
 
-    assert session._playback_ack_transport is transport
-    assert session._transport_reports_audio_delivery is True
+    assert session._audio_router._playback_ack_transport is transport
+    assert session._audio_router._transport_reports_audio_delivery is True
 
 
 @pytest.mark.asyncio
