@@ -103,7 +103,10 @@ class TurnManager:
         self._config = config or TurnManagerConfig()
 
         # Callback for barge-in: expected to call session.cancel_turn(barge_in=True).
-        # The callback is the sole emitter of the Interruption event.
+        # The callback is the sole emitter of the Interruption event.  Phase 4
+        # of the session decomposition installs this callback late (after the
+        # CancelOrchestrator exists), so it is also settable post-construction
+        # via :meth:`set_cancel_callback`.
         self._cancel_turn_callback = cancel_turn_callback
 
         # State
@@ -167,6 +170,16 @@ class TurnManager:
     def bind_session(self, session_id: str) -> None:
         """Bind a stable session identifier used for emitted events."""
         self._session_id = session_id
+
+    def set_cancel_callback(self, callback: Any | None) -> None:
+        """Install (or replace) the barge-in cancel callback.
+
+        Phase 4 of the session decomposition constructs TurnManager
+        before the CancelOrchestrator exists, so the callback is
+        installed late.  The callback is expected to be awaitable and
+        to return ``False`` when barge-in should be suppressed.
+        """
+        self._cancel_turn_callback = callback
 
     def bind_journal_hook(
         self,

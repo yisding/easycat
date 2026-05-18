@@ -364,7 +364,7 @@ def test_session_strip_markdown_does_not_inject_hidden_processor():
     processor = MarkerProcessor()
     session = Session(_full_config(strip_markdown=True, output_processors=[processor]))
 
-    assert session._output_processors == [processor]
+    assert session._tts_scheduler._output_processors == [processor]
 
 
 @pytest.mark.asyncio
@@ -497,7 +497,7 @@ async def test_replay_gated_audio_stays_bot_speaking_until_outbound_drain():
     assert session._turn_manager.state == TurnManagerState.BOT_SPEAKING
     assert session._outbound_queue.qsize() == 2
 
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
 
     assert session._turn_manager.state == TurnManagerState.IDLE
     assert len(transport.sent) == 2
@@ -532,8 +532,8 @@ async def test_session_start_rolls_back_after_connect_failure():
         await session.start()
 
     assert not session.is_running
-    assert session._pipeline_task is None
-    assert session._outbound_task is None
+    assert session._audio_router.pipeline_task is None
+    assert session._audio_router.outbound_task is None
 
     await session.start()
 
@@ -659,7 +659,7 @@ async def test_cancel_turn_barge_in_emits_interruption():
 
 @pytest.mark.asyncio
 async def test_journaled_task_records_scheduled_and_completed():
-    """``_journaled_task`` must write ``task_scheduled`` at creation and
+    """``RuntimeScope.create_journaled_task`` must write ``task_scheduled`` at creation and
     ``task_completed`` when the coroutine finishes cleanly."""
     journal = InMemoryRingBuffer(capacity=32)
     session = Session(_full_config(journal=journal))
@@ -668,7 +668,9 @@ async def test_journaled_task_records_scheduled_and_completed():
     async def _ok() -> str:
         return "ok"
 
-    task = session._journaled_task(_ok(), name="unit_test_task")
+    task = session._runtime_scope.create_journaled_task(
+        _ok(), name="unit_test_task", journal_sink=session._journal_sink
+    )
     await task
     # add_done_callback schedules the emit callback — let it run.
     await asyncio.sleep(0)
@@ -690,7 +692,9 @@ async def test_journaled_task_records_cancelled():
     async def _slow() -> None:
         await asyncio.sleep(10.0)
 
-    task = session._journaled_task(_slow(), name="slow_task")
+    task = session._runtime_scope.create_journaled_task(
+        _slow(), name="slow_task", journal_sink=session._journal_sink
+    )
     task.cancel()
     try:
         await task
@@ -710,7 +714,9 @@ async def test_journaled_task_records_raised():
     async def _boom() -> None:
         raise ValueError("explosion")
 
-    task = session._journaled_task(_boom(), name="boom_task")
+    task = session._runtime_scope.create_journaled_task(
+        _boom(), name="boom_task", journal_sink=session._journal_sink
+    )
     try:
         await task
     except ValueError:
@@ -804,7 +810,7 @@ async def test_pipeline_heartbeat_emits_records_at_interval():
 async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     """Regression test for plan-7 flakiness.
 
-    When VADStopSpeaking fires, ``_schedule_stt_segment_commit`` creates
+    When VADStopSpeaking fires, ``STTCommitter.schedule`` creates
     a task that calls ``stt.commit_segment``.  If SmartTurn immediately
     declares the turn complete, ``TurnEnded`` fires before the commit
     task has a chance to cancel — and previously ``_schedule_turn_ended``
@@ -820,8 +826,8 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     session._turn_state = TurnState.LISTENING
     session._turn = TurnContext("race-turn", CancelToken())
     session._turn.stt_has_uncommitted_audio = True
-    session._stt_active = True
-    session._stt_segment_silence_ms = 0  # match plan-7's fast config
+    session._stt_committer.mark_active()
+    session._stt_committer._segment_silence_ms = 0  # match plan-7's fast config
 
     events = []
 
@@ -845,7 +851,7 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     session.stt = _RaceSTT()
     session._stt_stage = type(session._stt_stage)(session.stt, journal=session._journal)
 
-    session._schedule_stt_segment_commit(VADStopSpeaking())
+    session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
     await asyncio.sleep(0.001)
     session._schedule_turn_ended(TurnEnded(turn_id="race-turn"))
     for _ in range(20):
@@ -950,7 +956,7 @@ async def test_flux_auto_turn_does_not_start_on_silence_frames():
     session._is_running = True
     session._turn_manager.start_turn = AsyncMock()  # type: ignore[method-assign]
 
-    await session._run_pipeline()
+    await session._audio_router._run_pipeline()
 
     session._turn_manager.start_turn.assert_not_called()  # type: ignore[attr-defined]
 
@@ -965,7 +971,7 @@ async def test_flux_auto_turn_does_not_barge_in_during_bot_playback():
     session._turn_manager._state = TurnManagerState.BOT_SPEAKING
     session._turn_manager.start_turn = AsyncMock()  # type: ignore[method-assign]
 
-    await session._run_pipeline()
+    await session._audio_router._run_pipeline()
 
     session._turn_manager.start_turn.assert_not_called()  # type: ignore[attr-defined]
 
@@ -1034,7 +1040,7 @@ async def test_handle_end_of_speech_clears_turn_id_on_stt_timeout():
     session = Session(_full_config())
     session._turn = TurnContext("turn-stale", CancelToken())
     session._timeout_config.stt_timeout = 0.01
-    session._stt_final_future = asyncio.get_running_loop().create_future()
+    session._turn.stt_final_future = asyncio.get_running_loop().create_future()
 
     await session._handle_end_of_speech()
 
@@ -1048,7 +1054,7 @@ async def test_handle_end_of_speech_clears_turn_id_on_empty_transcript():
     session._turn = TurnContext("turn-stale", CancelToken())
     done = asyncio.get_running_loop().create_future()
     done.set_result("")
-    session._stt_final_future = done
+    session._turn.stt_final_future = done
 
     await session._handle_end_of_speech()
 
@@ -1070,11 +1076,11 @@ async def test_pause_commit_keeps_turn_open_but_collects_segment_final():
     )
     session._turn = TurnContext("turn-1", CancelToken())
     session._turn.stt_has_uncommitted_audio = True
-    session._stt_active = True
+    session._stt_committer.mark_active()
     session._turn_manager._state = TurnManagerState.USER_PAUSED
-    session._start_stt_event_task()
+    session._stt_committer.start_event_loop(session._turn)
 
-    session._schedule_stt_segment_commit(VADStopSpeaking())
+    session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
     await asyncio.sleep(0.05)
 
     assert stt.commit_calls == 1
@@ -1161,7 +1167,7 @@ async def test_prepare_tts_payload_writes_journal_record():
     )
     session._turn = TurnContext("turn-tts-prepared", CancelToken())
 
-    payload = session._prepare_tts_payload("hello", is_streaming=False, is_final=True)
+    payload = session._tts_scheduler.prepare("hello", is_streaming=False, is_final=True)
 
     assert payload.text == "speak: hello"
     records = [record for record in journal.read() if record.name == "tts_payload_prepared"]
@@ -1196,11 +1202,11 @@ async def test_pause_commit_journals_segment_commit_and_final():
     )
     session._turn = TurnContext("turn-segment-journal", CancelToken())
     session._turn.stt_has_uncommitted_audio = True
-    session._stt_active = True
+    session._stt_committer.mark_active()
     session._turn_manager._state = TurnManagerState.USER_PAUSED
-    session._start_stt_event_task()
+    session._stt_committer.start_event_loop(session._turn)
 
-    await session._start_stt_segment_commit()
+    await session._stt_committer._start_segment_commit(turn=session._turn)
     await asyncio.sleep(0.05)
 
     records = [record for record in journal.read() if record.name.startswith("stt_segment_")]
@@ -1243,11 +1249,11 @@ async def test_shutdown_cancels_runtime_scoped_stt_pause_commit() -> None:
     session._is_running = True
     session._turn = TurnContext("turn-runtime-scope", CancelToken())
     session._turn.stt_has_uncommitted_audio = True
-    session._stt_active = True
+    session._stt_committer.mark_active()
     session._turn_manager._state = TurnManagerState.USER_PAUSED
 
-    session._schedule_stt_segment_commit(VADStopSpeaking())
-    task = session._stt_pause_commit_task
+    session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
+    task = session._stt_committer._pause_commit_task
     assert task is not None
     assert session._runtime_scope.tasks("stt_pause_commit") == (task,)
 
@@ -1257,7 +1263,7 @@ async def test_shutdown_cancels_runtime_scoped_stt_pause_commit() -> None:
         record for record in journal.read() if record.data.get("task_name") == "stt_pause_commit"
     ]
     assert task.cancelled()
-    assert session._stt_pause_commit_task is None
+    assert session._stt_committer._pause_commit_task is None
     assert session._runtime_scope.empty
     assert [record.name for record in records] == ["task_scheduled", "task_cancelled"]
 
@@ -1277,11 +1283,11 @@ async def test_stop_cancels_runtime_scoped_stt_pause_commit() -> None:
     session._is_running = True
     session._turn = TurnContext("turn-runtime-scope", CancelToken())
     session._turn.stt_has_uncommitted_audio = True
-    session._stt_active = True
+    session._stt_committer.mark_active()
     session._turn_manager._state = TurnManagerState.USER_PAUSED
 
-    session._schedule_stt_segment_commit(VADStopSpeaking())
-    task = session._stt_pause_commit_task
+    session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
+    task = session._stt_committer._pause_commit_task
     assert task is not None
 
     await session.stop()
@@ -1290,7 +1296,7 @@ async def test_stop_cancels_runtime_scoped_stt_pause_commit() -> None:
         record for record in journal.read() if record.data.get("task_name") == "stt_pause_commit"
     ]
     assert task.cancelled()
-    assert session._stt_pause_commit_task is None
+    assert session._stt_committer._pause_commit_task is None
     assert session._runtime_scope.empty
     assert [record.name for record in records] == ["task_scheduled", "task_cancelled"]
 
@@ -1308,7 +1314,7 @@ async def test_tts_audio_and_markers_are_journaled_with_artifact_ref():
     )
     session._turn = TurnContext("turn-tts-audio", CancelToken())
 
-    await session._synthesize_tts("hello", token=None)
+    await session._tts_scheduler.synthesize("hello", token=None)
 
     audio_records = [record for record in journal.read() if record.name == "tts_audio"]
     marker_records = [record for record in journal.read() if record.name == "tts_markers"]
@@ -1592,23 +1598,23 @@ async def test_playback_mark_ack_scoped_to_current_turn():
     # ── First turn ──
     session._turn = TurnContext("turn-first", CancelToken())
     await session._outbound_queue.put(_make_chunk())
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
     first_turn_marks = list(session._turn.playback_mark_to_bytes.keys())
     assert len(first_turn_marks) == 1
 
     # ── Second turn (replaces the TurnContext) ──
     session._is_running = True
-    with patch.object(session, "_start_stt_event_task"):
+    with patch.object(session._stt_committer, "start_event_loop"):
         await session._on_turn_started(TurnStarted())
     session._is_running = False
 
     await session._outbound_queue.put(_make_chunk())
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
     second_turn_marks = list(session._turn.playback_mark_to_bytes.keys())
     assert len(second_turn_marks) == 1
 
     # Ack for the second turn's mark works.
-    session._on_playback_mark_ack(PlaybackMarkAck(mark_name=second_turn_marks[0]))
+    session._audio_router.on_playback_ack(PlaybackMarkAck(mark_name=second_turn_marks[0]))
     assert len(session._turn.playback_ack_log) == 1
     assert session._turn.playback_ack_log[0][1] == 320
 
@@ -1628,10 +1634,10 @@ async def test_playback_mark_ack_tracks_transport_confirmed_name():
     session._turn = TurnContext("test-turn", CancelToken())
 
     await session._outbound_queue.put(_make_chunk())
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
 
     canonical_mark = transport.playback_marks[-1]
-    session._on_playback_mark_ack(PlaybackMarkAck(mark_name=canonical_mark))
+    session._audio_router.on_playback_ack(PlaybackMarkAck(mark_name=canonical_mark))
 
     assert len(session._turn.playback_ack_log) == 1
     assert session._turn.playback_ack_log[0][1] == 320
@@ -1666,7 +1672,7 @@ async def test_buffered_transport_delivery_is_counted_only_after_report() -> Non
 
     chunk = _make_chunk()
     await session._outbound_queue.put(chunk)
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
 
     assert transport.sent == [chunk]
     assert session._turn.audio_bytes_sent == 0
@@ -1700,7 +1706,7 @@ async def test_failed_send_does_not_emit_audio_out_or_count_bytes() -> None:
     session.event_bus.subscribe(AudioOut, lambda event: seen.append(event))
 
     await session._outbound_queue.put(_make_chunk())
-    await session._drain_outbound_audio()
+    await session._audio_router._drain_outbound_audio()
 
     assert session._turn.audio_bytes_sent == 0
     assert session._turn.bytes_since_last_mark == 0
