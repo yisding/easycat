@@ -97,7 +97,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.audio_utils import resample_chunk
 from easycat.extras import require_module
-from easycat.transports._base import _AudioQueueMixin
+from easycat.transports._base import _DEGRADED_INBOUND_QUEUE_FULL, _AudioQueueMixin
 from easycat.transports.websocket import _valid_config_sample_rate
 
 if TYPE_CHECKING:
@@ -177,9 +177,31 @@ _LOG_TRUNC = 64
 
 _DEFAULT_PATH = "/easycat"
 
+# WebTransport-specific ``TransportDegraded.reason`` codes emitted on the
+# session event bus.  These mirror conditions that previously only reached
+# ``logger.warning``; emitting them keeps the journal the single source of
+# truth for observability (a dropped frame / torn-down session is now visible
+# in an exported debug bundle, not just the process log).  The cross-transport
+# ``inbound_queue_full`` code is shared from ``_base`` (imported above).
+_DEGRADED_OUTBOUND_QUEUE_FULL = "outbound_queue_full"
+_DEGRADED_CONTROL_CODEC_POISONED = "control_codec_poisoned"
+_DEGRADED_REJECTED_STREAM_FLOOD = "rejected_stream_flood"
+_DEGRADED_OUTBOUND_WRITER_CRASHED = "outbound_writer_crashed"
+_DEGRADED_BARGE_IN_RESET_FAILED = "barge_in_reset_failed"
+
+# Signature of the per-session degraded-event emitter injected by
+# :class:`WebTransportConnectionTransport`.  ``fatal`` marks conditions that
+# tore the session down (vs. a recoverable single-frame drop).
+_DegradedEmitter = Callable[..., None]
+
 # Type alias for the user-supplied per-session handler. Module-private — not
 # part of the public surface.
 _SessionHandler = Callable[["WebTransportConnectionTransport"], Awaitable[None]]
+
+
+def _noop_degraded(reason: str, detail: str = "", *, fatal: bool = False) -> None:
+    """Default :data:`_DegradedEmitter` — used when no event bus is wired
+    (e.g. a directly-constructed session in a unit test)."""
 
 
 def _trunc_for_log(value: object) -> str:
@@ -326,8 +348,13 @@ class _WebTransportSession:
         in_queue: asyncio.Queue[AudioChunk | None],
         out_queue: asyncio.Queue[AudioChunk | None],
         on_close: asyncio.Event,
+        emit_degraded: _DegradedEmitter | None = None,
     ) -> None:
         self._h3 = h3
+        # Surfaces drop / poison / abort conditions on the session event bus
+        # so they land in the journal (see ``_DEGRADED_*``).  No-op until a
+        # bus is wired, so a directly-constructed session stays inert.
+        self._emit_degraded: _DegradedEmitter = emit_degraded or _noop_degraded
         self._quic_protocol = quic_protocol
         self._session_id = session_id
         self._target_rate = target_sample_rate
@@ -520,6 +547,11 @@ class _WebTransportSession:
                 self._session_id,
                 _MAX_REJECTED_STREAMS,
             )
+            self._emit_degraded(
+                _DEGRADED_REJECTED_STREAM_FLOOD,
+                f"session {self._session_id} exceeded {_MAX_REJECTED_STREAMS} rejected streams",
+                fatal=True,
+            )
             self.close_connection(reason="too many rejected streams")
             self._on_close.set()
 
@@ -562,6 +594,10 @@ class _WebTransportSession:
             self._in_queue.put_nowait(chunk)
         except asyncio.QueueFull:
             logger.warning("Inbound WebTransport audio queue full — dropping frame")
+            self._emit_degraded(
+                _DEGRADED_INBOUND_QUEUE_FULL,
+                f"dropped {len(chunk.data)}-byte mic frame; inbound queue full",
+            )
 
     def _handle_control_bytes(self, data: bytes) -> None:
         for msg in self._control_codec.feed(data):
@@ -573,6 +609,11 @@ class _WebTransportSession:
             logger.warning(
                 "WebTransport control codec poisoned (oversized frame) — closing session %d",
                 self._session_id,
+            )
+            self._emit_degraded(
+                _DEGRADED_CONTROL_CODEC_POISONED,
+                f"oversized control frame poisoned session {self._session_id}",
+                fatal=True,
             )
             self.close_connection(reason="control framing violation")
             self._on_close.set()
@@ -662,6 +703,10 @@ class _WebTransportSession:
             # Promoted from debug to warning: if reset_stream silently fails,
             # the client will keep hearing in-flight TTS after a barge-in.
             logger.warning("reset_stream failed for audio stream", exc_info=True)
+            self._emit_degraded(
+                _DEGRADED_BARGE_IN_RESET_FAILED,
+                "reset_stream failed; client may keep hearing TTS after barge-in",
+            )
         finally:
             self._outbound_audio_stream_id = None
             # Next chunk opens a fresh stream; force it to re-emit the inline
@@ -755,8 +800,13 @@ class _WebTransportSession:
                 self._quic_protocol.transmit()
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception("WebTransport outbound writer crashed")
+            self._emit_degraded(
+                _DEGRADED_OUTBOUND_WRITER_CRASHED,
+                f"outbound writer crashed: {type(exc).__name__}",
+                fatal=True,
+            )
             # Signal session teardown so the owning transport disconnects
             # cleanly instead of wedging with send_audio() still returning
             # True while no bytes ever reach the peer.
@@ -1018,6 +1068,11 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
             maxsize=self._config.outbound_max_pending,
         )
         self._on_close = asyncio.Event()
+        # ``_event_bus`` / ``_emit_tasks`` / ``_emit_degraded`` come from
+        # ``_AudioQueueMixin`` (initialised by ``_init_audio_queue`` above).
+        # Session attaches the bus post-construction via
+        # ``_maybe_attach_event_bus``; the session built below is handed the
+        # bound ``_emit_degraded`` and reads the bus live at emit time.
         if _h3 is None or _quic_protocol is None or _session_id is None:
             self._session: _WebTransportSession | None = None
             self._needs_external_session = True
@@ -1031,6 +1086,7 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
                 in_queue=self._in_queue,
                 out_queue=self._out_queue,
                 on_close=self._on_close,
+                emit_degraded=self._emit_degraded,
             )
             self._needs_external_session = False
 
@@ -1106,6 +1162,10 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
             return True
         except asyncio.QueueFull:
             logger.debug("WebTransport outbound queue full — dropping TTS frame")
+            self._emit_degraded(
+                _DEGRADED_OUTBOUND_QUEUE_FULL,
+                f"dropped {len(chunk.data)}-byte TTS frame; outbound queue full",
+            )
             return False
 
     async def clear_audio(self) -> None:
@@ -1173,6 +1233,9 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
         # Unblock receive_audio() and the outbound writer.
         self._enqueue_sentinel()
         self._enqueue_out_sentinel()
+
+    # ``_emit_degraded`` is inherited from ``_AudioQueueMixin`` — it reads
+    # ``self._event_bus`` live and tags events with ``transport_kind``.
 
     def version_info(self) -> dict[str, str]:
         try:
@@ -1368,6 +1431,11 @@ class WebTransportTransport(_AudioQueueMixin):
         self._init_audio_queue(self._config.max_pending_chunks)
         self._server: WebTransportServer | None = None
         self._active: WebTransportConnectionTransport | None = None
+        # ``_event_bus`` comes from ``_AudioQueueMixin`` (``_init_audio_queue``
+        # above).  Session attaches it post-construction
+        # (``_maybe_attach_event_bus``); ``connect``'s ``handle`` closure
+        # forwards it to the inner per-session transport so degraded events
+        # still reach the journal in the single-client path.
 
     @property
     def audio_format(self) -> AudioFormat:
@@ -1388,6 +1456,9 @@ class WebTransportTransport(_AudioQueueMixin):
                 )
                 return
             self._active = transport
+            # Forward the (late-attached) session bus so the inner session's
+            # drop/poison/abort conditions are journaled in this path too.
+            transport._event_bus = self._event_bus  # noqa: SLF001
             self._client_connected.set()
             try:
                 await transport.wait_closed()

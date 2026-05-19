@@ -1,7 +1,7 @@
 import pytest
 
 from easycat.cancel import CancelToken
-from easycat.events import EventBus, STTFinal
+from easycat.events import EventBus, STTFinal, TransportDegraded
 from easycat.runtime.artifacts import InMemoryArtifactStore
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
@@ -34,6 +34,51 @@ async def test_journal_sink_subscribes_session_events() -> None:
     assert records[0].session_id == "event-session"
     assert records[0].turn_id == "t1"
     assert records[0].data == {"text": "hello", "track": "caller"}
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_records_transport_degraded() -> None:
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(
+        TransportDegraded(
+            provider="webtransport",
+            reason="inbound_queue_full",
+            detail="dropped 320-byte mic frame; inbound queue full",
+        )
+    )
+    await bus.emit(
+        TransportDegraded(
+            provider="webtransport",
+            reason="control_codec_poisoned",
+            detail="oversized control frame poisoned session 4",
+            fatal=True,
+        )
+    )
+
+    records = journal.read()
+    assert [r.name for r in records] == ["transport_degraded", "transport_degraded"]
+    # Recoverable single-frame drop stays on the EVENT timeline.
+    assert records[0].kind == JournalRecordKind.EVENT
+    assert records[0].data == {
+        "provider": "webtransport",
+        "reason": "inbound_queue_full",
+        "detail": "dropped 320-byte mic frame; inbound queue full",
+        "fatal": False,
+    }
+    # Fatal teardown is a control-plane record (mirrors ``interruption``).
+    assert records[1].kind == JournalRecordKind.CONTROL
+    assert records[1].data["reason"] == "control_codec_poisoned"
+    assert records[1].data["fatal"] is True
 
 
 def test_journal_sink_stores_artifact_refs_before_record() -> None:

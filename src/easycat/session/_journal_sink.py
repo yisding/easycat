@@ -31,6 +31,7 @@ from easycat.events import (
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
+    TransportDegraded,
     TTSAudio,
     TTSMarkers,
     TurnEnded,
@@ -108,6 +109,10 @@ class SessionJournalSink:
         # PlaybackMarkAck is also consumed by Session state tracking; keep a
         # separate journal timeline of what the client rendered when.
         self._subscribe(PlaybackMarkAck, self._make_event_handler(evt, "playback_mark_ack"))
+        # Transports emit these for drop/poison/abort conditions that would
+        # otherwise only reach the debug log; recording them keeps the
+        # journal the single source of truth for observability.
+        self._subscribe(TransportDegraded, self._handle_transport_degraded)
 
     def replace_backends(
         self,
@@ -217,4 +222,19 @@ class SessionJournalSink:
             name="tts_markers",
             turn_id=event.turn_id,
             data={"markers": event.markers},
+        )
+
+    def _handle_transport_degraded(self, event: TransportDegraded) -> None:
+        # Fatal teardowns are control-plane events (mirrors ``interruption``);
+        # recoverable single-frame drops stay on the EVENT timeline.
+        self.append_record(
+            name="transport_degraded",
+            kind=JournalRecordKind.CONTROL if event.fatal else JournalRecordKind.EVENT,
+            turn_id=event.turn_id,
+            data={
+                "provider": event.provider,
+                "reason": event.reason,
+                "detail": event.detail,
+                "fatal": event.fatal,
+            },
         )
