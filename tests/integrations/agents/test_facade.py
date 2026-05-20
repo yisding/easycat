@@ -238,9 +238,12 @@ class TestAutoAdaptLangGraph:
     ``configurable.session_id`` instead of LangGraph's required
     ``thread_id`` and crash a checkpointed graph on the first turn)."""
 
+    @pytest.fixture(autouse=True)
+    def _requires_langgraph(self):
+        pytest.importorskip("langgraph")
+
     @staticmethod
     def _compiled_graph(*, checkpointer: bool = True):
-        pytest.importorskip("langgraph")
         from langgraph.checkpoint.memory import InMemorySaver
         from langgraph.graph import END, START, StateGraph
 

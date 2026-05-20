@@ -1444,8 +1444,13 @@ class TestLangChainBridgeInvoke:
         done = [e for e in events if e.kind == "done"]
         assert done and done[0].text == "ABC"
         assert done[0].structured_output == "ABC"
-        ai_msgs = [m for m in bridge._message_history if getattr(m, "type", None) == "ai"]
-        assert ai_msgs and ai_msgs[-1].content == "ABC"
+        ai_msgs = [
+            m
+            for m in bridge._message_history
+            if getattr(m, "type", None) == "ai"
+            or (isinstance(m, dict) and m.get("role") == "assistant")
+        ]
+        assert ai_msgs and _content_of_history_item(ai_msgs[-1]) == "ABC"
 
     @pytest.mark.asyncio
     async def test_chain_wrapping_non_streaming_chat_model_emits_text(self):

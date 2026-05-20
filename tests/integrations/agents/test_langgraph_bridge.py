@@ -12,6 +12,7 @@ same dict-shaped events as ``LangChainBridge`` plus the LangGraph
 from __future__ import annotations
 
 import asyncio
+import functools
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -1332,17 +1333,19 @@ class LastValue:
     """
 
 
+def _fake_add_messages(*args: Any, **kwargs: Any) -> Any:
+    return args, kwargs
+
+
 class _ReducerChannel:
     """Duck-types an ``Annotated[list, add_messages]`` reducer channel.
 
-    Its ``.operator`` is LangGraph's real ``add_messages`` reducer (the
-    bridge only enables the ``RemoveMessage`` / id-keyed-replace
-    machinery for that specific reducer)."""
+    Its ``.operator`` has the same name shape as LangGraph's
+    ``add_messages`` reducer so these duck-typed tests do not need the
+    real optional package installed."""
 
     def __init__(self) -> None:
-        from langgraph.graph.message import add_messages
-
-        self.operator = add_messages
+        self.operator = _fake_add_messages
 
 
 class _GenericReducerChannel:
@@ -1846,9 +1849,7 @@ class _FormattedAddMessagesChannel:
     ...)``, which is still genuine ``add_messages`` merge semantics."""
 
     def __init__(self) -> None:
-        from langgraph.graph.message import add_messages
-
-        self.operator = add_messages(format="langchain-openai")
+        self.operator = functools.partial(_fake_add_messages, format="langchain-openai")
 
 
 class TestLangGraphBridgeFormattedAddMessages:
