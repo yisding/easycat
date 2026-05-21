@@ -21,6 +21,8 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
       (requires explicit ``PydanticAIBridge(graph=..., ...)`` construction)
     - ``pydantic_ai.Agent`` -> :class:`PydanticAIBridge` (Agent mode)
     - ``agents.Agent`` (OpenAI Agents SDK) -> :class:`OpenAIAgentsBridge`
+    - ``langgraph.graph.state.CompiledStateGraph`` -> :class:`LangGraphBridge`
+    - ``langchain_core.runnables.Runnable`` -> :class:`LangChainBridge`
 
     Plain objects with ``async run(text) -> str`` but no framework match
     are returned unchanged — the caller (``create_session`` /
@@ -151,6 +153,46 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     except ImportError:
         pass
 
+    # 7b. LangGraph compiled graph -> LangGraphBridge (check before
+    # plain LangChain Runnable since CompiledStateGraph *is* a Runnable).
+    # A graph wrapped by a generic Runnable combinator
+    # (``graph.with_types(...)`` / ``.with_retry(...)``) is a
+    # ``RunnableBinding`` / ``RunnableRetry`` whose real graph sits on
+    # ``.bound`` — peel those so it still routes here instead of falling
+    # through to the plain LangChainBridge, which would feed it
+    # ``configurable.session_id`` instead of LangGraph's required
+    # ``thread_id`` and crash a checkpointed graph on the first turn.
+    compiled_graph = _unwrap_compiled_state_graph(agent)
+    if compiled_graph is not None:
+        if getattr(compiled_graph, "checkpointer", None) is None:
+            raise BridgeInputError(
+                "LangGraph graphs must be compiled with a checkpointer "
+                "to be auto-adapted. Call graph.compile("
+                "checkpointer=InMemorySaver()) or construct "
+                "LangGraphBridge(graph=..., ...) explicitly."
+            )
+        from easycat.integrations.agents.langgraph import LangGraphBridge
+
+        return LangGraphBridge(graph=compiled_graph)
+
+    # 7c. LangChain Runnable -> LangChainBridge.
+    try:
+        from langchain_core.runnables import Runnable  # type: ignore[import-untyped]
+
+        if isinstance(agent, Runnable):
+            from easycat.integrations.agents.langchain import LangChainBridge
+
+            # Bare language models (``ChatOpenAI(...)``, any
+            # ``BaseChatModel`` / ``BaseLLM``) are Runnables too, but they
+            # reject the default ``{"input": ..., "history": ...}`` dict
+            # with ``Invalid input type <class 'dict'>``.  Feed them a
+            # message sequence instead so ``EasyConfig.mic(agent=...)``
+            # works on the first turn while history still threads through.
+            messages_input = _is_language_model(agent)
+            return LangChainBridge(runnable=agent, messages_input=messages_input)
+    except ImportError:
+        pass
+
     # 8. Realtime-API-shaped objects -> error.
     cls_name = type(agent).__name__
     if "Realtime" in cls_name or hasattr(agent, f"create_{'realtime'}_session"):
@@ -166,3 +208,210 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     # :class:`AgentRunnerConfig`; ``AgentStage`` provides a default-config
     # safety wrap for callers that construct ``Session`` directly.
     return agent
+
+
+def _unwrap_compiled_state_graph(agent: Any) -> Any | None:
+    """Return the object :class:`LangGraphBridge` should drive for a
+    (possibly wrapped) ``CompiledStateGraph``, else ``None``.
+
+    A compiled LangGraph graph is a ``CompiledStateGraph``, but wrapping
+    it in a generic ``Runnable`` combinator — ``graph.bind(...)``,
+    ``graph.with_listeners(...)``, ``graph.with_config(...)``,
+    ``graph.with_types(...)``, ``graph.with_retry(...)`` — hides it
+    inside a ``RunnableBinding`` / ``RunnableRetry`` whose real graph
+    sits on ``.bound``.  It must still route through
+    :class:`LangGraphBridge` (not the plain :class:`LangChainBridge`,
+    which supplies ``configurable.session_id`` where LangGraph requires
+    ``thread_id`` and crashes a checkpointed graph on the first turn),
+    *without silently dropping the wrapper's behaviour*.
+
+    The two wrapper families differ:
+
+    * ``RunnableBinding`` (``bind`` / ``with_config`` / ``with_listeners``
+      / ``with_types``) overrides ``astream_events`` to apply its bound
+      kwargs + merged config (listeners included) and proxies *every
+      other* attribute to ``.bound``.  So when the chain from a binding
+      down to the graph is **all** ``RunnableBinding``, the bridge can
+      drive that binding directly: ``astream_events`` honours the
+      binding while ``graph.checkpointer`` / ``get_state`` / ``channels``
+      proxy through to the real graph.  We therefore return that
+      outermost preservable binding — peeling here would drop bound
+      kwargs and listeners.
+    * ``RunnableRetry`` (``with_retry``) does *not* proxy attribute
+      access (so the bridge's ``graph.checkpointer`` probe would see
+      ``None``) and does *not* override the streaming path the bridge
+      uses — its retry only wraps ``invoke``/``batch``, so it is inert
+      on ``astream_events`` and nothing is lost by peeling it.  A retry
+      anywhere in the chain also breaks the binding proxy for everything
+      above it.
+
+    So peel only the non-preservable prefix (an outer ``RunnableRetry``,
+    or a ``RunnableBinding`` sitting *above* a ``RunnableRetry`` whose
+    proxy is broken by it) and execute through the deepest object whose
+    descent to the graph is all-``RunnableBinding`` — or the bare graph
+    when no binding directly wraps it.
+
+    A peeled layer that carries only ``.config`` (a ``with_config`` /
+    ``with_types`` / inert ``with_retry``) loses nothing material: its
+    config is collected and re-applied onto the returned object via
+    ``.with_config(...)`` (innermost→outermost so an outer wrapper's
+    value wins and ``configurable`` sub-dicts deep-merge — matching
+    LangChain ``with_config`` and
+    :func:`~easycat.integrations.agents.langgraph._bound_config`).  But a
+    peeled layer carrying *behaviour* re-applying ``.config`` cannot
+    reproduce — non-empty bound ``.kwargs`` (a ``bind(**kwargs)``) or
+    ``.config_factories`` (a ``with_listeners(...)``) stranded above a
+    ``RunnableRetry`` — would be **silently dropped**.  Rather than do
+    that we raise :class:`BridgeInputError`: the only honest options for
+    a wrapper whose semantics cannot be preserved are to reject it or
+    drive it with a custom bridge, and ``with_retry()`` interposed
+    between such a binding and the graph makes pure-proxy execution
+    impossible (the retry neither proxies the state API nor retries the
+    streaming path).  Returns ``None`` (caller falls back to the plain
+    Runnable branch) when ``langgraph`` is unavailable.
+    """
+    try:
+        from langgraph.graph.state import (  # type: ignore[import-untyped]
+            CompiledStateGraph,
+        )
+    except ImportError:
+        return None
+    try:
+        from langchain_core.runnables.base import (  # type: ignore[import-untyped]
+            RunnableBinding,
+            RunnableBindingBase,
+        )
+    except ImportError:
+        RunnableBinding = ()  # type: ignore[assignment]
+        RunnableBindingBase = ()  # type: ignore[assignment]
+    # Walk outer→inner collecting wrapper layers (``seen`` guards a
+    # pathological self-referential ``.bound``) until the real graph.
+    seen: set[int] = set()
+    layers: list[tuple[Any, bool]] = []  # (wrapper, is_runnable_binding)
+    graph: Any = None
+    node = agent
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        if isinstance(node, CompiledStateGraph):
+            graph = node
+            break
+        if isinstance(node, RunnableBindingBase):
+            layers.append((node, isinstance(node, RunnableBinding)))
+            node = getattr(node, "bound", None)
+            continue
+        break
+    if graph is None:
+        return None
+
+    # The longest innermost run of consecutive ``RunnableBinding`` layers
+    # (those directly above the graph) is drivable through-the-wrapper:
+    # its ``astream_events`` applies every binding and ``__getattr__``
+    # proxies the state API down to the graph.  ``j`` = index of the
+    # outermost such binding; everything before ``j`` is non-preservable
+    # (a retry, or a binding whose proxy a retry below it has broken).
+    j = len(layers)
+    while j > 0 and layers[j - 1][1]:
+        j -= 1
+    target = layers[j][0] if j < len(layers) else graph
+
+    peeled_configs: list[dict[str, Any]] = []
+    for wrapper, _ in layers[:j]:
+        if getattr(wrapper, "kwargs", None) or getattr(wrapper, "config_factories", None):
+            raise BridgeInputError(
+                "Cannot auto-adapt a LangGraph graph whose .bind(**kwargs) / "
+                ".with_listeners(...) wrapper is interposed by .with_retry(): "
+                "RunnableRetry neither exposes the graph's state API nor "
+                "retries the streaming path the voice bridge drives, so the "
+                "wrapper's behaviour would be silently dropped. Compile that "
+                "behaviour into the graph (or drop the .with_retry()), or "
+                "construct LangGraphBridge(graph=...) yourself and drive the "
+                "wrapper explicitly."
+            )
+        cfg = getattr(wrapper, "config", None)
+        if isinstance(cfg, dict) and cfg:
+            peeled_configs.append(cfg)
+    if not peeled_configs:
+        return target
+    return target.with_config(_merge_wrapper_configs(peeled_configs))
+
+
+def _merge_wrapper_configs(layers: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge ``RunnableBinding`` config layers (outermost first) into one
+    config dict, innermost→outermost so an outer wrapper's value wins and
+    ``configurable`` sub-dicts deep-merge rather than replace."""
+    merged: dict[str, Any] = {}
+    configurable: dict[str, Any] = {}
+    for layer in reversed(layers):
+        for key, value in layer.items():
+            if key == "configurable" and isinstance(value, dict):
+                configurable.update(value)
+            else:
+                merged[key] = value
+    if configurable:
+        merged["configurable"] = configurable
+    return merged
+
+
+def _is_language_model(agent: Any) -> bool:
+    """True for a (possibly bound) LangChain language model — or a
+    model-first LCEL sequence whose first step is one.
+
+    A bare ``BaseChatModel`` / ``BaseLLM`` — and the same model wrapped
+    by ``.bind(...)`` / ``.bind_tools(...)`` / ``.with_config(...)``
+    (each returns a ``RunnableBinding``) or ``.with_retry(...)`` (returns
+    a ``RunnableRetry``) — only accept a string or message sequence as
+    input, not the ``LangChainBridge`` default payload dict (they reject
+    it with ``Invalid input type <class 'dict'>``).  Both wrapper
+    families subclass ``RunnableBindingBase`` and expose the wrapped
+    model on ``.bound``, so we peel any ``RunnableBindingBase`` layers
+    off ``.bound`` — a bound *and* retried chat/LLM is still recognised
+    and fed a message sequence on the first turn.
+
+    The same crash hits *model-first* LCEL compositions: the **first**
+    step of a ``RunnableSequence`` receives the runnable's raw input, so
+    ``ChatOpenAI() | StrOutputParser()`` and
+    ``ChatOpenAI().with_structured_output(...)`` (which compiles to a
+    sequence whose head is a bound model) feed the model directly and
+    reject the dict payload just like a bare model.  We descend into a
+    sequence's first step (peeling binding layers around it too) and
+    recognise it the same way — while a ``prompt | model`` chain keeps
+    the dict payload because its head is the prompt template, which
+    *wants* the prompt variables dict.  Returns ``False`` (rather than
+    raising) if ``langchain_core`` is unavailable so the caller falls
+    back to the default dict payload.
+    """
+    try:
+        from langchain_core.language_models import (  # type: ignore[import-untyped]
+            BaseChatModel,
+            BaseLLM,
+        )
+    except ImportError:
+        return False
+    try:
+        from langchain_core.runnables.base import (  # type: ignore[import-untyped]
+            RunnableBindingBase,
+            RunnableSequence,
+        )
+    except ImportError:
+        RunnableBindingBase = ()  # type: ignore[assignment]
+        RunnableSequence = ()  # type: ignore[assignment]
+    # ``RunnableBindingBase`` may nest (e.g.
+    # ``.bind_tools(...).with_config(...).with_retry()``) and a
+    # model-first sequence may itself sit under a binding or nest another
+    # sequence as its head; ``seen`` guards against a pathological
+    # self-referential ``.bound`` / ``.first``.
+    seen: set[int] = set()
+    while agent is not None and id(agent) not in seen:
+        seen.add(id(agent))
+        if isinstance(agent, RunnableBindingBase):
+            agent = getattr(agent, "bound", None)
+            continue
+        if isinstance(agent, RunnableSequence):
+            first = getattr(agent, "first", None)
+            if first is None:
+                steps = getattr(agent, "steps", None)
+                first = steps[0] if steps else None
+            agent = first
+            continue
+        break
+    return isinstance(agent, (BaseChatModel, BaseLLM))
