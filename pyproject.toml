@@ -21,6 +21,8 @@ easycat = "easycat.debug._pytest_plugin"
 [project.optional-dependencies]
 openai-agents = ["openai-agents>=0.6.2"]
 pydantic-ai = ["pydantic-ai>=0.1"]
+langchain = ["langchain-core>=0.3.0"]
+langgraph = ["langchain-core>=0.3.0", "langgraph>=0.2.0"]
 openai = ["openai>=1.0.0"]
 deepgram = ["deepgram-sdk>=3.0.0"]
 elevenlabs = ["elevenlabs>=1.0.0"]
