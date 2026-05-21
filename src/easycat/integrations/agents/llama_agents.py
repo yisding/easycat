@@ -1,0 +1,1401 @@
+"""LlamaAgents / LlamaIndex Workflows bridge.
+
+Wraps the modern ``llama-index-workflows`` in-process ``Workflow`` API and
+the optional ``llama-agents-client`` remote workflow server API.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import inspect
+import json
+import logging
+import time
+from collections.abc import AsyncIterator, Callable
+from typing import Any, Literal
+from uuid import uuid4
+
+from easycat.cancel import CancelToken
+from easycat.integrations.agents.base import (
+    AgentBridgeEvent,
+    AgentRecorder,
+    AgentTurnInput,
+    BridgeInputError,
+    CancellationMode,
+    CommitRule,
+    ExecutionCursor,
+    FrameworkStateSnapshot,
+    InterruptionPlan,
+    UnitKind,
+)
+from easycat.runtime.records import ErrorInfo
+
+logger = logging.getLogger(__name__)
+
+
+_TEXT_FIELDS = (
+    "delta",
+    "text_delta",
+    "chunk",
+    "msg",
+    "prefix",
+    "prompt",
+    "question",
+    "text",
+    "content",
+    "message",
+    "response",
+    "output",
+    "result",
+)
+
+# Upper bound on the best-effort await of a cancelled local handler. The
+# real WorkflowHandler.cancel_run() already gave the workflow time to honor
+# cancellation; this is only a safety net so a non-cooperative step can
+# never wedge the interrupted turn.
+_POST_CANCEL_AWAIT_TIMEOUT = 2.0
+
+
+class LlamaAgentsBridge:
+    """Bridge for LlamaAgents / LlamaIndex Workflows.
+
+    Local mode wraps an in-process ``workflows.Workflow`` instance and calls
+    ``workflow.run(...)``. Remote mode wraps a ``llama_agents.client.WorkflowClient``
+    and streams events from a named workflow server workflow.
+
+    ``turn_input.text`` is mapped into the workflow start event under
+    ``input_key`` (default: ``"message"``). Context and turn metadata are
+    also exposed to workflows as optional start-event fields.
+    """
+
+    COMMITTABLE_BOUNDARIES = {
+        UnitKind.WORKFLOW_NODE: CommitRule.BETWEEN_NODES,
+    }
+
+    def __init__(
+        self,
+        workflow: Any | None = None,
+        *,
+        client: Any | None = None,
+        base_url: str | None = None,
+        workflow_name: str | None = None,
+        input_key: str = "message",
+        context_key: str | None = "context",
+        turn_id_key: str | None = "turn_id",
+        interruption_note_key: str | None = "easycat_interruption_note",
+        preserve_context: bool = True,
+        run_kwargs: dict[str, Any] | None = None,
+        start_event_factory: Callable[[AgentTurnInput, dict[str, Any]], Any] | None = None,
+        event_text_extractor: Callable[[Any], str | None] | None = None,
+        human_response_event_factory: Callable[[AgentTurnInput], Any] | None = None,
+        human_response_key: str = "response",
+        human_response_step: str | None = None,
+        display_name: str | None = None,
+        include_internal_events: bool = False,
+    ) -> None:
+        remote_requested = client is not None or base_url is not None
+        if workflow is not None and remote_requested:
+            raise BridgeInputError("Pass either workflow= or client=/base_url=, not both")
+        if workflow is None and not remote_requested:
+            raise BridgeInputError("LlamaAgentsBridge requires workflow= or client=/base_url=")
+        if client is not None and base_url is not None:
+            raise BridgeInputError("Pass either client= or base_url=, not both")
+        if remote_requested and not workflow_name:
+            raise BridgeInputError("Remote LlamaAgentsBridge requires workflow_name=")
+
+        if base_url is not None:
+            try:
+                from llama_agents.client import WorkflowClient
+            except ImportError as exc:
+                raise ImportError(
+                    "llama-agents-client is required for remote LlamaAgentsBridge: "
+                    "pip install 'easycat[llama-agents]'"
+                ) from exc
+            client = WorkflowClient(base_url=base_url)
+
+        self._mode = "remote" if remote_requested else "local"
+        self._workflow = workflow
+        self._client = client
+        self._workflow_name = workflow_name
+        self._display_name = display_name or workflow_name or _workflow_name(workflow)
+        self._input_key = input_key
+        self._context_key = context_key
+        self._turn_id_key = turn_id_key
+        self._interruption_note_key = interruption_note_key
+        self._preserve_context = preserve_context
+        self._run_kwargs = dict(run_kwargs or {})
+        self._start_event_factory = start_event_factory
+        self._event_text_extractor = event_text_extractor
+        self._human_response_event_factory = human_response_event_factory
+        self._human_response_key = human_response_key
+        self._human_response_step = human_response_step
+        self._include_internal_events = include_internal_events
+
+        self._ctx: Any = None
+        self._remote_context: Any = None
+        self._remote_handler_id: str | None = None
+        self._remote_event_sequence: int | Literal["now"] = -1
+        self._active_handler: Any = None
+        self._active_handler_id: str | None = None
+        self._pending_local_handler: Any = None
+        self._pending_local_stream: AsyncIterator[Any] | None = None
+        self._pending_remote_handler_id: str | None = None
+        self._pending_interruption_note: str | None = None
+        self._last_output: Any = None
+        self._last_output_text = ""
+        self._run_count = 0
+        # Strong refs to background cancel/aclose tasks scheduled by reset()
+        # so they are not garbage-collected before they run to completion.
+        self._reset_cleanup_tasks: set[asyncio.Task[None]] = set()
+
+    # ── ExternalAgentBridge interface ─────────────────────────────
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        cursor = ExecutionCursor(
+            unit_id=f"llama-workflow-{uuid4().hex[:8]}",
+            unit_kind=UnitKind.WORKFLOW_NODE,
+            display_name=self._display_name,
+            entered_at=time.monotonic_ns(),
+            committable=False,
+        )
+        recorder.record_unit_entered(cursor)
+
+        accumulated = ""
+        try:
+            if self._mode == "remote":
+                stream = self._invoke_remote(turn_input, cancel_token)
+            else:
+                stream = self._invoke_local(turn_input, cancel_token)
+            try:
+                async for event in stream:
+                    if event.kind == "text_delta":
+                        accumulated += event.text
+                    yield event
+            finally:
+                # If the consumer closes invoke() early -- a text-session
+                # interruption aclose()s the generator (GeneratorExit), or
+                # the invoke task itself is cancelled -- the async for above
+                # is abandoned without closing the inner stream, so
+                # _invoke_local/_invoke_remote never reach their
+                # cancel_run()/cancel_handler() teardown and the underlying
+                # workflow keeps running and contaminates later turns despite
+                # the bridge state reporting idle. Closing the stream
+                # propagates the shutdown into those generators. On normal
+                # completion the stream is already exhausted and aclose() is
+                # a harmless no-op.
+                await stream.aclose()
+        except Exception as exc:
+            recorder.record_framework_error(ErrorInfo.from_exception(exc))
+            recorder.record_unit_exited(cursor, reason="error")
+            raise
+
+        self._last_output_text = accumulated
+        self._run_count += 1
+        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+        yield AgentBridgeEvent(
+            kind="done",
+            text=accumulated,
+            structured_output=self._last_output,
+        )
+
+    def snapshot_state(self) -> FrameworkStateSnapshot:
+        fields: dict[str, Any] = {
+            "mode": self._mode,
+            "workflow": self._display_name,
+            "input_key": self._input_key,
+            "preserve_context": self._preserve_context,
+            "run_count": self._run_count,
+            "active_handler_id": self._active_handler_id,
+            "remote_handler_id": self._remote_handler_id,
+            "remote_event_sequence": self._remote_event_sequence,
+            "has_context": self._ctx is not None or self._remote_context is not None,
+            "waiting_for_input": (
+                self._pending_local_handler is not None
+                or self._pending_remote_handler_id is not None
+            ),
+            "last_output_text": self._last_output_text,
+        }
+        return FrameworkStateSnapshot(fields=fields, kind="llama_agents")
+
+    def apply_interruption(
+        self,
+        delivered_text: str,
+        mode: CancellationMode,
+        recorder: AgentRecorder | None = None,
+        caused_by_signal_id: str | None = None,
+    ) -> None:
+        plan = self._plan_interruption(delivered_text, mode)
+
+        actual_pre_ref = plan.pre_state_ref
+        if recorder is not None:
+            actual_pre_ref = recorder.record_state_snapshot(
+                plan.pre_state_ref,
+                payload=self._serialize_framework_state(),
+            )
+
+        if recorder is not None:
+            try:
+                recorder.record_state_committed(
+                    mutation_kind=plan.mutation_kind,
+                    pre_state_ref=actual_pre_ref,
+                    post_state_ref=plan.post_state_ref,
+                )
+            except Exception:
+                return
+
+        try:
+            self._apply_planned_mutation(plan)
+        except Exception as exc:
+            if recorder is not None:
+                recorder.record_interruption_apply_failed(
+                    mutation_kind=plan.mutation_kind,
+                    pre_state_ref=actual_pre_ref,
+                    post_state_ref=plan.post_state_ref,
+                    failure_error=ErrorInfo.from_exception(exc),
+                )
+            raise
+
+        if recorder is not None:
+            recorder.record_state_snapshot(
+                plan.post_state_ref,
+                payload=self._serialize_framework_state(),
+            )
+            recorder.record_cancellation_boundary(
+                mode=mode,
+                reason=plan.mutation_kind,
+                caused_by_signal_id=caused_by_signal_id,
+            )
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        self._last_output_text = text
+        for target in (self._workflow, self._client):
+            fn = getattr(target, "replace_last_assistant_text", None)
+            if callable(fn):
+                try:
+                    fn(text)
+                except Exception:
+                    logger.debug("LlamaAgents replace_last_assistant_text failed", exc_info=True)
+
+    def append_interruption_note(self, note: str) -> None:
+        self._pending_interruption_note = note
+        for target in (self._workflow, self._client):
+            fn = getattr(target, "append_interruption_note", None)
+            if callable(fn):
+                try:
+                    fn(note)
+                except Exception:
+                    logger.debug("LlamaAgents append_interruption_note failed", exc_info=True)
+
+    def reset(self) -> None:
+        # A reset after an InputRequiredEvent pause must not just drop the
+        # paused handler reference: the workflow is still waiting locally or
+        # on the workflow server and would leak (and could later resume into
+        # a "fresh" session) if nobody cancels it. Tear it down before the
+        # references are cleared below.
+        self._teardown_pending_handlers()
+        for target in (self._workflow, self._client):
+            fn = getattr(target, "reset", None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    logger.debug("LlamaAgents reset delegate failed", exc_info=True)
+        self._ctx = None
+        self._remote_context = None
+        self._remote_handler_id = None
+        self._remote_event_sequence = -1
+        self._active_handler = None
+        self._active_handler_id = None
+        self._pending_local_handler = None
+        self._pending_local_stream = None
+        self._pending_remote_handler_id = None
+        self._pending_interruption_note = None
+        self._last_output = None
+        self._last_output_text = ""
+        self._run_count = 0
+
+    def _teardown_pending_handlers(self) -> None:
+        """Cancel any handler/stream left paused by a HITL InputRequiredEvent.
+
+        reset() runs synchronously (Session.reset_state() calls it inside the
+        event loop), so the paused handler's cancel_run()/cancel_handler() and
+        the suspended stream's aclose() can only be driven on a background
+        task -- but they must run, or the workflow keeps waiting locally / on
+        the workflow server after the bridge has forgotten about it.
+        """
+        handler = self._pending_local_handler
+        if handler is not None:
+            self._fire_and_forget(self._cancel_local_handler(handler))
+        stream = self._pending_local_stream
+        if stream is not None:
+            aclose = getattr(stream, "aclose", None)
+            if callable(aclose):
+                self._fire_and_forget(aclose())
+        handler_id = self._pending_remote_handler_id
+        if handler_id is not None and self._client is not None:
+            self._fire_and_forget(self._cancel_remote_handler(handler_id))
+
+    def _fire_and_forget(self, awaitable: Any) -> None:
+        """Best-effort drive an async teardown started from sync reset()."""
+        if awaitable is None or not inspect.isawaitable(awaitable):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop -- close the coroutine so it does not emit a
+            # "coroutine was never awaited" warning; cleanup cannot be driven.
+            close = getattr(awaitable, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    close()
+            return
+        task = loop.create_task(_swallow(awaitable))
+        self._reset_cleanup_tasks.add(task)
+        task.add_done_callback(self._reset_cleanup_tasks.discard)
+
+    async def aclose(self) -> None:
+        """Release HITL-paused handlers when the session tears down.
+
+        Session.stop()/shutdown() call aclose_if_supported(self.agent) but
+        not reset(), so a workflow that paused on an InputRequiredEvent
+        before the session ended would otherwise leave its live local
+        WorkflowHandler or remote server handler waiting forever. Unlike
+        reset()'s fire-and-forget teardown (reset() runs synchronously
+        inside the event loop), aclose() is async and awaits the cleanup so
+        those resources are actually released before teardown returns.
+        """
+        await self._aclose_pending_handlers()
+        # reset() may have scheduled fire-and-forget teardown that has not
+        # finished yet; await it too so aclose() does not return while a
+        # paused handler is still being cancelled in the background.
+        pending = list(self._reset_cleanup_tasks)
+        if pending:
+            with contextlib.suppress(Exception):
+                await asyncio.gather(*pending, return_exceptions=True)
+        for target in (self._workflow, self._client):
+            fn = getattr(target, "aclose", None)
+            if callable(fn):
+                try:
+                    result = fn()
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:
+                    logger.debug("LlamaAgents aclose delegate failed", exc_info=True)
+        self._ctx = None
+        self._remote_context = None
+        self._remote_handler_id = None
+        self._active_handler = None
+        self._active_handler_id = None
+        self._pending_local_handler = None
+        self._pending_local_stream = None
+        self._pending_remote_handler_id = None
+
+    async def _aclose_pending_handlers(self) -> None:
+        """Await teardown of a handler/stream left paused by a HITL pause.
+
+        The async counterpart of _teardown_pending_handlers(): aclose() runs
+        in an async context and must actually wait for the paused local
+        WorkflowHandler / remote server handler to be cancelled before the
+        session releases backends, rather than fire-and-forget like reset().
+        The cancels are bounded by _best_effort_cancel() so a non-cooperative
+        workflow step cannot wedge session teardown.
+        """
+        handler = self._pending_local_handler
+        if handler is not None:
+            await self._best_effort_cancel(self._cancel_local_handler(handler))
+        stream = self._pending_local_stream
+        if stream is not None:
+            aclose = getattr(stream, "aclose", None)
+            if callable(aclose):
+                with contextlib.suppress(Exception):
+                    await aclose()
+        handler_id = self._pending_remote_handler_id
+        if handler_id is not None and self._client is not None:
+            await self._best_effort_cancel(self._cancel_remote_handler(handler_id))
+
+    # ── Local workflow mode ───────────────────────────────────────
+
+    async def _invoke_local(
+        self,
+        turn_input: AgentTurnInput,
+        cancel_token: CancelToken | None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        assert self._workflow is not None
+
+        handler = self._pending_local_handler
+        if handler is not None:
+            # Deliver the human response before clearing the pending
+            # markers. If send_event raises (e.g. a misconfigured
+            # human_response_step or a paused context that rejects the
+            # event) the bridge must stay "waiting for input" so
+            # reset()/aclose() can still cancel the paused handler and a
+            # retry resends the HumanResponseEvent instead of falling
+            # through to a fresh workflow.run() -- mirroring the remote path.
+            self._send_local_human_response(handler, turn_input)
+            self._pending_local_handler = None
+            # Resume the *same* live stream cursor instead of calling
+            # stream_events() again. A real WorkflowHandler replays the
+            # already-yielded InputRequiredEvent on a fresh stream, so a new
+            # iterator would re-trigger the pause below and never reach the
+            # HumanResponseEvent/StopEvent -- local HITL would loop forever.
+            # The original generator is suspended right after the prompt, so
+            # continuing it picks up the post-response events (and naturally
+            # handles a genuinely new pause later in the same conversation).
+            events = self._pending_local_stream
+            self._pending_local_stream = None
+            if events is None:
+                events = self._stream_local_events(handler)
+        else:
+            kwargs = dict(self._run_kwargs)
+            start_payload = self._build_start_payload(turn_input)
+            if self._start_event_factory is not None:
+                kwargs["start_event"] = self._start_event_factory(turn_input, start_payload)
+            else:
+                kwargs.update(start_payload)
+            if self._preserve_context and self._ctx is not None:
+                kwargs["ctx"] = self._ctx
+
+            handler = self._workflow.run(**kwargs)
+            events = self._stream_local_events(handler)
+        self._active_handler = handler
+        self._active_handler_id = _string_or_none(getattr(handler, "run_id", None))
+
+        streamed_text = False
+        cancelled = False
+        failed = False
+        # _aiter_with_cancellation aclose()s its source on every
+        # non-exhaustive exit (cancel/teardown leak prevention). A HITL
+        # pause exits this generator via ``return`` while the source is only
+        # suspended, so without this adapter the abandoned wrapper's
+        # finalizer would close the very stream we save below as
+        # _pending_local_stream -- dropping the workflow's post-response
+        # deltas on resume. The adapter forwards the close on real
+        # cancel/teardown but absorbs it once the pause has marked it
+        # suspended.
+        guarded_events = _SuspendableSource(events) if events is not None else None
+        try:
+            if guarded_events is not None:
+                async for workflow_event in _aiter_with_cancellation(guarded_events, cancel_token):
+                    if _is_input_required_event(workflow_event):
+                        guarded_events.suspend()
+                        self._pending_local_handler = handler
+                        self._pending_local_stream = events
+                        self._last_output = workflow_event
+                        text = self._extract_event_text(workflow_event)
+                        if text:
+                            yield AgentBridgeEvent(kind="text_delta", text=text)
+                        return
+                    if _is_stop_event(workflow_event):
+                        continue
+                    delta = self._extract_event_text(workflow_event)
+                    if delta:
+                        streamed_text = True
+                        yield AgentBridgeEvent(kind="text_delta", text=delta)
+
+            if cancel_token is not None and cancel_token.is_cancelled:
+                cancelled = True
+                await self._cancel_local_handler(handler)
+
+            if cancelled:
+                self._last_output = await self._await_handler_best_effort(handler)
+                return
+
+            result = await handler if inspect.isawaitable(handler) else handler
+            self._last_output = result
+            if not streamed_text:
+                text = _extract_output_text(result)
+                if text:
+                    yield AgentBridgeEvent(kind="text_delta", text=text)
+        except (asyncio.CancelledError, GeneratorExit):
+            # Hard task cancellation (asyncio.CancelledError) or an early
+            # consumer close of invoke() (GeneratorExit -- e.g. a text-session
+            # interruption that aclose()s the generator right after a delta
+            # was delivered). Either way the turn is being torn down without
+            # the cooperative cancel_token. Without this the finally below
+            # runs with cancelled=False, preserves the interrupted Context,
+            # and never calls cancel_run() -- the workflow keeps running and
+            # contaminates the next turn.
+            cancelled = True
+            await self._best_effort_cancel(self._cancel_local_handler(handler))
+            raise
+        except Exception:
+            # A regular error from stream_events() or while awaiting the
+            # handler -- e.g. the workflow itself raised. Unlike a barge-in
+            # this is a hard failure with no continuity to preserve: only the
+            # cancellation branch above sets cancelled, so without this the
+            # finally would take the else branch and save handler.ctx, and the
+            # next preserve_context turn would feed partial state written by
+            # this aborted turn back into workflow.run(). Stop the handler so
+            # the workflow does not keep running, then let the finally drop the
+            # Context/pending markers (failed) -- mirroring the remote path's
+            # except Exception.
+            failed = True
+            await self._best_effort_cancel(self._cancel_local_handler(handler))
+            raise
+        finally:
+            if cancelled or failed or (cancel_token is not None and cancel_token.is_cancelled):
+                # The barge-in closed stream_events() before the terminal
+                # event, and cancel_run() may have returned on its own
+                # timeout without actually stopping the run. Reusing this
+                # handler's Context on the next preserve_context turn would
+                # either raise ContextStateError (Context._workflow_run
+                # rejects a still-running context) or replay the cancelled
+                # response's buffered stream deltas before the new answer.
+                # Drop it so the next turn starts from a clean Context;
+                # assistant-text continuity is carried by apply_interruption()
+                # / append_interruption_note(), not the workflow Context. A
+                # pending HITL handler/stream is interrupted state too, so
+                # drop it rather than resume a cancelled conversation.
+                self._ctx = None
+                self._pending_local_handler = None
+                self._pending_local_stream = None
+            else:
+                self._ctx = getattr(handler, "ctx", self._ctx)
+            self._active_handler = None
+            self._active_handler_id = None
+
+    def _stream_local_events(self, handler: Any) -> AsyncIterator[Any] | None:
+        stream_events = getattr(handler, "stream_events", None)
+        if not callable(stream_events):
+            return None
+        try:
+            params = inspect.signature(stream_events).parameters
+        except (TypeError, ValueError):
+            params = {}
+        if "expose_internal" in params:
+            return stream_events(expose_internal=self._include_internal_events)
+        return stream_events()
+
+    def _send_local_human_response(self, handler: Any, turn_input: AgentTurnInput) -> None:
+        ctx = getattr(handler, "ctx", None)
+        send_event = getattr(ctx, "send_event", None)
+        if not callable(send_event):
+            raise BridgeInputError("Paused Llama workflow handler has no ctx.send_event()")
+        event = self._build_human_response_event(turn_input)
+        send_event(event, step=self._human_response_step)
+
+    async def _best_effort_cancel(self, coro: Any) -> None:
+        """Drive a handler-cancel to completion while this task is torn down.
+
+        On hard task cancellation we still must stop the underlying
+        workflow, but a plain ``await`` here would itself be cancelled
+        before ``cancel_run()``/``cancel_handler()`` is delivered. Shield
+        the cancel and bound it with the post-cancel timeout so a
+        non-cooperative handler cannot wedge task teardown; anything still
+        running past the timeout is abandoned best-effort.
+        """
+        task = asyncio.ensure_future(coro)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(asyncio.shield(task), timeout=_POST_CANCEL_AWAIT_TIMEOUT)
+
+    async def _cancel_local_handler(self, handler: Any) -> None:
+        cancel_run = getattr(handler, "cancel_run", None)
+        if callable(cancel_run):
+            result = cancel_run()
+            if inspect.isawaitable(result):
+                await result
+            return
+        cancel = getattr(handler, "cancel", None)
+        if callable(cancel):
+            cancel()
+
+    async def _await_handler_best_effort(self, handler: Any) -> Any:
+        if not inspect.isawaitable(handler):
+            return None
+        is_done = getattr(handler, "is_done", None)
+        if callable(is_done):
+            try:
+                cancellation_completed = bool(is_done())
+            except Exception:
+                cancellation_completed = True
+            if not cancellation_completed:
+                # cancel_run() returned on its own timeout while the
+                # workflow is still on a non-cooperative step. Awaiting the
+                # handler here would block the barge-in indefinitely on the
+                # never-completing result, so abandon the post-cancel output.
+                return None
+
+        async def _await() -> Any:
+            return await handler
+
+        try:
+            return await asyncio.wait_for(_await(), timeout=_POST_CANCEL_AWAIT_TIMEOUT)
+        except Exception:
+            return None
+
+    # ── Remote WorkflowClient mode ────────────────────────────────
+
+    async def _invoke_remote(
+        self,
+        turn_input: AgentTurnInput,
+        cancel_token: CancelToken | None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        assert self._client is not None
+        assert self._workflow_name is not None
+
+        handler_id = self._pending_remote_handler_id
+        # We reuse an existing remote handler when resuming a HITL pause, or
+        # when preserve_context keeps the prior handler alive. In both cases
+        # the server's event log keeps accumulating, so streaming from -1
+        # would replay earlier turns -- carry the cursor forward instead.
+        reusing_handler = handler_id is not None or (
+            self._preserve_context and self._remote_handler_id is not None
+        )
+        after_sequence = self._remote_event_sequence if reusing_handler else -1
+        if handler_id is not None:
+            # Clear the pending marker only after the response is actually
+            # delivered. If send_event raises (e.g. a transient network or
+            # server error), the bridge must stay "waiting for input" so a
+            # retry resends the HumanResponseEvent instead of falling through
+            # to run_workflow_nowait() and leaving the paused workflow stuck.
+            await self._send_remote_human_response(handler_id, turn_input)
+            self._pending_remote_handler_id = None
+        else:
+            start_payload = self._build_start_payload(turn_input)
+            start_event: Any
+            if self._start_event_factory is not None:
+                start_event = self._start_event_factory(turn_input, start_payload)
+            else:
+                start_event = _start_event_from_payload(start_payload)
+
+            handler_data = await self._client.run_workflow_nowait(
+                self._workflow_name,
+                handler_id=self._remote_handler_id if self._preserve_context else None,
+                start_event=start_event,
+                context=self._remote_context if self._preserve_context else None,
+            )
+            handler_id = _string_or_none(getattr(handler_data, "handler_id", None))
+            if handler_id is None:
+                raise BridgeInputError(
+                    "WorkflowClient.run_workflow_nowait() did not return handler_id"
+                )
+
+        self._remote_handler_id = handler_id
+        self._active_handler_id = handler_id
+
+        streamed_text = False
+        cancelled = False
+        event_stream = None
+        try:
+            event_stream = self._client.get_workflow_events(
+                handler_id,
+                include_internal_events=self._include_internal_events,
+                after_sequence=after_sequence,
+            )
+            async for envelope in _aiter_with_cancellation(event_stream, cancel_token):
+                self._remote_event_sequence = getattr(
+                    event_stream, "last_sequence", self._remote_event_sequence
+                )
+                workflow_event = _load_remote_event(envelope)
+                if _is_input_required_event(workflow_event) or _is_input_required_event(envelope):
+                    self._pending_remote_handler_id = handler_id
+                    self._last_output = workflow_event
+                    delta = self._extract_event_text(workflow_event)
+                    if delta is None and workflow_event is not envelope:
+                        delta = self._extract_event_text(envelope)
+                    if delta:
+                        yield AgentBridgeEvent(kind="text_delta", text=delta)
+                    # A HITL pause returns from invoke() with the event
+                    # stream closed by the finally below, so the handler is
+                    # no longer actively running -- only
+                    # _pending_remote_handler_id tracks it for resume. This
+                    # return exits the function before the tail that normally
+                    # clears _active_handler_id, so clear it here or
+                    # snapshot_state() reports a stale active handler
+                    # alongside waiting_for_input until the next turn/reset.
+                    # (Local mode clears the equivalent marker in its
+                    # finally, which runs on the same return.)
+                    self._active_handler_id = None
+                    return
+                if _is_stop_event(workflow_event) or _is_stop_event(envelope):
+                    continue
+                delta = self._extract_event_text(workflow_event)
+                if delta is None and workflow_event is not envelope:
+                    delta = self._extract_event_text(envelope)
+                if delta:
+                    streamed_text = True
+                    yield AgentBridgeEvent(kind="text_delta", text=delta)
+
+            if cancel_token is not None and cancel_token.is_cancelled:
+                cancelled = True
+                # The cancellation race in _aiter_with_cancellation drops the
+                # envelope that arrived alongside the barge-in, so the loop
+                # body above never advanced _remote_event_sequence for it even
+                # though event_stream.last_sequence has already moved past it.
+                # Refresh from last_sequence here so the next preserve_context
+                # turn resumes *after* the dropped interrupted delta instead
+                # of replaying it.
+                self._remote_event_sequence = getattr(
+                    event_stream, "last_sequence", self._remote_event_sequence
+                )
+                await self._cancel_remote_handler(handler_id)
+                # Keep _remote_handler_id and the (now-advanced) event cursor.
+                # The handler is now terminal but stays persisted server-side
+                # (cancel_handler defaults to purge=False), so the next
+                # preserve_context turn continues from it via handler_id --
+                # exactly like a completed handler. This is the only
+                # server-side state reference we have: the pinned
+                # llama-agents-client HandlerData model exposes no context
+                # field, so _remote_context never populates from get_handler,
+                # and dropping the handler id here would silently lose all
+                # conversation state after every barge-in.
+        except (asyncio.CancelledError, GeneratorExit):
+            # Hard task cancellation (asyncio.CancelledError) or an early
+            # consumer close of invoke() (GeneratorExit) -- the turn is torn
+            # down without the cooperative cancel_token. Without this the
+            # workflow keeps running server-side -- cancel_handler() is never
+            # called -- and the next preserve_context turn resumes a
+            # contaminated handler. Mirror the cooperative path: advance the
+            # cursor past whatever the dropped envelope already consumed, stop
+            # the remote handler, and keep _remote_handler_id so the next turn
+            # still resumes it.
+            cancelled = True
+            if event_stream is not None:
+                self._remote_event_sequence = getattr(
+                    event_stream, "last_sequence", self._remote_event_sequence
+                )
+            await self._best_effort_cancel(self._cancel_remote_handler(handler_id))
+            # If the close/cancel arrived right after the InputRequiredEvent
+            # prompt was yielded above, _pending_remote_handler_id was
+            # already set. The handler is now cancelled, so leaving the
+            # marker would make the next turn send_event() a
+            # HumanResponseEvent to a dead handler instead of starting or
+            # resuming cleanly -- clear it (preserve_context continuity still
+            # rides on the retained _remote_handler_id, mirroring the
+            # cooperative cancel path and local mode's finally).
+            self._pending_remote_handler_id = None
+            self._active_handler_id = None
+            raise
+        except Exception:
+            # The remote SSE/event iterator raised a regular error after
+            # run_workflow_nowait() created the handler -- e.g. a connection
+            # failure that outlived the client's reconnect attempts. Unlike a
+            # barge-in this is a hard failure with no continuity to preserve:
+            # invoke() aborts with the exception and the tail below (which
+            # otherwise clears _active_handler_id and calls cancel_handler via
+            # get_handler/_raise_if_remote_failed) never runs. Stop the
+            # server-side workflow so it does not keep running, then drop the
+            # handler references so the next preserve_context turn starts a
+            # fresh run instead of resuming an abandoned/contaminated handler,
+            # and clear the active marker so snapshot_state() stops advertising
+            # a handler that invoke() has already failed out of.
+            await self._best_effort_cancel(self._cancel_remote_handler(handler_id))
+            self._remote_handler_id = None
+            self._pending_remote_handler_id = None
+            self._active_handler_id = None
+            raise
+        finally:
+            # The real WorkflowClient spins up a background SSE reader for
+            # get_workflow_events. Close it on every exit path -- cancellation,
+            # a HITL pause (early return above), or normal completion -- so a
+            # paused conversation does not leak a stream/task while the next
+            # user turn opens another one.
+            if event_stream is not None:
+                aclose = getattr(event_stream, "aclose", None)
+                if callable(aclose):
+                    with contextlib.suppress(Exception):
+                        await aclose()
+
+        # Clear the active-handler marker on every exit from the remote
+        # invocation tail, not just the success path. get_handler() or
+        # _raise_if_remote_failed() can raise here after the streaming loop
+        # already unwound; without the finally snapshot_state() would keep
+        # advertising a handler that invoke() has abandoned. (The
+        # cancellation/GeneratorExit branch above clears it on its own
+        # before re-raising and never reaches this tail.)
+        try:
+            result_data = await self._client.get_handler(handler_id)
+            # Best-effort: the real HandlerData carries no context field, so
+            # this is a no-op there and continuity rides on handler_id reuse.
+            # It only populates with clients/fakes that do expose a context.
+            self._remote_context = getattr(result_data, "context", self._remote_context)
+            self._last_output = _unwrap_remote_result(getattr(result_data, "result", None))
+            if not self._preserve_context:
+                # With preserve_context the handler (and its event log)
+                # survives into the next turn, so keep the cursor to avoid
+                # replaying this turn. Otherwise each turn gets a fresh
+                # handler -- reset to -1.
+                self._remote_event_sequence = -1
+            if not cancelled:
+                try:
+                    _raise_if_remote_failed(result_data, self._workflow_name)
+                except Exception:
+                    # The remote handler reached a failed/cancelled terminal
+                    # status. _remote_handler_id is still pinned, so a later
+                    # preserve_context turn would feed this dead handler back
+                    # into run_workflow_nowait() instead of starting cleanly.
+                    # Drop the handler references -- mirroring the stream-
+                    # failure except Exception above -- so the next turn opens
+                    # a fresh run. (_active_handler_id is cleared by the
+                    # finally below; the handler is already terminal server-
+                    # side so there is nothing to cancel.)
+                    self._remote_handler_id = None
+                    self._pending_remote_handler_id = None
+                    raise
+            if not streamed_text and not cancelled:
+                text = _extract_output_text(self._last_output)
+                if text:
+                    yield AgentBridgeEvent(kind="text_delta", text=text)
+        finally:
+            self._active_handler_id = None
+
+    async def _cancel_remote_handler(self, handler_id: str) -> None:
+        cancel_handler = getattr(self._client, "cancel_handler", None)
+        if callable(cancel_handler):
+            result = cancel_handler(handler_id)
+            if inspect.isawaitable(result):
+                await result
+
+    async def _send_remote_human_response(
+        self,
+        handler_id: str,
+        turn_input: AgentTurnInput,
+    ) -> None:
+        send_event = getattr(self._client, "send_event", None)
+        if not callable(send_event):
+            raise BridgeInputError("WorkflowClient does not support send_event()")
+        result = send_event(
+            handler_id,
+            self._build_human_response_event(turn_input),
+            step=self._human_response_step,
+        )
+        if inspect.isawaitable(result):
+            await result
+
+    # ── Interruption helpers ──────────────────────────────────────
+
+    def _serialize_framework_state(self) -> bytes:
+        state = {
+            "mode": self._mode,
+            "workflow": self._display_name,
+            "run_count": self._run_count,
+            "active_handler_id": self._active_handler_id,
+            "remote_handler_id": self._remote_handler_id,
+            "remote_event_sequence": self._remote_event_sequence,
+            "pending_interruption_note": self._pending_interruption_note,
+            "waiting_for_input": (
+                self._pending_local_handler is not None
+                or self._pending_remote_handler_id is not None
+            ),
+            "last_output_text": self._last_output_text,
+            "context": _jsonable_context(self._ctx),
+            "remote_context": _jsonable_context(self._remote_context),
+        }
+        try:
+            return json.dumps(state, default=str).encode("utf-8")
+        except (TypeError, ValueError):
+            return b"{}"
+
+    def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
+        pre_ref = f"llama-pre-{id(self):x}"
+        post_ref = f"llama-post-{id(self):x}"
+        mutation_kind = "interrupt_llama_workflow"
+        return InterruptionPlan(
+            mutation_kind=mutation_kind,
+            pre_state_ref=pre_ref,
+            post_state_ref=post_ref,
+            framework_instructions={
+                "delivered_text": delivered_text,
+                "replacement": delivered_text + "..." if delivered_text else "",
+                "mode": mode.value,
+            },
+        )
+
+    def _apply_planned_mutation(self, plan: InterruptionPlan) -> None:
+        replacement = plan.framework_instructions["replacement"]
+        delivered_text = plan.framework_instructions["delivered_text"]
+        mode = CancellationMode(plan.framework_instructions["mode"])
+        self._last_output_text = replacement
+
+        target = self._workflow if self._mode == "local" else self._client
+        fn = getattr(target, "apply_interruption", None)
+        if callable(fn):
+            fn(delivered_text, mode)
+
+    # ── Helpers ───────────────────────────────────────────────────
+
+    def _build_start_payload(self, turn_input: AgentTurnInput) -> dict[str, Any]:
+        payload: dict[str, Any] = {self._input_key: turn_input.text}
+        if self._context_key is not None:
+            payload[self._context_key] = turn_input.context
+        if self._turn_id_key is not None and turn_input.turn_id is not None:
+            payload[self._turn_id_key] = turn_input.turn_id
+        if self._interruption_note_key is not None and self._pending_interruption_note:
+            payload[self._interruption_note_key] = self._pending_interruption_note
+            self._pending_interruption_note = None
+        return payload
+
+    def _extract_event_text(self, event: Any) -> str | None:
+        if self._event_text_extractor is not None:
+            value = self._event_text_extractor(event)
+            return None if value is None else str(value)
+        return _extract_text_field(event)
+
+    def _build_human_response_event(self, turn_input: AgentTurnInput) -> Any:
+        if self._human_response_event_factory is not None:
+            return self._human_response_event_factory(turn_input)
+        return _human_response_event({self._human_response_key: turn_input.text})
+
+
+def _workflow_name(workflow: Any) -> str:
+    if workflow is None:
+        return "LlamaAgentsWorkflow"
+    name = getattr(workflow, "workflow_name", None)
+    if isinstance(name, str) and name:
+        return name
+    return type(workflow).__name__
+
+
+def _string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+async def _swallow(awaitable: Any) -> None:
+    """Await ``awaitable`` for its side effects, discarding any error."""
+    with contextlib.suppress(Exception):
+        await awaitable
+
+
+async def _aclose_iterator(iterator: Any) -> None:
+    """Best-effort close of ``iterator`` if it exposes ``aclose()``."""
+    aclose = getattr(iterator, "aclose", None)
+    if callable(aclose):
+        with contextlib.suppress(Exception):
+            await aclose()
+
+
+class _SuspendableSource:
+    """Lets a HITL pause keep its underlying event stream open.
+
+    ``_invoke_local`` pauses on an ``InputRequiredEvent`` by ``return``-ing
+    out of its ``async for`` over ``_aiter_with_cancellation(...)``. That
+    abandons the cancellation wrapper, whose finalizer aclose()s its source
+    on any non-exhaustive exit -- which would close the live stream the
+    bridge saved as ``_pending_local_stream`` for the next turn to resume,
+    so the workflow's post-response deltas are dropped and a workflow that
+    returns ``StopEvent()`` after streaming produces an empty answer.
+
+    Wrapping the source in this adapter and calling ``suspend()`` before the
+    pause return makes that finalizer-driven aclose() a harmless no-op while
+    still forwarding the close on a genuine cancel/teardown, so the
+    cancellation wrapper's leak prevention is preserved.
+    """
+
+    def __init__(self, source: AsyncIterator[Any]) -> None:
+        self._iter = source.__aiter__()
+        self._suspended = False
+
+    def __aiter__(self) -> _SuspendableSource:
+        return self
+
+    async def __anext__(self) -> Any:
+        return await self._iter.__anext__()
+
+    def suspend(self) -> None:
+        self._suspended = True
+
+    async def aclose(self) -> None:
+        if self._suspended:
+            return
+        await _aclose_iterator(self._iter)
+
+
+async def _aiter_with_cancellation(
+    source: AsyncIterator[Any],
+    cancel_token: CancelToken | None,
+) -> AsyncIterator[Any]:
+    """Yield from ``source``, stopping promptly when ``cancel_token`` fires.
+
+    A plain ``async for`` only observes cancellation *between* items, so a
+    barge-in while the workflow is busy on a long step (and the event stream
+    is idle waiting for the next item) would not be seen until the next
+    event is emitted -- often the final ``StopEvent``, by which point the
+    work has already finished.  Racing each ``__anext__()`` against
+    ``cancel_token.wait()`` lets the caller react while the stream is still
+    blocked.  Cancellation takes priority: a just-arrived item is dropped if
+    the token is already set, mirroring a top-of-loop cancel check.
+
+    On any non-exhaustive exit -- a cooperative cancel, a hard task cancel,
+    or the consumer closing ``invoke()`` mid-stream (``GeneratorExit`` from
+    ``aclose()``, the text-session interruption path) -- any in-flight
+    ``__anext__()`` read is cancelled and awaited and the underlying
+    ``source`` iterator is closed, so a local workflow's ``stream_events()``
+    generator and any background resources it owns are not leaked even if the
+    consumer is hard-cancelled while a read is still pending.  Only a fully
+    drained source is left alone: it has already run its own cleanup.
+    """
+    iterator = source.__aiter__()
+    exhausted = False
+
+    if cancel_token is None:
+        try:
+            while True:
+                try:
+                    item = await iterator.__anext__()
+                except StopAsyncIteration:
+                    exhausted = True
+                    return
+                yield item
+        finally:
+            if not exhausted:
+                await _aclose_iterator(iterator)
+        return
+
+    cancel_wait: asyncio.Task[None] = asyncio.ensure_future(cancel_token.wait())
+    next_item: asyncio.Task[Any] | None = None
+    try:
+        while not cancel_token.is_cancelled:
+            next_item = asyncio.ensure_future(iterator.__anext__())
+            await asyncio.wait(
+                (next_item, cancel_wait),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancel_token.is_cancelled:
+                return
+            try:
+                item = next_item.result()
+            except StopAsyncIteration:
+                exhausted = True
+                return
+            # Read consumed; clear so the finally does not re-handle it and a
+            # hard cancel during ``yield`` is not mistaken for a pending read.
+            next_item = None
+            yield item
+    finally:
+        # A hard task cancel can land on ``asyncio.wait()`` above while the
+        # read is still pending; closing the iterator is not enough while
+        # ``__anext__()`` runs, so cancel and await it first.
+        if next_item is not None:
+            if not next_item.done():
+                next_item.cancel()
+            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
+                await next_item
+        cancel_wait.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cancel_wait
+        if not exhausted:
+            await _aclose_iterator(iterator)
+
+
+_REMOTE_FAILURE_STATUSES = frozenset(
+    {"failed", "failure", "error", "errored", "cancelled", "canceled"}
+)
+
+
+def _raise_if_remote_failed(handler_data: Any, workflow_name: str | None) -> None:
+    status = getattr(handler_data, "status", None)
+    status_str = status.value if hasattr(status, "value") else status
+    if not isinstance(status_str, str):
+        return
+    if status_str.lower() not in _REMOTE_FAILURE_STATUSES:
+        return
+    error = getattr(handler_data, "error", None)
+    detail = str(error) if error else status_str
+    name = workflow_name or "remote workflow"
+    raise RuntimeError(f"Remote LlamaAgents workflow {name!r} {status_str}: {detail}")
+
+
+def _start_event_from_payload(payload: dict[str, Any]) -> Any:
+    try:
+        from workflows.events import StartEvent
+
+        return StartEvent(**payload)
+    except ImportError:
+        pass
+    try:
+        from llama_index.core.workflow import StartEvent
+
+        return StartEvent(**payload)
+    except ImportError:
+        return payload
+
+
+def _load_remote_event(envelope: Any) -> Any:
+    load_event = getattr(envelope, "load_event", None)
+    if callable(load_event):
+        try:
+            return load_event()
+        except Exception:
+            logger.debug("Failed to load LlamaAgents remote event", exc_info=True)
+    return envelope
+
+
+_TERMINAL_EVENT_NAMES = frozenset(
+    {
+        "StopEvent",
+        "WorkflowTimedOutEvent",
+        "WorkflowCancelledEvent",
+        "WorkflowFailedEvent",
+        "IdleReleasedEvent",
+    }
+)
+
+
+def _is_stop_event(event: Any) -> bool:
+    for path in (
+        ("workflows.events", "StopEvent"),
+        ("llama_index.core.workflow", "StopEvent"),
+    ):
+        try:
+            module = __import__(path[0], fromlist=[path[1]])
+            stop_event = getattr(module, path[1])
+            if isinstance(event, stop_event):
+                return True
+        except ImportError:
+            pass
+
+    if type(event).__name__ in _TERMINAL_EVENT_NAMES:
+        return True
+    event_type = getattr(event, "type", None)
+    if isinstance(event_type, str):
+        if event_type.rsplit(".", 1)[-1] in _TERMINAL_EVENT_NAMES:
+            return True
+    # A remote envelope wrapping a server-only StopEvent subclass keeps
+    # ``type`` set to the subclass (not in the set above) but lists the
+    # serializable base classes in ``types``; treat the base StopEvent as
+    # terminal so the final result isn't re-streamed as a text delta.
+    types = getattr(event, "types", None)
+    if isinstance(types, list):
+        leaves = {str(t).rsplit(".", 1)[-1] for t in types}
+        if leaves & _TERMINAL_EVENT_NAMES:
+            return True
+    return False
+
+
+def _is_input_required_event(event: Any) -> bool:
+    for path in (
+        ("workflows.events", "InputRequiredEvent"),
+        ("llama_index.core.workflow", "InputRequiredEvent"),
+    ):
+        try:
+            module = __import__(path[0], fromlist=[path[1]])
+            input_required_event = getattr(module, path[1])
+            if isinstance(event, input_required_event):
+                return True
+        except ImportError:
+            pass
+
+    cls_name = type(event).__name__
+    if cls_name == "InputRequiredEvent":
+        return True
+    event_type = getattr(event, "type", None)
+    if isinstance(event_type, str):
+        if event_type.rsplit(".", 1)[-1] == "InputRequiredEvent":
+            return True
+        # A remote envelope wrapping a server-only InputRequiredEvent
+        # subclass keeps ``type`` set to the subclass name (which won't
+        # match above) but lists the serializable base classes in
+        # ``types``; fall through to that check so the HITL prompt is still
+        # recognised and the next user turn is sent back as a
+        # HumanResponseEvent instead of being treated as plain text.
+    types = getattr(event, "types", None)
+    if isinstance(types, list):
+        return "InputRequiredEvent" in {str(t).rsplit(".", 1)[-1] for t in types}
+    return False
+
+
+def _human_response_event(payload: dict[str, Any]) -> Any:
+    try:
+        from workflows.events import HumanResponseEvent
+
+        return HumanResponseEvent(**payload)
+    except ImportError:
+        pass
+    try:
+        from llama_index.core.workflow import HumanResponseEvent
+
+        return HumanResponseEvent(**payload)
+    except ImportError:
+        return payload
+
+
+def _extract_text_field(value: Any) -> str | None:
+    data = _event_mapping(value)
+    for key in _TEXT_FIELDS:
+        if key in data:
+            text = data[key]
+            if isinstance(text, str):
+                return text
+            if isinstance(text, dict):
+                nested_text = _extract_text_field(text)
+                if nested_text is not None:
+                    return nested_text
+            elif text is not None and not isinstance(text, (list, tuple, set)):
+                return str(text)
+
+    nested = data.get("value")
+    if isinstance(nested, dict):
+        return _extract_text_field(nested)
+    return None
+
+
+def _event_mapping(event: Any) -> dict[str, Any]:
+    if isinstance(event, dict):
+        data = dict(event)
+        extra = data.get("_data")
+        if isinstance(extra, dict):
+            data.update(extra)
+        return data
+    model_dump = getattr(event, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump()
+            if isinstance(dumped, dict):
+                data = dict(dumped)
+                extra = data.get("_data")
+                if isinstance(extra, dict):
+                    data.update(extra)
+                return data
+        except Exception:
+            pass
+
+    data: dict[str, Any] = {}
+    for key in (*_TEXT_FIELDS, "value", "result"):
+        try:
+            if hasattr(event, key):
+                data[key] = getattr(event, key)
+        except Exception:
+            continue
+    return data
+
+
+def _unwrap_remote_envelope(value: Any) -> Any:
+    """Unwrap a remote ``EventEnvelope[WithMetadata]`` to its inner event.
+
+    The remote WorkflowClient returns results wrapped in an envelope that
+    carries serialization metadata (``qualified_name``, ``value``,
+    ``type``/``types``). Stringifying that envelope leaks repr noise like
+    ``value={} qualified_name=...`` into TTS, so resolve the real event
+    first; if the underlying class is server-only, ``load_event()`` raises
+    and we keep the envelope so callers can still inspect ``type``/``types``.
+    """
+    load_event = getattr(value, "load_event", None)
+    if not callable(load_event):
+        return value
+    try:
+        loaded = load_event()
+    except Exception:
+        logger.debug("Failed to load LlamaAgents remote result event", exc_info=True)
+        return value
+    return loaded if loaded is not None else value
+
+
+def _unwrap_remote_result(value: Any) -> Any:
+    """Resolve a remote ``HandlerData.result`` to the workflow's return value.
+
+    The real ``WorkflowClient`` stores the final event wrapped in an
+    ``EventEnvelopeWithMetadata``; for a normal completion that inner event is
+    the ``StopEvent``. Local mode instead exposes ``StopEvent.result`` (the
+    value the workflow returned) by awaiting the handler. Unwrap the envelope
+    and, when the inner event is a ``StopEvent``, return its ``result`` so
+    remote ``structured_output`` matches local mode rather than leaking
+    serialization metadata. Clients/fakes that already store the raw value
+    (no ``load_event``) pass through unchanged.
+    """
+    if value is None:
+        return None
+    unwrapped = _unwrap_remote_envelope(value)
+    if not _is_stop_event(unwrapped):
+        return unwrapped
+    if hasattr(unwrapped, "result"):
+        return unwrapped.result
+    # load_event() failed because the StopEvent subclass is only importable
+    # on the workflow server, so _unwrap_remote_envelope returned the raw
+    # envelope; _is_stop_event() still matched it via ``types``. The real
+    # workflow return value is the serialized event's ``result`` field
+    # inside the envelope, not an attribute on it -- dig it out so
+    # structured_output matches local mode rather than leaking the
+    # envelope's serialization metadata.
+    serialized = getattr(unwrapped, "value", None)
+    if isinstance(serialized, dict):
+        if "result" in serialized:
+            return serialized["result"]
+        nested = serialized.get("value")
+        if isinstance(nested, dict) and "result" in nested:
+            return nested["result"]
+    return unwrapped
+
+
+def _extract_output_text(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    result = _unwrap_remote_envelope(result)
+    if isinstance(result, str):
+        return result
+    text = _extract_text_field(result)
+    if text is not None:
+        return text
+    if isinstance(result, dict):
+        for key in ("result", "value"):
+            if key in result:
+                return _extract_output_text(result[key])
+    if result is None:
+        return ""
+    # A terminal event with no extractable text means the workflow finished
+    # silently -- speaking its repr (or the envelope's) would be wrong.
+    if _is_stop_event(result):
+        return ""
+    return str(result)
+
+
+def _scrub_secret_keys(value: Any) -> Any:
+    """Drop secret-looking keys from a workflow Context snapshot.
+
+    A Llama workflow ``Context`` stores arbitrary values under user-chosen
+    keys, so a raw ``to_dict()`` dump can carry credentials (e.g.
+    ``api_key``, an auth header) into the shareable debug bundle. Recurse
+    through dicts/lists/tuples and drop any key whose name matches a secret
+    fragment, mirroring the journal's own bridge-record scrubbing and
+    ``GenericWorkflowBridge``'s ``__dict__`` filtering.
+    """
+    from easycat.runtime.safe_defaults import _is_secret_name
+
+    if isinstance(value, dict):
+        return {k: _scrub_secret_keys(v) for k, v in value.items() if not _is_secret_name(str(k))}
+    if isinstance(value, list):
+        return [_scrub_secret_keys(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_secret_keys(item) for item in value)
+    return value
+
+
+def _jsonable_context(ctx: Any) -> Any:
+    if ctx is None:
+        return None
+    to_dict = getattr(ctx, "to_dict", None)
+    if callable(to_dict):
+        try:
+            return _scrub_secret_keys(to_dict())
+        except Exception:
+            return type(ctx).__name__
+    return _scrub_secret_keys(ctx)
+
+
+def is_llama_workflow_instance(agent: Any) -> bool:
+    """Return True when ``agent`` is an in-process Llama Workflow instance."""
+    if isinstance(agent, type):
+        return False
+    for module_name in (
+        "workflows",
+        "llama_agents.workflows",
+        "llama_index.core.workflow",
+    ):
+        try:
+            module = __import__(module_name, fromlist=["Workflow"])
+            workflow_cls = getattr(module, "Workflow")
+        except (ImportError, AttributeError):
+            continue
+        if isinstance(agent, workflow_cls):
+            return True
+    return False
+
+
+__all__ = ["LlamaAgentsBridge", "is_llama_workflow_instance"]

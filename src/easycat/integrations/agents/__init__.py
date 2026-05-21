@@ -25,6 +25,7 @@ from easycat.integrations.agents.base import (
 from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
 from easycat.integrations.agents.langchain import LangChainBridge
 from easycat.integrations.agents.langgraph import LangGraphBridge
+from easycat.integrations.agents.llama_agents import LlamaAgentsBridge
 from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
@@ -39,6 +40,7 @@ __all__ = [
     "INTERRUPTION_NOTE",
     "LangChainBridge",
     "LangGraphBridge",
+    "LlamaAgentsBridge",
     "OpenAIAgentsBridge",
     "PydanticAIBridge",
     "RemoteResponsesAPIBridge",

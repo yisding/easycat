@@ -5,14 +5,15 @@ from __future__ import annotations
 import pytest
 
 from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
+from easycat.integrations.agents.llama_agents import LlamaAgentsBridge
 from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
 
 @pytest.mark.parametrize(
     "bridge_cls",
-    [OpenAIAgentsBridge, PydanticAIBridge, GenericWorkflowBridge],
-    ids=["openai", "pydantic_ai", "generic"],
+    [OpenAIAgentsBridge, PydanticAIBridge, GenericWorkflowBridge, LlamaAgentsBridge],
+    ids=["openai", "pydantic_ai", "generic", "llama_agents"],
 )
 class TestCommittableBoundaries:
     def test_mapping_present(self, bridge_cls):

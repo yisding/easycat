@@ -15,6 +15,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
     - URL string -> :class:`RemoteResponsesAPIBridge`
     - ``ExternalAgentBridge`` -> pass-through
+    - ``workflows.Workflow`` / LlamaIndex workflow -> :class:`LlamaAgentsBridge`
     - workflow objects with ``on_user_turn(...)`` -> :class:`GenericWorkflowBridge`
     - ``pydantic_graph.Graph`` -> raises :class:`BridgeInputError`
       (requires explicit ``PydanticAIBridge(graph=..., ...)`` construction)
@@ -66,7 +67,15 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     if isinstance(agent, ExternalAgentBridge):
         return agent
 
-    # 3. Workflow with on_user_turn(...) -> GenericWorkflowBridge.
+    # 3. LlamaAgents / LlamaIndex Workflow -> LlamaAgentsBridge.
+    from easycat.integrations.agents.llama_agents import is_llama_workflow_instance
+
+    if is_llama_workflow_instance(agent):
+        from easycat.integrations.agents.llama_agents import LlamaAgentsBridge
+
+        return LlamaAgentsBridge(workflow=agent)
+
+    # 4. Workflow with on_user_turn(...) -> GenericWorkflowBridge.
     on_user_turn = getattr(agent, "on_user_turn", None)
     if callable(on_user_turn) and not isinstance(agent, type):
         try:
@@ -109,7 +118,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
             return GenericWorkflowBridge(workflow=agent)
 
-    # 4. pydantic_graph.Graph -> error (requires explicit PydanticAIBridge).
+    # 5. pydantic_graph.Graph -> error (requires explicit PydanticAIBridge).
     try:
         from pydantic_graph import Graph as PydanticGraph  # type: ignore[import-untyped]
 
@@ -122,7 +131,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     except ImportError:
         pass
 
-    # 5. pydantic_ai.Agent -> PydanticAIBridge (Agent mode).
+    # 6. pydantic_ai.Agent -> PydanticAIBridge (Agent mode).
     try:
         from pydantic_ai import Agent as PydanticAgent
 
@@ -133,7 +142,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     except ImportError:
         pass
 
-    # 6. OpenAI Agents SDK -> OpenAIAgentsBridge.
+    # 7. OpenAI Agents SDK -> OpenAIAgentsBridge.
     try:
         from agents import Agent as OpenAIAgent  # type: ignore[import-untyped]
 
@@ -144,7 +153,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     except ImportError:
         pass
 
-    # 6b. LangGraph compiled graph -> LangGraphBridge (check before
+    # 7b. LangGraph compiled graph -> LangGraphBridge (check before
     # plain LangChain Runnable since CompiledStateGraph *is* a Runnable).
     # A graph wrapped by a generic Runnable combinator
     # (``graph.with_types(...)`` / ``.with_retry(...)``) is a
@@ -166,7 +175,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
         return LangGraphBridge(graph=compiled_graph)
 
-    # 6c. LangChain Runnable -> LangChainBridge.
+    # 7c. LangChain Runnable -> LangChainBridge.
     try:
         from langchain_core.runnables import Runnable  # type: ignore[import-untyped]
 
@@ -184,7 +193,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     except ImportError:
         pass
 
-    # 7. Realtime-API-shaped objects -> error.
+    # 8. Realtime-API-shaped objects -> error.
     cls_name = type(agent).__name__
     if "Realtime" in cls_name or hasattr(agent, f"create_{'realtime'}_session"):
         raise BridgeInputError(

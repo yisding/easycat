@@ -77,7 +77,8 @@ session = create_session(config)
 >
 > The underlying bridge classes live in `easycat.integrations.agents`
 > (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`,
-> `RemoteResponsesAPIBridge`) for callers who want to construct them by hand.
+> `LlamaAgentsBridge`, `RemoteResponsesAPIBridge`) for callers who want to
+> construct them by hand.
 
 ## Telephony (inbound + outbound)
 
@@ -487,6 +488,45 @@ In most cases, you can just pass your PydanticAI agent or workflow to
 auto-adapts it to the right bridge. Under the hood, simple single-agent
 assistants use `PydanticAIBridge`, while step-based workflows with
 specialist pinning or programmatic hand-offs use `GenericWorkflowBridge`.
+
+### LlamaAgents / LlamaIndex Workflows
+
+For LlamaAgents' `llama-index-workflows` package, pass a `Workflow`
+instance directly or construct `LlamaAgentsBridge` when you need to set
+the start-event key. By default the bridge sends the user turn as
+`StartEvent(message=...)` and preserves the workflow `Context` across
+turns.
+
+```python
+from workflows import Workflow, step
+from workflows.events import StartEvent, StopEvent
+
+from easycat.integrations.agents import LlamaAgentsBridge
+
+
+class GreetingWorkflow(Workflow):
+    @step
+    async def greet(self, ev: StartEvent) -> StopEvent:
+        return StopEvent(result=f"Hello, {ev.message}")
+
+
+bridge = LlamaAgentsBridge(workflow=GreetingWorkflow(), input_key="message")
+```
+
+To call a workflow mounted on a LlamaAgents workflow server, construct
+the bridge with a `WorkflowClient` or `base_url`:
+
+```python
+bridge = LlamaAgentsBridge(base_url="http://localhost:8080", workflow_name="greet")
+```
+
+Workflows that stream `ProgressEvent(msg=...)` style events are surfaced
+as EasyCat text deltas. Human-in-the-loop workflows that emit
+`InputRequiredEvent(prefix=...)` pause after speaking the prompt; the
+next user turn is sent back as `HumanResponseEvent(response=...)` and
+the same workflow handler resumes. If your workflow uses custom start
+or human-response events, pass `start_event_factory=` or
+`human_response_event_factory=` when constructing the bridge.
 
 ## Examples
 Runnable examples live in the `examples/` directory:
