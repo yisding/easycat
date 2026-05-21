@@ -72,6 +72,9 @@ PUBLIC_API_SNAPSHOT = (
     "WebRTCTransportConfig",
     "WebSocketConnectionTransport",
     "WebSocketTransportConfig",
+    "WebTransportConnectionTransport",
+    "WebTransportServer",
+    "WebTransportTransportConfig",
     "attach_runtime_feedback",
     "create_session",
     "create_text_session",
@@ -85,7 +88,7 @@ PUBLIC_API_SNAPSHOT = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 72
+    assert len(easycat.__all__) <= 75
 
 
 def test_curated_public_api_lazy_imports() -> None:

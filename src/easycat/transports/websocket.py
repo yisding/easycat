@@ -24,6 +24,16 @@ from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
 logger = logging.getLogger(__name__)
 _MAX_NEGOTIATED_SAMPLE_RATE = 384000
 
+# WebSocket-specific ``TransportDegraded.reason`` codes emitted on the session
+# event bus (via the inherited ``_AudioQueueMixin._emit_degraded``).  These
+# mirror conditions that previously only reached ``logger.warning``; emitting
+# them keeps the journal the single source of truth for observability.  The
+# cross-transport ``inbound_queue_full`` code is emitted by ``_enqueue_chunk``
+# in ``_base`` and needs no wiring here.
+_DEGRADED_EXTRA_CLIENT_REJECTED = "extra_client_rejected"
+_DEGRADED_CONTROL_DECODE_FAILED = "control_decode_failed"
+_DEGRADED_INVALID_SAMPLE_RATE = "invalid_sample_rate"
+
 
 def _valid_config_sample_rate(value: object) -> int | None:
     """Return a negotiated sample rate only for sane integer values."""
@@ -113,6 +123,10 @@ class WebSocketTransport(_ServerTransportBase):
         """Handle a single client connection."""
         if self._ws is not None:
             logger.warning("Rejecting additional WebSocket client (only one session supported)")
+            self._emit_degraded(
+                _DEGRADED_EXTRA_CLIENT_REJECTED,
+                "rejected additional client; one session at a time",
+            )
             await ws.close(4000, "Only one session at a time")
             return
 
@@ -157,6 +171,7 @@ class WebSocketTransport(_ServerTransportBase):
             msg = json.loads(raw)
         except json.JSONDecodeError:
             logger.warning("Ignoring invalid JSON control message")
+            self._emit_degraded(_DEGRADED_CONTROL_DECODE_FAILED, "control frame is not valid JSON")
             return
 
         msg_type = msg.get("type")
@@ -172,6 +187,10 @@ class WebSocketTransport(_ServerTransportBase):
                 logger.info("Client negotiated audio format: %s", self._audio_format)
             elif "sample_rate" in msg:
                 logger.warning("Ignoring invalid WebSocket sample_rate: %r", msg["sample_rate"])
+                self._emit_degraded(
+                    _DEGRADED_INVALID_SAMPLE_RATE,
+                    f"ignored invalid negotiated sample_rate {msg['sample_rate']!r}",
+                )
         elif msg_type == "start":
             logger.debug("Client sent start signal")
         elif msg_type == "stop":
@@ -292,6 +311,7 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
             msg = json.loads(raw)
         except json.JSONDecodeError:
             logger.warning("Ignoring invalid JSON control message")
+            self._emit_degraded(_DEGRADED_CONTROL_DECODE_FAILED, "control frame is not valid JSON")
             return
 
         if msg.get("type") == "config":
@@ -305,6 +325,10 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
                 )
             elif "sample_rate" in msg:
                 logger.warning("Ignoring invalid WebSocket sample_rate: %r", msg["sample_rate"])
+                self._emit_degraded(
+                    _DEGRADED_INVALID_SAMPLE_RATE,
+                    f"ignored invalid negotiated sample_rate {msg['sample_rate']!r}",
+                )
 
     def version_info(self) -> dict[str, str]:
         try:

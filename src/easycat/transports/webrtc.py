@@ -38,6 +38,15 @@ _WEBRTC_SAMPLE_RATE = 48000  # Opus standard
 _FRAME_DURATION_MS = 20
 _FRAME_SAMPLES = (_WEBRTC_SAMPLE_RATE * _FRAME_DURATION_MS) // 1000  # 960
 
+# WebRTC-specific ``TransportDegraded.reason`` codes emitted on the session
+# event bus (via the inherited ``_AudioQueueMixin._emit_degraded``).  These
+# mirror conditions that previously only reached ``logger.warning``; emitting
+# them keeps the journal the single source of truth for observability.  The
+# cross-transport ``inbound_queue_full`` code is emitted by ``_enqueue_chunk``
+# in ``_base`` and needs no wiring here.
+_DEGRADED_NEGOTIATION_FAILED = "negotiation_failed"
+_DEGRADED_INBOUND_CONSUME_ERROR = "inbound_consume_error"
+
 _CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
@@ -321,7 +330,10 @@ class WebRTCTransport(_AudioQueueMixin):
         self._pc: Any | None = None
         self._outbound: _OutboundAudioSource = _OutboundAudioSource()
         self._outbound_track: Any | None = None
-        self._event_bus: EventBus | None = None
+        # ``_event_bus`` / ``_emit_degraded`` come from ``_AudioQueueMixin``
+        # (``_init_audio_queue`` above).  Session attaches the bus
+        # post-construction; it is forwarded to ``_outbound`` (for
+        # ``TransportAudioDelivered``) once a peer connects.
 
         # HTTP signaling server (aiohttp).
         self._web: Any | None = None  # cached aiohttp.web module
@@ -610,6 +622,11 @@ class WebRTCTransport(_AudioQueueMixin):
                 await asyncio.sleep(0.1)
         except Exception as exc:
             logger.warning("WebRTC offer handling failed: %s", exc)
+            self._emit_degraded(
+                _DEGRADED_NEGOTIATION_FAILED,
+                f"SDP negotiation failed: {type(exc).__name__}: {exc}",
+                fatal=True,
+            )
             if pc is not None:
                 await pc.close()
             self._pc = None
@@ -720,6 +737,10 @@ class WebRTCTransport(_AudioQueueMixin):
                 logger.info("WebRTC audio track stream ended")
             else:
                 logger.warning("WebRTC audio consume error: %s", exc)
+                self._emit_degraded(
+                    _DEGRADED_INBOUND_CONSUME_ERROR,
+                    f"inbound audio track failed: {type(exc).__name__}: {exc}",
+                )
         finally:
             # Ensure the pipeline unblocks even if on_ended/connectionstatechange
             # callbacks don't fire.  Duplicate sentinels are harmless — the first
