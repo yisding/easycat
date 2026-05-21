@@ -132,6 +132,12 @@ _register(
     "WebSocketConnectionTransport",
     "WebSocketTransportConfig",
 )
+_register(
+    "easycat.transports.webtransport",
+    "WebTransportConnectionTransport",
+    "WebTransportServer",
+    "WebTransportTransportConfig",
+)
 
 
 if TYPE_CHECKING:
@@ -215,6 +221,11 @@ if TYPE_CHECKING:
     from easycat.transports.websocket import (
         WebSocketConnectionTransport,
         WebSocketTransportConfig,
+    )
+    from easycat.transports.webtransport import (
+        WebTransportConnectionTransport,
+        WebTransportServer,
+        WebTransportTransportConfig,
     )
     from easycat.turn_manager import TurnManagerConfig, TurnMode
 

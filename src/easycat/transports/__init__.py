@@ -1,7 +1,7 @@
 """Transport implementations for EasyCat.
 
 Provides LocalTransport (mic/speaker), WebSocketTransport, TwilioTransport,
-and WebRTCTransport.
+WebRTCTransport, and WebTransportTransport.
 """
 
 from easycat.transports.local import LocalTransport, LocalTransportConfig
@@ -16,6 +16,12 @@ from easycat.transports.websocket import (
     WebSocketTransport,
     WebSocketTransportConfig,
 )
+from easycat.transports.webtransport import (
+    WebTransportConnectionTransport,
+    WebTransportServer,
+    WebTransportTransport,
+    WebTransportTransportConfig,
+)
 
 __all__ = [
     "ICEServer",
@@ -29,4 +35,8 @@ __all__ = [
     "WebSocketTransport",
     "WebSocketTransportConfig",
     "WebSocketConnectionTransport",
+    "WebTransportTransport",
+    "WebTransportTransportConfig",
+    "WebTransportConnectionTransport",
+    "WebTransportServer",
 ]

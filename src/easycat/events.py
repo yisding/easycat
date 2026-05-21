@@ -243,6 +243,28 @@ class ReconnectFailure(Event):
     error: str
 
 
+# Transport diagnostics
+@dataclass(frozen=True)
+class TransportDegraded(Event):
+    """A transport hit a non-fatal degradation or an abnormal teardown.
+
+    Emitted on the session :class:`EventBus` so :class:`SessionJournalSink`
+    can record drop / poison / abort conditions that would otherwise only
+    reach the debug log — keeping the journal the single source of truth for
+    observability (see ``runtime/``).
+
+    ``reason`` is a stable machine code owned by the emitting transport (see
+    that transport's ``_DEGRADED_*`` constants for the vocabulary).
+    ``fatal`` is True when the condition tore the underlying session down
+    rather than just dropping a frame.
+    """
+
+    provider: str
+    reason: str
+    detail: str = ""
+    fatal: bool = False
+
+
 # Telephony
 @dataclass(frozen=True)
 class DTMF(Event):

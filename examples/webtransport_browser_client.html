@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyCat Voice Chat (WebTransport)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: #f5f5f5;
+    }
+    .container {
+      text-align: center;
+      padding: 40px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      max-width: 460px;
+      width: 90%;
+    }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    .subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
+    .meta { margin: 10px 0 0; font-size: 12px; color: #666; word-break: break-all; }
+    #status {
+      margin: 16px 0;
+      padding: 6px 16px;
+      border-radius: 20px;
+      display: inline-block;
+      font-size: 14px;
+    }
+    .status-idle       { background: #e0e0e0; color: #555; }
+    .status-connecting { background: #fff3cd; color: #856404; }
+    .status-connected  { background: #d4edda; color: #155724; }
+    .status-error      { background: #f8d7da; color: #721c24; }
+    .level-bar {
+      width: 100%;
+      height: 4px;
+      background: #e0e0e0;
+      border-radius: 2px;
+      margin: 16px 0;
+      overflow: hidden;
+    }
+    .level-fill { height: 100%; background: #4CAF50; width: 0%; transition: width 80ms; }
+    button {
+      padding: 12px 36px;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 6px;
+      transition: opacity 0.2s;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #startBtn { background: #4CAF50; color: white; }
+    #stopBtn  { background: #f44336; color: white; }
+    code { font-family: ui-monospace, Menlo, monospace; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>EasyCat Voice Chat</h1>
+    <p class="subtitle">WebTransport (HTTP/3 over QUIC)</p>
+    <div><span id="status" class="status-idle">Ready</span></div>
+    <div class="meta">URL: <code id="urlEl">https://localhost:4433/easycat</code></div>
+    <div class="level-bar"><div class="level-fill" id="levelFill"></div></div>
+    <div>
+      <button id="startBtn">Start</button>
+      <button id="stopBtn" disabled>Stop</button>
+    </div>
+  </div>
+
+<script>
+// ── Configuration ────────────────────────────────────────────────
+// When opened directly as a file:// URL, location.hostname is empty —
+// fall back to localhost so the example works as written.
+var WT_HOST = location.hostname || "localhost";
+var WT_URL = "https://" + WT_HOST + ":4433/easycat";
+var DESIRED_RATE = 16000;
+
+// ── Stream tags (must match server) ──────────────────────────────
+var TAG_AUDIO   = 0x01;
+var TAG_CONTROL = 0x02;
+
+// ── State ────────────────────────────────────────────────────────
+// Note: the server writes TTS audio and control frames on **server-initiated**
+// bidirectional streams (see `acceptServerStreams` below).  We only write on
+// our client-opened streams and don't read from them, so no client-side
+// reader is needed for the streams we create here.
+var transport = null;
+var audioStream = null;
+var audioWriter = null;
+var controlStream = null;
+var controlWriter = null;
+var micCtx = null;
+var playCtx = null;
+var mediaStream = null;
+var workletNode = null;
+var analyser = null;
+var nextPlayTime = 0;
+// Scheduled/playing TTS sources, so barge-in can stop already-buffered audio.
+var pendingSources = [];
+var levelRAF = 0;
+var manualStop = false;
+
+// ── UI helpers ───────────────────────────────────────────────────
+var startBtn  = document.getElementById("startBtn");
+var stopBtn   = document.getElementById("stopBtn");
+var statusEl  = document.getElementById("status");
+var levelFill = document.getElementById("levelFill");
+document.getElementById("urlEl").textContent = WT_URL;
+
+function setStatus(text, type) {
+  statusEl.textContent = text;
+  statusEl.className = "status-" + type;
+}
+
+// ── AudioWorklet (PCM16 conversion) ──────────────────────────────
+var WORKLET_SRC = [
+  "class PCMProcessor extends AudioWorkletProcessor {",
+  "  process(inputs) {",
+  "    var ch = inputs[0][0];",
+  "    if (ch) {",
+  "      var pcm = new Int16Array(ch.length);",
+  "      for (var i = 0; i < ch.length; i++) {",
+  "        var s = Math.max(-1, Math.min(1, ch[i]));",
+  "        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;",
+  "      }",
+  "      this.port.postMessage(pcm.buffer, [pcm.buffer]);",
+  "    }",
+  "    return true;",
+  "  }",
+  "}",
+  'registerProcessor("pcm-processor", PCMProcessor);',
+].join("\n");
+
+// ── Level meter ──────────────────────────────────────────────────
+function startLevelMeter() {
+  if (!analyser) return;
+  var buf = new Uint8Array(analyser.fftSize);
+  function tick() {
+    analyser.getByteTimeDomainData(buf);
+    var sum = 0;
+    for (var i = 0; i < buf.length; i++) {
+      var v = (buf[i] - 128) / 128;
+      sum += v * v;
+    }
+    var rms = Math.sqrt(sum / buf.length);
+    levelFill.style.width = Math.min(100, rms * 400) + "%";
+    levelRAF = requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function stopLevelMeter() {
+  cancelAnimationFrame(levelRAF);
+  levelFill.style.width = "0%";
+}
+
+// ── Playback ─────────────────────────────────────────────────────
+function playAudio(pcm16Buf, rate) {
+  if (!playCtx) return;
+  var int16 = new Int16Array(pcm16Buf);
+  var float32 = new Float32Array(int16.length);
+  for (var i = 0; i < int16.length; i++) {
+    float32[i] = int16[i] / 32768.0;
+  }
+  var buffer = playCtx.createBuffer(1, float32.length, rate);
+  buffer.getChannelData(0).set(float32);
+  var src = playCtx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(playCtx.destination);
+  pendingSources.push(src);
+  src.onended = function () {
+    var i = pendingSources.indexOf(src);
+    if (i !== -1) pendingSources.splice(i, 1);
+  };
+  var now = playCtx.currentTime;
+  if (nextPlayTime < now) nextPlayTime = now;
+  src.start(nextPlayTime);
+  nextPlayTime += buffer.duration;
+}
+
+// Stop and discard every scheduled/playing TTS source, then reset the
+// playback clock.  On barge-in the server resets the audio stream to drop
+// buffered TTS, but chunks it already sent are scheduled on the
+// AudioContext timeline and would keep playing otherwise.
+function stopPlayback() {
+  for (var i = 0; i < pendingSources.length; i++) {
+    try {
+      pendingSources[i].onended = null;
+      pendingSources[i].stop();
+    } catch (_) { /* already stopped or ended */ }
+  }
+  pendingSources = [];
+  nextPlayTime = 0;
+}
+
+// ── Control frame helpers (4-byte BE length + UTF-8 JSON) ────────
+function encodeControl(msg) {
+  var body = new TextEncoder().encode(JSON.stringify(msg));
+  var frame = new Uint8Array(4 + body.length);
+  var view = new DataView(frame.buffer);
+  view.setUint32(0, body.length, false);
+  frame.set(body, 4);
+  return frame;
+}
+
+// Stateful decoder: server may chunk control frames arbitrarily.
+function makeControlDecoder() {
+  var buf = new Uint8Array(0);
+  return function feed(chunk) {
+    var combined = new Uint8Array(buf.length + chunk.length);
+    combined.set(buf, 0);
+    combined.set(chunk, buf.length);
+    buf = combined;
+    var out = [];
+    while (buf.length >= 4) {
+      var length = new DataView(buf.buffer, buf.byteOffset, 4).getUint32(0, false);
+      if (buf.length < 4 + length) break;
+      var body = buf.subarray(4, 4 + length);
+      buf = buf.subarray(4 + length);
+      try {
+        out.push(JSON.parse(new TextDecoder().decode(body)));
+      } catch (_) { /* drop malformed */ }
+    }
+    return out;
+  };
+}
+
+async function acceptServerStreams(transport) {
+  var inc = transport.incomingBidirectionalStreams.getReader();
+  while (true) {
+    var { value: stream, done } = await inc.read();
+    if (done) return;
+    // Pass the reader as a parameter so each dispatch keeps its own
+    // binding — a function-scoped `var` here would be clobbered by the
+    // next incoming stream and mix audio/control processing.
+    dispatchServerStream(stream.readable.getReader()).catch(function (e) {
+      console.warn(e);
+    });
+  }
+}
+
+async function dispatchServerStream(reader) {
+  try {
+    // Peek the first byte to know whether it's audio or control.
+    var first = await reader.read();
+    if (first.done || first.value.length === 0) return;
+    var tag = first.value[0];
+    if (tag === TAG_AUDIO) {
+      // Audio header is [0x01][4-byte BE sample rate], possibly split across
+      // reads.  The rate is inline (not a control message) so it can never
+      // race the audio bytes; it is constant for this stream's lifetime.
+      var hdr = first.value;
+      while (hdr.length < 5) {
+        var hr = await reader.read();
+        if (hr.done) return;
+        var merged = new Uint8Array(hdr.length + hr.value.length);
+        merged.set(hdr, 0);
+        merged.set(hr.value, hdr.length);
+        hdr = merged;
+      }
+      var rate = new DataView(hdr.buffer, hdr.byteOffset, hdr.byteLength).getUint32(1, false);
+      if (hdr.length > 5) playAudio(hdr.slice(5).buffer, rate);
+      while (true) {
+        var r = await reader.read();
+        if (r.done) return;
+        playAudio(
+          r.value.buffer.slice(r.value.byteOffset, r.value.byteOffset + r.value.byteLength),
+          rate
+        );
+      }
+    } else if (tag === TAG_CONTROL) {
+      var decode = makeControlDecoder();
+      if (first.value.length > 1) {
+        decode(first.value.subarray(1)).forEach(handleControlMessage);
+      }
+      while (true) {
+        var r2 = await reader.read();
+        if (r2.done) return;
+        decode(r2.value).forEach(handleControlMessage);
+      }
+    }
+  } catch (e) {
+    // Expected on barge-in: the server resets the audio stream to drop
+    // already-buffered TTS, which rejects the pending reader.read().  The
+    // chunks we already received are scheduled on the playback timeline,
+    // so stop those too; a fresh server-initiated stream follows.
+    if (tag === TAG_AUDIO) stopPlayback();
+  }
+}
+
+function handleControlMessage(msg) {
+  // Server→client control is currently just {"type":"ready"} — the outbound
+  // sample rate now travels inline on the audio stream (see dispatchServerStream).
+  if (msg.type === "ready") console.log("Server ready");
+}
+
+// ── Start / Stop ─────────────────────────────────────────────────
+async function start() {
+  manualStop = false;
+  startBtn.disabled = true;
+  setStatus("Requesting microphone...", "connecting");
+
+  try {
+    if (typeof WebTransport === "undefined") {
+      throw new Error("This browser doesn't support WebTransport. Use Chrome or Edge.");
+    }
+
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate: DESIRED_RATE,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    micCtx = new AudioContext({ sampleRate: DESIRED_RATE });
+    var captureRate = micCtx.sampleRate;
+
+    var blob = new Blob([WORKLET_SRC], { type: "application/javascript" });
+    var url = URL.createObjectURL(blob);
+    await micCtx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+
+    var source = micCtx.createMediaStreamSource(mediaStream);
+    workletNode = new AudioWorkletNode(micCtx, "pcm-processor");
+
+    analyser = micCtx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    startLevelMeter();
+
+    playCtx = new AudioContext();
+    nextPlayTime = 0;
+    pendingSources = [];
+
+    setStatus("Connecting to server...", "connecting");
+    transport = new WebTransport(WT_URL);
+    await transport.ready;
+
+    // Open audio + control bidirectional streams and write the tag bytes.
+    // Server reads from the write half of each and writes TTS audio /
+    // control frames back on server-initiated streams (see
+    // acceptServerStreams below).
+    // Audio stream is self-describing: [tag][4-byte BE sample rate][PCM].
+    // The rate is inline (not the `config` control frame) so it can never
+    // race the mic PCM on an independent QUIC stream.
+    audioStream = await transport.createBidirectionalStream();
+    audioWriter = audioStream.writable.getWriter();
+    var audioHdr = new Uint8Array(5);
+    audioHdr[0] = TAG_AUDIO;
+    new DataView(audioHdr.buffer).setUint32(1, captureRate, false);
+    await audioWriter.write(audioHdr);
+
+    controlStream = await transport.createBidirectionalStream();
+    controlWriter = controlStream.writable.getWriter();
+    await controlWriter.write(new Uint8Array([TAG_CONTROL]));
+
+    // Server-initiated streams carry TTS audio and control frames.
+    acceptServerStreams(transport).catch(function (e) { console.warn(e); });
+
+    // Wire mic -> worklet -> WebTransport
+    workletNode.port.onmessage = function (e) {
+      if (audioWriter) {
+        audioWriter.write(new Uint8Array(e.data)).catch(function () { /* closed */ });
+      }
+    };
+    source.connect(workletNode);
+
+    stopBtn.disabled = false;
+    setStatus("Connected — speak!", "connected");
+
+    transport.closed.then(function () {
+      if (!manualStop) setStatus("Disconnected", "idle");
+      cleanup();
+    }).catch(function (e) {
+      setStatus("Transport error: " + (e && e.message), "error");
+      cleanup();
+    });
+  } catch (err) {
+    setStatus("Error: " + err.message, "error");
+    cleanup();
+  }
+}
+
+async function stop() {
+  manualStop = true;
+  if (controlWriter) {
+    try { await controlWriter.write(encodeControl({ type: "stop" })); } catch (_) {}
+  }
+  if (transport) {
+    try { transport.close(); } catch (_) {}
+  }
+  cleanup();
+}
+
+function cleanup() {
+  stopLevelMeter();
+  if (mediaStream) mediaStream.getTracks().forEach(function (t) { t.stop(); });
+  if (workletNode) try { workletNode.disconnect(); } catch (_) {}
+  if (micCtx) try { micCtx.close(); } catch (_) {}
+  if (playCtx) try { playCtx.close(); } catch (_) {}
+  pendingSources = [];
+  transport = audioStream = audioWriter = null;
+  controlStream = controlWriter = null;
+  micCtx = playCtx = mediaStream = workletNode = analyser = null;
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+}
+
+startBtn.addEventListener("click", start);
+stopBtn.addEventListener("click", stop);
+</script>
+</body>
+</html>

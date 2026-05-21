@@ -79,6 +79,10 @@ from easycat.transports.websocket import (
     WebSocketTransport,
     WebSocketTransportConfig,
 )
+from easycat.transports.webtransport import (
+    WebTransportTransport,
+    WebTransportTransportConfig,
+)
 from easycat.tts.cartesia_tts import CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
@@ -315,6 +319,7 @@ TransportConfig = (
     | WebSocketTransportConfig
     | TwilioTransportConfig
     | WebRTCTransportConfig
+    | WebTransportTransportConfig
     | Transport
 )
 _TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
@@ -324,6 +329,7 @@ _TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
         config=config, event_bus=event_bus
     ),
     WebRTCTransportConfig: lambda config, event_bus: WebRTCTransport(config),
+    WebTransportTransportConfig: lambda config, event_bus: WebTransportTransport(config),
 }
 
 

@@ -14,8 +14,15 @@ import websockets
 from websockets.asyncio.server import Server, ServerConnection
 
 from easycat.audio_format import AudioChunk, AudioFormat
+from easycat.events import EventBus, TransportDegraded
 
 logger = logging.getLogger(__name__)
+
+# Canonical cross-transport ``TransportDegraded.reason`` code.  The inbound
+# queue-full drop is shared by every ``_AudioQueueMixin`` user (WebSocket /
+# WebRTC / WebTransport), so it lives here rather than in any one transport.
+# Transport-specific codes stay in their own modules.
+_DEGRADED_INBOUND_QUEUE_FULL = "inbound_queue_full"
 
 
 # ── Shared queue / receive_audio logic ────────────────────────────
@@ -41,6 +48,8 @@ class _AudioQueueMixin:
     _connected: bool
     _in_queue: asyncio.Queue[AudioChunk | None]
     _client_connected: asyncio.Event
+    _event_bus: EventBus | None
+    _emit_tasks: set[asyncio.Task[None]]
 
     def _init_audio_queue(self, max_pending_chunks: int) -> None:
         self._max_pending_chunks = max_pending_chunks
@@ -49,6 +58,44 @@ class _AudioQueueMixin:
             maxsize=max_pending_chunks,
         )
         self._client_connected = asyncio.Event()
+        # Optional session EventBus.  Attached post-construction by Session
+        # via ``_maybe_attach_event_bus`` (which only sets ``_event_bus``
+        # while it is None), so ``_emit_degraded`` reads it live.  Preserve a
+        # value a subclass already set via constructor injection (e.g.
+        # Twilio transports pass ``event_bus`` before calling this) — only
+        # default it when unset.
+        self._event_bus = getattr(self, "_event_bus", None)
+        # Fire-and-forget ``bus.emit`` tasks, tracked so they are not GC'd
+        # mid-flight.  Observability must never block a transport hot path,
+        # so emission is scheduled, not awaited.
+        self._emit_tasks = getattr(self, "_emit_tasks", set())
+
+    def _emit_degraded(self, reason: str, detail: str = "", *, fatal: bool = False) -> None:
+        """Publish a :class:`TransportDegraded` on the session event bus.
+
+        Scheduled, never awaited: called from synchronous callbacks and audio
+        hot paths where blocking on handler dispatch would stall the
+        transport.  A no-op until Session attaches the bus
+        (:meth:`Session._maybe_attach_event_bus`) and whenever there is no
+        running loop (e.g. a unit test driving the transport synchronously) —
+        observability is never load-bearing.
+        """
+        bus = self._event_bus
+        if bus is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        event = TransportDegraded(
+            provider=getattr(self, "transport_kind", "unknown"),
+            reason=reason,
+            detail=detail,
+            fatal=fatal,
+        )
+        task = loop.create_task(bus.emit(event))
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
 
     def _reset_audio_queue(self) -> None:
         """Reinitialize the queue to clear any stale sentinels from a previous session."""
@@ -99,6 +146,10 @@ class _AudioQueueMixin:
             self._in_queue.put_nowait(chunk)
         except asyncio.QueueFull:
             logger.warning("Inbound %s audio queue full — dropping frame", context)
+            self._emit_degraded(
+                _DEGRADED_INBOUND_QUEUE_FULL,
+                f"dropped {len(chunk.data)}-byte {context} frame; inbound queue full",
+            )
 
     async def receive_audio(self) -> AsyncIterator[AudioChunk]:
         """Yield audio chunks until a ``None`` sentinel is received."""
