@@ -488,6 +488,9 @@ bridge = PydanticAIBridge(agent=pydantic_agent)
 session = Session(SessionConfig(agent=bridge, ...))
 ```
 
+The `pydantic-ai` extra currently pins PydanticAI v2 beta 2 exactly, because
+upstream recommends exact pins while v2 is a prerelease.
+
 ### Workflows (recommended for multi-step voice apps)
 
 For voice apps with step-based control flow, define a workflow object with
