@@ -28,6 +28,11 @@ pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.integration_socket,
     pytest.mark.integration_live,
+    pytest.mark.provider_openai,
+    pytest.mark.surface_agent,
+    pytest.mark.surface_stt,
+    pytest.mark.surface_transport,
+    pytest.mark.surface_tts,
 ]
 
 

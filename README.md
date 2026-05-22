@@ -27,6 +27,47 @@ easycat inspect  # summarise one captured debug bundle
 The fastest path from empty directory to a running session is
 `easycat init` followed by `easycat doctor` to validate the environment.
 
+## Validation Workflow
+
+For normal PR work, run the script-first quick validation:
+
+```bash
+uv run python scripts/validate.py quick
+```
+
+This runs deterministic local tests only: no live credentials, no localhost
+socket lane, no slow tests, and no flaky quarantine. The script writes an
+isolated report under `.easycat/validation/runs/<run_id>/report.json`, plus
+JUnit and stdout/stderr logs, and updates `.easycat/validation/latest.json`
+after the report is complete. `.easycat/validation/` is ignored by git; remove
+old run directories when you no longer need the artifacts.
+
+Use the socket lane when touching WebSocket, transport, or localhost
+integration behavior:
+
+```bash
+uv run python scripts/validate.py socket
+```
+
+Live, latency, stress, and release validation are still planned public CLI
+surfaces. Until `easycat validate ...` lands, use the marker/direct entry
+points in [`plan/validation/README.md`](plan/validation/README.md). The planned
+public replacement for the quick script is `easycat validate quick`; it does
+not exist yet. When the public command is added, `--json` will remain the
+stdout machine-readable CLI envelope, while persisted validation reports will
+use `--report PATH`.
+
+Flaky quarantine is explicit debt. Use
+`@pytest.mark.flaky(issue="...", owner="...", review_by="YYYY-MM-DD")`; missing
+metadata, stale `review_by` dates, or release-scoped flaky tests fail
+collection. Quick and socket validation exclude flaky tests.
+
+Provider validation scope is tracked with provider and surface markers such as
+`provider_openai` and `surface_stt`. See
+[`plan/validation/reference.md`](plan/validation/reference.md) for the planned
+provider-surface matrix covering extras, credential env vars, contract status,
+cassette status, and live canaries.
+
 ## Current capabilities
 - Session runtime that wires the audio pipeline (noise reduction -> VAD -> STT -> agent -> TTS)
 - Typed event system with an EventBus for streaming-first voice events

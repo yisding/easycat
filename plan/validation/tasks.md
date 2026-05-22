@@ -18,10 +18,15 @@ artifact format in the repo. Tasks below create those surfaces.
 - Do not require live provider credentials for PR-required validation.
 - Preserve existing test marker behavior until a task explicitly changes it.
 - Emit generated validation artifacts under `.easycat/validation/` by default.
+- Write each validation run into an isolated run directory; never let matrix
+  jobs or concurrent local runs overwrite the same report or JUnit file.
 - Treat secrets, transcripts, prompts, phone numbers, and generated provider
   content as unsafe unless redaction is explicit.
 - Keep planned public commands documented as planned until the relevant task
   lands.
+- Preserve the existing CLI-wide `--json` meaning: stdout machine-readable
+  envelope. Use `--report PATH` or `--output PATH` for persisted validation
+  report files.
 
 ## Milestones
 
@@ -39,7 +44,7 @@ artifact format in the repo. Tasks below create those surfaces.
 
 ### V0.1 Register Validation Markers
 
-Status: pending
+Status: completed
 
 Current state:
 
@@ -57,9 +62,17 @@ Files:
 Tasks:
 
 - Register `contract`, `latency`, `stress`, `release`, `flaky`,
-  `provider_openai`, `provider_deepgram`, `provider_elevenlabs`, and
-  `provider_cartesia`.
+  `provider_openai`, `provider_deepgram`, `provider_elevenlabs`,
+  `provider_cartesia`, `surface_stt`, `surface_tts`, `surface_agent`,
+  `surface_transport`, `surface_vad`, `agent_bridge`, `requires_extra`, and
+  `provider`.
+- Decide and document that `quick` means PR-local validation: deterministic,
+  no sockets, no live credentials, no slow/flaky tests. It may include
+  `integration_local` tests, but if measured runtime gets too high, split a
+  smaller `unit` command later instead of weakening CI coverage.
 - Confirm all current custom markers are registered.
+- Add marker-lint helpers so any `integration_live`, `contract`, or `latency`
+  test that names a provider surface also declares provider and surface scope.
 - Add `strict_markers = true` after collection is clean.
 - Add `strict_config = true` only after current pytest config emits no
   warnings.
@@ -69,6 +82,10 @@ Acceptance:
 - `uv run pytest --collect-only -q` completes without unknown marker warnings.
 - Current CI marker expressions continue to select the same broad groups until
   CI is intentionally changed in V1.2.
+- `uv run pytest --collect-only -q -m "integration_live and provider_openai"`
+  collects only OpenAI-scoped live tests once provider markers are assigned.
+- Marker lint fails a synthetic live/provider test that omits provider or
+  surface metadata.
 
 Verification:
 
@@ -79,11 +96,11 @@ uv run pytest -q -m "not integration_socket and not integration_live and not slo
 
 ### V0.2 Define Validation Report Model
 
-Status: pending
+Status: completed
 
 Files:
 
-- temporary script/helper module chosen for V0, or `src/easycat/cli/validate.py`
+- reusable validation module chosen for V0, or `src/easycat/cli/validate.py`
   if V1 is pulled forward
 - `tests/cli/test_validate.py` or a focused report-model test
 
@@ -92,17 +109,27 @@ Tasks:
 - Add typed helpers for the validation JSON envelope:
   `ValidationRun`, `ValidationCheck`, `ValidationSkip`,
   `ValidationFailure`, and artifact references.
-- Include `schema_version`, command, timestamps, duration, status, git
-  metadata, Python/platform metadata, checks, skips, failures, latency, and
-  providers.
+- Include `schema_version`, `redaction_version`, `run_id`, command,
+  timestamps, duration, status, validation exit code, underlying tool exit
+  codes such as `pytest_exit_code`, git metadata, Python/platform metadata,
+  checks, skips, failures, latency, providers, extras, and artifact paths.
+- Represent provider check states as `not_requested`,
+  `skipped_missing_secret`, `failed_missing_required_secret`, `passed`, and
+  `failed`.
 - Make JSON serialization deterministic enough for tests.
-- Never serialize environment variable values or secret-like strings.
+- Never serialize environment variable values or secret-like strings. Allowed
+  environment metadata is env var presence by name only.
+- Define report-boundary redaction for command args, pytest stdout/stderr
+  snippets, JUnit paths, failure messages, file paths, URLs, transcripts,
+  prompts, generated provider text, phone numbers, and provider request IDs.
 
 Acceptance:
 
 - Unit tests verify required fields and deterministic serialization.
 - A test value that looks like a secret does not appear in serialized output.
 - The schema can represent pass, fail, and expected skip.
+- The schema can represent strict-mode skipped-required failures separately
+  from expected missing-secret skips.
 
 Verification:
 
@@ -112,24 +139,33 @@ uv run pytest tests/cli/test_validate.py -q
 
 ### V0.3 Create `scripts/validate.py quick/socket`
 
-Status: pending
+Status: completed
 
 Files:
 
 - `scripts/validate.py`
-- tests for report helpers, if helpers live outside the script
+- reusable validation runner/report helpers
+- tests for report helpers and script dispatch
 
 Tasks:
 
 - Create the `scripts/` directory if it is still absent.
+- Keep `scripts/validate.py` as a thin shim over reusable runner/report code
+  so V1 can reuse the implementation instead of creating a parallel codepath.
 - Implement `quick` with:
-  `uv run pytest -q --junitxml=.easycat/validation/junit.xml -m "not integration_socket and not integration_live and not slow and not flaky"`.
+  `uv run pytest -q --junitxml=<run-dir>/junit.xml -m "not integration_socket and not integration_live and not slow and not flaky"`.
 - Implement `socket` with:
-  `uv run pytest -q --junitxml=.easycat/validation/junit.xml -m "integration_socket and not integration_live and not flaky"`.
-- Create `.easycat/validation/` automatically.
-- Emit `.easycat/validation/latest.json`.
-- Return the pytest exit code.
+  `uv run pytest -q --junitxml=<run-dir>/junit.xml -m "integration_socket and not integration_live and not flaky"`.
+- Create `.easycat/validation/runs/<run_id>/` automatically. Use a run id
+  containing UTC timestamp, slice name, and a collision-resistant suffix such
+  as pid or CI run attempt.
+- Emit `<run-dir>/report.json` and atomically update
+  `.easycat/validation/latest.json` as the latest-run report copy or pointer.
+- Return validation exit codes, not raw pytest exit codes. Store both values
+  in the report.
 - Record command duration and artifact paths.
+- Capture stdout/stderr logs under the run directory when practical, with the
+  same redaction boundary as JSON reports.
 
 Acceptance:
 
@@ -137,6 +173,8 @@ Acceptance:
 - `uv run python scripts/validate.py socket` runs the planned socket selector.
 - A failed pytest run still writes a validation JSON report.
 - The JSON report references JUnit XML when it exists.
+- Two concurrent validation runs create separate run directories.
+- `latest.json` is updated atomically and never points at a partial report.
 
 Verification:
 
@@ -147,7 +185,7 @@ uv run python scripts/validate.py socket
 
 ### V0.4 Add Flaky Quarantine Metadata Check
 
-Status: pending
+Status: completed
 
 Current state:
 
@@ -162,14 +200,22 @@ Tasks:
 
 - Define the accepted flaky metadata format in marker kwargs or a nearby
   helper comment.
-- Validate that every `flaky` test has issue, owner, and review date.
-- Add release validation behavior that fails stale flaky markers.
+- Use `@pytest.mark.flaky(issue="...", owner="...", review_by="YYYY-MM-DD")`
+  as the initial metadata shape.
+- Validate that every `flaky` test has issue, owner, and review date, and
+  that `review_by` is not stale.
+- Add release validation behavior that fails stale flaky markers and fails
+  any release-required test that is still quarantined.
+- Define nightly rerun policy before adding a rerun dependency. If a plugin is
+  adopted later, name the plugin and keep it out of V0 unless needed.
 - Keep PR quick/socket selectors excluding `flaky`.
 
 Acceptance:
 
 - A synthetic or fixture test proves missing flaky metadata fails the
   validation helper.
+- A synthetic or fixture test proves stale `review_by` fails release
+  validation.
 - Normal test collection remains fast.
 
 Verification:
@@ -181,7 +227,7 @@ uv run pytest -q -m "not flaky and not integration_live"
 
 ### V0.5 Document Contributor Workflow
 
-Status: pending
+Status: completed
 
 Files:
 
@@ -194,9 +240,14 @@ Tasks:
   `uv run python scripts/validate.py quick`.
 - Label `easycat validate quick` as the planned public replacement until V1.1
   lands.
+- Document `--report PATH` for persisted validation JSON and reserve `--json`
+  for stdout machine-readable CLI envelopes.
 - Document when to run socket, live, latency, and release checks.
 - Document flaky marker policy.
 - Document artifact directory and cleanup expectations.
+- Add a provider validation table or link to the validation reference showing
+  provider surface, extra, env var, default mode/model, contract status,
+  cassette status, and live command.
 
 Acceptance:
 
@@ -226,27 +277,42 @@ Files:
 - `src/easycat/cli/validate.py`
 - `src/easycat/cli/_app.py`
 - `tests/cli/test_validate.py`
+- `tests/cli/TEST_PLANS.md`
+- `src/easycat/cli/_output.py` and `src/easycat/cli/diagnose/_codes.py` if
+  validation adds or reserves new public exit-code meanings
 
 Tasks:
 
 - Add a Typer command group: `easycat validate`.
 - Implement subcommands: `quick`, `socket`, and `report`.
-- Preserve JSON/JUnit/artifact options from the script.
+- Preserve report/JUnit/artifact options from the script.
+- Keep `--json` as the existing stdout envelope mode. Use `--report PATH` for
+  persisted validation JSON.
+- Add a validation exit-code table before implementation. Do not expose raw
+  pytest exit code `5` as public CLI exit code `5`, because `easycat` already
+  uses `5` for bundle missing/corrupt.
+- Store both public `exit_code` and underlying `pytest_exit_code` in reports.
 - Keep human output concise and Rich-compatible.
 - Add the command to the top-level journey menu.
+- Add `validate` and `validate report` to the CLI test plan.
 
 Acceptance:
 
-- `uv run easycat validate quick --json /tmp/easycat-validation.json` works.
+- `uv run easycat validate quick --report /tmp/easycat-validation.json`
+  writes a report, and `uv run easycat validate quick --json` emits the
+  standard stdout envelope.
 - `uv run easycat validate report .easycat/validation/latest.json` renders a
   concise summary.
-- CLI tests cover success, failure, and expected skip rendering.
+- CLI tests cover success, failure, expected skip rendering, missing report,
+  invalid JSON, unsupported `schema_version`, unknown `kind`, failed run,
+  artifact paths, and git dirty state rendering.
 - Bare `easycat` output lists validation only after the command exists.
 
 Verification:
 
 ```bash
-uv run easycat validate quick --json /tmp/easycat-validation.json
+uv run easycat validate quick --report /tmp/easycat-validation.json
+uv run easycat validate quick --json
 uv run pytest tests/cli/test_validate.py -q
 ```
 
@@ -261,10 +327,13 @@ Dependencies:
 Current state:
 
 - `.github/workflows/ci.yml` has one local test matrix on Python 3.12 and
-  3.14 with `-m "not integration_socket and not integration_live"`.
+  3.14 with `-m "not integration_socket and not integration_live"`, but the
+  package declares `requires-python >=3.11`.
 - The socket integration job also runs on Python 3.12 and 3.14.
 - The live-provider job is manual via `workflow_dispatch`.
 - CI does not upload validation JSON or JUnit artifacts.
+- Current CI uses pytest `-x`, which conflicts with complete JUnit and
+  validation reports.
 
 Files:
 
@@ -274,22 +343,31 @@ Tasks:
 
 - Change quick test selection to exclude `slow` and `flaky`.
 - Add JUnit output and validation JSON artifact upload with `if: always()`.
-- Keep quick required on Python 3.12 and 3.14.
+- Keep quick required on Python 3.11, 3.12, and 3.14 unless the project
+  changes its advertised Python support.
 - Keep socket required on Python 3.12 only.
+- Remove pytest `-x` from validation CI, set matrix `fail-fast: false`, and
+  add job-level `timeout-minutes`.
 - Add package build smoke on Python 3.12.
-- Use artifact names that include job name, Python version, and run attempt.
+- Use CI-specific artifact directories and names that include job name, Python
+  version, run attempt, and run id.
+- Use `--junit-prefix` or suite names so merged CI reports keep job context.
+- Split base socket coverage from optional transport-extra jobs, or narrow the
+  socket tier's stated coverage to the extras actually installed in CI.
 
 Acceptance:
 
 - PR-required workflow uploads artifacts on pass and failure.
 - Socket tests no longer run across every Python version in PR CI.
 - Slow and flaky tests are not included in quick CI.
+- Quick CI covers the declared minimum Python version.
+- A failed matrix job still uploads report, JUnit, and stdout/stderr logs.
 
 Verification:
 
 ```bash
-uv run pytest -q --junitxml=.easycat/validation/junit.xml -m "not integration_socket and not integration_live and not slow and not flaky"
-uv run pytest -q --junitxml=.easycat/validation/junit.xml -m "integration_socket and not integration_live and not flaky"
+uv run pytest -q --junitxml=.easycat/validation/runs/manual-quick/junit.xml -m "not integration_socket and not integration_live and not slow and not flaky"
+uv run pytest -q --junitxml=.easycat/validation/runs/manual-socket/junit.xml -m "integration_socket and not integration_live and not flaky"
 ```
 
 ### V1.3 Add Manual And Nightly Workflow Skeletons
@@ -313,12 +391,18 @@ Tasks:
   validation.
 - Protect live jobs with branch/environment conditions.
 - Upload artifacts with bounded retention.
+- Define strictness per workflow: manual/nightly may allow expected missing
+  secrets, but release mode fails when explicitly required providers or
+  latency prerequisites are skipped.
 
 Acceptance:
 
 - Workflows can be manually triggered without provider secrets.
-- Missing secrets are expected skips, not failures.
+- Missing secrets are expected skips in non-strict manual/nightly workflows,
+  not failures.
 - No live canary runs on untrusted fork PRs.
+- Required release checks cannot pass only because every required live or
+  latency check skipped.
 
 ## V2: Structured Latency Validation
 
@@ -341,12 +425,18 @@ Files:
 Tasks:
 
 - Add `pytest.mark.latency` to latency tests.
+- Add provider and surface markers to latency tests, because current latency
+  coverage is live-provider specific.
 - Factor reusable latency sample serialization helpers.
 - Preserve current test behavior and SLO assertions.
+- Separate smoke and sweep collection so smoke can run one low-cost condition
+  while sweep runs the broader matrix.
 
 Acceptance:
 
 - `uv run pytest -q -m latency --collect-only` selects latency tests.
+- `uv run pytest -q -m "latency and provider_openai" --collect-only`
+  selects only OpenAI-backed latency tests.
 - Existing direct latency test invocation still works.
 
 ### V2.2 Add Canonical Latency Sample JSON
@@ -368,19 +458,27 @@ Tasks:
 - Emit sample fields: `sample_id`, `condition_id`, `warmup`,
   `timestamp_source`, provider/model/transport/debug metadata, stage
   durations, `missing_stage_reason`, and `failure_class`.
-- Persist `smoke-latest.json` and `sweep-latest.json`.
+- Persist latency artifacts inside the isolated validation run directory, and
+  update `latency/smoke-latest.json` or `latency/sweep-latest.json` only as a
+  convenience pointer/copy.
 - Mark p90/p95/p99 as informational unless sample-count eligibility is met.
+- Store raw samples, summary eligibility, baseline metadata, environment
+  metadata, and clock source in the report.
+- Classify provider-side timeout/rate-limit/auth failures separately from
+  EasyCat latency regressions.
 
 Acceptance:
 
 - Smoke output contains raw sample and no percentile gate.
 - Sweep output contains raw samples plus eligible summaries.
 - JSON schema test covers missing-stage handling.
+- A smoke run with too few samples reports p90/p95/p99 as ineligible instead
+  of failing or claiming a percentile.
 
 Verification:
 
 ```bash
-uv run easycat validate latency --smoke --json /tmp/latency.json
+uv run easycat validate latency --smoke --report /tmp/latency.json
 ```
 
 ### V2.3 Add Baseline Comparison Helper
@@ -402,11 +500,43 @@ Tasks:
 - Require both relative and absolute regression thresholds.
 - Require sample-count eligibility before failing.
 - Classify provider/API drift separately from EasyCat regression.
+- Keep baselines versioned by condition and require explicit baseline refresh.
 
 Acceptance:
 
 - Unit tests cover pass, relative-only regression, absolute-only regression,
   eligible failure, and ineligible informational status.
+- A changed provider/model/region/transport condition refuses to compare with
+  a mismatched baseline.
+
+### V2.4 Add Reliability Sampling To Latency/Stress Runs
+
+Status: pending
+
+Dependencies:
+
+- V2.2
+
+Files:
+
+- latency/stress helper module
+- `tests/e2e/` latency and stress tests
+
+Tasks:
+
+- Capture event-loop lag, queue depth, dropped frames, journal degraded flag,
+  active sessions, and memory growth where practical.
+- Attach reliability samples to latency and stress reports with the same
+  `sample_id` or `condition_id`.
+- Keep reliability signals informational in smoke mode and eligible-gated in
+  sweep/stress modes.
+
+Acceptance:
+
+- A stress report contains saturation signals even if all functional
+  assertions pass.
+- Reliability samples are omitted or marked unavailable with an explicit
+  reason when the signal cannot be collected.
 
 ## V3: Provider And Protocol Contracts
 
@@ -424,16 +554,23 @@ Files:
 
 - `tests/contracts/`
 - `tests/contracts/conftest.py`
+- `tests/contracts/provider_surface_matrix.py` or equivalent
 
 Tasks:
 
 - Create shared helpers for contract fixtures.
 - Reuse existing fake providers and scripted test harnesses where possible.
 - Keep contract tests offline by default.
+- Add a canonical provider-surface matrix with provider, surface, adapter,
+  protocol, mode, model/API version, required extra, credential env var,
+  contract path, cassette path/status, and live-canary status.
+- Treat extras as a first-class report dimension, not only an install note.
 
 Acceptance:
 
 - Empty or smoke contract suite runs with `-m contract`.
+- A new registered provider surface without a matrix row or explicit exclusion
+  fails a local contract validation test.
 
 ### V3.2 Preserve Existing Provider Matrix Scope
 
@@ -448,11 +585,16 @@ Tasks:
 
 - Clarify that the existing matrix is the factory/session wiring check.
 - Do not add protocol cassette logic to that file.
+- Ensure every registered STT/TTS config appears in either the wiring matrix,
+  the provider-surface contract matrix, or an explicit exclusion list with a
+  reason.
 
 Acceptance:
 
 - Future failures distinguish wiring regressions from protocol contract
   failures.
+- STT/TTS normalization and contract coverage cannot silently omit a newly
+  registered provider such as Cartesia or OpenAI realtime.
 
 ### V3.3 Add STT/TTS/VAD/Transport Contract Tests
 
@@ -475,6 +617,10 @@ Tasks:
 - Validate stop/close idempotency where required.
 - Validate normalized timeout/auth/rate-limit/malformed-frame categories
   with fakes or cassettes.
+- Validate provider-surface-specific requirements such as input/output audio
+  format, commit/finalization behavior, alignment/marker support, SSML
+  support, API version headers, and EventBus requirements where EasyCat
+  depends on them.
 - Avoid asserting provider output quality.
 
 Acceptance:
@@ -482,7 +628,39 @@ Acceptance:
 - New provider without a contract path fails a local contract test.
 - Contracts pass without live credentials.
 
-### V3.4 Add HTTP Cassette Proof Of Concept
+### V3.4 Add Agent Bridge Contract Tests
+
+Status: pending
+
+Dependencies:
+
+- V3.1
+
+Files:
+
+- `tests/contracts/test_agent_bridge_contracts.py`
+- bridge contract helpers or fixtures
+
+Tasks:
+
+- Cover OpenAI Agents, PydanticAI, GenericWorkflow, Remote Responses API,
+  LangChain, LangGraph, and Llama Agents.
+- Validate the bridge event grammar: text delta, done, tool start/result,
+  handoff triple, framework snapshot safety, interruption modes, recorder
+  writes, and normalized errors.
+- Mark bridge tests with `contract`, `agent_bridge`, provider/bridge metadata,
+  and `requires_extra(...)` where optional dependencies are needed.
+- Keep optional bridge dependencies as expected skips unless a command or
+  release profile explicitly requires that extra.
+
+Acceptance:
+
+- A new bridge without a contract path or explicit exclusion fails contract
+  validation.
+- Bridge contract tests can report missing optional extras without pretending
+  the bridge passed.
+
+### V3.5 Add HTTP/SSE Cassette Proof Of Concept
 
 Status: pending
 
@@ -493,23 +671,32 @@ Dependencies:
 Files:
 
 - `tests/contracts/test_http_cassette_redaction.py`
+- `tests/contracts/test_sse_cassette_replay.py` if Remote Responses API
+  streaming is covered here
 - `tests/cassettes/http/`
+- `tests/cassettes/sse/`
 - dependency updates if adopting `pytest-recording`
 
 Tasks:
 
 - Add one small redacted HTTP cassette.
+- Add one small redacted SSE cassette for the Remote Responses API bridge if
+  that bridge is in the first cassette scope.
 - Configure record mode `none` and network blocking for CI/offline runs.
 - Filter authorization headers, provider API keys, tokens, signed URLs,
   timestamps, request IDs, and non-contract IDs.
 - Add a test that fails if secret-like values appear in cassettes.
+- Define the minimum cassette set per provider surface instead of leaving
+  cassette scope as an open-ended question.
 
 Acceptance:
 
 - Contract test can run without network.
 - Cassette redaction test fails on injected fake secrets.
+- The plan has an explicit cassette scope table for every provider surface:
+  required, deferred with reason, or not applicable.
 
-### V3.5 Add WebSocket Cassette Proof Of Concept
+### V3.6 Add WebSocket Cassette Proof Of Concept
 
 Status: pending
 
@@ -537,14 +724,14 @@ Acceptance:
 - Offline WebSocket cassette replay proves parser compatibility.
 - Schema version is validated.
 
-### V3.6 Add Schema Drift Fingerprints
+### V3.7 Add Schema Drift Fingerprints
 
 Status: pending
 
 Dependencies:
 
-- V3.4
 - V3.5
+- V3.6
 
 Files:
 
@@ -555,6 +742,9 @@ Tasks:
 
 - Compute observed schema fingerprints for request payloads, response/event
   payloads, and normalized errors.
+- Add provider-surface schema registry entries that separate required
+  outbound fields, required inbound event names, optional observed fields,
+  and provider-specific enum values EasyCat branches on.
 - Report `unchanged`, `additive_warning`, `breaking_failure`, or `unknown`.
 - Treat missing required fields, changed enum values used by EasyCat,
   content-type changes, and error-shape changes as failures.
@@ -563,6 +753,8 @@ Acceptance:
 
 - Additive unknown field test produces warning.
 - Missing required field test fails.
+- A provider-specific enum change used by EasyCat fails as
+  `breaking_failure`.
 
 ## V4: Live Canaries And Provider Reports
 
@@ -584,6 +776,12 @@ Tasks:
 - Implement JSON shape with provider, surface, adapter, `live_checked_at`,
   API version, auth env var presence, capabilities, models/voices where
   applicable, contract status, schema status, latency, and failure class.
+- Include protocol/mode, adapter version, required extra, credential env var
+  name, input and output audio formats, streaming/finalization behavior,
+  marker/alignment/SSML support, and API version header behavior where
+  applicable.
+- Decide whether providers expose a formal capability/version protocol or
+  reports may derive capabilities by duck-typing configs and adapters.
 - Redact provider-specific identifiers unless they are safe, low-cardinality
   capability values.
 
@@ -609,7 +807,12 @@ Files:
 Tasks:
 
 - Add repeatable `--provider`.
+- Add optional `--surface` or provider-surface selection before provider live
+  checks need to distinguish OpenAI batch STT from realtime STT, or speech
+  providers from agent bridges.
 - Run provider-specific live smoke only when credentials are present.
+- If a provider was explicitly requested, missing credentials fail in strict
+  or release mode and skip only in exploratory/manual non-strict mode.
 - Pass secrets through environment variables only.
 - Classify failures as `easycat_regression`, `provider_drift`,
   `provider_outage`, `auth_or_quota`, `network`, or `environment`.
@@ -618,6 +821,8 @@ Tasks:
 Acceptance:
 
 - Missing secret produces expected skip.
+- Explicitly requested provider in strict mode produces
+  `failed_missing_required_secret` when its credential is absent.
 - Configured provider produces a capability report.
 - No secret values appear in JSON.
 
@@ -640,11 +845,14 @@ Tasks:
 - Avoid live provider jobs on untrusted fork PRs.
 - Mask derived sensitive values with `::add-mask::`.
 - Upload only redacted artifacts.
+- Make credential env-var mapping explicit in workflow `env:` blocks or job
+  documentation without echoing values.
 
 Acceptance:
 
 - Workflow conditions make the secret exposure path explicit.
 - Missing secrets skip provider jobs.
+- Release-mode live jobs fail missing required secrets.
 
 ## V5: Stress, Benchmarks, And Release Gates
 
@@ -681,7 +889,8 @@ Current state:
 
 - Stress-like E2E tests exist under `tests/e2e/`, mostly gated by existing
   `integration_socket`, `integration_live`, and `slow` markers.
-- There is no `stress` marker yet.
+- The `stress` marker is registered, but existing stress-like tests are not
+  consistently marked with it yet.
 
 Files:
 
@@ -694,10 +903,16 @@ Tasks:
 - Capture active sessions, queue depths, dropped frames, event-loop lag,
   journal degraded flag, and memory growth where practical.
 - Preserve p95/p99 only when sample counts are high enough.
+- Add `pytest.mark.stress` to existing stress-like E2E tests and separate
+  local stress from live provider soak.
+- Define timeout and cancellation cleanup expectations so stress failures do
+  not leave sessions, transports, or provider streams running.
 
 Acceptance:
 
 - Stress report includes saturation signals, not only pass/fail.
+- Stress teardown verifies no leaked sessions or pending runtime tasks when
+  practical.
 
 ### V5.3 Add Release Validation Workflow
 
@@ -722,11 +937,17 @@ Tasks:
 - Run live provider smoke for configured credentials.
 - Run latency sweep when provider prerequisites exist.
 - Upload distribution and validation artifacts.
+- Run installed-package checks outside the source tree, clear `PYTHONPATH`,
+  and assert `easycat.__file__` points into site-packages.
+- Fail strict release validation when required provider, latency, or flaky
+  quarantine checks skip unexpectedly.
 
 Acceptance:
 
 - Release validation can be manually triggered.
 - It validates installed package behavior, not only editable source.
+- A release run cannot pass by skipping every required live/provider/latency
+  check.
 
 ## V6: Optional Observability API
 
@@ -789,9 +1010,11 @@ Acceptance:
 V0.1 -> V0.3 -> V1.1 -> V1.2
 V0.2 -> V0.3 -> V1.1
 V1.1 -> V2.2 -> V2.3
+V2.2 -> V2.4
 V3.1 -> V3.3
-V3.1 -> V3.4 -> V3.6
-V3.1 -> V3.5 -> V3.6
+V3.1 -> V3.4
+V3.1 -> V3.5 -> V3.7
+V3.1 -> V3.6 -> V3.7
 V0.2 -> V4.1 -> V4.2 -> V4.3
 V1.2 + V2.2 + V4.2 -> V5.3
 V6 can start after V1, but should wait until names and artifacts settle.

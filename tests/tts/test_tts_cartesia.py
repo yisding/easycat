@@ -298,6 +298,8 @@ class TestCartesiaTTS:
         assert "sdk_version" in info
 
     @pytest.mark.integration_live
+    @pytest.mark.provider_cartesia
+    @pytest.mark.surface_tts
     async def test_live_cartesia_tts(self):
         """Integration test requiring CARTESIA_API_KEY env var."""
         import os

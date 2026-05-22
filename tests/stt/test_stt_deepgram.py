@@ -350,6 +350,8 @@ async def test_deepgram_flux_parses_turn_info_updates_and_end_of_turn():
 
 
 @pytest.mark.integration_live
+@pytest.mark.provider_deepgram
+@pytest.mark.surface_stt
 async def test_live_deepgram_stt():
     """Integration test requiring DEEPGRAM_API_KEY env var."""
     import os

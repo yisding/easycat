@@ -294,6 +294,11 @@ async def test_remote_bridge_applies_interruption_with_n1_chain() -> None:
 
 @pytest.mark.integration_socket
 @pytest.mark.integration_live
+@pytest.mark.provider_openai
+@pytest.mark.surface_agent
+@pytest.mark.surface_stt
+@pytest.mark.surface_transport
+@pytest.mark.surface_tts
 async def test_live_openai_agents_barge_in(
     voice_fixtures,
     ws_server_factory,

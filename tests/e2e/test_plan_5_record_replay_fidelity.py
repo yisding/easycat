@@ -559,10 +559,12 @@ async def test_replay_audio_raises_when_artifact_is_missing(
 
 
 @pytest.mark.integration_live
+@pytest.mark.provider_openai
 @pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY"),
     reason="live OpenAI integration requires OPENAI_API_KEY",
 )
+@pytest.mark.surface_agent
 async def test_live_openai_text_session_records_and_replays(tmp_path: pathlib.Path) -> None:
     """Record a real OpenAI-backed text session, export, reload, and
     verify ``bundle.replay()`` walks every record under ARTIFACT fidelity.

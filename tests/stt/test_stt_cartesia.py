@@ -358,6 +358,8 @@ def test_cartesia_version_info_shape():
 
 
 @pytest.mark.integration_live
+@pytest.mark.provider_cartesia
+@pytest.mark.surface_stt
 async def test_live_cartesia_stt():
     """Integration test requiring CARTESIA_API_KEY env var."""
     import os

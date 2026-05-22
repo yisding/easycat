@@ -636,6 +636,8 @@ def test_factory_rejects_unknown_provider():
 
 
 @pytest.mark.integration_live
+@pytest.mark.provider_openai
+@pytest.mark.surface_stt
 async def test_live_openai_realtime_stt():
     """Integration test requiring OPENAI_API_KEY env var."""
     import os

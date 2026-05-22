@@ -278,6 +278,8 @@ async def test_openai_stt_reusable_across_streams():
 
 
 @pytest.mark.integration_live
+@pytest.mark.provider_openai
+@pytest.mark.surface_stt
 async def test_live_openai_stt():
     """Integration test requiring OPENAI_API_KEY env var."""
     import os

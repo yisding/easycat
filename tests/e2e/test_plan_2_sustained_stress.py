@@ -238,7 +238,12 @@ async def test_concurrent_sessions_journal_isolation(
 
 @pytest.mark.integration_socket
 @pytest.mark.integration_live
+@pytest.mark.provider_openai
 @pytest.mark.slow
+@pytest.mark.surface_agent
+@pytest.mark.surface_stt
+@pytest.mark.surface_transport
+@pytest.mark.surface_tts
 async def test_ten_turns_live_openai(
     voice_fixtures,
     ws_server_factory,

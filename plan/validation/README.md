@@ -15,27 +15,33 @@ commands unless the current-state section says they exist.
 
 ## Current State
 
-Snapshot: static inspection on 2026-05-21. No tests were run for this
-snapshot.
+Snapshot: V0 implementation pass on 2026-05-22.
 
-Implemented today:
+Implemented:
 
-- `pyproject.toml` registers only these pytest markers:
-  `integration_local`, `integration_socket`, `integration_live`, and
-  `slow`.
+- `pyproject.toml` registers the base, validation, provider, surface,
+  optional-extra, and flaky/release markers listed in [reference.md](reference.md),
+  with `strict_markers = true`.
+- `tests/conftest.py` enforces provider/surface metadata when validation tests
+  declare either side, and enforces flaky quarantine metadata:
+  `@pytest.mark.flaky(issue="...", owner="...", review_by="YYYY-MM-DD")`.
+- `scripts/validate.py quick` and `scripts/validate.py socket` exist as the V0
+  script-first validation entry points.
+- Validation runs write isolated artifacts under `.easycat/validation/runs/`
+  and update `.easycat/validation/latest.json` after a complete report exists.
+- `src/easycat/validation/report.py` defines the V0 validation JSON envelope,
+  provider credential states, artifact references, and report-boundary redaction.
 - `.github/workflows/ci.yml` has `lint`, local tests, socket integration
   tests, and manual live-provider tests.
 - The public CLI currently registers `init`, `doctor`, `explain`, `bundles`,
   and `inspect`. There is no `easycat validate` command.
-- There is no `scripts/validate.py` and no `scripts/` directory.
 - The existing provider matrix at
   `tests/integration/test_provider_contract_matrix.py` validates provider
   registry, factory, EventBus injection, and session wiring. It is not a
   protocol cassette suite.
 - `tests/e2e/test_plan_7_latency_benchmark.py` already measures voice-loop
-  latency and stage breakdowns, but it is marked with the existing
-  `integration_socket`, `integration_live`, and `slow` markers. There is no
-  `latency` marker or structured validation artifact yet.
+  latency and stage breakdowns, and is now marked `latency`, but it does not
+  emit a structured latency artifact yet.
 - CLI testing already has a focused plan in `tests/cli/TEST_PLANS.md`.
 - Broader E2E planning in [../testing/](../testing/README.md) is backed by
   concrete tests under `tests/e2e/`.
@@ -43,23 +49,45 @@ Implemented today:
 Planned but not implemented:
 
 - `easycat validate ...` command group.
-- `.easycat/validation/latest.json` validation reports.
 - JUnit and validation artifact upload in CI.
-- `contract`, `latency`, `stress`, `release`, `flaky`, and provider-specific
-  validation markers.
 - HTTP/WebSocket provider cassettes and schema drift fingerprints.
+- a canonical provider-surface matrix for provider, surface, adapter,
+  protocol, extra, credential env var, model/API version, contract path,
+  cassette status, and live-canary status.
 - Live provider capability reports.
 - Release validation workflow.
 
+## Recent Review Gaps
+
+Subagent and local review on 2026-05-21 found these plan hardening items:
+
+- Keep CLI `--json` as the existing stdout envelope. Use `--report PATH` or
+  `--output PATH` for persisted validation JSON.
+- Define validation exit-code mapping before adding public CLI commands. Do
+  not leak pytest exit codes directly through `easycat validate`.
+- Isolate artifacts by run id so concurrent local runs and CI matrix jobs do
+  not overwrite each other.
+- Make provider selection enforceable through provider/surface markers and a
+  marker lint; current `integration_live` tests are too broad to support
+  `--provider` safely.
+- Add strict release semantics: explicitly required provider, latency, and
+  release checks must fail when skipped.
+- Make provider surfaces, agent bridges, optional extras, and cassette scope
+  first-class in the contract plan.
+- Include Python 3.11 in required quick CI or explicitly change the support
+  policy.
+- Remove pytest `-x` from validation CI so JUnit/report artifacts describe all
+  failures found in a run.
+
 ## Target Slices
 
-These names are the planned validation vocabulary. Until V0/V1 in
-[tasks.md](tasks.md) lands, use the current pytest selectors shown here.
+These names are the validation vocabulary. V0 ships script-first `quick` and
+`socket`; the public `easycat validate ...` commands remain planned.
 
 | Slice | Current selector or entry point | Planned command |
 |---|---|---|
-| quick | `uv run pytest -q -m "not integration_socket and not integration_live"` | `easycat validate quick` |
-| socket | `uv run pytest -q -m "integration_socket"` | `easycat validate socket` |
+| quick | `uv run python scripts/validate.py quick` | `easycat validate quick` |
+| socket | `uv run python scripts/validate.py socket` | `easycat validate socket` |
 | contracts | existing `integration_local` provider matrix only | `easycat validate contracts` |
 | live | manual CI or `uv run pytest -q -m "integration_live"` with credentials | `easycat validate live` |
 | latency | `uv run pytest tests/e2e/test_plan_7_latency_benchmark.py -s -v` | `easycat validate latency --smoke/--sweep` |
@@ -68,7 +96,7 @@ These names are the planned validation vocabulary. Until V0/V1 in
 
 ## First Implementation PR
 
-Start with V0 in [tasks.md](tasks.md):
+V0 in [tasks.md](tasks.md) now covers:
 
 1. Register planned markers and enable strict marker validation once
    collection is clean.

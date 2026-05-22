@@ -392,6 +392,8 @@ async def test_elevenlabs_realtime_reusable():
 
 
 @pytest.mark.integration_live
+@pytest.mark.provider_elevenlabs
+@pytest.mark.surface_stt
 async def test_live_elevenlabs_stt_realtime():
     """Integration test requiring ELEVENLABS_API_KEY env var."""
     import os

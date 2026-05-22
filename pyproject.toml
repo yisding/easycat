@@ -106,9 +106,28 @@ select = ["E", "F", "I", "W", "UP"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+strict_markers = true
+strict_config = true
 markers = [
     "integration_local: in-process end-to-end tests with fake providers",
     "integration_socket: tests requiring localhost socket bind/connect permissions",
     "integration_live: tests requiring live API keys and optional provider extras",
     "slow: long-running end-to-end tests; opt in with '-m slow'",
+    "contract: provider, protocol, or bridge contract tests",
+    "latency: latency measurement or latency SLO tests",
+    "stress: load, soak, or high-volume validation tests",
+    "release: release-gate validation tests",
+    "flaky: quarantined intermittent test; requires linked issue, owner, and review date",
+    "provider_openai: OpenAI provider coverage",
+    "provider_deepgram: Deepgram provider coverage",
+    "provider_elevenlabs: ElevenLabs provider coverage",
+    "provider_cartesia: Cartesia provider coverage",
+    "surface_stt: STT surface coverage",
+    "surface_tts: TTS surface coverage",
+    "surface_agent: agent bridge surface coverage",
+    "surface_transport: transport surface coverage",
+    "surface_vad: VAD surface coverage",
+    "agent_bridge: agent bridge contract or live coverage",
+    "requires_extra(name): test requires an optional dependency extra",
+    "provider(name): generic provider metadata for custom provider filtering",
 ]
