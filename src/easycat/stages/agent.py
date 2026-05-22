@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
+from easycat import observability
 from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents._recorder import JournalAgentRecorder
@@ -167,54 +169,59 @@ class AgentStage:
 
         accumulated: list[str] = []
         errored = False
+        started = time.perf_counter()
         try:
-            async for event in bridge.invoke(turn_input, recorder, cancel_token):
-                kind = getattr(event, "kind", None)
-                text = getattr(event, "text", "")
-                if kind == "text_delta" and text:
-                    journal_append_event(
-                        ctx,
-                        stage=self.name,
-                        name="agent_delta",
-                        turn_id=turn.id,
-                        data_extra={"type": "TEXT_DELTA", "text": text},
-                    )
-                    accumulated.append(text)
-                elif kind == "done":
-                    if text:
+            with observability.span(
+                "easycat.agent.invoke",
+                {"easycat.stage": self.name, "easycat.surface": "agent_bridge"},
+            ):
+                async for event in bridge.invoke(turn_input, recorder, cancel_token):
+                    kind = getattr(event, "kind", None)
+                    text = getattr(event, "text", "")
+                    if kind == "text_delta" and text:
                         journal_append_event(
                             ctx,
                             stage=self.name,
                             name="agent_delta",
                             turn_id=turn.id,
-                            data_extra={"type": "DONE", "text": text},
+                            data_extra={"type": "TEXT_DELTA", "text": text},
                         )
-                        accumulated = [text]
-                elif kind == "tool_started" and getattr(event, "tool_name", ""):
-                    journal_append_event(
-                        ctx,
-                        stage=self.name,
-                        name="agent_delta",
-                        turn_id=turn.id,
-                        data_extra={
-                            "type": "TOOL_STARTED",
-                            "tool_name": event.tool_name,
-                            "call_id": getattr(event, "call_id", ""),
-                        },
-                    )
-                elif kind == "tool_result":
-                    journal_append_event(
-                        ctx,
-                        stage=self.name,
-                        name="agent_delta",
-                        turn_id=turn.id,
-                        data_extra={
-                            "type": "TOOL_RESULT",
-                            "call_id": getattr(event, "call_id", ""),
-                            "result": getattr(event, "result", ""),
-                        },
-                    )
-                yield event
+                        accumulated.append(text)
+                    elif kind == "done":
+                        if text:
+                            journal_append_event(
+                                ctx,
+                                stage=self.name,
+                                name="agent_delta",
+                                turn_id=turn.id,
+                                data_extra={"type": "DONE", "text": text},
+                            )
+                            accumulated = [text]
+                    elif kind == "tool_started" and getattr(event, "tool_name", ""):
+                        journal_append_event(
+                            ctx,
+                            stage=self.name,
+                            name="agent_delta",
+                            turn_id=turn.id,
+                            data_extra={
+                                "type": "TOOL_STARTED",
+                                "tool_name": event.tool_name,
+                                "call_id": getattr(event, "call_id", ""),
+                            },
+                        )
+                    elif kind == "tool_result":
+                        journal_append_event(
+                            ctx,
+                            stage=self.name,
+                            name="agent_delta",
+                            turn_id=turn.id,
+                            data_extra={
+                                "type": "TOOL_RESULT",
+                                "call_id": getattr(event, "call_id", ""),
+                                "result": getattr(event, "result", ""),
+                            },
+                        )
+                    yield event
         except Exception as exc:
             errored = True
             journal_append_event(
@@ -227,6 +234,14 @@ class AgentStage:
             )
             raise
         finally:
+            observability.record_histogram(
+                "easycat.stage.latency",
+                time.perf_counter() - started,
+                {
+                    "easycat.stage": self.name,
+                    "easycat.result": "fail" if errored else "pass",
+                },
+            )
             # Use a finally block so shadow history is updated even when
             # the consumer breaks out of the stream early (e.g. send_text
             # stops iterating on the ``done`` event — triggering

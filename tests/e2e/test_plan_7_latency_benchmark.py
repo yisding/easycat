@@ -83,24 +83,33 @@ Run with the usual ``OPENAI_API_KEY`` env var:
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import pathlib
 import statistics
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
 from easycat.events import AgentDelta, AgentRequestStarted, STTFinal, TTSAudio, VADStopSpeaking
+from easycat.validation.latency import (
+    LatencySample,
+    LatencyStageDurations,
+    ReliabilitySample,
+    ReliabilitySignals,
+    append_reliability_sample,
+    classify_latency_failure,
+)
 
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.integration_socket,
     pytest.mark.integration_live,
     pytest.mark.latency,
-    pytest.mark.provider_elevenlabs,
     pytest.mark.provider_openai,
     pytest.mark.slow,
     pytest.mark.surface_agent,
@@ -283,8 +292,20 @@ class ConditionResult:
         return srt[idx]
 
     @property
+    def p90_eligible(self) -> bool:
+        return len(self.samples_ms) >= 10
+
+    @property
+    def p90_display(self) -> str:
+        return f"{self.p90_ms:.0f}" if self.p90_eligible else "n/a"
+
+    @property
     def min_ms(self) -> float:
         return min(self.samples_ms) if self.samples_ms else float("nan")
+
+    @property
+    def max_ms(self) -> float:
+        return max(self.samples_ms) if self.samples_ms else float("nan")
 
 
 # ---------------------------------------------------------------------------
@@ -552,14 +573,38 @@ async def test_single_full_stack_latency_probe(
     pytest.importorskip("agents")
     stt_provider = os.environ.get("EASYCAT_BENCHMARK_STT_PROVIDER", "openai-realtime")
 
-    breakdown = await _measure_one_turn(
-        ws_server_factory=ws_server_factory,
-        voice_fixture_path=voice_fixtures["question"],
+    try:
+        breakdown = await _measure_one_turn(
+            ws_server_factory=ws_server_factory,
+            voice_fixture_path=voice_fixtures["question"],
+            debug="full",
+            enable_noise_reduction=True,
+            enable_echo_cancellation=True,
+            enable_smart_turn=True,
+            stt_provider=stt_provider,
+        )
+    except Exception as exc:
+        _append_latency_sample(
+            condition_id="single_full_stack_latency_probe",
+            warmup=False,
+            debug="full",
+            enable_noise_reduction=True,
+            enable_echo_cancellation=True,
+            enable_smart_turn=True,
+            stt_provider=stt_provider,
+            breakdown=None,
+            failure=exc,
+        )
+        raise
+    _append_latency_sample(
+        condition_id="single_full_stack_latency_probe",
+        warmup=False,
         debug="full",
         enable_noise_reduction=True,
         enable_echo_cancellation=True,
         enable_smart_turn=True,
         stt_provider=stt_provider,
+        breakdown=breakdown,
     )
 
     print()
@@ -677,6 +722,120 @@ def _format_ms(value: float | None) -> str:
     return f"{value:.0f} ms"
 
 
+def _append_latency_sample(
+    *,
+    condition_id: str,
+    warmup: bool,
+    debug: str,
+    enable_noise_reduction: bool,
+    enable_echo_cancellation: bool,
+    enable_smart_turn: bool,
+    stt_provider: str,
+    breakdown: StageBreakdown | None,
+    failure: Exception | None = None,
+) -> None:
+    samples_path = os.environ.get("EASYCAT_LATENCY_SAMPLES_PATH")
+    if not samples_path:
+        return
+
+    path = pathlib.Path(samples_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            payload = []
+    else:
+        payload = []
+    if not isinstance(payload, list):
+        payload = []
+
+    sample_id = f"{condition_id.lower()}-{uuid.uuid4().hex[:12]}"
+    sample = LatencySample(
+        sample_id=sample_id,
+        condition_id=condition_id,
+        warmup=warmup,
+        timestamp_source="time.monotonic",
+        provider={
+            "stt": stt_provider,
+            "tts": os.environ.get("EASYCAT_BENCHMARK_TTS_PROVIDER", "openai").strip().lower(),
+            "agent": "openai",
+        },
+        model={
+            "llm": os.environ.get("EASYCAT_BENCHMARK_LLM_MODEL", "gpt-5.4").strip(),
+            "tts": os.environ.get("EASYCAT_BENCHMARK_TTS_MODEL", "gpt-4o-mini-tts").strip(),
+        },
+        transport={"kind": "websocket"},
+        debug={
+            "journal": debug,
+            "noise_reduction": str(enable_noise_reduction).lower(),
+            "echo_cancellation": str(enable_echo_cancellation).lower(),
+            "smart_turn": str(enable_smart_turn).lower(),
+        },
+        stages=_latency_stage_durations(breakdown),
+        missing_stage_reason=_missing_stage_reason(breakdown, failure),
+        failure_class=classify_latency_failure(str(failure)) if failure is not None else None,
+    )
+    payload.append(sample.to_dict())
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    reliability_samples_path = os.environ.get("EASYCAT_RELIABILITY_SAMPLES_PATH")
+    if reliability_samples_path:
+        append_reliability_sample(
+            reliability_samples_path,
+            ReliabilitySample(
+                sample_id=sample_id,
+                condition_id=condition_id,
+                mode="latency",
+                informational=True,
+                eligible=False,
+                signals=ReliabilitySignals(
+                    unavailable_reason="runtime_saturation_signals_unavailable"
+                ),
+            ),
+        )
+
+
+def _latency_stage_durations(breakdown: StageBreakdown | None) -> LatencyStageDurations:
+    if breakdown is None:
+        return LatencyStageDurations()
+    return LatencyStageDurations(
+        detection_ms=breakdown.detection,
+        stt_ms=breakdown.stt,
+        stt_finalize_close_ms=breakdown.stt_finalize_close,
+        agent_request_start_ms=breakdown.agent_request_start,
+        llm_ttft_ms=breakdown.llm_ttft,
+        tts_ttfb_ms=breakdown.tts_ttfb,
+        transport_ms=breakdown.transport,
+        total_ms=breakdown.total,
+    )
+
+
+def _missing_stage_reason(
+    breakdown: StageBreakdown | None,
+    failure: Exception | None,
+) -> str | None:
+    if failure is not None:
+        return str(failure)
+    if breakdown is None:
+        return "sample_missing"
+    missing = [
+        name
+        for name, value in (
+            ("detection", breakdown.detection),
+            ("stt", breakdown.stt),
+            ("stt_finalize_close", breakdown.stt_finalize_close),
+            ("agent_request_start", breakdown.agent_request_start),
+            ("llm_ttft", breakdown.llm_ttft),
+            ("tts_ttfb", breakdown.tts_ttfb),
+            ("transport", breakdown.transport),
+            ("total", breakdown.total),
+        )
+        if value is None
+    ]
+    return ",".join(missing) if missing else None
+
+
 async def test_latency_benchmark_by_pipeline_flags(
     voice_fixtures: dict[str, pathlib.Path],
     ws_server_factory,
@@ -737,7 +896,28 @@ async def test_latency_benchmark_by_pipeline_flags(
             if breakdown is None:
                 assert last_error is not None
                 print(f"[latency] {cond['id']} {label} failed: {last_error}")
+                _append_latency_sample(
+                    condition_id=str(cond["id"]),
+                    warmup=is_warmup,
+                    debug=str(cond["debug"]),
+                    enable_noise_reduction=bool(cond["nr"]),
+                    enable_echo_cancellation=bool(cond["aec"]),
+                    enable_smart_turn=bool(cond["smart"]),
+                    stt_provider="openai-realtime",
+                    breakdown=None,
+                    failure=last_error,
+                )
                 continue
+            _append_latency_sample(
+                condition_id=str(cond["id"]),
+                warmup=is_warmup,
+                debug=str(cond["debug"]),
+                enable_noise_reduction=bool(cond["nr"]),
+                enable_echo_cancellation=bool(cond["aec"]),
+                enable_smart_turn=bool(cond["smart"]),
+                stt_provider="openai-realtime",
+                breakdown=breakdown,
+            )
             if is_warmup:
                 print(f"[latency] {cond['id']} warmup complete: {_format_ms(breakdown.total)}")
                 continue
@@ -780,7 +960,7 @@ async def test_latency_benchmark_by_pipeline_flags(
             f"{r.tts_ttfb_median_ms:>7.0f} "
             f"{r.transport_median_ms:>7.0f} "
             f"{r.median_ms:>7.0f} "
-            f"{r.p90_ms:>7.0f}"
+            f"{r.p90_display:>8}"
         )
     print("═" * 132)
     print("Industry context (public benchmarks, 2025-2026):")
@@ -800,7 +980,7 @@ async def test_latency_benchmark_by_pipeline_flags(
     assert any_ran, "no latency samples collected"
     for r in any_ran:
         # Outer sanity bound: anything over this is a broken pipeline.
-        assert r.p90_ms < 8000.0, f"{r.name} p90={r.p90_ms:.0f} ms exceeds 8000 ms sanity bound"
+        assert r.max_ms < 8000.0, f"{r.name} max={r.max_ms:.0f} ms exceeds 8000 ms sanity bound"
 
     # ── Relative comparisons + SLO assertions ─────────────────────
     # Each `_SLO_*` threshold is overridable via env var — see module
@@ -816,7 +996,7 @@ async def test_latency_benchmark_by_pipeline_flags(
             slo_violations.append(
                 f"baseline p50 {baseline.median_ms:.0f} ms > SLO {_SLO_BASELINE_P50_MS:.0f} ms"
             )
-        if baseline.p90_ms > _SLO_BASELINE_P90_MS:
+        if baseline.p90_eligible and baseline.p90_ms > _SLO_BASELINE_P90_MS:
             slo_violations.append(
                 f"baseline p90 {baseline.p90_ms:.0f} ms > SLO {_SLO_BASELINE_P90_MS:.0f} ms"
             )

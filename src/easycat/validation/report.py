@@ -92,7 +92,9 @@ class ValidationRun:
     skips: Sequence[ValidationSkip] = field(default_factory=list)
     failures: Sequence[ValidationFailure] = field(default_factory=list)
     latency: Mapping[str, Any] | None = None
+    reliability: Mapping[str, Any] | None = None
     providers: Sequence[ProviderCheck] = field(default_factory=list)
+    provider_reports: Sequence[Mapping[str, Any]] = field(default_factory=list)
     extras: Sequence[str] = field(default_factory=list)
     artifacts: Mapping[str, ArtifactRef] = field(default_factory=dict)
     schema_version: int = 1
@@ -108,6 +110,13 @@ class ValidationRun:
 
 def redact_text(value: str) -> str:
     return _redact_string(value)
+
+
+def redact_runtime_secrets(value: str, secrets: Sequence[str] | None = None) -> str:
+    redacted = _redact_string(value)
+    for secret in sorted({secret for secret in secrets or () if secret}, key=len, reverse=True):
+        redacted = redacted.replace(secret, "[REDACTED_SECRET]")
+    return redacted
 
 
 _URL_RE = re.compile(r"https?://[^\s\"')\]}]+")

@@ -12,6 +12,7 @@ import logging
 from collections import deque
 from typing import Any
 
+from easycat import observability
 from easycat.audio_format import AudioChunk
 
 logger = logging.getLogger(__name__)
@@ -62,12 +63,24 @@ class BoundedAudioQueue:
     def _note_drop(self, kind: str) -> None:
         """Increment the drop counter and notify the hook (if any)."""
         self._drops += 1
+        observability.increment_counter(
+            "easycat.queue.dropped.total",
+            attributes={"easycat.stage": "audio_queue"},
+        )
+        self._observe_depth()
         hook = self._on_drop
         if hook is not None:
             try:
                 hook(self._name, kind, len(self._queue), self._drops)
             except Exception:  # noqa: BLE001 - drop hook must never break the queue
                 logger.debug("on_drop hook raised", exc_info=True)
+
+    def _observe_depth(self, value: int | None = None) -> None:
+        observability.observe_gauge(
+            "easycat.queue.depth",
+            len(self._queue) if value is None else value,
+            attributes={"easycat.stage": "audio_queue"},
+        )
 
     @property
     def max_size(self) -> int:
@@ -106,6 +119,7 @@ class BoundedAudioQueue:
             self._not_empty.set()
             if self.full():
                 self._not_full.clear()
+            self._observe_depth()
             return True
 
         if self._policy == DropPolicy.DROP_OLDEST:
@@ -154,6 +168,7 @@ class BoundedAudioQueue:
                 self._not_empty.set()
                 if self.full():
                     self._not_full.clear()
+                self._observe_depth()
                 return True
 
         return False  # pragma: no cover
@@ -170,6 +185,7 @@ class BoundedAudioQueue:
         self._not_full.set()
         if self.empty():
             self._not_empty.clear()
+        self._observe_depth()
         return chunk
 
     def get_nowait(self) -> AudioChunk:
@@ -180,6 +196,7 @@ class BoundedAudioQueue:
         self._not_full.set()
         if self.empty():
             self._not_empty.clear()
+        self._observe_depth()
         return chunk
 
     def flush(self) -> list[AudioChunk]:
@@ -188,6 +205,7 @@ class BoundedAudioQueue:
         self._queue.clear()
         self._not_full.set()
         self._not_empty.clear()
+        self._observe_depth()
         return flushed
 
     def flush_for_new_turn(self) -> list[AudioChunk]:
@@ -204,6 +222,7 @@ class BoundedAudioQueue:
     def close(self) -> None:
         """Mark the queue as closed. Wakes up any waiters."""
         self._closed = True
+        self._observe_depth(0)
         self._not_empty.set()
         self._not_full.set()
 

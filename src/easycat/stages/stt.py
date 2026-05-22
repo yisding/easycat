@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
+from easycat import observability
 from easycat.runtime.context import RunContext
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.session._turn_context import TurnContext
@@ -39,45 +41,60 @@ class STTStage:
         self._last_snapshot = StageStateSnapshot(stage_name=self.name)
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
+        started = time.perf_counter()
+        result_attr = "pass"
         state_before = self.snapshot_state()
-        data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
-        input_ref = put_artifact(ctx, data_bytes)
-        extra = {
-            "audio_bytes": len(data_bytes) if isinstance(data_bytes, (bytes, bytearray)) else 0,
-        }
-        extra.update(audio_format_fields(input))
-        journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_start",
-            turn_id=turn.id,
-            state_before=state_before,
-            input_ref=input_ref,
-            data_extra=extra,
-        )
-        try:
-            await self._provider.send_audio(input)
-            result = input
-        except Exception as exc:
+        with observability.span(
+            "easycat.stt.stream",
+            {"easycat.stage": self.name, "easycat.surface": "stt"},
+        ):
+            data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
+            input_ref = put_artifact(ctx, data_bytes)
+            extra = {
+                "audio_bytes": len(data_bytes)
+                if isinstance(data_bytes, (bytes, bytearray))
+                else 0,
+            }
+            extra.update(audio_format_fields(input))
             journal_append_event(
                 ctx,
                 stage=self.name,
-                name="stage_error",
+                name="stage_start",
                 turn_id=turn.id,
                 state_before=state_before,
-                error=str(exc),
+                input_ref=input_ref,
+                data_extra=extra,
             )
-            raise
-        state_after = self.snapshot_state()
-        journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_complete",
-            turn_id=turn.id,
-            state_before=state_before,
-            state_after=state_after,
-        )
-        return result
+            try:
+                await self._provider.send_audio(input)
+                result = input
+            except Exception as exc:
+                result_attr = "fail"
+                journal_append_event(
+                    ctx,
+                    stage=self.name,
+                    name="stage_error",
+                    turn_id=turn.id,
+                    state_before=state_before,
+                    error=str(exc),
+                )
+                raise
+            finally:
+                observability.record_histogram(
+                    "easycat.stage.latency",
+                    time.perf_counter() - started,
+                    {"easycat.stage": self.name, "easycat.result": result_attr},
+                )
+            state_after = self.snapshot_state()
+            journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_complete",
+                turn_id=turn.id,
+                state_before=state_before,
+                state_after=state_after,
+            )
+            return result
 
     def snapshot_state(self) -> StageStateSnapshot:
         return StageStateSnapshot(

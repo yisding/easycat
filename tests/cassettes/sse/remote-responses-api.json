@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "redaction_version": 1,
+  "provider": "remote-responses-api",
+  "surface": "agent_bridge",
+  "protocol": "sse",
+  "provider_api_version": "responses-api",
+  "events": [
+    {
+      "event": "response.output_text.delta",
+      "data": {
+        "delta": "hello"
+      }
+    },
+    {
+      "event": "response.completed",
+      "data": {
+        "id": "[REDACTED_RESPONSE_ID]"
+      }
+    }
+  ]
+}
+

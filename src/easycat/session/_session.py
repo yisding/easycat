@@ -15,6 +15,7 @@ from dataclasses import replace
 from typing import Any, TypeVar
 from uuid import uuid4
 
+from easycat import observability
 from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -339,6 +340,7 @@ class Session:
         self._closed = False
         self._stopping = False
         self._flushed = False
+        self._observability_active = False
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         # STT futures live on TurnContext (per-turn so a stale callback
@@ -636,6 +638,20 @@ class Session:
                         "outbound_queue_len": self._outbound_queue.qsize(),
                         "outbound_queue_drops": self._outbound_queue.drops,
                     },
+                )
+                observability.record_histogram(
+                    "easycat.event_loop.lag",
+                    loop_lag_ms / 1000.0,
+                    {"easycat.stage": "session"},
+                )
+                observability.observe_gauge(
+                    "easycat.queue.depth",
+                    self._outbound_queue.qsize(),
+                    {"easycat.stage": "audio_queue"},
+                )
+                observability.observe_gauge(
+                    "easycat.journal.degraded",
+                    1 if self._journal is not None and self._journal.degraded else 0,
                 )
                 next_deadline = now + interval_s
         except asyncio.CancelledError:
@@ -1138,6 +1154,18 @@ class Session:
         if event is not None:
             event.set()
 
+    def _mark_observability_active(self) -> None:
+        if self._observability_active:
+            return
+        observability.session_started()
+        self._observability_active = True
+
+    def _mark_observability_inactive(self) -> None:
+        if not self._observability_active:
+            return
+        observability.session_ended()
+        self._observability_active = False
+
     # ── Lifecycle ──────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -1188,6 +1216,7 @@ class Session:
                 helper.start()
 
             self._is_running = True
+            self._mark_observability_active()
             self._audio_router.start_outbound()
             self._audio_router.start_ingress()
             # Heartbeat task detects asyncio event-loop stalls.  If a
@@ -1201,6 +1230,7 @@ class Session:
             )
         except Exception:
             self._is_running = False
+            self._mark_observability_inactive()
 
             await self._audio_router.stop_ingress()
             await self._audio_router.stop_outbound()
@@ -1285,6 +1315,7 @@ class Session:
             self.destroy()
             self._mark_closed()
         finally:
+            self._mark_observability_inactive()
             self._stopping = False
 
     async def shutdown(self) -> None:
@@ -1365,6 +1396,7 @@ class Session:
             self.destroy()
             self._mark_closed()
         finally:
+            self._mark_observability_inactive()
             self._stopping = False
 
     def close(self) -> None:
@@ -1770,4 +1802,9 @@ class Session:
             raise RuntimeError("send_text() is only available in text_session mode")
         if self._closed:
             raise RuntimeError("Session has been stopped")
-        return await self._turn_runner.send_text(text)
+        self._mark_observability_active()
+        try:
+            with observability.span("easycat.session", {"easycat.surface": "agent_bridge"}):
+                return await self._turn_runner.send_text(text)
+        finally:
+            self._mark_observability_inactive()

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from easycat import observability
 from easycat.runtime.context import RunContext
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.session._turn_context import TurnContext
@@ -90,32 +92,39 @@ class TTSStage:
         """
         frame_count = 0
         total_bytes = 0
+        started = time.perf_counter()
+        result_attr = "pass"
         try:
-            async for event in stream:
-                audio = getattr(event, "audio", None)
-                audio_bytes = getattr(audio, "data", None) if audio is not None else None
-                if audio_bytes:
-                    output_ref = put_artifact(ctx, audio_bytes)
-                    extra = {
-                        "audio_bytes": len(audio_bytes),
-                        "frame_index": frame_count,
-                    }
-                    extra.update(audio_format_fields(audio))
-                    duration = getattr(audio, "duration_ms", None)
-                    if duration is not None:
-                        extra["duration_ms"] = duration
-                    journal_append_event(
-                        ctx,
-                        stage=self.name,
-                        name="tts_frame",
-                        turn_id=turn_id,
-                        output_ref=output_ref,
-                        data_extra=extra,
-                    )
-                    frame_count += 1
-                    total_bytes += len(audio_bytes)
-                yield event
+            with observability.span(
+                "easycat.tts.synthesize",
+                {"easycat.stage": self.name, "easycat.surface": "tts"},
+            ):
+                async for event in stream:
+                    audio = getattr(event, "audio", None)
+                    audio_bytes = getattr(audio, "data", None) if audio is not None else None
+                    if audio_bytes:
+                        output_ref = put_artifact(ctx, audio_bytes)
+                        extra = {
+                            "audio_bytes": len(audio_bytes),
+                            "frame_index": frame_count,
+                        }
+                        extra.update(audio_format_fields(audio))
+                        duration = getattr(audio, "duration_ms", None)
+                        if duration is not None:
+                            extra["duration_ms"] = duration
+                        journal_append_event(
+                            ctx,
+                            stage=self.name,
+                            name="tts_frame",
+                            turn_id=turn_id,
+                            output_ref=output_ref,
+                            data_extra=extra,
+                        )
+                        frame_count += 1
+                        total_bytes += len(audio_bytes)
+                    yield event
         except Exception as exc:
+            result_attr = "fail"
             journal_append_event(
                 ctx,
                 stage=self.name,
@@ -125,6 +134,12 @@ class TTSStage:
                 error=str(exc),
             )
             raise
+        finally:
+            observability.record_histogram(
+                "easycat.stage.latency",
+                time.perf_counter() - started,
+                {"easycat.stage": self.name, "easycat.result": result_attr},
+            )
         state_after = self.snapshot_state()
         journal_append_event(
             ctx,

@@ -2,7 +2,7 @@
 
 Per-provider unit tests (``tests/stt/``, ``tests/tts/``) cover provider
 internals against mocked sockets. The gap they leave is the *wiring
-seam*: when someone adds a provider, widens a config dataclass, or
+seam* (factory/session wiring seam): when someone adds a provider, widens a config dataclass, or
 changes how ``Session`` plumbs providers into the pipeline, which
 ``(STT, TTS)`` pair silently breaks?
 

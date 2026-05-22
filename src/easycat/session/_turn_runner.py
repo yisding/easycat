@@ -31,6 +31,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from easycat import observability
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
@@ -573,8 +574,9 @@ class TurnRunner:
         turn_id = f"turn-{uuid4().hex[:12]}"
         await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn_id))
         response = ""
+        t0 = time.monotonic()
+        result_attr = "fail"
         try:
-            t0 = time.monotonic()
             await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn_id))
             structured_output = None
             self._text_turn_accumulated = ""
@@ -653,6 +655,7 @@ class TurnRunner:
                     turn_id=turn_id,
                     data={"value": elapsed_ms},
                 )
+            result_attr = "pass"
         except Exception as exc:
             logger.exception("Agent error in text_session send_text")
             await self._emit(
@@ -665,5 +668,14 @@ class TurnRunner:
             )
             raise
         finally:
+            observability.record_histogram(
+                "easycat.turn.latency",
+                time.monotonic() - t0,
+                {"easycat.surface": "agent_bridge", "easycat.result": result_attr},
+            )
+            observability.increment_counter(
+                "easycat.turns.total",
+                attributes={"easycat.surface": "agent_bridge", "easycat.result": result_attr},
+            )
             await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn_id))
         return response

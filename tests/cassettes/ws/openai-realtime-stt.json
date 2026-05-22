@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "redaction_version": 1,
+  "provider": "openai-realtime",
+  "surface": "stt",
+  "protocol": "websocket",
+  "provider_api_version": "realtime",
+  "capabilities_ref": "tests/contracts/provider_surface_matrix.py",
+  "frames": [
+    {
+      "direction": "client",
+      "opcode": "text",
+      "kind": "session.update",
+      "payload_assertion": {
+        "required_fields": ["type", "session"],
+        "session_audio_input_fields": ["format", "transcription", "turn_detection"]
+      }
+    },
+    {
+      "direction": "server",
+      "opcode": "text",
+      "kind": "session.updated",
+      "payload_assertion": {
+        "required_fields": ["type", "session"],
+        "session_ready": true
+      }
+    },
+    {
+      "direction": "client",
+      "opcode": "text",
+      "kind": "input_audio_buffer.append",
+      "payload_assertion": {
+        "required_fields": ["audio"],
+        "redacted_fields": ["audio"]
+      }
+    },
+    {
+      "direction": "client",
+      "opcode": "text",
+      "kind": "input_audio_buffer.commit",
+      "payload_assertion": {
+        "required_fields": ["type"],
+        "requires_prior_append": true
+      }
+    },
+    {
+      "direction": "server",
+      "opcode": "text",
+      "kind": "conversation.item.input_audio_transcription.completed",
+      "payload_assertion": {
+        "required_fields": ["transcript"],
+        "normalized_event_kind": "final_transcript"
+      }
+    }
+  ]
+}

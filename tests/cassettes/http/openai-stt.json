@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "redaction_version": 1,
+  "provider": "openai",
+  "surface": "stt",
+  "protocol": "http",
+  "provider_api_version": "v1",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.openai.test/v1/audio/transcriptions",
+        "headers": {
+          "authorization": "[REDACTED_SECRET]",
+          "content-type": "multipart/form-data"
+        },
+        "body_assertion": {
+          "kind": "multipart_audio",
+          "required_fields": ["file", "model"]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "x-request-id": "[REDACTED_REQUEST_ID]"
+        },
+        "json": {
+          "text": "hello world"
+        }
+      }
+    }
+  ]
+}
+

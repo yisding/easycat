@@ -19,13 +19,14 @@ first, debug second, safety net third, and infrastructure last.
 | 9 | Error-code registry integrity | `test_errors.py` |
 | 10 | Exit-code contract stability | `test_errors.py` + `test_exit_codes.py` |
 | 11 | JSON envelope stability | `test_json_schema.py` |
-| 12 | Library prereqs — `run()` lifecycle | `test_library_prereqs.py` |
-| 13 | Library prereqs — string-keyed providers | `test_library_prereqs.py` |
-| 14 | Packaging — wheel ships template dotfiles | `test_packaging.py` (integration) |
-| 15 | End-to-end scaffold-and-invoke | `test_cli_e2e.py` (integration) |
+| 12 | `validate` command and report rendering | `test_validate.py` |
+| 13 | Library prereqs — `run()` lifecycle | `test_library_prereqs.py` |
+| 14 | Library prereqs — string-keyed providers | `test_library_prereqs.py` |
+| 15 | Packaging — wheel ships template dotfiles | `test_packaging.py` (integration) |
+| 16 | End-to-end scaffold-and-invoke | `test_cli_e2e.py` (integration) |
 
-Plans 1-9 are fast unit tests. Plans 10-13 add coverage for cross-
-cutting contracts. Plans 14-15 are marked `integration_local` so they
+Plans 1-9 are fast unit tests. Plans 10-14 add coverage for cross-
+cutting contracts. Plans 15-16 are marked `integration_local` so they
 run in CI but not on every `pytest` invocation.
 
 ---
@@ -287,7 +288,34 @@ stdout and corrupting `jq` consumers.
 
 ---
 
-## Plan 12 — Library prereqs — `run()` lifecycle
+## Plan 12 — `validate` command and report rendering
+
+**Concern.** Validation should have one obvious command surface while
+preserving the global `--json` stdout envelope contract and keeping
+persisted reports under `--report`.
+
+**Risks.** Accidentally exposing raw pytest exit codes; report JSON
+becoming unreadable on failure; missing report artifacts not being
+called out; `--json` output diverging from the standard envelope.
+
+**Checks.**
+- `easycat validate quick --report PATH` writes a report and renders a
+  concise human summary.
+- `easycat validate quick --json` emits the standard JSON envelope on
+  stdout.
+- `easycat validate socket` returns the validation exit code, not the
+  raw pytest exit code.
+- `easycat validate report PATH` renders run status, checks, git dirty
+  state, expected skips, failures, artifact paths, and missing artifact
+  warnings.
+- Missing, invalid, unsupported-schema, and unknown-kind report files
+  fail explicitly.
+
+**Backed by.** `test_validate.py`.
+
+---
+
+## Plan 13 — Library prereqs — `run()` lifecycle
 
 **Concern.** `easycat.run(config)` is the entry point every template
 uses. If lifecycle is broken (start/stop/shutdown ordering), voice
@@ -310,7 +338,7 @@ and polluting stdout.
 
 ---
 
-## Plan 13 — Library prereqs — string-keyed providers
+## Plan 14 — Library prereqs — string-keyed providers
 
 **Concern.** `EasyConfig(stt="deepgram/flux")` is the headline DX
 win the plan promised. If the string parser silently mis-routes or
@@ -336,7 +364,7 @@ through as a valid key.
 
 ---
 
-## Plan 14 — Packaging — wheel ships template dotfiles
+## Plan 15 — Packaging — wheel ships template dotfiles
 
 **Concern.** `uvx easycat init my-agent` from a PyPI-installed
 `easycat` must get the full template catalog, including `.env.example`
@@ -360,7 +388,7 @@ suite).
 
 ---
 
-## Plan 15 — End-to-end scaffold-and-invoke
+## Plan 16 — End-to-end scaffold-and-invoke
 
 **Concern.** The scaffolded project itself must be usable. Users
 type `cd my-agent && uv sync && uv run python agent.py` — if any

@@ -22,11 +22,17 @@ from __future__ import annotations
 import asyncio
 import os
 import resource
+import uuid
 
 import pytest
 
 from easycat.runtime import JournalRecordKind
 from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.validation.latency import (
+    ReliabilitySample,
+    ReliabilitySignals,
+    append_reliability_sample,
+)
 from tests.e2e._assertions import (
     assert_no_dangling_artifacts,
     assert_strictly_monotonic_sequences,
@@ -36,11 +42,76 @@ from tests.e2e._assertions import (
 pytestmark = [pytest.mark.asyncio]
 
 
+def _append_stress_reliability_sample(
+    *,
+    condition_id: str,
+    event_loop_lag_ms: float | None = None,
+    journal_degraded: bool | None = None,
+    active_sessions: int | None = None,
+    memory_growth_kib: int | None = None,
+    dropped_frames: int | None = None,
+    queue_depth: int | None = None,
+) -> None:
+    samples_path = os.environ.get("EASYCAT_RELIABILITY_SAMPLES_PATH")
+    if not samples_path:
+        return
+    append_reliability_sample(
+        samples_path,
+        ReliabilitySample(
+            sample_id=f"{condition_id}-{uuid.uuid4().hex[:12]}",
+            condition_id=condition_id,
+            mode="stress",
+            informational=True,
+            eligible=False,
+            signals=ReliabilitySignals(
+                event_loop_lag_ms=event_loop_lag_ms,
+                queue_depth=queue_depth,
+                dropped_frames=dropped_frames,
+                journal_degraded=journal_degraded,
+                active_sessions=active_sessions,
+                memory_growth_kib=memory_growth_kib,
+                unavailable_reason=(
+                    "event_loop_lag_unavailable" if event_loop_lag_ms is None else None
+                ),
+            ),
+        ),
+    )
+
+
+class _EventLoopLagSampler:
+    def __init__(self, *, interval_s: float = 0.02) -> None:
+        self._interval_s = interval_s
+        self._task: asyncio.Task[None] | None = None
+        self._running = False
+        self.max_lag_ms = 0.0
+
+    async def start(self) -> None:
+        self._running = True
+        self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> float:
+        self._running = False
+        task = self._task
+        if task is not None:
+            await task
+        return round(self.max_lag_ms, 3)
+
+    async def _run(self) -> None:
+        loop = asyncio.get_running_loop()
+        next_deadline = loop.time() + self._interval_s
+        while self._running:
+            await asyncio.sleep(max(0.0, next_deadline - loop.time()))
+            now = loop.time()
+            self.max_lag_ms = max(self.max_lag_ms, (now - next_deadline) * 1000.0)
+            next_deadline = now + self._interval_s
+
+
 # ---------------------------------------------------------------------------
 # 2c. Ring buffer overflow (cheapest, most deterministic)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.stress
 async def test_ring_buffer_overflow_emits_sentinel() -> None:
     """``InMemoryRingBuffer`` must evict oldest records when full and emit
     a ``buffer_overflow`` sentinel."""
@@ -72,6 +143,7 @@ async def test_ring_buffer_overflow_emits_sentinel() -> None:
 
 @pytest.mark.integration_socket
 @pytest.mark.slow
+@pytest.mark.stress
 async def test_fifty_turns_single_session_scripted(
     monkeypatch: pytest.MonkeyPatch,
     ws_server_factory,
@@ -109,6 +181,8 @@ async def test_fifty_turns_single_session_scripted(
     handle = await ws_server_factory(builder)
 
     rss_before_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    lag_sampler = _EventLoopLagSampler()
+    await lag_sampler.start()
 
     async with WSVoiceClient(handle.url) as client:
         await client.wait_for_ready(timeout=5.0)
@@ -125,6 +199,7 @@ async def test_fifty_turns_single_session_scripted(
         # silence, so give the pipeline a moment to drain.
         await asyncio.sleep(2.0)
 
+    event_loop_lag_ms = await lag_sampler.stop()
     session = handle.session
     assert session is not None
     journal = session.journal
@@ -151,6 +226,16 @@ async def test_fifty_turns_single_session_scripted(
 
     # Memory growth bound: < 250 MB for 50 turns.
     rss_after_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    memory_growth_kib = rss_after_kib - rss_before_kib
+    _append_stress_reliability_sample(
+        condition_id="fifty_turns_single_session_scripted",
+        event_loop_lag_ms=event_loop_lag_ms,
+        journal_degraded=journal.degraded,
+        active_sessions=1,
+        memory_growth_kib=memory_growth_kib,
+        dropped_frames=len(overflows),
+        queue_depth=session._outbound_queue.qsize(),  # noqa: SLF001 - stress telemetry
+    )
     assert rss_after_kib - rss_before_kib < 250 * 1024, (
         f"RSS growth too large: {rss_after_kib - rss_before_kib} KiB"
     )
@@ -163,6 +248,7 @@ async def test_fifty_turns_single_session_scripted(
 
 @pytest.mark.integration_socket
 @pytest.mark.slow
+@pytest.mark.stress
 async def test_concurrent_sessions_journal_isolation(
     monkeypatch: pytest.MonkeyPatch,
     ws_server_factory,
@@ -202,6 +288,8 @@ async def test_concurrent_sessions_journal_isolation(
         return session
 
     handle = await ws_server_factory(builder)
+    lag_sampler = _EventLoopLagSampler()
+    await lag_sampler.start()
 
     async def run_client() -> None:
         tone = sine_pcm16(duration_s=0.2, sample_rate=16000)
@@ -218,6 +306,7 @@ async def test_concurrent_sessions_journal_isolation(
 
     # Wait a beat for final journal flushing.
     await asyncio.sleep(1.0)
+    event_loop_lag_ms = await lag_sampler.stop()
 
     assert len(sessions) >= 10, f"only {len(sessions)} sessions created"
 
@@ -229,6 +318,16 @@ async def test_concurrent_sessions_journal_isolation(
         ids = {r.session_id for r in records}
         assert len(ids) == 1, f"cross-session contamination: {ids}"
         assert session.session_id in ids
+    _append_stress_reliability_sample(
+        condition_id="concurrent_sessions_journal_isolation",
+        event_loop_lag_ms=event_loop_lag_ms,
+        journal_degraded=any(
+            bool(session.journal and session.journal.degraded) for session in sessions
+        ),
+        active_sessions=len(sessions),
+        dropped_frames=sum(session._outbound_queue.drops for session in sessions),  # noqa: SLF001
+        queue_depth=max((session._outbound_queue.qsize() for session in sessions), default=0),  # noqa: SLF001
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +339,7 @@ async def test_concurrent_sessions_journal_isolation(
 @pytest.mark.integration_live
 @pytest.mark.provider_openai
 @pytest.mark.slow
+@pytest.mark.stress
 @pytest.mark.surface_agent
 @pytest.mark.surface_stt
 @pytest.mark.surface_transport
@@ -263,6 +363,8 @@ async def test_ten_turns_live_openai(
         return build_live_session(transport=transport)
 
     handle = await ws_server_factory(builder)
+    lag_sampler = _EventLoopLagSampler()
+    await lag_sampler.start()
 
     speech_16k = voice_fixtures["short"].read_bytes()
 
@@ -275,6 +377,7 @@ async def test_ten_turns_live_openai(
             await client.send_silence(seconds=0.8, sample_rate=16000)
             await asyncio.sleep(1.0)
 
+    event_loop_lag_ms = await lag_sampler.stop()
     session = handle.session
     assert session is not None
 
@@ -282,3 +385,11 @@ async def test_ten_turns_live_openai(
     assert_strictly_monotonic_sequences(records)
     assert count_distinct_turns(session.journal) >= 3  # at least a few
     assert not session.journal.degraded
+    _append_stress_reliability_sample(
+        condition_id="ten_turns_live_openai",
+        event_loop_lag_ms=event_loop_lag_ms,
+        journal_degraded=session.journal.degraded,
+        active_sessions=1,
+        dropped_frames=session._outbound_queue.drops,  # noqa: SLF001 - stress telemetry
+        queue_depth=session._outbound_queue.qsize(),  # noqa: SLF001 - stress telemetry
+    )

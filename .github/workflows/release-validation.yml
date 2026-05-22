@@ -1,0 +1,132 @@
+name: Release Validation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  release-validation:
+    name: Release Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: release-validation
+    env:
+      VALIDATION_ARTIFACTS_DIR: ${{ github.workspace }}/.easycat/validation/release/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
+      RELEASE_VENV: ${{ runner.temp }}/easycat-release-venv
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: Mask live provider secrets
+        shell: bash
+        run: |
+          for value in "${OPENAI_API_KEY:-}" "${DEEPGRAM_API_KEY:-}" "${ELEVENLABS_API_KEY:-}" "${CARTESIA_API_KEY:-}"; do
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+      - run: uv sync --group dev --python 3.12
+      - run: uv build --sdist --wheel
+      - name: Create clean install environment
+        run: uv venv "$RELEASE_VENV" --python 3.12
+      - name: Install built wheel and test tools
+        run: |
+          WHEEL_PATH="$(ls "$GITHUB_WORKSPACE"/dist/*.whl | head -n 1)"
+          uv pip install --python "$RELEASE_VENV/bin/python" "easycat[openai,openai-agents] @ file://$WHEEL_PATH"
+          uv pip install --python "$RELEASE_VENV/bin/python" pytest pytest-asyncio
+      - name: Verify installed package outside source tree
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ""
+        run: |
+          "$RELEASE_VENV/bin/python" - <<'PY'
+          import pathlib
+          import easycat
+
+          package_path = pathlib.Path(easycat.__file__).resolve()
+          workspace = pathlib.Path(__import__("os").environ["GITHUB_WORKSPACE"]).resolve()
+          print(package_path)
+          assert "site-packages" in str(package_path)
+          assert not package_path.is_relative_to(workspace)
+          PY
+      - name: Run installed wheel smoke tests
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ""
+        run: |
+          "$RELEASE_VENV/bin/easycat" doctor --json
+          "$RELEASE_VENV/bin/python" -m pytest "$GITHUB_WORKSPACE/tests/cli/test_app.py" -q
+      - name: Run installed wheel quick validation
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ""
+          EASYCAT_VALIDATION_PYTEST_COMMAND: ${{ env.RELEASE_VENV }}/bin/python -m pytest
+          EASYCAT_VALIDATION_TEST_PATHS: ${{ github.workspace }}/tests
+        run: |
+          "$RELEASE_VENV/bin/easycat" validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "release-quick"
+      - name: Run installed wheel stress validation
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ""
+          EASYCAT_VALIDATION_PYTEST_COMMAND: ${{ env.RELEASE_VENV }}/bin/python -m pytest
+          EASYCAT_VALIDATION_TEST_PATHS: ${{ github.workspace }}/tests
+        run: |
+          "$RELEASE_VENV/bin/easycat" validate stress --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "release-stress"
+      - name: Release flaky quarantine collection
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ""
+        run: |
+          "$RELEASE_VENV/bin/python" -m pytest "$GITHUB_WORKSPACE/tests" --collect-only -q -m flaky
+      - name: Strict release live validation
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ""
+          EASYCAT_VALIDATION_PYTEST_COMMAND: ${{ env.RELEASE_VENV }}/bin/python -m pytest
+          EASYCAT_VALIDATION_TEST_ROOT: ${{ github.workspace }}/tests
+        run: |
+          "$RELEASE_VENV/bin/easycat" validate live --release --provider openai --surface stt --surface tts --artifacts-dir "$VALIDATION_ARTIFACTS_DIR"
+      - name: Release latency sweep
+        if: env.OPENAI_API_KEY != ''
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ""
+          EASYCAT_VALIDATION_PYTEST_COMMAND: ${{ env.RELEASE_VENV }}/bin/python -m pytest
+          EASYCAT_VALIDATION_TEST_ROOT: ${{ github.workspace }}/tests
+        run: |
+          "$RELEASE_VENV/bin/easycat" validate latency --sweep --require-samples --artifacts-dir "$VALIDATION_ARTIFACTS_DIR"
+      - name: Verify release validation reports
+        run: |
+          uv run --python 3.12 python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          root = pathlib.Path(os.environ["VALIDATION_ARTIFACTS_DIR"])
+          reports = sorted(root.glob("runs/*/report.json"))
+          if not reports:
+              raise SystemExit("no release validation reports found")
+          unexpected = []
+          for report_path in reports:
+              payload = json.loads(report_path.read_text())
+              for skip in payload.get("skips", []):
+                  if not skip.get("expected", False):
+                      unexpected.append(f"{report_path}: {skip.get('name')}")
+          if unexpected:
+              raise SystemExit("unexpected release validation skips: " + ", ".join(unexpected))
+          sys.exit(0)
+          PY
+      - name: Upload release validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validation-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}
+            dist/**
+          retention-days: 30

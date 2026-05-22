@@ -18,41 +18,80 @@ jobs:
       - run: uv run ruff format --check .
 
   test:
-    name: Tests (Unit + Local Integration)
+    name: Validate Quick
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.12", "3.14"]
+        python-version: ["3.11", "3.12", "3.14"]
+    env:
+      VALIDATION_ARTIFACTS_DIR: .easycat/validation/ci/${{ github.job }}-py${{ matrix.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev --python ${{ matrix.python-version }}
-      - run: uv run --python ${{ matrix.python-version }} pytest -x -q -m "not integration_socket and not integration_live"
+      - run: uv run --python ${{ matrix.python-version }} easycat validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "quick-py${{ matrix.python-version }}"
+      - name: Upload quick validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report-quick-py${{ matrix.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/latest.json
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/report.json
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/junit.xml
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stdout.log
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stderr.log
 
   integration-socket:
-    name: Tests (Socket Integration)
+    name: Validate Socket
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.14"]
+    timeout-minutes: 20
+    env:
+      VALIDATION_ARTIFACTS_DIR: .easycat/validation/ci/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
-          python-version: ${{ matrix.python-version }}
-      - run: uv sync --group dev --python ${{ matrix.python-version }}
-      - run: uv run --python ${{ matrix.python-version }} pytest -x -q -m "integration_socket"
+          python-version: "3.12"
+      - run: uv sync --group dev --python 3.12
+      - run: uv run --python 3.12 easycat validate socket --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "socket-py3.12"
+      - name: Upload socket validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report-socket-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/latest.json
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/report.json
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/junit.xml
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stdout.log
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stderr.log
+
+  build-smoke:
+    name: Build Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev --python 3.12
+      - run: uv build
 
   integration-live:
     name: Tests (Live Providers)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
       - run: uv sync --group dev --extra openai --extra deepgram --extra elevenlabs --python 3.12
-      - run: uv run --python 3.12 pytest -x -q -m "integration_live"
+      - run: uv run --python 3.12 pytest -q -m "integration_live"

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
+from easycat.observability import observe_gauge, record_histogram
 from easycat.runtime.records import (
     BufferOverflow,
     ErrorInfo,
@@ -379,10 +380,17 @@ class InMemoryRingBuffer:
         input_ref: str | None = None,
         output_ref: str | None = None,
     ) -> int:
+        started = time.perf_counter()
+        result = "fail"
         if self._degraded:
+            record_histogram(
+                "easycat.journal.append.latency",
+                time.perf_counter() - started,
+                {"easycat.result": result},
+            )
             return -1
         try:
-            return self._do_append(
+            sequence = self._do_append(
                 kind,
                 name,
                 session_id,
@@ -393,9 +401,17 @@ class InMemoryRingBuffer:
                 input_ref,
                 output_ref,
             )
+            result = "pass"
+            return sequence
         except Exception as exc:
             self._enter_degraded(session_id, exc)
             return -1
+        finally:
+            record_histogram(
+                "easycat.journal.append.latency",
+                time.perf_counter() - started,
+                {"easycat.result": result},
+            )
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
         with self._lock:
@@ -537,6 +553,7 @@ class InMemoryRingBuffer:
 
     def _enter_degraded(self, session_id: str, exc: Exception) -> None:
         self._degraded = True
+        observe_gauge("easycat.journal.degraded", 1)
         marker = JournalDegraded(
             sequence=-1,
             session_id=session_id,
@@ -763,10 +780,17 @@ class SqliteJournal:
         input_ref: str | None = None,
         output_ref: str | None = None,
     ) -> int:
+        started = time.perf_counter()
+        result = "fail"
         if self._degraded or self._closed:
+            record_histogram(
+                "easycat.journal.append.latency",
+                time.perf_counter() - started,
+                {"easycat.result": result},
+            )
             return -1
         try:
-            return self._do_append(
+            sequence = self._do_append(
                 kind,
                 name,
                 session_id,
@@ -777,9 +801,17 @@ class SqliteJournal:
                 input_ref,
                 output_ref,
             )
+            result = "pass"
+            return sequence
         except Exception as exc:
             self._enter_degraded(session_id, exc)
             return -1
+        finally:
+            record_histogram(
+                "easycat.journal.append.latency",
+                time.perf_counter() - started,
+                {"easycat.result": result},
+            )
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
         with self._lock:
@@ -970,6 +1002,7 @@ class SqliteJournal:
 
     def _enter_degraded(self, session_id: str, exc: Exception) -> None:
         self._degraded = True
+        observe_gauge("easycat.journal.degraded", 1)
         print(
             f"[easycat] journal degraded: {type(exc).__name__}: {exc}",
             file=sys.stderr,
@@ -1278,10 +1311,17 @@ class LibsqlJournal:
         input_ref: str | None = None,
         output_ref: str | None = None,
     ) -> int:
+        started = time.perf_counter()
+        result = "fail"
         if self._degraded or self._closed:
+            record_histogram(
+                "easycat.journal.append.latency",
+                time.perf_counter() - started,
+                {"easycat.result": result},
+            )
             return -1
         try:
-            return self._do_append(
+            sequence = self._do_append(
                 kind,
                 name,
                 session_id,
@@ -1292,9 +1332,17 @@ class LibsqlJournal:
                 input_ref,
                 output_ref,
             )
+            result = "pass"
+            return sequence
         except Exception as exc:
             self._enter_degraded(session_id, exc)
             return -1
+        finally:
+            record_histogram(
+                "easycat.journal.append.latency",
+                time.perf_counter() - started,
+                {"easycat.result": result},
+            )
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
         with self._lock:
@@ -1442,6 +1490,7 @@ class LibsqlJournal:
 
     def _enter_degraded(self, session_id: str, exc: Exception) -> None:
         self._degraded = True
+        observe_gauge("easycat.journal.degraded", 1)
         print(
             f"[easycat] journal degraded: {type(exc).__name__}: {exc}",
             file=sys.stderr,
