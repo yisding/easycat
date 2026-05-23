@@ -52,16 +52,22 @@ def translate_event(
     # FunctionToolResultEvent / OutputToolResultEvent → tool_result
     if event_cls in {"FunctionToolResultEvent", "OutputToolResultEvent"}:
         part = getattr(event, "part", None)
+        name = getattr(event, "tool_name", None) or getattr(part, "tool_name", "") or ""
         call_id = getattr(event, "tool_call_id", None) or getattr(part, "tool_call_id", "") or ""
         result = getattr(event, "result", None)
         if result is None:
             result = getattr(event, "content", None)
         if result is None:
             result = getattr(part, "content", "")
-        result_str = str(result)
+        result_str = "" if result is None else str(result)
         if recorder is not None:
-            recorder.record_tool_call(phase="result", name="", call_id=call_id)
-        return AgentBridgeEvent(kind="tool_result", call_id=call_id, result=result_str)
+            recorder.record_tool_call(phase="result", name=name, call_id=call_id)
+        return AgentBridgeEvent(
+            kind="tool_result",
+            tool_name=name,
+            call_id=call_id,
+            result=result_str,
+        )
 
     # FinalResultEvent → done when the event carries output. PydanticAI v2's
     # FinalResultEvent only identifies the output tool, so the bridge emits

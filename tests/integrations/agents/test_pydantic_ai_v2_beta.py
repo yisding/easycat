@@ -37,16 +37,80 @@ class _ToolReturnPart:
     content = {"ok": True}
 
 
+class _NoContentToolReturnPart:
+    tool_name = "lookup"
+    tool_call_id = "tc-none"
+    content = None
+
+
 class OutputToolCallEvent:
     part = _ToolCallPart()
 
 
 class OutputToolResultEvent:
-    part = _ToolReturnPart()
+    def __init__(
+        self,
+        part: Any | None = None,
+        *,
+        result: Any = None,
+        content: Any = None,
+    ) -> None:
+        self.part = part or _ToolReturnPart()
+        self.result = result
+        self.content = content
 
 
 class FunctionToolResultEvent:
-    part = _ToolReturnPart()
+    def __init__(
+        self,
+        part: Any | None = None,
+        *,
+        result: Any = None,
+        content: Any = None,
+    ) -> None:
+        self.part = part or _ToolReturnPart()
+        self.result = result
+        self.content = content
+
+
+class _EmptyAgentRun:
+    output = "done"
+    result = None
+    ctx = object()
+
+    async def __aenter__(self) -> _EmptyAgentRun:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        pass
+
+    def __aiter__(self) -> _EmptyAgentRun:
+        return self
+
+    async def __anext__(self) -> Any:
+        raise StopAsyncIteration
+
+    def new_messages(self) -> list[Any]:
+        return []
+
+
+class _LegacyMCPAgent:
+    name = "legacy"
+
+    def __init__(self) -> None:
+        self.mcp_servers = ["original"]
+        self.seen_mcp_servers: list[Any] | None = None
+
+    def iter(
+        self,
+        text: str,
+        *,
+        message_history: list[Any] | None = None,
+        deps: Any = None,
+        model_settings: Any = None,
+    ) -> _EmptyAgentRun:
+        self.seen_mcp_servers = list(self.mcp_servers)
+        return _EmptyAgentRun()
 
 
 class FinalResultEvent:
@@ -75,11 +139,15 @@ def test_v2_output_tool_events_translate_to_tool_phases() -> None:
     assert started.call_id == "tc1"
     assert result is not None
     assert result.kind == "tool_result"
+    assert result.tool_name == "lookup"
     assert result.call_id == "tc1"
     assert result.result == "{'ok': True}"
 
-    phases = [r.data["phase"] for r in journal.read() if r.name == "tool_phase_changed"]
-    assert phases == ["start", "result"]
+    records = [r.data for r in journal.read() if r.name == "tool_phase_changed"]
+    assert [(r["phase"], r["tool_name"], r["call_id"]) for r in records] == [
+        ("start", "lookup", "tc1"),
+        ("result", "lookup", "tc1"),
+    ]
 
 
 def test_v2_function_tool_result_reads_part_content() -> None:
@@ -87,8 +155,29 @@ def test_v2_function_tool_result_reads_part_content() -> None:
 
     assert event is not None
     assert event.kind == "tool_result"
+    assert event.tool_name == "lookup"
     assert event.call_id == "tc1"
     assert event.result == "{'ok': True}"
+
+
+@pytest.mark.parametrize("event_cls", [FunctionToolResultEvent, OutputToolResultEvent])
+def test_v2_tool_result_with_none_content_is_empty_string(event_cls: type[Any]) -> None:
+    journal = InMemoryRingBuffer(capacity=1000)
+    rec = _recorder(journal)
+
+    event = translate_event(event_cls(_NoContentToolReturnPart()), rec)
+
+    assert event is not None
+    assert event.kind == "tool_result"
+    assert event.tool_name == "lookup"
+    assert event.call_id == "tc-none"
+    assert event.result == ""
+    [record] = [r.data for r in journal.read() if r.name == "tool_phase_changed"]
+    assert (record["phase"], record["tool_name"], record["call_id"]) == (
+        "result",
+        "lookup",
+        "tc-none",
+    )
 
 
 def test_v2_final_result_without_output_is_not_done_event() -> None:
@@ -118,62 +207,49 @@ async def test_graph_event_handler_accepts_v2_stream_signature() -> None:
     assert handler.accumulated_text == "hello"
 
 
-class _MockAgentRun:
-    output = "done"
-    result = None
-    ctx = object()
+def test_bridge_passes_explicit_v2_toolset_objects_to_agent_kwargs() -> None:
+    pytest.importorskip("pydantic_ai")
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+    from pydantic_ai.toolsets import FunctionToolset
 
-    async def __aenter__(self) -> _MockAgentRun:
-        return self
+    agent = Agent(TestModel(custom_output_text="done"))
+    toolset = FunctionToolset([])
+    bridge = PydanticAIBridge(agent=agent, toolsets=[toolset])
+    kwargs = bridge._agent_run_kwargs(agent.iter, AgentTurnInput.from_text("hi"))
 
-    async def __aexit__(self, *args: Any) -> None:
-        pass
-
-    def __aiter__(self) -> _MockAgentRun:
-        return self
-
-    async def __anext__(self) -> Any:
-        raise StopAsyncIteration
-
-    def new_messages(self) -> list[Any]:
-        return []
+    assert kwargs["toolsets"] == [toolset]
 
 
-class _V2StyleAgent:
-    name = "v2-agent"
+def test_bridge_converts_mcp_server_uri_strings_to_v2_toolsets() -> None:
+    pytest.importorskip("pydantic_ai")
+    from pydantic_ai import Agent
+    from pydantic_ai.mcp import MCPToolset
+    from pydantic_ai.models.test import TestModel
+    from pydantic_ai.toolsets import AbstractToolset
 
-    def __init__(self) -> None:
-        self.kwargs: dict[str, Any] = {}
+    agent = Agent(TestModel(custom_output_text="done"))
+    bridge = PydanticAIBridge(agent=agent, mcp_servers=["stdio://server"])
+    kwargs = bridge._agent_run_kwargs(agent.iter, AgentTurnInput.from_text("hi"))
 
-    def iter(
-        self,
-        text: str,
-        *,
-        message_history: list[Any] | None = None,
-        deps: Any = None,
-        model_settings: Any = None,
-        toolsets: list[Any] | None = None,
-    ) -> _MockAgentRun:
-        self.kwargs = {
-            "text": text,
-            "message_history": message_history,
-            "deps": deps,
-            "model_settings": model_settings,
-            "toolsets": toolsets,
-        }
-        return _MockAgentRun()
+    [toolset] = kwargs["toolsets"]
+    assert isinstance(toolset, MCPToolset)
+    assert isinstance(toolset, AbstractToolset)
+    assert not isinstance(toolset, str)
+    assert hasattr(toolset, "for_run")
 
 
 @pytest.mark.asyncio
-async def test_bridge_passes_mcp_servers_as_v2_toolsets() -> None:
-    agent = _V2StyleAgent()
-    bridge = PydanticAIBridge(agent=agent, mcp_servers=["stdio://server"])
+async def test_bridge_assigns_raw_mcp_servers_to_legacy_agent_attribute() -> None:
+    agent = _LegacyMCPAgent()
+    bridge = PydanticAIBridge(agent=agent, mcp_servers=["sse://legacy-server"])
 
     events = [event async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())]
 
-    assert agent.kwargs["toolsets"] == ["stdio://server"]
-    assert [event.kind for event in events] == ["done"]
-    assert events[0].structured_output == "done"
+    assert agent.seen_mcp_servers == ["sse://legacy-server"]
+    assert agent.mcp_servers == ["original"]
+    assert events[-1].kind == "done"
+    assert events[-1].structured_output == "done"
 
 
 def test_bridge_rejects_mcp_servers_and_toolsets_together() -> None:
@@ -199,3 +275,66 @@ async def test_bridge_invokes_real_v2_test_model_when_extra_installed() -> None:
         ("done", "hello from v2"),
     ]
     assert events[-1].structured_output == "hello from v2"
+
+
+@pytest.mark.asyncio
+async def test_bridge_invokes_real_v2_graph_keyword_iter_and_drains_final_node_events() -> None:
+    pytest.importorskip("pydantic_graph")
+    from dataclasses import dataclass, field
+
+    from pydantic_graph import BaseNode, End, GraphBuilder, GraphRunContext
+    from pydantic_graph.step import NodeStep
+
+    @dataclass
+    class State:
+        seen: list[str] = field(default_factory=list)
+        _easycat_event_handler: Any = None
+
+    class Start(BaseNode[State, None, str]):
+        async def run(self, ctx: GraphRunContext[State, None]) -> Any:
+            ctx.state.seen.append("start")
+            await ctx.state._easycat_event_handler(PartDeltaEvent(TextPartDelta("start ")))
+            return Finish()
+
+    class Finish(BaseNode[State, None, str]):
+        async def run(self, ctx: GraphRunContext[State, None]) -> Any:
+            ctx.state.seen.append("finish")
+            await ctx.state._easycat_event_handler(PartDeltaEvent(TextPartDelta("finish")))
+            return End("graph-output")
+
+    builder = GraphBuilder(
+        state_type=State,
+        deps_type=type(None),
+        input_type=Start,
+        output_type=str,
+    )
+    start_step = NodeStep(Start)
+    finish_step = NodeStep(Finish)
+    builder.add(builder.edge_from(builder.start_node).to(start_step))
+    builder.add(builder.edge_from(start_step).to(finish_step))
+    builder.add(builder.edge_from(finish_step).to(builder.end_node))
+    graph = builder.build(validate_graph_structure=False)
+    state = State()
+    bridge = PydanticAIBridge(
+        graph=graph,
+        state_factory=lambda: state,
+        initial_node_factory=lambda text, _state: Start(),
+    )
+    journal = InMemoryRingBuffer(capacity=1000)
+
+    events = [
+        event async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder(journal))
+    ]
+
+    assert state.seen == ["start", "finish"]
+    assert [(event.kind, event.text) for event in events] == [
+        ("text_delta", "start "),
+        ("text_delta", "finish"),
+        ("done", "start finish"),
+    ]
+    assert events[-1].structured_output == "graph-output"
+
+    entered = [
+        record.data["display_name"] for record in journal.read() if record.name == "unit_entered"
+    ]
+    assert entered == ["Start", "Finish"]

@@ -9,10 +9,12 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import shlex
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import ExitStack
 from typing import Any
+from urllib.parse import unquote
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -85,7 +87,9 @@ class PydanticAIBridge:
                     "attribute. Add `_easycat_event_handler: Any = None` to "
                     "your state dataclass and pass "
                     "`event_stream_handler=ctx.state._easycat_event_handler` "
-                    "to each agent.run() call inside graph nodes."
+                    "to supported agent calls inside graph nodes (for "
+                    "PydanticAI v2, use Agent.run() or Agent.run_stream(); "
+                    "Agent.iter() does not accept event_stream_handler)."
                 )
             self._mode = "graph"
             self._graph = graph
@@ -343,11 +347,10 @@ class PydanticAIBridge:
         done_emitted = False
 
         saved_mcp_servers = _UNSET
-        runtime_toolsets = self._runtime_toolsets()
         try:
-            if runtime_toolsets is not None and hasattr(self._agent, "mcp_servers"):
+            if self._mcp_servers is not None and hasattr(self._agent, "mcp_servers"):
                 saved_mcp_servers = getattr(self._agent, "mcp_servers", None)
-                self._agent.mcp_servers = list(runtime_toolsets)
+                self._agent.mcp_servers = list(self._mcp_servers)
             if hasattr(self._agent, "iter"):
                 async for ev in self._stream_via_iter(turn_input, recorder, cancel_token):
                     if ev.kind == "text_delta":
@@ -415,7 +418,7 @@ class PydanticAIBridge:
                             yield mapped
 
             self._message_history = agent_run.new_messages()
-            self._last_output = _run_output(agent_run)
+            self._last_output = await _run_output(agent_run)
 
     async def _stream_via_run_stream(
         self,
@@ -437,12 +440,14 @@ class PydanticAIBridge:
                 accumulated = full_text
 
             self._message_history = result.new_messages()
-            self._last_output = _run_output(result)
+            self._last_output = await _run_output(result)
 
     def _runtime_toolsets(self) -> list[Any] | None:
         if self._toolsets is not None:
-            return self._toolsets
-        return self._mcp_servers
+            return list(self._toolsets)
+        if self._mcp_servers is not None:
+            return _mcp_servers_to_toolsets(self._mcp_servers)
+        return None
 
     def _agent_run_kwargs(
         self, call: Callable[..., Any], turn_input: AgentTurnInput
@@ -452,9 +457,10 @@ class PydanticAIBridge:
             "deps": self._deps,
             "model_settings": self._model_settings,
         }
-        runtime_toolsets = self._runtime_toolsets()
-        if runtime_toolsets is not None and _supports_kwarg(call, "toolsets"):
-            kwargs["toolsets"] = list(runtime_toolsets)
+        if _supports_kwarg(call, "toolsets"):
+            runtime_toolsets = self._runtime_toolsets()
+            if runtime_toolsets is not None:
+                kwargs["toolsets"] = list(runtime_toolsets)
         return kwargs
 
     def _message_history_for_turn(self, context: list[dict[str, str]]) -> list[Any] | None:
@@ -468,6 +474,26 @@ class PydanticAIBridge:
             logger.debug("PydanticAI message types unavailable; dropping turn context")
             return history or None
         return [*converted, *history]
+
+    def _graph_iter(self, initial_input: Any, state: Any) -> Any:
+        graph_iter = self._graph.iter
+        if _supports_positional_arg(graph_iter):
+            return graph_iter(initial_input, state=state)
+
+        kwargs: dict[str, Any] = {"state": state}
+        if self._deps is not None and _supports_kwarg(graph_iter, "deps"):
+            kwargs["deps"] = self._deps
+        if _supports_kwarg(graph_iter, "inputs"):
+            kwargs["inputs"] = initial_input
+        elif _supports_kwarg(graph_iter, "input"):
+            kwargs["input"] = initial_input
+        else:
+            raise BridgeConfigurationError(
+                "PydanticAIBridge Graph mode could not determine how to pass graph input. "
+                "Expected graph.iter(initial_node, state=...) or keyword "
+                "graph.iter(state=..., inputs=...)."
+            )
+        return graph_iter(**kwargs)
 
     # ── Graph mode ───────────────────────────────────────────────
 
@@ -495,52 +521,76 @@ class PydanticAIBridge:
         # Inject MCP servers/toolsets into graph agents (same save/restore pattern).
         saved_mcp: list[tuple[Any, Any]] = []
         graph_agent_overrides = ExitStack()
-        runtime_toolsets = self._runtime_toolsets()
-        if runtime_toolsets is not None and self._agents:
-            for ag in self._agents:
-                if hasattr(ag, "mcp_servers"):
-                    saved_mcp.append((ag, getattr(ag, "mcp_servers", None)))
-                    ag.mcp_servers = list(runtime_toolsets)
-                elif hasattr(ag, "override"):
-                    override = ag.override(toolsets=list(runtime_toolsets))
-                    graph_agent_overrides.enter_context(override)
+        observed_history: list[Any] = []
 
         try:
+            if self._agents:
+                runtime_toolsets: list[Any] | None = None
+                for ag in self._agents:
+                    if self._mcp_servers is not None and hasattr(ag, "mcp_servers"):
+                        saved_mcp.append((ag, getattr(ag, "mcp_servers", None)))
+                        ag.mcp_servers = list(self._mcp_servers)
+                    elif hasattr(ag, "override") and _supports_kwarg(ag.override, "toolsets"):
+                        if runtime_toolsets is None:
+                            runtime_toolsets = self._runtime_toolsets()
+                        if runtime_toolsets is not None:
+                            override = ag.override(toolsets=list(runtime_toolsets))
+                            graph_agent_overrides.enter_context(override)
+
             with graph_agent_overrides:
-                async with self._graph.iter(initial_node, state=state) as graph_run:
-                    async for node in graph_run:
-                        node_name = type(node).__name__
-                        self._active_node = node_name
+                async with self._graph_iter(initial_node, state) as graph_run:
+                    async for graph_item in graph_run:
+                        graph_units = _graph_iteration_units(graph_item)
+                        if not graph_units:
+                            output = _graph_item_output(graph_item)
+                            if output is not _UNSET:
+                                self._last_output = output
+                                if isinstance(output, str):
+                                    accumulated = accumulated or output
+                            continue
+
+                        for node in graph_units:
+                            node_name = _graph_item_display_name(node)
+                            observed_history.append(node)
+                            self._active_node = node_name
+
+                            if cancel_token and cancel_token.is_cancelled:
+                                break
+
+                            # Emit handoff triple if node changed.
+                            if prev_node_name is not None and node_name != prev_node_name:
+                                for ev in _handler.drain():
+                                    yield ev
+                                if prev_cursor is not None:
+                                    recorder.record_unit_exited(
+                                        prev_cursor.with_committable(True), reason=None
+                                    )
+                                recorder.record_framework_handoff(
+                                    from_unit=prev_node_name,
+                                    to_unit=node_name,
+                                    reason="graph_transition",
+                                )
+
+                            cursor = ExecutionCursor(
+                                unit_id=f"node-{uuid4().hex[:8]}",
+                                unit_kind=UnitKind.WORKFLOW_NODE,
+                                display_name=node_name,
+                                entered_at=time.monotonic_ns(),
+                                committable=False,
+                            )
+                            recorder.record_unit_entered(cursor)
+                            prev_cursor = cursor
+                            prev_node_name = node_name
+
+                            # Forward any events the handler captured during this node.
+                            for ev in _handler.drain():
+                                yield ev
 
                         if cancel_token and cancel_token.is_cancelled:
                             break
 
-                        # Emit handoff triple if node changed.
-                        if prev_node_name is not None and node_name != prev_node_name:
-                            if prev_cursor is not None:
-                                recorder.record_unit_exited(
-                                    prev_cursor.with_committable(True), reason=None
-                                )
-                            recorder.record_framework_handoff(
-                                from_unit=prev_node_name,
-                                to_unit=node_name,
-                                reason="graph_transition",
-                            )
-
-                        cursor = ExecutionCursor(
-                            unit_id=f"node-{uuid4().hex[:8]}",
-                            unit_kind=UnitKind.WORKFLOW_NODE,
-                            display_name=node_name,
-                            entered_at=time.monotonic_ns(),
-                            committable=False,
-                        )
-                        recorder.record_unit_entered(cursor)
-                        prev_cursor = cursor
-                        prev_node_name = node_name
-
-                        # Forward any events the handler captured during this node.
-                        for ev in _handler.drain():
-                            yield ev
+            for ev in _handler.drain():
+                yield ev
 
             # Close the last cursor.
             if prev_cursor is not None:
@@ -551,15 +601,16 @@ class PydanticAIBridge:
             accumulated = _handler.accumulated_text
 
             # Capture result.
-            result = getattr(graph_run, "result", None)
-            if result is not None:
-                output = getattr(result, "output", None)
+            output = await _run_output(graph_run)
+            if output is not None:
                 self._last_output = output
-                if output and isinstance(output, str):
+                if isinstance(output, str):
                     accumulated = accumulated or output
 
             # Capture graph run history as a state snapshot record.
             run_history = getattr(graph_run, "history", None)
+            if run_history is None:
+                run_history = observed_history
             if run_history is not None:
                 try:
                     serialized = json.dumps(
@@ -595,9 +646,12 @@ class PydanticAIBridge:
                 raise ConventionViolationError(
                     "PydanticAIBridge Graph mode: the _easycat_event_handler "
                     "was installed on the state but no agent call passed it "
-                    "through via event_stream_handler=. Ensure every "
-                    "agent.run() / agent.iter() call inside graph nodes "
-                    "passes event_stream_handler=ctx.state._easycat_event_handler."
+                    "through via event_stream_handler=. Ensure every supported "
+                    "agent call inside graph nodes passes "
+                    "event_stream_handler=ctx.state._easycat_event_handler. "
+                    "In PydanticAI v2, Agent.iter() does not accept "
+                    "event_stream_handler; use Agent.run(), Agent.run_stream(), "
+                    "or configure an agent-level event stream handler instead."
                 )
 
         except Exception as exc:
@@ -606,6 +660,7 @@ class PydanticAIBridge:
                 recorder.record_unit_exited(prev_cursor, reason="error")
             raise
         finally:
+            graph_agent_overrides.close()
             for ag, original in saved_mcp:
                 ag.mcp_servers = original
 
@@ -669,6 +724,22 @@ class _GraphEventHandler:
 _UNSET = object()
 
 
+def _supports_positional_arg(call: Callable[..., Any]) -> bool:
+    try:
+        signature = inspect.signature(call)
+    except (TypeError, ValueError):
+        return True
+    for param in signature.parameters.values():
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            return True
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            return param.name != "self"
+    return False
+
+
 def _supports_kwarg(call: Callable[..., Any], name: str) -> bool:
     try:
         signature = inspect.signature(call)
@@ -680,21 +751,119 @@ def _supports_kwarg(call: Callable[..., Any], name: str) -> bool:
     return name in signature.parameters
 
 
-def _run_output(run: Any) -> Any:
+def _mcp_servers_to_toolsets(mcp_servers: list[Any]) -> list[Any]:
+    try:
+        from pydantic_ai.mcp import MCPToolset, StdioTransport
+    except ImportError as exc:
+        raise BridgeConfigurationError(
+            "PydanticAIBridge mcp_servers= requires PydanticAI v2 MCP support. "
+            "Install the pydantic-ai MCP extra or pass explicit toolsets= objects."
+        ) from exc
+
+    toolsets: list[Any] = []
+    for index, server in enumerate(mcp_servers):
+        if not isinstance(server, str):
+            raise BridgeConfigurationError(
+                "PydanticAIBridge mcp_servers= expects EasyCat MCP URI strings. "
+                "Pass PydanticAI toolset objects with toolsets= instead."
+            )
+
+        if server.startswith("stdio://"):
+            command_line = unquote(server[len("stdio://") :]).strip()
+            try:
+                parts = shlex.split(command_line)
+            except ValueError as exc:
+                raise BridgeConfigurationError(
+                    f"Invalid stdio MCP server URI at index {index}: {server!r}"
+                ) from exc
+            if not parts:
+                raise BridgeConfigurationError(
+                    f"Invalid stdio MCP server URI at index {index}: missing command"
+                )
+            toolsets.append(MCPToolset(StdioTransport(command=parts[0], args=parts[1:])))
+            continue
+
+        if server.startswith(("http://", "https://")):
+            toolsets.append(MCPToolset(server))
+            continue
+
+        if server.startswith("sse://"):
+            raise BridgeConfigurationError(
+                "PydanticAI v2 MCPToolset does not accept EasyCat sse:// MCP URIs. "
+                "Use an http(s):// SSE endpoint such as http://host/sse, or pass "
+                "a pre-built PydanticAI MCPToolset with toolsets=."
+            )
+
+        raise BridgeConfigurationError(
+            f"Unsupported MCP server URI for PydanticAIBridge: {server!r}. "
+            "Use stdio://, http://, or https://, or pass explicit toolsets= objects."
+        )
+
+    return toolsets
+
+
+def _graph_iteration_units(item: Any) -> list[Any]:
+    if _is_graph_end_item(item):
+        return []
+    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+        return list(item)
+    return [item]
+
+
+def _graph_item_output(item: Any) -> Any:
+    if not _is_graph_end_item(item):
+        return _UNSET
+    if hasattr(item, "value"):
+        return getattr(item, "value")
+    return getattr(item, "_value", None)
+
+
+def _is_graph_end_item(item: Any) -> bool:
+    if type(item).__name__ == "EndMarker":
+        return True
+    return False
+
+
+def _graph_item_display_name(item: Any) -> str:
+    node_id = getattr(item, "node_id", None)
+    if node_id is not None:
+        node_id_text = str(node_id)
+        if node_id_text != "__start__":
+            return node_id_text
+
+    inputs = getattr(item, "inputs", _UNSET)
+    if inputs is not _UNSET and not isinstance(
+        inputs, (str, bytes, bytearray, int, float, bool, type(None))
+    ):
+        return type(inputs).__name__
+
+    return type(item).__name__
+
+
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _run_output(run: Any) -> Any:
     output = getattr(run, "output", None)
+    output = await _maybe_await(output)
     if output is not None:
         return output
 
     result = getattr(run, "result", None)
+    result = await _maybe_await(result)
     if result is not None:
         output = getattr(result, "output", None)
+        output = await _maybe_await(output)
         if output is not None:
             return output
 
     get_output = getattr(run, "get_output", None)
     if callable(get_output):
         try:
-            return get_output()
+            return await _maybe_await(get_output())
         except Exception:
             logger.debug("Failed to read PydanticAI run output", exc_info=True)
     return None
