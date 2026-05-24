@@ -23,11 +23,11 @@ from easycat.events import (
     ToolCallResult,
     ToolCallStarted,
 )
-from easycat.session._text import (
+from easycat.session._turn_context import TurnContext
+from easycat.session.text import (
     has_unclosed_markdown_delimiters,
     split_at_sentence_boundaries,
 )
-from easycat.session._turn_context import TurnContext
 from easycat.strip_markdown import strip_markdown
 from easycat.tts.input import TTSInput
 

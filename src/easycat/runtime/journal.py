@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
-from easycat.observability import observe_gauge, record_histogram
+from easycat._observability import observe_gauge, record_histogram
 from easycat.runtime.records import (
     BufferOverflow,
     ErrorInfo,

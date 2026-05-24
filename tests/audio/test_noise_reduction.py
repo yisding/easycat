@@ -192,7 +192,7 @@ def test_factory_krisp_preferred_in_auto():
 
 def test_resample_roundtrip_quality():
     """Resample 16k -> 48k -> 16k should approximately preserve audio."""
-    from easycat.audio_utils import resample
+    from easycat._audio_utils import resample
 
     # Create a simple tone-like pattern
     samples = [int(1000 * (i % 10) / 10) for i in range(160)]

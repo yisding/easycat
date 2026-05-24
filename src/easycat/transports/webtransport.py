@@ -94,9 +94,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from easycat._audio_utils import resample_chunk
+from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
-from easycat.audio_utils import resample_chunk
-from easycat.extras import require_module
 from easycat.transports._base import _DEGRADED_INBOUND_QUEUE_FULL, _AudioQueueMixin
 from easycat.transports.websocket import _valid_config_sample_rate
 

@@ -19,8 +19,8 @@ from typing import Any
 import websockets
 from websockets.asyncio.server import ServerConnection
 
+from easycat._audio_utils import resample
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
-from easycat.audio_utils import resample
 from easycat.events import (
     DTMF,
     CallAnswered,

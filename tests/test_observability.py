@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from easycat import observability
+from easycat import _observability as observability
 
 
 class _FakeSpan:
@@ -224,8 +224,8 @@ async def test_text_turn_emits_turn_metrics(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_audio_queue_emits_drop_counter_and_depth_gauge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from easycat._bounded_queue import BoundedAudioQueue, DropPolicy
     from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-    from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 
     meter = _FakeMeter()
     monkeypatch.setattr(observability, "_get_meter", lambda: meter)
@@ -250,8 +250,8 @@ async def test_audio_queue_emits_drop_counter_and_depth_gauge(
 async def test_audio_queue_refreshes_depth_after_block_put_and_close(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from easycat._bounded_queue import BoundedAudioQueue, DropPolicy
     from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-    from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 
     meter = _FakeMeter()
     monkeypatch.setattr(observability, "_get_meter", lambda: meter)

@@ -25,8 +25,8 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from easycat._bounded_queue import BoundedAudioQueue
 from easycat.audio_format import AudioChunk
-from easycat.bounded_queue import BoundedAudioQueue
 from easycat.events import (
     AudioIn,
     AudioOut,
@@ -44,7 +44,7 @@ from easycat.runtime.capabilities import (
 )
 from easycat.runtime.context import RunContext
 from easycat.session._journal_sink import SessionJournalSink
-from easycat.session._text import _chunk_has_speech_energy
+from easycat.session.text import _chunk_has_speech_energy
 from easycat.stages.audio import AudioStage
 from easycat.stages.stt import STTStage
 from easycat.stages.transport import TransportStage

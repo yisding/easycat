@@ -626,15 +626,6 @@ class EasyConfig:
         return cls(**kwargs)
 
 
-EasyCatConfig = EasyConfig
-"""Deprecated alias kept for the pre-rename ``EasyCatConfig`` symbol.
-
-New code should use :class:`EasyConfig`.  This alias exists only so
-imports written before the rename keep working; it is scheduled for
-removal in a future release.
-"""
-
-
 def _should_auto_turn_from_stt_final(config: EasyConfig) -> bool:
     """Whether this session should derive turn boundaries from STT finals."""
     if not isinstance(config.stt, DeepgramSTTConfig):

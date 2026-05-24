@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from easycat.bounded_queue import BoundedAudioQueue
+from easycat._bounded_queue import BoundedAudioQueue
 from easycat.events import EventBus, TTSAudio, TTSEventType, TTSMarkers
 from easycat.timeouts import TimeoutConfig, with_tts_timeout
 from easycat.tts.input import TTSInput, coerce_tts_input

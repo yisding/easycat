@@ -15,8 +15,9 @@ from dataclasses import replace
 from typing import Any, TypeVar
 from uuid import uuid4
 
-from easycat import observability
-from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
+from easycat import _observability as observability
+from easycat._bounded_queue import BoundedAudioQueue, DropPolicy
+from easycat._health_check import PeriodicHealthChecker
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
 from easycat.events import (
@@ -43,7 +44,6 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.health_check import PeriodicHealthChecker
 from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents.base import ExternalAgentBridge
