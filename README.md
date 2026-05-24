@@ -488,8 +488,7 @@ bridge = PydanticAIBridge(agent=pydantic_agent)
 session = Session(SessionConfig(agent=bridge, ...))
 ```
 
-The `pydantic-ai` extra accepts PydanticAI v1 and v2 so existing stable
-installations keep working while v2 is in prerelease. The
+The `pydantic-ai` extra targets stable PydanticAI v1. The
 `pydantic-ai-v2-beta` extra pins `pydantic-ai==2.0.0b2` exactly for local
 verification and apps that want to opt into the prerelease before it is stable.
 

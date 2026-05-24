@@ -43,10 +43,11 @@ def test_auto_adapt_agent_wraps_openai_agents():
 def test_auto_adapt_agent_wraps_pydantic_agents():
     pytest.importorskip("pydantic_ai")
     from pydantic_ai import Agent as PydanticAgent
+    from pydantic_ai.models.test import TestModel
 
     from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
-    raw = PydanticAgent("openai:gpt-4o-mini")
+    raw = PydanticAgent(TestModel(custom_output_text="ok"))
     adapted = auto_adapt_agent(raw)
     assert isinstance(adapted, PydanticAIBridge)
 

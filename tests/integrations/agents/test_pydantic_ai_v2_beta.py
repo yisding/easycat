@@ -265,9 +265,13 @@ def test_bridge_passes_explicit_v2_toolset_objects_to_agent_kwargs() -> None:
 def test_bridge_converts_mcp_server_uri_strings_to_v2_toolsets() -> None:
     pytest.importorskip("pydantic_ai")
     from pydantic_ai import Agent
-    from pydantic_ai.mcp import MCPToolset
     from pydantic_ai.models.test import TestModel
     from pydantic_ai.toolsets import AbstractToolset
+
+    mcp_mod = pytest.importorskip("pydantic_ai.mcp")
+    MCPToolset = getattr(mcp_mod, "MCPToolset", None)
+    if MCPToolset is None:
+        pytest.skip("PydanticAI MCPToolset requires a newer PydanticAI v1 or v2")
 
     agent = Agent(TestModel(custom_output_text="done"))
     bridge = PydanticAIBridge(agent=agent, mcp_servers=["stdio://server"])
@@ -340,7 +344,9 @@ async def test_bridge_invokes_real_v2_test_model_when_extra_installed() -> None:
 
 @pytest.mark.asyncio
 async def test_bridge_invokes_real_v2_graph_keyword_iter_and_drains_final_node_events() -> None:
-    pytest.importorskip("pydantic_graph")
+    pydantic_graph = pytest.importorskip("pydantic_graph")
+    if not hasattr(pydantic_graph, "GraphBuilder"):
+        pytest.skip("GraphBuilder requires PydanticGraph v2")
     from dataclasses import dataclass, field
 
     from pydantic_graph import BaseNode, End, GraphBuilder, GraphRunContext

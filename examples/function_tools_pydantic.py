@@ -16,7 +16,9 @@ try:
 except ImportError as exc:
     raise SystemExit("PydanticAI is required. Install with: uv add easycat[pydantic-ai]") from exc
 
-from easycat import EasyConfig, run
+from easycat import EasyConfig, require_env, run
+
+require_env("OPENAI_API_KEY")
 
 voice_agent = Agent(
     "openai:gpt-5.2",

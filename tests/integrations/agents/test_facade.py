@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 
@@ -51,6 +52,33 @@ class _CustomBridge:
         pass
 
 
+def _pydantic_graph_instance() -> Any:
+    pydantic_graph = pytest.importorskip("pydantic_graph")
+    from pydantic_graph import Graph
+
+    try:
+        return Graph(nodes=[])
+    except TypeError:
+        pass
+
+    graph_builder = getattr(pydantic_graph, "GraphBuilder", None)
+    if graph_builder is None:
+        pytest.fail("PydanticGraph exposes neither legacy Graph(nodes=...) nor GraphBuilder")
+
+    from pydantic_graph import BaseNode, End, GraphRunContext
+    from pydantic_graph.step import NodeStep
+
+    class Start(BaseNode[None, None, str]):
+        async def run(self, ctx: GraphRunContext[None, None]) -> Any:
+            return End("done")
+
+    builder = graph_builder(input_type=Start, output_type=str)
+    start_step = NodeStep(Start)
+    builder.add(builder.edge_from(builder.start_node).to(start_step))
+    builder.add(builder.edge_from(start_step).to(builder.end_node))
+    return builder.build(validate_graph_structure=False)
+
+
 class TestAutoAdaptWithBridge:
     def test_bridge_passthrough(self):
         bridge = _CustomBridge()
@@ -87,11 +115,8 @@ class TestAutoAdaptBridgeSelection:
         assert adapted.deep_mode
 
     def test_pydantic_graph_raises_bridge_input_error(self):
-        pytest.importorskip("pydantic_graph")
-        from pydantic_graph import Graph
-
         with pytest.raises(BridgeInputError, match="PydanticAIBridge"):
-            auto_adapt_agent(Graph(nodes=[]))
+            auto_adapt_agent(_pydantic_graph_instance())
 
     def test_realtime_class_name_raises_bridge_input_error(self):
         class RealtimeClient:

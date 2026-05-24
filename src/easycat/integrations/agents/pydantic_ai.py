@@ -417,7 +417,7 @@ class PydanticAIBridge:
                                 continue
                             yield mapped
 
-            self._message_history = agent_run.new_messages()
+            self._message_history = await _run_new_messages(agent_run)
             self._last_output = await _run_output(agent_run)
 
     async def _stream_via_run_stream(
@@ -439,7 +439,7 @@ class PydanticAIBridge:
                     yield AgentBridgeEvent(kind="text_delta", text=delta)
                 accumulated = full_text
 
-            self._message_history = result.new_messages()
+            self._message_history = await _run_new_messages(result)
             self._last_output = await _run_output(result)
 
     def _runtime_toolsets(self) -> list[Any] | None:
@@ -866,6 +866,22 @@ async def _run_output(run: Any) -> Any:
         except Exception:
             logger.debug("Failed to read PydanticAI run output", exc_info=True)
     return None
+
+
+async def _run_new_messages(run: Any) -> list[Any]:
+    new_messages = getattr(run, "new_messages", None)
+    if callable(new_messages):
+        return list(await _maybe_await(new_messages()))
+
+    result = getattr(run, "result", None)
+    result = await _maybe_await(result)
+    if result is not None:
+        result_new_messages = getattr(result, "new_messages", None)
+        if callable(result_new_messages):
+            return list(await _maybe_await(result_new_messages()))
+
+    logger.debug("PydanticAI run object does not expose new_messages()")
+    return []
 
 
 # ── Helpers ──────────────────────────────────────────────────────
