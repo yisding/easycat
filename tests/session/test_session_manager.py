@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from easycat._session_manager import SessionManager
+from easycat.session_manager import SessionManager
 
 
 class _DummySession:

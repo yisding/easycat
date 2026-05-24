@@ -43,11 +43,17 @@ _register(
 # Session and advanced app construction.
 _register("easycat.cancel", "CancelToken")
 _register("easycat.session._session", "Session")
-_register("easycat.session._types", "SessionConfig")
+_register("easycat.session._types", "CallIdentity", "SessionConfig")
 _register("easycat.session.actions", "SessionActions")
-_register("easycat._session_manager", "SessionManager")
-_register("easycat._supervisor", "SessionAudioBroadcaster")
+_register("easycat.session_manager", "SessionManager")
+_register("easycat.supervisor", "SessionAudioBroadcaster")
 _register("easycat.turn_manager", "TurnManagerConfig", "TurnMode")
+_register("easycat.integrations.agents", "auto_adapt_agent")
+
+# Pluggable audio backends — pass these into EasyConfig to pin a
+# specific VAD / noise-reduction implementation.
+_register("easycat.vad", "VADConfig")
+_register("easycat.noise_reduction", "NoiseReducerConfig")
 
 # Speech and output-processing knobs commonly used by applications.
 _register(
@@ -135,8 +141,6 @@ _register(
 
 
 if TYPE_CHECKING:
-    from easycat._session_manager import SessionManager
-    from easycat._supervisor import SessionAudioBroadcaster
     from easycat.audio_format import (
         PCM16_MONO_8K,
         PCM16_MONO_16K,
@@ -187,12 +191,14 @@ if TYPE_CHECKING:
         run,
         wait_for_shutdown_signal,
     )
+    from easycat.integrations.agents import auto_adapt_agent
     from easycat.llm_output_processing import (
         MarkdownStripProcessor,
         PauseProcessor,
         PhoneticReplacementProcessor,
         default_pronunciation_processors,
     )
+    from easycat.noise_reduction import NoiseReducerConfig
     from easycat.providers import (
         EchoCanceller,
         NoiseReducer,
@@ -203,9 +209,11 @@ if TYPE_CHECKING:
     )
     from easycat.runtime import JournalRecordKind
     from easycat.session._session import Session
-    from easycat.session._types import SessionConfig
+    from easycat.session._types import CallIdentity, SessionConfig
     from easycat.session.actions import SessionActions
+    from easycat.session_manager import SessionManager
     from easycat.smart_turn import SmartTurnConfig
+    from easycat.supervisor import SessionAudioBroadcaster
     from easycat.telephony.session_actions import TwilioSessionActionConfig
     from easycat.transports.local import LocalTransportConfig
     from easycat.transports.twilio_media import TwilioConnectionTransport
@@ -220,6 +228,7 @@ if TYPE_CHECKING:
         WebTransportTransportConfig,
     )
     from easycat.turn_manager import TurnManagerConfig, TurnMode
+    from easycat.vad import VADConfig
 
 
 def __getattr__(name: str):  # PEP 562

@@ -712,6 +712,11 @@ class TestReplaySpecForward:
 
         assert StageSpec is ReplaySpec
 
+    def test_stages_package_forwards(self):
+        from easycat.stages import ReplaySpec as PkgSpec
+
+        assert PkgSpec is ReplaySpec
+
 
 # ── VersionMismatch equality ─────────────────────────────────────
 

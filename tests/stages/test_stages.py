@@ -7,26 +7,26 @@ import pytest
 from easycat.cancel import CancelToken
 from easycat.runtime.context import RunContext
 from easycat.runtime.journal import InMemoryRingBuffer
-from easycat.runtime.replay import ReplaySpec
 from easycat.session._turn_context import TurnContext
-from easycat.stages.agent import AgentStage
-from easycat.stages.audio import AudioStage
-from easycat.stages.base import (
+from easycat.stages import (
     NONDETERMINISTIC_FIELDS,
+    AgentStage,
+    AudioStage,
     BackpressureSignal,
     CancelSignal,
     ControlSignal,
     InterruptSignal,
     PauseSignal,
+    ReplaySpec,
     ResumeSignal,
     Stage,
     StageStateSnapshot,
+    STTStage,
+    TransportStage,
+    TTSStage,
+    TurnStage,
+    VADStage,
 )
-from easycat.stages.stt import STTStage
-from easycat.stages.transport import TransportStage
-from easycat.stages.tts import TTSStage
-from easycat.stages.turn import TurnStage
-from easycat.stages.vad import VADStage
 
 # ── Helpers ──────────────────────────────────────────────────────
 

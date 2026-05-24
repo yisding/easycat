@@ -19,6 +19,7 @@ PUBLIC_API_SNAPSHOT = (
     "CallAnswered",
     "CallEnded",
     "CallFailed",
+    "CallIdentity",
     "CancelToken",
     "EasyCatError",
     "EasyConfig",
@@ -34,6 +35,7 @@ PUBLIC_API_SNAPSHOT = (
     "LocalTransportConfig",
     "MarkdownStripProcessor",
     "NoiseReducer",
+    "NoiseReducerConfig",
     "OutboundCallConfig",
     "PCM16_MONO_16K",
     "PCM16_MONO_24K",
@@ -62,6 +64,7 @@ PUBLIC_API_SNAPSHOT = (
     "TurnStarted",
     "TwilioConnectionTransport",
     "TwilioSessionActionConfig",
+    "VADConfig",
     "VADProvider",
     "VADStartSpeaking",
     "VADStopSpeaking",
@@ -73,6 +76,7 @@ PUBLIC_API_SNAPSHOT = (
     "WebTransportServer",
     "WebTransportTransportConfig",
     "attach_runtime_feedback",
+    "auto_adapt_agent",
     "create_session",
     "create_text_session",
     "default_pronunciation_processors",
@@ -85,7 +89,7 @@ PUBLIC_API_SNAPSHOT = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 75
+    assert len(easycat.__all__) <= 80
 
 
 def test_curated_public_api_lazy_imports() -> None:
@@ -109,7 +113,7 @@ def test_public_api_symbols_resolve() -> None:
 
 def test_culled_symbols_remain_available_from_modules() -> None:
     from easycat.debug.testing import load_bundle
-    from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
+    from easycat.integrations.agents import AgentRunner, AgentRunnerConfig
     from easycat.quick import speak, transcribe_file
     from easycat.session import split_at_sentence_boundaries
     from easycat.session.actions import CoreSessionActionExecutor

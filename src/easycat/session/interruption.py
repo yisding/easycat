@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat.integrations.agents._helpers import INTERRUPTION_NOTE
 from easycat.integrations.agents.base import CancellationMode
-from easycat.session._text import _cleanup_estimation_text, _truncate_partial_text_to_boundary
+from easycat.session.text import _cleanup_estimation_text, _truncate_partial_text_to_boundary
 
 if TYPE_CHECKING:
     from easycat.cancel import CancelToken

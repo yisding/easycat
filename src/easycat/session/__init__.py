@@ -30,7 +30,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     # Sentence splitter used by the teaching ladder when assembling
     # streaming TTS payloads.
     "split_at_sentence_boundaries": (
-        "easycat.session._text",
+        "easycat.session.text",
         "split_at_sentence_boundaries",
     ),
     # Action executor + actions
@@ -51,7 +51,6 @@ _LAZY: dict[str, tuple[str, str]] = {
 if TYPE_CHECKING:
     # Static-analysis view — imports never execute at runtime.
     from easycat.session._session import Session
-    from easycat.session._text import split_at_sentence_boundaries
     from easycat.session._types import (
         Agent,
         CallDirection,
@@ -73,6 +72,7 @@ if TYPE_CHECKING:
         TransferCallAction,
         TransferPlan,
     )
+    from easycat.session.text import split_at_sentence_boundaries
 
 
 def __getattr__(name: str):  # PEP 562
