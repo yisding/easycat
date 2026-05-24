@@ -680,3 +680,87 @@ def test_latency_baseline_comparison_refuses_unversioned_condition_baseline() ->
     assert comparison["status"] == "drift"
     assert comparison["conditions"][0]["reason"] == "baseline_version_missing"
     assert comparison["conditions"][0]["refresh_required"] is True
+
+
+def test_latency_runner_fails_when_budget_violated(tmp_path: Path) -> None:
+    """Pytest passes but per-stage budgets blow out -> exit 1 with budget failure."""
+
+    def fake_command_runner(command: list[str]) -> CommandResult:
+        samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
+        # Ten non-warmup samples with total_ms == 3000 (well above 1500 ms p95 budget).
+        samples = [
+            LatencySample(
+                sample_id=f"sample-{index}",
+                condition_id="baseline",
+                warmup=False,
+                timestamp_source="event_monotonic",
+                stages=LatencyStageDurations(
+                    total_ms=3000.0,
+                    stt_ms=200.0,
+                    tts_ttfb_ms=600.0,
+                    llm_ttft_ms=900.0,
+                ),
+            ).to_dict()
+            for index in range(10)
+        ]
+        samples_path.write_text(json.dumps(samples))
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["status"] == "fail"
+    assert report["tool_exit_codes"]["pytest"] == 0
+    assert report["tool_exit_codes"]["latency_budget"] == 1
+    budget_failures = [
+        failure for failure in report["failures"] if failure["name"] == "latency.budget"
+    ]
+    assert budget_failures, "expected a latency.budget failure entry"
+    assert budget_failures[0]["failure_class"] == "latency_budget"
+    violations = budget_failures[0]["details"]["violations"]
+    assert violations, "expected at least one violation in failure details"
+    stages = {entry["stage"] for entry in violations}
+    assert "total_ms" in stages
+
+
+def test_latency_runner_passes_when_budgets_satisfied(tmp_path: Path) -> None:
+    """When all latency budgets are met, no budget failure is appended."""
+
+    def fake_command_runner(command: list[str]) -> CommandResult:
+        samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
+        samples = [
+            LatencySample(
+                sample_id=f"sample-{index}",
+                condition_id="baseline",
+                warmup=False,
+                timestamp_source="event_monotonic",
+                stages=LatencyStageDurations(
+                    total_ms=400.0,
+                    stt_ms=50.0,
+                    tts_ttfb_ms=100.0,
+                    llm_ttft_ms=300.0,
+                ),
+            ).to_dict()
+            for index in range(10)
+        ]
+        samples_path.write_text(json.dumps(samples))
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 0
+    assert report["status"] == "pass"
+    assert "latency_budget" not in report["tool_exit_codes"]
+    assert not [failure for failure in report["failures"] if failure["name"] == "latency.budget"]
