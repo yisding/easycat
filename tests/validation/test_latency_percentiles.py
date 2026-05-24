@@ -72,7 +72,7 @@ def test_latency_percentile_stats_from_values_skips_none() -> None:
 
     assert stats.count == 10
     cleaned = [v for v in values if v is not None]
-    expected = statistics.quantiles(cleaned, n=100, method="inclusive")
+    expected = statistics.quantiles(cleaned, n=100, method="exclusive")
     assert stats.p50 == pytest.approx(expected[49])
     assert stats.p90 == pytest.approx(expected[89])
     assert stats.p95 == pytest.approx(expected[94])
@@ -80,17 +80,17 @@ def test_latency_percentile_stats_from_values_skips_none() -> None:
 
 
 def test_latency_percentile_stats_uses_linear_interpolation() -> None:
-    # Ten samples, evenly spaced. With inclusive (N+1)*p method these
+    # Ten samples, evenly spaced. With exclusive (N+1)*p method these
     # percentiles are interpolated, not nearest-rank.
     values = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0]
 
     stats = LatencyPercentileStats.from_values(values)
 
-    # Expected per `statistics.quantiles(..., method="inclusive")` semantics
+    # Expected per `statistics.quantiles(..., method="exclusive")` semantics
     assert stats.p50 == pytest.approx(550.0)
-    assert stats.p90 == pytest.approx(910.0)
-    assert stats.p95 == pytest.approx(955.0)
-    assert stats.p99 == pytest.approx(991.0)
+    assert stats.p90 == pytest.approx(990.0)
+    assert stats.p95 == pytest.approx(1045.0)
+    assert stats.p99 == pytest.approx(1089.0)
     assert stats.count == 10
 
 
@@ -98,10 +98,37 @@ def test_latency_percentile_stats_two_value_input_still_interpolates() -> None:
     stats = LatencyPercentileStats.from_values([100.0, 200.0])
 
     assert stats.count == 2
-    # statistics.quantiles with n=100, method="inclusive" on [100, 200]
+    # statistics.quantiles with n=100, method="exclusive" on [100, 200]
     # gives a linearly-interpolated p50 == 150.0 (not nearest-rank == 100/200)
     assert stats.p50 == pytest.approx(150.0)
-    assert stats.p95 == pytest.approx(195.0)
+    assert stats.p95 == pytest.approx(285.0)
+
+
+def test_latency_percentile_stats_single_value_short_circuits() -> None:
+    # statistics.quantiles requires n >= 2 inputs, so a single-value input is a
+    # special case: count=1 and all percentiles equal that single value.
+    stats = LatencyPercentileStats.from_values([742.0])
+
+    assert stats.count == 1
+    assert stats.p50 == pytest.approx(742.0)
+    assert stats.p90 == pytest.approx(742.0)
+    assert stats.p95 == pytest.approx(742.0)
+    assert stats.p99 == pytest.approx(742.0)
+
+
+def test_latency_percentile_stats_one_tail_spike_pulls_p95_high() -> None:
+    # The operator intuition that motivates exclusive: one bad sample in 20
+    # should push p95 close to that bad value, not get smoothed away to a
+    # number near the median.
+    values = [500.0] * 19 + [2000.0]
+
+    stats = LatencyPercentileStats.from_values(values)
+
+    assert stats.count == 20
+    assert stats.p50 == pytest.approx(500.0)
+    # Under exclusive (N+1)*p, idx 94 on this distribution is 1925.
+    # Under inclusive it would be 575 -- which is the footgun this pins.
+    assert stats.p95 == pytest.approx(1925.0)
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +167,7 @@ def test_build_latency_artifact_emits_percentiles_block_per_stage() -> None:
 
     total_overall = overall["total_ms"]
     expected_total = statistics.quantiles(
-        [100.0 + i * 100 for i in range(10)], n=100, method="inclusive"
+        [100.0 + i * 100 for i in range(10)], n=100, method="exclusive"
     )
     assert total_overall["count"] == 10
     assert total_overall["p50"] == pytest.approx(expected_total[49])
@@ -449,3 +476,75 @@ def test_latency_baseline_comparison_p50_does_not_flag_tail_regression() -> None
 
     assert comparison["status"] == "pass"
     assert comparison["conditions"][0]["status"] == "pass"
+
+
+def test_comparison_thresholds_rejects_unknown_percentile() -> None:
+    # Today the percentile lookup silently falls back to p50 on a typo; that
+    # is a silent footgun. An unknown percentile must raise a clear error
+    # naming the offending value.
+    bad_thresholds = LatencyComparisonThresholds(
+        relative_regression=0.2,
+        absolute_regression_ms=200.0,
+        min_samples=3,
+        regression_percentile="p42",
+    )
+    baseline = _comparison_artifact([500.0] * 20)
+    current = _comparison_artifact([500.0] * 20)
+
+    with pytest.raises((ValueError, KeyError), match="p42"):
+        compare_latency_baseline(current, baseline, thresholds=bad_thresholds)
+
+
+# ---------------------------------------------------------------------------
+# evaluate_budgets input strictness
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_budgets_raises_on_non_numeric_observed() -> None:
+    # Today evaluate_budgets silently swallows non-numeric percentile values
+    # via a try/except float() block. The percentiles dict is always produced
+    # by EasyCat itself and only ever contains None | float, so a non-numeric
+    # entry is a programmer bug and must surface, not be hidden.
+    percentiles = {
+        "overall": {
+            "total_ms": {
+                "p50": 500.0,
+                "p90": 900.0,
+                "p95": "not a number",
+                "p99": 1300.0,
+                "count": 20,
+            },
+        },
+        "by_condition": {},
+    }
+    budgets = (LatencyBudget(stage="total_ms", max_ms=1500.0, percentile="p95"),)
+
+    with pytest.raises((TypeError, ValueError)):
+        evaluate_budgets(percentiles, budgets)
+
+
+# ---------------------------------------------------------------------------
+# Public package re-exports
+# ---------------------------------------------------------------------------
+
+
+def test_validation_package_reexports_phase1_symbols() -> None:
+    # The Phase 1 latency symbols must be importable from the validation
+    # package surface, not just from the submodule.
+    from easycat.validation import (
+        DEFAULT_BUDGETS,
+        LatencyBudget,
+        LatencyBudgetViolation,
+        LatencyPercentileStats,
+        evaluate_budgets,
+    )
+
+    # Sanity-check that they are the same objects as in the submodule (not
+    # name-shadowed re-bindings).
+    from easycat.validation import latency as _latency_module
+
+    assert LatencyBudget is _latency_module.LatencyBudget
+    assert LatencyBudgetViolation is _latency_module.LatencyBudgetViolation
+    assert LatencyPercentileStats is _latency_module.LatencyPercentileStats
+    assert DEFAULT_BUDGETS is _latency_module.DEFAULT_BUDGETS
+    assert evaluate_budgets is _latency_module.evaluate_budgets
