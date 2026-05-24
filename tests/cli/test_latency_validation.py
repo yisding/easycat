@@ -212,7 +212,9 @@ def test_latency_failure_classification_handles_provider_failures() -> None:
     assert classify_latency_failure("baseline p50 exceeded") == "easycat_latency_regression"
 
 
-def test_latency_runner_writes_report_and_smoke_latest(tmp_path: Path) -> None:
+def test_latency_runner_writes_report_and_smoke_latest(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("CI", raising=False)
+
     def fake_command_runner(command: list[str]) -> CommandResult:
         samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
         samples_path.write_text(
