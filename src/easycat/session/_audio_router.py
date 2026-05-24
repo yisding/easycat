@@ -25,8 +25,8 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from easycat._bounded_queue import BoundedAudioQueue
 from easycat.audio_format import AudioChunk
-from easycat.bounded_queue import BoundedAudioQueue
 from easycat.events import (
     AudioIn,
     AudioOut,

@@ -12,9 +12,9 @@ from typing import Any
 import httpx
 import websockets
 
+from easycat._audio_utils import resample
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk, AudioFormat
-from easycat.audio_utils import resample
 from easycat.events import STTEvent, STTEventType, WordTimestamp
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase, pcm_to_wav

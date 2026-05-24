@@ -1,11 +1,13 @@
-"""EasyCat telephony features: DTMF, voicemail, outbound calls, screening, IVR."""
+"""EasyCat telephony features: DTMF, voicemail, outbound calls, screening, IVR.
 
-from easycat.telephony.call_state import (
-    CallStateChanged,
-    ClassificationGate,
-    OutboundCallState,
-    OutboundCallStateMachine,
-)
+The package root exposes the helpers an application typically wires up
+directly — TwiML helpers, the DTMF aggregator, the outbound call
+manager, voicemail policy, compliance/DNC helpers, and IVR navigation.
+Internal classifier types (state machines, fusion classifiers, screening
+pattern sets, etc.) live in their submodules; reach for them via the
+explicit module path when extending the pipeline.
+"""
+
 from easycat.telephony.compliance import (
     OPT_OUT_PHRASES,
     AIDisclosureConfig,
@@ -27,18 +29,11 @@ from easycat.telephony.ivr import (
     IVRActionType,
     IVRNavigator,
     IVRNavigatorConfig,
-    classify_ivr_prompt,
-    detect_human_after_ivr,
-)
-from easycat.telephony.ml_voicemail import (
-    ConversationCoherenceDetector,
-    EarlyMediaDetector,
 )
 from easycat.telephony.number_health import (
     CallDispositionTracker,
     NumberHealthMonitor,
     NumberHealthWarning,
-    NumberRotationSuggested,
 )
 from easycat.telephony.outbound import (
     OutboundCallManager,
@@ -48,19 +43,12 @@ from easycat.telephony.outbound import (
 )
 from easycat.telephony.retry import (
     RetryDecision,
-    RetryState,
     RetryStrategy,
     RetryStrategyConfig,
-    SMSFallbackSuggested,
 )
 from easycat.telephony.screening import (
     CallScreeningDetector,
-    ScreeningPatternSet,
     ScreeningResponse,
-    ScreeningState,
-    coherence_score,
-    is_conversational,
-    match_screening_platform,
 )
 from easycat.telephony.session_actions import (
     TwilioSessionActionConfig,
@@ -78,19 +66,11 @@ from easycat.telephony.twiml import (
     validate_twilio_webhook_signature,
 )
 from easycat.telephony.voicemail import (
-    TWILIO_AMD_MAP,
-    BeepDetectorConfig,
-    PostScreeningVoicemailDetector,
-    STTAMDFusionClassifier,
     VoicemailDetector,
     VoicemailDetectorConfig,
     VoicemailPolicy,
     VoicemailPolicyConfig,
     VoicemailPolicyHandler,
-    classify_greeting,
-    detect_sit_tones,
-    is_comfort_noise,
-    parse_twilio_amd_webhook,
 )
 
 __all__ = [
@@ -109,19 +89,11 @@ __all__ = [
     "twiml_say_and_hangup",
     "validate_twilio_webhook_signature",
     # Voicemail
-    "BeepDetectorConfig",
     "VoicemailDetector",
     "VoicemailDetectorConfig",
     "VoicemailPolicy",
     "VoicemailPolicyConfig",
     "VoicemailPolicyHandler",
-    "TWILIO_AMD_MAP",
-    "parse_twilio_amd_webhook",
-    "classify_greeting",
-    "detect_sit_tones",
-    "is_comfort_noise",
-    "ConversationCoherenceDetector",
-    "EarlyMediaDetector",
     # Outbound calls
     "OutboundCallManager",
     "OutboundCallManagerState",
@@ -132,28 +104,13 @@ __all__ = [
     "TwilioSessionActionExecutor",
     # Call screening
     "CallScreeningDetector",
-    "ScreeningPatternSet",
     "ScreeningResponse",
-    "ScreeningState",
-    "coherence_score",
-    "is_conversational",
-    "match_screening_platform",
-    # Call state machine
-    "CallStateChanged",
-    "ClassificationGate",
-    "OutboundCallState",
-    "OutboundCallStateMachine",
-    # Enhanced voicemail
-    "PostScreeningVoicemailDetector",
-    "STTAMDFusionClassifier",
     # IVR navigator
+    "DTMFDelivery",
     "IVRAction",
     "IVRActionType",
     "IVRNavigator",
     "IVRNavigatorConfig",
-    "classify_ivr_prompt",
-    "DTMFDelivery",
-    "detect_human_after_ivr",
     # Compliance / DNC
     "AIDisclosureConfig",
     "CallBlocked",
@@ -167,10 +124,7 @@ __all__ = [
     "CallDispositionTracker",
     "NumberHealthMonitor",
     "NumberHealthWarning",
-    "NumberRotationSuggested",
     "RetryDecision",
-    "RetryState",
     "RetryStrategy",
     "RetryStrategyConfig",
-    "SMSFallbackSuggested",
 ]

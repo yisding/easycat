@@ -13,10 +13,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from easycat._audio_utils import resample_chunk
+from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
-from easycat.audio_utils import resample_chunk
 from easycat.events import Event
-from easycat.extras import require_module
 from easycat.vad._base import _VADBase, _validate_positive_int
 
 logger = logging.getLogger(__name__)

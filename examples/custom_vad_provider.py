@@ -20,8 +20,6 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from easycat import (
-    AgentRunner,
-    AgentRunnerConfig,
     Session,
     SessionConfig,
     attach_runtime_feedback,
@@ -31,6 +29,7 @@ from easycat import (
 from easycat.audio_format import AudioChunk
 from easycat.events import Event, EventBus
 from easycat.integrations.agents import auto_adapt_agent
+from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.providers import VADProvider
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransport, LocalTransportConfig

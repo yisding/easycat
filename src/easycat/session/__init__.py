@@ -20,8 +20,6 @@ from typing import TYPE_CHECKING
 _LAZY: dict[str, tuple[str, str]] = {
     # Core Session class
     "Session": ("easycat.session._session", "Session"),
-    # Per-turn state
-    "TurnContext": ("easycat.session._turn_context", "TurnContext"),
     # Session types
     "Agent": ("easycat.session._types", "Agent"),
     "CallDirection": ("easycat.session._types", "CallDirection"),
@@ -29,17 +27,13 @@ _LAZY: dict[str, tuple[str, str]] = {
     "CallerIdExposure": ("easycat.session._types", "CallerIdExposure"),
     "SessionConfig": ("easycat.session._types", "SessionConfig"),
     "TurnState": ("easycat.session._types", "TurnState"),
-    # Interruption helpers (public for bridge authors inspecting sessions)
-    "estimate_and_notify_interruption": (
-        "easycat.session.interruption",
-        "estimate_and_notify_interruption",
-    ),
+    # Sentence splitter used by the teaching ladder when assembling
+    # streaming TTS payloads.
     "split_at_sentence_boundaries": (
         "easycat.session._text",
         "split_at_sentence_boundaries",
     ),
     # Action executor + actions
-    "CoreSessionActionExecutor": ("easycat.session.actions", "CoreSessionActionExecutor"),
     "CustomAction": ("easycat.session.actions", "CustomAction"),
     "EndCallAction": ("easycat.session.actions", "EndCallAction"),
     "SendDTMFAction": ("easycat.session.actions", "SendDTMFAction"),
@@ -58,7 +52,6 @@ if TYPE_CHECKING:
     # Static-analysis view — imports never execute at runtime.
     from easycat.session._session import Session
     from easycat.session._text import split_at_sentence_boundaries
-    from easycat.session._turn_context import TurnContext
     from easycat.session._types import (
         Agent,
         CallDirection,
@@ -68,7 +61,6 @@ if TYPE_CHECKING:
         TurnState,
     )
     from easycat.session.actions import (
-        CoreSessionActionExecutor,
         CustomAction,
         EndCallAction,
         SendDTMFAction,
@@ -81,7 +73,6 @@ if TYPE_CHECKING:
         TransferCallAction,
         TransferPlan,
     )
-    from easycat.session.interruption import estimate_and_notify_interruption
 
 
 def __getattr__(name: str):  # PEP 562

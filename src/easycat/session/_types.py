@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
-from easycat.bounded_queue import BoundedAudioQueue
+from easycat._bounded_queue import BoundedAudioQueue
 from easycat.events import EventBus
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.providers import (

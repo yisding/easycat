@@ -18,9 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from easycat._audio_utils import resample
+from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
-from easycat.audio_utils import resample
-from easycat.extras import require_module
 
 _BUNDLED_MODEL = str(Path(__file__).parent / "models" / "smart-turn-v3.2-cpu.onnx")
 

@@ -12,7 +12,7 @@ import logging
 from collections import deque
 from typing import Any
 
-from easycat import observability
+from easycat import _observability as observability
 from easycat.audio_format import AudioChunk
 
 logger = logging.getLogger(__name__)

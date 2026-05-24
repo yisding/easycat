@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
+from easycat._supervisor import SessionAudioBroadcaster
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import AudioIn, AudioOut, EventBus
-from easycat.supervisor import SessionAudioBroadcaster
 
 
 class _DummySession:

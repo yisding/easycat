@@ -26,7 +26,6 @@ def _register(module: str, *names: str) -> None:
 _register(
     "easycat.config",
     "EasyConfig",
-    "EasyCatConfig",
     "OutboundCallConfig",
     "TelephonyConfig",
     "VoicemailDetectionConfig",
@@ -46,14 +45,9 @@ _register("easycat.cancel", "CancelToken")
 _register("easycat.session._session", "Session")
 _register("easycat.session._types", "SessionConfig")
 _register("easycat.session.actions", "SessionActions")
-_register("easycat.session_manager", "SessionManager")
-_register("easycat.supervisor", "SessionAudioBroadcaster")
+_register("easycat._session_manager", "SessionManager")
+_register("easycat._supervisor", "SessionAudioBroadcaster")
 _register("easycat.turn_manager", "TurnManagerConfig", "TurnMode")
-_register(
-    "easycat.integrations.agents._agent_runner",
-    "AgentRunner",
-    "AgentRunnerConfig",
-)
 
 # Speech and output-processing knobs commonly used by applications.
 _register(
@@ -141,6 +135,8 @@ _register(
 
 
 if TYPE_CHECKING:
+    from easycat._session_manager import SessionManager
+    from easycat._supervisor import SessionAudioBroadcaster
     from easycat.audio_format import (
         PCM16_MONO_8K,
         PCM16_MONO_16K,
@@ -151,7 +147,6 @@ if TYPE_CHECKING:
     )
     from easycat.cancel import CancelToken
     from easycat.config import (
-        EasyCatConfig,
         EasyConfig,
         OutboundCallConfig,
         TelephonyConfig,
@@ -192,7 +187,6 @@ if TYPE_CHECKING:
         run,
         wait_for_shutdown_signal,
     )
-    from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
     from easycat.llm_output_processing import (
         MarkdownStripProcessor,
         PauseProcessor,
@@ -211,9 +205,7 @@ if TYPE_CHECKING:
     from easycat.session._session import Session
     from easycat.session._types import SessionConfig
     from easycat.session.actions import SessionActions
-    from easycat.session_manager import SessionManager
     from easycat.smart_turn import SmartTurnConfig
-    from easycat.supervisor import SessionAudioBroadcaster
     from easycat.telephony.session_actions import TwilioSessionActionConfig
     from easycat.transports.local import LocalTransportConfig
     from easycat.transports.twilio_media import TwilioConnectionTransport

@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Any
 
-from easycat import observability
+from easycat import _observability as observability
 from easycat.runtime.context import RunContext
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.session._turn_context import TurnContext

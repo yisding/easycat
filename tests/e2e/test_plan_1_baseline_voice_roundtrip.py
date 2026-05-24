@@ -23,7 +23,7 @@ import tempfile
 
 import pytest
 
-from easycat.audio_utils import resample
+from easycat._audio_utils import resample
 from easycat.debug.bundle import RunBundle
 from easycat.runtime import JournalRecordKind
 from tests.e2e._assertions import assert_turn_complete

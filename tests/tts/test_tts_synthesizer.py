@@ -5,12 +5,12 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from easycat._bounded_queue import BoundedAudioQueue, DropPolicy
+from easycat._tts_synthesizer import TTSSynthesizer
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.cancel import CancelToken
 from easycat.events import EventBus, TTSAudio, TTSEvent, TTSEventType, TTSMarkers
 from easycat.tts.input import TTSInput
-from easycat.tts_synthesizer import TTSSynthesizer
 
 # ── Test helpers ───────────────────────────────────────────────────
 

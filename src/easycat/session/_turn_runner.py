@@ -31,7 +31,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from easycat import observability
+from easycat import _observability as observability
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,

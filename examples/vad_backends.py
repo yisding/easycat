@@ -24,8 +24,6 @@ import argparse
 import asyncio
 
 from easycat import (
-    AgentRunner,
-    AgentRunnerConfig,
     Session,
     SessionConfig,
     attach_runtime_feedback,
@@ -34,6 +32,7 @@ from easycat import (
 )
 from easycat.events import EventBus
 from easycat.integrations.agents import auto_adapt_agent
+from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig

@@ -27,9 +27,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
+from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
-from easycat.extras import require_module
 from easycat.transports._base import _AudioQueueMixin
 
 logger = logging.getLogger(__name__)
@@ -473,7 +473,7 @@ class WebRTCTransport(_AudioQueueMixin):
         if self._pc is None or self._outbound_track is None:
             return False
 
-        from easycat.audio_utils import resample
+        from easycat._audio_utils import resample
 
         # Resample to 48 kHz for Opus encoding.
         if chunk.format.sample_rate != _WEBRTC_SAMPLE_RATE:
@@ -697,7 +697,7 @@ class WebRTCTransport(_AudioQueueMixin):
         Always enqueues a sentinel on exit so that ``receive_audio()`` does not
         block indefinitely if the track ends without a connection-state callback.
         """
-        from easycat.audio_utils import resample, to_mono
+        from easycat._audio_utils import resample, to_mono
 
         target_rate = self._config.audio_format.sample_rate
         target_format = self._config.audio_format
