@@ -1002,12 +1002,19 @@ class TestWebTransportServerWiring:
             lambda transport: asyncio.sleep(0),  # type: ignore[arg-type]
         )
         server._started = True  # noqa: SLF001 — fake "started"
-        # Inject a handler task that is the current task.
-        current = asyncio.current_task()
-        assert current is not None
-        server._handler_tasks.add(current)  # noqa: SLF001
-        # Should return promptly without awaiting itself.
-        await asyncio.wait_for(server.stop(), timeout=1)
+
+        # Run ``stop()`` from within a separate task so that
+        # ``asyncio.current_task()`` inside ``stop()`` reliably matches
+        # the handler-task registration on every Python version.
+        # (3.11's ``asyncio.wait_for`` wraps the inner coro in a new
+        # task, which would otherwise mask the regression we're guarding.)
+        async def handler_calls_stop() -> None:
+            handler_task = asyncio.current_task()
+            assert handler_task is not None
+            server._handler_tasks.add(handler_task)  # noqa: SLF001
+            await server.stop()
+
+        await asyncio.wait_for(asyncio.create_task(handler_calls_stop()), timeout=1)
 
     @pytest.mark.asyncio
     async def test_max_concurrent_sessions_force_closes_overflow(self) -> None:
