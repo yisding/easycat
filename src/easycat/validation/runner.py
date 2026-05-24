@@ -323,10 +323,21 @@ def run_latency_validation(
         json.dumps(latency_payload, indent=2, sort_keys=True) + "\n",
     )
 
+    budget_violations = latency_payload.get("budget_violations") or []
+    budget_failure: ValidationFailure | None = None
+    if budget_violations:
+        budget_failure = ValidationFailure(
+            name="latency.budget",
+            message="latency budget violated",
+            failure_class="latency_budget",
+            details={"violations": list(budget_violations)},
+        )
+
     if (
         sample_load_failure is not None
         or reliability_failure is not None
         or required_samples_failure is not None
+        or budget_failure is not None
     ):
         exit_code = 1
     status = "pass" if exit_code == 0 else "fail"
@@ -353,6 +364,8 @@ def run_latency_validation(
         failures.append(reliability_failure)
     if required_samples_failure is not None:
         failures.append(required_samples_failure)
+    if budget_failure is not None:
+        failures.append(budget_failure)
 
     artifacts: dict[str, ArtifactRef] = {
         "report": ArtifactRef(kind="validation_report", path=str(run_report_path)),
@@ -377,6 +390,7 @@ def run_latency_validation(
             **({"latency_samples": 1} if sample_load_failure is not None else {}),
             **({"reliability_samples": 1} if reliability_failure is not None else {}),
             **({"required_latency_samples": 1} if required_samples_failure is not None else {}),
+            **({"latency_budget": 1} if budget_failure is not None else {}),
         },
         git=_collect_git_metadata(),
         environment=_collect_environment_metadata(),
