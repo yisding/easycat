@@ -1,5 +1,12 @@
 """Validation report models and helpers."""
 
+from easycat.validation.latency import (
+    DEFAULT_BUDGETS,
+    LatencyBudget,
+    LatencyBudgetViolation,
+    LatencyPercentileStats,
+    evaluate_budgets,
+)
 from easycat.validation.provider_capabilities import (
     ProviderCapabilities,
     ProviderCapabilityReport,
@@ -18,8 +25,12 @@ from easycat.validation.report import (
 )
 
 __all__ = [
+    "DEFAULT_BUDGETS",
     "ArtifactRef",
     "GitMetadata",
+    "LatencyBudget",
+    "LatencyBudgetViolation",
+    "LatencyPercentileStats",
     "ProviderCapabilities",
     "ProviderCapabilityReport",
     "ProviderCheck",
@@ -30,4 +41,5 @@ __all__ = [
     "ValidationFailure",
     "ValidationRun",
     "ValidationSkip",
+    "evaluate_budgets",
 ]

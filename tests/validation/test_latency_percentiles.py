@@ -195,9 +195,11 @@ def test_build_latency_artifact_percentiles_skip_warmup_and_failed_samples() -> 
 
     overall = artifact["percentiles"]["overall"]["total_ms"]
     assert overall["count"] == 3
-    # The warmup/failed values must not show up in p95
+    # The warmup/failed values (10_000, 99_999) must not show up in p95.
+    # Exclusive method can extrapolate above the max sample (300) on small
+    # n, so the leak-detection bound is set well below the warmup/fail values.
     assert overall["p95"] is not None
-    assert overall["p95"] <= 300.0
+    assert overall["p95"] < 1000.0
 
 
 def test_build_latency_artifact_percentiles_split_by_condition() -> None:

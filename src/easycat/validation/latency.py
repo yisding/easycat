@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from statistics import median
-from typing import Any
+from typing import Any, Literal
 
 LATENCY_TEST_FILE = "tests/e2e/test_plan_7_latency_benchmark.py"
 LATENCY_SMOKE_TEST = "test_single_full_stack_latency_probe"
@@ -29,7 +29,7 @@ class LatencyComparisonThresholds:
     relative_regression: float = 0.2
     absolute_regression_ms: float = 200.0
     min_samples: int = 3
-    regression_percentile: str = "p95"
+    regression_percentile: Literal["p50", "p90", "p95", "p99"] = "p95"
 
     def to_dict(self) -> dict[str, float | int | str]:
         return {
@@ -66,7 +66,8 @@ class LatencyPercentileStats:
         if count == 1:
             only = cleaned[0]
             return cls(count=1, p50=only, p90=only, p95=only, p99=only)
-        cuts = statistics.quantiles(cleaned, n=100, method="inclusive")
+        # exclusive: (N+1)*p formula matches operator-intuition for tail samples
+        cuts = statistics.quantiles(cleaned, n=100, method="exclusive")
         return cls(
             count=count,
             p50=cuts[49],
@@ -146,10 +147,7 @@ def _evaluate_scope(
         observed = stats.get(budget.percentile)
         if observed is None:
             continue
-        try:
-            observed_ms = float(observed)
-        except (TypeError, ValueError):
-            continue
+        observed_ms = float(observed)
         if observed_ms > budget.max_ms:
             results.append(
                 LatencyBudgetViolation(
@@ -405,6 +403,11 @@ def compare_latency_baseline(
     thresholds: LatencyComparisonThresholds | None = None,
 ) -> dict[str, Any]:
     thresholds = thresholds or LatencyComparisonThresholds()
+    if thresholds.regression_percentile not in ("p50", "p90", "p95", "p99"):
+        raise ValueError(
+            f"regression_percentile must be one of p50, p90, p95, p99; "
+            f"got {thresholds.regression_percentile!r}"
+        )
     current_groups = _comparison_samples_by_condition(current)
     baseline_groups = _comparison_samples_by_condition(baseline)
     condition_results = [
@@ -550,8 +553,10 @@ def _compare_condition(
     current_values = [value for value in current_totals if value is not None]
     baseline_values = [value for value in baseline_totals if value is not None]
     percentile = thresholds.regression_percentile
-    current_observed = _comparison_percentile(current_values, percentile)
-    baseline_observed = _comparison_percentile(baseline_values, percentile)
+    current_observed = getattr(LatencyPercentileStats.from_values(current_values), percentile) or 0.0
+    baseline_observed = (
+        getattr(LatencyPercentileStats.from_values(baseline_values), percentile) or 0.0
+    )
     delta_ms = current_observed - baseline_observed
     relative_delta = delta_ms / baseline_observed if baseline_observed > 0 else None
     relative_regression = (
@@ -594,16 +599,6 @@ def _compare_condition(
         **base_result,
         "status": "pass",
     }
-
-
-def _comparison_percentile(values: list[float], percentile: str) -> float:
-    if not values:
-        return 0.0
-    if len(values) == 1:
-        return float(values[0])
-    cuts = statistics.quantiles(values, n=100, method="exclusive")
-    index = {"p50": 49, "p90": 89, "p95": 94, "p99": 98}.get(percentile, 49)
-    return float(cuts[index])
 
 
 def _condition_signature(samples: list[LatencySample]) -> dict[str, dict[str, str]]:
