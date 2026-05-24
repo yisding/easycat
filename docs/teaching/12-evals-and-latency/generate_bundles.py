@@ -22,16 +22,18 @@ from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 
 HERE = Path(__file__).parent
 BUNDLES = HERE / "bundles"
+GOLDEN = BUNDLES / "golden"
 GROUND_TRUTH = HERE / "ground_truth.csv"
+GOLDEN_GROUND_TRUTH = GOLDEN / "ground_truth.csv"
 
 
 def _emit(j, name, sid, data):
     j.append(kind=JournalRecordKind.EVENT, name=name, session_id=sid, data=data)
 
 
-def _save(j, sid: str, filename: str) -> None:
-    BUNDLES.mkdir(exist_ok=True)
-    path = BUNDLES / filename
+def _save(j, sid: str, filename: str, into: Path = BUNDLES) -> None:
+    into.mkdir(parents=True, exist_ok=True)
+    path = into / filename
     export_debug_bundle(types.SimpleNamespace(journal=j), path, overwrite=True)
     print(f"  wrote {path.relative_to(Path.cwd())}")
 
@@ -41,9 +43,9 @@ def _turn(
     sid: str,
     t_start: float,
     stt_text: str,
-    agent_first_token_delay_ms: float,
-    tts_spans_ms: list[float],
-    total_gap_ms: float,
+    agent_first_token_delay_ms: float = 350,
+    tts_spans_ms: list[float] | None = None,
+    total_gap_ms: float = 1000.0,
     interruption_t_ms: float | None = None,
     tool_calls: list[dict] | None = None,
 ) -> None:
@@ -54,6 +56,8 @@ def _turn(
     ``tool.call.started`` / ``tool.call.result`` following the same
     shape chapter 7 emits.
     """
+    if tts_spans_ms is None:
+        tts_spans_ms = [300]
     _emit(j, "turn.started", sid, {"stage": "turn", "t_ms": t_start})
     _emit(
         j,
@@ -220,9 +224,119 @@ def build_all() -> list[dict[str, str]]:
     print(f"  wrote {GROUND_TRUTH.relative_to(Path.cwd())}")
 
 
+def build_golden() -> None:
+    """Build the golden WER fixtures.
+
+    Each bundle has a hand-tuned mismatch between the STT hypothesis
+    (the text in ``stt.final``) and the reference transcript (in
+    ``ground_truth.csv``), producing a known, reproducible WER value.
+    Use these to verify the WER pipeline before pointing it at real
+    recordings — if the numbers below don't match, your pipeline has
+    drifted.
+
+    Three fixtures:
+
+    | bundle                       | ref words | edits | expected WER |
+    |------------------------------|-----------|-------|--------------|
+    | golden_01_wer_5pct.bundle    | 20        | 1 sub | 5.0%         |
+    | golden_02_wer_10pct.bundle   | 10        | 1 sub | 10.0%        |
+    | golden_03_wer_25pct.bundle   |  8        | 2     | 25.0%        |
+
+    All edits are at the word level (the same shape ``_wer_words``
+    in ``evals.py`` measures). Punctuation matters — neither side
+    includes any.
+    """
+    cases = [
+        {
+            "filename": "golden_01_wer_5pct.bundle",
+            "reference": (
+                "today seems like a really good day to go for a walk "
+                "in the park with my dog and friends"
+            ),
+            "hypothesis": (
+                # 1 substitution: "great" instead of "good" (word 6 of 20)
+                "today seems like a really great day to go for a walk "
+                "in the park with my dog and friends"
+            ),
+            "expected_wer_pct": 5.0,
+            "note": "1 substitution, 20-word reference",
+        },
+        {
+            "filename": "golden_02_wer_10pct.bundle",
+            "reference": "please set a quick timer for ten minutes starting now",
+            "hypothesis": (
+                # 1 substitution: "eleven" instead of "ten" (word 7 of 10)
+                "please set a quick timer for eleven minutes starting now"
+            ),
+            "expected_wer_pct": 10.0,
+            "note": "1 substitution, 10-word reference",
+        },
+        {
+            "filename": "golden_03_wer_25pct.bundle",
+            "reference": "the meeting starts at three in the afternoon",
+            "hypothesis": (
+                # 1 deletion ("the") + 1 substitution ("four" for "three") = 2 / 8 = 25%
+                "meeting starts at four in the afternoon"
+            ),
+            "expected_wer_pct": 25.0,
+            "note": "1 substitution + 1 deletion, 8-word reference",
+        },
+    ]
+
+    rows: list[dict[str, str]] = []
+    t = 9_000_000.0
+    for case in cases:
+        sid = case["filename"].removesuffix(".bundle")
+        j = InMemoryRingBuffer(capacity=1_000)
+        _turn(
+            j,
+            sid,
+            t_start=t,
+            stt_text=case["hypothesis"],
+            total_gap_ms=1000.0,
+        )
+        _save(j, sid, case["filename"], into=GOLDEN)
+        rows.append(
+            {
+                "bundle": case["filename"],
+                "reference_transcript": case["reference"],
+                "expected_wer_pct": f"{case['expected_wer_pct']:.1f}",
+                "had_real_barge_in": "0",
+                "had_tool_call": "0",
+                "note": case["note"],
+            }
+        )
+        t += 100_000
+
+    GOLDEN.mkdir(parents=True, exist_ok=True)
+    with GOLDEN_GROUND_TRUTH.open("w", newline="") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "bundle",
+                "reference_transcript",
+                "expected_wer_pct",
+                "had_real_barge_in",
+                "had_tool_call",
+                "note",
+            ],
+        )
+        w.writeheader()
+        w.writerows(rows)
+    print(f"  wrote {GOLDEN_GROUND_TRUTH.relative_to(Path.cwd())}")
+
+
 def main() -> None:
     print("Building evaluation bundles...")
     build_all()
+    print("\nBuilding golden WER bundles (reproducible non-zero WER)...")
+    build_golden()
+    print(
+        "\nRun evals against the golden set with:\n"
+        f"  uv run python {(HERE / 'evals.py').relative_to(Path.cwd())} "
+        f"{GOLDEN.relative_to(Path.cwd())} {GOLDEN_GROUND_TRUTH.relative_to(Path.cwd())}\n"
+        "Expected WERs: 5.0%, 10.0%, 25.0%, aggregate 10.5%."
+    )
 
 
 if __name__ == "__main__":

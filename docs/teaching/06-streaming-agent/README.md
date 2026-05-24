@@ -9,6 +9,21 @@
   diff against them.
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 
+> **Minimum to skip the ladder:** chapter 5 — you need to have
+> felt the blocking-agent gap in your ears for this chapter to
+> land.
+
+## Diff from chapter 5
+
+- **Added:** a sentence-splitter coroutine + drain coroutine
+  connected by an `asyncio.Queue`; `stream=True` on the LLM call;
+  `easycat.strip_markdown.strip_markdown` on every sentence; the
+  `split_at_sentence_boundaries` helper from `easycat.session`.
+- **Modified:** `blocking_agent` becomes `stream_sentences_to_tts`
+  — the LLM stream and TTS synth now overlap.
+- **Sidebar adds:** SSML / pronunciation, backpressure, and a
+  reprise of "partials can flap; act on FINAL only."
+
 ## Run it
 
 ```bash

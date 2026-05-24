@@ -11,6 +11,22 @@
   The 8 MB ONNX model ships bundled in `src/easycat/models/`.
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 
+> **Minimum to skip the ladder:** chapter 4 (VAD basics).
+> Smart-turn is independent of chapters 5-7 — drop it on top of
+> any VAD-gated pipeline.
+
+## Diff from chapter 7
+
+- **Added:** `SmartTurnONNX.detect()` invocation on every
+  `VADStopSpeaking`; a `pending` state in `MiniTurnDetector`;
+  `smart_turn.classify` journal records; `--backend {vad,smart}`
+  CLI for an A/B comparison; `SMART_THRESHOLD` / `SMART_FALLBACK_MS`
+  knobs.
+- **Modified:** turn commits on classifier probability instead of
+  a fixed silence wait.
+- **Removed:** tools — to isolate the endpoint-classification
+  concept (one axis per chapter).
+
 ## VAD silence is a timeout in disguise
 
 Chapter 4's VAD is great at "this frame contains speech." It is

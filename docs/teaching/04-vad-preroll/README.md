@@ -11,6 +11,37 @@
   extra pulls in `onnxruntime`, which Silero VAD needs.
 - `OPENAI_API_KEY` (TTS) and `DEEPGRAM_API_KEY` (STT).
 
+> **Minimum to skip the ladder:** chapter 2 (STT events). Chapter
+> 3 is the motivation; you can read its README without running
+> it. The bonus `naive_threshold.py` here is the wrong-version
+> warm-up for this chapter — see "The naive predecessor" below.
+
+## Diff from chapter 3
+
+- **Added:** `create_vad()` + a `MiniTurnDetector` with a 300 ms
+  pre-roll ring buffer; a `--no-preroll` flag to demonstrate
+  start-of-utterance truncation; `naive_threshold.py` showing why
+  an energy threshold isn't enough.
+- **Modified:** turns now commit on VAD boundaries, not on a
+  fixed-timeout absence of STT partials.
+- **Removed:** the silence-timeout turn detector from chapter 3.
+
+## The naive predecessor
+
+Before reaching for Silero, read `naive_threshold.py`:
+
+```bash
+uv run python docs/teaching/04-vad-preroll/naive_threshold.py
+```
+
+It classifies a chunk as speech if its RMS energy exceeds a fixed
+threshold. **Wrong-version-first** warm-up: it fires on every
+keyboard click, drops out mid-vowel for soft talkers, and never
+fires at all next to a fan. The script logs each false-fire to
+the journal so you can read the misclassifications back. Once
+you've heard it fail on your own voice, the rest of this chapter
+(real VAD + pre-roll) lands harder.
+
 ## Run it
 
 ```bash

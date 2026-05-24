@@ -11,6 +11,18 @@ build movement (chapters 6-9) exists to close this gap.
 - [Chapter 4](../04-vad-preroll/)
 - `OPENAI_API_KEY` (LLM + TTS) and `DEEPGRAM_API_KEY` (STT)
 
+> **Minimum to skip the ladder:** chapter 4 alone (VAD-gated
+> turns). You can read this chapter without chapter 3's
+> wrong-version parrot.
+
+## Diff from chapter 4
+
+- **Added:** an `AsyncOpenAI` client + `blocking_agent` function
+  between STT and TTS; three `turn.gap` sub-spans
+  (`stt_to_agent_ms`, `agent_ms`, `tts_ms`) journaled per turn.
+- **Removed:** the parrot — the bot now answers, instead of
+  repeating.
+
 ## Run it
 
 ```bash

@@ -10,6 +10,19 @@
 - `export OPENAI_API_KEY=sk-...` (or any other provider from
   `src/easycat/stt/factory.py`).
 
+> **Minimum to skip the ladder:** chapter 1 for the `Transport`
+> protocol. You can read this chapter without chapter 0's PCM math.
+
+## Diff from chapter 1
+
+- **Added:** STT provider via `create_stt_provider`; the first
+  `RunBundle` written to `runs/`; the partial-vs-final event shape
+  (`stt.partial`, `stt.final`).
+- **Modified:** the pipeline forks — audio still flows out of the
+  transport, but it now goes to STT instead of back to the speaker.
+- **Removed:** the speaker output (no echo in this chapter; this is
+  one-way mic → STT).
+
 ## The two scripts
 
 ```bash

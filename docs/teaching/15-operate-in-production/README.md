@@ -12,6 +12,23 @@
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
 
+> **Minimum to skip the ladder:** chapter 13 (you need a
+> `create_session` user) and chapter 11 (the debugger UI consumes
+> journals). Chapter 14's bridge layer is helpful background but
+> not required to use `SessionManager`.
+
+## Diff from chapter 14
+
+- **Added:** `SessionManager` and its `add` / `remove` /
+  `stop_all` / `connection(...)` surface; the four lifecycle
+  methods (`start`, `stop`, `shutdown`, `destroy`, `close`)
+  named and bounded; the debugger entry points (`serve_bundle`,
+  `serve_session`); the `easycat` CLI (`init`, `doctor`,
+  `explain`); `translate.py` — the ch 13 (production-shape)
+  → ch 12 (teaching-shape) bundle translator.
+- **Modified:** the demo runs through `SessionManager.connection`
+  instead of `await session.start()` / `stop()` directly.
+
 ## Run
 
 ```bash

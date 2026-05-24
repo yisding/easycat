@@ -11,6 +11,17 @@
   the speaker** — otherwise you will get a feedback loop the
   instant you press play.
 
+> **Minimum to skip the ladder:** chapter 0 alone. This chapter
+> assumes you can read raw PCM and nothing more.
+
+## Diff from chapter 0
+
+- **Added:** the `Transport` protocol (`src/easycat/providers.py`);
+  `LocalTransport` driving the mic + speaker as async streams; the
+  first `async for chunk in stream:` loop.
+- **Removed:** chapter 0's synchronous `sd.rec` / `sd.play`.
+  PortAudio now lives behind `LocalTransport`.
+
 ## Run it
 
 ```bash

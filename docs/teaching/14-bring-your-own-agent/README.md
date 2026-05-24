@@ -12,6 +12,27 @@
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
 
+> **Minimum to skip the ladder:** chapter 6 (the streaming-agent
+> surface — that's the concept the bridge layer abstracts).
+> Chapter 13 is the natural lead-in but not strictly required;
+> read its "one code change per axis" section first if you skip
+> the rest.
+
+## Diff from chapter 13
+
+- **Added:** a hand-rolled `MyWorkflow` class with
+  `on_user_turn(text, *, recorder, cancel_token)` (deep mode);
+  the `auto_adapt_agent()` → `BridgeAdapterShim` flow; the five
+  `SessionAction` types and their executors; the four output
+  processors (`MarkdownStripProcessor`, `PhoneticReplacement-`,
+  `Pause-`, custom); `mcp_servers=[...]` config entry.
+- **Modified:** `EasyConfig(agent=...)` now points at a
+  hand-rolled workflow, not an `agents.Agent(...)` from a
+  framework.
+- **Removed:** dependence on the OpenAI Agents SDK as an agent
+  surface. (It still works — chapter 13 used it — but this
+  chapter shows you don't need any framework at all.)
+
 ## Run
 
 ```bash
