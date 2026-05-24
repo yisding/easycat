@@ -477,9 +477,6 @@ class PydanticAIBridge:
 
     def _graph_iter(self, initial_input: Any, state: Any) -> Any:
         graph_iter = self._graph.iter
-        if _supports_positional_arg(graph_iter):
-            return graph_iter(initial_input, state=state)
-
         kwargs: dict[str, Any] = {"state": state}
         if self._deps is not None and _supports_kwarg(graph_iter, "deps"):
             kwargs["deps"] = self._deps
@@ -487,6 +484,8 @@ class PydanticAIBridge:
             kwargs["inputs"] = initial_input
         elif _supports_kwarg(graph_iter, "input"):
             kwargs["input"] = initial_input
+        elif _supports_positional_arg(graph_iter):
+            return graph_iter(initial_input, state=state)
         else:
             raise BridgeConfigurationError(
                 "PydanticAIBridge Graph mode could not determine how to pass graph input. "

@@ -113,6 +113,47 @@ class _LegacyMCPAgent:
         return _EmptyAgentRun()
 
 
+class _GraphStateForSignature:
+    _easycat_event_handler: Any = None
+
+
+class _NoOpGraphRun:
+    output = "graph-output"
+    history = None
+
+    async def __aenter__(self) -> _NoOpGraphRun:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        pass
+
+    def __aiter__(self) -> _NoOpGraphRun:
+        return self
+
+    async def __anext__(self) -> Any:
+        raise StopAsyncIteration
+
+
+class _AmbiguousKeywordGraph:
+    """Mimic a v2 graph whose `state` parameter is positional-capable."""
+
+    def __init__(self) -> None:
+        self.seen_state: Any = None
+        self.seen_deps: Any = None
+        self.seen_inputs: Any = None
+
+    def iter(
+        self,
+        state: Any = None,
+        deps: Any = None,
+        inputs: Any = None,
+    ) -> _NoOpGraphRun:
+        self.seen_state = state
+        self.seen_deps = deps
+        self.seen_inputs = inputs
+        return _NoOpGraphRun()
+
+
 class FinalResultEvent:
     tool_name = "final"
     tool_call_id = "tc-final"
@@ -250,6 +291,26 @@ async def test_bridge_assigns_raw_mcp_servers_to_legacy_agent_attribute() -> Non
     assert agent.mcp_servers == ["original"]
     assert events[-1].kind == "done"
     assert events[-1].structured_output == "done"
+
+
+def test_graph_iter_prefers_inputs_keyword_when_state_is_positional_capable() -> None:
+    state = _GraphStateForSignature()
+    initial_input = object()
+    graph = _AmbiguousKeywordGraph()
+    deps = object()
+    bridge = PydanticAIBridge(
+        graph=graph,
+        deps=deps,
+        state_factory=lambda: state,
+        initial_node_factory=lambda text, _state: initial_input,
+    )
+
+    graph_run = bridge._graph_iter(initial_input, state)
+
+    assert isinstance(graph_run, _NoOpGraphRun)
+    assert graph.seen_state is state
+    assert graph.seen_deps is deps
+    assert graph.seen_inputs is initial_input
 
 
 def test_bridge_rejects_mcp_servers_and_toolsets_together() -> None:
