@@ -10,8 +10,6 @@ import easycat
 PUBLIC_API_SNAPSHOT = (
     "AgentDelta",
     "AgentFinal",
-    "AgentRunner",
-    "AgentRunnerConfig",
     "AudioChunk",
     "AudioFormat",
     "AudioIn",
@@ -21,8 +19,8 @@ PUBLIC_API_SNAPSHOT = (
     "CallAnswered",
     "CallEnded",
     "CallFailed",
+    "CallIdentity",
     "CancelToken",
-    "EasyCatConfig",
     "EasyCatError",
     "EasyConfig",
     "EchoCanceller",
@@ -37,6 +35,7 @@ PUBLIC_API_SNAPSHOT = (
     "LocalTransportConfig",
     "MarkdownStripProcessor",
     "NoiseReducer",
+    "NoiseReducerConfig",
     "OutboundCallConfig",
     "PCM16_MONO_16K",
     "PCM16_MONO_24K",
@@ -65,6 +64,7 @@ PUBLIC_API_SNAPSHOT = (
     "TurnStarted",
     "TwilioConnectionTransport",
     "TwilioSessionActionConfig",
+    "VADConfig",
     "VADProvider",
     "VADStartSpeaking",
     "VADStopSpeaking",
@@ -76,6 +76,7 @@ PUBLIC_API_SNAPSHOT = (
     "WebTransportServer",
     "WebTransportTransportConfig",
     "attach_runtime_feedback",
+    "auto_adapt_agent",
     "create_session",
     "create_text_session",
     "default_pronunciation_processors",
@@ -88,12 +89,11 @@ PUBLIC_API_SNAPSHOT = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 75
+    assert len(easycat.__all__) <= 80
 
 
 def test_curated_public_api_lazy_imports() -> None:
     from easycat import (
-        EasyCatConfig,
         EasyConfig,
         MarkdownStripProcessor,
         SessionConfig,
@@ -101,7 +101,6 @@ def test_curated_public_api_lazy_imports() -> None:
     )
 
     assert EasyConfig.__name__ == "EasyConfig"
-    assert EasyCatConfig is EasyConfig
     assert SessionConfig.__name__ == "SessionConfig"
     assert MarkdownStripProcessor.__name__ == "MarkdownStripProcessor"
     assert create_session.__name__ == "create_session"
@@ -114,17 +113,22 @@ def test_public_api_symbols_resolve() -> None:
 
 def test_culled_symbols_remain_available_from_modules() -> None:
     from easycat.debug.testing import load_bundle
+    from easycat.integrations.agents import AgentRunner, AgentRunnerConfig
     from easycat.quick import speak, transcribe_file
     from easycat.session import split_at_sentence_boundaries
     from easycat.session.actions import CoreSessionActionExecutor
     from easycat.stt.factory import STTProviderConfig, create_stt_provider
 
+    assert "AgentRunner" not in easycat.__all__
+    assert "AgentRunnerConfig" not in easycat.__all__
     assert "CoreSessionActionExecutor" not in easycat.__all__
     assert "STTProviderConfig" not in easycat.__all__
     assert "load_bundle" not in easycat.__all__
     assert "speak" not in easycat.__all__
     assert "transcribe_file" not in easycat.__all__
 
+    assert AgentRunner.__name__ == "AgentRunner"
+    assert AgentRunnerConfig.__name__ == "AgentRunnerConfig"
     assert CoreSessionActionExecutor.__name__ == "CoreSessionActionExecutor"
     assert STTProviderConfig.__name__ == "STTProviderConfig"
     assert create_stt_provider.__name__ == "create_stt_provider"

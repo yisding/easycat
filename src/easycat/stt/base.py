@@ -6,8 +6,8 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 
+from easycat._audio_utils import pcm_to_wav  # noqa: F401 — re-exported for backward compat
 from easycat.audio_format import AudioChunk
-from easycat.audio_utils import pcm_to_wav  # noqa: F401 — re-exported for backward compat
 from easycat.events import STTEvent
 
 logger = logging.getLogger(__name__)

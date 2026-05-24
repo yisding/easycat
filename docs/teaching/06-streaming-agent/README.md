@@ -140,7 +140,7 @@ Three things bite every voice agent the instant it ships:
 Our `asyncio.Queue` is unbounded. If the agent streams faster
 than TTS+playback drains it, the queue grows without limit —
 fine for short exchanges, a slow leak in a long-running session.
-Production uses `easycat.bounded_queue.BoundedAudioQueue` with a
+Production uses `easycat._bounded_queue.BoundedAudioQueue` with a
 `DropPolicy`:
 
 - `DROP_OLDEST` — shed stale audio first. Good for live

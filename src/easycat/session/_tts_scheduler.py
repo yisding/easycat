@@ -27,7 +27,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from easycat.bounded_queue import BoundedAudioQueue
+from easycat._bounded_queue import BoundedAudioQueue
+from easycat._tts_synthesizer import TTSSynthesizer
 from easycat.cancel import CancelToken
 from easycat.events import EventBus
 from easycat.llm_output_processing import (
@@ -40,7 +41,6 @@ from easycat.session._journal_sink import SessionJournalSink
 from easycat.stages.tts import TTSStage
 from easycat.timeouts import TimeoutConfig, TTSTimeoutError
 from easycat.tts.input import TTSInput, strip_ssml_tags
-from easycat.tts_synthesizer import TTSSynthesizer
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:

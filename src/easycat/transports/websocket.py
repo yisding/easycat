@@ -17,8 +17,8 @@ from typing import ClassVar
 import websockets
 from websockets.asyncio.server import ServerConnection
 
+from easycat._audio_utils import resample_chunk
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
-from easycat.audio_utils import resample_chunk
 from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
 
 logger = logging.getLogger(__name__)

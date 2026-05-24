@@ -7,9 +7,9 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
 from easycat.events import Event
-from easycat.extras import require_module
 from easycat.vad._base import _VADBase
 
 logger = logging.getLogger(__name__)
