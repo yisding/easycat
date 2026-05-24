@@ -992,6 +992,9 @@ openai-agents = [
 pydantic-ai = [
     { name = "pydantic-ai" },
 ]
+pydantic-ai-v2-beta = [
+    { name = "pydantic-ai" },
+]
 quickstart = [
     { name = "numpy" },
     { name = "onnxruntime" },
@@ -1086,7 +1089,8 @@ requires-dist = [
     { name = "openai-agents", marker = "extra == 'all'", specifier = ">=0.6.2" },
     { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.6.2" },
     { name = "openai-agents", marker = "extra == 'quickstart'", specifier = ">=0.6.2" },
-    { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = "==2.0.0b2" },
+    { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=1.0.0,<3.0.0" },
+    { name = "pydantic-ai", marker = "extra == 'pydantic-ai-v2-beta'", specifier = "==2.0.0b2" },
     { name = "pyrnnoise", marker = "extra == 'all'", specifier = ">=0.3.0" },
     { name = "pyrnnoise", marker = "extra == 'quickstart'", specifier = ">=0.3.0" },
     { name = "pyrnnoise", marker = "extra == 'rnnoise'", specifier = ">=0.3.0" },
@@ -1108,7 +1112,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'telephony'", specifier = ">=0.29.0" },
     { name = "websockets", specifier = ">=16.0" },
 ]
-provides-extras = ["openai-agents", "pydantic-ai", "langchain", "langgraph", "llama-agents", "openai", "deepgram", "elevenlabs", "cartesia", "telephony", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "funasr-vad", "smart-turn", "debugger", "webrtc", "webtransport", "quickstart", "all"]
+provides-extras = ["openai-agents", "pydantic-ai", "pydantic-ai-v2-beta", "langchain", "langgraph", "llama-agents", "openai", "deepgram", "elevenlabs", "cartesia", "telephony", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "funasr-vad", "smart-turn", "debugger", "webrtc", "webtransport", "quickstart", "all"]
 
 [package.metadata.requires-dev]
 dev = [

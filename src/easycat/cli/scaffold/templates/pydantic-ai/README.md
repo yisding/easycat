@@ -42,7 +42,8 @@ Ctrl-C to quit.
 - **Swap the model:** change `"openai:gpt-4.1-mini"` to another model string
   PydanticAI supports, then add the matching API key and provider extra if
   that provider is not part of the default PydanticAI install. For example:
-  `uv add "pydantic-ai[groq]==2.0.0b2"`.
+  `uv add "pydantic-ai[groq]<2"` for stable v1, or
+  `uv add "pydantic-ai[groq]==2.0.0b2"` to opt into the v2 beta.
 - **Need multiple agents?** Extend `agent.py` with PydanticAI's graph or
   handoff patterns; this template keeps the first run intentionally small.
 - **Debug a session:** pass `debug="full"` to `EasyConfig(...)`. EasyCat

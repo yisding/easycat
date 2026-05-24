@@ -488,8 +488,10 @@ bridge = PydanticAIBridge(agent=pydantic_agent)
 session = Session(SessionConfig(agent=bridge, ...))
 ```
 
-The `pydantic-ai` extra currently pins PydanticAI v2 beta 2 exactly, because
-upstream recommends exact pins while v2 is a prerelease.
+The `pydantic-ai` extra accepts PydanticAI v1 and v2 so existing stable
+installations keep working while v2 is in prerelease. The
+`pydantic-ai-v2-beta` extra pins `pydantic-ai==2.0.0b2` exactly for local
+verification and apps that want to opt into the prerelease before it is stable.
 
 ### Workflows (recommended for multi-step voice apps)
 
