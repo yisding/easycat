@@ -553,7 +553,9 @@ def _compare_condition(
     current_values = [value for value in current_totals if value is not None]
     baseline_values = [value for value in baseline_totals if value is not None]
     percentile = thresholds.regression_percentile
-    current_observed = getattr(LatencyPercentileStats.from_values(current_values), percentile) or 0.0
+    current_observed = (
+        getattr(LatencyPercentileStats.from_values(current_values), percentile) or 0.0
+    )
     baseline_observed = (
         getattr(LatencyPercentileStats.from_values(baseline_values), percentile) or 0.0
     )
