@@ -102,18 +102,12 @@ eval.
 
 ## The pipeline
 
-```
-               raw mic
-                 │
-                 ▼
-             ┌───────┐      ┌───────┐     ┌─────┐     ┌─────┐
-             │  NR   │ ───► │  AEC  │───► │ VAD │───► │ STT │──► agent
-             └───────┘      └───────┘     └─────┘     └─────┘
-              (fan,          ▲                                       │
-              keyboard,      │  reference = what we                  │
-              baby)          │  asked the speaker to play           TTS
-                             │                                       │
-                             └──────────────── aec.feed_reference ◄──┘
+```mermaid
+flowchart LR
+    Mic[raw mic] --> NR["NR<br/>(fan,<br/>keyboard,<br/>baby)"]
+    NR --> AEC --> VAD --> STT --> Agent[agent]
+    Agent --> TTS
+    TTS -- "aec.feed_reference<br/>(what we asked<br/>the speaker to play)" --> AEC
 ```
 
 - **NR** is *single-input*. It sees only the mic and subtracts a

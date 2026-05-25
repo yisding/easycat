@@ -49,17 +49,17 @@ their mouth.
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    LLM -- "tokens<br/>(stream)" --> Splitter[sentence splitter]
+    Splitter -- "sentences<br/>(asyncio.Queue)" --> Drain[TTS drain]
+    Drain -- audio --> Spkr[Speaker]
 ```
-                  tokens              sentences              audio
-  ┌─────┐  stream   ┌──────────┐  queue   ┌─────────┐   ┌────────┐
-  │ LLM │──────────►│ sentence │─────────►│  TTS    │──►│ Spkr   │
-  └─────┘           │ splitter │          │ drain   │   └────────┘
-                    └──────────┘          └─────────┘
-                         │                     ▲
-                         │  ←── concurrent ──  │
-                         ▼                     │
-                   (split next token) ── (synth next sentence)
-```
+
+The splitter, the drain, and the LLM stream all run **concurrently**:
+while one sentence is being synthesised and played, the splitter is
+already accumulating the next sentence's tokens, and the drain is
+already pulling the sentence after that off the queue.
 
 Two coroutines. The splitter accumulates tokens and calls
 `split_at_sentence_boundaries(buffer)` after every delta. When

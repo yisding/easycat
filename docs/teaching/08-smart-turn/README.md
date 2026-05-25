@@ -45,19 +45,14 @@ signal. Input: the recent audio. Output: `P(end-of-turn)`.
 
 ## Architecture
 
-```
-                 every VADStopSpeaking event
-                           │
-                           ▼
-  ┌──────────────┐  audio-so-far  ┌──────────────┐
-  │  Vocal track │───────────────►│  Smart-turn  │────► P(done)
-  │  (turn_audio)│                │  (ONNX, 8MB) │
-  └──────────────┘                └──────────────┘
-            ▲                            │
-            │                            ▼
-  "speaking" deque of              threshold → commit turn
-  AudioChunks                      (speech_ended fires now,
-                                    not 600 ms later)
+```mermaid
+flowchart LR
+    Chunks[("speaking deque of<br/>AudioChunks")] --> VocalTrack["Vocal track<br/>(turn_audio)"]
+    VAD([VADStopSpeaking<br/>event]) -- triggers --> SmartTurn["Smart-turn<br/>(ONNX, 8 MB)"]
+    VocalTrack -- "audio-so-far" --> SmartTurn
+    SmartTurn -- "P(done)" --> Check{above<br/>threshold?}
+    Check -- yes --> Commit["commit turn<br/>(speech_ended fires now,<br/>not 600 ms later)"]
+    Check -- no --> Pending["pending<br/>(keep accumulating)"]
 ```
 
 ## Run it both ways
@@ -78,18 +73,14 @@ declarative utterances.
 
 `MiniTurnDetector` now has three states:
 
-```
-             VADStart                 VADStart
-   ┌──────┐──────────►┌──────────┐◄─────────────┐
-   │ idle │           │ speaking │              │
-   └──────┘◄──────────┴──────────┘──────────┐   │
-       ▲     speech_ended         VADStop   │   │
-       │     (commit)      (ask smart-turn) │   │
-       │                                    ▼   │
-       │                              ┌─────────────┐
-       └────────── fallback_ms ───────│   pending   │
-                  silence  timeout    │ (not done)  │
-                                      └─────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> speaking: VADStart
+    speaking --> idle: speech_ended (commit)
+    speaking --> pending: VADStop (ask smart-turn)
+    pending --> speaking: VADStart
+    pending --> idle: fallback_ms silence timeout
 ```
 
 Every chunk during a speech or pending segment goes into

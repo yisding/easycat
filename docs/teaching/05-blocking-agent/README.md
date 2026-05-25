@@ -35,12 +35,11 @@ your voice and the bot's.
 
 ## The obvious architecture
 
-```
-  ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐
-  │ Mic │──►│ VAD │──►│ STT │──►│ LLM │──►│ TTS │──►│ Spkr│
-  └─────┘   └─────┘   └─────┘   └─────┘   └─────┘   └─────┘
-                                    ▲
-                                    └── blocks here for 2-4 seconds
+```mermaid
+flowchart LR
+    Mic --> VAD --> STT --> LLM["LLM<br/>(blocks here<br/>for 2-4 sec)"]
+    LLM --> TTS --> Spkr
+    style LLM fill:#ffe6cc,stroke:#d79b00,color:#000
 ```
 
 The `blocking_agent` function on line ~78 of `main.py` is eight

@@ -85,10 +85,10 @@ write `async for chunk in stream:` — hence the choice at this layer.
 
 ## Architecture diagram
 
-```
- ┌─────────┐   receive_audio()    ┌────────┐    send_audio()    ┌─────────┐
- │   Mic   │ ───────────────────► │  echo  │ ─────────────────► │ Speaker │
- └─────────┘   AudioChunks        └────────┘    AudioChunks     └─────────┘
+```mermaid
+flowchart LR
+    Mic([Mic]) -- "receive_audio()<br/>AudioChunks" --> echo([echo])
+    echo -- "send_audio()<br/>AudioChunks" --> Speaker([Speaker])
 ```
 
 ## Pocket note
