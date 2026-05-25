@@ -84,8 +84,8 @@ time ──►
                              VAD: "speech!"
                                   ▼
   ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐ │ ┌──┬──┬──┐
-  │──── pre-roll ring buffer (300 ms) ─────────┤ │ │ live  │
-  └─────────────────────────────────────────────┘ │ └───────┘
+  │──── pre-roll ring buffer (300 ms) ─────────┤ │ │ live   │
+  └────────────────────────────────────────────┘ │ └────────┘
           ▲                                       ▼
      flush these to STT before              then keep
      forwarding live audio                   streaming

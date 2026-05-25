@@ -88,7 +88,7 @@ write `async for chunk in stream:` — hence the choice at this layer.
 ```
  ┌─────────┐   receive_audio()    ┌────────┐    send_audio()    ┌─────────┐
  │   Mic   │ ───────────────────► │  echo  │ ─────────────────► │ Speaker │
- └─────────┘    AudioChunks        └────────┘    AudioChunks     └─────────┘
+ └─────────┘   AudioChunks        └────────┘    AudioChunks     └─────────┘
 ```
 
 ## Pocket note

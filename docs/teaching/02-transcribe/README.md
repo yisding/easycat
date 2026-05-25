@@ -38,7 +38,7 @@ and writes a debug bundle to `docs/teaching/02-transcribe/runs/`.
 ```
  ┌─────┐    send_audio()    ┌────────────┐    events()    ┌──────────┐
  │ Mic │ ──────────────────►│     STT    │ ─────────────► │ Consumer │
- └─────┘   AudioChunks       └────────────┘  STTEvent      └──────────┘
+ └─────┘   AudioChunks      └────────────┘  STTEvent      └──────────┘
                                           (PARTIAL | FINAL)
 ```
 

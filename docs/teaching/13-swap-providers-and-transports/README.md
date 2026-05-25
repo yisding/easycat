@@ -71,7 +71,7 @@ Each run drops a bundle in `runs/ch13-<mix>-<transport>-*.bundle`.
 
 ```
   ┌─────────────────────┐        ┌─────────┐
-  │  EasyConfig(...) │──────► │ Session │ ──► the agent never
+  │  EasyConfig(...)    │──────► │ Session │ ──► the agent never
   │    stt=...          │        │ (same   │     knows which stt,
   │    tts=...          │        │  code   │     tts, or transport
   │    transport=...    │        │  every  │     is wired
