@@ -1,14 +1,19 @@
 # Validation Implementation Tasks
 
-Status: active backlog.
+Status: implementation substantially complete; small followups remain. See
+[Post-Implementation Audit](#post-implementation-audit-2026-05-26) below.
 
 This is the execution backlog for [reference.md](reference.md). It is ordered
 to make local validation useful before adding live provider, latency, release,
 and observability gates.
 
-Current-state caveat: as of static inspection on 2026-05-21, there is no
-`easycat validate` command, no `scripts/validate.py`, and no validation JSON
-artifact format in the repo. Tasks below create those surfaces.
+Current-state caveat: the static inspection note from 2026-05-21 is stale.
+As of the 2026-05-26 audit, `easycat validate` (quick/socket/live/report)
+ships, `scripts/validate.py` is a shim over `easycat.validation.runner`, and
+the validation JSON artifact format lives in `easycat.validation.report`. The
+per-milestone statuses below have been updated to reflect the audit; see
+[Post-Implementation Audit](#post-implementation-audit-2026-05-26) for the
+remaining followup list.
 
 ## Working Rules
 
@@ -39,6 +44,44 @@ artifact format in the repo. Tasks below create those surfaces.
 | V4 | Live canaries and provider reports | one to two PRs |
 | V5 | Stress, benchmarks, and release gates | two PRs |
 | V6 | Optional observability API | one PR after validation names settle |
+
+## Post-Implementation Audit (2026-05-26)
+
+A repository audit on 2026-05-26 found that V1 through V6 are substantively
+implemented; the per-milestone statuses below have been updated accordingly.
+The audit verified:
+
+- Module and file presence for every milestone's listed files (CLI commands,
+  validation modules, contract tests, workflows, observability stubs).
+- Test execution: 164 tests pass across `tests/validation/`,
+  `tests/cli/test_validate.py`, `tests/cli/test_latency_validation.py`,
+  `tests/contracts/`, `tests/test_validation_markers.py`, and
+  `tests/test_observability.py`.
+- Workflow content for `.github/workflows/ci.yml`,
+  `.github/workflows/nightly-validation.yml`, and
+  `.github/workflows/release-validation.yml`.
+
+The audit did not exhaustively trace every per-task acceptance bullet against
+its implementation, so individual gaps may still exist within shipped
+milestones. Any such gaps should be filed as new tasks rather than reopening
+a milestone wholesale.
+
+### Outstanding Work
+
+- **N1 — Replace nightly latency placeholder.** `nightly-validation.yml`
+  still has a `latency-placeholder` job whose body reads "Latency validation
+  is a placeholder until V2 lands." V2 has landed; replace with a real
+  `easycat validate latency` invocation that uploads artifacts the same way
+  the other nightly jobs do.
+- **N2 — Migrate stress test to public sampler.** `tests/e2e/test_plan_2_sustained_stress.py`
+  defines a private `_EventLoopLagSampler` inline. V2.4 shipped a public
+  `EventLoopLagSampler` in `easycat.validation.reliability`; the test should
+  consume the public surface so we have a real downstream user of the
+  reliability API.
+- **N3 — Deep acceptance-bullet audit.** For each shipped milestone,
+  spot-check the listed acceptance bullets against actual tests and code to
+  surface any gaps the file-presence audit missed. File findings as
+  additional N-tasks rather than reopening a milestone.
 
 ## V0: Validation Foundation
 
@@ -259,7 +302,7 @@ Acceptance:
 
 ### V1.1 Move Validation Into CLI
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -318,7 +361,7 @@ uv run pytest tests/cli/test_validate.py -q
 
 ### V1.2 Update CI Required Jobs
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -372,7 +415,7 @@ uv run pytest -q --junitxml=.easycat/validation/runs/manual-socket/junit.xml -m 
 
 ### V1.3 Add Manual And Nightly Workflow Skeletons
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -408,7 +451,7 @@ Acceptance:
 
 ### V2.1 Mark And Factor Latency Tests
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Current state:
 
@@ -441,7 +484,7 @@ Acceptance:
 
 ### V2.2 Add Canonical Latency Sample JSON
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -483,7 +526,7 @@ uv run easycat validate latency --smoke --report /tmp/latency.json
 
 ### V2.3 Add Baseline Comparison Helper
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -511,7 +554,7 @@ Acceptance:
 
 ### V2.4 Add Reliability Sampling To Latency/Stress Runs
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -542,7 +585,7 @@ Acceptance:
 
 ### V3.1 Create Contract Test Directory
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Current state:
 
@@ -574,7 +617,7 @@ Acceptance:
 
 ### V3.2 Preserve Existing Provider Matrix Scope
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Files:
 
@@ -598,7 +641,7 @@ Acceptance:
 
 ### V3.3 Add STT/TTS/VAD/Transport Contract Tests
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -630,7 +673,7 @@ Acceptance:
 
 ### V3.4 Add Agent Bridge Contract Tests
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -662,7 +705,7 @@ Acceptance:
 
 ### V3.5 Add HTTP/SSE Cassette Proof Of Concept
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -698,7 +741,7 @@ Acceptance:
 
 ### V3.6 Add WebSocket Cassette Proof Of Concept
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -726,7 +769,7 @@ Acceptance:
 
 ### V3.7 Add Schema Drift Fingerprints
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -760,7 +803,7 @@ Acceptance:
 
 ### V4.1 Add Provider Capability Report Model
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -792,7 +835,7 @@ Acceptance:
 
 ### V4.2 Implement `easycat validate live`
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -828,7 +871,7 @@ Acceptance:
 
 ### V4.3 Harden Live Canary CI
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -858,7 +901,7 @@ Acceptance:
 
 ### V5.1 Wrap Journal Benchmark In Validation Artifacts
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Current state:
 
@@ -883,7 +926,7 @@ Acceptance:
 
 ### V5.2 Add Stress Saturation Signals
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Current state:
 
@@ -916,7 +959,7 @@ Acceptance:
 
 ### V5.3 Add Release Validation Workflow
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
@@ -953,7 +996,7 @@ Acceptance:
 
 ### V6.1 Add No-Op-Safe OTel Spans
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Files:
 
@@ -978,7 +1021,7 @@ Acceptance:
 
 ### V6.2 Add Low-Cardinality Metrics
 
-Status: pending
+Status: completed (verified by 2026-05-26 audit)
 
 Dependencies:
 
