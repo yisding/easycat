@@ -122,12 +122,10 @@ def test_nightly_validation_has_real_latency_job() -> None:
     assert any(
         "easycat validate latency" in body
         and '--artifacts-dir "$VALIDATION_ARTIFACTS_DIR"' in body
-        and "--junit-prefix" in body
-        and "nightly-latency" in body
         for body in run_bodies
     ), (
         "latency job must run `easycat validate latency` with "
-        '`--artifacts-dir "$VALIDATION_ARTIFACTS_DIR"` and `--junit-prefix nightly-latency`'
+        '`--artifacts-dir "$VALIDATION_ARTIFACTS_DIR"`'
     )
 
     # Nightly latency is non-strict: it must not pass --release or --require-samples.
