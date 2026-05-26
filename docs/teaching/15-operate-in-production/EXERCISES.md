@@ -32,19 +32,24 @@ then again with it set. Which health checks change?
 
 1. The doctor checks five things: Python version, required
    extras (`sounddevice`, `onnxruntime`), optional extras (NR,
-   AEC), API keys (`OPENAI_API_KEY` etc.), and provider
-   reachability (an actual HTTPS request to each provider's
-   health endpoint).
-2. With `OPENAI_API_KEY` unset: the key check shows ❌ and the
-   reachability check is skipped for OpenAI. Other checks
-   unchanged.
-3. With `OPENAI_API_KEY` set but *invalid*: the key check shows
-   ✓ (it's present) but reachability shows ❌ (auth fails). That
-   distinction matters when debugging — "key missing" vs "key
-   wrong" are different failure modes.
+   AEC), API-key *presence* (env var set or not), and provider
+   reachability — an **unauthenticated `HEAD`** probe to each
+   provider's base URL (`src/easycat/cli/diagnose/doctor.py`).
+   Any HTTP response (even 4xx) counts as reachable; only
+   timeouts and connect errors fail.
+2. With `OPENAI_API_KEY` unset: the key-presence check shows ❌
+   and the reachability probe is **skipped** for OpenAI (the
+   doctor only probes providers whose key is present). Other
+   checks unchanged.
+3. With `OPENAI_API_KEY` set but *invalid*: key presence shows ✓
+   and reachability **also** shows ✓ — because the HEAD probe
+   doesn't send the key. The doctor can tell you "key missing"
+   but **cannot** tell you "key wrong"; you only learn that by
+   making a real authenticated call (i.e. running an example).
 4. `easycat doctor` is the first command to run on a new machine
    or in a CI container. It's faster than debugging by running
-   the actual app.
+   the actual app, but it's a *liveness* check, not an *auth*
+   check.
 
 ## 3. Translate a ch-13 bundle into a ch-12 eval input
 

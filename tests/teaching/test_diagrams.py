@@ -28,7 +28,10 @@ TL_CHARS = "┌├"
 TR_CHARS = "┐┤"
 BL_CHARS = "└├┴"
 BR_CHARS = "┘┤┴"
-H_LINE = "─"
+# Characters with a horizontal-line component. Crosses (┼) and T-junctions
+# (┬, ┴) are walked through transparently when scanning a top or bottom
+# edge — they are interior dividers, not edge endpoints.
+H_LINE_CHARS = "─┬┴┼"
 
 
 def _find_box_bugs(block: str) -> list[str]:
@@ -42,7 +45,7 @@ def _find_box_bugs(block: str) -> list[str]:
                 continue
             # Find candidate top-right on same row, separated only by ─.
             c2 = c + 1
-            while c2 < len(line) and line[c2] == H_LINE:
+            while c2 < len(line) and line[c2] in H_LINE_CHARS:
                 c2 += 1
             if c2 >= len(line) or line[c2] not in TR_CHARS:
                 continue
@@ -92,14 +95,17 @@ def _check_internal_consistency(block: str) -> list[str]:
     """
     lines = block.split("\n")
     bugs: list[str] = []
-    sides = set("│├┤┌┐└┘┴┬")
+    # Characters that can legitimately appear on a box's left or right wall:
+    # vertical bar, side-T junctions, any corner, ┴/┬ for boxes with attached
+    # connectors, and ┼ for boxes containing internal column dividers.
+    sides = set("│├┤┌┐└┘┴┬┼")
 
     for r, line in enumerate(lines):
         for c, ch in enumerate(line):
             if ch not in TL_CHARS:
                 continue
             c2 = c + 1
-            while c2 < len(line) and line[c2] == H_LINE:
+            while c2 < len(line) and line[c2] in H_LINE_CHARS:
                 c2 += 1
             if c2 >= len(line) or line[c2] not in TR_CHARS:
                 continue
@@ -114,8 +120,29 @@ def _check_internal_consistency(block: str) -> list[str]:
                     break
             if r2 is None:
                 continue
-            # Check intermediate rows.
-            for rm in range(r + 1, r2):
+            # Sanity-check: a real box has │ (or another side char) at
+            # *both* walls on *every* interior row. Fan-out/fan-in shapes
+            # (e.g. ch 14's bridge layer ┌─┼─┐ … └─┴─┬─┘) use these chars
+            # as frame chars but their interior is arrows + free text, not
+            # box content. Skip — they aren't column-validatable as boxes.
+            interior_rows = list(range(r + 1, r2))
+            if not interior_rows:
+                continue
+            walls_clean = True
+            for rm in interior_rows:
+                ln = lines[rm]
+                left = ln[c] if c < len(ln) else " "
+                right = ln[c2] if c2 < len(ln) else " "
+                if left not in sides or right not in sides:
+                    walls_clean = False
+                    break
+            if not walls_clean:
+                continue
+            # All interior rows have side chars at both walls; this is a
+            # real box. Now run the precise checks (which are mostly
+            # redundant after the gate above — but still catch the case
+            # where one wall is a side char and the other isn't).
+            for rm in interior_rows:
                 ln = lines[rm]
                 left = ln[c] if c < len(ln) else " "
                 right = ln[c2] if c2 < len(ln) else " "

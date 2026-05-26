@@ -50,6 +50,10 @@ markdown_extensions:
       pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.superfences:
+      # The `!!python/name:` tag below requires MkDocs's default YAML
+      # loader (UnsafeLoader). This is intentional — pymdown-extensions
+      # ships its Mermaid fence formatter as a callable that must be
+      # resolved at load time. Don't switch this file to SafeLoader.
       custom_fences:
         - name: mermaid
           class: mermaid

@@ -21,8 +21,9 @@
 
 - **Added:** `SessionManager` and its `add` / `remove` /
   `stop_all` / `connection(...)` surface; the four lifecycle
-  methods (`start`, `stop`, `shutdown`, `destroy`, `close`)
-  named and bounded; the debugger entry points (`serve_bundle`,
+  methods (`stop`, `shutdown`, `close`, `destroy`) named and
+  bounded — `start` is unchanged from earlier chapters; the
+  debugger entry points (`serve_bundle`,
   `serve_session`); the `easycat` CLI (`init`, `doctor`,
   `explain`); `translate.py` — the ch 13 (production-shape)
   → ch 12 (teaching-shape) bundle translator.

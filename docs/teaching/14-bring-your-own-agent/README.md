@@ -24,8 +24,8 @@
   `on_user_turn(text, *, recorder, cancel_token)` (deep mode);
   the `auto_adapt_agent()` → `BridgeAdapterShim` flow; the five
   `SessionAction` types and their executors; the four output
-  processors (`MarkdownStripProcessor`, `PhoneticReplacement-`,
-  `Pause-`, custom); `mcp_servers=[...]` config entry.
+  processors (`MarkdownStripProcessor`, `PhoneticReplacementProcessor`,
+  `PauseProcessor`, custom); `mcp_servers=[...]` config entry.
 - **Modified:** `EasyConfig(agent=...)` now points at a
   hand-rolled workflow, not an `agents.Agent(...)` from a
   framework.

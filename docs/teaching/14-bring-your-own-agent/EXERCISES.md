@@ -57,12 +57,15 @@ lifecycle?
    actions still work, but a `CustomAction` with name="end_call"
    would claim the wrong executor. Use disjoint `name` namespaces.
 
-## 3. Hear the pronunciation pipeline at work
+## 3. Watch the pronunciation pipeline at work
 
 **Task.** Register the `default_pronunciation_processors()` stack
-and say *"Call me at 555-867-5309."* Listen for the pause. Now
-drop the `PauseProcessor` and say it again. How does the stress
-pattern change?
+and say *"Call me at 555-867-5309."* Open the bundle afterwards and
+look at: (a) the `output_processor.*` records (which processor ran,
+which strings changed), and (b) any `ssml_downgraded: true` flag the
+TTS scheduler emitted because no bundled provider supports SSML
+today. The pronunciation pipeline is *wired*; the audible part of
+the chain ends one stage short of the speaker for now.
 
 **Hints**
 
@@ -70,15 +73,24 @@ pattern change?
    `PhoneticReplacementProcessor` (fixed-string swaps) and
    `PauseProcessor` (regex-matched `<break>` insertion). The
    default pause pattern targets phone-number-shaped digit groups.
-2. With pauses: the TTS reads "five five five" *pause* "eight six
-   seven" *pause* "five three oh nine" — natural cadence.
-3. Without pauses: the TTS reads "five five five eight six seven
-   five three oh nine" as one big number. Less intelligible over
-   the phone.
-4. The PauseProcessor wraps matched units in SSML `<break
-   time="500ms"/>` tags — only works if your TTS supports SSML.
-   OpenAI's TTS does; some don't. Check
-   `tts.input.format="ssml"` in `src/easycat/tts/input.py`.
+2. **Honesty check.** None of the bundled TTS providers currently
+   advertise `supports_ssml = True` (grep `src/easycat/tts/*.py`).
+   That means the session's `_tts_scheduler` calls `strip_ssml_tags`
+   on any SSML payload before sending it to the provider, and
+   journals an `ssml_downgraded: true` record. With today's
+   providers you will hear the same flat reading whether the
+   `PauseProcessor` is registered or not. The exercise is really
+   "watch the journal record the downgrade."
+3. To actually hear pauses, you'd need to plug in a TTS provider
+   that returns `True` from `supports_ssml` and accepts SSML break
+   tags. None ship with EasyCat as of this writing — a custom
+   provider via `create_tts_provider` is the path. File this as a
+   capability you'd add when a customer needs it.
+4. The PauseProcessor itself is wired correctly — it inserts
+   `<break time="...ms"/>` between matched units (see
+   `src/easycat/llm_output_processing.py`). The gap is only in
+   provider coverage. The journal is the source of truth: grep
+   `ssml_downgraded` to see every downgrade.
 
 ## Self-check
 
