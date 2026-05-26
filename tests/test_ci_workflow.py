@@ -64,7 +64,7 @@ def test_nightly_validation_workflow_skeleton_exists() -> None:
     assert "validate socket" in text
     assert "validate stress" in text
     assert "flaky-quarantine:" in text
-    assert "latency-placeholder:" in text
+    assert "latency:" in text
     assert "live-canaries:" in text
     assert "actions/upload-artifact@v4" in text
     assert "if: always()" in text
@@ -104,6 +104,82 @@ def test_validation_workflows_parse_as_yaml() -> None:
     yaml.safe_load(WORKFLOW.read_text())
     yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
     yaml.safe_load(RELEASE_WORKFLOW.read_text())
+
+
+def test_nightly_validation_has_real_latency_job() -> None:
+    data = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
+    jobs = data["jobs"]
+
+    assert "latency" in jobs, "expected a real `latency` job in nightly-validation.yml"
+    assert "latency-placeholder" not in jobs, (
+        "`latency-placeholder` job should be removed once the real `latency` job exists"
+    )
+
+    latency = jobs["latency"]
+    steps = latency.get("steps", [])
+    run_bodies = [step.get("run", "") for step in steps if isinstance(step, dict)]
+
+    assert any(
+        "easycat validate latency" in body
+        and '--artifacts-dir "$VALIDATION_ARTIFACTS_DIR"' in body
+        and "--junit-prefix" in body
+        and "nightly-latency" in body
+        for body in run_bodies
+    ), (
+        "latency job must run `easycat validate latency` with "
+        '`--artifacts-dir "$VALIDATION_ARTIFACTS_DIR"` and `--junit-prefix nightly-latency`'
+    )
+
+    # Nightly latency is non-strict: it must not pass --release or --require-samples.
+    for body in run_bodies:
+        if "easycat validate latency" in body:
+            assert "--release" not in body, "nightly latency must not use --release"
+            assert "--require-samples" not in body, (
+                "nightly latency must not use --require-samples (non-strict)"
+            )
+
+    env = latency.get("env", {})
+    assert "VALIDATION_ARTIFACTS_DIR" in env, (
+        "latency job must define VALIDATION_ARTIFACTS_DIR env like other nightly jobs"
+    )
+    expected_env = jobs["quick"]["env"]["VALIDATION_ARTIFACTS_DIR"]
+    assert env["VALIDATION_ARTIFACTS_DIR"] == expected_env, (
+        "VALIDATION_ARTIFACTS_DIR must mirror the shape used by quick/socket/stress jobs"
+    )
+
+    upload_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("uses", "").startswith("actions/upload-artifact@")
+    ]
+    assert upload_steps, "latency job must upload artifacts like other nightly jobs"
+    upload = upload_steps[0]
+    assert upload.get("if") == "always()", "upload step must run with if: always()"
+    assert upload.get("uses") == "actions/upload-artifact@v4"
+    with_block = upload.get("with", {})
+    assert with_block.get("path") == "${{ env.VALIDATION_ARTIFACTS_DIR }}"
+    assert "retention-days" in with_block
+
+
+def test_nightly_validation_has_no_placeholder_jobs() -> None:
+    data = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
+    jobs = data["jobs"]
+
+    offenders: list[tuple[str, str]] = []
+    for job_name, job in jobs.items():
+        for step in job.get("steps", []) or []:
+            if not isinstance(step, dict):
+                continue
+            run_body = step.get("run", "")
+            if not isinstance(run_body, str):
+                continue
+            lowered = run_body.lower()
+            if "placeholder" in lowered or "until v2 lands" in lowered:
+                offenders.append((job_name, run_body))
+
+    assert not offenders, (
+        f"nightly-validation.yml still contains placeholder run bodies: {offenders}"
+    )
 
 
 def test_live_canary_workflows_are_guarded_and_redacted() -> None:
