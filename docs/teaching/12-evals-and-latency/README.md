@@ -11,6 +11,23 @@
 - `uv sync --group dev`. The LLM-judge script additionally
   wants `OPENAI_API_KEY`.
 
+> **Minimum to skip the ladder:** chapter 11 (journal queries).
+> The metrics work on any bundle that follows the teaching shape
+> — you don't have to have built the pipeline.
+
+## Diff from chapter 11
+
+- **Added:** `latency_budget.py` (per-bundle latency vs budget),
+  `evals.py` (aggregate P50/P95, WER, barge-in F1),
+  `llm_judge.py` (LLM-as-judge triage); `generate_bundles.py`
+  builds the eval set; `ground_truth.csv` ties each bundle to its
+  reference transcript and labels; `bundles/golden/` (added by
+  this chapter's enhancement) — three bundles with controlled,
+  reproducible WER values (5%, ~10%, ~25%) so the WER pipeline
+  can be exercised without recording your own speech.
+- **Removed:** still no live pipeline. This chapter is pure
+  measurement.
+
 ## The five pre-recorded bundles
 
 ```bash
@@ -35,6 +52,42 @@ and whether the interruption (if any) was real.
 > `load_bundle`. Bundles are not signed or tamper-evident, so only
 > feed them bundles you generated or trust. See ch 11's README for
 > the full note.
+
+## The golden WER fixtures (`bundles/golden/`)
+
+The five fixtures above are useful for **latency** and **barge-in
+F1** but they all happen to have STT hypotheses identical to their
+reference transcripts — so the WER pipeline reports 0.0% across
+the board. That tells you the pipeline runs without errors; it
+does not tell you it produces the right numbers.
+
+The golden set adds three bundles with hand-tuned, reproducible
+WER values:
+
+| Bundle                          | Edits         | Ref words | WER  |
+|---------------------------------|---------------|----------:|-----:|
+| `golden_01_wer_5pct.bundle`     | 1 substitute  |        20 | 5.0% |
+| `golden_02_wer_10pct.bundle`    | 1 substitute  |        10 | 10.0%|
+| `golden_03_wer_25pct.bundle`    | 1 sub + 1 del |         8 | 25.0%|
+
+Aggregate (across the three): **10.5%**.
+
+Run `evals.py` against the golden directory:
+
+```bash
+uv run python docs/teaching/12-evals-and-latency/evals.py \
+    docs/teaching/12-evals-and-latency/bundles/golden \
+    docs/teaching/12-evals-and-latency/bundles/golden/ground_truth.csv
+```
+
+You should see exactly those four numbers (5.0%, 10.0%, 25.0%,
+aggregate 10.5%). If you don't, the WER implementation has
+drifted — fix it before trusting the numbers on real recordings.
+
+The same goldens are also the seed for a regression test
+(exercise 3): a pytest case that asserts `wer == 5.0%` on
+`golden_01_*` is your tripwire if anyone modifies the edit-distance
+code by accident.
 
 ## 1 — Latency budget, per bundle
 

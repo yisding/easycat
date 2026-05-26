@@ -9,6 +9,21 @@
   diff against them.
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 
+> **Minimum to skip the ladder:** chapter 5 — you need to have
+> felt the blocking-agent gap in your ears for this chapter to
+> land.
+
+## Diff from chapter 5
+
+- **Added:** a sentence-splitter coroutine + drain coroutine
+  connected by an `asyncio.Queue`; `stream=True` on the LLM call;
+  `easycat.strip_markdown.strip_markdown` on every sentence; the
+  `split_at_sentence_boundaries` helper from `easycat.session`.
+- **Modified:** `blocking_agent` becomes `stream_sentences_to_tts`
+  — the LLM stream and TTS synth now overlap.
+- **Sidebar adds:** SSML / pronunciation, backpressure, and a
+  reprise of "partials can flap; act on FINAL only."
+
 ## Run it
 
 ```bash
@@ -34,17 +49,17 @@ their mouth.
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    LLM -- "tokens<br/>(stream)" --> Splitter[sentence splitter]
+    Splitter -- "sentences<br/>(asyncio.Queue)" --> Drain[TTS drain]
+    Drain -- audio --> Spkr[Speaker]
 ```
-                  tokens              sentences              audio
-  ┌─────┐  stream   ┌──────────┐  queue   ┌─────────┐   ┌────────┐
-  │ LLM │──────────►│ sentence │─────────►│  TTS    │──►│ Spkr   │
-  └─────┘           │ splitter │          │ drain   │   └────────┘
-                    └──────────┘          └─────────┘
-                         │                     ▲
-                         │  ←── concurrent ──  │
-                         ▼                     │
-                   (split next token) ── (synth next sentence)
-```
+
+The splitter, the drain, and the LLM stream all run **concurrently**:
+while one sentence is being synthesised and played, the splitter is
+already accumulating the next sentence's tokens, and the drain is
+already pulling the sentence after that off the queue.
 
 Two coroutines. The splitter accumulates tokens and calls
 `split_at_sentence_boundaries(buffer)` after every delta. When
@@ -115,10 +130,15 @@ Three things bite every voice agent the instant it ships:
    Production uses `easycat.llm_output_processing` with
    `PhoneticReplacementProcessor` for fixed corrections.
 3. **SSML.** `TTSInput(text=..., format="ssml")` accepts
-   `<break time="500ms"/>` and `<phoneme>` tags when the
-   provider supports SSML. Useful for phone numbers ("1-800-..."),
-   acronyms, and deliberate pauses. Use sparingly — prosody is
-   brittle across vendors.
+   `<break time="500ms"/>` and `<phoneme>` tags **when the
+   provider advertises `supports_ssml = True`**. *Heads up:* none
+   of the providers bundled with EasyCat today (OpenAI,
+   ElevenLabs, Deepgram, Cartesia) return `True` from that property
+   — the `_tts_scheduler` will downgrade SSML to plain text and
+   journal `ssml_downgraded: true`. To actually pronounce
+   `<break>` you need a custom provider that returns `True`.
+   Chapter 14's `PauseProcessor` demonstrates the insertion side;
+   the playback side is currently provider-gated.
 
 ## Sidebar — backpressure
 
