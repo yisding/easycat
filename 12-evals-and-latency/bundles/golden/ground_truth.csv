@@ -1,0 +1,4 @@
+bundle,reference_transcript,expected_wer_pct,had_real_barge_in,had_tool_call,note
+golden_01_wer_5pct.bundle,today seems like a really good day to go for a walk in the park with my dog and friends,5.0,0,0,"1 substitution, 20-word reference"
+golden_02_wer_10pct.bundle,please set a quick timer for ten minutes starting now,10.0,0,0,"1 substitution, 10-word reference"
+golden_03_wer_25pct.bundle,the meeting starts at three in the afternoon,25.0,0,0,"1 substitution + 1 deletion, 8-word reference"
