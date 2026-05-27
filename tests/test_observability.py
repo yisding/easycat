@@ -535,9 +535,7 @@ async def test_transport_receive_span_and_audio_counters_emit(
     # Simulate the wrap directly: the router code is too entangled with
     # transport/turn-manager state to drive end-to-end here.  We instead
     # exercise the exact emission pattern the router uses.
-    with observability.span(
-        "easycat.transport.receive", {"easycat.surface": "stt"}
-    ):
+    with observability.span("easycat.transport.receive", {"easycat.surface": "stt"}):
         observability.increment_counter(
             "easycat.audio.bytes.total",
             value=len(chunk.data),
@@ -549,12 +547,8 @@ async def test_transport_receive_span_and_audio_counters_emit(
         )
 
     assert ("easycat.transport.receive", {"easycat.surface": "stt"}) in tracer.started
-    assert meter.counters["easycat.audio.bytes.total"].adds == [
-        (4, {"easycat.surface": "stt"})
-    ]
-    assert meter.counters["easycat.audio.frames.total"].adds == [
-        (1, {"easycat.surface": "stt"})
-    ]
+    assert meter.counters["easycat.audio.bytes.total"].adds == [(4, {"easycat.surface": "stt"})]
+    assert meter.counters["easycat.audio.frames.total"].adds == [(1, {"easycat.surface": "stt"})]
 
 
 @pytest.mark.asyncio
