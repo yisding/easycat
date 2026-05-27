@@ -7,8 +7,8 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from easycat._bounded_queue import BoundedAudioQueue
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.bounded_queue import BoundedAudioQueue
 from easycat.cancel import CancelToken
 from easycat.events import EventBus, TTSAudio
 from easycat.llm_output_processing import LLMOutputProcessor

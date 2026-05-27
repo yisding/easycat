@@ -4,6 +4,13 @@ import struct
 
 import pytest
 
+from easycat._audio_utils import (
+    chunk_frames,
+    resample,
+    resample_chunk,
+    to_mono,
+    to_mono_chunk,
+)
 from easycat.audio_format import (
     PCM16_MONO_8K,
     PCM16_MONO_16K,
@@ -11,13 +18,6 @@ from easycat.audio_format import (
     PCM16_MONO_48K,
     AudioChunk,
     AudioFormat,
-)
-from easycat.audio_utils import (
-    chunk_frames,
-    resample,
-    resample_chunk,
-    to_mono,
-    to_mono_chunk,
 )
 
 # ── Resampling tests ──────────────────────────────────────────────

@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
-from easycat import observability
+from easycat import _observability as observability
 from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents._recorder import JournalAgentRecorder

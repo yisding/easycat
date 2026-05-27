@@ -1003,16 +1003,18 @@ class TestWebTransportServerWiring:
         )
         server._started = True  # noqa: SLF001 — fake "started"
 
-        async def _stop_from_handler() -> None:
+        # Run ``stop()`` from within a separate task so that
+        # ``asyncio.current_task()`` inside ``stop()`` reliably matches
+        # the handler-task registration on every Python version.
+        # (3.11's ``asyncio.wait_for`` wraps the inner coro in a new
+        # task, which would otherwise mask the regression we're guarding.)
+        async def handler_calls_stop() -> None:
+            handler_task = asyncio.current_task()
+            assert handler_task is not None
+            server._handler_tasks.add(handler_task)  # noqa: SLF001
             await server.stop()
 
-        handler_task = asyncio.create_task(_stop_from_handler())
-        server._handler_tasks.add(handler_task)  # noqa: SLF001
-        try:
-            # Should return promptly without awaiting itself.
-            await asyncio.wait_for(handler_task, timeout=1)
-        finally:
-            server._handler_tasks.discard(handler_task)  # noqa: SLF001
+        await asyncio.wait_for(asyncio.create_task(handler_calls_stop()), timeout=1)
 
     @pytest.mark.asyncio
     async def test_max_concurrent_sessions_force_closes_overflow(self) -> None:

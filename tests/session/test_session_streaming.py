@@ -40,13 +40,6 @@ from easycat.integrations.agents.base import (
 )
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._session import Session
-from easycat.session._text import (
-    _cleanup_estimation_text,
-    _text_for_estimation_timeline,
-    _text_for_spoken_estimation,
-    has_unclosed_markdown_delimiters,
-    split_at_sentence_boundaries,
-)
 from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig
 from easycat.session.interruption import (
@@ -55,6 +48,13 @@ from easycat.session.interruption import (
     _audio_bytes_likely_heard,
     _audio_bytes_likely_heard_hybrid,
     _estimate_text_spoken,
+)
+from easycat.session.text import (
+    _cleanup_estimation_text,
+    _text_for_estimation_timeline,
+    _text_for_spoken_estimation,
+    has_unclosed_markdown_delimiters,
+    split_at_sentence_boundaries,
 )
 from easycat.timeouts import AgentTimeoutError, TimeoutConfig, TTSTimeoutError
 from easycat.tts.input import TTSInput

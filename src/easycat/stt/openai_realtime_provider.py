@@ -27,9 +27,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import websockets
 
+from easycat._audio_utils import resample_chunk
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk
-from easycat.audio_utils import resample_chunk
 from easycat.events import STTEvent, STTEventType
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase

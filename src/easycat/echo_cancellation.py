@@ -16,8 +16,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, cast
 
+from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
-from easycat.extras import require_module
 
 logger = logging.getLogger(__name__)
 

@@ -83,7 +83,7 @@ async def decode_and_asr(pcm_bytes: bytes, *, sample_rate: int) -> str:
     if not api_key:
         raise RuntimeError("decode_and_asr requires OPENAI_API_KEY")
 
-    from easycat.audio_utils import pcm_to_wav
+    from easycat._audio_utils import pcm_to_wav
 
     fmt = AudioFormat(sample_rate=sample_rate, channels=1, sample_width=2)
     wav_bytes = pcm_to_wav(pcm_bytes, fmt)
