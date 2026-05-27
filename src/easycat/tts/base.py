@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
+from easycat._audio_utils import resample, to_mono
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
-from easycat.audio_utils import resample, to_mono
 from easycat.events import TTSEvent, TTSEventType
 from easycat.tts.input import TTSInput
 

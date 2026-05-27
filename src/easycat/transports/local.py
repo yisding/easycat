@@ -14,9 +14,9 @@ import struct
 from dataclasses import dataclass, field
 from typing import ClassVar
 
+from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
-from easycat.extras import require_module
 from easycat.transports._base import _AudioQueueMixin
 
 logger = logging.getLogger(__name__)

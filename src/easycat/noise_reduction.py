@@ -14,9 +14,9 @@ import struct
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, cast
 
+from easycat._audio_utils import resample_chunk
+from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_48K, AudioChunk
-from easycat.audio_utils import resample_chunk
-from easycat.extras import require_module
 
 logger = logging.getLogger(__name__)
 

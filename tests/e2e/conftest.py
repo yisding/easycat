@@ -25,7 +25,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from easycat.audio_utils import resample
+from easycat._audio_utils import resample
 
 # ---------------------------------------------------------------------------
 # Skip helpers

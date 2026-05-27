@@ -1,0 +1,11 @@
+# Versions pinned because pymdown-extensions 10.12 + Pygments 2.20
+# crash mkdocs build with `AttributeError: 'NoneType' object has no
+# attribute 'replace'` (pygments html_formatter receives filename=None).
+# Fixed in pymdown-extensions 10.14+, but holding Pygments at 2.18 is
+# the safer pin until we're certain newer Pygments doesn't reintroduce.
+# Bump deliberately, not blindly — re-run `mkdocs build --strict` after
+# any change here.
+mkdocs==1.6.1
+mkdocs-material==9.5.49
+pymdown-extensions==10.14.3
+pygments==2.18.0

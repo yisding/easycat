@@ -131,7 +131,7 @@ async def test_sample_rate_mismatch_resamples(
 ) -> None:
     """Client announces 44.1 kHz; pipeline at 16 kHz must accept via
     transport-side resampling."""
-    from easycat.audio_utils import resample
+    from easycat._audio_utils import resample
     from tests.e2e._clients import WSVoiceClient
 
     handle, _ = await _make_scripted_server(monkeypatch, ws_server_factory, transcripts=["hello"])

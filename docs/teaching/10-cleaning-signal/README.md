@@ -14,9 +14,49 @@
 - For real AEC: `uv pip install -e '.[aec]'` (LiveKit APM).
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 
+> **Minimum to skip the ladder:** chapter 4 (where VAD sits).
+> NR / AEC are orthogonal to the agent layer — they belong
+> upstream of VAD and don't depend on chapters 5-9. The bonus
+> `wrong_order.py` here makes that "where it belongs" tangible.
+
 Both factories **silently fall back to passthrough** when their
 deps are missing. The script prints and journals the live backend
 so you know which one you're actually hearing.
+
+## Diff from chapter 9
+
+- **Added:** `create_noise_reducer()` + `create_echo_canceller()`
+  factories; a `clean_audio_pipeline` stage that runs NR → AEC
+  before VAD; an `aec.feed_reference(event.audio)` line in the
+  TTS drain (the only dual-input thing in the pipeline); an
+  `audio.config` journal record naming the live backend;
+  `generate_fixtures.py` + `replay.py` for deterministic offline
+  runs; `wrong_order.py` showing what happens with the stages in
+  the wrong order.
+- **Modified:** pipeline order becomes mic → NR → AEC → VAD → STT
+  → agent (and TTS still feeds AEC's reference).
+- **Removed:** chapter 9c's `TurnLedger` / history-rewrite — this
+  chapter isolates the NR/AEC axis. Merge them yourself in
+  exercise 4 if you want both at once.
+
+## The naive predecessor
+
+Before reaching for the right pipeline order, look at the wrong one:
+
+```bash
+# Run NR *after* VAD (no-op: VAD already classified the noise as speech)
+uv run python docs/teaching/10-cleaning-signal/wrong_order.py --mode nr-after-vad
+
+# Run AEC *without* feeding the reference (silently does nothing)
+uv run python docs/teaching/10-cleaning-signal/wrong_order.py --mode aec-no-reference
+```
+
+Both modes are technically running NR / AEC, and both produce a
+bundle. The journal shows the failure: VAD's false-fire rate
+doesn't change in `nr-after-vad`, and AEC's `feed_reference()`
+counter stays at zero in `aec-no-reference`. **Wrong-version-
+first** for pipeline ordering — the same components, wired
+wrong, do nothing.
 
 **Scope note.** This chapter isolates the NR/AEC axis. It drops
 chapter 9c's `TurnLedger` / history rewrite (the LLM's memory
@@ -62,18 +102,12 @@ eval.
 
 ## The pipeline
 
-```
-               raw mic
-                 │
-                 ▼
-             ┌───────┐      ┌───────┐     ┌─────┐     ┌─────┐
-             │  NR   │ ───► │  AEC  │───► │ VAD │───► │ STT │──► agent
-             └───────┘      └───────┘     └─────┘     └─────┘
-              (fan,          ▲                                       │
-              keyboard,      │  reference = what we                  │
-              baby)          │  asked the speaker to play           TTS
-                             │                                       │
-                             └──────────────── aec.feed_reference ◄──┘
+```mermaid
+flowchart LR
+    Mic[raw mic] --> NR["NR<br/>(fan,<br/>keyboard,<br/>baby)"]
+    NR --> AEC --> VAD --> STT --> Agent[agent]
+    Agent --> TTS
+    TTS -- "aec.feed_reference<br/>(what we asked<br/>the speaker to play)" --> AEC
 ```
 
 - **NR** is *single-input*. It sees only the mic and subtracts a

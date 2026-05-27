@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+from easycat._health_check import HealthCheckable, PeriodicHealthChecker
 from easycat.events import Error, ErrorStage, EventBus
-from easycat.health_check import HealthCheckable, PeriodicHealthChecker
 
 
 class HealthyProvider:

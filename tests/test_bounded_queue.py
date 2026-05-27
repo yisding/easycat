@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
+from easycat._bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat.audio_format import AudioChunk, AudioFormat
-from easycat.bounded_queue import BoundedAudioQueue, DropPolicy
 
 # Helper to create test audio chunks
 _fmt = AudioFormat(sample_rate=16000, channels=1, sample_width=2)

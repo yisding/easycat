@@ -13,6 +13,23 @@
   the bot will interrupt itself every time it hears its own
   voice. Chapter 10 fixes that with AEC; this chapter punts.
 
+> **Minimum to skip the ladder:** chapter 6 (the streaming-agent
+> surface). Barge-in is independent of tools (ch 7) and smart-turn
+> (ch 8) — drop it on any streaming pipeline.
+
+## Diff from chapter 8
+
+- **Added:** three separate scripts (`ignore.py`, `cancel.py`,
+  `estimate.py`); `CancelToken` from `easycat.cancel`;
+  `transport.clear_audio()` calls; a `bytes_sent` / sentence
+  ledger in `estimate.py` plus an interruption-estimate formula
+  that rewrites conversation history to match what the user
+  actually heard.
+- **Modified:** the pipeline splits into two coroutines
+  (mic-producer + coordinator) connected by a queue, so the mic
+  side never pauses while TTS runs.
+- **Removed:** smart-turn — to isolate the barge-in concept.
+
 ## The three scripts
 
 ```bash

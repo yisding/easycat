@@ -1,4 +1,4 @@
-"""Validation report models and helpers."""
+"""Validation report models, latency budgets, and reliability helpers."""
 
 from easycat.validation.latency import (
     DEFAULT_BUDGETS,

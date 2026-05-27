@@ -6,11 +6,11 @@ and has_unclosed_markdown_delimiters.
 
 from __future__ import annotations
 
-from easycat.session._text import (
+from easycat.session.interruption import _estimate_text_spoken
+from easycat.session.text import (
     has_unclosed_markdown_delimiters,
     split_at_sentence_boundaries,
 )
-from easycat.session.interruption import _estimate_text_spoken
 
 
 class TestEstimateTextSpoken:

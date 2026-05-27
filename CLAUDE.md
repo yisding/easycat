@@ -31,7 +31,7 @@ uv run python examples/ws_server.py  # Run an example
   - `_text_utils.py` — Sentence splitting, markdown checking, speech energy detection.
   - `_tts_helpers.py` — TTS payload text normalization for interruption estimation.
   - `_types.py` — `SessionConfig`, `TurnState`, `Agent` protocol.
-- `config.py` — `EasyCatConfig` (simplified, auto-wires OpenAI providers) and `SessionConfig` (advanced, explicit providers). `create_session()` factory builds a wired Session.
+- `config.py` — `EasyConfig` (simplified, auto-wires OpenAI providers) and `SessionConfig` (advanced, explicit providers). `create_session()` factory builds a wired Session.
 - `events.py` — `EventBus` pub/sub with sync/async handlers. Two event layers: provider-scoped (`STTEvent`, `TTSEvent`) emitted by providers, mapped to EasyCat-level events (`STTFinal`, `TTSAudio`, `TurnStarted`, etc.) by Session.
 - `providers.py` — `@runtime_checkable` Protocol definitions for all provider interfaces (`STTProvider`, `TTSProvider`, `VADProvider`, `Transport`, `NoiseReducer`). Providers use duck typing, not inheritance.
 - `turn_manager.py` — 5-state FSM (IDLE → USER_SPEAKING → USER_PAUSED → PROCESSING → BOT_SPEAKING) with pre-roll buffering and interruption detection. Supports VAD (automatic) and PUSH_TO_TALK turn modes.

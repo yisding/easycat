@@ -31,7 +31,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from easycat import observability
+from easycat import _observability as observability
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
@@ -51,7 +51,6 @@ from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._streaming import consume_agent_stream
-from easycat.session._text import _text_for_estimation_timeline
 from easycat.session._turn_context import TurnContext, TurnHandle
 from easycat.session.interruption import (
     estimate_and_notify_interruption,
@@ -59,6 +58,7 @@ from easycat.session.interruption import (
 from easycat.session.interruption import (
     notify_bridge_interruption as _notify_bridge_interruption,
 )
+from easycat.session.text import _text_for_estimation_timeline
 from easycat.stages.agent import AgentStage
 from easycat.strip_markdown import strip_markdown
 from easycat.timeouts import (
