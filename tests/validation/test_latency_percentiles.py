@@ -554,3 +554,31 @@ def test_validation_package_reexports_phase1_symbols() -> None:
     assert LatencyPercentileStats is _latency_module.LatencyPercentileStats
     assert DEFAULT_BUDGETS is _latency_module.DEFAULT_BUDGETS
     assert evaluate_budgets is _latency_module.evaluate_budgets
+
+
+def test_latency_budget_rejects_unknown_percentile() -> None:
+    """A typo in `percentile` should raise rather than silently default."""
+    with pytest.raises(ValueError, match="p50, p90, p95, p99"):
+        LatencyBudget(stage="total_ms", max_ms=1000.0, percentile="p59")
+
+
+def test_build_latency_artifact_skips_budget_evaluation_in_smoke_mode() -> None:
+    """SMOKE runs are low-sample; one slow probe must not trip the budget gate."""
+    samples = [
+        _make_sample(
+            sample_id="smoke-slow",
+            total_ms=20_000.0,
+            tts_ttfb_ms=5_000.0,
+            llm_ttft_ms=9_000.0,
+        )
+    ]
+
+    artifact = build_latency_artifact(
+        mode=LatencyMode.SMOKE,
+        samples=samples,
+        generated_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    assert artifact["budget_violations"] == [], (
+        "smoke mode must not enforce tail-latency budgets; sweep is the gate"
+    )

@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-
-from easycat.validation.latency import (
-    LatencyMode,
-    ReliabilitySample,
-    ReliabilitySignals,
-)
+import sys
 
 try:
     import resource as _resource
 except ImportError:  # pragma: no cover - Windows fallback
     _resource = None  # type: ignore[assignment]
 
-import sys
+from easycat.validation.latency import (
+    LatencyMode,
+    ReliabilitySample,
+    ReliabilitySignals,
+)
 
 
 class EventLoopLagSampler:

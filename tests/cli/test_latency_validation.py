@@ -778,3 +778,88 @@ def test_latency_runner_passes_when_budgets_satisfied(tmp_path: Path) -> None:
     assert report["status"] == "pass"
     assert "latency_budget" not in report["tool_exit_codes"]
     assert not [failure for failure in report["failures"] if failure["name"] == "latency.budget"]
+
+
+def test_latency_runner_records_separate_pytest_and_budget_checks(tmp_path: Path) -> None:
+    """When pytest passes but a budget violates, the pytest check stays `pass`
+    and a distinct `latency.budget` check captures the failure."""
+
+    def fake_command_runner(command: list[str]) -> CommandResult:
+        samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
+        samples = [
+            LatencySample(
+                sample_id=f"sample-{index}",
+                condition_id="baseline",
+                warmup=False,
+                timestamp_source="event_monotonic",
+                stages=LatencyStageDurations(
+                    total_ms=12000.0,
+                    stt_ms=200.0,
+                    tts_ttfb_ms=2500.0,
+                    llm_ttft_ms=4000.0,
+                ),
+            ).to_dict()
+            for index in range(10)
+        ]
+        samples_path.write_text(json.dumps(samples))
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    checks_by_name = {check["name"]: check for check in report["checks"]}
+    assert "pytest.latency.sweep" in checks_by_name, (
+        "pytest check must remain its own ValidationCheck"
+    )
+    assert checks_by_name["pytest.latency.sweep"]["status"] == "pass", (
+        "pytest exited 0 so its check must stay green; only the budget check fails"
+    )
+    assert "latency.budget" in checks_by_name, (
+        "budget evaluation in sweep mode must record its own ValidationCheck"
+    )
+    assert checks_by_name["latency.budget"]["status"] == "fail"
+    assert checks_by_name["latency.budget"]["details"]["violations"], (
+        "budget check details must carry the violations list for the report"
+    )
+
+
+def test_latency_runner_smoke_mode_omits_budget_check(tmp_path: Path) -> None:
+    """Smoke mode skips budget evaluation (single slow sample tolerated);
+    no `latency.budget` check should be recorded."""
+
+    def fake_command_runner(command: list[str]) -> CommandResult:
+        samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
+        samples = [
+            LatencySample(
+                sample_id="smoke-slow",
+                condition_id="baseline",
+                warmup=False,
+                timestamp_source="event_monotonic",
+                stages=LatencyStageDurations(
+                    total_ms=20_000.0,
+                    stt_ms=200.0,
+                    tts_ttfb_ms=5_000.0,
+                    llm_ttft_ms=9_000.0,
+                ),
+            ).to_dict(),
+        ]
+        samples_path.write_text(json.dumps(samples))
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SMOKE,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 0
+    assert report["status"] == "pass"
+    assert "latency_budget" not in report["tool_exit_codes"]
+    assert "latency.budget" not in {check["name"] for check in report["checks"]}

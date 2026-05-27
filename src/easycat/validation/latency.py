@@ -83,6 +83,13 @@ class LatencyBudget:
     max_ms: float
     percentile: str = "p95"
 
+    def __post_init__(self) -> None:
+        if self.percentile not in ("p50", "p90", "p95", "p99"):
+            raise ValueError(
+                f"LatencyBudget percentile must be one of p50, p90, p95, p99; "
+                f"got {self.percentile!r}"
+            )
+
     def to_dict(self) -> dict[str, float | str]:
         return {"stage": self.stage, "max_ms": self.max_ms, "percentile": self.percentile}
 
@@ -320,9 +327,17 @@ def build_latency_artifact(
     generated_at = generated_at or datetime.now(UTC)
     effective_budgets: Sequence[LatencyBudget] = DEFAULT_BUDGETS if budgets is None else budgets
     percentiles = _build_percentile_block(samples)
-    budget_violations = [
-        violation.to_dict() for violation in evaluate_budgets(percentiles, effective_budgets)
-    ]
+    # Budgets enforce tail-latency SLOs and are only meaningful when the run
+    # produced enough samples for those tails to be statistically eligible.
+    # SMOKE runs are explicitly low-sample (p95 is marked ineligible by
+    # `_summarize_totals`), so one slow probe would otherwise turn the default
+    # `easycat validate latency` invocation into a hard fail. Skip budget
+    # evaluation in SMOKE; sweep runs continue to enforce.
+    budget_violations = (
+        [violation.to_dict() for violation in evaluate_budgets(percentiles, effective_budgets)]
+        if mode is not LatencyMode.SMOKE
+        else []
+    )
     return {
         "schema_version": 1,
         "kind": "latency_validation",
