@@ -87,10 +87,14 @@ class LatencyBudget:
         return {"stage": self.stage, "max_ms": self.max_ms, "percentile": self.percentile}
 
 
+# Calibrated against the live-stack SLO defaults in
+# tests/e2e/test_plan_7_latency_benchmark.py (baseline p50 5000 ms, p90 6500 ms,
+# per-probe sanity bound 8000 ms). Loose enough to ride out live-API jitter,
+# tight enough that an order-of-magnitude regression still fails CI.
 DEFAULT_BUDGETS: tuple[LatencyBudget, ...] = (
-    LatencyBudget(stage="total_ms", max_ms=1500.0, percentile="p95"),
-    LatencyBudget(stage="tts_ttfb_ms", max_ms=200.0, percentile="p95"),
-    LatencyBudget(stage="llm_ttft_ms", max_ms=500.0, percentile="p95"),
+    LatencyBudget(stage="total_ms", max_ms=8000.0, percentile="p95"),
+    LatencyBudget(stage="tts_ttfb_ms", max_ms=1500.0, percentile="p95"),
+    LatencyBudget(stage="llm_ttft_ms", max_ms=2500.0, percentile="p95"),
 )
 
 
@@ -553,12 +557,19 @@ def _compare_condition(
     current_values = [value for value in current_totals if value is not None]
     baseline_values = [value for value in baseline_totals if value is not None]
     percentile = thresholds.regression_percentile
-    current_observed = (
-        getattr(LatencyPercentileStats.from_values(current_values), percentile) or 0.0
-    )
-    baseline_observed = (
-        getattr(LatencyPercentileStats.from_values(baseline_values), percentile) or 0.0
-    )
+    current_observed = getattr(LatencyPercentileStats.from_values(current_values), percentile)
+    baseline_observed = getattr(LatencyPercentileStats.from_values(baseline_values), percentile)
+    if current_observed is None or baseline_observed is None:
+        return {
+            "condition_id": condition_id,
+            "baseline_version": baseline_version,
+            "current_count": len(current_values),
+            "baseline_count": len(baseline_values),
+            "percentile": percentile,
+            "status": "info",
+            "reason": "no_samples",
+            "refresh_required": False,
+        }
     delta_ms = current_observed - baseline_observed
     relative_delta = delta_ms / baseline_observed if baseline_observed > 0 else None
     relative_regression = (

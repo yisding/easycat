@@ -245,18 +245,21 @@ def test_build_latency_artifact_percentiles_empty_when_no_eligible_samples() -> 
 
 
 def test_default_budgets_cover_required_stages() -> None:
+    # Budgets are calibrated against the live-stack SLOs in
+    # tests/e2e/test_plan_7_latency_benchmark.py — see the comment above
+    # DEFAULT_BUDGETS in src/easycat/validation/latency.py for the rationale.
     by_stage = {budget.stage: budget for budget in DEFAULT_BUDGETS}
 
     assert "total_ms" in by_stage
-    assert by_stage["total_ms"].max_ms <= 1500
+    assert by_stage["total_ms"].max_ms == 8000.0
     assert by_stage["total_ms"].percentile == "p95"
 
     assert "tts_ttfb_ms" in by_stage
-    assert by_stage["tts_ttfb_ms"].max_ms <= 200
+    assert by_stage["tts_ttfb_ms"].max_ms == 1500.0
     assert by_stage["tts_ttfb_ms"].percentile == "p95"
 
     assert "llm_ttft_ms" in by_stage
-    assert by_stage["llm_ttft_ms"].max_ms <= 500
+    assert by_stage["llm_ttft_ms"].max_ms == 2500.0
     assert by_stage["llm_ttft_ms"].percentile == "p95"
 
 
@@ -363,8 +366,10 @@ def test_evaluate_budgets_skips_stages_absent_from_percentiles() -> None:
 
 
 def test_build_latency_artifact_includes_budget_violations_when_present() -> None:
+    # Values chosen to exceed every stage in DEFAULT_BUDGETS so the test still
+    # fires if a single stage's budget is later loosened in isolation.
     samples = [
-        _make_sample(sample_id=f"s-{i}", total_ms=3000.0, tts_ttfb_ms=500.0, llm_ttft_ms=900.0)
+        _make_sample(sample_id=f"s-{i}", total_ms=12000.0, tts_ttfb_ms=2500.0, llm_ttft_ms=4000.0)
         for i in range(10)
     ]
 
@@ -503,10 +508,9 @@ def test_comparison_thresholds_rejects_unknown_percentile() -> None:
 
 
 def test_evaluate_budgets_raises_on_non_numeric_observed() -> None:
-    # Today evaluate_budgets silently swallows non-numeric percentile values
-    # via a try/except float() block. The percentiles dict is always produced
-    # by EasyCat itself and only ever contains None | float, so a non-numeric
-    # entry is a programmer bug and must surface, not be hidden.
+    # The percentiles dict is always produced by EasyCat itself and only ever
+    # contains None | float, so a non-numeric entry is a programmer bug and
+    # must surface as TypeError/ValueError rather than being swallowed.
     percentiles = {
         "overall": {
             "total_ms": {

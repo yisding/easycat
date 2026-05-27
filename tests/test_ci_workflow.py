@@ -128,13 +128,26 @@ def test_nightly_validation_has_real_latency_job() -> None:
         '`--artifacts-dir "$VALIDATION_ARTIFACTS_DIR"`'
     )
 
-    # Nightly latency is non-strict: it must not pass --release or --require-samples.
+    # Latency must fail loudly when no samples are produced (e.g. missing
+    # OPENAI_API_KEY causes the smoke probe to skip). Without --require-samples
+    # an empty run is indistinguishable from a passing run.
     for body in run_bodies:
         if "easycat validate latency" in body:
             assert "--release" not in body, "nightly latency must not use --release"
-            assert "--require-samples" not in body, (
-                "nightly latency must not use --require-samples (non-strict)"
+            assert "--require-samples" in body, (
+                "nightly latency must pass --require-samples so a skipped/empty "
+                "smoke run fails loudly instead of going green silently"
             )
+
+    # Live-credential gating mirrors live-canaries: protected branches only,
+    # OPENAI_API_KEY plumbed through the live-validation environment.
+    assert (
+        latency.get("if") == "github.event_name != 'pull_request' && github.ref_protected == true"
+    ), "latency job must be gated to protected, non-PR runs (same as live-canaries)"
+    assert latency.get("environment") == "live-validation", (
+        "latency job must run in the live-validation GitHub environment "
+        "so OPENAI_API_KEY is gated and audited"
+    )
 
     env = latency.get("env", {})
     assert "VALIDATION_ARTIFACTS_DIR" in env, (
@@ -144,6 +157,15 @@ def test_nightly_validation_has_real_latency_job() -> None:
     assert env["VALIDATION_ARTIFACTS_DIR"] == expected_env, (
         "VALIDATION_ARTIFACTS_DIR must mirror the shape used by quick/socket/stress jobs"
     )
+    assert env.get("OPENAI_API_KEY") == "${{ secrets.OPENAI_API_KEY }}", (
+        "latency job must export OPENAI_API_KEY from secrets; otherwise the "
+        "smoke probe skips and the job is a silent no-op"
+    )
+
+    mask_steps = [
+        step for step in steps if isinstance(step, dict) and "add-mask" in str(step.get("run", ""))
+    ]
+    assert mask_steps, "latency job must mask OPENAI_API_KEY in logs"
 
     upload_steps = [
         step

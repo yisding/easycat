@@ -616,6 +616,13 @@ def test_latency_baseline_comparison_fails_eligible_regression() -> None:
     assert comparison["status"] == "fail"
     assert condition["status"] == "fail"
     assert condition["failure_class"] == "easycat_latency_regression"
+    # Schema check: per-condition results carry the percentile keys.
+    assert condition["percentile"] == "p95"
+    assert condition["current_p95_ms"] == pytest.approx(1300.0)
+    assert condition["baseline_p95_ms"] == pytest.approx(1000.0)
+    assert condition["delta_ms"] == pytest.approx(300.0)
+    assert "current_median_ms" not in condition
+    assert "baseline_median_ms" not in condition
 
 
 def test_latency_baseline_comparison_marks_low_sample_counts_informational() -> None:
@@ -692,7 +699,9 @@ def test_latency_runner_fails_when_budget_violated(tmp_path: Path) -> None:
 
     def fake_command_runner(command: list[str]) -> CommandResult:
         samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
-        # Ten non-warmup samples with total_ms == 3000 (well above 1500 ms p95 budget).
+        # Ten non-warmup samples with values comfortably above every stage in
+        # DEFAULT_BUDGETS (total p95 8000 ms, tts_ttfb p95 1500 ms, llm_ttft p95
+        # 2500 ms).
         samples = [
             LatencySample(
                 sample_id=f"sample-{index}",
@@ -700,10 +709,10 @@ def test_latency_runner_fails_when_budget_violated(tmp_path: Path) -> None:
                 warmup=False,
                 timestamp_source="event_monotonic",
                 stages=LatencyStageDurations(
-                    total_ms=3000.0,
+                    total_ms=12000.0,
                     stt_ms=200.0,
-                    tts_ttfb_ms=600.0,
-                    llm_ttft_ms=900.0,
+                    tts_ttfb_ms=2500.0,
+                    llm_ttft_ms=4000.0,
                 ),
             ).to_dict()
             for index in range(10)
