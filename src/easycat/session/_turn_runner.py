@@ -612,14 +612,21 @@ class TurnRunner:
                         )
                     )
                 elif kind == "tool_started":
-                    await self._emit(
-                        ToolCallStarted(
-                            tool_name=event.tool_name,
-                            call_id=event.call_id,
-                            session_id=self._session_id,
-                            turn_id=turn_id,
+                    with observability.span(
+                        "easycat.agent.tool",
+                        {
+                            "easycat.stage": "agent",
+                            "easycat.surface": "agent_bridge",
+                        },
+                    ):
+                        await self._emit(
+                            ToolCallStarted(
+                                tool_name=event.tool_name,
+                                call_id=event.call_id,
+                                session_id=self._session_id,
+                                turn_id=turn_id,
+                            )
                         )
-                    )
                 elif kind == "tool_delta":
                     await self._emit(
                         ToolCallDelta(
@@ -658,6 +665,13 @@ class TurnRunner:
             result_attr = "pass"
         except Exception as exc:
             logger.exception("Agent error in text_session send_text")
+            observability.increment_counter(
+                "easycat.session.errors.total",
+                attributes={
+                    "easycat.error_type": type(exc).__name__,
+                    "easycat.surface": "agent_bridge",
+                },
+            )
             await self._emit(
                 Error(
                     exception=exc,
@@ -668,14 +682,21 @@ class TurnRunner:
             )
             raise
         finally:
-            observability.record_histogram(
-                "easycat.turn.latency",
-                time.monotonic() - t0,
-                {"easycat.surface": "agent_bridge", "easycat.result": result_attr},
-            )
-            observability.increment_counter(
-                "easycat.turns.total",
-                attributes={"easycat.surface": "agent_bridge", "easycat.result": result_attr},
-            )
-            await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn_id))
+            with observability.span(
+                "easycat.turn.commit",
+                {
+                    "easycat.surface": "agent_bridge",
+                    "easycat.result": result_attr,
+                },
+            ):
+                observability.record_histogram(
+                    "easycat.turn.latency",
+                    time.monotonic() - t0,
+                    {"easycat.surface": "agent_bridge", "easycat.result": result_attr},
+                )
+                observability.increment_counter(
+                    "easycat.turns.total",
+                    attributes={"easycat.surface": "agent_bridge", "easycat.result": result_attr},
+                )
+                await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn_id))
         return response

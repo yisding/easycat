@@ -25,6 +25,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
 from easycat.audio_format import AudioChunk
 from easycat.events import (
@@ -301,7 +302,22 @@ class AudioRouter:
                 # calls inside the loop body operate on the same context.
                 turn = self._current_turn() or self._no_turn
 
-                await self._emit(AudioIn(chunk=chunk))
+                with observability.span(
+                    "easycat.transport.receive",
+                    {"easycat.surface": "stt"},
+                ):
+                    chunk_bytes = getattr(chunk, "data", None)
+                    if isinstance(chunk_bytes, (bytes, bytearray)):
+                        observability.increment_counter(
+                            "easycat.audio.bytes.total",
+                            value=len(chunk_bytes),
+                            attributes={"easycat.surface": "stt"},
+                        )
+                        observability.increment_counter(
+                            "easycat.audio.frames.total",
+                            attributes={"easycat.surface": "stt"},
+                        )
+                    await self._emit(AudioIn(chunk=chunk))
 
                 # Stages 1-2: Noise reduction + Echo cancellation via AudioStage.
                 # AudioStage wraps both so a single journal record covers

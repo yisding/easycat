@@ -70,6 +70,14 @@ class STTStage:
                 result = input
             except Exception as exc:
                 result_attr = "fail"
+                observability.increment_counter(
+                    "easycat.provider.errors.total",
+                    attributes={
+                        "easycat.surface": "stt",
+                        "easycat.provider": type(self._provider).__name__.lower(),
+                        "easycat.error_type": type(exc).__name__,
+                    },
+                )
                 journal_append_event(
                     ctx,
                     stage=self.name,

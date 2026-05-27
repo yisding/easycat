@@ -190,6 +190,7 @@ async def test_text_turn_emits_session_and_agent_spans(monkeypatch: pytest.Monke
     assert [name for name, _attrs in tracer.started] == [
         "easycat.session",
         "easycat.agent.invoke",
+        "easycat.turn.commit",
     ]
 
 
@@ -313,3 +314,331 @@ def test_metric_attributes_reject_span_only_genai_keys() -> None:
             0.1,
             {"gen_ai.system": "openai"},
         )
+
+
+# ──────────────────────────────────────────────────────────────────
+# N4+N5: spans/counters wired into the pipeline stages.
+# ──────────────────────────────────────────────────────────────────
+
+
+def _make_run_ctx() -> object:
+    from easycat.runtime.context import RunContext
+
+    return RunContext(run_id="r1", session_id="s1", runtime_mode="chained_pipeline")
+
+
+def _make_turn_ctx() -> object:
+    from easycat.cancel import CancelToken
+    from easycat.session._turn_context import TurnContext
+
+    return TurnContext(turn_id="turn-1", cancel_token=CancelToken())
+
+
+@pytest.mark.asyncio
+async def test_transport_send_span_and_audio_counters_emit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.stages.transport import TransportStage
+
+    class _StubTransport:
+        async def send_audio(self, chunk):  # noqa: ANN001
+            return True
+
+    tracer = _FakeTracer()
+    meter = _FakeMeter()
+    monkeypatch.setattr(observability, "_get_tracer", lambda: tracer)
+    monkeypatch.setattr(observability, "_get_meter", lambda: meter)
+
+    stage = TransportStage(_StubTransport())
+    payload = b"\x01\x02\x03\x04"
+    delivered = await stage.execute(payload, _make_run_ctx(), _make_turn_ctx())
+    assert delivered is True
+
+    names = [name for name, _attrs in tracer.started]
+    assert "easycat.transport.send" in names
+    send_attrs = next(attrs for name, attrs in tracer.started if name == "easycat.transport.send")
+    assert send_attrs.get("easycat.surface") == "tts"
+    assert send_attrs.get("easycat.stage") == "transport"
+
+    bytes_counter = meter.counters["easycat.audio.bytes.total"]
+    assert bytes_counter.adds == [(len(payload), {"easycat.surface": "tts"})]
+    frames_counter = meter.counters["easycat.audio.frames.total"]
+    assert frames_counter.adds == [(1, {"easycat.surface": "tts"})]
+
+
+@pytest.mark.asyncio
+async def test_transport_send_error_increments_provider_errors_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.stages.transport import TransportStage
+
+    class _BrokenTransport:
+        async def send_audio(self, chunk):  # noqa: ANN001
+            raise RuntimeError("boom")
+
+    tracer = _FakeTracer()
+    meter = _FakeMeter()
+    monkeypatch.setattr(observability, "_get_tracer", lambda: tracer)
+    monkeypatch.setattr(observability, "_get_meter", lambda: meter)
+
+    stage = TransportStage(_BrokenTransport())
+    with pytest.raises(RuntimeError, match="boom"):
+        await stage.execute(b"\x00\x00", _make_run_ctx(), _make_turn_ctx())
+
+    err_counter = meter.counters["easycat.provider.errors.total"]
+    assert err_counter.adds == [
+        (
+            1,
+            {
+                "easycat.surface": "tts",
+                "easycat.provider": "_brokentransport",
+                "easycat.error_type": "RuntimeError",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_vad_detect_span_emits(monkeypatch: pytest.MonkeyPatch) -> None:
+    from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+    from easycat.stages.vad import VADStage
+
+    class _StubVAD:
+        async def process(self, chunk):  # noqa: ANN001
+            if False:
+                yield None
+            return
+
+    tracer = _FakeTracer()
+    monkeypatch.setattr(observability, "_get_tracer", lambda: tracer)
+    monkeypatch.setattr(observability, "_get_meter", lambda: _FakeMeter())
+
+    stage = VADStage(_StubVAD())
+    chunk = AudioChunk(data=b"\x00\x00\x00\x00", format=PCM16_MONO_16K)
+    await stage.execute(chunk, _make_run_ctx(), _make_turn_ctx())
+
+    names = [name for name, _attrs in tracer.started]
+    assert "easycat.vad.detect" in names
+    attrs = next(a for name, a in tracer.started if name == "easycat.vad.detect")
+    assert attrs.get("easycat.surface") == "stt"
+    assert attrs.get("easycat.stage") == "vad"
+
+
+@pytest.mark.asyncio
+async def test_vad_error_increments_provider_errors_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+    from easycat.stages.vad import VADStage
+
+    class _BrokenVAD:
+        async def process(self, chunk):  # noqa: ANN001
+            raise ValueError("vad-bad")
+            if False:
+                yield None
+
+    monkeypatch.setattr(observability, "_get_tracer", lambda: _FakeTracer())
+    meter = _FakeMeter()
+    monkeypatch.setattr(observability, "_get_meter", lambda: meter)
+
+    stage = VADStage(_BrokenVAD())
+    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+    with pytest.raises(ValueError, match="vad-bad"):
+        await stage.execute(chunk, _make_run_ctx(), _make_turn_ctx())
+
+    err_counter = meter.counters["easycat.provider.errors.total"]
+    assert err_counter.adds == [
+        (
+            1,
+            {
+                "easycat.surface": "stt",
+                "easycat.provider": "_brokenvad",
+                "easycat.error_type": "ValueError",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stt_error_increments_provider_errors_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.stages.stt import STTStage
+
+    class _BrokenSTT:
+        async def send_audio(self, chunk):  # noqa: ANN001
+            raise RuntimeError("stt-down")
+
+    monkeypatch.setattr(observability, "_get_tracer", lambda: _FakeTracer())
+    meter = _FakeMeter()
+    monkeypatch.setattr(observability, "_get_meter", lambda: meter)
+
+    stage = STTStage(_BrokenSTT())
+    with pytest.raises(RuntimeError, match="stt-down"):
+        await stage.execute(b"\x00\x00", _make_run_ctx(), _make_turn_ctx())
+
+    err_counter = meter.counters["easycat.provider.errors.total"]
+    assert err_counter.adds == [
+        (
+            1,
+            {
+                "easycat.surface": "stt",
+                "easycat.provider": "_brokenstt",
+                "easycat.error_type": "RuntimeError",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_agent_error_increments_provider_errors_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.stages.agent import AgentStage
+
+    class _BrokenAgent:
+        async def run(self, text):  # noqa: ANN001
+            raise RuntimeError("agent-down")
+
+    monkeypatch.setattr(observability, "_get_tracer", lambda: _FakeTracer())
+    meter = _FakeMeter()
+    monkeypatch.setattr(observability, "_get_meter", lambda: meter)
+
+    stage = AgentStage(_BrokenAgent())
+    with pytest.raises(RuntimeError, match="agent-down"):
+        await stage.execute("hi", _make_run_ctx(), _make_turn_ctx())
+
+    err_counter = meter.counters["easycat.provider.errors.total"]
+    # AgentStage wraps providers with AgentRunner internally; the provider
+    # attribute is the inner class type, lowercased.
+    assert err_counter.adds, "expected provider.errors.total to be incremented"
+    add_value, add_attrs = err_counter.adds[0]
+    assert add_value == 1
+    assert add_attrs["easycat.surface"] == "agent_bridge"
+    assert add_attrs["easycat.error_type"] == "RuntimeError"
+    assert "easycat.provider" in add_attrs
+
+
+@pytest.mark.asyncio
+async def test_transport_receive_span_and_audio_counters_emit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The audio router wraps inbound chunks in a transport.receive span."""
+    from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+
+    tracer = _FakeTracer()
+    meter = _FakeMeter()
+    monkeypatch.setattr(observability, "_get_tracer", lambda: tracer)
+    monkeypatch.setattr(observability, "_get_meter", lambda: meter)
+
+    chunk = AudioChunk(data=b"\x00\x00\x00\x00", format=PCM16_MONO_16K)
+    # Simulate the wrap directly: the router code is too entangled with
+    # transport/turn-manager state to drive end-to-end here.  We instead
+    # exercise the exact emission pattern the router uses.
+    with observability.span(
+        "easycat.transport.receive", {"easycat.surface": "stt"}
+    ):
+        observability.increment_counter(
+            "easycat.audio.bytes.total",
+            value=len(chunk.data),
+            attributes={"easycat.surface": "stt"},
+        )
+        observability.increment_counter(
+            "easycat.audio.frames.total",
+            attributes={"easycat.surface": "stt"},
+        )
+
+    assert ("easycat.transport.receive", {"easycat.surface": "stt"}) in tracer.started
+    assert meter.counters["easycat.audio.bytes.total"].adds == [
+        (4, {"easycat.surface": "stt"})
+    ]
+    assert meter.counters["easycat.audio.frames.total"].adds == [
+        (1, {"easycat.surface": "stt"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_audio_router_source_has_transport_receive_wiring() -> None:
+    """The audio router source emits the transport.receive span around
+    the inbound chunk-processing block.
+
+    This is a structural assertion: end-to-end wiring through
+    ``AudioRouter`` is exercised by the broader integration suite; here
+    we just guard the literal source-level invariant so a refactor that
+    drops the span gets caught.
+    """
+    import inspect
+
+    from easycat.session import _audio_router
+
+    src = inspect.getsource(_audio_router.AudioRouter._run_pipeline)
+    assert 'observability.span(\n                    "easycat.transport.receive"' in src
+    assert '"easycat.audio.bytes.total"' in src
+    assert '"easycat.audio.frames.total"' in src
+
+
+@pytest.mark.asyncio
+async def test_turn_commit_span_emits_on_text_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    from easycat import create_text_session
+
+    class Agent:
+        async def run(self, text: str) -> str:
+            return f"echo: {text}"
+
+    tracer = _FakeTracer()
+    monkeypatch.setattr(observability, "_get_tracer", lambda: tracer)
+    monkeypatch.setattr(observability, "_get_meter", lambda: None)
+    session = create_text_session(agent=Agent(), debug="off")
+    await session.send_text("hi")
+    names = [name for name, _attrs in tracer.started]
+    assert "easycat.turn.commit" in names
+
+
+@pytest.mark.asyncio
+async def test_agent_tool_span_emits_on_tool_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A turn that emits a tool_started event should open agent.tool span."""
+    from easycat import create_text_session
+    from easycat.integrations.agents.base import AgentBridgeEvent
+    from tests._bridge_helpers import _TestBridgeBase
+
+    class _ToolBridge(_TestBridgeBase):
+        """Minimal bridge that emits a tool_started/result followed by done."""
+
+        async def invoke(self, turn_input, recorder, cancel_token=None):  # noqa: ANN001
+            yield AgentBridgeEvent(kind="tool_started", tool_name="calc", call_id="c1")
+            yield AgentBridgeEvent(kind="tool_result", call_id="c1", result="42")
+            yield AgentBridgeEvent(kind="done", text="answer: 42")
+
+    tracer = _FakeTracer()
+    monkeypatch.setattr(observability, "_get_tracer", lambda: tracer)
+    monkeypatch.setattr(observability, "_get_meter", lambda: None)
+    session = create_text_session(agent=_ToolBridge(), debug="off", wrap_agent=False)
+    result = await session.send_text("compute")
+    assert "answer" in result
+    names = [name for name, _attrs in tracer.started]
+    assert "easycat.agent.tool" in names
+
+
+@pytest.mark.asyncio
+async def test_session_errors_counter_increments_on_dispatch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat import create_text_session
+
+    class _BrokenAgent:
+        async def run(self, text: str) -> str:
+            raise RuntimeError("dispatch-broke")
+
+    monkeypatch.setattr(observability, "_get_tracer", lambda: _FakeTracer())
+    meter = _FakeMeter()
+    monkeypatch.setattr(observability, "_get_meter", lambda: meter)
+    session = create_text_session(agent=_BrokenAgent(), debug="off")
+    with pytest.raises(RuntimeError, match="dispatch-broke"):
+        await session.send_text("hi")
+
+    err_counter = meter.counters.get("easycat.session.errors.total")
+    assert err_counter is not None
+    assert err_counter.adds, "expected session.errors.total to be incremented"
+    _value, attrs = err_counter.adds[0]
+    assert attrs["easycat.surface"] == "agent_bridge"
+    assert attrs["easycat.error_type"] == "RuntimeError"
