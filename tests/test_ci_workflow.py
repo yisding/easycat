@@ -167,6 +167,11 @@ def test_nightly_validation_has_real_latency_job() -> None:
     ]
     assert mask_steps, "latency job must mask OPENAI_API_KEY in logs"
 
+    assert isinstance(latency.get("timeout-minutes"), int), (
+        "latency job must declare a timeout-minutes so a hung live probe "
+        "cannot consume the full workflow budget"
+    )
+
     upload_steps = [
         step
         for step in steps
@@ -179,6 +184,12 @@ def test_nightly_validation_has_real_latency_job() -> None:
     with_block = upload.get("with", {})
     assert with_block.get("path") == "${{ env.VALIDATION_ARTIFACTS_DIR }}"
     assert "retention-days" in with_block
+    artifact_name = with_block.get("name", "")
+    assert artifact_name.startswith("nightly-validation-report-latency-"), (
+        f"latency upload artifact name {artifact_name!r} must start with "
+        "'nightly-validation-report-latency-' so it does not collide with "
+        "the quick/socket/stress artifact slots"
+    )
 
 
 def test_nightly_validation_has_no_placeholder_jobs() -> None:

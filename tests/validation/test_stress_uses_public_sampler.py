@@ -29,13 +29,28 @@ def _parse_stress_module() -> ast.Module:
 
 
 def test_stress_test_does_not_define_private_event_loop_lag_sampler() -> None:
-    """The stress test must not redefine `_EventLoopLagSampler` locally."""
+    """The stress test must not redefine an inline event-loop-lag sampler.
+
+    Catches the literal `_EventLoopLagSampler` shim as well as a rename
+    (e.g. `_LagSampler`, `_LoopLagProbe`) that exposes the same async
+    `start`/`stop` shape — anything that looks like a private copy of the
+    public `EventLoopLagSampler` should be flagged.
+    """
     module = _parse_stress_module()
-    class_names = {node.name for node in ast.walk(module) if isinstance(node, ast.ClassDef)}
-    assert "_EventLoopLagSampler" not in class_names, (
-        "tests/e2e/test_plan_2_sustained_stress.py still defines a private "
-        "_EventLoopLagSampler class; it should import the public "
-        "EventLoopLagSampler from easycat.validation.reliability instead."
+    offenders: list[str] = []
+    for node in ast.walk(module):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        method_names = {
+            child.name for child in node.body if isinstance(child, ast.AsyncFunctionDef)
+        }
+        if {"start", "stop"} <= method_names:
+            offenders.append(node.name)
+    assert not offenders, (
+        f"tests/e2e/test_plan_2_sustained_stress.py defines inline async "
+        f"start/stop sampler-shaped classes ({offenders!r}); import "
+        "EventLoopLagSampler from easycat.validation.reliability instead "
+        "of redefining the shape locally."
     )
 
 

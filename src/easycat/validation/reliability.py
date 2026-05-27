@@ -17,6 +17,14 @@ import sys
 
 
 class EventLoopLagSampler:
+    """Background event-loop-lag probe for reliability sampling.
+
+    A sampler is single-shot: call `start()` once, then `stop()` once
+    to retrieve the peak lag. After `stop()` the sampler caches its
+    last `max_lag_ms` and is not designed to be restarted — construct
+    a fresh instance for each probe window.
+    """
+
     def __init__(self, *, interval_s: float = 0.02) -> None:
         self._interval_s = interval_s
         self._task: asyncio.Task[None] | None = None
