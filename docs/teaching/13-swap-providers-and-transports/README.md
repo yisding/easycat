@@ -14,6 +14,22 @@
 - `OPENAI_API_KEY` always; `DEEPGRAM_API_KEY` + `ELEVENLABS_API_KEY`
   for the `deepgram-eleven` mix.
 
+> **Minimum to skip the ladder:** chapter 6 (you need a streaming
+> pipeline to swap) plus chapter 12 (so you can measure the
+> tradeoffs). You can skip the operate-movement (chs 10-11) if
+> you only want to see the Protocol payoff.
+
+## Diff from chapter 12
+
+- **Added:** `create_session()` + `EasyConfig` end-to-end (the
+  first chapter that uses the production wiring); WebRTC and
+  Twilio transport options; `--provider-mix
+  {openai,deepgram-eleven}` and `--transport {local,webrtc,twilio}`
+  CLI matrix; bundle-shape note explaining the teaching → production
+  journal-shape transition.
+- **Removed:** every hand-rolled coroutine from chapters 6-10.
+  `Session` orchestrates the pipeline now.
+
 ## The 2×3 matrix
 
 |                  | Local (mic) | WebRTC (browser) | Twilio (phone) |
@@ -55,7 +71,7 @@ Each run drops a bundle in `runs/ch13-<mix>-<transport>-*.bundle`.
 
 ```
   ┌─────────────────────┐        ┌─────────┐
-  │  EasyConfig(...) │──────► │ Session │ ──► the agent never
+  │  EasyConfig(...)    │──────► │ Session │ ──► the agent never
   │    stt=...          │        │ (same   │     knows which stt,
   │    tts=...          │        │  code   │     tts, or transport
   │    transport=...    │        │  every  │     is wired

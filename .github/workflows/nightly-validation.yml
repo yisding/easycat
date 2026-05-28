@@ -139,11 +139,32 @@ jobs:
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
           retention-days: 14
 
-  latency-placeholder:
-    name: Latency Placeholder
+  latency:
+    name: Nightly Latency
+    if: github.event_name != 'pull_request' && github.ref_protected == true
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 45
+    environment: live-validation
+    env:
+      VALIDATION_ARTIFACTS_DIR: .easycat/validation/nightly/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
-      - run: |
-          echo "Latency validation is a placeholder until V2 lands."
-          echo "Nightly latency prerequisites may skip in non-strict mode."
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: Mask live provider secrets
+        shell: bash
+        run: |
+          if [ -n "${OPENAI_API_KEY:-}" ]; then
+            echo "::add-mask::$OPENAI_API_KEY"
+          fi
+      - run: uv sync --group dev --python 3.12
+      - run: uv run --python 3.12 easycat validate latency --require-samples --artifacts-dir "$VALIDATION_ARTIFACTS_DIR"
+      - name: Upload latency validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-validation-report-latency-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
+          retention-days: 14

@@ -1,0 +1,84 @@
+name: Deploy teaching-ladder site
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "docs/teaching/**"
+      - "mkdocs.yml"
+      - ".mkdocs/**"
+      - "requirements-docs.txt"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Always build (on push, on matching PR, on manual trigger) so we catch
+    # mkdocs / hook regressions before they land on main.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install docs dependencies
+        run: pip install -r requirements-docs.txt
+      - name: Build the site (--strict)
+        run: mkdocs build --strict
+      - name: Import-check teaching scripts not covered by pytest
+        # `naive_threshold.py`, `blocking_tool.py`, `wrong_order.py` and the
+        # other teaching scripts aren't collected by pytest (they live under
+        # docs/teaching/, outside testpaths). If easycat moves a symbol they
+        # import, the rot is silent. Compile every .py under docs/teaching/
+        # in the same environment as the runtime tests, with the source
+        # tree on PYTHONPATH so cross-imports resolve.
+        run: |
+          set -eu
+          pip install -e ".[quickstart]"
+          PYTHONPATH=src python -m compileall -q docs/teaching/
+          for f in $(find docs/teaching -name '*.py'); do
+            python -c "import ast; ast.parse(open('$f').read())"
+          done
+          # Spot-check the three wrong-version-first scripts compile *and*
+          # their easycat imports resolve.
+          python -c "
+          import importlib.util, sys
+          for path in [
+              'docs/teaching/04-vad-preroll/naive_threshold.py',
+              'docs/teaching/07-tools/blocking_tool.py',
+              'docs/teaching/10-cleaning-signal/wrong_order.py',
+          ]:
+              spec = importlib.util.spec_from_file_location('m', path)
+              mod = importlib.util.module_from_spec(spec)
+              try:
+                  spec.loader.exec_module(mod)
+              except SystemExit:
+                  pass  # main() raises SystemExit when env vars missing
+              except ImportError as e:
+                  sys.exit(f'{path}: import failed: {e}')
+          print('All teaching scripts import cleanly.')
+          "
+
+      - name: Smoke-check the hook output
+        # The hook in .mkdocs/hooks.py aliases each chapter README.md to
+        # the directory's index URL. If the hook silently breaks (mkdocs
+        # File API changes, plugin order shifts), the build still succeeds
+        # but URLs become /00-hello-audio/README/ instead of
+        # /00-hello-audio/. These four assertions catch that.
+        run: |
+          set -eu
+          test -f site/index.html
+          test -f site/00-hello-audio/index.html
+          test -f site/15-operate-in-production/index.html
+          test ! -f site/00-hello-audio/README/index.html
+
+      - name: Deploy to gh-pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: mkdocs gh-deploy --force

@@ -9,6 +9,38 @@
 - `uv sync --group dev`. No API keys needed — everything is
   offline against pre-recorded bundles.
 
+> **Minimum to skip the ladder:** chapter 2 alone (the first
+> chapter that writes a bundle). The investigation flow doesn't
+> depend on you having built the pipeline, just on knowing what
+> the records mean.
+
+## Read-only by design
+
+This is the one chapter where you do **not** produce audio.
+There's nothing for a microphone to do. The "runnable at every
+checkpoint" rule bends here because the chapter's whole point is
+*reading* bundles, not making them. The fixtures under `bundles/`
+are checked in so you can work offline, on a plane, without API
+keys, without a mic — pick the constraint that fits.
+
+If you do want to scrub a *live* bundle: any chapter from 2
+onward dumps one to its own `runs/` directory. Chapter 9c
+(`docs/teaching/09-interruption/runs/`) is the most interesting —
+barge-in turns have the richest record set. Open one with
+`investigate.py` in this chapter once you've finished the three
+planted-bug investigations below.
+
+## Diff from chapter 10
+
+- **Added:** `investigate.py` — a tiny CLI bundle browser;
+  `bundles/bug_*.bundle` — three planted-failure fixtures checked
+  in (unlike the gitignored `runs/*` from earlier chapters);
+  `generate_bundles.py` that builds those fixtures; an explicit
+  walkthrough of the `JournalView` query surface
+  (`filter_by_stage`, `filter_by_turn`, `lookup_by_sequence`).
+- **Removed:** the entire live pipeline. This chapter writes no
+  audio.
+
 ## The journal is not logs
 
 - **Logs** are unstructured prose. You grep them. Your search

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from easycat import _observability as observability
 from easycat.runtime.context import RunContext
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.session._turn_context import TurnContext
@@ -57,16 +58,28 @@ class VADStage:
             data_extra=start_extra,
         )
         try:
-            events: list[Any] = []
-            async for event in self._provider.process(input):
-                events.append(event)
-                if len(events) >= self._MAX_EVENTS_PER_CHUNK:
-                    logger.warning(
-                        "VAD provider yielded too many events for a single chunk; truncating"
-                    )
-                    break
-            result = events
+            with observability.span(
+                "easycat.vad.detect",
+                {"easycat.stage": self.name, "easycat.surface": "stt"},
+            ):
+                events: list[Any] = []
+                async for event in self._provider.process(input):
+                    events.append(event)
+                    if len(events) >= self._MAX_EVENTS_PER_CHUNK:
+                        logger.warning(
+                            "VAD provider yielded too many events for a single chunk; truncating"
+                        )
+                        break
+                result = events
         except Exception as exc:
+            observability.increment_counter(
+                "easycat.provider.errors.total",
+                attributes={
+                    "easycat.surface": "stt",
+                    "easycat.provider": type(self._provider).__name__.lower(),
+                    "easycat.error_type": type(exc).__name__,
+                },
+            )
             journal_append_event(
                 ctx,
                 stage=self.name,

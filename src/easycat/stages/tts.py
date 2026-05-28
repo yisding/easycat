@@ -53,6 +53,14 @@ class TTSStage:
         try:
             result = self._provider.synthesize(input)
         except Exception as exc:
+            observability.increment_counter(
+                "easycat.provider.errors.total",
+                attributes={
+                    "easycat.surface": "tts",
+                    "easycat.provider": type(self._provider).__name__.lower(),
+                    "easycat.error_type": type(exc).__name__,
+                },
+            )
             journal_append_event(
                 ctx,
                 stage=self.name,
@@ -125,6 +133,14 @@ class TTSStage:
                     yield event
         except Exception as exc:
             result_attr = "fail"
+            observability.increment_counter(
+                "easycat.provider.errors.total",
+                attributes={
+                    "easycat.surface": "tts",
+                    "easycat.provider": type(self._provider).__name__.lower(),
+                    "easycat.error_type": type(exc).__name__,
+                },
+            )
             journal_append_event(
                 ctx,
                 stage=self.name,

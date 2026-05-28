@@ -13,6 +13,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from easycat.validation.latency import (
     LatencyMode,
@@ -323,10 +324,21 @@ def run_latency_validation(
         json.dumps(latency_payload, indent=2, sort_keys=True) + "\n",
     )
 
+    budget_violations = latency_payload.get("budget_violations") or []
+    budget_failure: ValidationFailure | None = None
+    if budget_violations:
+        budget_failure = ValidationFailure(
+            name="latency.budget",
+            message="latency budget violated",
+            failure_class="latency_budget",
+            details={"violations": list(budget_violations)},
+        )
+
     if (
         sample_load_failure is not None
         or reliability_failure is not None
         or required_samples_failure is not None
+        or budget_failure is not None
     ):
         exit_code = 1
     status = "pass" if exit_code == 0 else "fail"
@@ -353,6 +365,8 @@ def run_latency_validation(
         failures.append(reliability_failure)
     if required_samples_failure is not None:
         failures.append(required_samples_failure)
+    if budget_failure is not None:
+        failures.append(budget_failure)
 
     artifacts: dict[str, ArtifactRef] = {
         "report": ArtifactRef(kind="validation_report", path=str(run_report_path)),
@@ -377,18 +391,19 @@ def run_latency_validation(
             **({"latency_samples": 1} if sample_load_failure is not None else {}),
             **({"reliability_samples": 1} if reliability_failure is not None else {}),
             **({"required_latency_samples": 1} if required_samples_failure is not None else {}),
+            **({"latency_budget": 1} if budget_failure is not None else {}),
         },
         git=_collect_git_metadata(),
         environment=_collect_environment_metadata(),
-        checks=[
-            ValidationCheck(
-                name=f"pytest.latency.{mode.value}",
-                status=status,
-                duration_s=duration_s,
-                command=command,
-                artifacts=check_artifacts,
-            )
-        ],
+        checks=_latency_checks(
+            mode=mode,
+            pytest_exit_code=result.exit_code,
+            duration_s=duration_s,
+            command=command,
+            check_artifacts=check_artifacts,
+            budget_failure=budget_failure,
+            budget_violations=budget_violations,
+        ),
         failures=failures,
         latency=latency_payload,
         artifacts=artifacts,
@@ -719,6 +734,52 @@ def _live_selector_errors(
 
 def _runtime_secret_values() -> tuple[str, ...]:
     return tuple(value for name in PROVIDER_ENV_VARS if (value := os.environ.get(name)))
+
+
+def _latency_checks(
+    *,
+    mode: LatencyMode,
+    pytest_exit_code: int,
+    duration_s: float,
+    command: Sequence[str],
+    check_artifacts: dict[str, ArtifactRef],
+    budget_failure: ValidationFailure | None,
+    budget_violations: Sequence[Any],
+) -> list[ValidationCheck]:
+    """Split pytest + budget evaluation into distinct ValidationCheck entries.
+
+    A budget failure used to share the single `pytest.latency.<mode>` check
+    with pytest, so a passing pytest exit (0) with a budget violation would
+    surface as a failed pytest check — misattributing the failure. Reporting
+    them separately lets consumers tell which gate actually failed.
+
+    Budget evaluation is skipped for SMOKE mode upstream in
+    `build_latency_artifact`, so no `latency.budget` check is recorded for
+    smoke runs.
+    """
+    checks: list[ValidationCheck] = [
+        ValidationCheck(
+            name=f"pytest.latency.{mode.value}",
+            status="pass" if pytest_exit_code == 0 else "fail",
+            duration_s=duration_s,
+            command=command,
+            artifacts=check_artifacts,
+        )
+    ]
+    if mode is not LatencyMode.SMOKE:
+        budget_artifacts: dict[str, ArtifactRef] = {}
+        if "latency" in check_artifacts:
+            budget_artifacts["latency"] = check_artifacts["latency"]
+        checks.append(
+            ValidationCheck(
+                name="latency.budget",
+                status="fail" if budget_failure is not None else "pass",
+                duration_s=0.0,
+                artifacts=budget_artifacts,
+                details={"violations": list(budget_violations)} if budget_violations else {},
+            )
+        )
+    return checks
 
 
 def _latency_failure_sample(mode: LatencyMode, message: str) -> LatencySample:

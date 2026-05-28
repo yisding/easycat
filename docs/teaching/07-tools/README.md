@@ -9,6 +9,35 @@
 - [Chapter 6](../06-streaming-agent/)
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 
+> **Minimum to skip the ladder:** chapter 6 (the streaming-agent
+> surface). Chapters 7-9 are mutually orthogonal — you can read
+> any of them after ch 6 in any order.
+
+## Diff from chapter 6
+
+- **Added:** two demo tools (`get_weather`, `set_timer`); a filler
+  heuristic in `should_play_filler`; `tool.call.started` /
+  `tool.call.result` journal records; sentence-queue items become
+  `("reply" | "filler", text)` tuples; `blocking_tool.py` showing
+  what happens *without* a filler.
+- **Modified:** the agent loop now handles `delta.tool_calls` and
+  runs a second LLM iteration once tool results return.
+
+## The naive predecessor
+
+Before `main.py`, read `blocking_tool.py`:
+
+```bash
+uv run python docs/teaching/07-tools/blocking_tool.py
+```
+
+It runs a tool synchronously inside the agent and emits no filler
+at all. Ask *"What's the weather in Tokyo?"* and listen — the
+1.5-second silence in the middle of the turn is exactly what the
+filler heuristic in `main.py` is built to mask. **Wrong-version-
+first** for tool UX: the technical pipe works, the user
+experience does not.
+
 ## Run it
 
 ```bash

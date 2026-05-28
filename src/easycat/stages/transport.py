@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from easycat import _observability as observability
 from easycat.runtime.context import RunContext
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.session._turn_context import TurnContext
@@ -59,8 +60,30 @@ class TransportStage:
             data_extra=extra,
         )
         try:
-            delivered = await self._provider.send_audio(input)
+            with observability.span(
+                "easycat.transport.send",
+                {"easycat.stage": self.name, "easycat.surface": "tts"},
+            ):
+                if isinstance(audio_bytes, (bytes, bytearray)):
+                    observability.increment_counter(
+                        "easycat.audio.bytes.total",
+                        value=len(audio_bytes),
+                        attributes={"easycat.surface": "tts"},
+                    )
+                    observability.increment_counter(
+                        "easycat.audio.frames.total",
+                        attributes={"easycat.surface": "tts"},
+                    )
+                delivered = await self._provider.send_audio(input)
         except Exception as exc:
+            observability.increment_counter(
+                "easycat.provider.errors.total",
+                attributes={
+                    "easycat.surface": "tts",
+                    "easycat.provider": type(self._provider).__name__.lower(),
+                    "easycat.error_type": type(exc).__name__,
+                },
+            )
             journal_append_event(
                 ctx,
                 stage=self.name,

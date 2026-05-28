@@ -15,6 +15,20 @@ personally heard this fail on your own voice.
   parrot needs mid-speech partials, which the OpenAI STT default
   does not produce).
 
+> **Minimum to skip the ladder:** chapters 1-2 (Transport + STT
+> events). Chapter 0's PCM math isn't needed here.
+
+## Diff from chapter 2
+
+- **Added:** TTS via `easycat.quick.speak`; a fixed silence-timeout
+  turn detector; a conversation loop that keeps running until
+  Ctrl-C.
+- **New requirement:** `DEEPGRAM_API_KEY` — the parrot's silence
+  timer keys off STT partials, which OpenAI's default STT only emits
+  after the audio uploads.
+- **Modified:** STT events drive an action (speak) instead of just
+  printing.
+
 ## Run it
 
 ```bash
