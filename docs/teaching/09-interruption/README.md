@@ -86,6 +86,45 @@ On barge-in:
 
 Three places, one token. That's the pattern.
 
+<!-- BEGIN auto:snippet src=cancel.py symbol=run_agent -->
+```python
+async def run_agent(client, user_text, sentence_queue, cancel: CancelToken):
+    """Consume the agent stream until cancelled."""
+    stream = await client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a helpful voice assistant. "
+                    "Give a long-ish answer so the reader has something to interrupt."
+                ),
+            },
+            {"role": "user", "content": user_text},
+        ],
+        stream=True,
+    )
+    buffer = ""
+    async for chunk in stream:
+        if cancel.is_cancelled:
+            break
+        delta = chunk.choices[0].delta.content or ""
+        if not delta:
+            continue
+        buffer += delta
+        ready, buffer = split_at_sentence_boundaries(buffer)
+        if ready.strip():
+            spoken = strip_markdown(ready).strip()
+            if spoken:
+                await sentence_queue.put(spoken)
+    if buffer.strip() and not cancel.is_cancelled:
+        spoken = strip_markdown(buffer).strip()
+        if spoken:
+            await sentence_queue.put(spoken)
+    await sentence_queue.put(None)
+```
+<!-- END auto:snippet -->
+
 **What this still doesn't solve:** the bot's memory. The LLM
 thinks it said its whole reply. Next turn it may reference "as I
 mentioned before" — but the user never heard it.
@@ -108,6 +147,39 @@ history.append({"role": "assistant", "content": heard_text})
 ```
 
 Next turn, the LLM's memory matches the user's.
+
+<!-- BEGIN auto:snippet src=estimate.py symbol=TurnLedger -->
+```python
+class TurnLedger:
+    """Per-turn record of what the bot tried to say vs. what played.
+
+    ``sentences_sent`` accumulates the text of each sentence dispatched
+    to TTS in order. ``bytes_sent`` tracks audio bytes that actually
+    reached ``transport.send_audio``. At cancel time we combine them
+    to estimate where, in the concatenated text, the user's ear fell
+    silent.
+    """
+
+    sentences_sent: list[str] = field(default_factory=list)
+    bytes_sent: int = 0
+
+    def heard_text(self) -> str:
+        """Estimate the text prefix the user's ear actually reached.
+
+        Audio bytes map directly to playback duration (OpenAI TTS
+        emits a fixed-rate stream). Convert duration to characters
+        via the expected full-text byte count; clamp to the real
+        length so a complete turn returns the whole string.
+        """
+        if not self.sentences_sent:
+            return ""
+        full_text = " ".join(self.sentences_sent)
+        expected = max(1, _expected_bytes(full_text))
+        estimated_chars = int(len(full_text) * self.bytes_sent / expected)
+        estimated_chars = max(0, min(estimated_chars, len(full_text)))
+        return full_text[:estimated_chars]
+```
+<!-- END auto:snippet -->
 
 ## Honesty note — the triggering utterance
 

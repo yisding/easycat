@@ -24,6 +24,302 @@
 - **Sidebar adds:** SSML / pronunciation, backpressure, and a
   reprise of "partials can flap; act on FINAL only."
 
+<!-- BEGIN auto:diff prev=05-blocking-agent src=main.py -->
+<details>
+<summary>Full unified diff vs <code>05-blocking-agent/main.py</code> (auto-generated)</summary>
+
+```diff
+--- docs/teaching/05-blocking-agent/main.py
++++ docs/teaching/06-streaming-agent/main.py
+@@ -1,9 +1,11 @@
+-"""Chapter 5 — The blocking agent.
+-
+-Same pipeline as chapter 4, but instead of parroting the transcript
+-back, we send it to an LLM and wait for the complete response before
+-handing it to TTS. The bot falls silent for 2-4 seconds per turn.
+-That silence is the whole point of this chapter.
++"""Chapter 6 — Streaming agent + sentence-boundary TTS.
++
++Instead of waiting for the whole LLM response, stream tokens as
++they arrive, split on sentence boundaries, and hand each sentence
++to TTS as soon as it's complete. Sentence N+1 synthesises while
++sentence N is still playing.
++
++First-audio latency drops by ~3× versus chapter 5.
+ 
+ Dependencies:
+     uv sync --extra quickstart --group dev
+@@ -28,24 +30,28 @@
+ from easycat.events import (
+     EventBus,
+     STTEventType,
++    TTSEventType,
+     VADStartSpeaking,
+     VADStopSpeaking,
+ )
+-from easycat.quick import speak
+ from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
++from easycat.session import split_at_sentence_boundaries
++from easycat.strip_markdown import strip_markdown
+ from easycat.stt.factory import STTProviderConfig, create_stt_provider
+ from easycat.transports.local import LocalTransport
++from easycat.tts.factory import TTSProviderConfig, create_tts_provider
++from easycat.tts.input import TTSInput
+ from easycat.vad import VADConfig
+ from easycat.vad.factory import create_vad
+ 
+ PREROLL_FRAMES = 15
+ MODEL = "gpt-4o-mini"
+ RUNS_DIR = Path(__file__).parent / "runs"
+-SESSION_ID = f"ch05-blocking-{int(time.time())}"
++SESSION_ID = f"ch06-streaming-{int(time.time())}"
+ 
+ 
+ class MiniTurnDetector:
+-    """Same as chapter 4."""
++    """Same as chapters 4 & 5."""
+ 
+     def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
+         self._vad = vad
+@@ -69,35 +75,109 @@
+                 self._preroll.append(chunk)
+ 
+ 
+-def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
+-    """Record a closed span with start→end wall time in ms."""
+-    elapsed_ms = (time.monotonic() - t0) * 1000
+-    journal.append(
+-        kind=JournalRecordKind.EVENT,
+-        name=name,
+-        session_id=SESSION_ID,
+-        data={"stage": name.split(".")[1], "elapsed_ms": elapsed_ms, **extra},
+-    )
+-
+-
+-async def blocking_agent(client: AsyncOpenAI, user_text: str) -> str:
+-    """One LLM call. Wait for the full response. Return the string."""
+-    resp = await client.chat.completions.create(
++async def stream_sentences_to_tts(
++    client: AsyncOpenAI,
++    user_text: str,
++    sentence_queue: asyncio.Queue[str | None],
++    journal: InMemoryRingBuffer,
++) -> None:
++    """Iterate the LLM's token stream; flush sentence-by-sentence to the queue.
++
++    We accumulate tokens, then after each delta check whether a complete
++    sentence exists at the start of the buffer. If so, push it to the
++    sentence queue so the TTS drain coroutine can start synth immediately.
++    """
++    stream = await client.chat.completions.create(
+         model=MODEL,
+         messages=[
+             {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
+             {"role": "user", "content": user_text},
+         ],
+-    )
+-    return resp.choices[0].message.content or ""
+-
+-
+-async def run_turn(transport, stt, client, journal) -> None:
+-    """Finalize the current STT stream, run the LLM, speak the reply.
+-
+-    The STT stream has been receiving chunks from the parent caller's
+-    VAD loop already — we just close it here and drain the FINAL.
++        stream=True,
++    )
++
++    buffer = ""
++    first_token_t: float | None = None
++    async for chunk in stream:
++        delta = chunk.choices[0].delta.content or ""
++        if not delta:
++            continue
++        if first_token_t is None:
++            first_token_t = time.monotonic()
++            journal.append(
++                kind=JournalRecordKind.EVENT,
++                name="agent.first_token",
++                session_id=SESSION_ID,
++                data={"stage": "agent", "t_ms": first_token_t * 1000},
++            )
++        buffer += delta
++
++        # split_at_sentence_boundaries returns (ready, leftover). ``ready``
++        # is a prefix of complete sentences; ``leftover`` is the dangling
++        # tail we keep buffering.
++        ready, buffer = split_at_sentence_boundaries(buffer)
++        if ready.strip():
++            spoken = strip_markdown(ready).strip()
++            if spoken:
++                await sentence_queue.put(spoken)
++                journal.append(
++                    kind=JournalRecordKind.EVENT,
++                    name="agent.sentence",
++                    session_id=SESSION_ID,
++                    data={"stage": "agent", "text": spoken},
++                )
++
++    # Flush any trailing text the LLM ended mid-sentence (no terminal
++    # punctuation). The production consume_agent_stream also guards with
++    # has_unclosed_markdown_delimiters; we keep the toy simple.
++    if buffer.strip():
++        spoken = strip_markdown(buffer).strip()
++        if spoken:
++            await sentence_queue.put(spoken)
++    await sentence_queue.put(None)
++
++
++async def drain_sentences_to_speaker(
++    tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
++) -> None:
++    """Take one sentence at a time, synthesise, stream audio to speaker.
++
++    Because ``transport.send_audio`` returns as soon as the chunk is
++    enqueued for playback, the next ``tts.synthesize`` can start while
++    the current sentence is still audible. That is the pipeline overlap.
+     """
++    first_audio_t: float | None = None
++    while True:
++        sentence = await sentence_queue.get()
++        if sentence is None:
++            break
++
++        synth_start = time.monotonic()
++        async for event in tts.synthesize(TTSInput(text=sentence)):
++            if event.type == TTSEventType.AUDIO and event.audio is not None:
++                if first_audio_t is None:
++                    first_audio_t = time.monotonic()
++                    journal.append(
++                        kind=JournalRecordKind.EVENT,
++                        name="tts.first_audio",
++                        session_id=SESSION_ID,
++                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
++                    )
++                await transport.send_audio(event.audio)
++        journal.append(
++            kind=JournalRecordKind.EVENT,
++            name="stage.tts.execute",
++            session_id=SESSION_ID,
++            data={
++                "stage": "tts",
++                "elapsed_ms": (time.monotonic() - synth_start) * 1000,
++                "text": sentence,
++            },
++        )
++
++
++async def run_turn(transport, stt, client, tts, journal) -> None:
++    """STT-final → fan out to LLM-stream → sentence-queue → TTS-drain."""
+     final_text = ""
+     stt_final_t = None
+     async for event in stt.events():
+@@ -108,55 +188,26 @@
+     if not final_text.strip() or stt_final_t is None:
+         return
+ 
++    journal.append(
++        kind=JournalRecordKind.EVENT,
++        name="stt.final",
++        session_id=SESSION_ID,
++        data={"stage": "stt", "text": final_text, "t_ms": stt_final_t * 1000},
++    )
+     print(f"  user: {final_text!r}")
+-
+-    # Sub-gap 1: STT final → we start the LLM call. Just our own
+-    # dispatch overhead; should be under a millisecond.
+-    agent_dispatch = time.monotonic()
+-    span(
+-        journal,
+-        "stage.stt_to_agent",
+-        stt_final_t,
+-        at_ms=(agent_dispatch - stt_final_t) * 1000,
+-    )
+-
+-    # Sub-gap 2: the LLM call itself. The biggest sub-gap — usually
+-    # 1-3 seconds of silence on a small model, more on a large one.
+-    agent_start = time.monotonic()
+-    reply = await blocking_agent(client, final_text)
+-    agent_end = time.monotonic()
+-    span(
+-        journal,
+-        "stage.agent.execute",
+-        agent_start,
+-        prompt=final_text,
+-        reply=reply,
+-    )
+-
+-    # Sub-gap 3: agent response → first TTS audio reaches the speaker.
+-    # The OpenAI TTS provider streams PCM back, so ``speak`` blocks
+-    # until the whole file is enqueued on the transport. For teaching
+-    # purposes we report the full synth-and-enqueue duration.
+-    tts_start = time.monotonic()
+-    print(f"  bot:  {reply!r}")
+-    await speak(transport, reply)
+-    span(journal, "stage.tts.execute", tts_start, text=reply)
+-
++    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
++    await asyncio.gather(
++        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
++        drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
++    )
+     total_gap = (time.monotonic() - stt_final_t) * 1000
++    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
+     journal.append(
+         kind=JournalRecordKind.EVENT,
+         name="turn.gap",
+         session_id=SESSION_ID,
+-        data={
+-            "stage": "turn",
+-            "total_gap_ms": total_gap,
+-            "stt_to_agent_ms": (agent_dispatch - stt_final_t) * 1000,
+-            "agent_ms": (agent_end - agent_start) * 1000,
+-            "tts_ms": (time.monotonic() - tts_start) * 1000,
+-            "text": reply,
+-        },
+-    )
+-    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
++        data={"stage": "turn", "total_gap_ms": total_gap, "text": final_text},
++    )
+ 
+ 
+ async def main() -> None:
+@@ -168,6 +219,9 @@
+     vad = create_vad(VADConfig())
+     detector = MiniTurnDetector(vad)
+     client = AsyncOpenAI()
++    tts = create_tts_provider(
++        TTSProviderConfig(provider="openai", settings={"api_key": os.environ["OPENAI_API_KEY"]})
++    )
+ 
+     def stt_factory():
+         return create_stt_provider(
+@@ -179,10 +233,9 @@
+         )
+ 
+     await transport.connect()
+-    print("Talk. Each turn will feel slow. That is the lesson.\n")
++    print("Streaming agent. Ctrl-C to stop.\n")
+ 
+     async def collect_turns():
+-        """Same shape as chapter 4: stream live into STT per turn."""
+         stt = None
+         async for tag, chunk in detector.frames(transport.receive_audio()):
+             if tag == "speech_started":
+@@ -194,7 +247,7 @@
+                 await stt.send_audio(chunk)
+             elif tag == "speech_ended" and stt is not None:
+                 await stt.end_stream()
+-                await run_turn(transport, stt, client, journal)
++                await run_turn(transport, stt, client, tts, journal)
+                 stt = None
+ 
+     try:
+```
+
+</details>
+<!-- END auto:diff -->
+
 ## Run it
 
 ```bash
@@ -71,6 +367,117 @@ N+1 can begin synthesising while sentence N is **still playing**
 from the speaker queue. (Only one TTS synth runs at a time — but
 playback and the next synth overlap, and so does the next token
 arriving at the splitter.)
+
+The splitter half:
+
+<!-- BEGIN auto:snippet src=main.py symbol=stream_sentences_to_tts -->
+```python
+async def stream_sentences_to_tts(
+    client: AsyncOpenAI,
+    user_text: str,
+    sentence_queue: asyncio.Queue[str | None],
+    journal: InMemoryRingBuffer,
+) -> None:
+    """Iterate the LLM's token stream; flush sentence-by-sentence to the queue.
+
+    We accumulate tokens, then after each delta check whether a complete
+    sentence exists at the start of the buffer. If so, push it to the
+    sentence queue so the TTS drain coroutine can start synth immediately.
+    """
+    stream = await client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
+            {"role": "user", "content": user_text},
+        ],
+        stream=True,
+    )
+
+    buffer = ""
+    first_token_t: float | None = None
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content or ""
+        if not delta:
+            continue
+        if first_token_t is None:
+            first_token_t = time.monotonic()
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="agent.first_token",
+                session_id=SESSION_ID,
+                data={"stage": "agent", "t_ms": first_token_t * 1000},
+            )
+        buffer += delta
+
+        # split_at_sentence_boundaries returns (ready, leftover). ``ready``
+        # is a prefix of complete sentences; ``leftover`` is the dangling
+        # tail we keep buffering.
+        ready, buffer = split_at_sentence_boundaries(buffer)
+        if ready.strip():
+            spoken = strip_markdown(ready).strip()
+            if spoken:
+                await sentence_queue.put(spoken)
+                journal.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="agent.sentence",
+                    session_id=SESSION_ID,
+                    data={"stage": "agent", "text": spoken},
+                )
+
+    # Flush any trailing text the LLM ended mid-sentence (no terminal
+    # punctuation). The production consume_agent_stream also guards with
+    # has_unclosed_markdown_delimiters; we keep the toy simple.
+    if buffer.strip():
+        spoken = strip_markdown(buffer).strip()
+        if spoken:
+            await sentence_queue.put(spoken)
+    await sentence_queue.put(None)
+```
+<!-- END auto:snippet -->
+
+…feeding the drain half:
+
+<!-- BEGIN auto:snippet src=main.py symbol=drain_sentences_to_speaker -->
+```python
+async def drain_sentences_to_speaker(
+    tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
+) -> None:
+    """Take one sentence at a time, synthesise, stream audio to speaker.
+
+    Because ``transport.send_audio`` returns as soon as the chunk is
+    enqueued for playback, the next ``tts.synthesize`` can start while
+    the current sentence is still audible. That is the pipeline overlap.
+    """
+    first_audio_t: float | None = None
+    while True:
+        sentence = await sentence_queue.get()
+        if sentence is None:
+            break
+
+        synth_start = time.monotonic()
+        async for event in tts.synthesize(TTSInput(text=sentence)):
+            if event.type == TTSEventType.AUDIO and event.audio is not None:
+                if first_audio_t is None:
+                    first_audio_t = time.monotonic()
+                    journal.append(
+                        kind=JournalRecordKind.EVENT,
+                        name="tts.first_audio",
+                        session_id=SESSION_ID,
+                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
+                    )
+                await transport.send_audio(event.audio)
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="stage.tts.execute",
+            session_id=SESSION_ID,
+            data={
+                "stage": "tts",
+                "elapsed_ms": (time.monotonic() - synth_start) * 1000,
+                "text": sentence,
+            },
+        )
+```
+<!-- END auto:snippet -->
 
 ## The toy vs. the production version
 

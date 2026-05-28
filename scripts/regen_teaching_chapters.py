@@ -124,7 +124,8 @@ def render_snippet(chapter: Chapter, attrs: dict[str, str]) -> str:
 def render_diff(chapter: Chapter, attrs: dict[str, str]) -> str:
     prev_slug = attrs["prev"]
     src_name = attrs.get("src", "main.py")
-    prev_path = TEACHING / prev_slug / src_name
+    prev_src = attrs.get("prev_src", src_name)
+    prev_path = TEACHING / prev_slug / prev_src
     cur_path = chapter.path / src_name
     prev_lines = prev_path.read_text().splitlines(keepends=True)
     cur_lines = cur_path.read_text().splitlines(keepends=True)
@@ -132,7 +133,7 @@ def render_diff(chapter: Chapter, attrs: dict[str, str]) -> str:
     rel_cur = cur_path.relative_to(ROOT).as_posix()
     diff = difflib.unified_diff(prev_lines, cur_lines, fromfile=rel_prev, tofile=rel_cur, n=3)
     diff_text = "".join(diff).rstrip() + "\n"
-    summary = f"Full unified diff vs <code>{prev_slug}/{src_name}</code> (auto-generated)"
+    summary = f"Full unified diff vs <code>{prev_slug}/{prev_src}</code> (auto-generated)"
     return f"\n<details>\n<summary>{summary}</summary>\n\n```diff\n{diff_text}```\n\n</details>\n"
 
 
