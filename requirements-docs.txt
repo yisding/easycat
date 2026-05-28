@@ -6,6 +6,6 @@
 # Bump deliberately, not blindly — re-run `mkdocs build --strict` after
 # any change here.
 mkdocs==1.6.1
-mkdocs-material==9.5.49
+mkdocs-material==9.7.6
 pymdown-extensions==10.14.3
 pygments==2.18.0
