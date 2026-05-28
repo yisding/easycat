@@ -3,15 +3,16 @@ from __future__ import annotations
 import json
 import os
 import platform
+import statistics
 import sys
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from statistics import median
-from typing import Any
+from typing import Any, Literal
 
 LATENCY_TEST_FILE = "tests/e2e/test_plan_7_latency_benchmark.py"
 LATENCY_SMOKE_TEST = "test_single_full_stack_latency_probe"
@@ -28,13 +29,147 @@ class LatencyComparisonThresholds:
     relative_regression: float = 0.2
     absolute_regression_ms: float = 200.0
     min_samples: int = 3
+    regression_percentile: Literal["p50", "p90", "p95", "p99"] = "p95"
 
-    def to_dict(self) -> dict[str, float | int]:
+    def to_dict(self) -> dict[str, float | int | str]:
         return {
             "relative_regression": self.relative_regression,
             "absolute_regression_ms": self.absolute_regression_ms,
             "min_samples": self.min_samples,
+            "regression_percentile": self.regression_percentile,
         }
+
+
+@dataclass(frozen=True)
+class LatencyPercentileStats:
+    count: int
+    p50: float | None
+    p90: float | None
+    p95: float | None
+    p99: float | None
+
+    def to_dict(self) -> dict[str, float | int | None]:
+        return {
+            "count": self.count,
+            "p50": self.p50,
+            "p90": self.p90,
+            "p95": self.p95,
+            "p99": self.p99,
+        }
+
+    @classmethod
+    def from_values(cls, values: Sequence[float | None]) -> LatencyPercentileStats:
+        cleaned = [float(value) for value in values if value is not None]
+        count = len(cleaned)
+        if count == 0:
+            return cls(count=0, p50=None, p90=None, p95=None, p99=None)
+        if count == 1:
+            only = cleaned[0]
+            return cls(count=1, p50=only, p90=only, p95=only, p99=only)
+        # exclusive: (N+1)*p formula matches operator-intuition for tail samples
+        cuts = statistics.quantiles(cleaned, n=100, method="exclusive")
+        return cls(
+            count=count,
+            p50=cuts[49],
+            p90=cuts[89],
+            p95=cuts[94],
+            p99=cuts[98],
+        )
+
+
+@dataclass(frozen=True)
+class LatencyBudget:
+    stage: str
+    max_ms: float
+    percentile: str = "p95"
+
+    def __post_init__(self) -> None:
+        if self.percentile not in ("p50", "p90", "p95", "p99"):
+            raise ValueError(
+                f"LatencyBudget percentile must be one of p50, p90, p95, p99; "
+                f"got {self.percentile!r}"
+            )
+
+    def to_dict(self) -> dict[str, float | str]:
+        return {"stage": self.stage, "max_ms": self.max_ms, "percentile": self.percentile}
+
+
+# Calibrated against the live-stack SLO defaults in
+# tests/e2e/test_plan_7_latency_benchmark.py (baseline p50 5000 ms, p90 6500 ms,
+# per-probe sanity bound 8000 ms). Loose enough to ride out live-API jitter,
+# tight enough that an order-of-magnitude regression still fails CI.
+DEFAULT_BUDGETS: tuple[LatencyBudget, ...] = (
+    LatencyBudget(stage="total_ms", max_ms=8000.0, percentile="p95"),
+    LatencyBudget(stage="tts_ttfb_ms", max_ms=1500.0, percentile="p95"),
+    LatencyBudget(stage="llm_ttft_ms", max_ms=2500.0, percentile="p95"),
+)
+
+
+@dataclass(frozen=True)
+class LatencyBudgetViolation:
+    stage: str
+    percentile: str
+    observed_ms: float
+    budget_ms: float
+    scope: str
+
+    def to_dict(self) -> dict[str, float | str]:
+        return {
+            "stage": self.stage,
+            "percentile": self.percentile,
+            "observed_ms": self.observed_ms,
+            "budget_ms": self.budget_ms,
+            "scope": self.scope,
+        }
+
+
+def evaluate_budgets(
+    percentiles: Mapping[str, Any],
+    budgets: Sequence[LatencyBudget],
+) -> list[LatencyBudgetViolation]:
+    violations: list[LatencyBudgetViolation] = []
+    overall = percentiles.get("overall")
+    if isinstance(overall, Mapping):
+        violations.extend(_evaluate_scope(overall, budgets, scope="overall"))
+    by_condition = percentiles.get("by_condition")
+    if isinstance(by_condition, Mapping):
+        for condition_id, stage_stats in sorted(
+            by_condition.items(), key=lambda item: str(item[0])
+        ):
+            if not isinstance(stage_stats, Mapping):
+                continue
+            violations.extend(
+                _evaluate_scope(stage_stats, budgets, scope=f"condition:{condition_id}")
+            )
+    return violations
+
+
+def _evaluate_scope(
+    stage_stats: Mapping[str, Any],
+    budgets: Sequence[LatencyBudget],
+    *,
+    scope: str,
+) -> list[LatencyBudgetViolation]:
+    results: list[LatencyBudgetViolation] = []
+    for budget in budgets:
+        stats = stage_stats.get(budget.stage)
+        if not isinstance(stats, Mapping):
+            continue
+        observed = stats.get(budget.percentile)
+        if observed is None:
+            continue
+        observed_ms = float(observed)
+        if observed_ms > budget.max_ms:
+            results.append(
+                LatencyBudgetViolation(
+                    stage=budget.stage,
+                    percentile=budget.percentile,
+                    observed_ms=observed_ms,
+                    budget_ms=float(budget.max_ms),
+                    scope=scope,
+                )
+            )
+    return results
 
 
 def latency_pytest_args(mode: LatencyMode | str) -> list[str]:
@@ -186,9 +321,23 @@ def build_latency_artifact(
     baseline: dict[str, Any] | None = None,
     environment: dict[str, Any] | None = None,
     clock_source: str = "time.monotonic",
+    budgets: Sequence[LatencyBudget] | None = None,
 ) -> dict[str, Any]:
     mode = LatencyMode(mode)
     generated_at = generated_at or datetime.now(UTC)
+    effective_budgets: Sequence[LatencyBudget] = DEFAULT_BUDGETS if budgets is None else budgets
+    percentiles = _build_percentile_block(samples)
+    # Budgets enforce tail-latency SLOs and are only meaningful when the run
+    # produced enough samples for those tails to be statistically eligible.
+    # SMOKE runs are explicitly low-sample (p95 is marked ineligible by
+    # `_summarize_totals`), so one slow probe would otherwise turn the default
+    # `easycat validate latency` invocation into a hard fail. Skip budget
+    # evaluation in SMOKE; sweep runs continue to enforce.
+    budget_violations = (
+        [violation.to_dict() for violation in evaluate_budgets(percentiles, effective_budgets)]
+        if mode is not LatencyMode.SMOKE
+        else []
+    )
     return {
         "schema_version": 1,
         "kind": "latency_validation",
@@ -200,6 +349,8 @@ def build_latency_artifact(
         "samples": [sample.to_dict() for sample in samples],
         "reliability_samples": [sample.to_dict() for sample in reliability_samples or []],
         "summary": _summarize_samples(mode, samples),
+        "percentiles": percentiles,
+        "budget_violations": budget_violations,
     }
 
 
@@ -271,6 +422,11 @@ def compare_latency_baseline(
     thresholds: LatencyComparisonThresholds | None = None,
 ) -> dict[str, Any]:
     thresholds = thresholds or LatencyComparisonThresholds()
+    if thresholds.regression_percentile not in ("p50", "p90", "p95", "p99"):
+        raise ValueError(
+            f"regression_percentile must be one of p50, p90, p95, p99; "
+            f"got {thresholds.regression_percentile!r}"
+        )
     current_groups = _comparison_samples_by_condition(current)
     baseline_groups = _comparison_samples_by_condition(baseline)
     condition_results = [
@@ -299,6 +455,34 @@ def compare_latency_baseline(
         "thresholds": thresholds.to_dict(),
         "conditions": condition_results,
     }
+
+
+_PERCENTILE_STAGE_FIELDS: tuple[str, ...] = tuple(
+    item.name for item in fields(LatencyStageDurations)
+)
+
+
+def _build_percentile_block(samples: list[LatencySample]) -> dict[str, Any]:
+    eligible = [sample for sample in samples if not sample.warmup and sample.failure_class is None]
+    overall = {
+        stage: LatencyPercentileStats.from_values(
+            [getattr(sample.stages, stage) for sample in eligible]
+        ).to_dict()
+        for stage in _PERCENTILE_STAGE_FIELDS
+    }
+    by_condition_samples: dict[str, list[LatencySample]] = defaultdict(list)
+    for sample in eligible:
+        by_condition_samples[sample.condition_id].append(sample)
+    by_condition = {
+        condition_id: {
+            stage: LatencyPercentileStats.from_values(
+                [getattr(sample.stages, stage) for sample in condition_samples]
+            ).to_dict()
+            for stage in _PERCENTILE_STAGE_FIELDS
+        }
+        for condition_id, condition_samples in sorted(by_condition_samples.items())
+    }
+    return {"overall": overall, "by_condition": by_condition}
 
 
 def _summarize_samples(mode: LatencyMode, samples: list[LatencySample]) -> dict[str, Any]:
@@ -387,10 +571,22 @@ def _compare_condition(
     baseline_totals = [sample.stages.total_ms for sample in baseline_samples]
     current_values = [value for value in current_totals if value is not None]
     baseline_values = [value for value in baseline_totals if value is not None]
-    current_median = median(current_values)
-    baseline_median = median(baseline_values)
-    delta_ms = current_median - baseline_median
-    relative_delta = delta_ms / baseline_median if baseline_median > 0 else None
+    percentile = thresholds.regression_percentile
+    current_observed = getattr(LatencyPercentileStats.from_values(current_values), percentile)
+    baseline_observed = getattr(LatencyPercentileStats.from_values(baseline_values), percentile)
+    if current_observed is None or baseline_observed is None:
+        return {
+            "condition_id": condition_id,
+            "baseline_version": baseline_version,
+            "current_count": len(current_values),
+            "baseline_count": len(baseline_values),
+            "percentile": percentile,
+            "status": "info",
+            "reason": "no_samples",
+            "refresh_required": False,
+        }
+    delta_ms = current_observed - baseline_observed
+    relative_delta = delta_ms / baseline_observed if baseline_observed > 0 else None
     relative_regression = (
         relative_delta is not None and relative_delta >= thresholds.relative_regression
     )
@@ -401,8 +597,9 @@ def _compare_condition(
         "baseline_version": baseline_version,
         "current_count": len(current_values),
         "baseline_count": len(baseline_values),
-        "current_median_ms": current_median,
-        "baseline_median_ms": baseline_median,
+        "percentile": percentile,
+        f"current_{percentile}_ms": current_observed,
+        f"baseline_{percentile}_ms": baseline_observed,
         "delta_ms": delta_ms,
         "relative_delta": relative_delta,
         "regression": {

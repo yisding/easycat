@@ -224,6 +224,14 @@ class AgentStage:
                     yield event
         except Exception as exc:
             errored = True
+            observability.increment_counter(
+                "easycat.provider.errors.total",
+                attributes={
+                    "easycat.surface": "agent_bridge",
+                    "easycat.provider": type(self._provider).__name__.lower(),
+                    "easycat.error_type": type(exc).__name__,
+                },
+            )
             journal_append_event(
                 ctx,
                 stage=self.name,

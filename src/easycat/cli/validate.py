@@ -328,9 +328,44 @@ def report_command(
                 f"{failure_class} {failure.get('message', '')}"
             )
 
+    _render_latency_percentiles(payload.get("latency"))
     _render_artifacts(payload.get("artifacts"))
 
     raise typer.Exit(0 if status == "pass" else 1)
+
+
+def _render_latency_percentiles(latency: object) -> None:
+    if not isinstance(latency, dict):
+        return
+    percentiles = latency.get("percentiles")
+    if not isinstance(percentiles, dict):
+        return
+    overall = percentiles.get("overall")
+    if not isinstance(overall, dict):
+        return
+    for stage, stats in sorted(overall.items()):
+        if not isinstance(stats, dict):
+            continue
+        tokens = [stage]
+        for percentile in ("p50", "p90", "p95", "p99"):
+            value = stats.get(percentile)
+            if value is None:
+                continue
+            tokens.append(f"{percentile}={_format_percentile_value(value)}")
+        if len(tokens) > 1:
+            stdout_console.print(" ".join(tokens))
+
+
+def _format_percentile_value(value: object) -> str:
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return f"{value:.2f}"
+    return str(value)
 
 
 def _load_report_payload(path: Path) -> dict[str, object]:

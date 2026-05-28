@@ -767,6 +767,60 @@ def test_validate_report_cli_rejects_unknown_kind(cli: CliRunner, tmp_path: Path
     assert "unknown validation report kind: other" in result.stdout
 
 
+def test_validate_report_cli_renders_latency_percentiles(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """When latency.percentiles is present, render a one-line summary per stage."""
+    report_path = tmp_path / "report.json"
+    run = _validation_run(
+        latency={
+            "schema_version": 1,
+            "kind": "latency_validation",
+            "mode": "sweep",
+            "generated_at": "2026-05-22T12:00:00Z",
+            "baseline": {"comparison": "not_configured"},
+            "environment": {},
+            "clock_source": "time.monotonic",
+            "samples": [],
+            "reliability_samples": [],
+            "summary": {},
+            "percentiles": {
+                "overall": {
+                    "total_ms": {
+                        "p50": 500.0,
+                        "p90": 900.0,
+                        "p95": 1100.0,
+                        "p99": 1300.0,
+                        "count": 20,
+                    },
+                    "tts_ttfb_ms": {
+                        "p50": 80.0,
+                        "p90": 120.0,
+                        "p95": 150.0,
+                        "p99": 180.0,
+                        "count": 20,
+                    },
+                },
+                "by_condition": {},
+            },
+            "budget_violations": [],
+        },
+    )
+    report_path.write_text(run.to_json())
+
+    result = cli.invoke(app, ["validate", "report", str(report_path)])
+
+    assert result.exit_code == 0
+    # Each stage rendered on its own line with p50/p95/p99 figures.
+    assert "total_ms" in result.stdout
+    assert "p50=500" in result.stdout
+    assert "p95=1100" in result.stdout
+    assert "p99=1300" in result.stdout
+    assert "tts_ttfb_ms" in result.stdout
+    assert "p95=150" in result.stdout
+
+
 def test_validate_report_cli_renders_failed_run_details(cli: CliRunner, tmp_path: Path) -> None:
     report_path = tmp_path / "report.json"
     report_path.write_text(

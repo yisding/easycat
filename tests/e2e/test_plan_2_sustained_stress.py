@@ -33,6 +33,7 @@ from easycat.validation.latency import (
     ReliabilitySignals,
     append_reliability_sample,
 )
+from easycat.validation.reliability import EventLoopLagSampler
 from tests.e2e._assertions import (
     assert_no_dangling_artifacts,
     assert_strictly_monotonic_sequences,
@@ -76,34 +77,6 @@ def _append_stress_reliability_sample(
             ),
         ),
     )
-
-
-class _EventLoopLagSampler:
-    def __init__(self, *, interval_s: float = 0.02) -> None:
-        self._interval_s = interval_s
-        self._task: asyncio.Task[None] | None = None
-        self._running = False
-        self.max_lag_ms = 0.0
-
-    async def start(self) -> None:
-        self._running = True
-        self._task = asyncio.create_task(self._run())
-
-    async def stop(self) -> float:
-        self._running = False
-        task = self._task
-        if task is not None:
-            await task
-        return round(self.max_lag_ms, 3)
-
-    async def _run(self) -> None:
-        loop = asyncio.get_running_loop()
-        next_deadline = loop.time() + self._interval_s
-        while self._running:
-            await asyncio.sleep(max(0.0, next_deadline - loop.time()))
-            now = loop.time()
-            self.max_lag_ms = max(self.max_lag_ms, (now - next_deadline) * 1000.0)
-            next_deadline = now + self._interval_s
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +154,7 @@ async def test_fifty_turns_single_session_scripted(
     handle = await ws_server_factory(builder)
 
     rss_before_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    lag_sampler = _EventLoopLagSampler()
+    lag_sampler = EventLoopLagSampler()
     await lag_sampler.start()
 
     async with WSVoiceClient(handle.url) as client:
@@ -288,7 +261,7 @@ async def test_concurrent_sessions_journal_isolation(
         return session
 
     handle = await ws_server_factory(builder)
-    lag_sampler = _EventLoopLagSampler()
+    lag_sampler = EventLoopLagSampler()
     await lag_sampler.start()
 
     async def run_client() -> None:
@@ -363,7 +336,7 @@ async def test_ten_turns_live_openai(
         return build_live_session(transport=transport)
 
     handle = await ws_server_factory(builder)
-    lag_sampler = _EventLoopLagSampler()
+    lag_sampler = EventLoopLagSampler()
     await lag_sampler.start()
 
     speech_16k = voice_fixtures["short"].read_bytes()
