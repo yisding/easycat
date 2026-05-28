@@ -2505,7 +2505,7 @@ Your job is to find the failure using only the journal.</p>
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span>docs/teaching/11-journal/bundles/bug_03_ghost_interruption.bundle<span class="w"> </span>--name<span class="w"> </span>interruption.start
 </span></code></pre></div>
 <p>Under the hood it is:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span> <span class="nn">easycat.debug.testing</span> <span class="kn">import</span> <span class="n">load_bundle</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">easycat.debug.testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_bundle</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">b</span> <span class="o">=</span> <span class="n">load_bundle</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">b</span><span class="o">.</span><span class="n">records</span><span class="p">():</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="o">...</span>
