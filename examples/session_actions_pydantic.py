@@ -14,8 +14,10 @@ try:
 except ImportError as exc:
     raise SystemExit("PydanticAI is required. Install with: uv add easycat[pydantic-ai]") from exc
 
-from easycat import EasyConfig, SessionActions, run
+from easycat import EasyConfig, SessionActions, require_env, run
 from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
+
+require_env("OPENAI_API_KEY")
 
 
 @dataclass

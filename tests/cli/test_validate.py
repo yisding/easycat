@@ -298,7 +298,7 @@ def test_live_validation_runs_configured_provider_and_redacts_reports(
     assert payload["providers"][0]["state"] == "passed"
     assert payload["provider_reports"][0]["status"] == "pass"
     assert payload["provider_reports"][0]["capabilities"]["streaming"] is False
-    report_artifact = payload["artifacts"]["provider_openai_stt"]["path"]
+    report_artifact = result.run.artifacts["provider_openai_stt"].path
     assert Path(report_artifact).exists()
 
 

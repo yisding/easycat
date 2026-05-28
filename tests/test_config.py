@@ -350,9 +350,11 @@ def test_create_session_auto_adapts_openai_agents():
 
 def test_create_session_auto_adapts_pydantic_agents():
     pydantic_ai_mod = pytest.importorskip("pydantic_ai")
+    from pydantic_ai.models.test import TestModel
+
     from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 
-    raw = pydantic_ai_mod.Agent("openai:gpt-4o-mini")
+    raw = pydantic_ai_mod.Agent(TestModel(custom_output_text="ok"))
     config = EasyConfig(openai_api_key="test-key", agent=raw)
     try:
         session = create_session(config)

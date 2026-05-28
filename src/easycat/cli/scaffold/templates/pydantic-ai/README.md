@@ -39,9 +39,11 @@ Ctrl-C to quit.
 - **Add more tools:** decorate with `@voice_agent.tool_plain` (or
   `@voice_agent.tool` if you need the run context) and PydanticAI will
   dispatch based on the request.
-- **Swap the model:** change `"openai:gpt-4.1-mini"` to any model string
-  PydanticAI supports (`"anthropic:claude-sonnet-4-5"`,
-  `"groq:llama-3.3-70b"`, etc.). Add the matching API key to `.env`.
+- **Swap the model:** change `"openai:gpt-4.1-mini"` to another model string
+  PydanticAI supports, then add the matching API key and provider extra if
+  that provider is not part of the default PydanticAI install. For example:
+  `uv add "pydantic-ai[groq]<2"` for stable v1, or
+  `uv add "pydantic-ai[groq]==2.0.0b2"` to opt into the v2 beta.
 - **Need multiple agents?** Extend `agent.py` with PydanticAI's graph or
   handoff patterns; this template keeps the first run intentionally small.
 - **Debug a session:** pass `debug="full"` to `EasyConfig(...)`. EasyCat

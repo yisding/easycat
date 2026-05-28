@@ -20,7 +20,8 @@ easycat = "easycat.debug._pytest_plugin"
 
 [project.optional-dependencies]
 openai-agents = ["openai-agents>=0.6.2"]
-pydantic-ai = ["pydantic-ai>=0.1"]
+pydantic-ai = ["pydantic-ai>=1.0.0,<2.0.0"]
+pydantic-ai-v2-beta = ["pydantic-ai==2.0.0b2"]
 langchain = ["langchain-core>=0.3.0"]
 langgraph = ["langchain-core>=0.3.0", "langgraph>=0.2.0"]
 llama-agents = ["llama-index-workflows>=2.15.0,<3.0.0", "llama-agents-client>=0.3.0,<1.0.0"]
@@ -83,6 +84,14 @@ all = [
 [build-system]
 requires = ["uv_build>=0.8.17,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "pydantic-ai" },
+        { extra = "pydantic-ai-v2-beta" },
+    ],
+]
 
 [dependency-groups]
 dev = [
