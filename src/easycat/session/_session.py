@@ -18,6 +18,7 @@ from uuid import uuid4
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat._health_check import PeriodicHealthChecker
+from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
 from easycat.events import (
@@ -70,7 +71,6 @@ from easycat.session._cancel_orchestrator import CancelOrchestrator
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._stt_committer import STTCommitter
 from easycat.session._tts_scheduler import TTSScheduler
-from easycat.session._turn_context import TurnContext
 from easycat.session._turn_runner import TurnRunner
 from easycat.session._types import (
     _TM_TO_TURN_STATE,

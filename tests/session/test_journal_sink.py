@@ -1,5 +1,6 @@
 import pytest
 
+from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.events import EventBus, STTFinal, TransportDegraded
 from easycat.runtime.artifacts import InMemoryArtifactStore
@@ -7,7 +8,6 @@ from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._session import Session
-from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig
 
 

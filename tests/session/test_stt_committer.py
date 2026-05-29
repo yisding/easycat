@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.events import (
     Error,
@@ -21,7 +22,6 @@ from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._stt_committer import STTCommitter
-from easycat.session._turn_context import TurnContext
 from easycat.timeouts import TimeoutConfig
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
 

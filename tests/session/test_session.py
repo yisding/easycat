@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -45,7 +46,6 @@ from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactS
 from easycat.runtime.journal import InMemoryRingBuffer, SqliteJournal
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
-from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig, TurnState
 from easycat.timeouts import AgentTimeoutError
 from easycat.tts.input import TTSInput

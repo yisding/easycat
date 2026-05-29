@@ -328,8 +328,8 @@ def _make_run_ctx() -> object:
 
 
 def _make_turn_ctx() -> object:
+    from easycat._turn_context import TurnContext
     from easycat.cancel import CancelToken
-    from easycat.session._turn_context import TurnContext
 
     return TurnContext(turn_id="turn-1", cancel_token=CancelToken())
 

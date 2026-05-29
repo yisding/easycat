@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.runtime.context import RunContext
 from easycat.runtime.journal import InMemoryRingBuffer
-from easycat.session._turn_context import TurnContext
 from easycat.stages import (
     NONDETERMINISTIC_FIELDS,
     AgentStage,

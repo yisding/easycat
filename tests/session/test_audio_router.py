@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -22,7 +23,6 @@ from easycat.events import (
 from easycat.runtime.context import RunContext
 from easycat.session._audio_router import AudioRouter
 from easycat.session._journal_sink import SessionJournalSink
-from easycat.session._turn_context import TurnContext
 from easycat.stages.audio import AudioStage
 from easycat.stages.stt import STTStage
 from easycat.stages.transport import TransportStage

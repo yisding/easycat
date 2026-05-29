@@ -16,8 +16,8 @@ from easycat.integrations.agents.base import CancellationMode
 from easycat.session.text import _cleanup_estimation_text, _truncate_partial_text_to_boundary
 
 if TYPE_CHECKING:
+    from easycat._turn_context import TurnContext
     from easycat.cancel import CancelToken
-    from easycat.session._turn_context import TurnContext
 
 logger = logging.getLogger(__name__)
 

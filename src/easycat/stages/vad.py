@@ -9,10 +9,10 @@ from typing import Any
 
 from easycat import _observability as observability
 from easycat._audio_utils import to_mono_chunk
+from easycat._turn_context import TurnContext
 from easycat.audio_format import AudioChunk
 from easycat.runtime.context import RunContext
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
-from easycat.session._turn_context import TurnContext
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,

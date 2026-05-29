@@ -47,7 +47,7 @@ from easycat.timeouts import STTTimeoutError, TimeoutConfig
 from easycat.turn_manager import TurnManagerState
 
 if TYPE_CHECKING:
-    from easycat.session._turn_context import TurnContext
+    from easycat._turn_context import TurnContext
     from easycat.turn_manager import TurnManager
 
 logger = logging.getLogger(__name__)

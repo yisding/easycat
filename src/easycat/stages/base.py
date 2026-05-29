@@ -11,10 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
+from easycat._turn_context import TurnContext
 from easycat.runtime.context import RunContext
 from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS  # noqa: F401  (re-export)
 from easycat.runtime.records import JournalRecordKind
-from easycat.session._turn_context import TurnContext
 
 if TYPE_CHECKING:
     # Annotation-only imports.  At runtime ``ReplaySpec`` resolves via

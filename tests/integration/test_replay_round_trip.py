@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.debug.bundle import RunBundle
@@ -30,7 +31,6 @@ from easycat.runtime.artifacts import InMemoryArtifactStore
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.replay import ReplayFidelity, ReplaySpec
 from easycat.session._session import Session
-from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig
 from easycat.turn_manager import TurnManagerConfig
 

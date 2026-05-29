@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from easycat._turn_context import TurnContext
 from easycat.events import (
     AgentDelta,
     Error,
@@ -23,7 +24,6 @@ from easycat.events import (
     ToolCallResult,
     ToolCallStarted,
 )
-from easycat.session._turn_context import TurnContext
 from easycat.session.text import (
     has_unclosed_markdown_delimiters,
     split_at_sentence_boundaries,

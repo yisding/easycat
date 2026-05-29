@@ -8,9 +8,9 @@ import time
 from typing import Any
 
 from easycat import _observability as observability
+from easycat._turn_context import TurnContext
 from easycat.runtime.context import RunContext
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
-from easycat.session._turn_context import TurnContext
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,

@@ -52,7 +52,7 @@ from easycat.stages.vad import VADStage
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
-    from easycat.session._turn_context import TurnContext
+    from easycat._turn_context import TurnContext
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +315,7 @@ class AudioRouter:
 
     async def on_audio_delivered(self, event: TransportAudioDelivered) -> None:
         """Finalize accounting for buffered transports at their no-clear point."""
-        from easycat.session._turn_context import TurnContext as _TurnCtx
+        from easycat._turn_context import TurnContext as _TurnCtx
 
         turn = event.turn_ref if isinstance(event.turn_ref, _TurnCtx) else None
         if turn is None:

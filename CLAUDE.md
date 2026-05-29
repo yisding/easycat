@@ -25,7 +25,6 @@ uv run python examples/ws_server.py  # Run an example
 **Key modules:**
 - `session/` — Package containing the core orchestrator. Key files:
   - `_session.py` — `Session` class. Wires pipeline stages, manages turn lifecycle, coordinates agent/TTS.
-  - `_turn_context.py` — `TurnContext` per-turn state (timing, playback tracking, cancel token). Created fresh each turn.
   - `_streaming.py` — `consume_agent_stream()` translates agent stream events into TTS payloads on sentence boundaries.
   - `_turn_runner.py` — Drives a single turn end-to-end (agent run → streaming → TTS scheduling), holding the logic that used to be inlined in `_session.py`.
   - `_audio_router.py` — Routes captured audio through noise reduction / echo cancellation and feeds TTS output back as AEC reference audio.
@@ -42,6 +41,7 @@ uv run python examples/ws_server.py  # Run an example
 - `stages/` — Pipeline stages wrapping providers with a uniform `execute` / `snapshot_state` / `handle_upstream` surface and optional journal recording. `Stage` protocol defined in `stages/base.py`.
 - `debug/` — `RunBundle` for serializing/loading complete session recordings. `load_bundle()` for test fixtures.
 - `smart_turn.py` — Optional ONNX-based endpoint detection that classifies whether a user has finished speaking, enabling faster turn transitions without waiting for silence timeout.
+- `_turn_context.py` (package root) — `TurnContext` per-turn state (timing, playback tracking, cancel token; created fresh each turn) and the `TurnHandle` protocol. Lives at the root as a leaf (depends only on `cancel.py`) so both `session/` and the lower `stages/` layer import it downward — preserving the `Session → Stages → Providers` direction without an import cycle.
 
 **Provider subpackages** (`stt/`, `tts/`, `transports/`, `telephony/`): one provider per file, each implementing the corresponding Protocol. Base classes (`STTBase`, `TTSBase`, `_ServerTransportBase`) provide shared plumbing.
 

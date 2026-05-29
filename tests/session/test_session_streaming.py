@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -40,7 +41,6 @@ from easycat.integrations.agents.base import (
 )
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._session import Session
-from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig
 from easycat.session.interruption import (
     _all_tts_audio_delivered,

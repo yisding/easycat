@@ -44,8 +44,8 @@ from easycat.tts.input import TTSInput, strip_ssml_tags
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
+    from easycat._turn_context import TurnContext
     from easycat.session._audio_router import AudioRouter
-    from easycat.session._turn_context import TurnContext
 
 logger = logging.getLogger(__name__)
 

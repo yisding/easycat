@@ -36,7 +36,7 @@ from easycat.stages.base import (
 from easycat.stages.base import journal_append_control_signal as _journal_control_signal
 
 if TYPE_CHECKING:
-    from easycat.session._turn_context import TurnContext
+    from easycat._turn_context import TurnContext
     from easycat.session.actions import SessionActions
     from easycat.stages.base import Stage
 

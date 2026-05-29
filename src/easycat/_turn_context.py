@@ -1,4 +1,4 @@
-"""Per-turn state for a voice session.
+"""Per-turn state for a voice session — a shared core type.
 
 Each turn (user speaks → agent responds → bot speaks) gets its own
 ``TurnContext``.  Session creates one at turn start and discards it at
@@ -9,6 +9,15 @@ Per-turn STT futures (``pending_stt_segment_futures``) also live here so
 that a stale callback from the previous turn cannot resolve a future on
 the next turn — the futures naturally die when the ``TurnContext`` is
 replaced.
+
+This lives at the package root (a leaf, depending only on
+``easycat.cancel``) rather than under ``session/`` so both the
+``session`` layer *and* the lower ``stages`` layer can import it
+*downward*.  Stages receive a ``TurnContext`` per ``execute`` call but
+must not depend on the ``session`` package; keeping the type here
+preserves the documented ``Session → Stages → Providers`` direction and
+avoids the import cycle that previously forced a lazy ``__getattr__`` in
+``session/__init__.py``.
 """
 
 from __future__ import annotations
