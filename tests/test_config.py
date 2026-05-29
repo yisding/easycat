@@ -75,9 +75,14 @@ class _IdentitySinkTransport:
 
 
 def test_easycat_config_requires_stt_tts(monkeypatch: pytest.MonkeyPatch):
+    # No key resolved and no stt/tts configured now routes through the
+    # error catalog as EASYCAT_E203 (an EasyCatError, not a ValueError).
+    from easycat.errors import EasyCatError
+
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(ValueError):
+    with pytest.raises(EasyCatError) as excinfo:
         EasyConfig()
+    assert excinfo.value.code == "EASYCAT_E203"
 
 
 def test_easycat_config_openai_defaults():
@@ -633,6 +638,86 @@ def test_missing_api_key_error_uses_catalog_name_for_openai_tts():
             stt=OpenAIRealtimeSTTConfig(api_key="stt-key"),
             tts=OpenAITTSConfig(api_key=""),
         )
+
+
+# ── missing-key routes through EASYCAT_E203 ────────────────────────────
+
+
+def test_missing_openai_key_with_no_stt_tts_raises_e203(monkeypatch: pytest.MonkeyPatch):
+    from easycat.errors import EasyCatError
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(EasyCatError) as excinfo:
+        EasyConfig()
+    assert excinfo.value.code == "EASYCAT_E203"
+    assert excinfo.value.context == {"var": "OPENAI_API_KEY"}
+
+
+# ── agent shape fail-fast at construction ──────────────────────────────
+
+
+def _stub_audio_backends(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub VAD/noise-reduction so create_session reaches the agent check.
+
+    The agent shape check sits after VAD creation in ``create_session``;
+    stub the audio backends so the check is reached even when no real VAD
+    backend is installed in the test environment.
+    """
+
+    class _VAD:
+        async def process(self, chunk):
+            if False:
+                yield chunk
+
+        def configure(self, **kwargs):
+            pass
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    monkeypatch.setattr("easycat.config.create_vad", lambda *_a, **_k: _VAD())
+    monkeypatch.setattr("easycat.config.create_noise_reducer", lambda *_a, **_k: _NoiseReducer())
+
+
+def test_create_session_rejects_bogus_agent(monkeypatch: pytest.MonkeyPatch):
+    from easycat.config import EasyConfigError
+
+    _stub_audio_backends(monkeypatch)
+    config = EasyConfig(openai_api_key="test-key", agent=object())
+    with pytest.raises(EasyConfigError, match=r"async run"):
+        create_session(config)
+
+
+def test_create_session_rejects_sync_run_agent(monkeypatch: pytest.MonkeyPatch):
+    from easycat.config import EasyConfigError
+
+    _stub_audio_backends(monkeypatch)
+
+    class SyncRunAgent:
+        def run(self, text: str) -> str:
+            return text
+
+    config = EasyConfig(openai_api_key="test-key", agent=SyncRunAgent())
+    with pytest.raises(EasyConfigError, match=r"async run"):
+        create_session(config)
+
+
+def test_create_session_accepts_valid_async_run_agent(monkeypatch: pytest.MonkeyPatch):
+    _stub_audio_backends(monkeypatch)
+    config = EasyConfig(openai_api_key="test-key", agent=_DummyAgent())
+    session = create_session(config)
+    assert isinstance(session.agent, AgentRunner)
+
+
+def test_create_session_skips_agent_check_when_wrap_agent_false(monkeypatch: pytest.MonkeyPatch):
+    # wrap_agent=False is the deliberate custom-bridge escape hatch — the
+    # shape check is skipped so a non-Agent object passes construction
+    # without raising EasyConfigError.
+    _stub_audio_backends(monkeypatch)
+    config = EasyConfig(openai_api_key="test-key", agent=object(), wrap_agent=False)
+    session = create_session(config)
+    assert session is not None
 
 
 # ── text session config object form ───────────────────────────────────
