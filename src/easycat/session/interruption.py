@@ -269,6 +269,7 @@ def estimate_and_notify_interruption(
     tts_chunks: list[TtsChunk] | list[tuple[str, int, bool]],
     *,
     tts_playback_started: bool,
+    tts_playback_cut_short: bool = False,
     interrupted: bool,
     interruption_mode: str,
     latency_compensation_ms: int,
@@ -280,8 +281,18 @@ def estimate_and_notify_interruption(
     Called after a streaming turn completes when the user barged in.
     Compares audio bytes sent to the transport against per-chunk TTS
     production to estimate what text was actually heard.
+
+    ``cancelled_during_playback`` requires the playback to have been *cut
+    short* by the cancelled token (``tts_playback_cut_short``), not merely
+    started. ``token.is_cancelled`` now flips synchronously on
+    ``cancel()`` (the asyncio.Event ``set`` is deferred onto the loop), so a
+    turn that finished speaking and only afterwards had its token cancelled
+    by a *later* turn's barge-in would otherwise be retro-truncated to what
+    was "heard" at the (now bogus) cutoff — clobbering its committed history.
     """
-    cancelled_during_playback = bool(token and token.is_cancelled and tts_playback_started)
+    cancelled_during_playback = bool(
+        token and token.is_cancelled and tts_playback_started and tts_playback_cut_short
+    )
     if not (interrupted or cancelled_during_playback):
         return None
 

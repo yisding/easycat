@@ -303,6 +303,12 @@ class TurnRunner:
         turn_gen = self._turn.generation
         tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
         tts_playback_started = False
+        # True only if playback was cut off mid-stream by a cancelled token
+        # (a genuine barge-in), as opposed to the queue draining naturally.
+        # A turn that finishes speaking and *then* has its token cancelled by a
+        # later turn must not be retro-truncated as "interrupted during
+        # playback".
+        tts_playback_cut_short = False
         tts_chunks: list[tuple[str, int, bool]] = []
         tts_should_stop = False
 
@@ -311,6 +317,7 @@ class TurnRunner:
         async def _process_tts() -> None:
             nonlocal tts_should_stop
             nonlocal tts_playback_started
+            nonlocal tts_playback_cut_short
             started = False
             # Snapshot the gate state at first-payload time and reuse it in
             # the post-loop branch.  ``_is_gated`` is time-varying (the
@@ -378,6 +385,12 @@ class TurnRunner:
                     self._turn_manager.reset()
                 else:
                     self._reset_turn_state()
+
+            # Whether playback was cut short by a barge-in is decided here, at
+            # the moment playback finishes — i.e. whether the token was already
+            # cancelled *during* this turn's playback.  A later turn cancelling
+            # this (now-superseded) token must not retroactively flip this.
+            tts_playback_cut_short = bool(token and token.is_cancelled)
 
         # ── Run agent stream + TTS concurrently ──
 
@@ -471,6 +484,7 @@ class TurnRunner:
             turn,
             tts_chunks,
             tts_playback_started=tts_playback_started,
+            tts_playback_cut_short=tts_playback_cut_short,
             interrupted=interrupted,
             interruption_mode=self._cancel.interruption_mode,
             latency_compensation_ms=self._cancel.latency_compensation_ms,
