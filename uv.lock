@@ -1175,7 +1175,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'quickstart'", specifier = ">=2.31.0" },
     { name = "requests", marker = "extra == 'rnnoise'", specifier = ">=2.31.0" },
     { name = "rich", specifier = ">=13.0" },
-    { name = "sentencesplit", specifier = ">=0.0.3" },
+    { name = "sentencesplit", specifier = ">=0.0.4" },
     { name = "sounddevice", marker = "extra == 'all'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'local'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'quickstart'", specifier = ">=0.4.6" },
@@ -5009,11 +5009,11 @@ wheels = [
 
 [[package]]
 name = "sentencesplit"
-version = "0.0.3"
+version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/33/ad/543e029f7a3cd5f5824864c1f1eb4d6482ca30d84dda60229ee4817649aa/sentencesplit-0.0.3.tar.gz", hash = "sha256:634db2b153d89afd975266e46d7679c9ca9548c5d3cb309e7907fdd17e8fd7c1", size = 67006, upload-time = "2026-04-12T03:19:17.113Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b9/a6/c77cdebd3f7bc065cecc7b34a59bcf26798d3b7bb61a4a8fbf626ebadbcc/sentencesplit-0.0.4.tar.gz", hash = "sha256:171943e70640700bc26f7f3acf06745d447c35d0bb5a7d9396465354db51eaa8", size = 67140, upload-time = "2026-05-10T06:08:29.48Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/71/ee/b7a6293ed12d32489c6f46a5c380a2d5dd54897eade7fcdb5abf2799e985/sentencesplit-0.0.3-py3-none-any.whl", hash = "sha256:0e966758f6143505e097aea69a741ba54d1d583ad179c1b01188a1a8f9907988", size = 83625, upload-time = "2026-04-12T03:19:15.723Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/99/d0fc698843e2395ebdd90024d3d6ff86b5abd2f657dde4283317c34d7ca2/sentencesplit-0.0.4-py3-none-any.whl", hash = "sha256:8ca96e219b72cff76dc03782516f20d0b3324401250d7eb710284b310f58adc1", size = 83809, upload-time = "2026-05-10T06:08:27.845Z" },
 ]
 
 [[package]]
