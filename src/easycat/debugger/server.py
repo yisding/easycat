@@ -952,7 +952,8 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                 offset=offset,
             )
         except ValueError as exc:
-            return web.Response(status=400, text=str(exc))
+            logger.warning("Invalid records query: %s", exc)
+            return web.Response(status=400, text="invalid query parameters")
         return web.json_response(
             {
                 "records": page,
@@ -993,7 +994,8 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         try:
             frames, fmt = _collect_tts_frames(source, turn_id)
         except ValueError as exc:
-            return web.Response(status=409, text=str(exc))
+            logger.warning("Cannot assemble TTS audio for %s: %s", turn_id, exc)
+            return web.Response(status=409, text="cannot assemble audio for this turn")
         if not frames:
             return web.Response(status=404, text="no tts frames for turn")
         # Stream the WAV out incrementally.  Whole-file response would
@@ -1139,9 +1141,11 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             return web.Response(status=503, text="no export function bound")
         try:
             tmp_path = export_fn()
-        except Exception as exc:  # noqa: BLE001 - never hide export errors
+        except Exception:  # noqa: BLE001 - never hide export errors
+            # Detail is logged server-side; don't leak exception text to the
+            # client (CodeQL py/stack-trace-exposure).
             logger.exception("Export failed")
-            return web.Response(status=500, text=str(exc))
+            return web.Response(status=500, text="export failed")
         if tmp_path is None:
             return web.Response(status=409, text="session has no journal to export")
         # FileResponse streams the bundle without loading it into memory.
