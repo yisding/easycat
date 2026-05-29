@@ -14,7 +14,7 @@ def current_time() -> str:
 
 
 run(
-    EasyConfig(
+    EasyConfig.mic(
         agent=Agent(
             name="$AGENT_NAME",
             instructions="$AGENT_INSTRUCTIONS",

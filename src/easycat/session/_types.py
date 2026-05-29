@@ -111,7 +111,17 @@ _TM_TO_TURN_STATE: dict[TurnManagerState, TurnState] = {
 
 @dataclass
 class SessionConfig:
-    """Configuration for a Session."""
+    """Configuration for a Session — the lowest rung of the ladder.
+
+    This is where you supply live provider *instances* (``stt``, ``tts``,
+    ``transport``, … already constructed and ready to run). That is a
+    different field *type* from :class:`~easycat.EasyConfig`, whose
+    matching fields take provider *descriptors* (string shortcuts /
+    config objects) that it resolves and wires for you one rung up. Reach
+    for ``SessionConfig`` + :class:`Session` only when you need to
+    hand-build providers or bypass the auto-wiring entirely; otherwise
+    ``EasyConfig`` + ``create_session`` is the path.
+    """
 
     stt: STTProvider | None = None
     tts: TTSProvider | None = None

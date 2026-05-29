@@ -1,12 +1,18 @@
-"""EasyCat public API.
+"""EasyCat — a voice bot in three lines.
 
-The top-level package intentionally exposes the app-facing surface only.
-Less-common provider implementations, stage internals, action executors,
-telephony helpers, and debug test utilities remain importable from their
-own modules.
+Start here (requires ``uv add 'easycat[quickstart]'``)::
 
-Exports are loaded lazily via PEP 562 ``__getattr__`` so CLI cold starts
-do not import provider stacks unless a caller touches that symbol.
+    from agents import Agent
+    from easycat import EasyConfig, run
+    run(EasyConfig.mic(agent=Agent(name="assistant", instructions="Be helpful.")))
+
+``EasyConfig`` + ``run`` is the entry path. Drop to ``SessionConfig`` + ``Session``
+only when you need to hand-build provider instances.
+
+The top-level package intentionally exposes the app-facing surface only;
+providers, stage internals, and telephony/debug helpers stay importable
+from their own modules. Exports load lazily via PEP 562 so cold starts stay
+cheap.
 """
 
 from __future__ import annotations
