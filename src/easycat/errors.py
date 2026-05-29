@@ -38,7 +38,26 @@ class EasyCatError(Exception):
         self.code = code
         self.message = message
         self.context = context
-        super().__init__(f"{code}: {message}")
+        super().__init__(self._render())
+
+    def _render(self) -> str:
+        """Render ``CODE: message`` with the registry fix + explain hint.
+
+        Reads ``REGISTRY`` at call time (module global), so an
+        ``EasyCatError`` constructed before its code is registered still
+        renders correctly. The ``entry.fix.format`` call is guarded like
+        the factory's headline substitution so a future braced fix
+        template cannot turn into a constructor-time ``KeyError``.
+        """
+        base = f"{self.code}: {self.message}"
+        entry = REGISTRY.get(self.code)
+        if entry is None:
+            return base
+        try:
+            fix = entry.fix.format(**self.context) if self.context else entry.fix
+        except (KeyError, IndexError):
+            fix = entry.fix
+        return f"{base}\n  Fix: {fix}\n  Run `easycat explain {self.code}` for details."
 
 
 @dataclass
