@@ -653,6 +653,24 @@ def test_missing_openai_key_with_no_stt_tts_raises_e203(monkeypatch: pytest.Monk
     assert excinfo.value.context == {"var": "OPENAI_API_KEY"}
 
 
+def test_easyconfig_is_keyword_only(monkeypatch: pytest.MonkeyPatch):
+    """Positional construction must fail loudly, never silently mis-bind.
+
+    Regression guard for the ``_AgentSessionConfig`` base extraction: a base
+    dataclass injects its fields before the subclass's in the generated
+    ``__init__``, so without ``kw_only=True`` a positional
+    ``EasyConfig("sk-...")`` would bind the key to ``agent`` instead of
+    ``openai_api_key``. ``kw_only`` turns that into a ``TypeError``.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    with pytest.raises(TypeError):
+        EasyConfig("sk-test")  # type: ignore[misc]  # positional is rejected
+    # The keyword form still works and resolves the key correctly.
+    cfg = EasyConfig(openai_api_key="sk-test")
+    assert cfg.openai_api_key == "sk-test"
+    assert cfg.agent is None
+
+
 # ── agent shape fail-fast at construction ──────────────────────────────
 
 

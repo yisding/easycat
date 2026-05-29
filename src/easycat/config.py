@@ -466,17 +466,21 @@ def _provider_display_name(cfg: Any, kind: Literal["STT", "TTS"]) -> str:
     return type(cfg).__name__.replace("Config", "")
 
 
-@dataclass
+@dataclass(kw_only=True)
 class _AgentSessionConfig:
     """Shared agent / journal / debug fields for both session configs.
 
     Extracted so :class:`EasyConfig` (audio sessions) and
     :class:`TextSessionConfig` (text-only sessions) declare the
-    agent/journal/debug knobs once instead of copying them.  Every field
-    here carries a default so the subclasses can append their own
-    ``field(default_factory=...)`` defaults without ordering conflicts;
-    all construction sites are keyword-only, so field order does not
-    matter.  Future maintainers must keep these fields all-defaulted.
+    agent/journal/debug knobs once instead of copying them.
+
+    Both this base and its subclasses are ``@dataclass(kw_only=True)``:
+    a base dataclass injects its fields *before* the subclass's in the
+    generated ``__init__``, so without ``kw_only`` a positional
+    ``EasyConfig("sk-...")`` would silently mis-bind ``"sk-..."`` to
+    ``agent`` instead of ``openai_api_key``.  Keyword-only construction
+    makes that a loud ``TypeError`` and decouples the public field order
+    from this internal split.
     """
 
     agent: Any = None
@@ -497,7 +501,7 @@ class _AgentSessionConfig:
     mcp_servers: list[str] | None = None
 
 
-@dataclass
+@dataclass(kw_only=True)
 class EasyConfig(_AgentSessionConfig):
     """Top-level configuration for EasyCat sessions.
 
@@ -1083,7 +1087,7 @@ def _maybe_launch_debugger_ui(session: Session) -> None:
         logger.exception("Debugger UI failed to start; continuing without it.")
 
 
-@dataclass
+@dataclass(kw_only=True)
 class TextSessionConfig(_AgentSessionConfig):
     """Configuration for a text-only Session (no audio pipeline).
 
