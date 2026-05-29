@@ -94,6 +94,21 @@ FORBIDDEN_ATTRIBUTE_KEYS = frozenset(
     }
 )
 
+# Defense-in-depth against new PII-bearing keys: any attribute whose name
+# *contains* one of these substrings is rejected even when it is not on the
+# explicit forbidden list above.  The explicit allow-list is consulted FIRST
+# (see :func:`sanitize_attributes`) so currently-allowed keys are never caught
+# — none of the allowed ``easycat.*`` / ``gen_ai.*`` keys contain a substring.
+_FORBIDDEN_SUBSTRINGS = (
+    "transcript",
+    "prompt",
+    "content",
+    "text",
+    "body",
+    "secret",
+    "token",
+)
+
 _COUNTERS: dict[str, Any] = {}
 _HISTOGRAMS: dict[str, Any] = {}
 _GAUGES: dict[str, Any] = {}
@@ -171,11 +186,17 @@ def sanitize_attributes(
     sanitized: dict[str, Any] = {}
     for key, value in attributes.items():
         normalized = str(key)
-        if normalized in FORBIDDEN_ATTRIBUTE_KEYS:
+        # Check explicit membership first so an allowed key is never falsely
+        # rejected by the substring guard below.
+        if normalized in allowed_keys:
+            sanitized[normalized] = _safe_attribute_value(value)
+            continue
+        low = normalized.lower()
+        if normalized in FORBIDDEN_ATTRIBUTE_KEYS or any(
+            substring in low for substring in _FORBIDDEN_SUBSTRINGS
+        ):
             raise ValueError(f"forbidden observability attribute: {normalized}")
-        if normalized not in allowed_keys:
-            raise ValueError(f"unsupported observability attribute: {normalized}")
-        sanitized[normalized] = _safe_attribute_value(value)
+        raise ValueError(f"unsupported observability attribute: {normalized}")
     return sanitized
 
 
