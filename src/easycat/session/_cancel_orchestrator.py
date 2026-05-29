@@ -36,7 +36,7 @@ from easycat.stages.base import (
 from easycat.stages.base import journal_append_control_signal as _journal_control_signal
 
 if TYPE_CHECKING:
-    from easycat.session._turn_context import TurnContext
+    from easycat._turn_context import TurnContext
     from easycat.session.actions import SessionActions
     from easycat.stages.base import Stage
 
@@ -182,7 +182,6 @@ class CancelOrchestrator:
         turn_id: str | None = None,
     ) -> None:
         """Write the ``assistant_interruption_notified`` journal record."""
-        replacement_text = None
         self._journal_sink.append_record(
             name="assistant_interruption_notified",
             turn_id=turn_id,
@@ -191,6 +190,5 @@ class CancelOrchestrator:
                 "mode": mode,
                 "text_spoken": text_spoken,
                 "notified": notified,
-                "replacement_text": replacement_text,
             },
         )

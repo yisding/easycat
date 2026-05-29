@@ -15,6 +15,7 @@ from easycat.events import (
     CallAnswered,
     CallInitiated,
     CallScreening,
+    CallStateChanged,
     EventBus,
     STTFinal,
     VADStartSpeaking,
@@ -275,6 +276,14 @@ class VoicemailPolicyHandler:
     to a specific transport), it produces action descriptors that the
     application layer can execute.
 
+    It also subscribes to :class:`CallStateChanged` so it stays consistent
+    with the authoritative reclassification model owned by
+    :class:`~easycat.telephony.call_state.OutboundCallStateMachine`. When the
+    call leaves ``VOICEMAIL`` (e.g. a human picks up during the greeting —
+    ``VOICEMAIL`` -> ``HUMAN``), the handler re-arms so that a subsequent
+    re-entry into ``VOICEMAIL`` (late voicemail after the pickup) is handled
+    again instead of being silently dropped.
+
     Supported policies:
       - ``HANG_UP``: Generate TwiML ``<Hangup>`` or call REST API.
       - ``LEAVE_MESSAGE``: Wait for beep, then trigger TTS for a message.
@@ -301,10 +310,11 @@ class VoicemailPolicyHandler:
         return self._last_action
 
     def start(self) -> None:
-        """Subscribe to VoicemailDetected events."""
+        """Subscribe to VoicemailDetected and CallStateChanged events."""
         if not self._started:
             self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
             self._event_bus.subscribe(VoicemailDetected, self._on_voicemail_detected)
+            self._event_bus.subscribe(CallStateChanged, self._on_state_changed)
             self._started = True
 
     def stop(self) -> None:
@@ -312,6 +322,7 @@ class VoicemailPolicyHandler:
         if self._started:
             self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
             self._event_bus.unsubscribe(VoicemailDetected, self._on_voicemail_detected)
+            self._event_bus.unsubscribe(CallStateChanged, self._on_state_changed)
             self._started = False
         self._action_taken = False
         self._last_action = None
@@ -320,6 +331,20 @@ class VoicemailPolicyHandler:
         """Reset policy state for a new outbound call."""
         self._action_taken = False
         self._last_action = None
+
+    async def _on_state_changed(self, event: CallStateChanged) -> None:
+        """Re-arm the policy when the call leaves the VOICEMAIL state.
+
+        The state machine supports ``VOICEMAIL`` -> ``HUMAN`` (voicemail
+        pickup). Once a human grabs the phone, an already-taken action no
+        longer reflects the live disposition, so re-arm. A subsequent
+        ``HUMAN`` -> ``VOICEMAIL`` (late voicemail) re-entry is then handled
+        again rather than being dropped as a duplicate.
+        """
+        from easycat.telephony.call_state import OutboundCallState
+
+        if event.old == OutboundCallState.VOICEMAIL and event.new != OutboundCallState.VOICEMAIL:
+            self._action_taken = False
 
     async def _on_voicemail_detected(self, event: VoicemailDetected) -> None:
         """Apply policy based on detection result."""

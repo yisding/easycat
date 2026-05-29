@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.events import CallInitiated, EventBus, STTFinal
 from easycat.integrations.agents._agent_runner import AgentRunner
@@ -29,7 +30,6 @@ from easycat.integrations.agents.base import (
     UnitKind,
 )
 from easycat.runtime.context import RunContext
-from easycat.session._turn_context import TurnContext
 from easycat.session._types import CallIdentity
 from easycat.stages.agent import AgentStage
 from easycat.telephony.compliance import DNCList

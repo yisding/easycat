@@ -16,7 +16,7 @@ from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.tts.base import TTSBase
-from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
+from easycat.tts.input import TTSInput, coerce_tts_input
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,12 @@ class CartesiaTTSConfig:
     max_buffer_delay_ms: int | None = None
     output_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_24K)
     event_bus: object | None = None
+    # Reconnect tuning for the synthesis WebSocket. Defaults match
+    # ReconnectConfig; lower max_retries to fail fast and defer to
+    # turn-level retry, or raise it for flaky links.
+    reconnect_max_retries: int = 3
+    reconnect_base_delay: float = 1.0
+    reconnect_max_delay: float = 30.0
 
     def __post_init__(self) -> None:
         if self.encoding not in _ENCODING_SAMPLE_WIDTH:
@@ -88,6 +94,16 @@ class CartesiaTTS(TTSBase):
         )
         self._ws: ReconnectingWebSocket | None = None
         self._context_id: str | None = None
+        # The synthesis request frame for the in-flight utterance, replayed
+        # by the on_reconnect hook so a mid-stream drop restarts the utterance
+        # from the top instead of aborting it. Known tradeoff: Cartesia
+        # synthesis is one-shot, so any audio already emitted before the drop
+        # is re-emitted after the restart (audible repetition), not a seamless
+        # resume.
+        self._pending_request: str | None = None
+        # Strong references to fire-and-forget Error-emit tasks so the event
+        # loop does not garbage-collect them before ``bus.emit`` completes.
+        self._emit_tasks: set[asyncio.Task[Any]] = set()
 
     def _create_ws(self) -> ReconnectingWebSocket:
         return ReconnectingWebSocket(
@@ -97,10 +113,32 @@ class CartesiaTTS(TTSBase):
                     "X-API-Key": self._config.api_key,
                     "Cartesia-Version": self._config.cartesia_version,
                 },
+                max_retries=self._config.reconnect_max_retries,
+                base_delay=self._config.reconnect_base_delay,
+                max_delay=self._config.reconnect_max_delay,
             ),
             event_bus=self._config.event_bus,
             provider_name="cartesia_tts",
+            on_reconnect=self._replay_request,
         )
+
+    async def _replay_request(self) -> None:
+        """Re-send the in-flight synthesis request after a reconnect.
+
+        Cartesia synthesis is one-shot: the request frame carries the full
+        transcript, so replaying it restarts the utterance from the top on a
+        fresh socket — it does NOT resume from the drop point. Any audio
+        already emitted before the drop is re-emitted, producing audible
+        repetition; this is an accepted tradeoff of stateless one-shot replay
+        in exchange for not aborting the utterance entirely. Without this hook
+        a transient drop would re-raise out of recv_iter and abort the
+        utterance.
+        """
+        ws = self._ws
+        request = self._pending_request
+        if ws is None or request is None or self._cancelled:
+            return
+        await ws.send(request)
 
     def _build_request(self, text: str, context_id: str) -> dict[str, Any]:
         request: dict[str, Any] = {
@@ -121,22 +159,30 @@ class CartesiaTTS(TTSBase):
             request["max_buffer_delay_ms"] = self._config.max_buffer_delay_ms
         return request
 
-    @property
-    def supports_ssml(self) -> bool:
-        return False
-
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
+        # SSML is not supported (``supports_ssml`` is ``False``), so the
+        # scheduler always delivers a plain-text payload here.
         self._start_synthesis()
-        payload = coerce_tts_input(payload)
-        text = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
+        text = coerce_tts_input(payload).text
 
         self._ws = self._create_ws()
         context_id = str(uuid4())
         self._context_id = context_id
 
+        request = json.dumps(self._build_request(text, context_id))
+        # Leave replay disarmed until the request has actually been sent on a
+        # connected stream. ``on_reconnect`` fires for retries during the
+        # *initial* connect too, and arming earlier would replay the request
+        # before the send below, duplicating the utterance.
+        self._pending_request = None
+
         try:
             await self._ws.connect()
-            await self._ws.send(json.dumps(self._build_request(text, context_id)))
+            await self._ws.send(request)
+            # Request is now live: arm replay so a *mid-stream* reconnect
+            # re-sends it and restarts the utterance from the top (see
+            # ``_replay_request`` for the duplicate-audio tradeoff).
+            self._pending_request = request
 
             async for message in self._ws.recv_iter():
                 if self._cancelled:
@@ -175,6 +221,7 @@ class CartesiaTTS(TTSBase):
         finally:
             await self._close_ws()
             self._context_id = None
+            self._pending_request = None
             self._end_synthesis()
 
     async def _close_ws(self) -> None:
@@ -228,11 +275,16 @@ class CartesiaTTS(TTSBase):
             except Exception:  # pragma: no cover - pre-3.11
                 pass
         try:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 bus.emit(Error(exception=exc, stage=ErrorStage.TTS, provider="cartesia"))
             )
         except RuntimeError:  # no running loop
             logger.debug("Could not emit provider error — no running loop", exc_info=True)
+            return
+        # Keep a strong reference until the emit completes; the event loop
+        # only holds a weak one, so an untracked task can be GC'd mid-flight.
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
 
     def version_info(self) -> dict[str, str]:
         return {

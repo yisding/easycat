@@ -95,7 +95,7 @@ class VersionMismatch:
     provider: str
     bundle_version: str
     installed_version: str
-    code: str  # "MISMATCH" or "UNKNOWN"
+    code: str  # "MISMATCH", "UNKNOWN", or "MISSING"
 
 
 class ProviderVersionMismatchError(RuntimeError):
@@ -301,8 +301,13 @@ def check_provider_versions(
     """Compare bundle-captured versions against installed versions.
 
     Returns a list of :class:`VersionMismatch` records — empty when
-    every bundle version matches the installed version (or when the
-    bundle simply doesn't mention a provider the caller is asking about).
+    every bundle version matches the installed version.
+
+    An installed provider that the bundle never captured is reported as
+    a ``"MISSING"`` mismatch rather than silently skipped: an un-captured
+    provider version is exactly the case where determinism cannot be
+    guaranteed, so ARTIFACT replays must surface it under the same force
+    policy as the explicit ``"UNKNOWN"`` sentinel.
 
     This function never raises.  Callers decide whether a non-empty list
     should abort or warn; :class:`ReplayRunner` runs the T4.2 policy:
@@ -323,8 +328,18 @@ def check_provider_versions(
         bundle_version = _stringify_version(bundle_version_raw)
         installed_str = _stringify_version(installed_version)
         if bundle_version is None:
-            # Installed provider not captured in bundle — not a mismatch,
-            # just an unknown pairing.  Skip.
+            # Installed provider not captured in bundle.  Determinism
+            # can't be guaranteed against a version we never recorded, so
+            # surface it as MISSING rather than silently treating it as a
+            # match.
+            mismatches.append(
+                VersionMismatch(
+                    provider=provider,
+                    bundle_version=_UNKNOWN_VERSION,
+                    installed_version=installed_str,
+                    code="MISSING",
+                )
+            )
             continue
         if bundle_version == _UNKNOWN_VERSION or installed_str == _UNKNOWN_VERSION:
             mismatches.append(
@@ -523,7 +538,7 @@ class ReplayRunner:
         if not mismatches:
             return self._spec.fidelity
 
-        unknown = any(m.code == "UNKNOWN" for m in mismatches)
+        unknown = any(m.code in ("UNKNOWN", "MISSING") for m in mismatches)
         message = _format_version_mismatch(mismatches)
         error_code = "PROVIDER_VERSION_UNKNOWN" if unknown else "PROVIDER_VERSION_MISMATCH"
 

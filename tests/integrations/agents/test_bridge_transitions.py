@@ -380,9 +380,103 @@ class TestOpenAIAgentsBridgeHandoff:
         assert handoff_record.data["from_unit"] == "AgentA"
         assert handoff_record.data["to_unit"] == "AgentB"
 
+        # The exiting agent cursor must be committable on handoff, matching the
+        # BETWEEN_TURNS rule and the non-handoff completion path.
+        assert records[handoff_exit_idx].data["committable"] is True
+
         # Verify no interleaved records between the triple.
         assert handoff_idx == handoff_exit_idx + 1
         assert handoff_enter_idx == handoff_idx + 1
+
+    @pytest.mark.asyncio
+    async def test_handoff_emits_balanced_stream_cursor_events(self):
+        """Stream-level cursor events are balanced for both cursors on handoff.
+
+        Out-of-band consumers see a paired cursor_entered/cursor_exited for the
+        original cursor *and* for the handoff-target cursor, so the lifecycle is
+        not asymmetric across a handoff.
+        """
+        from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
+
+        agent_a = _MockAgent("AgentA")
+        agent_b = _MockAgent("AgentB")
+
+        events = [
+            _MockStreamEvent(
+                type="raw_response_event",
+                data=_MockRawResponseEvent("hello"),
+            ),
+        ]
+        run_result = _MockRunResult(events, last_agent=agent_b)
+        mock_runner = _MockRunner(run_result)
+
+        bridge = OpenAIAgentsBridge(agent=agent_a)
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _make_recorder(journal)
+
+        import easycat.integrations.agents.openai_agents as oai_mod
+
+        original_runner = oai_mod.Runner
+        oai_mod.Runner = mock_runner
+        try:
+            stream_events = [ev async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), rec)]
+        finally:
+            oai_mod.Runner = original_runner
+
+        # Collect cursor lifecycle events in emission order.
+        cursor_events = [
+            (ev.kind, ev.cursor.display_name)
+            for ev in stream_events
+            if ev.kind in ("cursor_entered", "cursor_exited")
+        ]
+
+        # Original cursor enter at start, original exit, then handoff-target
+        # cursor enter + exit — both cursors are balanced.
+        assert cursor_events == [
+            ("cursor_entered", "AgentA"),
+            ("cursor_exited", "AgentA"),
+            ("cursor_entered", "AgentB"),
+            ("cursor_exited", "AgentB"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_no_handoff_emits_single_balanced_cursor_pair(self):
+        """Without a handoff only the original cursor's enter/exit is streamed."""
+        from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
+
+        agent_a = _MockAgent("AgentA")
+
+        events = [
+            _MockStreamEvent(
+                type="raw_response_event",
+                data=_MockRawResponseEvent("hi"),
+            ),
+        ]
+        run_result = _MockRunResult(events, last_agent=agent_a)
+        mock_runner = _MockRunner(run_result)
+
+        bridge = OpenAIAgentsBridge(agent=agent_a)
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _make_recorder(journal)
+
+        import easycat.integrations.agents.openai_agents as oai_mod
+
+        original_runner = oai_mod.Runner
+        oai_mod.Runner = mock_runner
+        try:
+            stream_events = [ev async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), rec)]
+        finally:
+            oai_mod.Runner = original_runner
+
+        cursor_events = [
+            (ev.kind, ev.cursor.display_name)
+            for ev in stream_events
+            if ev.kind in ("cursor_entered", "cursor_exited")
+        ]
+        assert cursor_events == [
+            ("cursor_entered", "AgentA"),
+            ("cursor_exited", "AgentA"),
+        ]
 
     @pytest.mark.asyncio
     async def test_no_handoff_when_same_agent(self):

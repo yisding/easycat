@@ -160,6 +160,14 @@ class WebSocketTransport(_ServerTransportBase):
             if isinstance(message, bytes):
                 chunk = AudioChunk(data=message, format=self._audio_format)
                 if chunk.format.sample_rate != target_rate:
+                    # Hot path: each inbound binary frame is resampled when the
+                    # client rate differs from the pipeline rate (the common
+                    # browser-48kHz-to-16kHz case). ``resample`` re-resolves its
+                    # numpy/soxr/scipy backend per call, so there is some
+                    # per-frame allocation/import-probe churn here. This is
+                    # acceptable because frames are ~20ms (low call frequency);
+                    # if a higher-throughput backend is needed, cache the
+                    # chosen resampler callable in ``_audio_utils``.
                     chunk = resample_chunk(chunk, target_rate)
                 self._enqueue_chunk(chunk, context="WebSocket")
             elif isinstance(message, str):
@@ -294,6 +302,12 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
                 if isinstance(message, bytes):
                     chunk = AudioChunk(data=message, format=self._audio_format)
                     if chunk.format.sample_rate != target_rate:
+                        # Hot path: resampled per inbound frame when the client
+                        # rate differs from the pipeline rate. ``resample``
+                        # re-resolves its numpy/soxr/scipy backend per call, but
+                        # this is acceptable because frames are ~20ms; cache the
+                        # chosen resampler in ``_audio_utils`` if throughput
+                        # becomes a concern.
                         chunk = resample_chunk(chunk, target_rate)
                     self._enqueue_chunk(chunk, context="WebSocket")
                 elif isinstance(message, str):

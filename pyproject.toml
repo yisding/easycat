@@ -98,6 +98,7 @@ dev = [
     "pre-commit>=4.5.1",
     "pytest>=8.0",
     "pytest-asyncio>=1.0",
+    "pytest-timeout>=2.4.0",
     "ruff>=0.9",
 ]
 
@@ -117,6 +118,13 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 strict_markers = true
 strict_config = true
+# Safety net: no single test should run for minutes. A hung test
+# (e.g. an await on an event/future that never fires) is force-failed
+# by pytest-timeout instead of blocking the whole suite indefinitely,
+# and faulthandler dumps the stuck stack just before the timeout fires.
+timeout = 60
+timeout_method = "thread"
+faulthandler_timeout = 55
 markers = [
     "integration_local: in-process end-to-end tests with fake providers",
     "integration_socket: tests requiring localhost socket bind/connect permissions",

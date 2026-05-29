@@ -582,6 +582,30 @@ class TestClassificationGate:
             gate.stop()
 
     @pytest.mark.asyncio
+    async def test_gate_overflow_drops_newest_preserving_opener_start(self) -> None:
+        from easycat.audio_format import AudioChunk, AudioFormat
+
+        bus = EventBus()
+        # Small timeout -> small buffer cap (50 frames/s * 1s floor = 50).
+        gate = ClassificationGate(bus, enabled=True, timeout_s=0.5)
+        gate.start()
+        try:
+            gate.close()
+            cap = gate._buffer_max
+            fmt = AudioFormat(sample_rate=16000, channels=1, sample_width=2)
+            # Emit one extra frame beyond capacity.
+            for i in range(cap + 5):
+                await bus.emit(TTSAudio(chunk=AudioChunk(data=bytes([i % 256]) * 100, format=fmt)))
+            buf = gate.buffer
+            assert len(buf) == cap
+            # The first (oldest) frame survives so the opener start is intact.
+            assert buf[0].chunk.data[0] == 0
+            # Newest frames were dropped, surfaced as a metric.
+            assert gate.dropped_frames == 5
+        finally:
+            gate.stop()
+
+    @pytest.mark.asyncio
     async def test_gate_releases_on_amd_result(self) -> None:
         from easycat.audio_format import AudioChunk, AudioFormat
 

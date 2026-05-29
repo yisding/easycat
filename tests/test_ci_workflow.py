@@ -76,7 +76,10 @@ def test_release_validation_workflow_skeleton_exists() -> None:
 
     assert "workflow_dispatch:" in text
     assert "uv build --sdist --wheel" in text
-    assert "RELEASE_VENV: ${{ runner.temp }}/easycat-release-venv" in text
+    # RELEASE_VENV is exported via $GITHUB_ENV (not a job-level ``env:``)
+    # because ``runner.temp`` is not resolvable when job env is evaluated —
+    # see the workflow's "Configure release venv path" step.
+    assert 'echo "RELEASE_VENV=$RUNNER_TEMP/easycat-release-venv" >> "$GITHUB_ENV"' in text
     assert 'uv venv "$RELEASE_VENV" --python 3.12' in text
     assert '"easycat[openai,openai-agents] @ file://$WHEEL_PATH"' in text
     assert 'PYTHONPATH: ""' in text

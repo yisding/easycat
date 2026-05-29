@@ -328,8 +328,8 @@ def _make_run_ctx() -> object:
 
 
 def _make_turn_ctx() -> object:
+    from easycat._turn_context import TurnContext
     from easycat.cancel import CancelToken
-    from easycat.session._turn_context import TurnContext
 
     return TurnContext(turn_id="turn-1", cancel_token=CancelToken())
 
@@ -565,8 +565,15 @@ async def test_audio_router_source_has_transport_receive_wiring() -> None:
 
     from easycat.session import _audio_router
 
-    src = inspect.getsource(_audio_router.AudioRouter._run_pipeline)
-    assert 'observability.span(\n                    "easycat.transport.receive"' in src
+    # The inbound receive loop is split across ``_run_pipeline`` (the
+    # transport iteration) and ``_process_chunk`` (per-chunk handling), so
+    # inspect both. Match on the span name rather than exact indentation so
+    # a reformat of the ``with`` block doesn't spuriously fail this guard.
+    src = inspect.getsource(_audio_router.AudioRouter._run_pipeline) + inspect.getsource(
+        _audio_router.AudioRouter._process_chunk
+    )
+    assert "observability.span(" in src
+    assert '"easycat.transport.receive"' in src
     assert '"easycat.audio.bytes.total"' in src
     assert '"easycat.audio.frames.total"' in src
 

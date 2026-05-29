@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -40,9 +41,9 @@ from easycat.integrations.agents.base import (
 )
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._session import Session
-from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig
 from easycat.session.interruption import (
+    TtsChunk,
     _all_tts_audio_delivered,
     _audio_bytes_acknowledged,
     _audio_bytes_likely_heard,
@@ -52,7 +53,6 @@ from easycat.session.interruption import (
 from easycat.session.text import (
     _cleanup_estimation_text,
     _text_for_estimation_timeline,
-    _text_for_spoken_estimation,
     has_unclosed_markdown_delimiters,
     split_at_sentence_boundaries,
 )
@@ -392,6 +392,41 @@ class TimeoutThenRecoverTTS(FakeTTS):
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
 
 
+# ── consume_agent_stream cancellation tests ───────────────────────
+
+
+async def test_consume_agent_stream_captures_done_on_cancel_without_tool_calls():
+    """A cancelled stream with no pending tool calls still surfaces the
+    trailing ``done`` payload (text + structured_output) instead of
+    silently discarding it."""
+    from easycat.session._streaming import consume_agent_stream
+
+    cancel_token = CancelToken()
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        # Cancel before yielding so the very first event hits the
+        # pending_tool_calls == 0 cancellation branch.
+        cancel_token.cancel()
+        yield AgentBridgeEvent(kind="done", text="final text", structured_output={"answer": 42})
+
+    turn = TurnContext(turn_id="t1", cancel_token=cancel_token)
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+
+    result = await consume_agent_stream(
+        _stream,
+        cancel_token=cancel_token,
+        tts_queue=tts_queue,
+        emit=AsyncMock(),
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=False,
+        turn=turn,
+    )
+
+    assert result.interrupted is True
+    assert result.text == "final text"
+    assert result.structured_output == {"answer": 42}
+
+
 # ── Sentence boundary helper tests ────────────────────────────────
 
 
@@ -463,16 +498,6 @@ def test_split_chinese_sentence():
 # ── _estimate_text_spoken tests ─────────────────────────────────────
 
 
-def test_text_for_spoken_estimation_strips_ssml_markup() -> None:
-    payload = TTSInput(text='<speak>Hello<break time="120ms"/>world</speak>', format="ssml")
-    assert _text_for_spoken_estimation(payload) == "Hello world"
-
-
-def test_text_for_spoken_estimation_keeps_plain_text() -> None:
-    payload = TTSInput(text="Hello world", format="plain")
-    assert _text_for_spoken_estimation(payload) == "Hello world"
-
-
 def test_text_for_estimation_timeline_encodes_ssml_breaks() -> None:
     payload = TTSInput(
         text='<speak>Hello<break time="500ms"/>world</speak>',
@@ -507,20 +532,20 @@ def test_cleanup_estimation_text_removes_pause_markers() -> None:
 def test_estimate_text_spoken_with_pause_markers_advances_less_text() -> None:
     # First chunk contains synthetic pause markers, so half-byte progress should
     # include less visible text than the same bytes on plain text.
-    with_pause = _estimate_text_spoken([("AB" + "\ue000" * 10 + "CD", 1000)], 500)
-    plain = _estimate_text_spoken([("ABCD", 1000)], 500)
+    with_pause = _estimate_text_spoken([("AB" + "\ue000" * 10 + "CD", 1000, True)], 500)
+    plain = _estimate_text_spoken([("ABCD", 1000, True)], 500)
     assert len(with_pause.replace("\ue000", "")) <= len(plain)
 
 
 def test_estimate_text_spoken_empty():
     assert _estimate_text_spoken([], 0) == ""
     assert _estimate_text_spoken([], 100) == ""
-    assert _estimate_text_spoken([("Hello.", 320)], 0) == ""
+    assert _estimate_text_spoken([("Hello.", 320, True)], 0) == ""
 
 
 def test_estimate_text_spoken_full_chunks():
     """When all audio was sent, the full text is returned."""
-    chunks = [("Hello. ", 320), ("How are you?", 640)]
+    chunks = [("Hello. ", 320, True), ("How are you?", 640, True)]
     assert _estimate_text_spoken(chunks, 960) == "Hello. How are you?"
     # More bytes sent than produced — still returns full text
     assert _estimate_text_spoken(chunks, 9999) == "Hello. How are you?"
@@ -528,14 +553,14 @@ def test_estimate_text_spoken_full_chunks():
 
 def test_estimate_text_spoken_partial_first_chunk():
     """When only part of the first chunk's audio was sent, estimate proportionally."""
-    chunks = [("Hello world.", 1000)]
+    chunks = [("Hello world.", 1000, True)]
     # Half the audio sent → approximately half the text
     assert _estimate_text_spoken(chunks, 500) == "Hello "
 
 
 def test_estimate_text_spoken_one_and_a_half_chunks():
     """First chunk fully sent, second chunk partially sent."""
-    chunks = [("First sentence. ", 400), ("Second sentence.", 400)]
+    chunks = [("First sentence. ", 400, True), ("Second sentence.", 400, True)]
     # All of first chunk (400) + half of second (200) = 600
     spoken = _estimate_text_spoken(chunks, 600)
     assert spoken.startswith("First sentence. ")
@@ -544,20 +569,20 @@ def test_estimate_text_spoken_one_and_a_half_chunks():
 
 
 def test_estimate_text_spoken_partial_chunk_trims_mid_word_boundary():
-    chunks = [("Alpha bravo charlie", 1000)]
+    chunks = [("Alpha bravo charlie", 1000, True)]
     # 12 chars would land in the middle of "charlie"; should trim to word boundary.
     assert _estimate_text_spoken(chunks, 700) == "Alpha bravo "
 
 
 def test_estimate_text_spoken_partial_single_token_keeps_prefix():
-    chunks = [("supercalifragilistic", 1000)]
+    chunks = [("supercalifragilistic", 1000, True)]
     # No internal boundary exists; keep proportional prefix instead of dropping content.
     assert _estimate_text_spoken(chunks, 300) == "superc"
 
 
 def test_estimate_text_spoken_skips_zero_audio_chunks():
     """Chunks with 0 audio bytes (cancelled before any output) are skipped."""
-    chunks = [("First. ", 320), ("Never spoken.", 0), ("Third.", 320)]
+    chunks = [("First. ", 320, True), ("Never spoken.", 0, True), ("Third.", 320, True)]
     # 320 covers first chunk, 0-byte chunk is skipped, then 320 for third
     assert _estimate_text_spoken(chunks, 640) == "First. Third."
 
@@ -585,6 +610,22 @@ def test_all_tts_audio_delivered_requires_completed_synthesis():
 def test_all_tts_audio_delivered_zero_audio_is_still_fully_delivered():
     chunks = [("", 0, True)]
     assert _all_tts_audio_delivered(chunks, 0)
+
+
+def test_tts_chunk_named_fields_flow_through_consumers():
+    # The producer (TurnRunner._process_tts) builds TtsChunk instances, so the
+    # consumers must accept them by named field as well as positionally.
+    chunks = [
+        TtsChunk(text="Hello. ", audio_bytes=320, completed=True),
+        TtsChunk(text="How are you?", audio_bytes=640, completed=True),
+    ]
+    assert chunks[0].text == "Hello. "
+    assert chunks[0].audio_bytes == 320
+    assert chunks[0].completed is True
+
+    assert _estimate_text_spoken(chunks, 960) == "Hello. How are you?"
+    assert _all_tts_audio_delivered(chunks, 960)
+    assert not _all_tts_audio_delivered(chunks, 959)
 
 
 def test_audio_bytes_likely_heard_without_cutoff_uses_all_bytes():
@@ -1680,7 +1721,6 @@ async def test_session_barge_in_writes_interruption_journal_record():
         "mode": "truncate",
         "text_spoken": "",
         "notified": True,
-        "replacement_text": None,
     }
 
 
@@ -2053,12 +2093,12 @@ async def test_session_barge_in_drain_records_timeline_strings(monkeypatch: pyte
         return 1
 
     def _assert_string_chunks(
-        chunks: list[tuple[str, int]],
+        chunks: list[tuple[str, int, bool]],
         audio_bytes_sent: int,
     ) -> str:
         captured["called"] = True
         assert audio_bytes_sent == 1
-        assert all(isinstance(text, str) for text, _ in chunks)
+        assert all(isinstance(text, str) for text, _, _ in chunks)
         return ""
 
     monkeypatch.setattr(
@@ -2833,8 +2873,11 @@ async def test_streaming_interruption_prefers_cancel_token_timestamp(
     )
 
     token = CancelToken()
-    token._cancelled_at = 10.0
     session._turn = TurnContext("test-turn", token)
+    # A stale barge-in timestamp that must NOT be chosen as the cutoff once the
+    # token carries its own cancellation time. ``cancelled_at`` is a real
+    # monotonic timestamp (orders of magnitude larger than this sentinel), so a
+    # mismatch is unambiguous.
     session._turn.last_barge_in_time = 20.0
 
     async def _cancel_during_tts_playback() -> None:
@@ -2846,7 +2889,11 @@ async def test_streaming_interruption_prefers_cancel_token_timestamp(
     await session._run_streaming_agent("test", token=token)
     await cancel_task
 
-    assert captured["cutoff"] == pytest.approx(10.0)
+    # The cutoff must come from the token's own cancellation time (set by
+    # cancel() during playback), not the stale barge-in time.
+    assert token.cancelled_at is not None
+    assert captured["cutoff"] == pytest.approx(token.cancelled_at)
+    assert captured["cutoff"] != pytest.approx(20.0)
 
 
 @pytest.mark.asyncio

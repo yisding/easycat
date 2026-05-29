@@ -49,13 +49,23 @@ integration behavior:
 uv run python scripts/validate.py socket
 ```
 
-Live, latency, stress, and release validation are still planned public CLI
-surfaces. Until `easycat validate ...` lands, use the marker/direct entry
-points in [`plan/validation/README.md`](plan/validation/README.md). The planned
-public replacement for the quick script is `easycat validate quick`; it does
-not exist yet. When the public command is added, `--json` will remain the
-stdout machine-readable CLI envelope, while persisted validation reports will
-use `--report PATH`.
+The same lanes are available through the public `easycat validate` command,
+which is the recommended entry point:
+
+```bash
+easycat validate quick      # deterministic local validation (same as the script lane)
+easycat validate socket     # localhost socket / transport integration validation
+easycat validate stress     # local stress validation and saturation-signal capture
+easycat validate latency    # live latency validation (add --smoke or --sweep)
+easycat validate live       # live provider canaries (filter with --provider / --surface)
+easycat validate report PATH # render a concise summary of a saved report JSON
+```
+
+`--json` emits the standard machine-readable stdout envelope, `--report PATH`
+writes a persisted validation report JSON, and `--junit PATH` writes JUnit XML
+(available on the `quick`, `socket`, and `stress` lanes). For the lower-level
+marker/direct entry points, see
+[`plan/validation/README.md`](plan/validation/README.md).
 
 Flaky quarantine is explicit debt. Use
 `@pytest.mark.flaky(issue="...", owner="...", review_by="YYYY-MM-DD")`; missing
@@ -74,7 +84,7 @@ cassette status, and live canaries.
 - Passive supervisor listen-in via session audio fan-out on the EventBus
 - STT providers: OpenAI, Deepgram, ElevenLabs, Cartesia
 - TTS providers: OpenAI, Deepgram, ElevenLabs, Cartesia
-- VAD providers: Silero (open-source), optional TEN VAD (non-permissive license), and Krisp (commercial)
+- VAD providers: Silero (open-source), FunASR ONNX VAD (open-source), optional TEN VAD (non-permissive license), and Krisp (commercial)
 - Noise reduction: RNNoise (open-source), Krisp (commercial), passthrough fallback
 - Transports: Local (sounddevice), WebSocket server, WebRTC (aiortc), Twilio Media Streams server
 - Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers, outbound calling (Twilio), screening + IVR navigation, per-number health / retry / compliance gates, caller-ID propagation to the agent or tools
@@ -118,8 +128,8 @@ session = create_session(config)
 >
 > The underlying bridge classes live in `easycat.integrations.agents`
 > (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`,
-> `LlamaAgentsBridge`, `RemoteResponsesAPIBridge`) for callers who want to
-> construct them by hand.
+> `LlamaAgentsBridge`, `RemoteResponsesAPIBridge`, `LangChainBridge`,
+> `LangGraphBridge`) for callers who want to construct them by hand.
 
 ## Telephony (inbound + outbound)
 

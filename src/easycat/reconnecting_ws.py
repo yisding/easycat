@@ -66,6 +66,20 @@ class ReconnectingWebSocket:
         self._ws: ClientConnection | None = None
         self._closed = False
         self._connect_lock = asyncio.Lock()
+        # Set while a live socket is available, cleared during a reconnect
+        # window. ``send()``/``recv()`` await this (with a timeout) so a
+        # concurrent write blocks briefly across a recv_iter-driven reconnect
+        # instead of racing against a half-replaced socket.
+        self._connected = asyncio.Event()
+        # True once an initial connection has succeeded. Before that,
+        # send()/recv() fail fast rather than waiting on a reconnect that
+        # isn't happening.
+        self._ever_connected = False
+        # How long send()/recv() wait for an in-progress reconnect before
+        # giving up. Bounded so a write (or a best-effort cancel frame) does
+        # not stall the pipeline for a full backoff budget; if the reconnect
+        # is slower than this the write fails and defers to turn-level retry.
+        self._send_wait_timeout = min(self._config.max_delay, max(self._config.base_delay, 5.0))
 
     @property
     def is_connected(self) -> bool:
@@ -112,6 +126,8 @@ class ReconnectingWebSocket:
                     additional_headers=self._config.extra_headers,
                 )
                 logger.debug("WebSocket connected to %s (attempt %d)", self._url, attempt + 1)
+                self._connected.set()
+                self._ever_connected = True
                 await self._emit_reconnect_success()
                 if attempt > 0 and self._on_reconnect:
                     await self._invoke_callback(self._on_reconnect)
@@ -136,25 +152,80 @@ class ReconnectingWebSocket:
             await self._invoke_callback(self._on_give_up)
         raise ConnectionError(f"Failed to connect after {attempt} attempts") from last_error
 
-    async def send(self, message: str | bytes) -> None:
-        """Send a message over the WebSocket."""
-        if self._ws is None:
+    async def _await_connected(self) -> ClientConnection:
+        """Wait for a live socket, snapshot it, and return it.
+
+        Blocks briefly while a ``recv_iter``-driven reconnect swaps in a new
+        connection so a concurrent ``send()``/``recv()`` does not race against
+        a half-replaced or half-open socket. Snapshotting ``self._ws`` into a
+        local guards against it being reassigned out from under us between the
+        ``None`` check and the actual I/O call.
+        """
+        if self._closed:
+            raise RuntimeError("WebSocket has been closed")
+        if not self._connected.is_set():
+            # Only wait if a reconnect could plausibly restore the socket.
+            # A socket that has never connected fails fast. A socket whose
+            # ``_ws`` has been nulled with no reconnect in flight is terminally
+            # dead (e.g. recv_iter gave up after a failed reconnect): fast-fail
+            # rather than burning the full wait timeout on a known-dead socket.
+            if not self._ever_connected:
+                raise RuntimeError("WebSocket is not connected")
+            if self._ws is None and not self._connect_lock.locked():
+                # A closed socket always reports "closed" regardless of where in
+                # this method the caller happens to observe it (the exact point
+                # is scheduling-dependent across Python versions).
+                if self._closed:
+                    raise RuntimeError("WebSocket has been closed")
+                raise RuntimeError("WebSocket is not connected")
+            try:
+                await asyncio.wait_for(self._connected.wait(), timeout=self._send_wait_timeout)
+            except TimeoutError as exc:
+                raise RuntimeError("WebSocket is not connected") from exc
+            # close() (and other paths) may wake us by setting ``_connected``;
+            # re-check the closed flag before snapshotting a now-closing socket.
+            if self._closed:
+                raise RuntimeError("WebSocket has been closed")
+        ws = self._ws
+        if ws is None:
+            if self._closed:
+                raise RuntimeError("WebSocket has been closed")
             raise RuntimeError("WebSocket is not connected")
-        await self._ws.send(message)
+        return ws
+
+    async def send(self, message: str | bytes) -> None:
+        """Send a message over the WebSocket.
+
+        Best-effort across a reconnect: if a ``recv_iter``-driven reconnect is
+        in flight, the send blocks (up to ``max_delay``) for the new socket
+        rather than failing against the closing one.
+        """
+        ws = await self._await_connected()
+        await ws.send(message)
 
     async def recv(self) -> str | bytes:
         """Receive a message from the WebSocket."""
-        if self._ws is None:
-            raise RuntimeError("WebSocket is not connected")
-        return await self._ws.recv()
+        ws = await self._await_connected()
+        return await ws.recv()
 
     async def recv_iter(self) -> AsyncIterator[str | bytes]:
         """Iterate over incoming messages, reconnecting on transient drops.
 
-        On ``ConnectionClosed``, attempts to re-establish the connection
-        using the same retry/backoff policy as the initial ``connect()``.
-        If reconnection fails (or the socket was explicitly closed via
-        ``close()``), the iterator ends.
+        Behaviour on ``ConnectionClosed`` depends on whether an
+        ``on_reconnect`` callback was configured:
+
+        - **With** an ``on_reconnect`` hook, the connection is re-established
+          using the same retry/backoff policy as the initial ``connect()``.
+          The hook re-primes provider session state, then iteration resumes.
+          If reconnection ultimately fails, the iterator ends cleanly.
+        - **Without** an ``on_reconnect`` hook the drop is propagated: the
+          ``ConnectionClosed`` exception is re-raised into the consumer.
+          Stateful providers that send one-shot init frames cannot safely
+          resume a half-open stream, so they surface the error for a clean
+          restart instead of silently reconnecting into a broken session.
+
+        If the socket was explicitly closed via ``close()``, the iterator
+        ends cleanly in both cases.
         """
         if self._ws is None:
             if self._closed:
@@ -168,6 +239,8 @@ class ReconnectingWebSocket:
                 # Clean end-of-stream (server closed normally) — done.
                 return
             except websockets.exceptions.ConnectionClosed as exc:
+                # The socket is gone; block concurrent sends until reconnect.
+                self._connected.clear()
                 if self._closed:
                     return
                 rcvd = getattr(exc, "rcvd", None)
@@ -175,7 +248,7 @@ class ReconnectingWebSocket:
                 if self._on_reconnect is None:
                     logger.warning(
                         "WebSocket connection lost (code=%s). No on_reconnect callback "
-                        "configured; ending recv_iter to allow clean restart.",
+                        "configured; propagating ConnectionClosed for a clean restart.",
                         close_code,
                     )
                     raise
@@ -187,7 +260,12 @@ class ReconnectingWebSocket:
                     async with self._connect_lock:
                         await self._connect_with_retry()
                 except ConnectionError:
+                    # Reconnect is exhausted and the socket is terminally dead.
+                    # Null ``_ws`` (it still references the closed connection)
+                    # so a later send()/recv() fast-fails in ``_await_connected``
+                    # instead of waiting out the full reconnect timeout.
                     logger.error("Reconnection failed; ending recv_iter")
+                    self._ws = None
                     return
 
     async def close(self) -> None:
@@ -198,6 +276,9 @@ class ReconnectingWebSocket:
         releasing the lock without completing the full backoff sequence.
         """
         self._closed = True
+        # Wake any sender blocked in ``_await_connected``; it will observe the
+        # closed flag / cleared socket and raise instead of hanging.
+        self._connected.set()
         async with self._connect_lock:
             if self._ws is not None:
                 try:
@@ -206,6 +287,7 @@ class ReconnectingWebSocket:
                     logger.debug("Error closing WebSocket", exc_info=True)
                 finally:
                     self._ws = None
+        self._connected.clear()
 
     # ── Event emission helpers ────────────────────────────────────
 

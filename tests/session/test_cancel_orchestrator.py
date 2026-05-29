@@ -14,12 +14,12 @@ from typing import Any
 
 import pytest
 
+from easycat._turn_context import TurnContext
 from easycat.events import EventBus
 from easycat.runtime.context import RunContext
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._cancel_orchestrator import CancelOrchestrator
 from easycat.session._journal_sink import SessionJournalSink
-from easycat.session._turn_context import TurnContext
 from easycat.session.actions import SessionActions
 from easycat.stages.base import ControlSignal, InterruptSignal
 
@@ -213,7 +213,6 @@ async def test_record_interruption_writes_journal_record_with_expected_shape() -
         "mode": "precise",
         "text_spoken": "hello there",
         "notified": True,
-        "replacement_text": None,
     }
 
 

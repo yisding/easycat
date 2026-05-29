@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
+import time
 from typing import Any
 
+from easycat import _observability as observability
+from easycat._turn_context import TurnContext
 from easycat.runtime.context import RunContext
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
-from easycat.session._turn_context import TurnContext
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
@@ -41,12 +44,22 @@ class AudioStage:
     ) -> None:
         self._provider = provider
         self._echo_canceller = echo_canceller
+        # Fallback recording sink used only when ``ctx.journal`` is None
+        # (see ``_journal_ctx``); recording normally flows through ctx.
         self._journal = journal
-        self._last_snapshot = StageStateSnapshot(stage_name=self.name)
+
+    def _journal_ctx(self, ctx: RunContext) -> RunContext:
+        """Return *ctx*, substituting the constructor journal as a fallback."""
+        if ctx.journal is None and self._journal is not None:
+            return dataclasses.replace(ctx, journal=self._journal)
+        return ctx
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
+        ctx = self._journal_ctx(ctx)
+        started = time.perf_counter()
+        result_attr = "pass"
         state_before = self.snapshot_state()
-        raw_bytes = getattr(input, "data", None)
+        raw_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
         input_ref = put_artifact(ctx, raw_bytes)
         start_extra = {
             "audio_bytes": len(raw_bytes) if isinstance(raw_bytes, (bytes, bytearray)) else 0,
@@ -61,13 +74,27 @@ class AudioStage:
             input_ref=input_ref,
             data_extra=start_extra,
         )
+        # Track which component is in flight so a raised exception is
+        # attributed to the provider that actually failed (the noise reducer
+        # vs. the echo canceller), not always to ``self._provider``.
+        error_provider = type(self._provider).__name__.lower()
         try:
             chunk = input
             chunk = await self._provider.process(chunk)
             if self._echo_canceller is not None:
+                error_provider = type(self._echo_canceller).__name__.lower()
                 chunk = await self._echo_canceller.process(chunk)
             result = chunk
         except Exception as exc:
+            result_attr = "fail"
+            observability.increment_counter(
+                "easycat.provider.errors.total",
+                attributes={
+                    "easycat.surface": "stt",
+                    "easycat.provider": error_provider,
+                    "easycat.error_type": type(exc).__name__,
+                },
+            )
             journal_append_event(
                 ctx,
                 stage=self.name,
@@ -77,8 +104,16 @@ class AudioStage:
                 error=str(exc),
             )
             raise
+        finally:
+            observability.record_histogram(
+                "easycat.stage.latency",
+                time.perf_counter() - started,
+                {"easycat.stage": self.name, "easycat.result": result_attr},
+            )
         state_after = self.snapshot_state()
-        processed_bytes = getattr(result, "data", None)
+        processed_bytes = (
+            getattr(result, "data", None) if not isinstance(result, bytes) else result
+        )
         output_ref = put_artifact(ctx, processed_bytes)
         complete_extra = {
             "audio_bytes": (
@@ -150,6 +185,11 @@ class AudioStage:
         signal: ControlSignal,
         ctx: RunContext | None = None,
     ) -> None:
+        """Observe and journal an upstream control signal (no cancel here).
+
+        Cancellation is owned by the ``CancelOrchestrator`` / turn runner;
+        this method only records that the stage saw the signal.
+        """
         logger.debug("AudioStage received upstream signal: %s", signal)
         if ctx is not None:
-            journal_append_control_signal(ctx, stage=self.name, signal=signal)
+            journal_append_control_signal(self._journal_ctx(ctx), stage=self.name, signal=signal)

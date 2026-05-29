@@ -229,15 +229,20 @@ class TestCheckProviderVersions:
         assert len(mismatches) == 1
         assert mismatches[0].code == "UNKNOWN"
 
-    def test_provider_not_in_bundle_skipped(self, tmp_path):
+    def test_provider_not_in_bundle_reported_missing(self, tmp_path):
         path = _write_bundle(
             tmp_path,
             records=[],
             provider_versions={"stt": "openai-1.0"},
         )
         bundle = RunBundle.load(path)
-        # Installed has tts but bundle doesn't — not a mismatch.
-        assert check_provider_versions(bundle, {"tts": "eleven-v5"}) == []
+        # Installed has tts but bundle didn't capture it — determinism
+        # can't be guaranteed, so it surfaces as a MISSING mismatch.
+        mismatches = check_provider_versions(bundle, {"tts": "eleven-v5"})
+        assert len(mismatches) == 1
+        assert mismatches[0].provider == "tts"
+        assert mismatches[0].installed_version == "eleven-v5"
+        assert mismatches[0].code == "MISSING"
 
     def test_dict_version_stringify_is_key_order_stable(self):
         """``version_info()`` may return a dict; the helper stringifies
@@ -393,6 +398,27 @@ class TestVersionMatchPolicy:
             )
         assert result.fidelity_label is ReplayFidelity.LIVE
         assert any("version mismatch" in rec.message for rec in caplog.records)
+
+    def test_missing_provider_artifact_no_force_raises_unknown(self, tmp_path):
+        # Bundle never captured the installed provider's version, so
+        # ARTIFACT replay must surface it like the UNKNOWN sentinel
+        # rather than silently treating it as a match.
+        bundle = self._bundle(tmp_path, {"stt": "v1"})
+        with pytest.raises(ProviderVersionMismatchError) as exc_info:
+            bundle.replay(
+                ReplaySpec(fidelity=ReplayFidelity.ARTIFACT),
+                installed_versions={"tts": "eleven-v5"},
+            )
+        assert exc_info.value.error_code == "PROVIDER_VERSION_UNKNOWN"
+        assert exc_info.value.mismatches[0].code == "MISSING"
+
+    def test_missing_provider_artifact_with_force_downgrades_to_live(self, tmp_path):
+        bundle = self._bundle(tmp_path, {"stt": "v1"})
+        result = bundle.replay(
+            ReplaySpec(fidelity=ReplayFidelity.ARTIFACT, force=True),
+            installed_versions={"tts": "eleven-v5"},
+        )
+        assert result.fidelity_label is ReplayFidelity.LIVE
 
 
 # ── Committable-boundary enforcement ─────────────────────────────

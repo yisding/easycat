@@ -1,49 +1,20 @@
 """Shared helpers for agent bridge implementations.
 
-``serialize_output`` and ``split_replacement_by_original_parts`` are
-used by multiple bridge backends (OpenAI Agents SDK, PydanticAI, etc.)
-for post-processing assistant output and keeping history part
-granularity when rewriting text.
+``split_replacement_by_original_parts`` is used by multiple bridge
+backends (OpenAI Agents SDK, PydanticAI, etc.) for post-processing
+assistant output and keeping history part granularity when rewriting
+text.
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
-from typing import Any
 
 # Shared constant used by bridges when recording an end-of-turn
 # interruption in message history.
 INTERRUPTION_NOTE = (
     "[The user interrupted the assistant's response and may not have heard all of it.]"
 )
-
-
-def serialize_output(output: Any) -> str:
-    """Serialize an agent output value to a human-/machine-readable string.
-
-    Handles Pydantic models (v1 and v2), dicts, lists, and plain values.
-    Prefers JSON serialization for structured types so the result is valid
-    JSON rather than a Python repr.
-
-    - ``str`` -> returned as-is
-    - Pydantic v2 model (has ``model_dump_json``) -> JSON string
-    - Pydantic v1 model (has ``json`` method) -> JSON string
-    - ``dict`` / ``list`` -> ``json.dumps``
-    - anything else -> ``str()``
-    """
-    if isinstance(output, str):
-        return output
-    # Pydantic v2
-    if hasattr(output, "model_dump_json"):
-        return output.model_dump_json()
-    # Pydantic v1
-    if hasattr(output, "json") and callable(output.json):
-        return output.json()
-    # dict / list -> JSON
-    if isinstance(output, (dict, list)):
-        return json.dumps(output, default=str)
-    return str(output)
 
 
 def split_replacement_by_original_parts(

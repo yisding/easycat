@@ -144,6 +144,24 @@ class TestBlock:
         assert result is True
         assert q.drops == 0
 
+    async def test_block_returns_false_when_closed_mid_wait(self):
+        # A BLOCK-policy producer parked in the wait must not append to a
+        # queue that gets closed while it is waiting.
+        q = BoundedAudioQueue(max_size=1, policy=DropPolicy.BLOCK, block_timeout=1.0)
+        await q.put(_chunk(b"\x01"))
+
+        async def close_later():
+            await asyncio.sleep(0.05)
+            q.close()  # wakes _not_full waiters without freeing space
+
+        task = asyncio.create_task(close_later())
+        result = await q.put(_chunk(b"\x02"))
+        await task
+
+        assert result is False
+        # The chunk must not have landed in the closed queue.
+        assert q.qsize() == 1
+
 
 # ── Flush / stale audio (Task 8.7) ────────────────────────────────
 

@@ -16,7 +16,24 @@ TKey = TypeVar("TKey")
 
 
 class SessionManager(Generic[TKey]):
-    """Track and lifecycle-manage many EasyCat sessions in one process."""
+    """Track and lifecycle-manage many EasyCat sessions in one process.
+
+    Concurrency contract:
+
+    - This manager relies on :meth:`Session.stop` being idempotent. A session
+      may be stopped by :meth:`remove`, :meth:`stop_all`, the ``finally`` block
+      of :meth:`connection`, or an external caller; any combination of these
+      must be safe. ``Session.stop`` satisfies this because it funnels through
+      ``Session.destroy``, which guards repeated teardown.
+    - :meth:`connection` and :meth:`stop_all` (or :meth:`remove`) must **not**
+      be used concurrently on overlapping keys. ``stop_all``/``remove`` tear
+      the session down without signalling an in-flight ``connection`` body, so
+      application code still inside the ``yield`` would be operating on an
+      already-stopped session with no notification. If you need to force-stop
+      sessions that may be in active ``connection`` blocks, coordinate
+      cancellation at the call site (e.g. cancel the tasks running those
+      blocks) before invoking ``stop_all``.
+    """
 
     def __init__(self) -> None:
         self._sessions: dict[TKey, Session] = {}
@@ -58,6 +75,14 @@ class SessionManager(Generic[TKey]):
 
     @asynccontextmanager
     async def connection(self, key: TKey, session: Session) -> AsyncIterator[Session]:
+        """Manage a session's lifetime within an ``async with`` block.
+
+        The ``finally`` clause always calls :meth:`remove`, so ``session.stop``
+        may run even if it was already stopped elsewhere (e.g. by
+        :meth:`stop_all`); this is safe only because ``Session.stop`` is
+        idempotent. Do not run :meth:`stop_all`/:meth:`remove` on this key
+        concurrently with the ``yield`` body (see class docstring).
+        """
         await self.add(key, session)
         try:
             yield session

@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.events import (
     Error,
@@ -21,7 +22,6 @@ from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._stt_committer import STTCommitter
-from easycat.session._turn_context import TurnContext
 from easycat.timeouts import TimeoutConfig
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
 
@@ -246,14 +246,14 @@ async def test_cancel_invokes_on_speech_detection_reset_and_clears_state() -> No
     committer, stt, _emitted, _no_turn, _tm = _make_committer(on_speech_detection_reset=_reset)
     committer.mark_active()
     turn = _new_turn()
-    turn.stt_final_future = asyncio.get_running_loop().create_future()
+    turn.pending_stt_segment_futures.append(asyncio.get_running_loop().create_future())
 
     await committer.cancel(turn)
 
     assert reset_calls == [1]
     assert committer.is_active is False
     assert stt.end_stream_calls == 1
-    assert turn.stt_final_future is None
+    assert all(f.done() for f in turn.pending_stt_segment_futures)
 
 
 @pytest.mark.asyncio

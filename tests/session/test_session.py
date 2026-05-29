@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -45,7 +46,6 @@ from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactS
 from easycat.runtime.journal import InMemoryRingBuffer, SqliteJournal
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
-from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig, TurnState
 from easycat.timeouts import AgentTimeoutError
 from easycat.tts.input import TTSInput
@@ -300,6 +300,27 @@ def _full_config(**overrides) -> SessionConfig:
     )
     defaults.update(overrides)
     return SessionConfig(**defaults)
+
+
+# ── Config wiring tests ────────────────────────────────────────────
+
+
+def test_stt_segment_silence_ms_forwarded_to_committer():
+    """``TurnManagerConfig.stt_segment_silence_ms`` is read by Session, not
+    TurnManager, and forwarded to the STTCommitter as ``segment_silence_ms``.
+
+    Guards the (intentional) cross-component wiring documented on the field so
+    it cannot silently regress into a dead config value.
+    """
+    session = Session(
+        _full_config(
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=1000,
+                stt_segment_silence_ms=250,
+            ),
+        )
+    )
+    assert session._stt_committer._segment_silence_ms == 250
 
 
 # ── CancelToken tests ──────────────────────────────────────────────
@@ -1040,7 +1061,11 @@ async def test_handle_end_of_speech_clears_turn_id_on_stt_timeout():
     session = Session(_full_config())
     session._turn = TurnContext("turn-stale", CancelToken())
     session._timeout_config.stt_timeout = 0.01
-    session._turn.stt_final_future = asyncio.get_running_loop().create_future()
+    session._stt_committer.mark_active()
+    # A pending segment future that never resolves drives the
+    # committer's own stt_timeout fallback (await_pending), which
+    # clears the turn instead of running the agent.
+    session._turn.pending_stt_segment_futures.append(asyncio.get_running_loop().create_future())
 
     await session._handle_end_of_speech()
 
@@ -1052,9 +1077,6 @@ async def test_handle_end_of_speech_clears_turn_id_on_stt_timeout():
 async def test_handle_end_of_speech_clears_turn_id_on_empty_transcript():
     session = Session(_full_config())
     session._turn = TurnContext("turn-stale", CancelToken())
-    done = asyncio.get_running_loop().create_future()
-    done.set_result("")
-    session._turn.stt_final_future = done
 
     await session._handle_end_of_speech()
 

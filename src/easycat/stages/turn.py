@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import time
 from typing import Any
 
+from easycat import _observability as observability
+from easycat._turn_context import TurnContext
 from easycat.runtime.context import RunContext
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
-from easycat.session._turn_context import TurnContext
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
@@ -26,19 +28,33 @@ class TurnStage:
     ``execute`` runs SmartTurn's endpoint classifier on an audio window.
     The raw input audio is captured as ``input_ref`` on ``stage_start``
     so a LIVE replay can re-run the same classifier against the same
-    window.  The classifier's decision + probability are recorded on
-    ``stage_complete`` so ARTIFACT replay returns the original verdict
-    without loading the ONNX model.
+    window.  The classifier's ``prediction`` + ``probability`` (the two
+    fields of :class:`SmartTurnResult`) are recorded on ``stage_complete``
+    so ARTIFACT replay returns the original verdict without loading the
+    ONNX model.
     """
 
     name = "turn"
 
     def __init__(self, provider: Any, *, journal: Any = None) -> None:
         self._provider = provider
+        # Fallback recording sink used only when ``ctx.journal`` is None
+        # (see ``_journal_ctx``); recording normally flows through ctx.
         self._journal = journal
-        self._last_snapshot = StageStateSnapshot(stage_name=self.name)
+        # Most recent endpoint decision (last classifier ``prediction``),
+        # surfaced via ``snapshot_state`` so ``replay_decision`` is real.
+        self._last_decision: Any = None
+
+    def _journal_ctx(self, ctx: RunContext) -> RunContext:
+        """Return *ctx*, substituting the constructor journal as a fallback."""
+        if ctx.journal is None and self._journal is not None:
+            return dataclasses.replace(ctx, journal=self._journal)
+        return ctx
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
+        ctx = self._journal_ctx(ctx)
+        started = time.perf_counter()
+        result_attr = "pass"
         state_before = self.snapshot_state()
         audio_bytes = _concat_chunks(input)
         input_ref = put_artifact(ctx, audio_bytes)
@@ -56,6 +72,15 @@ class TurnStage:
         try:
             result = await self._provider.detect(input)
         except Exception as exc:
+            result_attr = "fail"
+            observability.increment_counter(
+                "easycat.provider.errors.total",
+                attributes={
+                    "easycat.surface": "stt",
+                    "easycat.provider": type(self._provider).__name__.lower(),
+                    "easycat.error_type": type(exc).__name__,
+                },
+            )
             journal_append_event(
                 ctx,
                 stage=self.name,
@@ -65,6 +90,12 @@ class TurnStage:
                 error=str(exc),
             )
             raise
+        finally:
+            observability.record_histogram(
+                "easycat.stage.latency",
+                time.perf_counter() - started,
+                {"easycat.stage": self.name, "easycat.result": result_attr},
+            )
         state_after = self.snapshot_state()
         complete_extra: dict[str, Any] = {}
         if isinstance(result, dict):
@@ -73,9 +104,11 @@ class TurnStage:
             source = dataclasses.asdict(result)
         else:
             source = {}
-        for key in ("prediction", "probability", "decision"):
+        for key in ("prediction", "probability"):
             if key in source:
                 complete_extra[key] = source[key]
+        if "prediction" in source:
+            self._last_decision = source["prediction"]
         journal_append_event(
             ctx,
             stage=self.name,
@@ -88,10 +121,10 @@ class TurnStage:
         return result
 
     def snapshot_state(self) -> StageStateSnapshot:
-        return StageStateSnapshot(
-            stage_name=self.name,
-            fields={"provider": type(self._provider).__name__},
-        )
+        fields: dict[str, Any] = {"provider": type(self._provider).__name__}
+        if self._last_decision is not None:
+            fields["decision"] = self._last_decision
+        return StageStateSnapshot(stage_name=self.name, fields=fields)
 
     def replay(
         self,
@@ -100,9 +133,9 @@ class TurnStage:
     ) -> Any:
         """Replay Turn (SmartTurn) stage.
 
-        ``ARTIFACT`` returns the captured classification/decision.
-        ``LIVE`` returns the captured audio window so SmartTurn can be
-        re-run against the same snapshot.
+        ``ARTIFACT`` returns the captured classification (the recorded
+        ``prediction``).  ``LIVE`` returns the captured audio window so
+        SmartTurn can be re-run against the same snapshot.
         """
         overrides = spec.overrides
         if spec.fidelity is ReplayFidelity.LIVE:
@@ -116,20 +149,25 @@ class TurnStage:
                         return blob
             return None
 
-        if "decision" in overrides or "result" in overrides:
-            return overrides.get("decision", overrides.get("result"))
+        if "prediction" in overrides or "result" in overrides:
+            return overrides.get("prediction", overrides.get("result"))
         if cassette is not None:
             record = cassette.last_record("stage_complete") or cassette.last_record()
             if record is not None:
                 data = record.get("data") or {}
                 if isinstance(data, dict):
-                    for key in ("decision", "result", "prediction"):
+                    for key in ("prediction", "result"):
                         if key in data:
                             return data[key]
         return None
 
     def replay_decision(self, snapshot: StageStateSnapshot) -> Any:
-        """Replay a turn decision from a snapshot."""
+        """Replay the last endpoint decision recorded in a snapshot.
+
+        ``snapshot_state`` carries the most recent classifier ``prediction``
+        under ``fields["decision"]`` once the stage has run, so this returns
+        that verdict (or ``None`` for a snapshot taken before any run).
+        """
         return snapshot.fields.get("decision", None)
 
     async def handle_upstream(
@@ -137,9 +175,14 @@ class TurnStage:
         signal: ControlSignal,
         ctx: RunContext | None = None,
     ) -> None:
+        """Observe and journal an upstream control signal (no cancel here).
+
+        Cancellation is owned by the ``CancelOrchestrator`` / turn runner;
+        this method only records that the stage saw the signal.
+        """
         logger.debug("TurnStage received upstream signal: %s", signal)
         if ctx is not None:
-            journal_append_control_signal(ctx, stage=self.name, signal=signal)
+            journal_append_control_signal(self._journal_ctx(ctx), stage=self.name, signal=signal)
 
 
 def _concat_chunks(input_: Any) -> bytes:

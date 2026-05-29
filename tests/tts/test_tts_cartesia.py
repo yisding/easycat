@@ -67,18 +67,33 @@ def _error_msg() -> str:
 class FakeReconnectingWS:
     """Mock ReconnectingWebSocket for Cartesia TTS tests."""
 
-    def __init__(self, messages: list[str | bytes] | None = None) -> None:
+    def __init__(
+        self,
+        messages: list[str | bytes] | None = None,
+        on_reconnect=None,
+        reconnect_after: int | None = None,
+    ) -> None:
         self._messages = messages or []
         self._sent: list[str | bytes] = []
         self._closed = False
+        # ``on_reconnect`` mirrors the hook the provider passes to the real
+        # ReconnectingWebSocket constructor. ``reconnect_after`` (when set)
+        # makes ``recv_iter`` invoke that hook after yielding that many
+        # messages, simulating a mid-stream recv_iter-driven reconnect.
+        self._on_reconnect = on_reconnect
+        self._reconnect_after = reconnect_after
         self.connect = AsyncMock()
 
     async def send(self, message: str | bytes) -> None:
         self._sent.append(message)
 
     async def recv_iter(self):
-        for msg in self._messages:
+        for i, msg in enumerate(self._messages):
             yield msg
+            if self._reconnect_after is not None and i + 1 == self._reconnect_after:
+                result = self._on_reconnect()
+                if asyncio.iscoroutine(result):
+                    await result
 
     async def close(self) -> None:
         self._closed = True
@@ -240,6 +255,54 @@ class TestCartesiaTTS:
                 pass
 
         assert fake_ws._closed
+
+    async def test_replay_request_resends_armed_request_mid_stream(self):
+        """A mid-stream recv_iter-driven reconnect replays the armed request.
+
+        Drives the on_reconnect hook after the first chunk and asserts the
+        full synthesis request is re-sent on the (fake) socket, restarting the
+        utterance from the top.
+        """
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS(
+            messages=[_chunk_msg(_pcm16_bytes(100)), _done_msg()],
+            on_reconnect=provider._replay_request,
+            reconnect_after=1,
+        )
+
+        with patch.object(provider, "_create_ws", return_value=fake_ws):
+            async for _ in provider.synthesize("Hello world"):
+                pass
+
+        # Initial send plus the replayed request: two identical frames.
+        assert len(fake_ws._sent) == 2
+        first = json.loads(fake_ws._sent[0])
+        second = json.loads(fake_ws._sent[1])
+        assert first["transcript"] == "Hello world"
+        assert second == first
+
+    async def test_replay_request_noop_when_unarmed(self):
+        """Replay is a no-op when armed state is None (initial-connect retry)."""
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS()
+        provider._ws = fake_ws
+        provider._pending_request = None
+
+        await provider._replay_request()
+
+        assert fake_ws._sent == []
+
+    async def test_replay_request_noop_when_cancelled(self):
+        """Replay is a no-op once the provider is cancelled."""
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS()
+        provider._ws = fake_ws
+        provider._pending_request = json.dumps({"transcript": "Hello"})
+        await provider.cancel()
+
+        await provider._replay_request()
+
+        assert fake_ws._sent == []
 
     async def test_ignores_malformed_json(self):
         provider = self._make_provider()

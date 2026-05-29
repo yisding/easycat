@@ -6,7 +6,14 @@ import math
 import struct
 import time
 
-from easycat.events import EventBus, VADStartSpeaking, VADStopSpeaking, VoicemailDetected
+from easycat.events import (
+    CallStateChanged,
+    EventBus,
+    VADStartSpeaking,
+    VADStopSpeaking,
+    VoicemailDetected,
+)
+from easycat.telephony.call_state import OutboundCallState
 from easycat.telephony.voicemail import (
     BeepDetectorConfig,
     VoicemailDetector,
@@ -415,6 +422,64 @@ class TestVoicemailPolicyHandler:
 
             await bus.emit(VoicemailDetected(result="machine"))
             # Action should not have changed (still the same object)
+            assert handler.last_action is first_action
+        finally:
+            handler.stop()
+
+    async def test_rearms_on_voicemail_pickup_then_late_voicemail(self) -> None:
+        # Regression: a voicemail pickup (VOICEMAIL -> HUMAN) must re-arm the
+        # handler so a subsequent late-voicemail re-entry is handled again
+        # instead of being dropped as a duplicate machine detection.
+        bus = EventBus()
+        config = VoicemailPolicyConfig(policy=VoicemailPolicy.HANG_UP)
+        handler = VoicemailPolicyHandler(bus, config)
+        handler.start()
+
+        try:
+            await bus.emit(VoicemailDetected(result="machine"))
+            first_action = handler.last_action
+            assert first_action is not None
+            assert handler._action_taken is True
+
+            # Human picks up during the greeting — state machine reports the
+            # authoritative VOICEMAIL -> HUMAN transition.
+            await bus.emit(
+                CallStateChanged(
+                    old=OutboundCallState.VOICEMAIL,
+                    new=OutboundCallState.HUMAN,
+                )
+            )
+            assert handler._action_taken is False
+
+            # Late voicemail re-entry: a new machine detection is handled again.
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert handler.last_action is not None
+            assert handler.last_action is not first_action
+        finally:
+            handler.stop()
+
+    async def test_non_pickup_state_change_does_not_rearm(self) -> None:
+        # A transition that does not leave VOICEMAIL must not re-arm.
+        bus = EventBus()
+        config = VoicemailPolicyConfig(policy=VoicemailPolicy.HANG_UP)
+        handler = VoicemailPolicyHandler(bus, config)
+        handler.start()
+
+        try:
+            await bus.emit(VoicemailDetected(result="machine"))
+            first_action = handler.last_action
+            assert first_action is not None
+
+            # Unrelated transition (not leaving VOICEMAIL) keeps the handler armed-off.
+            await bus.emit(
+                CallStateChanged(
+                    old=OutboundCallState.CLASSIFYING,
+                    new=OutboundCallState.VOICEMAIL,
+                )
+            )
+            assert handler._action_taken is True
+
+            await bus.emit(VoicemailDetected(result="machine"))
             assert handler.last_action is first_action
         finally:
             handler.stop()

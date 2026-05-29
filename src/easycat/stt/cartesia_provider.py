@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
 
+from easycat._audio_utils import resample_chunk
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
@@ -50,10 +51,15 @@ class CartesiaSTT(WebSocketSTTBase):
     """
 
     def __init__(self, config: CartesiaSTTConfig) -> None:
+        # Like the other bundled streaming STT providers, accept any upstream
+        # PCM rate and resample to the configured ``sample_rate`` in
+        # ``_on_audio`` rather than rejecting mismatches. ``expected_sample_rate``
+        # is left as ``None`` so the base validator only enforces PCM encoding
+        # and callers can swap providers without crashing.
         super().__init__(
             provider_name="cartesia_stt",
             provider_error_name="cartesia",
-            expected_sample_rate=config.sample_rate,
+            expected_sample_rate=None,
             close_timeout=5.0,
         )
         self._config = config
@@ -72,6 +78,8 @@ class CartesiaSTT(WebSocketSTTBase):
         )
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
+        if chunk.format.sample_rate != self._config.sample_rate:
+            chunk = resample_chunk(chunk, self._config.sample_rate)
         await self._send_ws(chunk.data)
 
     async def _on_commit_segment(self) -> bool:

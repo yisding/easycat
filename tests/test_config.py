@@ -70,6 +70,9 @@ class _IdentitySinkTransport:
     def bind_identity_sink(self, sink) -> None:
         self.identity_sink = sink
 
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "identity-sink"}
+
 
 def test_easycat_config_requires_stt_tts(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -611,3 +614,64 @@ def test_debug_bool_true_rejected():
 def test_debug_bool_false_rejected():
     with pytest.raises(ValueError, match="Invalid debug=False"):
         EasyConfig(openai_api_key="test-key", debug=False)
+
+
+# ── provider display name in missing-API-key errors ───────────────────
+
+
+def test_missing_api_key_error_uses_catalog_name_for_deepgram():
+    with pytest.raises(ValueError, match=r"deepgram STT requires an API key"):
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+        )
+
+
+def test_missing_api_key_error_uses_catalog_name_for_openai_tts():
+    with pytest.raises(ValueError, match=r"openai TTS requires an API key"):
+        EasyConfig(
+            stt=OpenAIRealtimeSTTConfig(api_key="stt-key"),
+            tts=OpenAITTSConfig(api_key=""),
+        )
+
+
+# ── text session config object form ───────────────────────────────────
+
+
+def test_create_text_session_accepts_config_object():
+    from easycat.config import TextSessionConfig, create_text_session
+
+    config = TextSessionConfig(agent=_DummyAgent(), debug="off")
+    session = create_text_session(config)
+    assert session is not None
+
+
+def test_create_text_session_kwargs_still_supported():
+    from easycat.config import create_text_session
+
+    session = create_text_session(agent=_DummyAgent(), debug="off")
+    assert session is not None
+
+
+def test_text_session_config_validates_debug():
+    from easycat.config import TextSessionConfig
+
+    with pytest.raises(ValueError, match="Invalid debug"):
+        TextSessionConfig(agent=_DummyAgent(), debug="loud")  # type: ignore[arg-type]
+
+
+def test_create_text_session_rejects_config_plus_loose_kwargs():
+    from easycat.config import TextSessionConfig, create_text_session
+
+    config = TextSessionConfig(agent=_DummyAgent())
+    with pytest.raises(ValueError, match="not both"):
+        create_text_session(config, agent=_DummyAgent())
+
+
+def test_create_text_session_config_with_default_kwargs_ok():
+    from easycat.config import TextSessionConfig, create_text_session
+
+    # Passing config alongside only default-valued kwargs is allowed.
+    config = TextSessionConfig(agent=_DummyAgent(), debug="off")
+    session = create_text_session(config, debug="off")
+    assert session is not None

@@ -22,6 +22,7 @@ from easycat.events import EventBus, TransportDegraded
 from easycat.transports.webrtc import (
     _DEGRADED_INBOUND_CONSUME_ERROR,
     _DEGRADED_NEGOTIATION_FAILED,
+    _DEGRADED_OUTBOUND_QUEUE_FULL,
     ICEServer,
     WebRTCTransport,
     WebRTCTransportConfig,
@@ -211,6 +212,13 @@ class TestWebRTCTransportConformance:
         t = WebRTCTransport()
         assert not t.is_connected
         assert not t.has_client
+
+    def test_echo_cancellation_default_is_on(self):
+        # Deliberate flip from the prior implicit ``False`` default: WebRTC is a
+        # browser-mic transport and matches WebSocket's EasyCat-side AEC default.
+        from easycat.runtime.capabilities import default_echo_cancellation_enabled
+
+        assert default_echo_cancellation_enabled(WebRTCTransport()) is True
 
 
 class TestWebRTCIngressQueueOwnership:
@@ -771,5 +779,30 @@ class TestWebRTCDegradedEvents:
         for _ in range(5):
             await asyncio.sleep(0)
         evt = next(e for e in received if e.reason == _DEGRADED_INBOUND_CONSUME_ERROR)
+        assert evt.provider == "webrtc"
+        assert evt.fatal is False
+
+    @pytest.mark.asyncio
+    async def test_outbound_queue_full_emits_degraded(self):
+        """A dropped outbound TTS frame must surface a ``TransportDegraded`` so
+        backpressure is visible in the journal, not just a logger.debug line."""
+        transport = WebRTCTransport()
+        # Pretend a peer connected so send_audio reaches the enqueue path.
+        transport._pc = object()  # type: ignore[assignment]
+        transport._outbound_track = object()
+        bus = EventBus()
+        received: list[TransportDegraded] = []
+        bus.subscribe(TransportDegraded, lambda e: received.append(e))
+        transport._event_bus = bus
+
+        # Force the outbound source to always reject the frame as if full.
+        transport._outbound.enqueue = lambda *a, **k: False  # type: ignore[method-assign]
+
+        delivered = await transport.send_audio(make_chunk())
+        assert delivered is False
+
+        for _ in range(5):
+            await asyncio.sleep(0)
+        evt = next(e for e in received if e.reason == _DEGRADED_OUTBOUND_QUEUE_FULL)
         assert evt.provider == "webrtc"
         assert evt.fatal is False

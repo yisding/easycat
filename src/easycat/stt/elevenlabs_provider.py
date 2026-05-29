@@ -10,23 +10,38 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-import websockets
 
 from easycat._audio_utils import resample
-from easycat._provider_helpers import get_package_version
+from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk, AudioFormat
-from easycat.events import STTEvent, STTEventType, WordTimestamp
-from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
-from easycat.stt.base import STTBase, pcm_to_wav
+from easycat.events import STTEvent, STTEventType
+from easycat.stt.base import pcm_to_wav
+from easycat.stt.websocket_base import WebSocketSTTBase
 
 logger = logging.getLogger(__name__)
+
+# How long to wait for ``committed_transcript`` after an end-of-turn
+# commit before we give up and promote the most recent
+# ``partial_transcript`` to a FINAL.  Mirrors OpenAIRealtimeSTT so a
+# stalled provider final does not leave the turn with zero transcript.
+_FINAL_TRANSCRIPT_TIMEOUT_S = 5.0
 
 
 @dataclass
 class ElevenLabsSTTConfig:
-    """Configuration for the ElevenLabs STT provider."""
+    """Configuration for the ElevenLabs STT provider.
 
-    api_key: str
+    .. note::
+
+       ``api_key`` defaults to ``""`` to support the inject-the-key-later
+       workflow (e.g. constructing the config first and assigning the key
+       before use).  A missing key is therefore *not* validated at
+       construction time — it surfaces on the first live request rather
+       than eagerly.  The :func:`easycat.stt.factory` path still
+       fail-fasts on an empty key.
+    """
+
+    api_key: str = ""
     model: str | None = None
     language: str | None = None
     mode: str = "realtime"  # "realtime" or "batch"
@@ -42,7 +57,7 @@ class ElevenLabsSTTConfig:
     event_bus: Any = field(default=None, repr=False)
 
 
-class ElevenLabsSTT(STTBase):
+class ElevenLabsSTT(WebSocketSTTBase):
     """ElevenLabs STT supporting realtime WebSocket and batch modes.
 
     In **realtime** mode, a WebSocket connection is opened on ``start_stream``
@@ -53,17 +68,25 @@ class ElevenLabsSTT(STTBase):
     """
 
     def __init__(self, config: ElevenLabsSTTConfig) -> None:
-        super().__init__()
+        super().__init__(
+            provider_name="elevenlabs_stt",
+            provider_error_name="elevenlabs",
+        )
         self._config = config
         # Batch mode state
         self._buffer = bytearray()
         self._audio_format: AudioFormat | None = None
         # Realtime mode state
-        self._ws: ReconnectingWebSocket | None = None
-        self._receive_task: asyncio.Task[None] | None = None
-        self._close_task: asyncio.Task[None] | None = None
         self._final_received: asyncio.Event | None = None
         self._audio_pending_commit: bool = False
+        # Latest partial transcript text, promoted to a FINAL if the
+        # committed transcript stalls past the timeout.
+        self._partial_text: str = ""
+        # Set when ``_send_commit`` gave up waiting for the committed
+        # transcript and already promoted ``_partial_text`` to a FINAL.
+        # Causes the first subsequent ``committed_transcript`` to be
+        # dropped instead of emitting a second FINAL for the same turn.
+        self._dropping_pending_final: bool = False
 
     def _resolved_model(self) -> str:
         if self._config.model is not None:
@@ -132,23 +155,30 @@ class ElevenLabsSTT(STTBase):
     # -- Realtime (WebSocket) mode -----------------------------------------
 
     async def _start_realtime(self) -> None:
-        if self._close_task is not None:
-            try:
-                await self._close_task
-            except Exception:
-                pass
-            self._close_task = None
         headers = {"xi-api-key": self._config.api_key}
-        self._ws = ReconnectingWebSocket(
-            url=self._build_realtime_ws_url(),
-            config=ReconnectConfig(extra_headers=headers),
-            event_bus=self._config.event_bus,
-            provider_name="elevenlabs_stt",
-            connect_fn=self._config.ws_connect,
-        )
-        await self._ws.connect()
-        self._receive_task = asyncio.create_task(self._receive_loop())
         self._final_received = None
+        self._audio_pending_commit = False
+        self._partial_text = ""
+        self._dropping_pending_final = False
+        await self._connect_websocket(
+            url=self._build_realtime_ws_url(),
+            headers=headers,
+            event_bus=self._config.event_bus,
+            connect_fn=self._config.ws_connect,
+            on_reconnect=self._on_reconnect,
+        )
+
+    async def _on_reconnect(self) -> None:
+        """Recover local state after a transparent reconnect.
+
+        The ElevenLabs realtime session is fully configured via the
+        connection URL's query params (model, audio format, commit
+        strategy, language), so nothing needs to be re-sent.  Its mere
+        presence flips ``recv_iter`` from "re-raise on drop" to
+        "reconnect and keep yielding".  The fresh socket starts with an
+        empty server-side audio buffer, so reset the pending-commit flag
+        to match.
+        """
         self._audio_pending_commit = False
 
     async def _send_realtime(self, chunk: AudioChunk) -> None:
@@ -175,21 +205,24 @@ class ElevenLabsSTT(STTBase):
         return await self._send_commit(wait_for_final=False)
 
     async def _end_realtime(self) -> None:
-        ws = self._ws
-        receive_task = self._receive_task
-        if ws is not None and self._audio_pending_commit:
+        if self._ws is not None and self._audio_pending_commit:
             await self._send_commit(wait_for_final=True)
 
-        self._ws = None
-        self._receive_task = None
         self._final_received = None
-        if ws is not None:
-            try:
-                await self._close_connection(ws, receive_task)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.debug("ElevenLabs realtime close failed during end", exc_info=True)
+        try:
+            # ElevenLabs keeps the realtime socket open after delivering the
+            # committed transcript, so ``recv_iter`` would otherwise block in
+            # the receive loop until ``_close_active_websocket`` hits its close
+            # timeout.  Close the socket first to wake the receive loop, then
+            # drain it — this keeps the turn-to-agent latency low.
+            ws = self._ws
+            if ws is not None:
+                await ws.close()
+            await self._close_active_websocket()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("ElevenLabs realtime close failed during end", exc_info=True)
 
     async def _send_commit(self, *, wait_for_final: bool) -> bool:
         ws = self._ws
@@ -198,6 +231,10 @@ class ElevenLabsSTT(STTBase):
 
         final_received = asyncio.Event()
         self._final_received = final_received
+        # Each fresh commit starts a clean slate — any stale drop flag
+        # from a previous commit (e.g. one whose timed-out committed
+        # transcript never arrived) should not suppress this commit's final.
+        self._dropping_pending_final = False
         try:
             await ws.send(
                 json.dumps(
@@ -218,63 +255,45 @@ class ElevenLabsSTT(STTBase):
         self._audio_pending_commit = False
         if wait_for_final:
             try:
-                await asyncio.wait_for(final_received.wait(), timeout=5.0)
+                await asyncio.wait_for(final_received.wait(), timeout=_FINAL_TRANSCRIPT_TIMEOUT_S)
             except TimeoutError:
-                logger.warning("Timed out waiting for final transcript from ElevenLabs")
+                # Give up on ElevenLabs' committed transcript and promote
+                # whatever we've streamed via ``partial_transcript`` so the
+                # session can still drive the agent.  The real committed
+                # transcript, if it arrives later, will be dropped via
+                # ``_dropping_pending_final`` so the turn doesn't receive
+                # two FINAL events.
+                logger.warning(
+                    "Timed out after %.1fs waiting for final transcript from "
+                    "ElevenLabs; promoting %d-char partial to FINAL",
+                    _FINAL_TRANSCRIPT_TIMEOUT_S,
+                    len(self._partial_text),
+                )
+                if self._partial_text:
+                    self._emit_event(
+                        STTEvent(
+                            type=STTEventType.FINAL,
+                            text=self._partial_text,
+                            language=self._config.language,
+                        )
+                    )
+                    self._partial_text = ""
+                    # Only suppress the late committed transcript when we
+                    # actually promoted a partial to a FINAL.  If no partial
+                    # ever arrived, a real ``committed_transcript`` showing up
+                    # during the close/drain path is the turn's only
+                    # transcript and must not be dropped.
+                    self._dropping_pending_final = True
         return True
 
-    async def _close_connection(
-        self,
-        ws: ReconnectingWebSocket,
-        receive_task: asyncio.Task[None] | None,
-    ) -> None:
-        await ws.close()
-        if receive_task is not None:
-            try:
-                await asyncio.wait_for(receive_task, timeout=2.0)
-            except TimeoutError:
-                receive_task.cancel()
-                logger.warning("ElevenLabs receive loop timed out on close")
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.debug("ElevenLabs close task ignored receive-loop error", exc_info=True)
-
-    @staticmethod
-    def _log_close_task_exception(task: asyncio.Task[None]) -> None:
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.debug("ElevenLabs close task failed", exc_info=True)
-
-    async def _receive_loop(self) -> None:
-        assert self._ws is not None
-        queue = self._event_queue
-        try:
-            async for raw_message in self._ws.recv_iter():
-                if isinstance(raw_message, bytes):
-                    continue
-                try:
-                    msg = json.loads(raw_message)
-                except json.JSONDecodeError:
-                    continue
-                self._handle_ws_message(msg)
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("ElevenLabs WebSocket closed")
-        except Exception:
-            logger.exception("Error in ElevenLabs receive loop")
-        finally:
-            queue.put_nowait(None)
-
-    def _handle_ws_message(self, msg: dict[str, Any]) -> None:
+    def _handle_json_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("message_type") or msg.get("type", "")
 
         if msg_type == "partial_transcript":
             text = msg.get("text", "")
             if not text:
                 return
+            self._partial_text = text
             self._emit_event(
                 STTEvent(
                     type=STTEventType.PARTIAL,
@@ -286,25 +305,23 @@ class ElevenLabsSTT(STTBase):
             return
 
         if msg_type in {"committed_transcript", "committed_transcript_with_timestamps"}:
+            if self._dropping_pending_final:
+                # A previous ``_send_commit`` already gave up on this
+                # committed transcript and promoted the accumulated partial
+                # to a FINAL, so silently discard this late revision to
+                # avoid emitting a second FINAL for the same turn.
+                logger.debug(
+                    "Dropping late ElevenLabs committed_transcript (already promoted partial)"
+                )
+                self._dropping_pending_final = False
+                self._partial_text = ""
+                if self._final_received is not None:
+                    self._final_received.set()
+                return
+
             text = msg.get("text", "")
             if not text:
                 return
-
-            word_timestamps = None
-            words = msg.get("words")
-            if words:
-                parsed = []
-                for w in words:
-                    word = None
-                    start = None
-                    end = None
-                    if isinstance(w, dict):
-                        word = w.get("text") or w.get("word")
-                        start = w.get("start")
-                        end = w.get("end")
-                    if word is not None and start is not None and end is not None:
-                        parsed.append(WordTimestamp(word=word, start=float(start), end=float(end)))
-                word_timestamps = parsed or None
 
             self._emit_event(
                 STTEvent(
@@ -312,9 +329,10 @@ class ElevenLabsSTT(STTBase):
                     text=text,
                     confidence=msg.get("confidence"),
                     language=msg.get("language_code") or self._config.language,
-                    word_timestamps=word_timestamps,
+                    word_timestamps=word_timestamps_from_words(msg.get("words")),
                 )
             )
+            self._partial_text = ""
             if self._final_received is not None:
                 self._final_received.set()
 

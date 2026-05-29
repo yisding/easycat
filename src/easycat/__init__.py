@@ -52,8 +52,15 @@ _register("easycat.integrations.agents", "auto_adapt_agent")
 
 # Pluggable audio backends — pass these into EasyConfig to pin a
 # specific VAD / noise-reduction implementation.
-_register("easycat.vad", "VADConfig")
-_register("easycat.noise_reduction", "NoiseReducerConfig")
+_register("easycat.vad", "VADConfig", "create_vad")
+_register("easycat.noise_reduction", "NoiseReducerConfig", "create_noise_reducer")
+
+# Provider factory functions and their explicit config types.
+_register("easycat.stt.factory", "STTProviderConfig", "create_stt_provider")
+_register("easycat.tts.factory", "TTSProviderConfig", "create_tts_provider")
+# Discovery helpers — enumerate valid ``stt=`` / ``tts=`` string names.
+_register("easycat.stt.factory", "available_stt_providers")
+_register("easycat.tts.factory", "available_tts_providers")
 
 # Speech and output-processing knobs commonly used by applications.
 _register(
@@ -198,7 +205,7 @@ if TYPE_CHECKING:
         PhoneticReplacementProcessor,
         default_pronunciation_processors,
     )
-    from easycat.noise_reduction import NoiseReducerConfig
+    from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
     from easycat.providers import (
         EchoCanceller,
         NoiseReducer,
@@ -213,6 +220,11 @@ if TYPE_CHECKING:
     from easycat.session.actions import SessionActions
     from easycat.session_manager import SessionManager
     from easycat.smart_turn import SmartTurnConfig
+    from easycat.stt.factory import (
+        STTProviderConfig,
+        available_stt_providers,
+        create_stt_provider,
+    )
     from easycat.supervisor import SessionAudioBroadcaster
     from easycat.telephony.session_actions import TwilioSessionActionConfig
     from easycat.transports.local import LocalTransportConfig
@@ -226,6 +238,11 @@ if TYPE_CHECKING:
         WebTransportConnectionTransport,
         WebTransportServer,
         WebTransportTransportConfig,
+    )
+    from easycat.tts.factory import (
+        TTSProviderConfig,
+        available_tts_providers,
+        create_tts_provider,
     )
     from easycat.turn_manager import TurnManagerConfig, TurnMode
     from easycat.vad import VADConfig

@@ -1,9 +1,14 @@
 """``easycat doctor`` — first-run environment verification.
 
-Runs five checks against the local environment and prints a Rich
-table.  Every failure row is tagged with its ``EASYCAT_Exxx`` code so
-the user (or their coding agent) can look up the fix via
-``easycat explain``.
+Runs eight checks against the local environment (python, easycat, env
+vars, provider reachability, onnxruntime, microphone, journal, disk)
+and prints a Rich table.  Every failure row is tagged with its
+``EASYCAT_Exxx`` code so the user (or their coding agent) can look up
+the fix via ``easycat explain``.
+
+The ``production`` environment profile drops the local-microphone check
+(server deployments have no mic) since those checks are only relevant to
+the local-transport ``dev`` profile.
 """
 
 from __future__ import annotations
@@ -409,14 +414,18 @@ def _apply_safe_fixes(results: list[CheckResult]) -> int:
     return applied
 
 
-def _run_all_checks(only_provider: str | None) -> list[CheckResult]:
+def _run_all_checks(only_provider: str | None, environment: str = "dev") -> list[CheckResult]:
     results: list[CheckResult] = []
     results.append(check_python_version())
     results.append(check_easycat_version())
     results.extend(check_env_vars(only_provider=only_provider))
     results.extend(check_provider_reachability(only_provider=only_provider))
     results.append(check_onnxruntime())
-    results.append(check_microphone())
+    # The local microphone is only meaningful for the dev profile's
+    # local transport; server deployments (production) have no mic, so
+    # running the probe there only produces a noisy, irrelevant skip.
+    if environment != "production":
+        results.append(check_microphone())
     results.append(check_journal_writable())
     results.append(check_disk_space())
     return results
@@ -479,7 +488,10 @@ def doctor(
     fix: bool = typer.Option(
         False,
         "--fix",
-        help="Offer auto-fixes for safe issues (placeholder in M1 — TBD).",
+        help=(
+            "Apply safe auto-fixes, then re-run checks. Currently only "
+            "creates a missing journal directory (EASYCAT_E207)."
+        ),
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
@@ -501,7 +513,7 @@ def doctor(
         )
         raise typer.Exit(2)
 
-    results = _run_all_checks(only_provider=only_provider)
+    results = _run_all_checks(only_provider=only_provider, environment=environment)
 
     if fix:
         # ``--fix`` handles the narrow, safe remediations: creating the
@@ -513,7 +525,7 @@ def doctor(
             stderr_console.print(
                 f"[dim]--fix applied {applied} remediation(s); re-running checks.[/]"
             )
-            results = _run_all_checks(only_provider=only_provider)
+            results = _run_all_checks(only_provider=only_provider, environment=environment)
         else:
             stderr_console.print("[dim]--fix: no auto-remediatable issues found.[/]")
 

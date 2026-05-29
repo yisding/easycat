@@ -47,7 +47,7 @@ from easycat.timeouts import STTTimeoutError, TimeoutConfig
 from easycat.turn_manager import TurnManagerState
 
 if TYPE_CHECKING:
-    from easycat.session._turn_context import TurnContext
+    from easycat._turn_context import TurnContext
     from easycat.turn_manager import TurnManager
 
 logger = logging.getLogger(__name__)
@@ -298,8 +298,6 @@ class STTCommitter:
         """Start background consumption of provider-scoped STT events."""
         if self._stt_task and not self._stt_task.done():
             self._stt_task.cancel()
-        if turn is not None and turn is not self._no_turn:
-            turn.stt_final_future = None
 
         async def _consume() -> None:
             my_task = asyncio.current_task()
@@ -365,7 +363,3 @@ class STTCommitter:
             except (asyncio.CancelledError, Exception):
                 pass
         self.resolve_pending(turn, "")
-        if turn is not None and turn is not self._no_turn:
-            if turn.stt_final_future and not turn.stt_final_future.done():
-                turn.stt_final_future.set_result("")
-            turn.stt_final_future = None

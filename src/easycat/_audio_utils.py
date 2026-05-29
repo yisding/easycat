@@ -3,10 +3,26 @@
 from __future__ import annotations
 
 import io
+import logging
 import struct
 from collections.abc import Iterator
 
 from easycat.audio_format import AudioChunk, AudioFormat
+
+logger = logging.getLogger(__name__)
+
+# Cache of which optional resampling backend resolved, to avoid re-importing
+# on every chunk. Values: "soxr", "scipy", "linear", or None when not yet
+# probed. This reflects which backend is *available*, not whether it last
+# succeeded: a transient runtime failure falls back to linear for that one
+# chunk only and the high-quality backend is retried on the next chunk.
+_resolved_backend: str | None = None
+
+# Track whether a real runtime failure for each backend has already been
+# logged, so we warn once (with a traceback) rather than on every chunk while
+# still retrying the high-quality backend. A transient native-lib hiccup must
+# not permanently degrade quality for the lifetime of the process.
+_logged_runtime_failure: set[str] = set()
 
 
 def pcm_to_wav(pcm_data: bytes, fmt: AudioFormat) -> bytes:
@@ -34,47 +50,157 @@ def pcm_to_wav(pcm_data: bytes, fmt: AudioFormat) -> bytes:
 
 
 def resample(data: bytes, from_rate: int, to_rate: int) -> bytes:
-    """Resample PCM16 mono audio between sample rates.
+    """Resample PCM16 *mono* audio between sample rates.
 
-    Prefers high-quality backends (soxr, scipy) when available and
-    falls back to linear interpolation if not.
+    The byte buffer is treated as a single interleaved-free int16 stream,
+    so multi-channel input must be downmixed (see :func:`to_mono` /
+    :func:`to_mono_chunk`) before calling this; interleaved stereo would be
+    resampled as garbage. Prefers high-quality backends (soxr, scipy) when
+    available and falls back to linear interpolation if not.
     """
     if from_rate == to_rate:
         return data
     if not data:
         return data
 
-    # Try soxr (highest quality, fast) if installed
-    try:
-        import numpy as np  # type: ignore[import-untyped]
-        import soxr  # type: ignore[import-not-found]
+    # Drop any odd trailing byte: a 16-bit sample split across a chunk boundary
+    # can't be reconstructed within a single call and would otherwise crash both
+    # np.frombuffer and struct.unpack. Callers that stream arbitrary byte-length
+    # chunks (TTSBase) buffer the leftover byte so no audio is actually lost.
+    if len(data) % 2:
+        data = data[:-1]
+        if not data:
+            return b""
 
-        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        resampled = soxr.resample(samples, from_rate, to_rate)
-        out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
-        return out.tobytes()
-    except Exception:
+    global _resolved_backend
+
+    # Resolve the best available backend once and cache the result. A runtime
+    # failure does not change this cache, so the high-quality backend is
+    # retried on every chunk and only the (logged-once) failures fall back to
+    # linear for the affected chunk.
+    if _resolved_backend is None:
+        _resolved_backend = _resolve_resample_backend()
+
+    if _resolved_backend == "soxr":
+        result = _resample_soxr(data, from_rate, to_rate)
+        if result is not None:
+            return result
+    elif _resolved_backend == "scipy":
+        result = _resample_scipy(data, from_rate, to_rate)
+        if result is not None:
+            return result
+
+    return _resample_linear(data, from_rate, to_rate)
+
+
+def _resolve_resample_backend() -> str:
+    """Probe for an optional high-quality resampling backend exactly once.
+
+    Returns ``"soxr"``, ``"scipy"``, or ``"linear"``. A missing import is
+    expected and silent; a backend that imports but fails at runtime is logged
+    once so silent quality regressions are observable.
+    """
+    try:
+        import numpy  # type: ignore[import-untyped]  # noqa: F401
+        import soxr  # type: ignore[import-not-found]  # noqa: F401
+
+        return "soxr"
+    except ImportError:
         pass
 
-    # Try scipy.signal.resample_poly as a quality fallback
     try:
-        import math
+        import numpy  # type: ignore[import-untyped]  # noqa: F401
+        from scipy.signal import resample_poly  # type: ignore[import-not-found]  # noqa: F401
 
-        import numpy as np  # type: ignore[import-untyped]
-        from scipy.signal import resample_poly  # type: ignore[import-not-found]
-
-        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        g = math.gcd(from_rate, to_rate)
-        up = to_rate // g
-        down = from_rate // g
-        resampled = resample_poly(samples, up, down)
-        out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
-        return out.tobytes()
-    except Exception:
+        return "scipy"
+    except ImportError:
         pass
 
-    # Decode PCM16 LE samples
+    return "linear"
+
+
+def _resample_soxr(data: bytes, from_rate: int, to_rate: int) -> bytes | None:
+    """Resample via soxr; return ``None`` on a real failure.
+
+    A failure falls back to linear for this chunk only; soxr is retried on the
+    next chunk. The failure is logged once (with a traceback) to surface a
+    quality regression without spamming the log on every chunk.
+    """
+    try:
+        return _resample_soxr_impl(data, from_rate, to_rate)
+    except Exception:
+        _log_runtime_failure_once("soxr")
+        return None
+
+
+def _resample_soxr_impl(data: bytes, from_rate: int, to_rate: int) -> bytes:
+    import numpy as np  # type: ignore[import-untyped]
+    import soxr  # type: ignore[import-not-found]
+
+    samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+    resampled = soxr.resample(samples, from_rate, to_rate)
+    out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+    return out.tobytes()
+
+
+def _resample_scipy(data: bytes, from_rate: int, to_rate: int) -> bytes | None:
+    """Resample via scipy; return ``None`` on a real failure.
+
+    A failure falls back to linear for this chunk only; scipy is retried on the
+    next chunk. The failure is logged once (with a traceback) to surface a
+    quality regression without spamming the log on every chunk.
+    """
+    try:
+        return _resample_scipy_impl(data, from_rate, to_rate)
+    except Exception:
+        _log_runtime_failure_once("scipy")
+        return None
+
+
+def _resample_scipy_impl(data: bytes, from_rate: int, to_rate: int) -> bytes:
+    import math
+
+    import numpy as np  # type: ignore[import-untyped]
+    from scipy.signal import resample_poly  # type: ignore[import-not-found]
+
+    samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+    g = math.gcd(from_rate, to_rate)
+    up = to_rate // g
+    down = from_rate // g
+    resampled = resample_poly(samples, up, down)
+    out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+    return out.tobytes()
+
+
+def _log_runtime_failure_once(backend: str) -> None:
+    """Warn (with traceback) the first time ``backend`` fails at runtime.
+
+    Subsequent failures for the same backend are silent to avoid per-chunk log
+    spam, but the backend itself is still retried on later chunks.
+    """
+    if backend in _logged_runtime_failure:
+        return
+    _logged_runtime_failure.add(backend)
+    logger.warning(
+        "%s resampling failed; falling back to linear interpolation (lower "
+        "quality) for this chunk. The high-quality backend will be retried on "
+        "subsequent chunks; suppressing further %s failure logs.",
+        backend,
+        backend,
+        exc_info=True,
+    )
+
+
+def _resample_linear(data: bytes, from_rate: int, to_rate: int) -> bytes:
+    """Pure-Python linear-interpolation resampler (no optional deps).
+
+    Tolerates an odd trailing byte (a 16-bit sample split across a chunk
+    boundary) by dropping it rather than raising ``struct.error``.
+    """
+    # Decode PCM16 LE samples, dropping any odd trailing byte that would
+    # otherwise split a 16-bit sample and crash struct.unpack.
     num_samples = len(data) // 2
+    data = data[: num_samples * 2]
     samples = struct.unpack(f"<{num_samples}h", data)
 
     ratio = from_rate / to_rate

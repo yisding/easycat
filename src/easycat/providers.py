@@ -18,11 +18,29 @@ from easycat.events import Event, STTEvent, TTSEvent
 if TYPE_CHECKING:
     from easycat.tts.input import TTSInput
 
+# ── Versioned Provider ─────────────────────────────────────────────
+
+
+@runtime_checkable
+class VersionedProvider(Protocol):
+    """Shared contract for providers that report their version info.
+
+    The framework's journal records a ``provider_versions`` event by calling
+    ``version_info()`` on every wired provider. Implementing this method is a
+    de-facto part of the provider contract; mixing this Protocol into each
+    provider interface makes that dependency explicit and type-checkable.
+    """
+
+    def version_info(self) -> dict[str, str]:
+        """Return a mapping of version metadata for this provider."""
+        ...
+
+
 # ── STT Provider ───────────────────────────────────────────────────
 
 
 @runtime_checkable
-class STTProvider(Protocol):
+class STTProvider(VersionedProvider, Protocol):
     """Speech-to-text provider interface.
 
     Providers stream audio in via `send_audio` and produce `STTEvent` objects
@@ -60,7 +78,7 @@ class STTProvider(Protocol):
 
 
 @runtime_checkable
-class TTSProvider(Protocol):
+class TTSProvider(VersionedProvider, Protocol):
     """Text-to-speech provider interface.
 
     Call `synthesize` with text to get an async iterator of TTSEvent objects.
@@ -89,7 +107,7 @@ class TTSProvider(Protocol):
 
 
 @runtime_checkable
-class VADProvider(Protocol):
+class VADProvider(VersionedProvider, Protocol):
     """Voice activity detection provider interface.
 
     Process audio chunks and yield speech start/stop events.
@@ -116,7 +134,7 @@ class VADProvider(Protocol):
 
 
 @runtime_checkable
-class NoiseReducer(Protocol):
+class NoiseReducer(VersionedProvider, Protocol):
     """Noise reduction provider interface.
 
     Processes an audio chunk and returns a cleaned version.
@@ -131,7 +149,7 @@ class NoiseReducer(Protocol):
 
 
 @runtime_checkable
-class EchoCanceller(Protocol):
+class EchoCanceller(VersionedProvider, Protocol):
     """Echo cancellation provider interface.
 
     Processes near-end (mic) audio and accepts far-end (speaker) reference.
@@ -150,7 +168,35 @@ class EchoCanceller(Protocol):
 
 
 @runtime_checkable
-class Transport(Protocol):
+class TransportLike(Protocol):
+    """Narrow structural contract for an already-constructed transport.
+
+    This mirrors :class:`Transport`'s audio/connection surface but deliberately
+    omits :meth:`VersionedProvider.version_info`. It exists so that the identity
+    discrimination in ``_create_transport`` (distinguishing a pre-built transport
+    instance from a transport *config*) does not silently reject third-party
+    transports that satisfy the audio contract but predate ``version_info()``.
+    """
+
+    async def connect(self) -> None:
+        """Establish the transport connection."""
+        ...
+
+    async def disconnect(self) -> None:
+        """Close the transport connection."""
+        ...
+
+    def receive_audio(self) -> AsyncIterator[AudioChunk]:
+        """Return an async iterator that yields incoming audio chunks."""
+        ...
+
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        """Send an audio chunk to the remote end."""
+        ...
+
+
+@runtime_checkable
+class Transport(VersionedProvider, Protocol):
     """Audio transport interface for sending/receiving audio.
 
     Handles connection lifecycle and bidirectional audio streaming.

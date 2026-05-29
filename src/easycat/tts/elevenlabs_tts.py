@@ -17,7 +17,7 @@ from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.tts.base import TTSBase
-from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
+from easycat.tts.input import TTSInput, coerce_tts_input
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,12 @@ class ElevenLabsTTSConfig:
     ws_base_url: str = "wss://api.elevenlabs.io/v1"
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_24K)
     event_bus: object | None = None
+    # Reconnect tuning for the synthesis WebSocket. Defaults match
+    # ReconnectConfig; lower max_retries to fail fast and defer to
+    # turn-level retry, or raise it for flaky links.
+    reconnect_max_retries: int = 3
+    reconnect_base_delay: float = 1.0
+    reconnect_max_delay: float = 30.0
 
     def __post_init__(self) -> None:
         if self.output_format not in _ELEVENLABS_FORMAT_MAP:
@@ -93,6 +99,16 @@ class ElevenLabsTTS(TTSBase):
         self._client: httpx.AsyncClient | None = None
         self._response: httpx.Response | None = None
         self._ws: ReconnectingWebSocket | None = None
+        # Init/text/EOS frames for the in-flight utterance, replayed by the
+        # on_reconnect hook so a mid-stream drop restarts the utterance from
+        # the top instead of aborting it. Known tradeoff: replaying the full
+        # init+text+EOS sequence restarts synthesis, so any audio already
+        # emitted before the drop is re-emitted (audible repetition), not a
+        # seamless resume.
+        self._pending_messages: tuple[str, ...] | None = None
+        # Strong references to fire-and-forget Error-emit tasks so the event
+        # loop does not garbage-collect them before ``bus.emit`` completes.
+        self._emit_tasks: set[asyncio.Task[Any]] = set()
 
     def _get_http_client(self) -> httpx.AsyncClient:
         """Get or create the HTTP client."""
@@ -107,14 +123,13 @@ class ElevenLabsTTS(TTSBase):
             )
         return self._client
 
-    @property
-    def supports_ssml(self) -> bool:
-        return False
-
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
-        """Synthesize text using the configured streaming mode."""
-        payload = coerce_tts_input(payload)
-        text = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
+        """Synthesize text using the configured streaming mode.
+
+        SSML is not supported (``supports_ssml`` is ``False``), so the
+        scheduler always delivers a plain-text payload here.
+        """
+        text = coerce_tts_input(payload).text
         if self._config.stream_mode == ElevenLabsStreamMode.WEBSOCKET:
             async for event in self._synthesize_ws(text):
                 yield event
@@ -219,15 +234,25 @@ class ElevenLabsTTS(TTSBase):
             raise
         finally:
             await self._close_ws()
+            self._pending_messages = None
             self._end_synthesis()
 
     async def _start_ws_stream(self, text: str) -> ReconnectingWebSocket:
         """Send the full ElevenLabs stream-init sequence, retrying once on stale sockets."""
         messages = self._build_ws_messages(text)
+        # Leave replay disarmed until the request has actually been sent on a
+        # connected stream. ``on_reconnect`` fires for retries during the
+        # *initial* connect too, and arming earlier would replay the
+        # init/text/EOS frames before the sends below, duplicating the utterance.
+        self._pending_messages = None
         ws = await self._connect_ws()
 
         try:
             await self._send_ws_messages(ws, messages)
+            # Request is now live: arm replay so a *mid-stream* reconnect
+            # re-sends these frames and restarts the utterance from the top
+            # (see ``_replay_request`` for the duplicate-audio tradeoff).
+            self._pending_messages = messages
             return ws
         except Exception:
             if self._cancelled:
@@ -235,6 +260,7 @@ class ElevenLabsTTS(TTSBase):
             await self._close_ws()
             ws = await self._connect_ws()
             await self._send_ws_messages(ws, messages)
+            self._pending_messages = messages
             return ws
 
     def _build_ws_messages(self, text: str) -> tuple[str, str, str]:
@@ -274,12 +300,33 @@ class ElevenLabsTTS(TTSBase):
             url=ws_url,
             config=ReconnectConfig(
                 extra_headers={"xi-api-key": self._config.api_key},
+                max_retries=self._config.reconnect_max_retries,
+                base_delay=self._config.reconnect_base_delay,
+                max_delay=self._config.reconnect_max_delay,
             ),
             event_bus=self._config.event_bus,
             provider_name="elevenlabs_tts",
+            on_reconnect=self._replay_request,
         )
         await self._ws.connect()
         return self._ws
+
+    async def _replay_request(self) -> None:
+        """Re-send the init/text/EOS frames after a reconnect.
+
+        ElevenLabs streaming is stateful: the init + text + EOS sequence is
+        replayed on the fresh socket, which restarts the utterance from the
+        top — it does NOT resume from the drop point. Any audio already
+        emitted before the drop is re-emitted, producing audible repetition;
+        this is an accepted tradeoff of stateless one-shot replay in exchange
+        for not aborting the utterance entirely. Without this hook a transient
+        drop would re-raise out of recv_iter and abort the utterance.
+        """
+        ws = self._ws
+        messages = self._pending_messages
+        if ws is None or messages is None or self._cancelled:
+            return
+        await self._send_ws_messages(ws, messages)
 
     async def _close_ws(self) -> None:
         """Close the WebSocket connection."""
@@ -335,11 +382,16 @@ class ElevenLabsTTS(TTSBase):
             except Exception:  # pragma: no cover - pre-3.11
                 pass
         try:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 bus.emit(Error(exception=exc, stage=ErrorStage.TTS, provider="elevenlabs"))
             )
         except RuntimeError:  # no running loop
             logger.debug("Could not emit provider error — no running loop", exc_info=True)
+            return
+        # Keep a strong reference until the emit completes; the event loop
+        # only holds a weak one, so an untracked task can be GC'd mid-flight.
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
 
     def version_info(self) -> dict[str, str]:
         return {

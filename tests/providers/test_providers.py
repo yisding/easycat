@@ -18,6 +18,7 @@ from easycat.providers import (
     NoiseReducer,
     STTProvider,
     Transport,
+    TransportLike,
     TTSProvider,
     VADProvider,
 )
@@ -143,6 +144,38 @@ def test_stub_noise_reducer_is_noise_reducer():
 
 def test_stub_transport_is_transport():
     assert isinstance(StubTransport(), Transport)
+
+
+class LegacyTransport:
+    """A custom transport satisfying the audio contract but lacking version_info()."""
+
+    async def connect(self) -> None:
+        pass
+
+    async def disconnect(self) -> None:
+        pass
+
+    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
+        yield AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        pass
+
+    async def clear_audio(self) -> None:
+        pass
+
+
+def test_legacy_transport_lacks_version_info_fails_full_protocol():
+    # The full Transport protocol now requires version_info(); a transport that
+    # predates that contract no longer satisfies isinstance(..., Transport).
+    assert not isinstance(LegacyTransport(), Transport)
+
+
+def test_legacy_transport_satisfies_transport_like():
+    # ...but it still matches the narrow audio contract used to discriminate a
+    # pre-built transport instance from a transport config in _create_transport.
+    assert isinstance(LegacyTransport(), TransportLike)
+    assert isinstance(StubTransport(), TransportLike)
 
 
 def test_provider_catalog_rejects_mismatched_provider_and_env_var_keys():

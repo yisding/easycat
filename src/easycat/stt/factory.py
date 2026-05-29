@@ -70,19 +70,13 @@ def create_stt_provider(config: STTProviderConfig) -> STTBase:
 
     Validates the provider name and API key at construction time (fail-fast).
     Provider-specific parameters are passed via ``config.params``.
-    """
-    if not isinstance(config.provider, str):
-        raise ValueError(
-            f"Unknown STT provider '{config.provider}'. "
-            f"Available providers: {', '.join(sorted(_PROVIDER_TO_CONFIG))}"
-        )
 
-    provider_name = config.provider.lower()
-    if provider_name not in _PROVIDER_TO_CONFIG:
-        raise ValueError(
-            f"Unknown STT provider '{config.provider}'. "
-            f"Available providers: {', '.join(sorted(_PROVIDER_TO_CONFIG))}"
-        )
+    Raises:
+        EasyCatError (EASYCAT_E104): Unknown provider name, with fuzzy-match
+            suggestion (shared with the ``stt="provider/model"`` shortcut path).
+        ValueError: Missing API key.
+    """
+    provider_name = _CATALOG.validate_name(config.provider)
 
     if not config.api_key:
         raise ValueError(f"API key is required for STT provider '{config.provider}'")
@@ -117,6 +111,16 @@ def _provider_for_config(config_type: STTConfigType) -> type[STTBase]:
 def available_providers() -> list[str]:
     """Return every registered STT provider name, sorted."""
     return _CATALOG.available_names()
+
+
+def available_stt_providers() -> list[str]:
+    """Return every valid ``stt=`` provider name, sorted.
+
+    Public, unambiguously named alias of :func:`available_providers`,
+    exported from the top-level ``easycat`` package so callers can
+    enumerate valid ``stt="provider/model"`` shortcut names.
+    """
+    return available_providers()
 
 
 def parse_stt_string(spec: str) -> STTConfig:

@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from easycat import _observability as observability
+from easycat._turn_context import TurnContext, TurnHandle
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
@@ -51,8 +52,8 @@ from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._streaming import consume_agent_stream
-from easycat.session._turn_context import TurnContext, TurnHandle
 from easycat.session.interruption import (
+    TtsChunk,
     estimate_and_notify_interruption,
 )
 from easycat.session.interruption import (
@@ -63,7 +64,6 @@ from easycat.stages.agent import AgentStage
 from easycat.strip_markdown import strip_markdown
 from easycat.timeouts import (
     AgentTimeoutError,
-    STTTimeoutError,
     TimeoutConfig,
     TTSTimeoutError,
     with_agent_timeout,
@@ -168,8 +168,6 @@ class TurnRunner:
         self._stt.cancel_scheduled()
         self._stt.cancel_inflight()
         self._stt.resolve_pending(prev, "")
-        if prev is not None and prev is not self._turn.no_turn:
-            prev.stt_final_future = None
 
         if prev and not prev.cancel_token.is_cancelled:
             prev.cancel_token.cancel()
@@ -274,36 +272,9 @@ class TurnRunner:
         transcript = ""
         if turn is not None:
             transcript = turn.transcript_text
-        stt_final_future = (
-            turn.stt_final_future if turn is not None and turn is not self._turn.no_turn else None
-        )
-        if not transcript and stt_final_future is not None:
-            try:
-                if self._timeout_config and self._timeout_config.stt_timeout:
-                    transcript = await asyncio.wait_for(
-                        stt_final_future,
-                        timeout=self._timeout_config.stt_timeout,
-                    )
-                else:
-                    transcript = await stt_final_future
-            except TimeoutError:
-                err = STTTimeoutError("stt", self._timeout_config.stt_timeout)
-                await self._emit(Error(exception=err, stage=ErrorStage.STT))
-                if self._turn.current is turn:
-                    self._reset_turn_state()
-                return
-            except Exception:
-                transcript = ""
-            finally:
-                if turn is not None and turn is not self._turn.no_turn:
-                    turn.stt_final_future = None
 
-        if transcript:
-            if turn is not None and turn is not self._turn.no_turn:
-                if turn.stt_final_future is not None and not turn.stt_final_future.done():
-                    turn.stt_final_future.set_result(transcript)
-            if turn:
-                turn.stt_final_time = time.monotonic()
+        if transcript and turn:
+            turn.stt_final_time = time.monotonic()
 
         if not transcript or (token and token.is_cancelled):
             if self._turn.current is turn:
@@ -333,7 +304,13 @@ class TurnRunner:
         turn_gen = self._turn.generation
         tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
         tts_playback_started = False
-        tts_chunks: list[tuple[str, int, bool]] = []
+        # True only if playback was cut off mid-stream by a cancelled token
+        # (a genuine barge-in), as opposed to the queue draining naturally.
+        # A turn that finishes speaking and *then* has its token cancelled by a
+        # later turn must not be retro-truncated as "interrupted during
+        # playback".
+        tts_playback_cut_short = False
+        tts_chunks: list[TtsChunk] = []
         tts_should_stop = False
 
         # ── TTS consumer task ──
@@ -341,6 +318,7 @@ class TurnRunner:
         async def _process_tts() -> None:
             nonlocal tts_should_stop
             nonlocal tts_playback_started
+            nonlocal tts_playback_cut_short
             started = False
             # Snapshot the gate state at first-payload time and reuse it in
             # the post-loop branch.  ``_is_gated`` is time-varying (the
@@ -354,10 +332,14 @@ class TurnRunner:
                     if payload is None:
                         break
                     if token and token.is_cancelled:
-                        tts_chunks.append((_text_for_estimation_timeline(payload), 0, False))
+                        tts_chunks.append(
+                            TtsChunk(_text_for_estimation_timeline(payload), 0, False)
+                        )
                         break
                     if self._tts.is_playback_suppressed:
-                        tts_chunks.append((_text_for_estimation_timeline(payload), 0, False))
+                        tts_chunks.append(
+                            TtsChunk(_text_for_estimation_timeline(payload), 0, False)
+                        )
                         break
 
                     if not started:
@@ -377,7 +359,7 @@ class TurnRunner:
                         ),
                     )
                     tts_chunks.append(
-                        (
+                        TtsChunk(
                             _text_for_estimation_timeline(payload),
                             result.audio_bytes,
                             result.completed,
@@ -392,27 +374,23 @@ class TurnRunner:
             except Exception:
                 logger.exception("TTS streaming error")
 
+            # Decide whether playback was cut short by a barge-in *now* — while
+            # still inside _process_tts and before ``finalize_speaking_turn``
+            # emits bot_stopped_speaking (after which the next turn can start and
+            # cancel this turn's now-superseded token). ``is_cancelled`` here
+            # therefore reflects a cancellation observed *during* this turn's
+            # playback, not a later turn retroactively cancelling the token.
+            tts_playback_cut_short = bool(token and token.is_cancelled)
+
             while not tts_queue.empty():
                 remaining = tts_queue.get_nowait()
                 if remaining is not None:
-                    tts_chunks.append((_text_for_estimation_timeline(remaining), 0, False))
+                    tts_chunks.append(TtsChunk(_text_for_estimation_timeline(remaining), 0, False))
 
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
-                # Drain session actions (end_call, transfer) BEFORE
-                # transitioning to IDLE so no new turn can sneak in.
-                tts_should_stop = await self._drain_session_actions()
-                if tts_should_stop:
-                    await self._audio.await_drain()
-                    await self._turn_manager.bot_stopped_speaking()
-                else:
-                    await self._turn_manager.bot_stopped_speaking()
-                    # Wait for queued audio to drain so the router can still
-                    # call turn.record_audio_sent() and emit playback marks
-                    # for the tail of this turn's audio.
-                    await self._audio.await_drain()
-                # Only clear if a new turn hasn't started during the drain.
-                if self._turn.current is turn and self._turn.generation == turn_gen:
-                    self._turn.set(None)
+                tts_should_stop = await self._tts.finalize_speaking_turn(
+                    turn, turn_generation=turn_gen
+                )
             elif started and not tts_playback_started:
                 if gated:
                     # Keep current turn alive for gated replay mark accounting
@@ -513,6 +491,7 @@ class TurnRunner:
             turn,
             tts_chunks,
             tts_playback_started=tts_playback_started,
+            tts_playback_cut_short=tts_playback_cut_short,
             interrupted=interrupted,
             interruption_mode=self._cancel.interruption_mode,
             latency_compensation_ms=self._cancel.latency_compensation_ms,

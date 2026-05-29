@@ -369,6 +369,22 @@ class PydanticAIBridge:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
             raise
+        except BaseException:
+            # The default ``AgentRunner`` enforces its timeout by
+            # cancelling the pending ``__anext__()`` (and then calling
+            # ``aclose()``), injecting ``asyncio.CancelledError`` /
+            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
+            # block above is skipped and the still-open agent cursor would
+            # be left without a ``unit_exited`` record, breaking the
+            # recorder's strict stack invariant for the postmortem journal.
+            # Close it defensively (so a recorder error can't mask the
+            # cancellation) before re-raising; no ``record_framework_error``
+            # since a cancelled turn isn't a framework fault.
+            try:
+                recorder.record_unit_exited(agent_cursor, reason="error")
+            except Exception:
+                logger.debug("Failed to close agent cursor during cancel cleanup", exc_info=True)
+            raise
         finally:
             if saved_mcp_servers is not _UNSET:
                 self._agent.mcp_servers = saved_mcp_servers
@@ -657,6 +673,24 @@ class PydanticAIBridge:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             if prev_cursor is not None:
                 recorder.record_unit_exited(prev_cursor, reason="error")
+            raise
+        except BaseException:
+            # ``AgentRunner``'s timeout/barge-in ``aclose()`` injects
+            # ``asyncio.CancelledError`` / ``GeneratorExit`` here; neither
+            # is an ``Exception`` so the block above is skipped and the
+            # still-open graph-node cursor would be left without a
+            # ``unit_exited`` record, breaking the recorder's strict stack
+            # invariant for the postmortem journal.  Close it defensively
+            # before re-raising; no ``record_framework_error`` since a
+            # cancelled turn isn't a framework fault.
+            if prev_cursor is not None:
+                try:
+                    recorder.record_unit_exited(prev_cursor, reason="error")
+                except Exception:
+                    logger.debug(
+                        "Failed to close graph-node cursor during cancel cleanup",
+                        exc_info=True,
+                    )
             raise
         finally:
             graph_agent_overrides.close()

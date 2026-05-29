@@ -54,3 +54,41 @@ def test_smart_turn_ensure_loaded_uses_numpy_and_onnxruntime_only(
     assert created_feature_extractors == [(fake_np, 8)]
     assert provider._feature_extractor == "fake-feature-extractor"
     assert provider._session[0] == "fake-session"
+
+
+def _make_provider_with_probability(probability: float, threshold: float) -> SmartTurnONNX:
+    """Build a SmartTurnONNX whose inference returns a fixed probability."""
+
+    provider = SmartTurnONNX(model_path="unused.onnx", threshold=threshold)
+    # numpy is only used for length checks / padding in _predict_sync; a slice
+    # of length >= max_samples skips padding entirely.
+    fake_np = SimpleNamespace(pad=lambda *a, **k: a[0])
+    provider._np = fake_np
+    provider._feature_extractor = lambda *a, **k: "features"
+
+    fake_output = SimpleNamespace(item=lambda: probability)
+    provider._session = SimpleNamespace(run=lambda *a, **k: [[fake_output]])
+    return provider
+
+
+def test_predict_boundary_equal_threshold_is_incomplete() -> None:
+    """probability == threshold must classify as incomplete (strict-greater)."""
+
+    provider = _make_provider_with_probability(0.5, threshold=0.5)
+    audio = [0.0] * (8 * 16000)
+
+    result = provider._predict_sync(audio)
+
+    assert result.probability == 0.5
+    assert result.prediction == 0
+
+
+def test_predict_above_threshold_is_complete() -> None:
+    """probability strictly above threshold classifies as complete."""
+
+    provider = _make_provider_with_probability(0.51, threshold=0.5)
+    audio = [0.0] * (8 * 16000)
+
+    result = provider._predict_sync(audio)
+
+    assert result.prediction == 1

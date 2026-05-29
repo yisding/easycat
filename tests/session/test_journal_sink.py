@@ -1,13 +1,13 @@
 import pytest
 
+from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
-from easycat.events import EventBus, STTFinal, TransportDegraded
+from easycat.events import Error, ErrorStage, EventBus, STTFinal, TransportDegraded
 from easycat.runtime.artifacts import InMemoryArtifactStore
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._session import Session
-from easycat.session._turn_context import TurnContext
 from easycat.session._types import SessionConfig
 
 
@@ -79,6 +79,32 @@ async def test_journal_sink_records_transport_degraded() -> None:
     assert records[1].kind == JournalRecordKind.CONTROL
     assert records[1].data["reason"] == "control_codec_poisoned"
     assert records[1].data["fatal"] is True
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_records_error_code() -> None:
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    exc = TimeoutError("agent timed out")
+    exc.code = "EASYCAT_E301"  # type: ignore[attr-defined]
+    await bus.emit(Error(exception=exc, stage=ErrorStage.AGENT, provider="openai", turn_id="t1"))
+
+    record = journal.read()[0]
+    assert record.name == "error"
+    assert record.data["code"] == "EASYCAT_E301"
+    assert record.data["provider"] == "openai"
+    assert record.data["stage"] == "agent"
+    assert record.error is not None
+    assert record.error.type == "TimeoutError"
 
 
 def test_journal_sink_stores_artifact_refs_before_record() -> None:

@@ -60,6 +60,73 @@ class TestSafeConfigSnapshot:
         assert "custom_field" not in snap
 
 
+class TestNestedSecretRedaction:
+    def test_nested_dataclass_secret_is_redacted(self):
+        """A secret nested one level deep inside an allowlisted field is redacted."""
+
+        @dataclass
+        class _Inner:
+            model: str = "whisper"
+            api_key: str = "sk-nested-secret"
+
+        @dataclass
+        class _Cfg:
+            stt: object = None
+
+        snap = safe_config_snapshot(_Cfg(stt=_Inner()))
+        assert "sk-nested-secret" not in snap["stt"]
+        assert "***" in snap["stt"]
+        assert "whisper" in snap["stt"]
+
+    def test_two_level_deep_secret_is_redacted(self):
+        """A secret two levels deep must still not leak into the snapshot."""
+
+        @dataclass
+        class _Creds:
+            token: str = "tok-deep-secret"
+
+        @dataclass
+        class _Provider:
+            name: str = "deepgram"
+            creds: object = None
+
+        @dataclass
+        class _Cfg:
+            stt: object = None
+
+        snap = safe_config_snapshot(_Cfg(stt=_Provider(creds=_Creds())))
+        assert "tok-deep-secret" not in snap["stt"]
+        assert "***" in snap["stt"]
+        assert "deepgram" in snap["stt"]
+
+    def test_secret_in_nested_dict_is_redacted(self):
+        """Secret keys inside a dict value are redacted."""
+
+        @dataclass
+        class _Cfg:
+            stt: object = None
+
+        snap = safe_config_snapshot(_Cfg(stt={"model": "nova", "api_key": "sk-dict-secret"}))
+        assert "sk-dict-secret" not in snap["stt"]
+        assert "***" in snap["stt"]
+        assert "nova" in snap["stt"]
+
+    def test_secret_in_nested_list_is_redacted(self):
+        """Secret-bearing dataclasses inside a list are redacted."""
+
+        @dataclass
+        class _Inner:
+            password: str = "pw-list-secret"
+
+        @dataclass
+        class _Cfg:
+            stt: object = None
+
+        snap = safe_config_snapshot(_Cfg(stt=[_Inner()]))
+        assert "pw-list-secret" not in snap["stt"]
+        assert "***" in snap["stt"]
+
+
 class TestSafeEnvSnapshot:
     def test_includes_allowlisted_vars(self):
         with patch.dict(os.environ, {"EASYCAT_DEBUG": "1", "EASYCAT_DATA_DIR": "/tmp/ec"}):

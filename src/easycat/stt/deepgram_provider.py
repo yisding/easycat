@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
 
+from easycat._audio_utils import resample_chunk
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
@@ -47,10 +48,14 @@ class DeepgramSTT(WebSocketSTTBase):
     """
 
     def __init__(self, config: DeepgramSTTConfig) -> None:
+        # Like the realtime STT providers, accept any upstream PCM rate and
+        # resample to the configured ``sample_rate`` in ``_on_audio`` rather
+        # than rejecting mismatches. ``expected_sample_rate`` is left as
+        # ``None`` so the base validator only enforces PCM encoding.
         super().__init__(
             provider_name="deepgram_stt",
             provider_error_name="deepgram",
-            expected_sample_rate=config.sample_rate,
+            expected_sample_rate=None,
             close_timeout=5.0,
         )
         self._config = config
@@ -66,7 +71,17 @@ class DeepgramSTT(WebSocketSTTBase):
         )
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
+        if chunk.format.sample_rate != self._config.sample_rate:
+            chunk = resample_chunk(chunk, self._config.sample_rate)
         await self._send_ws(chunk.data)
+
+    async def _on_commit_segment(self) -> bool:
+        # Flux uses provider-side EndOfTurn endpointing, so an explicit
+        # Finalize control message is unnecessary (and unsupported on the
+        # v2 endpoint); keep returning the base ``False`` for Flux models.
+        if self._config.is_flux:
+            return False
+        return await self._send_json_control({"type": "Finalize"}, label="Deepgram Finalize")
 
     async def _on_end(self) -> None:
         if self._ws is not None:
@@ -76,6 +91,17 @@ class DeepgramSTT(WebSocketSTTBase):
 
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type", "")
+        if msg_type == "Error":
+            # Deepgram error frames carry the human-readable text under
+            # ``description`` (and sometimes ``message``); the ``description``
+            # is the more descriptive field, so surface it via
+            # ``override_message`` so it wins over the generic ``message``.
+            self._emit_provider_error_from_message(
+                msg,
+                override_message=msg.get("description"),
+                default_message="Deepgram STT error",
+            )
+            return
         if self._config.is_flux:
             self._handle_flux_message(msg_type, msg)
             return

@@ -27,6 +27,12 @@ class TTSBase:
         self._output_format = output_format
         self._cancelled = False
         self._active = False
+        # Leftover sub-sample bytes carried across _make_audio_event calls so
+        # every emitted AudioChunk is sample-aligned, even when no resample
+        # happens (e.g. a WS frame whose length is not a multiple of the
+        # sample width). _make_audio_event aligns the buffer here before any
+        # downmix/resample, so _normalize_audio always receives whole samples.
+        self._sample_carry = b""
 
     @property
     def is_cancelled(self) -> bool:
@@ -40,17 +46,44 @@ class TTSBase:
         """Mark synthesis as active and reset cancellation state."""
         self._cancelled = False
         self._active = True
+        self._sample_carry = b""
 
     def _end_synthesis(self) -> None:
-        """Mark synthesis as complete."""
+        """Mark synthesis as complete.
+
+        Any non-empty ``_sample_carry`` here is a sub-sample remainder (at
+        most ``sample_width - 1`` bytes, i.e. less than one whole 16-bit
+        sample) that no following frame ever completed. It is intentionally
+        dropped rather than zero-padded and emitted: a fabricated partial
+        sample would inject a click far more audible than the at-most
+        half-sample of silence lost, and emitting from here would force a
+        return-value contract onto every subclass's synthesis loop.
+        """
+        self._sample_carry = b""
         self._active = False
 
     def _make_audio_event(self, data: bytes, fmt: AudioFormat | None = None) -> TTSEvent:
         """Create a TTSEvent with AUDIO type.
 
+        Streaming sources (WebSocket / chunked HTTP) can split a single
+        16-bit PCM sample across two frames, so an individual ``data``
+        buffer may not be a whole number of samples. A 1-byte remainder
+        is carried across calls so every emitted :class:`AudioChunk` is
+        sample-aligned, regardless of whether ``fmt`` triggers a resample.
+
         If `fmt` differs from the target output format, the data is
         resampled and/or downmixed to match `self._output_format`.
         """
+        source_format = fmt if fmt is not None else self._output_format
+        sample_width = source_format.sample_width * source_format.channels
+        if sample_width > 1:
+            data = self._sample_carry + data
+            remainder = len(data) % sample_width
+            if remainder:
+                self._sample_carry = data[-remainder:]
+                data = data[:-remainder]
+            else:
+                self._sample_carry = b""
         if fmt is not None:
             data = self._normalize_audio(data, fmt)
         chunk = AudioChunk(data=data, format=self._output_format)
@@ -70,19 +103,33 @@ class TTSBase:
             data = to_mono(data, source_format.channels)
 
         if source_format.sample_rate != self._output_format.sample_rate:
+            # ``data`` is already sample-aligned: _make_audio_event held back
+            # any sub-sample remainder in _sample_carry before calling here, so
+            # resample never sees a split 16-bit sample.
             data = resample(data, source_format.sample_rate, self._output_format.sample_rate)
 
         return data
 
     @property
     def supports_ssml(self) -> bool:
-        """Whether this provider accepts SSML input natively."""
+        """Whether this provider accepts SSML input natively.
+
+        The scheduler (:class:`~easycat.session._tts_scheduler.TTSScheduler`)
+        reads this flag *before* calling :meth:`synthesize`: when it is
+        ``False`` (the default for every built-in provider) any ``ssml``
+        payload is downgraded to plain text via ``strip_ssml_tags`` up front.
+        A provider that overrides this to ``True`` opts into receiving the
+        raw SSML markup unchanged and is responsible for forwarding it to
+        its backend.
+        """
         return False
 
     def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text into streaming TTSEvent objects.
 
-        Subclasses must override this method.
+        Subclasses must override this method.  Unless a subclass advertises
+        :attr:`supports_ssml`, the scheduler guarantees the payload is
+        already plain text, so implementations only need ``payload.text``.
         """
         raise NotImplementedError
 

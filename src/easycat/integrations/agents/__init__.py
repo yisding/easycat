@@ -13,10 +13,7 @@ stays small.
 
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.integrations.agents._factory import auto_adapt_agent
-from easycat.integrations.agents._helpers import (
-    INTERRUPTION_NOTE,
-    serialize_output,
-)
+from easycat.integrations.agents._helpers import INTERRUPTION_NOTE
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentTurnInput,
@@ -45,5 +42,4 @@ __all__ = [
     "PydanticAIBridge",
     "RemoteResponsesAPIBridge",
     "auto_adapt_agent",
-    "serialize_output",
 ]

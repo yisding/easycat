@@ -20,35 +20,35 @@ class TestEstimateTextSpoken:
         assert _estimate_text_spoken([], 100) == ""
 
     def test_zero_bytes_sent(self) -> None:
-        assert _estimate_text_spoken([("hello", 100)], 0) == ""
+        assert _estimate_text_spoken([("hello", 100, True)], 0) == ""
 
     def test_negative_bytes_sent(self) -> None:
-        assert _estimate_text_spoken([("hello", 100)], -10) == ""
+        assert _estimate_text_spoken([("hello", 100, True)], -10) == ""
 
     def test_full_delivery(self) -> None:
-        assert _estimate_text_spoken([("hello", 100)], 100) == "hello"
+        assert _estimate_text_spoken([("hello", 100, True)], 100) == "hello"
 
     def test_over_delivery(self) -> None:
-        assert _estimate_text_spoken([("hello", 100)], 200) == "hello"
+        assert _estimate_text_spoken([("hello", 100, True)], 200) == "hello"
 
     def test_partial_single_chunk(self) -> None:
-        result = _estimate_text_spoken([("hello world", 100)], 50)
+        result = _estimate_text_spoken([("hello world", 100, True)], 50)
         assert len(result) > 0
         assert len(result) < len("hello world")
 
     def test_multiple_chunks_partial(self) -> None:
-        chunks = [("First. ", 100), ("Second. ", 100), ("Third.", 100)]
+        chunks = [("First. ", 100, True), ("Second. ", 100, True), ("Third.", 100, True)]
         result = _estimate_text_spoken(chunks, 150)
         assert "First. " in result
         assert "Third" not in result
 
     def test_zero_audio_chunk_skipped(self) -> None:
-        chunks = [("skipped", 0), ("hello", 100)]
+        chunks = [("skipped", 0, True), ("hello", 100, True)]
         result = _estimate_text_spoken(chunks, 100)
         assert result == "hello"
 
     def test_all_zero_audio_chunks(self) -> None:
-        chunks = [("a", 0), ("b", 0)]
+        chunks = [("a", 0, True), ("b", 0, True)]
         result = _estimate_text_spoken(chunks, 100)
         assert result == ""
 

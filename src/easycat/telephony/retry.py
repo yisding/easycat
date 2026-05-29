@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -48,6 +49,11 @@ class RetryStrategyConfig:
     )
     shorter_delay_reasons: frozenset[str] = field(default_factory=lambda: frozenset({"busy"}))
     shorter_delay_s: float = 30.0
+    # Fraction of the computed delay that is randomized to avoid synchronized
+    # retry storms across many numbers (thundering herd). 0.0 disables jitter.
+    # Equal jitter: the returned delay falls in
+    # [delay * (1 - jitter_fraction), delay].
+    jitter_fraction: float = 0.5
 
 
 class RetryStrategy:
@@ -96,15 +102,35 @@ class RetryStrategy:
         return RetryDecision.RETRY
 
     def get_delay(self, number: str) -> float:
-        """Calculate the delay before retrying a call to this number."""
+        """Calculate the delay before retrying a call to this number.
+
+        Randomized jitter (see ``RetryStrategyConfig.jitter_fraction``) is
+        applied so that a batch of numbers failing simultaneously does not
+        retry in lockstep and recreate the load spike that caused the failures.
+        """
         state = self.get_state(number)
         reason = state.last_reason
 
         if reason in self._config.shorter_delay_reasons:
-            return self._config.shorter_delay_s
+            return self._apply_jitter(self._config.shorter_delay_s)
 
         delay = self._config.base_delay_s * (self._config.backoff_factor ** (state.attempts - 1))
-        return min(delay, self._config.max_delay_s)
+        delay = min(delay, self._config.max_delay_s)
+        return self._apply_jitter(delay)
+
+    def _apply_jitter(self, delay: float) -> float:
+        """Apply equal jitter to a computed delay.
+
+        Returns a value in ``[delay * (1 - jitter_fraction), delay]``. With the
+        default ``jitter_fraction`` of 0.5 this is the classic "equal jitter"
+        strategy (``delay/2 + random.uniform(0, delay/2)``).
+        """
+        fraction = self._config.jitter_fraction
+        if fraction <= 0.0 or delay <= 0.0:
+            return delay
+        fraction = min(fraction, 1.0)
+        jitter_range = delay * fraction
+        return delay - jitter_range + random.uniform(0.0, jitter_range)
 
     def reset(self, number: str) -> None:
         """Reset retry state for a number (e.g., after successful call)."""

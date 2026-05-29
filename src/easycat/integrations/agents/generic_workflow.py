@@ -159,6 +159,22 @@ class GenericWorkflowBridge:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(cursor, reason="error")
             raise
+        except BaseException:
+            # The default ``AgentRunner`` enforces its timeout by
+            # cancelling the pending ``__anext__()`` (and then calling
+            # ``aclose()``), injecting ``asyncio.CancelledError`` /
+            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
+            # block above is skipped and the still-open workflow cursor
+            # would be left without a ``unit_exited`` record, breaking the
+            # recorder's strict stack invariant for the postmortem journal.
+            # Close it defensively (so a recorder error can't mask the
+            # cancellation) before re-raising; no ``record_framework_error``
+            # since a cancelled turn isn't a framework fault.
+            try:
+                recorder.record_unit_exited(cursor, reason="error")
+            except Exception:
+                logger.debug("Failed to close cursor during cancel cleanup", exc_info=True)
+            raise
 
         recorder.record_unit_exited(cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(
@@ -344,15 +360,25 @@ class GenericWorkflowBridge:
     ) -> AsyncIterator[AgentBridgeEvent]:
         # Check for streaming variant first.
         if hasattr(self._workflow, "on_user_turn_streaming"):
+            # Streaming chunks are inherently unstructured text, so we leave
+            # ``_last_output`` at its ``None`` default rather than emitting the
+            # concatenated text as ``structured_output``.  That would merely
+            # duplicate the ``done`` event's ``text`` field and could surface a
+            # partial-but-presented-as-complete value on barge-in cancel.  This
+            # matches the deep-mode streaming branch, which likewise leaves
+            # ``structured_output`` unset for streamed chunks; the awaitable /
+            # plain-value branches still expose a real structured object.
             async for chunk in self._workflow.on_user_turn_streaming(turn_input.text):
                 if cancel_token and cancel_token.is_cancelled:
                     break
                 if chunk:
-                    yield AgentBridgeEvent(kind="text_delta", text=chunk)
+                    yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
             return
 
         result = self._workflow.on_user_turn(turn_input.text)
         if inspect.isasyncgen(result):
+            # See streaming note above: leave ``_last_output`` unset for
+            # streamed chunks (parity with deep mode, no partial-on-cancel).
             async for chunk in result:
                 if cancel_token and cancel_token.is_cancelled:
                     break
@@ -388,7 +414,7 @@ class GenericWorkflowBridge:
                 if cancel_token and cancel_token.is_cancelled:
                     break
                 if chunk:
-                    yield AgentBridgeEvent(kind="text_delta", text=chunk)
+                    yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
         elif inspect.isawaitable(result):
             output = await result
             self._last_output = output

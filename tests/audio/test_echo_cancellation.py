@@ -53,9 +53,10 @@ def test_frame_samples_common_rates():
     assert _frame_samples_for_rate(48000) == 480
 
 
-def test_frame_samples_uncommon_rate():
-    """frame_samples_for_rate falls back to sample_rate // 100."""
-    assert _frame_samples_for_rate(44100) == 441
+def test_frame_samples_uncommon_rate_rejected():
+    """frame_samples_for_rate rejects rates WebRTC AEC does not support."""
+    with pytest.raises(ValueError, match="Unsupported sample rate 44100"):
+        _frame_samples_for_rate(44100)
 
 
 # ── LiveKitAEC tests ──────────────────────────────────────────────
@@ -174,6 +175,25 @@ def test_livekit_aec_feed_reference_multiple_frames():
     aec.feed_reference(chunk)
 
     assert mock_apm.process_reverse_stream.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_livekit_aec_rejects_mismatched_near_far_rates():
+    """AEC should reject far-end reference at a different rate than near-end."""
+    mock_rtc = MagicMock()
+    mock_apm = MagicMock()
+    mock_rtc.AudioProcessingModule.return_value = mock_apm
+    mock_rtc.AudioFrame.side_effect = _fake_audio_frame
+
+    with patch("easycat.echo_cancellation.require_module", return_value=mock_rtc):
+        aec = LiveKitAEC()
+
+    near = AudioChunk(data=b"\x00\x00" * 160, format=PCM16_MONO_16K)
+    await aec.process(near)
+
+    far = AudioChunk(data=b"\x00\x00" * 480, format=PCM16_MONO_48K)
+    with pytest.raises(ValueError, match="sample rates must match"):
+        aec.feed_reference(far)
 
 
 # ── PassthroughAEC tests ─────────────────────────────────────────
