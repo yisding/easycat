@@ -85,12 +85,17 @@ def run(config: EasyConfig) -> None:
         logging.getLogger("easycat").setLevel(_resolve_easycat_log_level(default=logging.INFO))
 
     session = create_session(config)
-    if (
-        sys.stderr.isatty()
-        and not os.getenv("PYTEST_CURRENT_TEST")
-        and not os.getenv("EASYCAT_QUIET")
-    ):
-        print(_wired_summary(config), file=sys.stderr)
+    if sys.stderr.isatty() and not os.getenv("PYTEST_CURRENT_TEST"):
+        # Live transcript feedback (Listening.../You.../Assistant...) always
+        # shows on an interactive TTY. The one-line "what got wired" banner is
+        # an extra on top, suppressed independently via EASYCAT_QUIET or the
+        # repo's standard NO_COLOR / CI conventions (see cli/_output.py) — so
+        # silencing the banner never costs you the transcripts.
+        banner_suppressed = bool(
+            os.getenv("EASYCAT_QUIET") or os.getenv("NO_COLOR") or os.getenv("CI") == "true"
+        )
+        if not banner_suppressed:
+            print(_wired_summary(config), file=sys.stderr)
         attach_runtime_feedback(session)
 
     async def _run() -> None:
