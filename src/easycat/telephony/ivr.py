@@ -22,7 +22,7 @@ from typing import Any
 
 from easycat.events import EventBus, IVRAction, IVRActionType, STTFinal
 from easycat.telephony.screening import EARLY_MEDIA_PHRASES as _EARLY_MEDIA_PATTERNS
-from easycat.telephony.twiml import sanitize_dtmf_digits, twiml_play_digits
+from easycat.telephony.twiml import VALID_DTMF_OUTPUT_CHARS, twiml_play_digits
 
 logger = logging.getLogger(__name__)
 
@@ -129,16 +129,16 @@ class DTMFDelivery:
         if not self._client or not self._call_sid:
             return False
 
-        # Validate against the shared whitelist (single source of truth in
-        # twiml.py) to prevent TwiML injection via the agent callback.  Reuse
-        # sanitize_dtmf_digits so the validation logic is shared, but keep the
-        # strict all-or-nothing contract: if any character is stripped the input
-        # is suspect, so reject the whole string rather than playing a partial.
-        sanitized = sanitize_dtmf_digits(digits)
-        if not sanitized or sanitized != digits:
+        # Validate against the shared whitelist (VALID_DTMF_OUTPUT_CHARS, the
+        # single source of truth in twiml.py) to prevent TwiML injection via the
+        # agent callback.  This is an all-or-nothing contract: if any character
+        # is invalid the whole input is suspect, so reject it rather than play a
+        # partial.  We check the charset directly (rather than calling
+        # sanitize_dtmf_digits, which logs its own "stripped" warning) so this
+        # rejection path emits exactly one, accurate log line.
+        if not digits or any(c not in VALID_DTMF_OUTPUT_CHARS for c in digits):
             logger.warning("Invalid DTMF digits rejected: %r", digits)
             return False
-        digits = sanitized
 
         # Insert W (1-second delay) between digits if inter-digit delay is enabled.
         if self._inter_digit_delay and len(digits) > 1:
