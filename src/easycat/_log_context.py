@@ -6,9 +6,15 @@ any log record emitted while a session/turn is active can be tagged with them by
 This is logging-only correlation; these keys are intentionally kept OUT of the
 OpenTelemetry attribute allow-list (see :mod:`easycat._observability`).
 
-``ContextVar`` propagation follows ``asyncio`` task boundaries, which is the only
-concurrency boundary EasyCat crosses.  ``threading.Thread`` workers do not inherit
-the bound values, but EasyCat avoids that boundary, so no thread resets are needed.
+``ContextVar`` values are captured at task-creation time: a task inherits the
+ids bound in the context that created it, and a record is enriched (by the
+handler-level :class:`CorrelationFilter`) using the value live in the *emitting*
+task's context.  A long-lived task created before an id is bound — e.g. the
+audio-router pipeline loop, spawned at session start — will therefore NOT see a
+later ``bind_turn`` from another task; such tasks re-bind explicitly each
+iteration so their own log records stay correlated.  ``threading.Thread`` workers
+do not inherit the bound values either, but EasyCat avoids that boundary, so no
+thread resets are needed.
 """
 
 from __future__ import annotations

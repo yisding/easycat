@@ -27,7 +27,11 @@ Standard Python logging on the `easycat` logger. All module loggers are
 - **Process owners** — the `easycat` CLI, `easycat.run()`, and `debug="light"`/
   `debug="full"` wiring — opt in to console output by attaching exactly one
   tagged handler to the `easycat` logger (never root) via
-  `enable_console_logging()`.
+  `enable_console_logging()`. Enabling it also sets `propagate=False` on the
+  `easycat` logger so records do not double-log through root handlers your app
+  configured — those handlers stop receiving `easycat` records once console
+  logging is enabled. If you want `easycat` records in your own root pipeline,
+  do not enable console logging; configure the `easycat` logger yourself.
 - Logging is **lossy**: messages are dropped below the configured level, and the
   format is meant for humans, not machines. Do not parse it. Do not depend on a
   specific message appearing — use the journal (C) for that.
@@ -132,12 +136,16 @@ There are two independent knobs, and they control different things:
 
 When a session/turn is active, log records emitted within that async context are
 tagged with `session_id` and `turn_id` (via a `contextvars`-backed logging
-filter). The console formatter shows them as `[session/turn]`, and the JSON
-formatter emits them as fields. Unbound records show `-` (or `null` in JSON).
+filter on the console handler). The console formatter shows them as
+`[session/turn]`, and the JSON formatter emits them as fields. Unbound records
+show `-` in both formats.
 
-These ids propagate across `asyncio` task boundaries, which is the only
-concurrency boundary EasyCat crosses; `threading.Thread` workers would not
-inherit them, but EasyCat avoids that boundary.
+The ids are captured at task-creation time: a task inherits the ids bound in the
+context that created it. Short-lived per-turn work (agent, TTS) is created after
+`bind_turn` and inherits the turn id; the long-lived audio-pipeline tasks are
+created at session start, before any turn, so they re-bind the current turn each
+loop iteration to stay correlated. `threading.Thread` workers do not inherit the
+ids, but EasyCat avoids that boundary.
 
 ## Honesty caveats
 

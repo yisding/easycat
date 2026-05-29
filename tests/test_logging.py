@@ -8,6 +8,7 @@ ownership/idempotency, and the degraded-journal WARNING path — all via real
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import subprocess
@@ -15,8 +16,16 @@ import sys
 
 import pytest
 
+from easycat._console import color_enabled
 from easycat._log_context import CorrelationFilter, bind_session, bind_turn
-from easycat._logging import _HANDLER_TAG, _JsonFormatter, enable_console_logging
+from easycat._logging import (
+    _HANDLER_TAG,
+    _coerce_level,
+    _JsonFormatter,
+    _make_handler,
+    enable_console_logging,
+    set_easycat_log_level,
+)
 
 
 @pytest.fixture
@@ -246,3 +255,135 @@ def test_enable_console_logging_force_adds_a_second_handler(easycat_logger_state
 
     tagged = [h for h in logger.handlers if getattr(h, _HANDLER_TAG, False)]
     assert len(tagged) == 2
+
+
+# ── level coercion (C1/C2) ────────────────────────────────────────────
+
+
+def test_coerce_level_accepts_case_insensitive_name_and_int() -> None:
+    assert _coerce_level("InFo") == logging.INFO
+    assert _coerce_level("debug") == logging.DEBUG
+    assert _coerce_level(logging.ERROR) == logging.ERROR
+
+
+def test_coerce_level_rejects_unknown_name() -> None:
+    with pytest.raises(ValueError, match="Unknown logging level: 'bogus'"):
+        _coerce_level("bogus")
+
+
+def test_set_easycat_log_level_accepts_name_and_int(easycat_logger_state) -> None:
+    logger = easycat_logger_state
+    set_easycat_log_level("warning")
+    assert logger.level == logging.WARNING
+    set_easycat_log_level(logging.DEBUG)
+    assert logger.level == logging.DEBUG
+
+
+def test_set_easycat_log_level_rejects_unknown_name() -> None:
+    with pytest.raises(ValueError, match="Unknown logging level: 'nope'"):
+        set_easycat_log_level("nope")
+
+
+def test_enable_console_logging_rejects_unknown_level(easycat_logger_state) -> None:
+    with pytest.raises(ValueError, match="Unknown logging level: 'loud'"):
+        enable_console_logging(level="loud")
+
+
+# ── handler selection + color policy (T4) ─────────────────────────────
+
+
+def test_make_handler_uses_json_formatter_when_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASYCAT_LOG_FORMAT", "json")
+    handler = _make_handler()
+    assert isinstance(handler.formatter, _JsonFormatter)
+
+
+def test_make_handler_uses_rich_when_color_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from rich.logging import RichHandler
+
+    monkeypatch.delenv("EASYCAT_LOG_FORMAT", raising=False)
+    monkeypatch.setattr("easycat._console.color_enabled", lambda: True)
+    assert isinstance(_make_handler(), RichHandler)
+
+
+def test_make_handler_plain_stream_when_color_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EASYCAT_LOG_FORMAT", raising=False)
+    monkeypatch.setattr("easycat._console.color_enabled", lambda: False)
+    handler = _make_handler()
+    assert isinstance(handler, logging.StreamHandler)
+    assert not isinstance(handler.formatter, _JsonFormatter)
+
+
+def test_color_enabled_honors_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert color_enabled() is False
+
+
+def test_color_enabled_honors_ci(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("CI", "true")
+    assert color_enabled() is False
+
+
+def test_color_enabled_true_on_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+
+    class _TTY:
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("sys.stderr", _TTY())
+    assert color_enabled() is True
+
+
+# ── downstream safety + async correlation (T6 / A1) ───────────────────
+
+
+def test_easycat_records_do_not_propagate_to_root_when_enabled(easycat_logger_state) -> None:
+    """propagate=False keeps easycat records out of a host's root handlers."""
+    logger = easycat_logger_state
+    logger.handlers[:] = []
+    captured: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record)
+
+    root = logging.getLogger()
+    sink = _Capture()
+    root.addHandler(sink)
+    try:
+        enable_console_logging()
+        logging.getLogger("easycat.test").warning("should not reach root")
+        assert captured == []
+    finally:
+        root.removeHandler(sink)
+
+
+async def test_correlation_filter_enriches_record_bound_in_task(easycat_logger_state) -> None:
+    """A record emitted inside a task that bound a turn id is enriched by the
+    handler-level filter — the mechanism the long-lived audio router relies on."""
+    logger = easycat_logger_state
+    logger.handlers[:] = []
+    logger.setLevel(logging.DEBUG)
+    captured: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record)
+
+    handler = _Capture()
+    handler.addFilter(CorrelationFilter())
+    logger.addHandler(handler)
+
+    async def _emit_in_task() -> None:
+        bind_session("sess-in-task")
+        bind_turn("turn-in-task")
+        logging.getLogger("easycat.session._audio_router").debug("pipeline log")
+
+    await asyncio.create_task(_emit_in_task())
+
+    assert captured, "expected a captured record"
+    assert captured[-1].session_id == "sess-in-task"
+    assert captured[-1].turn_id == "turn-in-task"

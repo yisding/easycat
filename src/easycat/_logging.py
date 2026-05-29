@@ -34,8 +34,8 @@ def enable_console_logging(level: int | str | None = None, *, force: bool = Fals
     logger = logging.getLogger("easycat")
     if level is None:
         level = _resolve_easycat_log_level(default=logging.INFO)
-    elif isinstance(level, str):
-        level = logging.getLevelName(level.upper())
+    else:
+        level = _coerce_level(level)
     logger.setLevel(level)
 
     if not force and any(getattr(h, _HANDLER_TAG, False) for h in logger.handlers):
@@ -59,9 +59,26 @@ def set_easycat_log_level(level: int | str) -> None:
     level name (case-insensitive) or an integer.  Does not call ``basicConfig``
     and never attaches a handler.
     """
-    if isinstance(level, str):
-        level = logging.getLevelName(level.upper())
-    logging.getLogger("easycat").setLevel(level)
+    logging.getLogger("easycat").setLevel(_coerce_level(level))
+
+
+def _coerce_level(level: int | str) -> int:
+    """Coerce a level name (case-insensitive) or int to a logging level int.
+
+    ``logging.getLevelName`` returns a string like ``"Level FOO"`` for an
+    unknown name, which ``setLevel`` then rejects with a cryptic
+    ``Unknown level: 'Level FOO'``. Validate here so a bad value raises a clear
+    error that names the original input and the valid options.
+    """
+    if isinstance(level, int):
+        return level
+    resolved = logging.getLevelName(level.upper())
+    if not isinstance(resolved, int):
+        raise ValueError(
+            f"Unknown logging level: {level!r}. Use one of "
+            "DEBUG, INFO, WARNING, ERROR, CRITICAL (or an int)."
+        )
+    return resolved
 
 
 class _JsonFormatter(logging.Formatter):

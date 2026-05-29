@@ -32,6 +32,9 @@ def color_enabled() -> bool:
 
 
 # Diagnostic/feedback console (stderr; never captured for JSON output).
+# The color decision is evaluated once at import time (Rich freezes it on the
+# Console). Tests/automation that toggle NO_COLOR/CI must do so before importing
+# easycat; mid-run env changes will not retroactively recolor this console.
 feedback_console = Console(
     stderr=True,
     force_terminal=color_enabled() or None,

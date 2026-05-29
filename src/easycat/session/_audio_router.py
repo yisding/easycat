@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._log_context import bind_turn
 from easycat.audio_format import AudioChunk
 from easycat.events import (
     AudioIn,
@@ -301,6 +302,11 @@ class AudioRouter:
                 # Snapshot the active turn once per iteration so all stage
                 # calls inside the loop body operate on the same context.
                 turn = self._current_turn() or self._no_turn
+                # This is a long-lived task created at session start (before any
+                # turn), so it cannot inherit the turn id from the context that
+                # started the turn — bind it per iteration so log records emitted
+                # here are correlated (cleared to "-" while idle).
+                bind_turn(None if turn is self._no_turn else turn.id)
 
                 with observability.span(
                     "easycat.transport.receive",
@@ -391,6 +397,9 @@ class AudioRouter:
                 break
             replayed_chunk = self._replay_chunks_pending > 0
             turn = self._current_turn()
+            # Long-lived drain task: keep its log records correlated with the
+            # turn whose audio is being sent (cleared to "-" between turns).
+            bind_turn(turn.id if turn is not None else None)
             try:
                 self._stamp_outbound_chunk(chunk, turn)
                 delivered = await self._transport_stage.execute(
