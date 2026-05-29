@@ -1129,8 +1129,8 @@ requires-dist = [
     { name = "aiortc", marker = "extra == 'webrtc'", specifier = ">=1.9.0" },
     { name = "deepgram-sdk", marker = "extra == 'all'", specifier = ">=3.0.0" },
     { name = "deepgram-sdk", marker = "extra == 'deepgram'", specifier = ">=3.0.0" },
-    { name = "elevenlabs", marker = "extra == 'all'", specifier = ">=1.0.0" },
-    { name = "elevenlabs", marker = "extra == 'elevenlabs'", specifier = ">=1.0.0" },
+    { name = "elevenlabs", marker = "extra == 'all'", specifier = ">=2.50.0" },
+    { name = "elevenlabs", marker = "extra == 'elevenlabs'", specifier = ">=2.50.0" },
     { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.110.0" },
     { name = "fastapi", marker = "extra == 'telephony'", specifier = ">=0.110.0" },
     { name = "funasr-onnx", marker = "extra == 'funasr-vad'", specifier = ">=0.4.1" },
@@ -1200,7 +1200,7 @@ dev = [
 
 [[package]]
 name = "elevenlabs"
-version = "2.39.0"
+version = "2.50.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -1210,9 +1210,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/87/98/06e115eb658628fc5fe19e8374a6b4b54824177f77670bf174f5be822a5c/elevenlabs-2.39.0.tar.gz", hash = "sha256:fde43cae47e499ac20888906849fbb880344aa889c605be2a5ba6ad5f878e1b1", size = 524346, upload-time = "2026-03-12T18:39:52.43Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/92/28/7e7cb7de9fd87247ccd622397a930bd28f31b70d8fe5432891a4f7b9f220/elevenlabs-2.50.0.tar.gz", hash = "sha256:ee7eae957ca5a18f542c677ec8473374a66184cd6c647dfe08781e8248ca02d0", size = 624204, upload-time = "2026-05-26T14:59:16.644Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/13/cf71880bcb3ee8ed0f354ef74525959a7401769dea2d280d03904f3e5f8c/elevenlabs-2.39.0-py3-none-any.whl", hash = "sha256:e7d6a291dbf31f1d5d22dfed346bd49ba0fc5e8886b31f38cd8668b4827ed508", size = 1418502, upload-time = "2026-03-12T18:39:50.434Z" },
+    { url = "https://files.pythonhosted.org/packages/18/de/a6112715e0d10cd699b189717dba89d3f12fc925ae76288329d650d31250/elevenlabs-2.50.0-py3-none-any.whl", hash = "sha256:3d6072440eb78bb68d7407e2d7866ad554aa1bdf0963c9f1cacb22d5db7c9cb7", size = 1689746, upload-time = "2026-05-26T14:59:14.827Z" },
 ]
 
 [[package]]

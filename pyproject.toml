@@ -27,7 +27,7 @@ langgraph = ["langchain-core>=0.3.0", "langgraph>=0.2.0"]
 llama-agents = ["llama-index-workflows>=2.15.0,<3.0.0", "llama-agents-client>=0.3.0,<1.0.0"]
 openai = ["openai>=1.0.0"]
 deepgram = ["deepgram-sdk>=3.0.0"]
-elevenlabs = ["elevenlabs>=1.0.0"]
+elevenlabs = ["elevenlabs>=2.50.0"]
 # Cartesia STT/TTS talk directly to the Cartesia WebSocket API via the
 # core ``websockets`` dependency — no SDK install is required. This
 # marker extra exists so downstream tooling (e.g. ``easycat doctor``)
@@ -65,7 +65,7 @@ all = [
     "livekit>=1.0.0",
     "aiohttp>=3.9.0",
     "deepgram-sdk>=3.0.0",
-    "elevenlabs>=1.0.0",
+    "elevenlabs>=2.50.0",
     "fastapi>=0.110.0",
     "openai>=1.0.0",
     "openai-agents>=0.6.2",
