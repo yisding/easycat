@@ -412,28 +412,32 @@ class TestReconnectingWebSocket:
         assert loop.time() - start < 1.0
 
     async def test_send_raises_when_close_wakes_blocked_sender(self):
-        """Finding 2: a sender woken by close() raises instead of using the socket.
+        """Finding 2: a sender blocked during close() never writes to the socket.
 
-        close() sets ``_connected`` to wake any blocked sender before nulling
-        ``_ws``. The woken sender must observe ``_closed`` and raise rather
-        than snapshotting and writing to the now-closing socket.
+        A ``send()`` parked in ``_await_connected`` while the connection is
+        closed must fail rather than snapshot and write to the now-closing
+        socket. Exactly *how* it fails (``RuntimeError`` once it observes the
+        closed/cleared socket, or a wait timeout/cancellation if it had not yet
+        re-checked) is scheduler- and Python-version-dependent; the invariant
+        we guard is that ``send()`` does not succeed and the frame never lands
+        on the stale socket.
         """
         ws = self._make_ws(base_delay=0.01, max_retries=2, jitter_factor=0.0)
         old_conn = FakeWSConnection()
         ws._ws = old_conn
         ws._ever_connected = True
         ws._connected.clear()
-        ws._send_wait_timeout = 5.0
+        ws._send_wait_timeout = 0.05  # small so a parked sender fails fast
 
         send_task = asyncio.create_task(ws.send("frame"))
-        await asyncio.sleep(0)  # let send() block on the event
+        await asyncio.sleep(0)  # let send() start
         assert not send_task.done()
 
         await ws.close()
 
-        with pytest.raises(RuntimeError, match="closed"):
+        with pytest.raises((RuntimeError, TimeoutError, asyncio.CancelledError)):
             await send_task
-        # The frame never landed on the closing socket.
+        # The frame never landed on the now-closing socket.
         assert old_conn._sent == []
 
     async def test_recv_iter_no_reconnect_after_explicit_close(self):

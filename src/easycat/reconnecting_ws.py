@@ -172,6 +172,11 @@ class ReconnectingWebSocket:
             if not self._ever_connected:
                 raise RuntimeError("WebSocket is not connected")
             if self._ws is None and not self._connect_lock.locked():
+                # A closed socket always reports "closed" regardless of where in
+                # this method the caller happens to observe it (the exact point
+                # is scheduling-dependent across Python versions).
+                if self._closed:
+                    raise RuntimeError("WebSocket has been closed")
                 raise RuntimeError("WebSocket is not connected")
             try:
                 await asyncio.wait_for(self._connected.wait(), timeout=self._send_wait_timeout)
@@ -183,6 +188,8 @@ class ReconnectingWebSocket:
                 raise RuntimeError("WebSocket has been closed")
         ws = self._ws
         if ws is None:
+            if self._closed:
+                raise RuntimeError("WebSocket has been closed")
             raise RuntimeError("WebSocket is not connected")
         return ws
 
