@@ -1,8 +1,14 @@
 """RunBundle: portable debug bundle for replay and sharing.
 
-A bundle packages the execution journal, artifact blobs, and manifest
-metadata into a single ZIP archive that can be loaded for replay or
-shared with teammates.
+An exported bundle packages the execution journal, artifact blobs, and
+manifest metadata into a single ZIP archive (``.zip``, ``.bundle``, or
+``.easycat-bundle``) that :meth:`RunBundle.load` opens for replay or
+sharing with teammates.
+
+A :class:`RunBundle` can also be reconstructed from a crashed session's
+raw SQLite journal (``.sqlite``) plus its artifact directory via
+:meth:`RunBundle.from_partial_journal`.  Both kinds of file are surfaced
+by :func:`discover_bundles`, so callers must dispatch on the suffix.
 """
 
 from __future__ import annotations

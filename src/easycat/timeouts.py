@@ -20,7 +20,13 @@ logger = logging.getLogger(__name__)
 
 
 class STTTimeoutError(Exception):
-    """STT provider did not produce a transcript within the timeout."""
+    """STT provider did not produce a transcript within the timeout.
+
+    Carries the stable ``code`` ``EASYCAT_E301`` so journal ``Error``
+    records are machine-correlatable with ``easycat explain``.
+    """
+
+    code = "EASYCAT_E301"
 
     def __init__(self, provider_name: str, timeout: float) -> None:
         self.provider_name = provider_name
@@ -29,7 +35,13 @@ class STTTimeoutError(Exception):
 
 
 class AgentTimeoutError(Exception):
-    """Agent did not respond within the timeout."""
+    """Agent did not respond within the timeout.
+
+    Carries the stable ``code`` ``EASYCAT_E302`` so journal ``Error``
+    records are machine-correlatable with ``easycat explain``.
+    """
+
+    code = "EASYCAT_E302"
 
     def __init__(self, timeout: float) -> None:
         self.timeout = timeout
@@ -37,7 +49,13 @@ class AgentTimeoutError(Exception):
 
 
 class TTSTimeoutError(Exception):
-    """TTS provider did not produce audio within the timeout."""
+    """TTS provider did not produce audio within the timeout.
+
+    Carries the stable ``code`` ``EASYCAT_E303`` so journal ``Error``
+    records are machine-correlatable with ``easycat explain``.
+    """
+
+    code = "EASYCAT_E303"
 
     def __init__(self, provider_name: str, timeout: float) -> None:
         self.provider_name = provider_name
@@ -56,45 +74,16 @@ class TimeoutConfig:
     agent_timeout: float = 30.0  # seconds
     tts_first_byte_timeout: float = 5.0  # seconds
 
+    def __post_init__(self) -> None:
+        if self.stt_timeout <= 0:
+            raise ValueError("stt_timeout must be positive")
+        if self.agent_timeout <= 0:
+            raise ValueError("agent_timeout must be positive")
+        if self.tts_first_byte_timeout <= 0:
+            raise ValueError("tts_first_byte_timeout must be positive")
+
 
 # ── Timeout-guarded functions ──────────────────────────────────────
-
-
-async def with_stt_timeout(
-    events_iter: AsyncIterator[Any],
-    *,
-    timeout: float,
-    provider_name: str = "stt",
-    event_bus: Any | None = None,
-) -> AsyncIterator[Any]:
-    """Wrap an STT events iterator with a timeout.
-
-    If no event is received within `timeout` seconds, emits an error
-    event and raises STTTimeoutError.
-    """
-    timed_out = False
-    try:
-        while True:
-            try:
-                event = await asyncio.wait_for(events_iter.__anext__(), timeout=timeout)
-                yield event
-            except StopAsyncIteration:
-                return
-            except TimeoutError:
-                timed_out = True
-                break
-    finally:
-        if timed_out:
-            err = STTTimeoutError(provider_name, timeout)
-            logger.warning(str(err))
-            if event_bus is not None:
-                from easycat.events import Error, ErrorStage
-
-                await event_bus.emit(
-                    Error(exception=err, stage=ErrorStage.STT, provider=provider_name)
-                )
-    if timed_out:
-        raise STTTimeoutError(provider_name, timeout)
 
 
 async def with_agent_timeout(

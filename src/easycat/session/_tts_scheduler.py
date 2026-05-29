@@ -9,7 +9,7 @@ Responsibilities:
 - Provide the single-shot :meth:`synthesize_bypass` path used by
   greeting / opt-out announcements.
 - Track the in-flight synthesis task so cancellation can target it.
-- Reserve the future :meth:`synthesize_sentences` hook for
+- Reserve the future :meth:`_synthesize_sentences` private hook for
   sentence-level pipelining (see workstream-tts-pipelining when it lands).
 
 Outbound queue ownership note: the :class:`BoundedAudioQueue` that
@@ -175,6 +175,46 @@ class TTSScheduler:
 
     # ── Synthesis ──────────────────────────────────────────────
 
+    async def finalize_speaking_turn(
+        self,
+        turn: TurnContext | None,
+        *,
+        turn_generation: int | None = None,
+    ) -> bool:
+        """Run the end-of-turn drain → stop → drain → clear sequence.
+
+        Shared by the streaming agent path (``TurnRunner._process_tts``)
+        and the single-shot :meth:`synthesize` path so the barge-in /
+        clear semantics cannot diverge between the two.
+
+        Drains pending session actions (end_call, transfer) *before*
+        transitioning the turn manager to IDLE so no new turn can sneak
+        in. When ``should_stop`` is signalled the outbound audio is
+        drained before stopping; otherwise the manager stops first and the
+        queued tail audio is drained afterwards so the router can still
+        record sent bytes and emit playback marks.
+
+        The turn pointer is only cleared when the same turn (matched by
+        identity *and*, when supplied, ``turn_generation``) is still
+        active — a turn that was replaced (barge-in) or replaced-then-
+        reissued under the same identity must not be cleared here.
+
+        Returns ``True`` if a drained session action signalled that the
+        session should stop.
+        """
+        should_stop = await self._drain_session_actions()
+        if should_stop:
+            await self._audio_router.await_drain()
+            await self._turn_manager.bot_stopped_speaking()
+        else:
+            await self._turn_manager.bot_stopped_speaking()
+            await self._audio_router.await_drain()
+        if self._current_turn() is turn and (
+            turn_generation is None or (turn is not None and turn.generation == turn_generation)
+        ):
+            self._clear_turn()
+        return should_stop
+
     async def synthesize(
         self,
         payload: TTSInput | str,
@@ -224,18 +264,7 @@ class TTSScheduler:
                 and turn is not None
                 and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
             ):
-                # Drain session actions (end_call, transfer) BEFORE
-                # transitioning to IDLE so no new turn can sneak in.
-                should_stop = await self._drain_session_actions()
-                if should_stop:
-                    await self._audio_router.await_drain()
-                    await self._turn_manager.bot_stopped_speaking()
-                else:
-                    await self._turn_manager.bot_stopped_speaking()
-                    await self._audio_router.await_drain()
-                # Only clear if a new turn hasn't started during the drain.
-                if self._current_turn() is turn:
-                    self._clear_turn()
+                should_stop = await self.finalize_speaking_turn(turn)
             elif gated and self._current_turn() is turn and turn is not None:
                 # Gated opener TTS is buffered — reset to IDLE so the
                 # callee's speech can start new turns while we wait for
@@ -255,17 +284,19 @@ class TTSScheduler:
         """
         await self._synth.synthesize(text, token=None, bypass_gate=True)
 
-    async def synthesize_sentences(
+    async def _synthesize_sentences(
         self,
         payloads: object,
         cancel_token: CancelToken | None,
         turn: TurnContext,
     ) -> object:
-        """Synthesize a stream of payloads with lookahead pipelining.
+        """Reserved private placeholder for sentence-level pipelining.
 
         Not yet implemented — current behaviour is one-at-a-time
-        synthesis via :meth:`synthesize`.  The hook exists so the
-        pipelining change is a local one when it lands.
+        synthesis via :meth:`synthesize`.  Kept private so the scheduler's
+        public surface only advertises implemented methods; the hook
+        exists so the pipelining change is a local one when it lands
+        (see workstream-tts-pipelining).
         """
         raise NotImplementedError("sentence-level TTS pipelining is not implemented yet")
 

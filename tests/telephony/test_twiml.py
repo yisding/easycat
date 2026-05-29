@@ -9,6 +9,9 @@ from easycat.telephony import (
 )
 from easycat.telephony.twiml import (
     parse_gather_webhook,
+    reconstruct_public_url,
+    sanitize_dtmf_digits,
+    twiml_dial_number,
     twiml_dial_send_digits,
     twiml_gather,
     twiml_hangup,
@@ -128,9 +131,12 @@ class TestTwimlPlayDigits:
         result = twiml_play_digits("5")
         assert result.startswith('<?xml version="1.0" encoding="UTF-8"?>')
 
-    def test_escapes_special_chars(self) -> None:
+    def test_strips_non_dtmf_special_chars(self) -> None:
+        # Non-DTMF characters (including XML-significant ones) are stripped
+        # before rendering, so the payload cannot carry markup at all.
         result = twiml_play_digits("1&2")
-        assert "&amp;" in result
+        assert '<Play digits="12"/>' in result
+        assert "&" not in result
 
 
 class TestTwimlDialSendDigits:
@@ -194,3 +200,150 @@ class TestTwimlHangup:
         assert "<Hangup/>" in result
         assert "<Response>" in result
         assert result.startswith('<?xml version="1.0"')
+
+
+# ── Finding 1: DTMF charset validation shared across both output paths ──
+
+
+class TestSanitizeDtmfDigits:
+    """Tests for the centralized DTMF whitelist."""
+
+    def test_keeps_valid_digits_and_pauses(self) -> None:
+        assert sanitize_dtmf_digits("1234*#ABCDwW") == "1234*#ABCDwW"
+
+    def test_strips_non_dtmf_text(self) -> None:
+        assert sanitize_dtmf_digits("12<Play>3") == "123"
+
+    def test_strips_letters_outside_whitelist(self) -> None:
+        assert sanitize_dtmf_digits("1x2y3") == "123"
+
+    def test_empty(self) -> None:
+        assert sanitize_dtmf_digits("") == ""
+
+
+class TestDtmfOutputSanitization:
+    """The two TwiML DTMF entry points share one whitelist (Finding 1)."""
+
+    def test_play_digits_strips_injection(self) -> None:
+        result = twiml_play_digits('1"/><Say>x</Say><Play digits="2')
+        # Only DTMF digits survive; no injected element text leaks through.
+        assert "<Say>" not in result
+        assert '<Play digits="12"/>' in result
+
+    def test_dial_send_digits_strips_injection(self) -> None:
+        result = twiml_dial_send_digits("+15551234567", "12abc34")
+        assert 'sendDigits="1234"' in result
+
+    def test_dial_number_strips_injection(self) -> None:
+        result = twiml_dial_number(
+            "+15551234567",
+            send_digits="9<Hangup/>9",
+        )
+        assert "<Hangup/>" not in result
+        assert 'sendDigits="99"' in result
+
+
+# ── Finding 2: proxied public-URL reconstruction for signature validation ──
+
+
+class TestReconstructPublicUrl:
+    """Tests for reconstruct_public_url."""
+
+    def test_default_uses_host_and_https(self) -> None:
+        url = reconstruct_public_url({"Host": "voice.example.com"}, "/twiml?x=1")
+        assert url == "https://voice.example.com/twiml?x=1"
+
+    def test_ignores_forwarded_headers_without_trust(self) -> None:
+        headers = {
+            "Host": "internal.lb",
+            "X-Forwarded-Proto": "http",
+            "X-Forwarded-Host": "voice.example.com",
+        }
+        url = reconstruct_public_url(headers, "/twiml")
+        assert url == "https://internal.lb/twiml"
+
+    def test_honors_forwarded_headers_when_trusted(self) -> None:
+        headers = {
+            "Host": "internal.lb",
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "voice.example.com",
+        }
+        url = reconstruct_public_url(headers, "/twiml", trust_proxy=True)
+        assert url == "https://voice.example.com/twiml"
+
+    def test_forwarded_header_takes_first_entry(self) -> None:
+        headers = {
+            "Host": "internal.lb",
+            "X-Forwarded-Host": "voice.example.com, internal.lb",
+            "X-Forwarded-Proto": "https, http",
+        }
+        url = reconstruct_public_url(headers, "/twiml", trust_proxy=True)
+        assert url == "https://voice.example.com/twiml"
+
+    def test_case_insensitive_headers(self) -> None:
+        url = reconstruct_public_url({"host": "voice.example.com"}, "/twiml")
+        assert url == "https://voice.example.com/twiml"
+
+    def test_prefixes_missing_leading_slash(self) -> None:
+        url = reconstruct_public_url({"Host": "voice.example.com"}, "twiml")
+        assert url == "https://voice.example.com/twiml"
+
+    def test_no_host_returns_path(self) -> None:
+        assert reconstruct_public_url({}, "/twiml") == "/twiml"
+
+    def test_validates_signature_behind_proxy(self) -> None:
+        public_url = "https://voice.example.com/twiml"
+        params = {"CallSid": "CA123", "From": "+15551234567"}
+        signature = compute_twilio_webhook_signature(
+            auth_token="token", url=public_url, params=params
+        )
+        # The app behind a TLS-terminating LB sees http + internal host.
+        headers = {
+            "Host": "internal.lb",
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "voice.example.com",
+        }
+        reconstructed = reconstruct_public_url(headers, "/twiml", trust_proxy=True)
+        assert validate_twilio_webhook_signature(
+            auth_token="token",
+            url=reconstructed,
+            params=params,
+            signature=signature,
+        )
+
+
+class TestValidateWithCandidateUrls:
+    """validate_twilio_webhook_signature accepts multiple candidate URLs."""
+
+    def test_matches_one_of_several_candidates(self) -> None:
+        public_url = "https://voice.example.com/twiml"
+        params = {"CallSid": "CA123"}
+        signature = compute_twilio_webhook_signature(
+            auth_token="token", url=public_url, params=params
+        )
+        assert validate_twilio_webhook_signature(
+            auth_token="token",
+            url=["http://voice.example.com/twiml", public_url],
+            params=params,
+            signature=signature,
+        )
+
+    def test_rejects_when_no_candidate_matches(self) -> None:
+        params = {"CallSid": "CA123"}
+        signature = compute_twilio_webhook_signature(
+            auth_token="token", url="https://voice.example.com/twiml", params=params
+        )
+        assert not validate_twilio_webhook_signature(
+            auth_token="token",
+            url=["http://voice.example.com/twiml", "https://other.example.com/twiml"],
+            params=params,
+            signature=signature,
+        )
+
+    def test_empty_candidate_list_rejected(self) -> None:
+        assert not validate_twilio_webhook_signature(
+            auth_token="token",
+            url=[],
+            params={},
+            signature="x",
+        )

@@ -199,6 +199,24 @@ class TestDegradedMode:
         captured = capsys.readouterr()
         assert "journal degraded" in captured.err
 
+    def test_degraded_marker_does_not_advance_sequence(self):
+        j = InMemoryRingBuffer(capacity=10)
+        j.append(kind=JournalRecordKind.EVENT, name="e1", session_id="s1")
+        seq_before = j.latest_sequence
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("disk full")
+
+        j._do_append = broken
+        assert j.append(kind=JournalRecordKind.EVENT, name="e2", session_id="s1") == -1
+
+        # The degraded marker occupies sequence -1 and the live counter does
+        # not advance past a sequence no append() return value corresponds to.
+        assert j.latest_sequence == seq_before
+        degraded = [r for r in j.read(start=-1) if r.kind == JournalRecordKind.DEGRADED]
+        assert len(degraded) == 1
+        assert degraded[0].sequence == -1
+
     def test_subsequent_appends_silently_dropped(self, capsys):
         j = InMemoryRingBuffer(capacity=10)
         j._degraded = True
@@ -270,6 +288,42 @@ class TestJournalView:
             appender(),
         )
         assert received == [1, 2, 3]
+
+    async def test_follow_stop_event(self):
+        j = InMemoryRingBuffer(capacity=10)
+        view = JournalView(j)
+        stop = asyncio.Event()
+
+        async def follower() -> list[int]:
+            seen: list[int] = []
+            async for rec in view.follow(from_sequence=0, poll_interval=0.01, stop=stop):
+                seen.append(rec.sequence)
+            return seen
+
+        task = asyncio.create_task(follower())
+        await asyncio.sleep(0.03)
+        stop.set()
+        seen = await asyncio.wait_for(task, timeout=2.0)
+        # The generator terminated cleanly once stop was set.
+        assert seen == []
+
+    async def test_follow_emits_gap_notice_on_eviction(self):
+        # Capacity 2 so older records are evicted before follow() reads them.
+        j = InMemoryRingBuffer(capacity=2)
+        view = JournalView(j)
+        # Append enough that the earliest sequences (1, 2, ...) are evicted.
+        for i in range(6):
+            j.append(kind=JournalRecordKind.EVENT, name=f"e{i}", session_id="s1")
+
+        # Follow from sequence 1 — those records are long gone from the ring.
+        gen = view.follow(from_sequence=1, poll_interval=0.01)
+        first = await asyncio.wait_for(gen.__anext__(), timeout=2.0)
+        await gen.aclose()
+
+        assert first.kind == JournalRecordKind.CONTROL
+        assert first.data["dropped_from"] == "follow_gap"
+        assert first.data["gap"] >= 1
+        assert first.sequence == 1
 
 
 class TestCreateJournal:

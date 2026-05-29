@@ -61,6 +61,32 @@ def test_suggest_codes_returns_close_matches() -> None:
     assert any(m.startswith("EASYCAT_E1") for m in matches)
 
 
+def test_runtime_and_bundle_ranges_are_registered() -> None:
+    """The documented E3xx (runtime) and E4xx (bundle/replay) ranges exist."""
+    for code in (
+        "EASYCAT_E301",
+        "EASYCAT_E302",
+        "EASYCAT_E303",
+        "EASYCAT_E304",
+        "EASYCAT_E305",
+        "EASYCAT_E401",
+        "EASYCAT_E402",
+        "EASYCAT_E403",
+    ):
+        assert code in REGISTRY
+
+
+def test_runtime_timeout_errors_carry_registered_codes() -> None:
+    """Timeout exceptions expose stable codes that exist in the registry."""
+    from easycat.timeouts import AgentTimeoutError, STTTimeoutError, TTSTimeoutError
+
+    assert STTTimeoutError("stt", 1.0).code == "EASYCAT_E301"
+    assert AgentTimeoutError(1.0).code == "EASYCAT_E302"
+    assert TTSTimeoutError("tts", 1.0).code == "EASYCAT_E303"
+    for err in (STTTimeoutError("stt", 1.0), AgentTimeoutError(1.0), TTSTimeoutError("tts", 1.0)):
+        assert err.code in REGISTRY
+
+
 def test_exit_code_mapping() -> None:
     assert exit_code_for("EASYCAT_E101") == 101
     assert exit_code_for("EASYCAT_E102") == 4

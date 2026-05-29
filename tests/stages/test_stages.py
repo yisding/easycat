@@ -309,6 +309,30 @@ class TestStageProtocol:
         _STAGE_CLASSES,
         ids=[c[0].__name__ for c in _STAGE_CLASSES],
     )
+    def test_replay_protocol_signature_accepts_cassette(self, stage_cls, provider_cls):
+        """The ``Stage.replay`` protocol contract matches its implementors.
+
+        Every concrete stage accepts a ``cassette`` second argument, so a
+        caller typed against ``Stage`` must be able to pass one.
+        """
+        import inspect
+
+        from easycat.runtime.replay import ReplayFidelity
+
+        proto_params = list(inspect.signature(Stage.replay).parameters)
+        assert "cassette" in proto_params
+
+        stage = stage_cls(provider_cls())
+        impl_params = list(inspect.signature(stage.replay).parameters)
+        assert "cassette" in impl_params
+        # Passing the protocol's optional cassette must not raise.
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.ARTIFACT), None) in (None, [])
+
+    @pytest.mark.parametrize(
+        "stage_cls,provider_cls",
+        _STAGE_CLASSES,
+        ids=[c[0].__name__ for c in _STAGE_CLASSES],
+    )
     async def test_handle_upstream(self, stage_cls, provider_cls):
         stage = stage_cls(provider_cls())
         # Should not raise
@@ -459,6 +483,33 @@ class TestStageExecuteRecording:
         result = await stage.execute("hello", ctx, turn)
         assert result == "reply:hello"
 
+    async def test_constructor_journal_used_when_ctx_journal_is_none(self):
+        """Lock the fallback: a constructor journal records even when
+        ``ctx.journal`` is None (otherwise the ctor arg would be dead state).
+        """
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=None)
+        turn = _make_turn()
+        stage = STTStage(_StubSTT(), journal=journal)
+        await stage.execute(b"chunk", ctx, turn)
+        names = [r.name for r in journal.read()]
+        assert "stage_start" in names
+        assert "stage_complete" in names
+
+    async def test_agent_constructor_journal_used_when_ctx_journal_is_none(self):
+        """AgentStage routes both stage events and the recorder through the
+        same fallback journal when ``ctx.journal`` is None.
+        """
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=None)
+        turn = _make_turn()
+        stage = AgentStage(_StubAgent(), journal=journal)
+        result = await stage.execute("hello", ctx, turn)
+        assert result == "reply:hello"
+        names = [r.name for r in journal.read()]
+        assert "stage_start" in names
+        assert "stage_complete" in names
+
     async def test_transport_stage_returns_true_when_send_audio_returns_true(self):
         class _DeliveringTransport:
             async def send_audio(self, chunk):
@@ -485,28 +536,95 @@ class TestStageExecuteRecording:
         complete = next(r for r in records if r.name == "stage_complete")
         assert complete.data.get("delivered") is False
 
+    def test_transport_live_replay_returns_captured_outbound_bytes(self):
+        """LIVE replay reads the captured outbound bytes from the
+        ``stage_complete`` ``output_ref`` (execute never writes ``input_ref``,
+        so the old ``stage_start``/``input_ref`` lookup always returned None).
+        """
+        from easycat.runtime.replay import ReplayCassette, ReplayFidelity
 
-# ── VAD and Turn replay_decision stubs ───────────────────────────
+        records = (
+            {"name": "stage_start", "data": {}, "input_ref": None, "output_ref": None},
+            {"name": "stage_complete", "data": {}, "input_ref": None, "output_ref": "out-1"},
+        )
+        cassette = ReplayCassette(
+            stage_name="transport",
+            records=records,
+            _resolver=lambda ref: b"outbound" if ref == "out-1" else None,
+        )
+        stage = TransportStage(_StubTransport())
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.LIVE), cassette) == b"outbound"
+
+
+# ── VAD event serialization + Turn dataclass recording ───────────
 
 
 class TestReplayDecision:
-    def test_vad_replay_decision(self):
-        stage = VADStage(_StubVAD())
-        snap = stage.snapshot_state()
-        # WS4: replay_decision now returns the decision from snapshot fields
-        result = stage.replay_decision(snap)
-        assert result is None  # no "decision" field in default snapshot
+    async def test_vad_stage_serializes_event_fields(self):
+        """``stage_complete`` records reconstructable event descriptors
+        (type + dataclass fields), not bare class-name strings."""
+        from easycat.events import VADStartSpeaking, VADStopSpeaking
 
-    def test_turn_replay_decision(self):
+        class _SpeakingVAD:
+            async def process(self, chunk):
+                yield VADStartSpeaking(turn_id="t-1")
+                yield VADStopSpeaking(turn_id="t-1")
+
+            def configure(self, **kwargs):
+                pass
+
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        stage = VADStage(_SpeakingVAD(), journal=journal)
+        await stage.execute(b"\x00\x00", ctx, turn)
+        complete = next(r for r in journal.read() if r.name == "stage_complete")
+        events = complete.data.get("events")
+        assert isinstance(events, list)
+        assert [e["type"] for e in events] == ["VADStartSpeaking", "VADStopSpeaking"]
+        # Payload (timestamps, correlation ids) is preserved for replay.
+        assert all(isinstance(e["fields"], dict) for e in events)
+        assert all(e["fields"]["turn_id"] == "t-1" for e in events)
+        assert all("timestamp" in e["fields"] for e in events)
+
+    def test_vad_replay_decision_none_before_run(self):
+        stage = VADStage(_StubVAD())
+        assert stage.replay_decision(stage.snapshot_state()) is None
+
+    async def test_vad_replay_decision_returns_last_event(self):
+        """After execute, ``snapshot_state`` carries the last event type and
+        ``replay_decision`` returns it (was previously dead code → None)."""
+        from easycat.events import VADStartSpeaking
+
+        class _SpeakingVAD:
+            async def process(self, chunk):
+                yield VADStartSpeaking(turn_id="t-1")
+
+            def configure(self, **kwargs):
+                pass
+
+        ctx = _make_ctx(journal=None)
+        turn = _make_turn()
+        stage = VADStage(_SpeakingVAD())
+        await stage.execute(b"\x00\x00", ctx, turn)
+        assert stage.replay_decision(stage.snapshot_state()) == "VADStartSpeaking"
+
+    def test_turn_replay_decision_none_before_run(self):
         stage = TurnStage(_StubSmartTurn())
-        snap = stage.snapshot_state()
-        # WS4: replay_decision now returns the decision from snapshot fields
-        result = stage.replay_decision(snap)
-        assert result is None  # no "decision" field in default snapshot
+        assert stage.replay_decision(stage.snapshot_state()) is None
+
+    async def test_turn_replay_decision_returns_last_prediction(self):
+        """After execute, ``replay_decision`` returns the recorded prediction
+        (was previously dead code → None)."""
+        ctx = _make_ctx(journal=None)
+        turn = _make_turn()
+        stage = TurnStage(_StubSmartTurn())
+        await stage.execute([b"\x00\x00"], ctx, turn)
+        assert stage.replay_decision(stage.snapshot_state()) == 1
 
     async def test_turn_stage_records_dataclass_result(self):
         """``detect`` may return a dataclass; ``stage_complete`` still records
-        the prediction/probability/decision keys."""
+        the prediction/probability keys."""
         import dataclasses as _dc
 
         @_dc.dataclass
@@ -528,6 +646,30 @@ class TestReplayDecision:
         assert complete.data.get("prediction") == 1
         assert complete.data.get("probability") == pytest.approx(0.87)
         assert "unrelated" not in complete.data
+
+    async def test_turn_replay_round_trips_recorded_prediction(self):
+        """ARTIFACT replay reads back the ``prediction`` key the stage records,
+        and an explicit ``prediction`` override wins (no phantom 'decision')."""
+        from easycat.runtime.replay import ReplayCassette, ReplayFidelity
+
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        stage = TurnStage(_StubSmartTurn(), journal=journal)
+        await stage.execute([b"\x00\x00"], ctx, turn)
+
+        records = tuple(
+            {"name": r.name, "data": r.data, "input_ref": None, "output_ref": None}
+            for r in journal.read()
+        )
+        cassette = ReplayCassette(stage_name="turn", records=records)
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.ARTIFACT), cassette) == 1
+
+        override = stage.replay(
+            ReplaySpec(fidelity=ReplayFidelity.ARTIFACT, overrides={"prediction": 0}),
+            cassette,
+        )
+        assert override == 0
 
 
 # ── Text mode (create_text_session / send_text) ──────────────────

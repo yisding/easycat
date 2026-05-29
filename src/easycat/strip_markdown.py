@@ -65,7 +65,9 @@ _STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~")
 _HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
 _BLOCKQUOTE_RE = re.compile(r"^(?:>\s*)+", re.MULTILINE)
 _UNORDERED_LIST_RE = re.compile(r"^(\s*)[-*+]\s+", re.MULTILINE)
-_ORDERED_LIST_RE = re.compile(r"^(\s*)\d+\.\s+", re.MULTILINE)
+# Ordered lists: cap to 1–3 digits (mirrors the detect pattern) to avoid
+# stripping leading year-like numeric sentences (e.g. "2026. We launched").
+_ORDERED_LIST_RE = re.compile(r"^(\s*)\d{1,3}\.\s+", re.MULTILINE)
 _HR_DASH_RE = re.compile(r"^-{3,}\s*$", re.MULTILINE)
 _HR_ASTERISK_RE = re.compile(r"^\*{3,}\s*$", re.MULTILINE)
 _HR_UNDERSCORE_RE = re.compile(r"^_{3,}\s*$", re.MULTILINE)
@@ -366,7 +368,7 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     result = _UNORDERED_LIST_RE.sub(r"\1", result)
 
     # 11. Ordered list markers (preserve indentation)
-    result = re.sub(r"^(\s*)\d{1,3}\.\s+", r"\1", result, flags=re.MULTILINE)
+    result = _ORDERED_LIST_RE.sub(r"\1", result)
 
     # 12. Horizontal rules (---, ***, ___)
     result = _HR_DASH_RE.sub("", result)

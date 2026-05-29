@@ -156,6 +156,8 @@ class BoundedAudioQueue:
             # multiple producers may have been woken by a single get(),
             # so only the first to acquire the lock should append.
             async with self._put_lock:
+                if self._closed:
+                    return False
                 if self.full():
                     self._note_drop("block_lost_race")
                     logger.debug(

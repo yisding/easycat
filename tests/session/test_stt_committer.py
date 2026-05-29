@@ -246,14 +246,14 @@ async def test_cancel_invokes_on_speech_detection_reset_and_clears_state() -> No
     committer, stt, _emitted, _no_turn, _tm = _make_committer(on_speech_detection_reset=_reset)
     committer.mark_active()
     turn = _new_turn()
-    turn.stt_final_future = asyncio.get_running_loop().create_future()
+    turn.pending_stt_segment_futures.append(asyncio.get_running_loop().create_future())
 
     await committer.cancel(turn)
 
     assert reset_calls == [1]
     assert committer.is_active is False
     assert stt.end_stream_calls == 1
-    assert turn.stt_final_future is None
+    assert all(f.done() for f in turn.pending_stt_segment_futures)
 
 
 @pytest.mark.asyncio

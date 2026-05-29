@@ -21,13 +21,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from easycat.events import EventBus, IVRAction, IVRActionType, STTFinal
-from easycat.telephony.dtmf import VALID_DTMF_DIGITS
 from easycat.telephony.screening import EARLY_MEDIA_PHRASES as _EARLY_MEDIA_PATTERNS
+from easycat.telephony.twiml import VALID_DTMF_OUTPUT_CHARS
 
 logger = logging.getLogger(__name__)
 
 # Valid DTMF characters: standard digits + W/w pauses for inter-digit delays.
-_VALID_DTMF = VALID_DTMF_DIGITS | frozenset("wW")
+# Shared with the TwiML output helpers so both DTMF code paths enforce one
+# whitelist (see easycat.telephony.twiml.VALID_DTMF_OUTPUT_CHARS).
+_VALID_DTMF = VALID_DTMF_OUTPUT_CHARS
 
 # Heuristic patterns that indicate IVR prompts.
 _IVR_PATTERNS: list[re.Pattern[str]] = [
@@ -271,14 +273,39 @@ class IVRNavigator:
                     self._agent_callback(context),
                     timeout=self._config.agent_timeout_s,
                 )
-            except (TimeoutError, Exception):
-                logger.exception("IVR agent retry also failed")
+            except TimeoutError:
+                # Transient: the agent is slow/unreachable. Re-arm the prompt
+                # timeout and wait for the next prompt rather than hanging up.
+                logger.warning("IVR agent retry timed out")
                 self._start_prompt_timeout()
                 return
+            except Exception:
+                # Hard failure (e.g. a crashing callback) on the retry too —
+                # this is deterministic, not transient, so escalate to hangup
+                # instead of pointlessly re-arming the prompt timeout.
+                logger.exception("IVR agent retry crashed; escalating to hangup")
+                self._active = False
+                await self._event_bus.emit(
+                    IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
+                )
+                return
         except Exception:
-            logger.exception("IVR agent callback failed")
-            self._start_prompt_timeout()
-            return
+            # Hard failure on the first attempt: give the callback one more
+            # chance after a delay (transient bugs / flaky deps), then escalate.
+            logger.warning("IVR agent callback crashed, retrying after delay")
+            await asyncio.sleep(self._config.agent_retry_delay_s)
+            try:
+                result = await asyncio.wait_for(
+                    self._agent_callback(context),
+                    timeout=self._config.agent_timeout_s,
+                )
+            except Exception:
+                logger.exception("IVR agent retry also crashed; escalating to hangup")
+                self._active = False
+                await self._event_bus.emit(
+                    IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
+                )
+                return
 
         action_str = result.get("action", "wait")
 

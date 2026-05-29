@@ -118,6 +118,31 @@ def test_resample_rate_pairs_dc_preservation(from_rate: int, to_rate: int):
         assert abs(s - value) <= 1
 
 
+# ── Odd-length chunk handling (split 16-bit sample) ───────────────
+
+
+def test_resample_odd_length_does_not_crash():
+    """An odd byte count (a sample split across a streaming chunk) must not
+    raise struct.error; the trailing byte is dropped instead."""
+    result = resample(b"\x01\x02\x03", 16000, 24000)
+    assert isinstance(result, bytes)
+
+
+def test_resample_single_byte_returns_empty():
+    """A lone byte carries no complete sample and resamples to nothing."""
+    assert resample(b"\x01", 16000, 24000) == b""
+
+
+def test_resample_odd_length_linear_fallback_does_not_crash(monkeypatch):
+    """The pure-Python (no numpy/soxr/scipy) path must also tolerate an odd
+    trailing byte rather than raising struct.error."""
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    result = au.resample(b"\x01\x02\x03\x04\x05", 16000, 8000)
+    assert isinstance(result, bytes)
+
+
 def test_resample_chunk_to_48k():
     data = struct.pack("<100h", *([1000] * 100))
     chunk = AudioChunk(data=data, format=PCM16_MONO_16K)

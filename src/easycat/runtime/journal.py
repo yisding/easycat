@@ -25,6 +25,7 @@ from easycat.runtime.records import (
     JournalDegraded,
     JournalRecord,
     JournalRecordKind,
+    RecoveredSessionMarker,
     TimingInfo,
 )
 
@@ -160,6 +161,7 @@ class JournalView:
         *,
         from_sequence: int | None = None,
         poll_interval: float = 0.05,
+        stop: asyncio.Event | None = None,
     ) -> collections.abc.AsyncIterator[JournalRecord]:
         """Yield new records as they are appended.
 
@@ -168,6 +170,19 @@ class JournalView:
         Pass ``0`` to replay the full history then live-tail.
 
         Polls ``latest_sequence`` on *poll_interval* seconds.
+
+        **Lossiness on bounded buffers:** with the in-memory ring buffer,
+        records can be evicted (``deque`` ``maxlen``) before this loop observes
+        them if appends outpace *poll_interval*.  When the cursor falls behind
+        the oldest retained record, ``follow`` yields a synthetic
+        :class:`BufferOverflow` notice (``data['dropped_from'] == 'follow_gap'``
+        with ``data['gap']`` = number of skipped sequences) so the consumer has
+        an in-band signal that the sequence stream is non-contiguous.  Persistent
+        backends (SQLite/libSQL) retain every record, so no gap occurs there.
+
+        **Stopping:** the loop exits when *stop* (an :class:`asyncio.Event`) is
+        set, or when the caller closes the generator (``aclose()`` / breaking
+        out of ``async for``), which raises ``GeneratorExit`` at the next yield.
         """
         if from_sequence is not None:
             cursor = from_sequence
@@ -177,15 +192,29 @@ class JournalView:
             # slip in between read and +1.
             cursor = self._journal.latest_sequence + 1
         while True:
+            if stop is not None and stop.is_set():
+                return
             # Fetch records from cursor onward.  read() is lock-protected
             # in every backend, so we won't miss records that were appended
             # between the previous iteration's yield and this call.
             records = self._journal.read(start=cursor)
+            if records and records[0].sequence > cursor:
+                # The oldest record we wanted (sequence == cursor) was evicted
+                # before we could read it.  Surface the gap in-band.
+                gap = records[0].sequence - cursor
+                yield BufferOverflow(
+                    sequence=cursor,
+                    session_id=records[0].session_id,
+                    timing=records[0].timing,
+                    data={"dropped_from": "follow_gap", "gap": gap},
+                )
             for rec in records:
                 yield rec
                 # Advance cursor past the yielded record so we never
                 # re-deliver it, even if the caller suspends mid-batch.
                 cursor = rec.sequence + 1
+            if stop is not None and stop.is_set():
+                return
             await asyncio.sleep(poll_interval)
 
     @property
@@ -554,6 +583,10 @@ class InMemoryRingBuffer:
     def _enter_degraded(self, session_id: str, exc: Exception) -> None:
         self._degraded = True
         observe_gauge("easycat.journal.degraded", 1)
+        # Build the marker once with sequence=-1 so it does not consume a live
+        # sequence number.  ``append`` returns -1 in degraded mode, and keeping
+        # the marker at -1 means ``latest_sequence`` does not advance past a
+        # sequence that no ``append`` return value corresponds to.
         marker = JournalDegraded(
             sequence=-1,
             session_id=session_id,
@@ -575,15 +608,7 @@ class InMemoryRingBuffer:
         # Try to write the marker — best-effort.
         try:
             with self._lock:
-                self._seq += 1
-                self._buf.append(
-                    JournalDegraded(
-                        sequence=self._seq,
-                        session_id=marker.session_id,
-                        timing=marker.timing,
-                        data=marker.data,
-                    )
-                )
+                self._buf.append(marker)
         except Exception:
             pass
 
@@ -653,6 +678,7 @@ class SqliteJournal:
         self._degraded = False
         self._closed = False
         self._recovered = False
+        self._original_session_id = session_id
         self._clean_close_marked = False
 
         # ── Check for prior unclean shutdown ─────────────────────
@@ -679,6 +705,14 @@ class SqliteJournal:
 
             if row is None and prior_count > 0:
                 # Unclean shutdown from a previous session — promote to crash-dump.
+                # Capture the prior session's id before we truncate so it can be
+                # recorded on the recovery marker (see ``original_session_id``).
+                prior_session_row = self._conn.execute(
+                    "SELECT session_id FROM journal ORDER BY sequence DESC LIMIT 1"
+                ).fetchone()
+                self._original_session_id = (
+                    prior_session_row[0] if prior_session_row else session_id
+                )
                 self._recovered = True
                 crash_dir = root / "crash-dumps"
                 crash_dir.mkdir(parents=True, exist_ok=True)
@@ -713,6 +747,12 @@ class SqliteJournal:
                         self._conn.execute("PRAGMA journal_mode=WAL")
                         self._conn.execute("PRAGMA synchronous=NORMAL")
                         self._conn.execute("PRAGMA wal_autocheckpoint=0")
+                        # The prior session's records are now safely preserved
+                        # in the crash dump.  Truncate the live journal so the
+                        # new session starts fresh at sequence=1 (the documented
+                        # contract) instead of continuing the prior counter and
+                        # interleaving prior-session rows under the same id.
+                        self._conn.execute("DELETE FROM journal")
                         logger.info(
                             "Recovered unclean journal for session %s (%d records) → %s",
                             session_id,
@@ -734,8 +774,10 @@ class SqliteJournal:
         # Clear the clean_close marker (we're starting a new session).
         self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
 
-        # Recover sequence counter from any existing records (crash-recovery
-        # path keeps old rows; clean-reuse truncates them above).
+        # Recover sequence counter from any existing records.  Both the
+        # crash-recovery and clean-reuse paths truncate the journal table
+        # above, so for a reused session_id this leaves ``_seq`` at 0 and the
+        # first real append starts at sequence=1.
         row = self._conn.execute("SELECT MAX(sequence) FROM journal").fetchone()
         if row and row[0] is not None:
             self._seq = row[0]
@@ -761,7 +803,12 @@ class SqliteJournal:
                     "recovered_session",
                     now.wall_ns,
                     now.mono_ns,
-                    json.dumps({"recovered_record_count": prior_count}),
+                    json.dumps(
+                        {
+                            "recovered_record_count": prior_count,
+                            "original_session_id": self._original_session_id,
+                        }
+                    ),
                     "",
                 ),
             )
@@ -960,20 +1007,27 @@ class SqliteJournal:
                     self._clear_clean_close_marker_before_write()
                 self._seq += 1
                 seq = self._seq
+                # op_id and queue_ns are written explicitly (currently '' / 0)
+                # so the persisted column set matches ``_row_to_record`` and
+                # does not rely on silent SQL DEFAULTs.  They are reserved for
+                # WS3 stage timing; there is no append() channel to populate
+                # them yet, so they are guaranteed-zero placeholders for now.
                 self._conn.execute(
                     "INSERT INTO journal "
-                    "(sequence, session_id, kind, name, wall_ns, mono_ns, cpu_ns, "
-                    "turn_id, data, error_type, error_msg, error_tb, error_notes, "
+                    "(sequence, session_id, kind, op_id, name, wall_ns, mono_ns, cpu_ns, "
+                    "queue_ns, turn_id, data, error_type, error_msg, error_tb, error_notes, "
                     "input_ref, output_ref, tags) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         seq,
                         session_id,
                         kind.value,
+                        "",
                         name,
                         now_wall,
                         now_mono,
                         now_cpu,
+                        0,
                         turn_id,
                         data_json,
                         error.type if error else None,
@@ -1040,20 +1094,36 @@ class SqliteJournal:
                 notes=error_notes,
             )
         tag_set = frozenset(tags_str.split(",")) if tags_str else frozenset()
-        return JournalRecord(
+        kind = JournalRecordKind(kind_str)
+        data = json.loads(data_str) if data_str else {}
+        common = dict(
             sequence=sequence,
             session_id=session_id,
-            kind=JournalRecordKind(kind_str),
+            kind=kind,
             op_id=op_id,
             name=name,
             timing=TimingInfo(wall_ns=wall_ns, mono_ns=mono_ns, cpu_ns=cpu_ns, queue_ns=queue_ns),
             turn_id=turn_id,
-            data=json.loads(data_str) if data_str else {},
+            data=data,
             error=error,
             input_ref=input_ref,
             output_ref=output_ref,
             tags=tag_set,
         )
+        # Reconstruct typed subclasses so their schema-declared fields are
+        # populated on SQLite round-trip rather than collapsing to the base
+        # JournalRecord.  Subclass-only fields are sourced from ``data``.
+        if kind is JournalRecordKind.RECOVERY and name == "recovered_session":
+            return RecoveredSessionMarker(
+                recovered_record_count=int(data.get("recovered_record_count", 0)),
+                original_session_id=str(data.get("original_session_id", "")),
+                **common,
+            )
+        if kind is JournalRecordKind.CONTROL and name == "buffer_overflow":
+            return BufferOverflow(**common)
+        if kind is JournalRecordKind.DEGRADED and name == "journal_degraded":
+            return JournalDegraded(**common)
+        return JournalRecord(**common)
 
 
 # ── Litestream adapter ──────────────────────────────────────────
@@ -1089,6 +1159,7 @@ class LitestreamSqliteJournal:
         self._replica_url = replica_url or os.environ.get("EASYCAT_JOURNAL_LITESTREAM_REPLICA", "")
         self._sidecar: subprocess.Popen[bytes] | None = None
         self._litestream_available = False
+        self._stderr_thread: threading.Thread | None = None
 
         if not self._replica_url:
             logger.warning(
@@ -1118,6 +1189,17 @@ class LitestreamSqliteJournal:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
+            # Drain stderr on a daemon thread so a full OS pipe buffer can never
+            # block (and silently stall) the sidecar, and so replication errors
+            # surface in the logs instead of being lost.
+            if self._sidecar.stderr is not None:
+                self._stderr_thread = threading.Thread(
+                    target=self._drain_stderr,
+                    args=(self._sidecar.stderr,),
+                    daemon=True,
+                    name="litestream-stderr",
+                )
+                self._stderr_thread.start()
             logger.info(
                 "Journal: backend=sqlite+litestream replica=%s pid=%d path=%s",
                 safe_url,
@@ -1194,6 +1276,22 @@ class LitestreamSqliteJournal:
 
     # ── Internals ────────────────────────────────────────────────
 
+    @staticmethod
+    def _drain_stderr(stream: Any) -> None:
+        """Forward litestream sidecar stderr to the logger until EOF."""
+        try:
+            for raw in iter(stream.readline, b""):
+                line = raw.decode("utf-8", "replace").rstrip()
+                if line:
+                    logger.warning("litestream: %s", line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
     def _stop_sidecar(self) -> None:
         if self._sidecar is None:
             return
@@ -1206,6 +1304,16 @@ class LitestreamSqliteJournal:
         except OSError:
             pass
         finally:
+            # The drain thread closes the pipe on EOF; join it so the fd is
+            # released before we drop our reference to the process.
+            if self._stderr_thread is not None:
+                self._stderr_thread.join(timeout=2)
+                self._stderr_thread = None
+            if self._sidecar.stderr is not None:
+                try:
+                    self._sidecar.stderr.close()
+                except OSError:
+                    pass
             self._sidecar = None
 
 
@@ -1254,7 +1362,12 @@ class LibsqlJournal:
         self._conn = libsql.connect(**connect_kwargs)
         self._conn.executescript(_SQLITE_SCHEMA)
 
-        # Handle session-id reuse: mirror SqliteJournal's truncation logic.
+        # Handle session-id reuse: mirror only SqliteJournal's *clean-reuse*
+        # truncation.  libSQL does NOT implement crash recovery — there is no
+        # crash-dump promotion, no RecoveredSessionMarker, and no _recovered
+        # flag.  An unclean reuse continues appending into the prior table with
+        # a continued sequence counter.  This divergence from the SqliteJournal
+        # contract is documented in DURABILITY.md ("Backend support").
         row = self._conn.execute(
             "SELECT value FROM session_state WHERE key = 'clean_close'"
         ).fetchone()
@@ -1452,20 +1565,23 @@ class LibsqlJournal:
         with self._lock:
             self._seq += 1
             seq = self._seq
+            # op_id / queue_ns are reserved WS3 placeholders (see SqliteJournal).
             self._conn.execute(
                 "INSERT INTO journal "
-                "(sequence, session_id, kind, name, wall_ns, mono_ns, cpu_ns, "
-                "turn_id, data, error_type, error_msg, error_tb, error_notes, "
+                "(sequence, session_id, kind, op_id, name, wall_ns, mono_ns, cpu_ns, "
+                "queue_ns, turn_id, data, error_type, error_msg, error_tb, error_notes, "
                 "input_ref, output_ref, tags) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     seq,
                     session_id,
                     kind.value,
+                    "",
                     name,
                     now_wall,
                     now_mono,
                     now_cpu,
+                    0,
                     turn_id,
                     json.dumps(data or {}, default=str),
                     error.type if error else None,

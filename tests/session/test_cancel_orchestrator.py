@@ -213,7 +213,6 @@ async def test_record_interruption_writes_journal_record_with_expected_shape() -
         "mode": "precise",
         "text_spoken": "hello there",
         "notified": True,
-        "replacement_text": None,
     }
 
 

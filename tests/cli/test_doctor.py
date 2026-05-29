@@ -1,4 +1,4 @@
-"""``easycat doctor`` — checks 1-5 and --json envelope."""
+"""``easycat doctor`` — environment checks and --json envelope."""
 
 from __future__ import annotations
 
@@ -92,6 +92,32 @@ def test_doctor_unknown_environment(cli: CliRunner, empty_env: None) -> None:
     result = cli.invoke(app, ["doctor", "--environment", "bogus"])
     assert result.exit_code == 2
     assert "Unknown --environment" in result.stderr
+
+
+def test_doctor_production_drops_microphone_check(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    no_network: None,
+) -> None:
+    """The production profile is server-oriented and skips the local mic
+    probe; the dev profile still includes it."""
+    for var in (
+        "OPENAI_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "CARTESIA_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+
+    dev = cli.invoke(app, ["doctor", "--json"])
+    dev_names = {c["name"] for c in json.loads(dev.stdout)["checks"]}
+    assert "microphone" in dev_names
+
+    prod = cli.invoke(app, ["doctor", "--environment", "production", "--json"])
+    prod_names = {c["name"] for c in json.loads(prod.stdout)["checks"]}
+    assert "microphone" not in prod_names
 
 
 def test_doctor_only_provider_filters_reachability(

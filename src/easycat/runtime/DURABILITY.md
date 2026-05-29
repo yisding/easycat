@@ -105,6 +105,21 @@ exists without a `clean_close` marker):
 SQLite's native WAL recovery handles any uncheckpointed WAL pages
 automatically — no special handling is needed.
 
+### Backend support
+
+Crash recovery (crash-dump promotion + `RecoveredSessionMarker` at
+`sequence=0` + truncating the live journal to start fresh at
+`sequence=1`) is provided by the **SQLite** and **`sqlite+litestream`**
+backends only.
+
+The **libSQL** backend (`journal_backend="libsql"`) does **not**
+implement crash recovery. It mirrors only the clean-reuse truncation:
+if a session id is reused after a clean close, the prior records are
+deleted. If a libSQL session is reused after an unclean shutdown, it
+continues appending into the existing table with a continued sequence
+counter and emits **no** recovery marker. Use the SQLite backend if
+crash-recovery semantics are required.
+
 ## Storage layout
 
 ```

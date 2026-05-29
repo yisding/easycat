@@ -103,9 +103,19 @@ class ClassificationGate:
         self._hold_audio = hold_audio
         self._on_flush = on_flush
 
+        # Cap the buffer from the gate timeout so the bound scales with how
+        # long the opener may legitimately be held, rather than an arbitrary
+        # fixed count.  ~50 frames/s (20 ms PCMU/PCM frames) is a generous
+        # upper bound for telephony TTS; a 1 s floor keeps very short timeouts
+        # usable.  On overflow we drop the *newest* frames (see
+        # :meth:`_on_tts_audio`) so the intelligible start of the opener
+        # survives for replay after HUMAN classification.
+        _frames_per_s = 50
+        self._buffer_max = max(int(timeout_s * _frames_per_s), _frames_per_s)
         self._closed = False
-        self._buffer: deque[TTSAudio] = deque(maxlen=1000)
+        self._buffer: deque[TTSAudio] = deque()
         self._buffer_warned = False
+        self._dropped_frames = 0
         self._timeout_task: asyncio.Task[None] | None = None
         self._started = False
         self._hold_audio_playing = False
@@ -121,6 +131,15 @@ class ClassificationGate:
     @property
     def buffer(self) -> list[TTSAudio]:
         return list(self._buffer)
+
+    @property
+    def dropped_frames(self) -> int:
+        """Number of TTS frames dropped due to gate buffer overflow.
+
+        Exposed as a metric so overflow (a sign the opener exceeded the
+        gate's hold capacity) is observable rather than only logged once.
+        """
+        return self._dropped_frames
 
     def set_flush_async_callback(self, callback: Callable[[list[TTSAudio]], Any]) -> None:
         """Set the async callback invoked when the gate releases on timeout."""
@@ -152,6 +171,7 @@ class ClassificationGate:
         self._closed = True
         self._buffer.clear()
         self._buffer_warned = False
+        self._dropped_frames = 0
         self._start_timeout()
         if self._hold_audio:
             self._hold_audio_playing = True
@@ -219,13 +239,21 @@ class ClassificationGate:
 
     async def _on_tts_audio(self, event: TTSAudio) -> None:
         if self._closed and not event.bypass_gate:
-            if len(self._buffer) == self._buffer.maxlen and not self._buffer_warned:
-                self._buffer_warned = True
-                logger.error(
-                    "Classification gate buffer full (%d frames) — "
-                    "oldest TTS frames will be dropped",
-                    self._buffer.maxlen,
-                )
+            if len(self._buffer) >= self._buffer_max:
+                # Drop the *newest* frame rather than the oldest: the start of
+                # the opener carries the intelligible greeting that must survive
+                # for replay after HUMAN classification.  Dropping from the
+                # front (deque maxlen) would truncate the opener mid-sentence.
+                self._dropped_frames += 1
+                if not self._buffer_warned:
+                    self._buffer_warned = True
+                    logger.warning(
+                        "Classification gate buffer full (%d frames) — "
+                        "newest TTS frames will be dropped to preserve the "
+                        "opener start",
+                        self._buffer_max,
+                    )
+                return
             self._buffer.append(event)
 
     def _start_timeout(self) -> None:

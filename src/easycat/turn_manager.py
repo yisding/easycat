@@ -67,6 +67,14 @@ class TurnManagerConfig:
     end_of_turn_silence_ms: int = 1000
     # Silence budget, after VAD stop, before finalizing the current STT segment.
     # 0 means commit the segment immediately when VAD reports a pause.
+    #
+    # NOTE: This field is *not* read by TurnManager itself.  It is consumed by
+    # ``Session``, which forwards it to the ``STTCommitter`` as
+    # ``segment_silence_ms`` (see ``session/_session.py`` and
+    # ``session/_stt_committer.py``).  Setting it on a bare ``TurnManager``
+    # (constructed without a Session) therefore has no effect.  It lives here so
+    # the single ``TurnManagerConfig`` object stays the one place callers tune
+    # turn/STT segmentation timing.
     stt_segment_silence_ms: int = 0
     # Pre-roll buffer duration in milliseconds
     pre_roll_ms: int = 300
@@ -76,6 +84,23 @@ class TurnManagerConfig:
     # When set, TurnManager queries it on silence to decide whether
     # to end the turn immediately or wait the full timeout.
     endpoint_detector: Any = None
+    # Optional decision threshold applied to the detector's *probability*.
+    # When set (not None), TurnManager ends the turn when
+    # ``result.probability > endpoint_threshold`` instead of trusting the
+    # provider-precomputed ``result.prediction``.  This lets callers tune
+    # endpoint sensitivity without reconstructing the provider.  When None
+    # (default), the provider's own ``prediction`` int is used, preserving
+    # back-compat.  The comparison is strict-greater, matching the provider:
+    # ``probability == endpoint_threshold`` stays incomplete.
+    endpoint_threshold: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.end_of_turn_silence_ms < 0:
+            raise ValueError("end_of_turn_silence_ms must be non-negative")
+        if self.stt_segment_silence_ms < 0:
+            raise ValueError("stt_segment_silence_ms must be non-negative")
+        if self.pre_roll_ms < 0:
+            raise ValueError("pre_roll_ms must be non-negative")
 
 
 class TurnManager:
@@ -92,6 +117,11 @@ class TurnManager:
     Responsibility boundary: TurnManager emits turn.ended, NOT stt.final.
     The Session handles calling end_stream() on the STT provider.
     """
+
+    # Trailing audio window (ms) handed to the endpoint detector.  Smart-turn
+    # models only consume the last few seconds of speech, so bounding the
+    # window keeps detection latency constant regardless of turn length.
+    _DETECTOR_WINDOW_MS: float = 8000.0
 
     def __init__(
         self,
@@ -331,37 +361,72 @@ class TurnManager:
         self._cancel_silence_timer()
         self._silence_timer_task = asyncio.create_task(self._silence_timeout())
 
+    def _detector_audio_window(self) -> list[AudioChunk]:
+        """Return the trailing audio the endpoint detector should consume.
+
+        Smart-turn models only look at the most recent few seconds of speech,
+        so we bound the window to the trailing ``_DETECTOR_WINDOW_MS`` instead
+        of the whole turn.  This keeps detection latency roughly constant
+        regardless of turn length (an unbounded window made a long turn slow to
+        score, which in turn ate into the post-pause grace budget).
+        """
+        chunks = self._turn_audio
+        if not chunks:
+            return []
+        budget_ms = self._DETECTOR_WINDOW_MS
+        window: deque[AudioChunk] = deque()
+        acc = 0.0
+        for chunk in reversed(chunks):
+            window.appendleft(chunk)
+            acc += chunk.duration_ms
+            if acc >= budget_ms:
+                break
+        return list(window)
+
     async def _silence_timeout(self) -> None:
         """Wait for end-of-turn silence timeout, then transition to Processing.
 
         When an endpoint detector is configured, it is queried first.  If the
         detector predicts "complete", the turn ends immediately.  If it predicts
         "incomplete" (or raises an error), falls back to the normal sleep.
+
+        The detector's own latency is **not** subtracted from the grace budget
+        on the "incomplete" path: a model that says "still talking" must grant
+        the user the full ``end_of_turn_silence_ms`` grace, and a slow detector
+        must never be able to nullify its own "incomplete" verdict by ending
+        the turn immediately.
         """
         try:
-            detector_elapsed = 0.0
             if self._endpoint_detector is not None and self._turn_audio:
                 try:
-                    t0 = time.monotonic()
                     if (
                         self._endpoint_stage is not None
                         and self._endpoint_ctx_getter is not None
                         and self._endpoint_turn_getter is not None
                     ):
                         result = await self._endpoint_stage.execute(
-                            list(self._turn_audio),
+                            self._detector_audio_window(),
                             self._endpoint_ctx_getter(),
                             self._endpoint_turn_getter(),
                         )
                     else:
-                        result = await self._endpoint_detector.detect(list(self._turn_audio))
-                    detector_elapsed = time.monotonic() - t0
+                        result = await self._endpoint_detector.detect(
+                            self._detector_audio_window()
+                        )
                     logger.debug(
                         "Smart-turn prediction=%d probability=%.3f",
                         result.prediction,
                         result.probability,
                     )
-                    if result.prediction == 1:
+                    # When a manager-level threshold is configured, decide on
+                    # the raw probability (strict-greater) so endpoint
+                    # sensitivity is tunable without rebuilding the provider.
+                    # Otherwise trust the provider's precomputed prediction.
+                    if self._config.endpoint_threshold is not None:
+                        is_complete = result.probability > self._config.endpoint_threshold
+                    else:
+                        is_complete = result.prediction == 1
+                    if is_complete:
                         if self._state == TurnManagerState.USER_PAUSED:
                             self._transition(
                                 TurnManagerState.PROCESSING,
@@ -384,8 +449,10 @@ class TurnManager:
                 except Exception:
                     logger.exception("Endpoint detection failed, falling back to silence timeout")
 
-            remaining = max(0, self._config.end_of_turn_silence_ms / 1000.0 - detector_elapsed)
-            await asyncio.sleep(remaining)
+            # Grant the full grace budget from the moment of the "incomplete"
+            # (or failed) decision — do not penalize the user for detector
+            # latency, which would let a slow model collapse the wait to zero.
+            await asyncio.sleep(self._config.end_of_turn_silence_ms / 1000.0)
 
             if self._state == TurnManagerState.USER_PAUSED:
                 self._transition(
@@ -426,6 +493,13 @@ class TurnManager:
             result = await self._cancel_turn_callback()
             if result is False:
                 return
+
+        # Cancel the prior turn's token before issuing a fresh one.  When the
+        # barge-in interrupts a PROCESSING turn there is an in-flight agent run
+        # bound to this token; cancelling it prevents a stale response from
+        # leaking through once the new turn has started.
+        if self._cancel_token is not None:
+            self._cancel_token.cancel()
 
         # Start new turn
         self._cancel_token = CancelToken()

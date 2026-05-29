@@ -12,7 +12,7 @@ from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.tts.base import TTSBase
-from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
+from easycat.tts.input import TTSInput, coerce_tts_input
 
 logger = logging.getLogger(__name__)
 
@@ -54,20 +54,18 @@ class OpenAITTS(TTSBase):
         )
         self._response: httpx.Response | None = None
 
-    @property
-    def supports_ssml(self) -> bool:
-        return False
-
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using OpenAI Audio API with streaming response.
 
         Requests PCM16 format directly to avoid decoding overhead.
         Yields TTSEvent objects with AUDIO type containing PCM16 chunks.
+
+        SSML is not supported (``supports_ssml`` is ``False``), so the
+        scheduler always delivers a plain-text payload here.
         """
         self._start_synthesis()
 
-        payload = coerce_tts_input(payload)
-        text = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
+        text = coerce_tts_input(payload).text
 
         try:
             request_body = {

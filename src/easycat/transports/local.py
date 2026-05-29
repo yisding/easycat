@@ -12,6 +12,7 @@ import logging
 import queue as thread_queue
 import struct
 from dataclasses import dataclass, field
+from functools import partial
 from typing import ClassVar
 
 from easycat._extras import require_module
@@ -30,14 +31,6 @@ class _QueuedOutputChunk:
     chunk: AudioChunk
     turn_id: str | None = None
     turn_ref: object | None = None
-
-
-def _enqueue_or_drop(q: asyncio.Queue[object], item: object) -> None:
-    """Best-effort enqueue — silently drops if the queue is full."""
-    try:
-        q.put_nowait(item)
-    except asyncio.QueueFull:
-        logger.debug("Inbound mic audio queue full — dropping frame")
 
 
 @dataclass
@@ -123,7 +116,13 @@ class LocalTransport(_AudioQueueMixin):
             # Convert float32 [-1, 1] to int16
             pcm = (arr * 32767).astype(np.int16).tobytes()  # type: ignore[union-attr]
             chunk = AudioChunk(data=pcm, format=self._audio_format)
-            loop.call_soon_threadsafe(_enqueue_or_drop, self._in_queue, chunk)
+            # ``_enqueue_chunk`` is sync-safe and emits the canonical
+            # ``inbound_queue_full`` TransportDegraded event on overflow, so
+            # local mic drops surface in the journal like every other
+            # transport.  Schedule it onto the loop from the audio thread.
+            # ``call_soon_threadsafe`` takes no kwargs, so bind ``context``
+            # via ``partial``.
+            loop.call_soon_threadsafe(partial(self._enqueue_chunk, chunk, context="mic"))
 
         self._input_stream = sd.InputStream(
             samplerate=self._audio_format.sample_rate,
@@ -255,7 +254,10 @@ class LocalTransport(_AudioQueueMixin):
         def _emit() -> None:
             if self._event_bus is None:
                 return
-            loop.create_task(
+            # Retain the emit task so it is not GC'd mid-flight before the
+            # AudioRouter sees the TransportAudioDelivered event (matches the
+            # ``_AudioQueueMixin._emit_tasks`` pattern used elsewhere).
+            task = loop.create_task(
                 self._event_bus.emit(
                     TransportAudioDelivered(
                         chunk=queued.chunk,
@@ -264,6 +266,8 @@ class LocalTransport(_AudioQueueMixin):
                     )
                 )
             )
+            self._emit_tasks.add(task)
+            task.add_done_callback(self._emit_tasks.discard)
 
         loop.call_soon_threadsafe(_emit)
 

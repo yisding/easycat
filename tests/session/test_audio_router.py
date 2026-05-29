@@ -13,6 +13,7 @@ from easycat.cancel import CancelToken
 from easycat.events import (
     AudioIn,
     AudioOut,
+    Error,
     EventBus,
     PlaybackMarkAck,
     TransportAudioDelivered,
@@ -403,3 +404,94 @@ async def test_stop_outbound_when_no_task_is_noop():
     router, _ = _make_router()
     await router.stop_outbound()
     assert router.outbound_task is None
+
+
+@pytest.mark.asyncio
+async def test_per_chunk_error_is_skipped_and_pipeline_survives():
+    chunks = [_make_chunk(byte_value=i + 1) for i in range(3)]
+    transport = _FakeTransport(chunks=chunks)
+    turn = TurnContext(turn_id="t1", cancel_token=CancelToken())
+    router, state = _make_router(
+        transport=transport,
+        is_stt_active=True,
+        current_turn=turn,
+    )
+
+    # Fail STT execute on the second chunk only.
+    calls = {"n": 0}
+    original_send = state["stt"].send_audio
+
+    async def _flaky_send(chunk):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("transient STT glitch")
+        await original_send(chunk)
+
+    state["stt"].send_audio = _flaky_send
+
+    await router._run_pipeline()
+
+    # One bad frame surfaced as an Error, but the other two were delivered
+    # and the loop ran to completion (transport exhausted, not torn down).
+    errors = [evt for evt in state["emitted"] if isinstance(evt, Error)]
+    assert len(errors) == 1
+    assert len(state["stt"].received) == 2
+    assert state["running"] is False  # finally marks stopped on natural exit
+
+
+@pytest.mark.asyncio
+async def test_sustained_chunk_errors_tear_down_session():
+    threshold = AudioRouter._MAX_CONSECUTIVE_CHUNK_ERRORS
+    chunks = [_make_chunk() for _ in range(threshold + 5)]
+    transport = _FakeTransport(chunks=chunks)
+    turn = TurnContext(turn_id="t1", cancel_token=CancelToken())
+    router, state = _make_router(
+        transport=transport,
+        is_stt_active=True,
+        current_turn=turn,
+    )
+
+    async def _always_fail(chunk):
+        raise RuntimeError("backend down")
+
+    state["stt"].send_audio = _always_fail
+
+    await router._run_pipeline()
+
+    errors = [evt for evt in state["emitted"] if isinstance(evt, Error)]
+    # One Error per failed frame up to the threshold; the threshold frame
+    # re-raises into the fatal handler which emits one more Error.
+    assert len(errors) == threshold + 1
+
+
+@pytest.mark.asyncio
+async def test_await_drain_waits_for_in_flight_send():
+    release = asyncio.Event()
+
+    class _SlowTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            await release.wait()
+            self.sent.append(chunk)
+            return True
+
+    transport = _SlowTransport()
+    router, state = _make_router(transport=transport)
+
+    await router.queue_outbound(_make_chunk(byte_value=9))
+    router.start_outbound()
+    # Let the drain task dequeue the chunk and block inside send_audio.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    # Queue is empty but the chunk is still in flight: await_drain must
+    # not return until the send completes (it will time out here).
+    await router.await_drain(timeout=0.05)
+    assert len(transport.sent) == 0  # still in flight, send_audio blocked
+
+    # Releasing the send lets the in-flight chunk land and drain to idle.
+    release.set()
+    await router.await_drain(timeout=1.0)
+    assert len(transport.sent) == 1
+
+    state["running"] = False
+    await router.stop_outbound()

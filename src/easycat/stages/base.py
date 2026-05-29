@@ -17,44 +17,77 @@ from easycat.runtime.records import JournalRecordKind
 from easycat.session._turn_context import TurnContext
 
 if TYPE_CHECKING:
-    # Annotation-only import.  At runtime ``ReplaySpec`` resolves via
+    # Annotation-only imports.  At runtime ``ReplaySpec`` resolves via
     # ``__getattr__`` below so we stay clear of the import cycle with
+    # ``runtime.replay``.  ``ReplayCassette`` is only referenced in the
+    # ``Stage.replay`` signature, so the lazy ``TYPE_CHECKING`` import is
+    # sufficient and keeps the module load order independent of
     # ``runtime.replay``.
-    from easycat.runtime.replay import ReplaySpec
+    from easycat.runtime.replay import ReplayCassette, ReplaySpec
 
 # ── Control signals ──────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class ControlSignal:
-    """Base for upstream control signals."""
+    """Base for upstream control signals.
+
+    A control signal is an *observation* that is fanned out through every
+    stage's :meth:`Stage.handle_upstream` so the signal path shows up in
+    the journal.  Receiving a signal does not, by itself, change pipeline
+    behaviour: the actual cancel/truncate/pause work is owned by the
+    ``CancelOrchestrator`` and the turn runner, not by the stages that
+    observe the signal.  The verbs in the subclasses below describe the
+    intent the orchestrator acts on, not work that ``handle_upstream``
+    performs.
+    """
 
     signal_id: str
 
 
 @dataclass(frozen=True)
 class InterruptSignal(ControlSignal):
-    """User barged in — cancel downstream and truncate."""
+    """User barged in.
+
+    Intent: the orchestrator/turn runner cancels downstream work and
+    truncates playback.  Stages only observe and journal this signal.
+    """
 
 
 @dataclass(frozen=True)
 class CancelSignal(ControlSignal):
-    """Cancel the current operation."""
+    """Cancel the current operation.
+
+    Intent acted on by the orchestrator/turn runner; stages only observe
+    and journal this signal.
+    """
 
 
 @dataclass(frozen=True)
 class PauseSignal(ControlSignal):
-    """Pause the stage (e.g. during hold)."""
+    """Pause the pipeline (e.g. during hold).
+
+    Intent acted on by the orchestrator; stages only observe and journal
+    this signal.
+    """
 
 
 @dataclass(frozen=True)
 class ResumeSignal(ControlSignal):
-    """Resume a previously paused stage."""
+    """Resume a previously paused pipeline.
+
+    Intent acted on by the orchestrator; stages only observe and journal
+    this signal.
+    """
 
 
 @dataclass(frozen=True)
 class BackpressureSignal(ControlSignal):
-    """Downstream is overwhelmed — slow down."""
+    """Downstream is overwhelmed — slow down.
+
+    Intent acted on by the orchestrator; stages only observe and journal
+    this signal.
+    """
 
 
 # ── Stage state ──────────────────────────────────────────────────
@@ -86,15 +119,37 @@ class Stage(Protocol):
         """Return a frozen snapshot of current internal state."""
         ...
 
-    def replay(self, spec: ReplaySpec) -> Any:
-        """Replay from journal/artifacts.  Stub until WS4."""
+    def replay(self, spec: ReplaySpec, cassette: ReplayCassette | None = None) -> Any:
+        """Replay this stage's output from journal/artifacts.
+
+        ``spec`` selects the replay fidelity and carries any caller
+        overrides; ``cassette`` (when supplied) is the per-stage view of
+        the recorded journal/artifacts that the stage reads its captured
+        output from.  Every concrete stage implements this two-argument
+        form; the protocol mirrors it so callers programming to ``Stage``
+        (e.g. the replay runner in ``debugger/server.py``) can pass a
+        cassette.
+
+        Note: endpoint-detector stages (``VADStage``, ``TurnStage``) also
+        expose a ``replay_decision(snapshot)`` method.  That is a
+        detector-specific extension and is intentionally *not* part of the
+        ``Stage`` contract — callers must narrow to the concrete type
+        before using it.
+        """
         ...
 
     async def handle_upstream(self, signal: ControlSignal, ctx: RunContext | None = None) -> None:
-        """React to an upstream control signal.
+        """Observe (and journal) an upstream control signal.
 
-        When *ctx* is supplied, the stage journals a ``ControlSignalRecord``
-        so the signal path is visible alongside normal stage events.
+        This is observation/journaling only.  When *ctx* is supplied, the
+        stage journals a ``ControlSignalRecord`` so the signal path is
+        visible alongside normal stage events; it performs **no**
+        cancellation or truncation.  The real cancel/truncate work is
+        owned out-of-band by the ``CancelOrchestrator`` and the turn
+        runner (which cancel the in-flight task and call
+        ``provider.cancel()``).  Custom stages should follow the same
+        contract: react to a signal here by recording/adjusting local
+        observability state, not by trying to tear down downstream work.
         """
         ...
 

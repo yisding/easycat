@@ -13,7 +13,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import resample_chunk, to_mono_chunk
 from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
 from easycat.events import Event
@@ -144,9 +144,17 @@ class FunASROnnxVAD(_VADBase):
         self._threshold = 0.5
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
-        """Process a chunk and yield translated FunASR boundary events."""
+        """Process a chunk and yield translated FunASR boundary events.
+
+        The chunk must be mono PCM16; the byte stream is decoded as a flat
+        int16 sequence. Interleaved multi-channel input is downmixed to mono
+        first so frame boundaries and resampling stay correct.
+        """
         if self._numpy is None or self._model is None:
             self._initialize()
+
+        if chunk.format.channels > 1:
+            chunk = to_mono_chunk(chunk)
 
         if chunk.format.sample_rate != _FUNASR_SAMPLE_RATE:
             chunk = resample_chunk(chunk, _FUNASR_SAMPLE_RATE)

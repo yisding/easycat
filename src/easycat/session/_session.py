@@ -687,10 +687,6 @@ class Session:
         self._stt_committer.cancel_scheduled()
         self._stt_committer.cancel_inflight()
         self._stt_committer.resolve_pending(turn, "")
-        if turn is not None and turn is not self._no_turn:
-            if turn.stt_final_future and not turn.stt_final_future.done():
-                turn.stt_final_future.set_result("")
-            turn.stt_final_future = None
         self._turn = None
         self._audio_router.reset_speech_detection()
         self._audio_router.reset_replay_chunks()
@@ -1166,6 +1162,26 @@ class Session:
         observability.session_ended()
         self._observability_active = False
 
+    def _on_provider_unhealthy(self, provider_name: str) -> None:
+        """React to a provider crossing the consecutive-failure threshold.
+
+        Health checks fire this once on the healthy->unhealthy transition.
+        WebSocket-backed providers reconnect internally on the next send/recv,
+        so the actionable step here is escalation: the threshold-gated ``Error``
+        event (emitted by the checker) lets owners drive teardown/failover, and
+        we surface a session-level warning so a persistently stale provider is
+        visible without spamming a warning every check interval.
+        """
+        logger.warning(
+            "Provider %r is unhealthy after repeated health checks; "
+            "recovery is delegated to provider reconnect / Error subscribers",
+            provider_name,
+        )
+
+    def _on_provider_recovered(self, provider_name: str) -> None:
+        """React to a previously-unhealthy provider passing a health check."""
+        logger.info("Provider %r recovered from unhealthy state", provider_name)
+
     # ── Lifecycle ──────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -1208,6 +1224,9 @@ class Session:
                         health_provider,
                         provider_name=name,
                         event_bus=self.event_bus,
+                        failure_threshold=3,
+                        on_unhealthy=self._on_provider_unhealthy,
+                        on_recovered=self._on_provider_recovered,
                     )
                     checker.start()
                     self._health_checkers.append(checker)

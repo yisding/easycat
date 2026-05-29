@@ -626,10 +626,12 @@ def test_factory_creates_openai_realtime():
 
 
 def test_factory_rejects_unknown_provider():
+    from easycat.errors import EasyCatError
     from easycat.stt.factory import STTProviderConfig, create_stt_provider
 
-    with pytest.raises(ValueError, match="Unknown STT provider"):
+    with pytest.raises(EasyCatError) as exc_info:
         create_stt_provider(STTProviderConfig(provider="nonexistent", api_key="k"))
+    assert exc_info.value.code == "EASYCAT_E104"
 
 
 # ── Live integration ─────────────────────────────────────────────

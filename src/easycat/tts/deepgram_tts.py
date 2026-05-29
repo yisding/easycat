@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from typing import Any
 
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 from easycat.tts.base import TTSBase
-from easycat.tts.input import TTSInput, coerce_tts_input, strip_ssml_tags
+from easycat.tts.input import TTSInput, coerce_tts_input
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,12 @@ class DeepgramTTSConfig:
     base_url: str = "wss://api.deepgram.com/v1/speak"
     output_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_24K)
     event_bus: object | None = None
+    # Reconnect tuning for the synthesis WebSocket. Defaults match
+    # ReconnectConfig; lower max_retries to fail fast and defer to
+    # turn-level retry, or raise it for flaky links.
+    reconnect_max_retries: int = 3
+    reconnect_base_delay: float = 1.0
+    reconnect_max_delay: float = 30.0
 
 
 class DeepgramTTS(TTSBase):
@@ -45,6 +53,12 @@ class DeepgramTTS(TTSBase):
         super().__init__(output_format=config.output_format)
         self._config = config
         self._ws: ReconnectingWebSocket | None = None
+        # Text of the in-flight utterance, replayed by the on_reconnect hook
+        # so a mid-stream drop resumes synthesis instead of aborting it.
+        self._pending_text: str | None = None
+        # Strong references to fire-and-forget Error-emit tasks so the event
+        # loop does not garbage-collect them before ``bus.emit`` completes.
+        self._emit_tasks: set[asyncio.Task[Any]] = set()
         # Build the source format based on what Deepgram returns
         self._source_format = AudioFormat(
             sample_rate=config.sample_rate,
@@ -67,14 +81,28 @@ class DeepgramTTS(TTSBase):
             url=self._build_url(),
             config=ReconnectConfig(
                 extra_headers={"Authorization": f"Token {self._config.api_key}"},
+                max_retries=self._config.reconnect_max_retries,
+                base_delay=self._config.reconnect_base_delay,
+                max_delay=self._config.reconnect_max_delay,
             ),
             event_bus=self._config.event_bus,
             provider_name="deepgram_tts",
+            on_reconnect=self._replay_request,
         )
 
-    @property
-    def supports_ssml(self) -> bool:
-        return False
+    async def _replay_request(self) -> None:
+        """Re-send the Speak + Flush frames after a reconnect.
+
+        Deepgram synthesis is one-shot per utterance, so replaying the text
+        and flush restarts it on the fresh socket. Without this hook a
+        transient drop would re-raise out of recv_iter and abort synthesis.
+        """
+        ws = self._ws
+        text = self._pending_text
+        if ws is None or text is None or self._cancelled:
+            return
+        await ws.send(json.dumps({"type": "Speak", "text": text}))
+        await ws.send(json.dumps({"type": "Flush"}))
 
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using Deepgram's WebSocket TTS API.
@@ -82,11 +110,14 @@ class DeepgramTTS(TTSBase):
         Opens a WebSocket, sends the text, and yields audio chunks as
         they arrive. Sends a flush message after the text to signal
         end of input.
+
+        SSML is not supported (``supports_ssml`` is ``False``), so the
+        scheduler always delivers a plain-text payload here.
         """
         self._start_synthesis()
         self._ws = self._create_ws()
-        payload = coerce_tts_input(payload)
-        text = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
+        text = coerce_tts_input(payload).text
+        self._pending_text = text
 
         try:
             await self._ws.connect()
@@ -108,17 +139,28 @@ class DeepgramTTS(TTSBase):
                     # Handle control messages from Deepgram
                     try:
                         ctrl = json.loads(message)
-                        if ctrl.get("type") == "Flushed":
-                            break
                     except json.JSONDecodeError:
-                        pass
+                        continue
+                    ctrl_type = ctrl.get("type")
+                    if ctrl_type == "Flushed":
+                        break
+                    if ctrl_type in ("Error", "Warning"):
+                        # Deepgram surfaces invalid model / rate-limit /
+                        # quota rejections as Error (or Warning) frames.
+                        # Route them through the journal-visible Error event
+                        # and stop the loop so the failure is observable
+                        # instead of silently waiting for a socket close.
+                        self._emit_provider_error_from_msg(ctrl)
+                        break
 
         except Exception as exc:
             if not self._cancelled:
                 logger.error("Deepgram TTS error: %s", exc)
+                self._emit_provider_error(exc, ws_close_code=getattr(exc, "code", None))
                 raise
         finally:
             await self._close_ws()
+            self._pending_text = None
             self._end_synthesis()
 
     async def _close_ws(self) -> None:
@@ -132,18 +174,73 @@ class DeepgramTTS(TTSBase):
                 self._ws = None
 
     async def stop(self) -> None:
-        """Gracefully stop synthesis."""
+        """Gracefully stop synthesis.
+
+        Sends a final Flush so Deepgram emits any buffered audio, then closes
+        the socket. Closing here matches Cartesia/ElevenLabs ``stop()`` so a
+        graceful stop between turns does not leave the WebSocket lingering
+        until the next ``cancel()``/``close()``.
+        """
         await super().stop()
         if self._ws is not None:
             try:
                 await self._ws.send(json.dumps({"type": "Flush"}))
             except Exception:
-                pass
+                logger.debug("Error sending Deepgram Flush on stop", exc_info=True)
+        await self._close_ws()
 
     async def cancel(self) -> None:
         """Immediately cancel synthesis and close the WebSocket."""
         await super().cancel()
         await self._close_ws()
+
+    def _emit_provider_error_from_msg(self, msg: dict[str, Any]) -> None:
+        """Build and emit a provider Error from a Deepgram control frame."""
+        message = (
+            msg.get("description")
+            or msg.get("message")
+            or msg.get("reason")
+            or "Deepgram TTS error"
+        )
+        exc = RuntimeError(f"Deepgram TTS error: {message}")
+        self._emit_provider_error(
+            exc,
+            code=msg.get("code"),
+            ws_close_code=msg.get("type"),
+        )
+
+    def _emit_provider_error(self, exc: BaseException, **context: Any) -> None:
+        """Post a journal-visible ``Error`` event, with provider context.
+
+        Without this, a Deepgram failure (rejected model, WS close code, or
+        rate limit) would only land in the logger — a recorded RunBundle
+        could not explain *why* TTS failed. Context is attached as notes on
+        the exception so the existing ``Error`` event shape carries it without
+        needing a new event type.
+        """
+        bus = getattr(self._config, "event_bus", None)
+        if bus is None:
+            return
+        from easycat.events import Error, ErrorStage
+
+        for key, value in context.items():
+            if value is None:
+                continue
+            try:
+                exc.add_note(f"{key}={value}")  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - pre-3.11
+                pass
+        try:
+            task = asyncio.create_task(
+                bus.emit(Error(exception=exc, stage=ErrorStage.TTS, provider="deepgram"))
+            )
+        except RuntimeError:  # no running loop
+            logger.debug("Could not emit provider error — no running loop", exc_info=True)
+            return
+        # Keep a strong reference until the emit completes; the event loop
+        # only holds a weak one, so an untracked task can be GC'd mid-flight.
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
 
     def version_info(self) -> dict[str, str]:
         return {

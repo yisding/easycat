@@ -43,9 +43,11 @@ _FRAME_SAMPLES = (_WEBRTC_SAMPLE_RATE * _FRAME_DURATION_MS) // 1000  # 960
 # mirror conditions that previously only reached ``logger.warning``; emitting
 # them keeps the journal the single source of truth for observability.  The
 # cross-transport ``inbound_queue_full`` code is emitted by ``_enqueue_chunk``
-# in ``_base`` and needs no wiring here.
+# in ``_base`` and needs no wiring here.  ``outbound_queue_full`` mirrors
+# WebTransport: emitted from ``send_audio`` when the outbound TTS queue is full.
 _DEGRADED_NEGOTIATION_FAILED = "negotiation_failed"
 _DEGRADED_INBOUND_CONSUME_ERROR = "inbound_consume_error"
+_DEGRADED_OUTBOUND_QUEUE_FULL = "outbound_queue_full"
 
 _CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
@@ -321,6 +323,10 @@ class WebRTCTransport(_AudioQueueMixin):
 
     _transport_name = "WebRTC"
     reports_audio_delivery = True
+    # Browser-mic transport like WebSocket: the browser's WebRTC stack already
+    # applies echo cancellation, so default it on to match WebSocket rather than
+    # silently falling back to False via getattr.
+    default_echo_cancellation_enabled = True
 
     def __init__(self, config: WebRTCTransportConfig | None = None) -> None:
         self._config = config or WebRTCTransportConfig()
@@ -482,12 +488,21 @@ class WebRTCTransport(_AudioQueueMixin):
             pcm_data = chunk.data
 
         self._outbound._event_bus = self._event_bus
-        return self._outbound.enqueue(
+        accepted = self._outbound.enqueue(
             pcm_data,
             original_chunk=chunk,
             turn_id=getattr(chunk, "_easycat_turn_id", None),
             turn_ref=getattr(chunk, "_easycat_turn_ref", None),
         )
+        if not accepted:
+            # Mirror WebTransport: a full outbound queue dropping a TTS frame
+            # must reach the journal so backpressure is observable, not just a
+            # logger.debug line lost outside the debug bundle.
+            self._emit_degraded(
+                _DEGRADED_OUTBOUND_QUEUE_FULL,
+                f"dropped {len(chunk.data)}-byte TTS frame; outbound queue full",
+            )
+        return accepted
 
     async def clear_audio(self) -> None:
         """Discard queued outbound audio (useful during barge-in)."""

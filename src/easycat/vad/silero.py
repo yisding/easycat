@@ -12,7 +12,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import resample_chunk, to_mono_chunk
 from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
 from easycat.events import Event
@@ -162,14 +162,22 @@ class SileroVAD(_VADBase):
                 return
             except (ImportError, RuntimeError) as exc:
                 errors.append(f"{backend}: {exc}")
-                logger.info("Silero VAD %s backend unavailable: %s", backend, exc)
+                # A single backend being unavailable is an expected fallback
+                # (e.g. torch missing -> ONNX), so log at debug; the aggregate
+                # RuntimeError below surfaces if *every* backend fails.
+                logger.debug("Silero VAD %s backend unavailable: %s", backend, exc)
 
         joined = "; ".join(errors) or "no backend candidates"
         raise RuntimeError(f"Failed to load Silero VAD model: {joined}")
 
     def _load_torch_model(self) -> None:
+        # The torch path is an optional speed-up that falls back to the bundled
+        # ONNX model when torch is missing, so we don't point users at the
+        # heavyweight ``easycat[all]`` extra (the ``silero-vad`` extra ships the
+        # working ONNX backend without torch). A missing torch here is expected
+        # and surfaces as a debug-level fallback in ``_load_model``.
         try:
-            torch = require_module("torch", extra="all", purpose="Silero VAD")
+            torch = require_module("torch", purpose="Silero VAD (optional torch backend)")
         except ImportError as exc:
             raise RuntimeError(str(exc)) from exc
         try:
@@ -197,7 +205,14 @@ class SileroVAD(_VADBase):
         self._backend = "onnx"
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
-        """Process an audio chunk and yield VAD events."""
+        """Process an audio chunk and yield VAD events.
+
+        The chunk must be mono PCM16; the byte stream is decoded as a flat
+        int16 sequence. Interleaved multi-channel input is downmixed to mono
+        first so frame boundaries and resampling stay correct.
+        """
+        if chunk.format.channels > 1:
+            chunk = to_mono_chunk(chunk)
         # Silero v5 handles 8 kHz and 16 kHz natively.  Anything else (24 k,
         # 48 k, …) resamples to 16 kHz to preserve fidelity.
         if chunk.format.sample_rate not in _SILERO_SUPPORTED_RATES:
@@ -223,7 +238,9 @@ class SileroVAD(_VADBase):
                 speech_prob = self._model.predict(float_samples, target_rate)
             else:
                 if self._torch is None:
-                    self._torch = require_module("torch", extra="all", purpose="Silero VAD")
+                    self._torch = require_module(
+                        "torch", purpose="Silero VAD (optional torch backend)"
+                    )
                 tensor = self._torch.FloatTensor(float_samples)
                 speech_prob = self._model(tensor, target_rate).item()
             now = time.monotonic()

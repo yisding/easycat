@@ -22,6 +22,12 @@ class STTBase:
     """
 
     def __init__(self, *, expected_sample_rate: int | None = None) -> None:
+        # ``expected_sample_rate`` controls the strict-rate contract enforced
+        # by ``_validate_audio``. When set, ``send_audio`` rejects any chunk
+        # whose rate differs. When ``None`` (the convention used by all
+        # EasyCat-bundled streaming providers), the provider is responsible
+        # for resampling mismatched input to its own target rate in
+        # ``_on_audio`` so callers can swap providers without crashing.
         self._event_queue: asyncio.Queue[STTEvent | None] = asyncio.Queue()
         self._running = False
         self._expected_sample_rate = expected_sample_rate

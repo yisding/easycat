@@ -20,16 +20,19 @@ uv run python examples/ws_server.py  # Run an example
 
 ## Architecture
 
-**Pipeline flow:** Transport (audio in) → NoiseReducer → VAD → STT → [SmartTurn] → Agent → TTS → Transport (audio out)
+**Pipeline flow:** Transport (audio in) → NoiseReducer → EchoCanceller → VAD → STT → [SmartTurn] → Agent → TTS → Transport (audio out). The `EchoCanceller` also consumes TTS output as reference audio (fed in by `session/_audio_router.py`) so it can subtract the bot's own playback from the captured mic signal.
 
 **Key modules:**
 - `session/` — Package containing the core orchestrator. Key files:
   - `_session.py` — `Session` class. Wires pipeline stages, manages turn lifecycle, coordinates agent/TTS.
   - `_turn_context.py` — `TurnContext` per-turn state (timing, playback tracking, cancel token). Created fresh each turn.
   - `_streaming.py` — `consume_agent_stream()` translates agent stream events into TTS payloads on sentence boundaries.
-  - `_interruption.py` — Audio-byte estimation for barge-in: maps TTS output back to what the user heard.
-  - `_text_utils.py` — Sentence splitting, markdown checking, speech energy detection.
-  - `_tts_helpers.py` — TTS payload text normalization for interruption estimation.
+  - `_turn_runner.py` — Drives a single turn end-to-end (agent run → streaming → TTS scheduling), holding the logic that used to be inlined in `_session.py`.
+  - `_audio_router.py` — Routes captured audio through noise reduction / echo cancellation and feeds TTS output back as AEC reference audio.
+  - `_tts_scheduler.py` — `TTSScheduler.prepare()` builds and normalizes TTS payload text (the former `_tts_helpers.py` job) and schedules synthesis/playback.
+  - `_stt_committer.py` — Commits finalized STT transcripts into the turn lifecycle.
+  - `interruption.py` — Audio-byte estimation for barge-in: maps TTS output back to what the user heard.
+  - `text.py` — Sentence splitting, markdown checking, speech energy detection, and spoken-text normalization (`_text_for_spoken_estimation`, `_text_for_estimation_timeline`).
   - `_types.py` — `SessionConfig`, `TurnState`, `Agent` protocol.
 - `config.py` — `EasyConfig` (simplified, auto-wires OpenAI providers) and `SessionConfig` (advanced, explicit providers). `create_session()` factory builds a wired Session.
 - `events.py` — `EventBus` pub/sub with sync/async handlers. Two event layers: provider-scoped (`STTEvent`, `TTSEvent`) emitted by providers, mapped to EasyCat-level events (`STTFinal`, `TTSAudio`, `TurnStarted`, etc.) by Session.
@@ -42,9 +45,9 @@ uv run python examples/ws_server.py  # Run an example
 
 **Provider subpackages** (`stt/`, `tts/`, `transports/`, `telephony/`): one provider per file, each implementing the corresponding Protocol. Base classes (`STTBase`, `TTSBase`, `_ServerTransportBase`) provide shared plumbing.
 
-**Agent bridges** (`integrations/agents/`): `ExternalAgentBridge` protocol (single contract between Session and agents) with implementations `OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, and `RemoteResponsesAPIBridge`. `AgentRunner` (in `integrations/agents/_agent_runner.py`) implements `ExternalAgentBridge` by wrapping a simple `async run(text) -> str` object — used for basic agents that need timeout/cancellation/history. `auto_adapt_agent()` in `_factory.py` detects known framework objects and returns the right bridge.
+**Agent bridges** (`integrations/agents/`): `ExternalAgentBridge` protocol (single contract between Session and agents) with implementations `OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, `RemoteResponsesAPIBridge`, `LlamaAgentsBridge`, `LangChainBridge`, and `LangGraphBridge`. `AgentRunner` (in `integrations/agents/_agent_runner.py`) implements `ExternalAgentBridge` by wrapping a simple `async run(text) -> str` object — used for basic agents that need timeout/cancellation/history. `auto_adapt_agent()` in `_factory.py` detects known framework objects and returns the right bridge.
 
-**Dual-backend fallback:** VAD (`create_vad` auto: Silero → FunASR → TEN → Krisp; raises if none resolve) and noise reduction (`create_noise_reducer` auto: Krisp → RNNoise → passthrough). Each can be forced to a single backend via `VADConfig.backend` / `NoiseReducerConfig.backend`.
+**Dual-backend fallback:** VAD (`create_vad` auto: Silero → FunASR → TEN → Krisp; raises if none resolve), noise reduction (`create_noise_reducer` auto: Krisp → RNNoise → passthrough), and echo cancellation (`create_echo_canceller` from `EchoCancellationConfig`: LiveKitAEC when enabled and available, else `PassthroughAEC`; `EasyConfig` derives a transport-aware default via `enable_echo_cancellation`). VAD and noise reduction can each be forced to a single backend via `VADConfig.backend` / `NoiseReducerConfig.backend`.
 
 ## Key Patterns
 
@@ -52,7 +55,7 @@ uv run python examples/ws_server.py  # Run an example
 - **Async-first** — all I/O is async; providers are async iterators
 - **Cooperative cancellation** — `CancelToken` (not exceptions) for turn/TTS cancellation
 - **Factory functions** — `create_session()`, `create_vad()`, `create_noise_reducer()`
-- **Provider registries** — `stt/factory.py` and `tts/factory.py` each have a central `_PROVIDER_TO_CONFIG` dict. To add a new STT/TTS provider: add an entry to the registry and a corresponding config dataclass.
+- **Provider registries** — `stt/factory.py` has a central `_PROVIDER_TO_CONFIG` dict and `tts/factory.py` has a central `_PROVIDERS` dict, each mapping a provider name to its `(provider class, config class)` pair. To add a new STT/TTS provider: add an entry to the registry and a corresponding config dataclass.
 - **Event bus injection** — Deepgram and ElevenLabs providers require an `EventBus` injected at construction (they emit provider-scoped events). OpenAI providers do not.
 - **Noop stubs** (`stubs.py`) — `NoopSTT`, `NoopTTS`, `NoopVAD`, `NoopTransport` for test isolation
 

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -67,6 +66,12 @@ class AudioRouter:
     the gated-replay book-keeping used when the classification gate
     flushes buffered TTS audio.
 
+    Consecutive per-chunk pipeline errors above
+    :attr:`_MAX_CONSECUTIVE_CHUNK_ERRORS` are treated as a genuinely
+    broken pipeline and tear the session down; below that threshold a
+    single bad frame is logged, surfaced as an :class:`Error`, and
+    skipped so one transient backend hiccup never drops a live call.
+
     Outbound-queue ownership: the single :class:`BoundedAudioQueue`
     lives on :class:`Session`; the router and the
     :class:`TTSSynthesizer` both hold the same reference (drain side
@@ -78,6 +83,13 @@ class AudioRouter:
     interacts with the transport solely via ``send_audio`` and never
     holds that internal queue.
     """
+
+    # Number of *consecutive* per-chunk pipeline failures tolerated before
+    # the loop gives up and lets the session tear down.  A single bad
+    # frame (malformed audio, momentary ONNX/Krisp/VAD glitch, one STT
+    # send failure) must not drop the call; a sustained run of failures
+    # signals a genuinely broken backend.
+    _MAX_CONSECUTIVE_CHUNK_ERRORS = 10
 
     def __init__(
         self,
@@ -156,6 +168,23 @@ class AudioRouter:
         self._outbound_task: asyncio.Task[None] | None = None
         self._pipeline_task: asyncio.Task[None] | None = None
 
+        # Outbound drain progress tracking.  ``_outbound_in_flight`` counts
+        # chunks that have been dequeued but whose ``transport.send_audio``
+        # has not yet returned.  ``_outbound_idle`` is set whenever the
+        # queue is empty *and* no send is in flight, so ``await_drain`` can
+        # wait on a real event instead of busy-polling, and never returns
+        # while the final chunk is still inside the transport.
+        self._outbound_in_flight: int = 0
+        self._outbound_idle: asyncio.Event = asyncio.Event()
+        self._outbound_idle.set()
+
+    def _update_outbound_idle(self) -> None:
+        """Set/clear the idle event based on queue depth and in-flight sends."""
+        if self._outbound_in_flight == 0 and self._outbound_queue.empty():
+            self._outbound_idle.set()
+        else:
+            self._outbound_idle.clear()
+
     # ── Public API ──────────────────────────────────────────────
 
     @property
@@ -207,21 +236,30 @@ class AudioRouter:
         self._outbound_task = None
 
     async def await_drain(self, timeout: float = 2.0) -> None:
-        """Wait for the outbound queue to empty, with a timeout.
+        """Wait for outbound audio to fully drain, with a timeout.
 
-        If the transport's ``send_audio`` is blocked (network backpressure,
-        stalled connection), the outbound worker cannot make progress and the
-        queue never empties.  A bounded wait prevents turn cleanup from
-        hanging indefinitely in that scenario.
+        "Drained" means the outbound queue is empty *and* no chunk is
+        still in flight inside ``transport.send_audio`` — otherwise turn
+        cleanup could clear the turn pointer and emit
+        ``bot_stopped_speaking`` while the final chunk is still being
+        delivered, truncating the tail of the bot's last utterance.
+
+        The wait is event-driven (``_outbound_idle``) rather than a
+        busy-poll on ``sleep(0)``, so a backpressured/slow transport does
+        not spin the event loop and compete with the drain task for loop
+        time.  If the transport's ``send_audio`` stays blocked (network
+        backpressure, stalled connection) the bounded ``timeout`` prevents
+        turn cleanup from hanging indefinitely.
         """
         if not self._outbound_task or self._outbound_task.done():
             return
-        deadline = time.monotonic() + timeout
-        while not self._outbound_queue.empty():
-            if time.monotonic() >= deadline:
-                logger.warning("Outbound queue drain timed out after %.1fs", timeout)
-                break
-            await asyncio.sleep(0)
+        if self._outbound_in_flight == 0 and self._outbound_queue.empty():
+            return
+        self._update_outbound_idle()
+        try:
+            await asyncio.wait_for(self._outbound_idle.wait(), timeout=timeout)
+        except TimeoutError:
+            logger.warning("Outbound queue drain timed out after %.1fs", timeout)
 
     async def queue_outbound(self, chunk: AudioChunk) -> None:
         """Enqueue a TTS chunk for the outbound drain loop."""
@@ -293,73 +331,44 @@ class AudioRouter:
 
     async def _run_pipeline(self) -> None:
         """Main audio receive loop: Transport -> Noise Reduction -> AEC -> VAD -> STT."""
+        # Tracks consecutive per-chunk failures.  Reset to 0 after every
+        # frame that processes cleanly so only a sustained run trips the
+        # fatal threshold.
+        consecutive_errors = 0
         try:
             async for chunk in self._transport.receive_audio():
                 if not self._is_running():
                     break
 
-                # Snapshot the active turn once per iteration so all stage
-                # calls inside the loop body operate on the same context.
-                turn = self._current_turn() or self._no_turn
-
-                with observability.span(
-                    "easycat.transport.receive",
-                    {"easycat.surface": "stt"},
-                ):
-                    chunk_bytes = getattr(chunk, "data", None)
-                    if isinstance(chunk_bytes, (bytes, bytearray)):
-                        observability.increment_counter(
-                            "easycat.audio.bytes.total",
-                            value=len(chunk_bytes),
-                            attributes={"easycat.surface": "stt"},
-                        )
-                        observability.increment_counter(
-                            "easycat.audio.frames.total",
-                            attributes={"easycat.surface": "stt"},
-                        )
-                    await self._emit(AudioIn(chunk=chunk))
-
-                # Stages 1-2: Noise reduction + Echo cancellation via AudioStage.
-                # AudioStage wraps both so a single journal record covers
-                # the pair — matches WS3 T3.10's intent that Audio is
-                # one stage for replay purposes.
-                if self._enable_noise_reduction() or self._enable_aec():
-                    chunk = await self._audio_stage.execute(chunk, self._run_ctx, turn)
-
-                # Stage 3: VAD (optional) via VADStage.
-                if self._enable_vad():
-                    vad_events = await self._vad_stage.execute(chunk, self._run_ctx, turn)
-                    for vad_event in vad_events:
-                        vad_event = self._with_correlation(vad_event)
-                        await self._emit(vad_event)
-                        await self._turn_manager.on_vad_event(vad_event)
-
-                # TurnManager always sees raw audio frames for pre-roll buffering
-                self._turn_manager.on_audio_frame(chunk)
-
-                # Stage 4: Feed audio to STT (if listening)
-                started_turn_from_chunk = False
-                if self._auto_turn_from_stt_final() and not self._is_stt_active():
-                    if self._turn_manager.state == TurnManagerState.IDLE:
-                        if _chunk_has_speech_energy(chunk):
-                            self._auto_turn_speech_frames += 1
-                        else:
-                            self._auto_turn_speech_frames = 0
-
-                        if self._auto_turn_speech_frames >= 2:
-                            await self._turn_manager.start_turn()
-                            self._auto_turn_speech_frames = 0
-                            started_turn_from_chunk = self._is_stt_active()
-                    else:
-                        self._auto_turn_speech_frames = 0
-
-                if self._is_stt_active() and not started_turn_from_chunk:
-                    active_turn = self._current_turn()
-                    if active_turn is not None:
-                        active_turn.stt_has_uncommitted_audio = True
-                    await self._stt_stage.execute(
-                        chunk, self._run_ctx, active_turn or self._no_turn
+                # A failure inside a single frame's stage pipeline (noise
+                # reduction, VAD, or STT) must not kill the whole live
+                # call — one malformed frame or a momentary backend glitch
+                # is logged + surfaced as an Error and the frame is
+                # skipped.  Only the outer handler (below) deals with
+                # genuinely fatal conditions: transport iterator
+                # exhaustion/cancellation, or a sustained run of failures.
+                try:
+                    await self._process_chunk(chunk)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    consecutive_errors += 1
+                    logger.warning(
+                        "Pipeline chunk failed (%d/%d consecutive); skipping frame",
+                        consecutive_errors,
+                        self._MAX_CONSECUTIVE_CHUNK_ERRORS,
+                        exc_info=True,
                     )
+                    await self._emit(Error(exception=exc, stage=ErrorStage.PIPELINE))
+                    if consecutive_errors >= self._MAX_CONSECUTIVE_CHUNK_ERRORS:
+                        logger.error(
+                            "Pipeline exceeded %d consecutive chunk errors; tearing down",
+                            self._MAX_CONSECUTIVE_CHUNK_ERRORS,
+                        )
+                        raise
+                    continue
+                else:
+                    consecutive_errors = 0
 
         except asyncio.CancelledError:
             pass
@@ -378,6 +387,74 @@ class AudioRouter:
                 logger.debug("Pipeline exited while session was running; marking session stopped")
                 self._set_running(False)
 
+    async def _process_chunk(self, chunk: AudioChunk) -> None:
+        """Run a single received frame through the stage pipeline.
+
+        Raises on any stage failure so the caller can apply the
+        per-chunk error policy (skip + surface) without conflating it
+        with fatal transport-iterator conditions.
+        """
+        # Snapshot the active turn once so all stage calls operate on the
+        # same context.
+        turn = self._current_turn() or self._no_turn
+
+        with observability.span(
+            "easycat.transport.receive",
+            {"easycat.surface": "stt"},
+        ):
+            chunk_bytes = getattr(chunk, "data", None)
+            if isinstance(chunk_bytes, (bytes, bytearray)):
+                observability.increment_counter(
+                    "easycat.audio.bytes.total",
+                    value=len(chunk_bytes),
+                    attributes={"easycat.surface": "stt"},
+                )
+                observability.increment_counter(
+                    "easycat.audio.frames.total",
+                    attributes={"easycat.surface": "stt"},
+                )
+            await self._emit(AudioIn(chunk=chunk))
+
+        # Stages 1-2: Noise reduction + Echo cancellation via AudioStage.
+        # AudioStage wraps both so a single journal record covers
+        # the pair — matches WS3 T3.10's intent that Audio is
+        # one stage for replay purposes.
+        if self._enable_noise_reduction() or self._enable_aec():
+            chunk = await self._audio_stage.execute(chunk, self._run_ctx, turn)
+
+        # Stage 3: VAD (optional) via VADStage.
+        if self._enable_vad():
+            vad_events = await self._vad_stage.execute(chunk, self._run_ctx, turn)
+            for vad_event in vad_events:
+                vad_event = self._with_correlation(vad_event)
+                await self._emit(vad_event)
+                await self._turn_manager.on_vad_event(vad_event)
+
+        # TurnManager always sees raw audio frames for pre-roll buffering
+        self._turn_manager.on_audio_frame(chunk)
+
+        # Stage 4: Feed audio to STT (if listening)
+        started_turn_from_chunk = False
+        if self._auto_turn_from_stt_final() and not self._is_stt_active():
+            if self._turn_manager.state == TurnManagerState.IDLE:
+                if _chunk_has_speech_energy(chunk):
+                    self._auto_turn_speech_frames += 1
+                else:
+                    self._auto_turn_speech_frames = 0
+
+                if self._auto_turn_speech_frames >= 2:
+                    await self._turn_manager.start_turn()
+                    self._auto_turn_speech_frames = 0
+                    started_turn_from_chunk = self._is_stt_active()
+            else:
+                self._auto_turn_speech_frames = 0
+
+        if self._is_stt_active() and not started_turn_from_chunk:
+            active_turn = self._current_turn()
+            if active_turn is not None:
+                active_turn.stt_has_uncommitted_audio = True
+            await self._stt_stage.execute(chunk, self._run_ctx, active_turn or self._no_turn)
+
     # ── Internal: outbound drain ───────────────────────────────
 
     async def _drain_outbound_audio(self) -> None:
@@ -391,6 +468,11 @@ class AudioRouter:
                 break
             replayed_chunk = self._replay_chunks_pending > 0
             turn = self._current_turn()
+            # Mark the chunk as in flight before the transport send so
+            # ``await_drain`` does not report the queue as drained while
+            # the final chunk is still inside ``send_audio``.
+            self._outbound_in_flight += 1
+            self._update_outbound_idle()
             try:
                 self._stamp_outbound_chunk(chunk, turn)
                 delivered = await self._transport_stage.execute(
@@ -407,6 +489,8 @@ class AudioRouter:
             except Exception:
                 logger.exception("Failed to send audio to transport")
             finally:
+                self._outbound_in_flight = max(0, self._outbound_in_flight - 1)
+                self._update_outbound_idle()
                 if replayed_chunk:
                     self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
                     if (

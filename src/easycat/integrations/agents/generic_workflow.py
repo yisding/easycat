@@ -159,6 +159,22 @@ class GenericWorkflowBridge:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(cursor, reason="error")
             raise
+        except BaseException:
+            # The default ``AgentRunner`` enforces its timeout by
+            # cancelling the pending ``__anext__()`` (and then calling
+            # ``aclose()``), injecting ``asyncio.CancelledError`` /
+            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
+            # block above is skipped and the still-open workflow cursor
+            # would be left without a ``unit_exited`` record, breaking the
+            # recorder's strict stack invariant for the postmortem journal.
+            # Close it defensively (so a recorder error can't mask the
+            # cancellation) before re-raising; no ``record_framework_error``
+            # since a cancelled turn isn't a framework fault.
+            try:
+                recorder.record_unit_exited(cursor, reason="error")
+            except Exception:
+                logger.debug("Failed to close cursor during cancel cleanup", exc_info=True)
+            raise
 
         recorder.record_unit_exited(cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(
@@ -344,20 +360,31 @@ class GenericWorkflowBridge:
     ) -> AsyncIterator[AgentBridgeEvent]:
         # Check for streaming variant first.
         if hasattr(self._workflow, "on_user_turn_streaming"):
+            # Accumulate streamed text into ``_last_output`` so streaming
+            # shallow workflows expose ``structured_output`` just like the
+            # awaitable / plain-value branches below (which set it from the
+            # full result).  Without this, ``structured_output`` is always
+            # ``None`` for streaming shallow mode — a silent parity gap.
+            accumulated = ""
             async for chunk in self._workflow.on_user_turn_streaming(turn_input.text):
                 if cancel_token and cancel_token.is_cancelled:
                     break
                 if chunk:
-                    yield AgentBridgeEvent(kind="text_delta", text=chunk)
+                    accumulated += str(chunk)
+                    yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
+            self._last_output = accumulated
             return
 
         result = self._workflow.on_user_turn(turn_input.text)
         if inspect.isasyncgen(result):
+            accumulated = ""
             async for chunk in result:
                 if cancel_token and cancel_token.is_cancelled:
                     break
                 if chunk:
+                    accumulated += str(chunk)
                     yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
+            self._last_output = accumulated
         elif inspect.isawaitable(result):
             output = await result
             self._last_output = output

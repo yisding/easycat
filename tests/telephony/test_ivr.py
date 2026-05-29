@@ -192,6 +192,61 @@ class TestIVRAgentDecision:
             nav.stop()
 
     @pytest.mark.asyncio
+    async def test_agent_persistent_crash_escalates_to_hangup(self) -> None:
+        bus = EventBus()
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+        call_count = 0
+
+        async def crashing_agent(ctx: dict) -> dict:
+            nonlocal call_count
+            call_count += 1
+            raise TypeError("malformed callback")
+
+        cfg = IVRNavigatorConfig(agent_retry_delay_s=0.0)
+        nav = IVRNavigator(bus, agent_callback=crashing_agent, config=cfg)
+        nav.start()
+        nav.activate()
+        try:
+            await bus.emit(STTFinal(text="Press 1 for sales"))
+            # First crash retries once; the retry crashes too → escalate.
+            assert call_count == 2
+            hangups = [a for a in actions if a.type == IVRActionType.HANGUP]
+            assert len(hangups) == 1
+            assert nav._active is False
+        finally:
+            nav.stop()
+
+    @pytest.mark.asyncio
+    async def test_agent_crash_then_recover(self) -> None:
+        bus = EventBus()
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+        call_count = 0
+
+        async def flaky_agent(ctx: dict) -> dict:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise KeyError("transient")
+            return {"action": "dtmf", "digits": "1"}
+
+        cfg = IVRNavigatorConfig(agent_retry_delay_s=0.0)
+        nav = IVRNavigator(bus, agent_callback=flaky_agent, config=cfg)
+        nav.start()
+        nav.activate()
+        try:
+            await bus.emit(STTFinal(text="Press 1 for sales"))
+            # First attempt crashes, retry succeeds → DTMF, no hangup.
+            assert call_count == 2
+            dtmf_actions = [a for a in actions if a.type == IVRActionType.DTMF]
+            assert len(dtmf_actions) == 1
+            hangups = [a for a in actions if a.type == IVRActionType.HANGUP]
+            assert len(hangups) == 0
+        finally:
+            nav.stop()
+
+    @pytest.mark.asyncio
     async def test_agent_receives_full_context(self) -> None:
         bus = EventBus()
         captured_contexts: list[dict] = []

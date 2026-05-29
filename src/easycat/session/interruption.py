@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from easycat.integrations.agents._helpers import INTERRUPTION_NOTE
 from easycat.integrations.agents.base import CancellationMode
@@ -55,15 +55,31 @@ class InterruptionNotification:
     notified: bool
 
 
+class TtsChunk(NamedTuple):
+    """A sentence-level TTS call's contribution to the playback timeline.
+
+    Shared shape consumed by both :func:`_estimate_text_spoken` and
+    :func:`_all_tts_audio_delivered`.  Being a :class:`NamedTuple`, it stays
+    tuple-compatible with existing ``(text, audio_bytes, completed)`` call
+    sites, so producers can keep appending plain 3-tuples.
+    """
+
+    text: str
+    audio_bytes: int
+    completed: bool
+
+
 def _estimate_text_spoken(
-    tts_chunks: list[tuple[str, int]],
+    tts_chunks: list[TtsChunk] | list[tuple[str, int, bool]],
     audio_bytes_sent: int,
 ) -> str:
     """Estimate what text the user heard based on TTS audio delivered.
 
-    Each entry in *tts_chunks* is ``(text, audio_bytes_produced)`` for a
-    sentence-level TTS call.  *audio_bytes_sent* is the total audio bytes
-    that were actually sent to the transport before the barge-in flush.
+    Each entry in *tts_chunks* is a :class:`TtsChunk` (or the equivalent
+    ``(text, audio_bytes, completed)`` tuple) for a sentence-level TTS call;
+    the ``completed`` flag is ignored here.  *audio_bytes_sent* is the total
+    audio bytes that were actually sent to the transport before the barge-in
+    flush.
 
     Walks through the chunks in order, subtracting each chunk's audio from
     the bytes-sent budget.  When the budget runs out mid-chunk, the text is
@@ -75,7 +91,7 @@ def _estimate_text_spoken(
 
     remaining = audio_bytes_sent
     spoken = ""
-    for chunk_text, chunk_audio in tts_chunks:
+    for chunk_text, chunk_audio, _ in tts_chunks:
         if chunk_audio <= 0:
             # No audio produced for this chunk (e.g. cancelled before any
             # data) — skip.
@@ -94,7 +110,8 @@ def _estimate_text_spoken(
 
 
 def _all_tts_audio_delivered(
-    tts_chunks: list[tuple[str, int, bool]], audio_bytes_delivered: int
+    tts_chunks: list[TtsChunk] | list[tuple[str, int, bool]],
+    audio_bytes_delivered: int,
 ) -> bool:
     """Whether all synthesized TTS audio has been delivered/heard.
 
@@ -249,7 +266,7 @@ def estimate_and_notify_interruption(
     agent: Any,
     token: CancelToken | None,
     turn: TurnContext,
-    tts_chunks: list[tuple[str, int, bool]],
+    tts_chunks: list[TtsChunk] | list[tuple[str, int, bool]],
     *,
     tts_playback_started: bool,
     interrupted: bool,
@@ -283,12 +300,7 @@ def estimate_and_notify_interruption(
     )
 
     if not _all_tts_audio_delivered(tts_chunks, heard_bytes):
-        text_spoken = _cleanup_estimation_text(
-            _estimate_text_spoken(
-                [(text, audio_bytes) for text, audio_bytes, _ in tts_chunks],
-                heard_bytes,
-            )
-        )
+        text_spoken = _cleanup_estimation_text(_estimate_text_spoken(tts_chunks, heard_bytes))
         notified = notify_bridge_interruption(agent, text_spoken, interruption_mode)
         return InterruptionNotification(
             mode=interruption_mode,

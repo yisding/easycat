@@ -182,7 +182,6 @@ class CancelOrchestrator:
         turn_id: str | None = None,
     ) -> None:
         """Write the ``assistant_interruption_notified`` journal record."""
-        replacement_text = None
         self._journal_sink.append_record(
             name="assistant_interruption_notified",
             turn_id=turn_id,
@@ -191,6 +190,5 @@ class CancelOrchestrator:
                 "mode": mode,
                 "text_spoken": text_spoken,
                 "notified": notified,
-                "replacement_text": replacement_text,
             },
         )

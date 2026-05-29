@@ -193,6 +193,50 @@ class TestLocalTransport:
         assert delivered is False
         assert transport._out_queue.qsize() == 1
 
+    @pytest.mark.asyncio
+    async def test_mic_queue_full_emits_inbound_queue_full(self):
+        """Mic-queue overflow surfaces a TransportDegraded like other transports."""
+        from easycat.events import TransportDegraded
+        from easycat.transports._base import _DEGRADED_INBOUND_QUEUE_FULL
+
+        transport = LocalTransport(LocalTransportConfig(max_pending_in_chunks=1))
+        bus = EventBus()
+        received: list[TransportDegraded] = []
+        bus.subscribe(TransportDegraded, lambda e: received.append(e))
+        transport._event_bus = bus
+
+        transport._enqueue_chunk(_make_chunk(), context="mic")  # fills the 1 slot
+        transport._enqueue_chunk(_make_chunk(), context="mic")  # dropped
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert [e.reason for e in received] == [_DEGRADED_INBOUND_QUEUE_FULL]
+        assert received[0].provider == "local"
+        assert "mic" in received[0].detail
+
+    @pytest.mark.asyncio
+    async def test_schedule_audio_delivery_tracks_emit_task(self):
+        """The audio-delivery emit task is retained so it isn't GC'd mid-flight."""
+        from easycat.events import TransportAudioDelivered
+        from easycat.transports.local import _QueuedOutputChunk
+
+        transport = LocalTransport()
+        bus = EventBus()
+        received: list[TransportAudioDelivered] = []
+        bus.subscribe(TransportAudioDelivered, lambda e: received.append(e))
+        transport._event_bus = bus
+        transport._loop = asyncio.get_running_loop()
+
+        queued = _QueuedOutputChunk(chunk=_make_chunk(), turn_id="t1")
+        transport._schedule_audio_delivery(queued)
+        # call_soon_threadsafe callback runs first, then the emit task.
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert len(received) == 1
+        assert received[0].turn_id == "t1"
+        assert transport._emit_tasks == set()  # drained after completion
+
 
 # ── WebSocketTransport tests ─────────────────────────────────────
 

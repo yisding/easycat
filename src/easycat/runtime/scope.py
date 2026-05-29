@@ -5,14 +5,35 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, TypeVar
-
-if TYPE_CHECKING:
-    from easycat.session._journal_sink import SessionJournalSink
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+
+
+@runtime_checkable
+class JournalSink(Protocol):
+    """Minimal structural sink that :meth:`RuntimeScope.create_journaled_task` needs.
+
+    Defined in the runtime layer so task plumbing depends only on its own
+    abstractions. Concrete sinks (e.g. the session package's
+    ``SessionJournalSink``) satisfy this protocol structurally.
+    """
+
+    def current_turn_id(self, turn_id: str | None = ...) -> str | None:
+        """Resolve the turn id to record, defaulting to the active turn."""
+        ...
+
+    def append_record(
+        self,
+        *,
+        name: str,
+        turn_id: str | None = ...,
+        data: dict[str, Any] | None = ...,
+    ) -> None:
+        """Append a journal record."""
+        ...
 
 
 class RuntimeScope:
@@ -37,7 +58,7 @@ class RuntimeScope:
         coro: Coroutine[Any, Any, _T],
         *,
         name: str,
-        journal_sink: SessionJournalSink,
+        journal_sink: JournalSink,
         turn_id: str | None = None,
     ) -> asyncio.Task[_T]:
         """Create a tracked task that journals scheduled/completed/cancelled/raised.

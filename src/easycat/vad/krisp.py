@@ -33,7 +33,7 @@ class KrispVAD(_VADBase):
     def _initialize(self) -> None:
         """Initialize the Krisp VAD SDK session."""
         try:
-            krisp_audio = require_module("krisp_audio", purpose="Krisp VAD")
+            krisp_audio = require_module("krisp_audio", extra="krisp", purpose="Krisp VAD")
         except ImportError as exc:
             raise RuntimeError(str(exc)) from exc
         config = {}

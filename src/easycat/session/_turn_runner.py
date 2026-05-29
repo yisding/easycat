@@ -63,7 +63,6 @@ from easycat.stages.agent import AgentStage
 from easycat.strip_markdown import strip_markdown
 from easycat.timeouts import (
     AgentTimeoutError,
-    STTTimeoutError,
     TimeoutConfig,
     TTSTimeoutError,
     with_agent_timeout,
@@ -168,8 +167,6 @@ class TurnRunner:
         self._stt.cancel_scheduled()
         self._stt.cancel_inflight()
         self._stt.resolve_pending(prev, "")
-        if prev is not None and prev is not self._turn.no_turn:
-            prev.stt_final_future = None
 
         if prev and not prev.cancel_token.is_cancelled:
             prev.cancel_token.cancel()
@@ -274,36 +271,9 @@ class TurnRunner:
         transcript = ""
         if turn is not None:
             transcript = turn.transcript_text
-        stt_final_future = (
-            turn.stt_final_future if turn is not None and turn is not self._turn.no_turn else None
-        )
-        if not transcript and stt_final_future is not None:
-            try:
-                if self._timeout_config and self._timeout_config.stt_timeout:
-                    transcript = await asyncio.wait_for(
-                        stt_final_future,
-                        timeout=self._timeout_config.stt_timeout,
-                    )
-                else:
-                    transcript = await stt_final_future
-            except TimeoutError:
-                err = STTTimeoutError("stt", self._timeout_config.stt_timeout)
-                await self._emit(Error(exception=err, stage=ErrorStage.STT))
-                if self._turn.current is turn:
-                    self._reset_turn_state()
-                return
-            except Exception:
-                transcript = ""
-            finally:
-                if turn is not None and turn is not self._turn.no_turn:
-                    turn.stt_final_future = None
 
-        if transcript:
-            if turn is not None and turn is not self._turn.no_turn:
-                if turn.stt_final_future is not None and not turn.stt_final_future.done():
-                    turn.stt_final_future.set_result(transcript)
-            if turn:
-                turn.stt_final_time = time.monotonic()
+        if transcript and turn:
+            turn.stt_final_time = time.monotonic()
 
         if not transcript or (token and token.is_cancelled):
             if self._turn.current is turn:
@@ -398,21 +368,9 @@ class TurnRunner:
                     tts_chunks.append((_text_for_estimation_timeline(remaining), 0, False))
 
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
-                # Drain session actions (end_call, transfer) BEFORE
-                # transitioning to IDLE so no new turn can sneak in.
-                tts_should_stop = await self._drain_session_actions()
-                if tts_should_stop:
-                    await self._audio.await_drain()
-                    await self._turn_manager.bot_stopped_speaking()
-                else:
-                    await self._turn_manager.bot_stopped_speaking()
-                    # Wait for queued audio to drain so the router can still
-                    # call turn.record_audio_sent() and emit playback marks
-                    # for the tail of this turn's audio.
-                    await self._audio.await_drain()
-                # Only clear if a new turn hasn't started during the drain.
-                if self._turn.current is turn and self._turn.generation == turn_gen:
-                    self._turn.set(None)
+                tts_should_stop = await self._tts.finalize_speaking_turn(
+                    turn, turn_generation=turn_gen
+                )
             elif started and not tts_playback_started:
                 if gated:
                     # Keep current turn alive for gated replay mark accounting

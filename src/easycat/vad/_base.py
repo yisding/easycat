@@ -117,7 +117,13 @@ class _VADBase:
             if self._is_speaking:
                 if self._silence_start_time is None:
                     self._silence_start_time = now
-                elif (now - self._silence_start_time) * 1000 >= self._min_silence_duration_ms:
+                # Mirror the speech-side structure: fall through to the elapsed
+                # check so that with min_silence_duration_ms=0 the stop event can
+                # fire on the first silent frame, matching the speech path.
+                if (
+                    self._silence_start_time is not None
+                    and (now - self._silence_start_time) * 1000 >= self._min_silence_duration_ms
+                ):
                     self._is_speaking = False
                     self._silence_start_time = None
                     yield VADStopSpeaking()

@@ -211,6 +211,11 @@ class TwilioTransport(_ServerTransportBase):
     """
 
     _transport_name = "Twilio"
+    # Telephony policy: leave EasyCat-side echo cancellation off by default.
+    # Twilio's PSTN/SIP path handles line echo upstream, and the 8 kHz mulaw
+    # mono stream has no reliable local reference signal for software AEC.
+    # Declared explicitly so the choice is intentional, not a getattr fallback.
+    default_echo_cancellation_enabled = False
 
     def __init__(
         self,
@@ -614,6 +619,12 @@ def _mulaw_encode_sample(sample: int) -> int:
 
 class TwilioConnectionTransport(_AudioQueueMixin):
     """Twilio Media Streams transport for one accepted WebSocket connection."""
+
+    # Telephony policy: see ``TwilioTransport.default_echo_cancellation_enabled``.
+    # PSTN echo is handled upstream and the mulaw stream lacks a local reference
+    # signal, so EasyCat-side AEC defaults off — declared explicitly, not via
+    # getattr fallback.
+    default_echo_cancellation_enabled = False
 
     def __init__(
         self,

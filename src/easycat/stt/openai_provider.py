@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class OpenAISTTConfig:
     """Configuration for the OpenAI STT provider."""
 
-    api_key: str
+    api_key: str = ""
     model: str = "gpt-4o-transcribe"
     language: str | None = None
     prompt: str | None = None

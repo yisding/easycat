@@ -31,7 +31,7 @@ class TimingInfo:
     wall_ns: int = 0  # time.time_ns()
     mono_ns: int = 0  # time.monotonic_ns()
     cpu_ns: int = 0  # time.process_time_ns() — CPU time spent in process
-    queue_ns: int = 0  # time waiting in a stage queue (filled by WS3 stages)
+    queue_ns: int = 0  # reserved for WS3 stage queue time; no write path yet (always 0)
 
 
 @dataclass(frozen=True)
@@ -227,6 +227,10 @@ class RecoveredSessionMarker(JournalRecord):
 
     The post-open journal still starts at sequence=1, so AC1.4's strict
     monotonicity holds for real records.
+
+    On SQLite persistence the typed fields below are mirrored into the base
+    ``data`` dict (the journal table has no dedicated columns for them) and
+    rehydrated by ``SqliteJournal._row_to_record`` on read.
     """
 
     kind: JournalRecordKind = JournalRecordKind.RECOVERY

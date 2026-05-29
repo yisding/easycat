@@ -398,4 +398,4 @@ async def test_synthesize_sentences_raises_not_implemented() -> None:
     turn = TurnContext("turn-1", CancelToken())
 
     with pytest.raises(NotImplementedError):
-        await scheduler.synthesize_sentences(payloads=None, cancel_token=None, turn=turn)
+        await scheduler._synthesize_sentences(payloads=None, cancel_token=None, turn=turn)

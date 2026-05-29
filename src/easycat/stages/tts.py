@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import logging
 import time
@@ -38,10 +39,18 @@ class TTSStage:
 
     def __init__(self, provider: Any, *, journal: Any = None) -> None:
         self._provider = provider
+        # Fallback recording sink used only when ``ctx.journal`` is None
+        # (see ``_journal_ctx``); recording normally flows through ctx.
         self._journal = journal
-        self._last_snapshot = StageStateSnapshot(stage_name=self.name)
+
+    def _journal_ctx(self, ctx: RunContext) -> RunContext:
+        """Return *ctx*, substituting the constructor journal as a fallback."""
+        if ctx.journal is None and self._journal is not None:
+            return dataclasses.replace(ctx, journal=self._journal)
+        return ctx
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
+        ctx = self._journal_ctx(ctx)
         state_before = self.snapshot_state()
         journal_append_event(
             ctx,
@@ -225,6 +234,12 @@ class TTSStage:
         signal: ControlSignal,
         ctx: RunContext | None = None,
     ) -> None:
+        """Observe and journal an upstream control signal (no cancel here).
+
+        The real TTS cancel/truncate is driven out-of-band by the turn
+        runner / ``CancelOrchestrator`` (``tts.cancel()`` + task cancel).
+        This method only records that the stage saw the signal.
+        """
         logger.debug("TTSStage received upstream signal: %s", signal)
         if ctx is not None:
-            journal_append_control_signal(ctx, stage=self.name, signal=signal)
+            journal_append_control_signal(self._journal_ctx(ctx), stage=self.name, signal=signal)

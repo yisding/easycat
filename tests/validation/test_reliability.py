@@ -6,12 +6,16 @@ import time
 import pytest
 
 from easycat.validation.latency import (
+    DEFAULT_RELIABILITY_BUDGETS,
     LatencyMode,
     LatencySample,
     LatencyStageDurations,
+    ReliabilityBudget,
     ReliabilitySample,
     ReliabilitySignals,
     build_latency_artifact,
+    build_reliability_artifact,
+    evaluate_reliability_budgets,
 )
 
 # ---------------------------------------------------------------------------
@@ -188,6 +192,75 @@ def test_build_latency_artifact_passes_through_reliability_samples() -> None:
     assert len(artifact["reliability_samples"]) == 1
     assert artifact["reliability_samples"][0]["sample_id"] == "s1"
     assert artifact["reliability_samples"][0]["condition_id"] == "c1"
+
+
+# ---------------------------------------------------------------------------
+# 4b. Reliability budgets are evaluated against eligible samples
+# ---------------------------------------------------------------------------
+
+
+def _eligible_sample(condition_id: str, **signals: object) -> ReliabilitySample:
+    return ReliabilitySample(
+        sample_id=f"s-{condition_id}",
+        condition_id=condition_id,
+        mode="sweep",
+        informational=False,
+        eligible=True,
+        signals=ReliabilitySignals(**signals),  # type: ignore[arg-type]
+    )
+
+
+def test_evaluate_reliability_budgets_passes_within_thresholds() -> None:
+    samples = [_eligible_sample("c1", event_loop_lag_ms=10.0, dropped_frames=0)]
+    assert evaluate_reliability_budgets(samples, DEFAULT_RELIABILITY_BUDGETS) == []
+
+
+def test_evaluate_reliability_budgets_flags_event_loop_lag() -> None:
+    samples = [_eligible_sample("c1", event_loop_lag_ms=10_000.0)]
+    violations = evaluate_reliability_budgets(samples, DEFAULT_RELIABILITY_BUDGETS)
+    signals = {violation.signal for violation in violations}
+    assert "event_loop_lag_ms" in signals
+    overall = [v for v in violations if v.scope == "overall" and v.signal == "event_loop_lag_ms"]
+    assert overall and overall[0].observed == 10_000.0
+
+
+def test_evaluate_reliability_budgets_flags_dropped_frames_and_degraded_journal() -> None:
+    samples = [_eligible_sample("c1", dropped_frames=3, journal_degraded=True)]
+    signals = {
+        violation.signal
+        for violation in evaluate_reliability_budgets(samples, DEFAULT_RELIABILITY_BUDGETS)
+    }
+    assert "dropped_frames" in signals
+    assert "journal_degraded" in signals
+
+
+def test_evaluate_reliability_budgets_ignores_ineligible_samples() -> None:
+    bad = ReliabilitySample(
+        sample_id="s1",
+        condition_id="c1",
+        mode="smoke",
+        informational=True,
+        eligible=False,
+        signals=ReliabilitySignals(dropped_frames=99, event_loop_lag_ms=9_999.0),
+    )
+    assert evaluate_reliability_budgets([bad], DEFAULT_RELIABILITY_BUDGETS) == []
+
+
+def test_evaluate_reliability_budgets_respects_custom_budget() -> None:
+    samples = [_eligible_sample("c1", queue_depth=5)]
+    budgets = (ReliabilityBudget(signal="queue_depth", max_value=2.0),)
+    violations = evaluate_reliability_budgets(samples, budgets)
+    assert len(violations) >= 1
+    assert any(v.signal == "queue_depth" and v.observed == 5.0 for v in violations)
+
+
+def test_build_reliability_artifact_includes_budget_violations() -> None:
+    samples = [_eligible_sample("c1", event_loop_lag_ms=10_000.0)]
+    artifact = build_reliability_artifact(samples=samples)
+    assert "budget_violations" in artifact
+    assert any(
+        violation["signal"] == "event_loop_lag_ms" for violation in artifact["budget_violations"]
+    )
 
 
 # ---------------------------------------------------------------------------

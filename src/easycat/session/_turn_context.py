@@ -5,10 +5,10 @@ Each turn (user speaks → agent responds → bot speaks) gets its own
 turn end, replacing the 15+ per-turn instance variables that previously
 lived on Session.
 
-Per-turn STT futures (``stt_final_future`` and
-``pending_stt_segment_futures``) also live here so that a stale
-callback from the previous turn cannot resolve a future on the next
-turn — the futures naturally die when the ``TurnContext`` is replaced.
+Per-turn STT futures (``pending_stt_segment_futures``) also live here so
+that a stale callback from the previous turn cannot resolve a future on
+the next turn — the futures naturally die when the ``TurnContext`` is
+replaced.
 """
 
 from __future__ import annotations
@@ -64,7 +64,6 @@ class TurnContext:
         "playback_ack_log",
         "bytes_since_last_mark",
         "last_barge_in_time",
-        "stt_final_future",
         "pending_stt_segment_futures",
     )
 
@@ -97,7 +96,6 @@ class TurnContext:
 
         # STT future plumbing — per-turn so a stale callback cannot resolve
         # a future on the next turn (the futures die with the TurnContext).
-        self.stt_final_future: asyncio.Future[str] | None = None
         self.pending_stt_segment_futures: list[asyncio.Future[str]] = []
 
     def record_barge_in(self) -> None:

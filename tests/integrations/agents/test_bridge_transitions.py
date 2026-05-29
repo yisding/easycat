@@ -380,6 +380,10 @@ class TestOpenAIAgentsBridgeHandoff:
         assert handoff_record.data["from_unit"] == "AgentA"
         assert handoff_record.data["to_unit"] == "AgentB"
 
+        # The exiting agent cursor must be committable on handoff, matching the
+        # BETWEEN_TURNS rule and the non-handoff completion path.
+        assert records[handoff_exit_idx].data["committable"] is True
+
         # Verify no interleaved records between the triple.
         assert handoff_idx == handoff_exit_idx + 1
         assert handoff_enter_idx == handoff_idx + 1

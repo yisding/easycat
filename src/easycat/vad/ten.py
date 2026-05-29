@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from importlib.metadata import version
 from typing import Any
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import resample_chunk, to_mono_chunk
 from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
 from easycat.events import Event
@@ -61,9 +61,17 @@ class TenVAD(_VADBase):
         logger.info("TEN VAD initialized")
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
-        """Process an audio chunk and yield VAD events."""
+        """Process an audio chunk and yield VAD events.
+
+        The chunk must be mono PCM16; the byte stream is decoded as a flat
+        int16 sequence. Interleaved multi-channel input is downmixed to mono
+        first so frame boundaries and resampling stay correct.
+        """
         if self._ten_vad is None or self._numpy is None:
             self._initialize()
+
+        if chunk.format.channels > 1:
+            chunk = to_mono_chunk(chunk)
 
         # TEN currently runs at 16 kHz in this integration.
         if chunk.format.sample_rate != _TEN_SAMPLE_RATE:

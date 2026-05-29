@@ -5,7 +5,7 @@
 - Key subpackages: `session/`, `stages/`, `stt/`, `tts/`, `transports/`, `telephony/`, `integrations/agents/`, `runtime/`, `debug/`, `debugger/`, `cli/`.
 - Core orchestrators/utilities live alongside: `config.py`, `events.py`, `turn_manager.py`, `smart_turn.py`, `timeouts.py`.
 - Provider interfaces are centralized in `providers.py`; STT/TTS factory registries live in `stt/factory.py` and `tts/factory.py`.
-- Agent framework bridges live in `src/easycat/integrations/agents/` (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, `RemoteResponsesAPIBridge`, plus `AgentRunner`).
+- Agent framework bridges live in `src/easycat/integrations/agents/` (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, `RemoteResponsesAPIBridge`, `LlamaAgentsBridge`, `LangChainBridge`, `LangGraphBridge`, plus `AgentRunner`).
 - `src/easycat/models/`: runtime model assets (for example ONNX smart-turn model).
 - `tests/`: pytest suite mirroring domains (`tests/stt/`, `tests/tts/`, `tests/session/`, `tests/stages/`, `tests/transports/`, `tests/websocket/`, `tests/integrations/agents/`, `tests/telephony/`, `tests/runtime/`, `tests/debug/`).
 - `examples/`: runnable reference apps covering local microphone, WebSocket, WebRTC, Twilio, and Cartesia/Deepgram/ElevenLabs provider swaps.

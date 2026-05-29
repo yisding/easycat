@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import struct
 from unittest.mock import AsyncMock, patch
@@ -9,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from easycat.audio_format import PCM16_MONO_24K
-from easycat.events import TTSEventType
+from easycat.events import Error, ErrorStage, EventBus, TTSEventType
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from tests.tts._harness import extract_audio_chunks, verify_pcm16_audio
 
@@ -158,7 +159,7 @@ class TestDeepgramTTS:
 
         assert fake_ws._closed
 
-    async def test_stop_sends_flush(self):
+    async def test_stop_sends_flush_and_closes_ws(self):
         provider = self._make_provider()
         fake_ws = FakeReconnectingWS()
         provider._ws = fake_ws
@@ -168,6 +169,53 @@ class TestDeepgramTTS:
         assert len(fake_ws._sent) == 1
         msg = json.loads(fake_ws._sent[0])
         assert msg["type"] == "Flush"
+        # stop() closes the socket so a graceful stop between turns does not
+        # leave the WebSocket lingering until cancel()/close().
+        assert fake_ws._closed
+        assert provider._ws is None
+
+    async def test_error_frame_posted_to_event_bus(self):
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+
+        provider = DeepgramTTS(DeepgramTTSConfig(api_key="k", event_bus=bus))
+        error_frame = json.dumps(
+            {"type": "Error", "code": "INVALID_MODEL", "description": "bad model"}
+        )
+        fake_ws = FakeReconnectingWS(messages=[error_frame])
+
+        with patch.object(provider, "_create_ws", return_value=fake_ws):
+            async for _ in provider.synthesize("test"):
+                pass
+
+        # Event bus emission is scheduled via create_task — yield once.
+        await asyncio.sleep(0)
+        assert len(errors) == 1
+        err = errors[0]
+        assert err.stage == ErrorStage.TTS
+        assert err.provider == "deepgram"
+        notes = getattr(err.exception, "__notes__", [])
+        assert any("code=INVALID_MODEL" in n for n in notes)
+
+    async def test_synthesis_exception_posted_to_event_bus(self):
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+
+        provider = DeepgramTTS(DeepgramTTSConfig(api_key="k", event_bus=bus))
+        fake_ws = FakeReconnectingWS()
+        fake_ws.connect = AsyncMock(side_effect=RuntimeError("connect failed"))
+
+        with patch.object(provider, "_create_ws", return_value=fake_ws):
+            with pytest.raises(RuntimeError, match="connect failed"):
+                async for _ in provider.synthesize("test"):
+                    pass
+
+        await asyncio.sleep(0)
+        assert len(errors) == 1
+        assert errors[0].stage == ErrorStage.TTS
+        assert errors[0].provider == "deepgram"
 
     @pytest.mark.integration_live
     @pytest.mark.provider_deepgram

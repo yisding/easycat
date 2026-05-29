@@ -418,6 +418,27 @@ def _inject_agent_runtime(
             inner._api_key = remote_agent_api_key
 
 
+def _provider_display_name(cfg: Any, kind: Literal["STT", "TTS"]) -> str:
+    """Human-facing label for a provider config in error messages.
+
+    Prefers the registered provider name from the STT/TTS
+    :class:`~easycat._provider_catalog.ProviderCatalog` (e.g.
+    ``"deepgram STT"``) so the missing-API-key error reads consistently
+    for every registered provider. Falls back to the config class name
+    when the config type isn't in the catalog (e.g. a custom config).
+    """
+    if kind == "STT":
+        from easycat.stt.factory import _CATALOG as catalog
+    else:
+        from easycat.tts.factory import _CATALOG as catalog
+
+    cfg_type = type(cfg)
+    for provider_name, (_provider_cls, config_cls) in catalog.providers.items():
+        if config_cls is cfg_type:
+            return f"{provider_name} {kind}"
+    return type(cfg).__name__.replace("Config", "")
+
+
 @dataclass
 class EasyConfig:
     """Top-level configuration for EasyCat sessions.
@@ -579,14 +600,9 @@ class EasyConfig:
             raise ValueError("STT configuration is required.")
         if self.tts is None:
             raise ValueError("TTS configuration is required.")
-        for cfg in (self.stt, self.tts):
+        for cfg, kind in ((self.stt, "STT"), (self.tts, "TTS")):
             if hasattr(cfg, "api_key") and not cfg.api_key:
-                name = (
-                    type(cfg)
-                    .__name__.replace("Config", "")
-                    .replace("STT", " STT")
-                    .replace("TTS", " TTS")
-                )
+                name = _provider_display_name(cfg, kind)
                 raise ValueError(f"{name} requires an API key.")
 
     # ── Factory presets ──────────────────────────────────────────
@@ -733,12 +749,12 @@ def create_session(config: EasyConfig) -> Session:
             if config.enable_noise_reduction or config.noise_reduction is not None
             else None
         )
-        # enable_echo_cancellation acts as a shortcut: when True and no
-        # explicit EchoCancellationConfig is provided, auto-construct one
-        # with enabled=True so the LiveKit backend is actually activated.
+        # ``EasyConfig.__post_init__`` always resolves ``echo_cancellation``
+        # to a concrete config (honoring the tri-state ``enable_echo_cancellation``
+        # via ``_default_echo_cancellation_for_transport``), so it is never None
+        # here.
         echo_cfg = config.echo_cancellation
-        if echo_cfg is None:
-            echo_cfg = EchoCancellationConfig(enabled=bool(config.enable_echo_cancellation))
+        assert echo_cfg is not None
         echo_canceller = create_echo_canceller(echo_cfg)
         transport = _create_transport(config.transport, event_bus)
 
@@ -996,9 +1012,48 @@ def _maybe_launch_debugger_ui(session: Session) -> None:
         logger.exception("Debugger UI failed to start; continuing without it.")
 
 
+@dataclass
+class TextSessionConfig:
+    """Configuration for a text-only Session (no audio pipeline).
+
+    Mirrors the shared journal/debug/agent fields of :class:`EasyConfig`
+    so both ``create_session`` and ``create_text_session`` accept a
+    single config object of the ``create_*(config)`` shape. Audio-only
+    fields (``stt``/``tts``/``vad``/``transport``/etc.) have no analogue
+    here because text sessions never enter the audio pipeline; an
+    :class:`EasyConfig` user moving to text can copy the shared fields
+    across.
+
+    Validated by the same :func:`_validate_common` as :class:`EasyConfig`.
+    """
+
+    agent: Any = None
+    session_id: str | None = None
+    debug: Literal["off", "light", "full"] = "off"
+    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
+    journal_retention: Literal["archive", "delete"] = "archive"
+    wrap_agent: bool = True
+    agent_runner: AgentRunnerConfig | None = None
+    agent_model: str | None = None
+    remote_agent_api_key: str | None = None
+    mcp_servers: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        _validate_common(
+            debug=self.debug,
+            journal_backend=self.journal_backend,
+            journal_retention=self.journal_retention,
+            mcp_servers=self.mcp_servers,
+            session_id=self.session_id,
+            agent=self.agent,
+            agent_model=self.agent_model,
+        )
+
+
 def create_text_session(
+    config: TextSessionConfig | None = None,
     *,
-    agent: Any,
+    agent: Any = None,
     session_id: str | None = None,
     debug: Literal["off", "light", "full"] = "off",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
@@ -1011,6 +1066,10 @@ def create_text_session(
 ) -> Session:
     """Create a text-only Session (no audio pipeline).
 
+    Accepts a :class:`TextSessionConfig` (the ``create_*(config)`` shape
+    shared with :func:`create_session`) or, for back-compat, the legacy
+    loose keyword arguments. The two forms are mutually exclusive.
+
     The returned session supports :meth:`Session.send_text` for
     request/response agent interaction without STT, TTS, VAD, or
     transport.  Useful for testing agent logic and building text-based
@@ -1019,15 +1078,30 @@ def create_text_session(
     Raises :class:`RuntimeError` if the caller attempts to call
     :meth:`Session.start` on a text session.
     """
-    _validate_common(
-        debug=debug,
-        journal_backend=journal_backend,
-        journal_retention=journal_retention,
-        mcp_servers=mcp_servers,
-        session_id=session_id,
-        agent=agent,
-        agent_model=agent_model,
-    )
+    if config is None:
+        config = TextSessionConfig(
+            agent=agent,
+            session_id=session_id,
+            debug=debug,
+            journal_backend=journal_backend,
+            journal_retention=journal_retention,
+            wrap_agent=wrap_agent,
+            agent_runner=agent_runner,
+            agent_model=agent_model,
+            remote_agent_api_key=remote_agent_api_key,
+            mcp_servers=mcp_servers,
+        )
+
+    agent = config.agent
+    session_id = config.session_id
+    debug = config.debug
+    journal_backend = config.journal_backend
+    journal_retention = config.journal_retention
+    wrap_agent = config.wrap_agent
+    agent_runner = config.agent_runner
+    agent_model = config.agent_model
+    remote_agent_api_key = config.remote_agent_api_key
+    mcp_servers = config.mcp_servers
 
     sid = session_id or f"session-{uuid4().hex[:12]}"
     artifact_store = _create_artifact_store(sid, debug)

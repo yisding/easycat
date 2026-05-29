@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import io
+import logging
 import struct
 from collections.abc import Iterator
 
 from easycat.audio_format import AudioChunk, AudioFormat
+
+logger = logging.getLogger(__name__)
+
+# Cache of which optional resampling backend resolved, to avoid re-importing
+# (and re-logging real failures) on every chunk. Values: "soxr", "scipy",
+# "linear", or None when not yet probed.
+_resolved_backend: str | None = None
 
 
 def pcm_to_wav(pcm_data: bytes, fmt: AudioFormat) -> bytes:
@@ -34,17 +42,77 @@ def pcm_to_wav(pcm_data: bytes, fmt: AudioFormat) -> bytes:
 
 
 def resample(data: bytes, from_rate: int, to_rate: int) -> bytes:
-    """Resample PCM16 mono audio between sample rates.
+    """Resample PCM16 *mono* audio between sample rates.
 
-    Prefers high-quality backends (soxr, scipy) when available and
-    falls back to linear interpolation if not.
+    The byte buffer is treated as a single interleaved-free int16 stream,
+    so multi-channel input must be downmixed (see :func:`to_mono` /
+    :func:`to_mono_chunk`) before calling this; interleaved stereo would be
+    resampled as garbage. Prefers high-quality backends (soxr, scipy) when
+    available and falls back to linear interpolation if not.
     """
     if from_rate == to_rate:
         return data
     if not data:
         return data
 
-    # Try soxr (highest quality, fast) if installed
+    # Drop any odd trailing byte: a 16-bit sample split across a chunk boundary
+    # can't be reconstructed within a single call and would otherwise crash both
+    # np.frombuffer and struct.unpack. Callers that stream arbitrary byte-length
+    # chunks (TTSBase) buffer the leftover byte so no audio is actually lost.
+    if len(data) % 2:
+        data = data[:-1]
+        if not data:
+            return b""
+
+    global _resolved_backend
+
+    # Resolve the best available backend once and cache the result, so a real
+    # runtime failure (vs. a missing import) is logged rather than silently
+    # downgrading the audio quality on every chunk.
+    if _resolved_backend is None:
+        _resolved_backend = _resolve_resample_backend()
+
+    if _resolved_backend == "soxr":
+        result = _resample_soxr(data, from_rate, to_rate)
+        if result is not None:
+            return result
+    elif _resolved_backend == "scipy":
+        result = _resample_scipy(data, from_rate, to_rate)
+        if result is not None:
+            return result
+
+    return _resample_linear(data, from_rate, to_rate)
+
+
+def _resolve_resample_backend() -> str:
+    """Probe for an optional high-quality resampling backend exactly once.
+
+    Returns ``"soxr"``, ``"scipy"``, or ``"linear"``. A missing import is
+    expected and silent; a backend that imports but fails at runtime is logged
+    once so silent quality regressions are observable.
+    """
+    try:
+        import numpy  # type: ignore[import-untyped]  # noqa: F401
+        import soxr  # type: ignore[import-not-found]  # noqa: F401
+
+        return "soxr"
+    except ImportError:
+        pass
+
+    try:
+        import numpy  # type: ignore[import-untyped]  # noqa: F401
+        from scipy.signal import resample_poly  # type: ignore[import-not-found]  # noqa: F401
+
+        return "scipy"
+    except ImportError:
+        pass
+
+    return "linear"
+
+
+def _resample_soxr(data: bytes, from_rate: int, to_rate: int) -> bytes | None:
+    """Resample via soxr; return ``None`` (and log once) on a real failure."""
+    global _resolved_backend
     try:
         import numpy as np  # type: ignore[import-untyped]
         import soxr  # type: ignore[import-not-found]
@@ -54,9 +122,18 @@ def resample(data: bytes, from_rate: int, to_rate: int) -> bytes:
         out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
         return out.tobytes()
     except Exception:
-        pass
+        logger.warning(
+            "soxr resampling failed; falling back to linear interpolation "
+            "(lower quality). Suppressing further soxr attempts.",
+            exc_info=True,
+        )
+        _resolved_backend = "linear"
+        return None
 
-    # Try scipy.signal.resample_poly as a quality fallback
+
+def _resample_scipy(data: bytes, from_rate: int, to_rate: int) -> bytes | None:
+    """Resample via scipy; return ``None`` (and log once) on a real failure."""
+    global _resolved_backend
     try:
         import math
 
@@ -71,10 +148,25 @@ def resample(data: bytes, from_rate: int, to_rate: int) -> bytes:
         out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
         return out.tobytes()
     except Exception:
-        pass
+        logger.warning(
+            "scipy resampling failed; falling back to linear interpolation "
+            "(lower quality). Suppressing further scipy attempts.",
+            exc_info=True,
+        )
+        _resolved_backend = "linear"
+        return None
 
-    # Decode PCM16 LE samples
+
+def _resample_linear(data: bytes, from_rate: int, to_rate: int) -> bytes:
+    """Pure-Python linear-interpolation resampler (no optional deps).
+
+    Tolerates an odd trailing byte (a 16-bit sample split across a chunk
+    boundary) by dropping it rather than raising ``struct.error``.
+    """
+    # Decode PCM16 LE samples, dropping any odd trailing byte that would
+    # otherwise split a 16-bit sample and crash struct.unpack.
     num_samples = len(data) // 2
+    data = data[: num_samples * 2]
     samples = struct.unpack(f"<{num_samples}h", data)
 
     ratio = from_rate / to_rate

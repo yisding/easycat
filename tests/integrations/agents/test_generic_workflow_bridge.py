@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
@@ -215,3 +216,51 @@ class TestCommittableBoundaries:
     def test_boundaries_present(self):
         assert hasattr(GenericWorkflowBridge, "COMMITTABLE_BOUNDARIES")
         assert len(GenericWorkflowBridge.COMMITTABLE_BOUNDARIES) > 0
+
+
+class _SlowStreamingWorkflow:
+    """Shallow streaming workflow that blocks until cancelled."""
+
+    async def on_user_turn(self, text: str) -> str:
+        return f"Echo: {text}"
+
+    async def on_user_turn_streaming(self, text: str) -> AsyncIterator[str]:
+        yield "first "
+        await asyncio.sleep(10)
+        yield "never"
+
+
+class TestStreamingStructuredOutput:
+    """Finding 2 — streaming shallow mode populates structured_output."""
+
+    @pytest.mark.asyncio
+    async def test_streaming_variant_sets_structured_output(self):
+        bridge = GenericWorkflowBridge(workflow=_ShallowStreamingWorkflow())
+        rec = _recorder()
+        done = None
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hello world"), rec):
+            if ev.kind == "done":
+                done = ev
+        assert done is not None
+        # Previously this was always None for the streaming branch.
+        assert done.structured_output == "hello world "
+
+
+class TestCursorCleanupOnCancel:
+    """Finding 1 — cursor stack stays balanced on GeneratorExit/cancel."""
+
+    @pytest.mark.asyncio
+    async def test_shallow_streaming_aclose_balances_cursor(self):
+        bridge = GenericWorkflowBridge(workflow=_SlowStreamingWorkflow())
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+        gen = bridge.invoke(AgentTurnInput.from_text("hi"), rec)
+        # Consume the first chunk, then abort mid-stream (barge-in / timeout).
+        first = await gen.__anext__()
+        assert first.kind == "text_delta"
+        await gen.aclose()
+        # The workflow cursor must have been closed despite the
+        # GeneratorExit injected by aclose(), leaving a balanced stack.
+        assert rec._open_cursors == []
+        names = [r.name for r in journal.read()]
+        assert names.count("unit_entered") == names.count("unit_exited")

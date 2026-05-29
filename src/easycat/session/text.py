@@ -248,18 +248,6 @@ _PAUSE_MARKER = ""
 _PAUSE_CHARS_PER_SECOND = 14.0
 
 
-def _text_for_spoken_estimation(payload: TTSInput) -> str:
-    """Return plain spoken text for interruption accounting.
-
-    Interruption text estimation compares audio-byte progress against
-    text length.  SSML markup should not count toward spoken-character
-    estimates, so SSML payloads are normalised to plain text here.
-    """
-    if payload.format == "ssml":
-        return strip_ssml_tags(payload.text)
-    return payload.text
-
-
 def _text_for_estimation_timeline(payload: TTSInput) -> str:
     """Return text used for interruption timeline estimation.
 

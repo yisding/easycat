@@ -172,6 +172,116 @@ def _evaluate_scope(
     return results
 
 
+@dataclass(frozen=True)
+class ReliabilityBudget:
+    """A pass/fail threshold for a single reliability signal.
+
+    ``observed`` is the maximum value of ``signal`` across all eligible
+    reliability samples (boolean signals such as ``journal_degraded`` are
+    coerced to ``0``/``1``). A budget is violated when the observed maximum
+    exceeds ``max_value``; use ``max_value=0`` to require the signal to never
+    fire (e.g. ``dropped_frames``, ``journal_degraded``).
+    """
+
+    signal: str
+    max_value: float
+
+    def to_dict(self) -> dict[str, float | str]:
+        return {"signal": self.signal, "max_value": self.max_value}
+
+
+# Reliability budgets are evaluated over *eligible* samples only (SMOKE runs
+# mark their samples informational, so they never gate). Thresholds are loose
+# enough to ride out normal CI jitter but tight enough that a saturated event
+# loop, a leak, or any dropped audio still fails the run.
+DEFAULT_RELIABILITY_BUDGETS: tuple[ReliabilityBudget, ...] = (
+    ReliabilityBudget(signal="event_loop_lag_ms", max_value=250.0),
+    ReliabilityBudget(signal="memory_growth_kib", max_value=512_000.0),
+    ReliabilityBudget(signal="dropped_frames", max_value=0.0),
+    ReliabilityBudget(signal="journal_degraded", max_value=0.0),
+)
+
+
+@dataclass(frozen=True)
+class ReliabilityBudgetViolation:
+    signal: str
+    observed: float
+    budget: float
+    scope: str
+
+    def to_dict(self) -> dict[str, float | str]:
+        return {
+            "signal": self.signal,
+            "observed": self.observed,
+            "budget": self.budget,
+            "scope": self.scope,
+        }
+
+
+def _reliability_signal_value(sample: ReliabilitySample, signal: str) -> float | None:
+    value = getattr(sample.signals, signal, None)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    return float(value)
+
+
+def evaluate_reliability_budgets(
+    samples: Sequence[ReliabilitySample],
+    budgets: Sequence[ReliabilityBudget],
+) -> list[ReliabilityBudgetViolation]:
+    """Compare eligible reliability samples against their budgets.
+
+    Only ``eligible`` samples participate (SMOKE/informational samples are
+    skipped). For each budget the maximum observed value across eligible
+    samples is compared to ``max_value``; the result is grouped both overall
+    and per condition so consumers can localize the offending condition.
+    """
+    eligible = [sample for sample in samples if sample.eligible]
+    if not eligible:
+        return []
+    by_condition: dict[str, list[ReliabilitySample]] = defaultdict(list)
+    for sample in eligible:
+        by_condition[sample.condition_id].append(sample)
+    violations = _evaluate_reliability_scope(eligible, budgets, scope="overall")
+    for condition_id, condition_samples in sorted(by_condition.items()):
+        violations.extend(
+            _evaluate_reliability_scope(
+                condition_samples, budgets, scope=f"condition:{condition_id}"
+            )
+        )
+    return violations
+
+
+def _evaluate_reliability_scope(
+    samples: Sequence[ReliabilitySample],
+    budgets: Sequence[ReliabilityBudget],
+    *,
+    scope: str,
+) -> list[ReliabilityBudgetViolation]:
+    results: list[ReliabilityBudgetViolation] = []
+    for budget in budgets:
+        observed_values = [
+            value
+            for sample in samples
+            if (value := _reliability_signal_value(sample, budget.signal)) is not None
+        ]
+        if not observed_values:
+            continue
+        observed = max(observed_values)
+        if observed > budget.max_value:
+            results.append(
+                ReliabilityBudgetViolation(
+                    signal=budget.signal,
+                    observed=observed,
+                    budget=float(budget.max_value),
+                    scope=scope,
+                )
+            )
+    return results
+
+
 def latency_pytest_args(mode: LatencyMode | str) -> list[str]:
     mode = LatencyMode(mode)
     if mode is LatencyMode.SMOKE:
@@ -358,14 +468,23 @@ def build_reliability_artifact(
     *,
     samples: list[ReliabilitySample],
     generated_at: datetime | None = None,
+    budgets: Sequence[ReliabilityBudget] | None = None,
 ) -> dict[str, Any]:
     generated_at = generated_at or datetime.now(UTC)
+    effective_budgets: Sequence[ReliabilityBudget] = (
+        DEFAULT_RELIABILITY_BUDGETS if budgets is None else budgets
+    )
+    budget_violations = [
+        violation.to_dict()
+        for violation in evaluate_reliability_budgets(samples, effective_budgets)
+    ]
     return {
         "schema_version": 1,
         "kind": "reliability_validation",
         "generated_at": generated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "samples": [sample.to_dict() for sample in samples],
         "summary": _summarize_reliability_samples(samples),
+        "budget_violations": budget_violations,
     }
 
 
@@ -692,11 +811,33 @@ def _percentile_value(values: list[float], percentile: float, eligible: bool) ->
     return {"eligible": eligible, "value": value}
 
 
-def classify_latency_failure(message: str) -> str:
-    normalized = message.lower().replace("_", " ").replace("-", " ")
-    if any(
-        token in normalized
-        for token in (
+class FailureCategory(StrEnum):
+    """Canonical failure buckets shared by latency and live classification.
+
+    Both ``classify_latency_failure`` and ``runner.classify_live_failure``
+    derive their (path-specific) ``failure_class`` strings from this single
+    enum so the two paths can never silently disagree on which error tokens
+    map to which bucket. The path-specific string vocabularies are kept
+    distinct for back-compat; downstream consumers can normalize via
+    ``classify_failure_category``.
+    """
+
+    AUTH = "auth"
+    QUOTA = "quota"
+    TIMEOUT = "timeout"
+    NETWORK = "network"
+    DRIFT = "drift"
+    REGRESSION = "regression"
+    OTHER = "other"
+
+
+# Single source of truth for error-token matching, ordered by precedence.
+# Tokens are matched against a normalized message (lowercased, with "_" and
+# "-" collapsed to spaces) so both word- and identifier-style errors match.
+_FAILURE_CATEGORY_TOKENS: tuple[tuple[FailureCategory, tuple[str, ...]], ...] = (
+    (
+        FailureCategory.AUTH,
+        (
             "api key",
             "auth",
             "unauthorized",
@@ -704,17 +845,43 @@ def classify_latency_failure(message: str) -> str:
             "permission denied",
             "401",
             "403",
-        )
-    ):
-        return "provider_auth"
-    if any(
-        token in normalized
-        for token in ("rate limit", "ratelimit", "429", "quota", "too many requests")
-    ):
-        return "provider_rate_limit"
-    if any(token in normalized for token in ("timeout", "timed out", "deadline")):
-        return "provider_timeout"
-    return "easycat_latency_regression"
+        ),
+    ),
+    (
+        FailureCategory.QUOTA,
+        ("rate limit", "ratelimit", "429", "quota", "too many requests"),
+    ),
+    (FailureCategory.TIMEOUT, ("timeout", "timed out", "deadline")),
+    (FailureCategory.NETWORK, ("dns", "network", "connection")),
+    (FailureCategory.DRIFT, ("schema", "unknown event", "drift")),
+    (FailureCategory.REGRESSION, ("assert", "failed", "traceback")),
+)
+
+
+def classify_failure_category(message: str) -> FailureCategory:
+    """Map an error message to its canonical :class:`FailureCategory`."""
+    normalized = message.lower().replace("_", " ").replace("-", " ")
+    for category, tokens in _FAILURE_CATEGORY_TOKENS:
+        if any(token in normalized for token in tokens):
+            return category
+    return FailureCategory.OTHER
+
+
+# Latency-path vocabulary (preserved for back-compat). Timeouts are treated as
+# provider issues here and the catch-all is a latency regression.
+_LATENCY_FAILURE_CLASSES: dict[FailureCategory, str] = {
+    FailureCategory.AUTH: "provider_auth",
+    FailureCategory.QUOTA: "provider_rate_limit",
+    FailureCategory.TIMEOUT: "provider_timeout",
+    FailureCategory.NETWORK: "provider_timeout",
+    FailureCategory.DRIFT: "easycat_latency_regression",
+    FailureCategory.REGRESSION: "easycat_latency_regression",
+    FailureCategory.OTHER: "easycat_latency_regression",
+}
+
+
+def classify_latency_failure(message: str) -> str:
+    return _LATENCY_FAILURE_CLASSES[classify_failure_category(message)]
 
 
 def _latency_environment_metadata() -> dict[str, Any]:

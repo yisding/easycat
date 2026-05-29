@@ -118,6 +118,15 @@ async def consume_agent_stream(
                         break
                     continue
                 else:
+                    # No tool calls left to drain. Capture any trailing
+                    # ``done`` payload (text / structured_output) before
+                    # stopping, mirroring the pending>0 branch above, so an
+                    # interrupted stream still surfaces its partial result.
+                    if kind == "done":
+                        if event.text:
+                            result.text = event.text
+                        if getattr(event, "structured_output", None) is not None:
+                            result.structured_output = event.structured_output
                     break
 
             # ── Normal event handling ──
@@ -168,6 +177,14 @@ async def consume_agent_stream(
                     result.structured_output = event.structured_output
                 await _flush_buffer()
                 done_received = True
+            elif kind in ("cursor_entered", "cursor_exited", "handoff", "state_snapshot"):
+                # Observability-only kinds. Bridges already write the
+                # authoritative execution-cursor / handoff / state records via
+                # the AgentRecorder (the journal is the single source of truth
+                # for these). They are surfaced on the stream so out-of-band
+                # consumers can follow framework progress, but they never drive
+                # TTS, so this translation layer intentionally ignores them.
+                pass
 
     except Exception as exc:
         result.error = exc
