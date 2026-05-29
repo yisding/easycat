@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from easycat import _observability as observability
+from easycat._log_context import bind_turn
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
@@ -177,6 +178,8 @@ class TurnRunner:
         cancel_token = self._turn_manager.cancel_token or CancelToken()
         turn = TurnContext(turn_id=event.turn_id, cancel_token=cancel_token)
         self._turn.set(turn)
+        # Tag log records emitted while this turn is active with its turn id.
+        bind_turn(turn.id)
         self._audio.reset_speech_detection()
         self._tts.set_playback_suppressed(False)
 
@@ -583,6 +586,8 @@ class TurnRunner:
             # Build a turn context for this text turn so AgentStage can
             # stamp records with the right turn_id.
             text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
+            # Tag log records emitted while this text turn is active.
+            bind_turn(text_turn.id)
             accumulated = ""
             system_prefix = self._caller_id_system_message()
             async for event in self._agent_stage.execute_streaming(

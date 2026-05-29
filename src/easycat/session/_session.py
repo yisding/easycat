@@ -18,6 +18,7 @@ from uuid import uuid4
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat._health_check import PeriodicHealthChecker
+from easycat._log_context import bind_session
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
 from easycat.events import (
@@ -1180,6 +1181,10 @@ class Session:
             )
         if self._is_running:
             return
+        # Tag log records emitted in this context with the session id.  A
+        # ContextVar default of None is fine; threading.Thread workers won't
+        # inherit it, but EasyCat avoids that boundary.
+        bind_session(self.session_id)
         transport_connected = False
         self._health_checkers = []
 

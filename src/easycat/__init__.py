@@ -12,7 +12,12 @@ do not import provider stacks unless a caller touches that symbol.
 from __future__ import annotations
 
 import importlib
+import logging
 from typing import TYPE_CHECKING
+
+# Library hygiene: stay silent unless the embedding application configures logging.
+# https://docs.python.org/3/howto/logging.html#configuring-logging-for-a-library
+logging.getLogger("easycat").addHandler(logging.NullHandler())
 
 _LAZY_ATTR: dict[str, tuple[str, str]] = {}
 
@@ -39,6 +44,7 @@ _register(
     "run",
     "wait_for_shutdown_signal",
 )
+_register("easycat._logging", "set_easycat_log_level")
 
 # Session and advanced app construction.
 _register("easycat.cancel", "CancelToken")
@@ -141,6 +147,7 @@ _register(
 
 
 if TYPE_CHECKING:
+    from easycat._logging import set_easycat_log_level
     from easycat.audio_format import (
         PCM16_MONO_8K,
         PCM16_MONO_16K,

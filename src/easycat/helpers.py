@@ -41,15 +41,24 @@ def attach_runtime_feedback(session: Session) -> None:
     """Print useful status updates and transcripts to the console.
 
     Subscribes to key lifecycle events so developers can see what is
-    happening while an example (or production bot) is running.
+    happening while an example (or production bot) is running.  Lines are
+    rendered through the shared stderr console so ``NO_COLOR``/``CI`` are
+    honored (a bare ``print`` would ignore them).
     """
-    session.subscribe_event(TurnStarted, lambda _e: print("\U0001f3a4 Listening\u2026"))
-    session.subscribe_event(STTFinal, lambda e: print(f"\U0001f4dd You: {e.text}"))
-    session.subscribe_event(AgentFinal, lambda e: print(f"\U0001f916 Assistant: {e.text}"))
+    from easycat._console import feedback_console
+
+    def _say(text: str) -> None:
+        # ``markup=False``/``highlight=False`` keep the literal text (emoji and
+        # user/assistant content) intact rather than letting Rich reinterpret it.
+        feedback_console.print(text, markup=False, highlight=False)
+
+    session.subscribe_event(TurnStarted, lambda _e: _say("\U0001f3a4 Listening\u2026"))
+    session.subscribe_event(STTFinal, lambda e: _say(f"\U0001f4dd You: {e.text}"))
+    session.subscribe_event(AgentFinal, lambda e: _say(f"\U0001f916 Assistant: {e.text}"))
     session.subscribe_event(
-        BotStoppedSpeaking, lambda _e: print("\u2705 Your turn \u2014 you can speak now.")
+        BotStoppedSpeaking, lambda _e: _say("\u2705 Your turn \u2014 you can speak now.")
     )
-    session.subscribe_event(Interruption, lambda _e: print("\u26a1 Interruption detected."))
+    session.subscribe_event(Interruption, lambda _e: _say("\u26a1 Interruption detected."))
 
 
 def run(config: EasyConfig) -> None:
@@ -70,19 +79,16 @@ def run(config: EasyConfig) -> None:
     :func:`easycat.create_session` directly and manage the lifecycle
     themselves.
     """
-    from easycat.config import _resolve_easycat_log_level, create_session
+    from easycat._logging import enable_console_logging
+    from easycat.config import create_session
 
     env_level = os.getenv("EASYCAT_LOG_LEVEL", "").strip()
-    if env_level and not logging.root.handlers:
-        # Only configure the root logger when the user explicitly asked
-        # for a log level; otherwise stay silent so applications that
-        # already own logging aren't overridden.
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        )
     if env_level:
-        logging.getLogger("easycat").setLevel(_resolve_easycat_log_level(default=logging.INFO))
+        # Only attach a console handler when the user explicitly asked for a
+        # log level; otherwise stay silent so applications that already own
+        # logging aren't overridden.  ``run()`` owns the process, but the
+        # handler still goes on the ``easycat`` logger, never root.
+        enable_console_logging()
 
     session = create_session(config)
     if sys.stderr.isatty() and not os.getenv("PYTEST_CURRENT_TEST"):

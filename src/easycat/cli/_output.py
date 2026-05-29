@@ -8,12 +8,13 @@ exactly one place (:data:`EXIT_CODES`).
 from __future__ import annotations
 
 import json
-import os
 import sys
 from collections.abc import Mapping
 from typing import Any
 
 from rich.console import Console
+
+from easycat._console import color_enabled, feedback_console
 
 SCHEMA_VERSION = 1
 
@@ -33,24 +34,18 @@ EXIT_CODES: dict[int, tuple[str, str]] = {
 }
 
 
-def _color_enabled() -> bool:
-    """Honor ``NO_COLOR`` and ``CI`` per the CLI output contract."""
-    if os.getenv("NO_COLOR"):
-        return False
-    if os.getenv("CI") == "true":
-        return False
-    return sys.stderr.isatty()
+# Backwards-compatible alias: the color policy now lives in ``easycat._console``
+# (the single source of truth shared with the logging handler and runtime
+# feedback lines).  Kept under the original name for CLI modules that import it.
+_color_enabled = color_enabled
 
 
 # Primary output console (stdout; what scripts capture).
-stdout_console = Console(force_terminal=_color_enabled(), no_color=not _color_enabled())
+stdout_console = Console(force_terminal=color_enabled(), no_color=not color_enabled())
 
 # Diagnostic/log console (stderr; never captured for JSON output).
-stderr_console = Console(
-    stderr=True,
-    force_terminal=_color_enabled(),
-    no_color=not _color_enabled(),
-)
+# Shared with runtime feedback so ``NO_COLOR``/``CI`` are honored uniformly.
+stderr_console = feedback_console
 
 
 def info(message: str) -> None:

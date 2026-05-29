@@ -83,6 +83,7 @@ PUBLIC_API_SNAPSHOT = (
     "export_debug_bundle",
     "require_env",
     "run",
+    "set_easycat_log_level",
     "wait_for_shutdown_signal",
 )
 
