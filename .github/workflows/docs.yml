@@ -9,6 +9,7 @@ on:
       - "mkdocs.yml"
       - ".mkdocs/**"
       - "requirements-docs.txt"
+      - "scripts/regen_teaching_chapters.py"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -30,6 +31,14 @@ jobs:
           python-version: "3.12"
       - name: Install docs dependencies
         run: pip install -r requirements-docs.txt
+      - name: Check chapter auto-blocks are in sync with source
+        # `scripts/regen_teaching_chapters.py` refreshes the auto:snippet /
+        # auto:diff / auto:linerange / auto:linkhash blocks in each chapter
+        # README from the chapter's `*.py`. If a contributor edits a
+        # chapter's source without re-running the script, the README drifts
+        # silently (deep links point at the wrong lines, snippets show the
+        # old code). `--check` exits non-zero with a diff on stderr.
+        run: python scripts/regen_teaching_chapters.py --check
       - name: Build the site (--strict)
         run: mkdocs build --strict
       - name: Import-check teaching scripts not covered by pytest

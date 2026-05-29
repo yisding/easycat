@@ -126,6 +126,39 @@ teams):
 The budgets here are defensible starting points; real numbers are
 per-deployment.
 
+The check itself is straightforward — pull the spans out of the
+journal, compare each against its budget, label `OK` or `OVER`:
+
+<!-- BEGIN auto:snippet src=latency_budget.py symbol=analyze -->
+```python
+def analyze(path: Path) -> None:
+    bundle = load_bundle(path)
+    stt_final_t = None
+    first_token_t = None
+    tts_total = 0.0
+    tts_count = 0
+    total_gap = None
+
+    for r in bundle.records():
+        if r["name"] == "stt.final" and stt_final_t is None:
+            stt_final_t = r["data"].get("t_ms")
+        elif r["name"] == "agent.first_token" and first_token_t is None:
+            first_token_t = r["data"].get("t_ms")
+        elif r["name"] == "stage.tts.execute":
+            tts_total += r["data"].get("elapsed_ms", 0.0)
+            tts_count += 1
+        elif r["name"] == "turn.gap" and total_gap is None:
+            total_gap = r["data"].get("total_gap_ms")
+
+    agent_dispatch_ms = (first_token_t - stt_final_t) if (stt_final_t and first_token_t) else None
+
+    print(f"=== {path.name} ===")
+    _row("agent first token", agent_dispatch_ms, BUDGET_MS["agent_first_token"])
+    _row(f"tts synth ({tts_count} sent.)", tts_total, BUDGET_MS["tts_total"])
+    _row("total (stt final → done)", total_gap, BUDGET_MS["total"])
+```
+<!-- END auto:snippet -->
+
 ## 2 — Aggregate evals, across bundles
 
 ```bash
