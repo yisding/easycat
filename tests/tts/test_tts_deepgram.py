@@ -159,6 +159,34 @@ class TestDeepgramTTS:
 
         assert fake_ws._closed
 
+    async def test_replay_disarmed_during_initial_connect(self):
+        """on_reconnect fires for retries during the *initial* connect too.
+
+        Replay must stay a no-op until the Speak/Flush frames have actually
+        been sent on a connected stream; otherwise a retry mid-connect would
+        send them before synthesize() does, duplicating the utterance.
+        """
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS()
+        provider._ws = fake_ws
+
+        # State before the initial send: _pending_text is disarmed.
+        provider._pending_text = None
+        await provider._replay_request()
+        assert fake_ws._sent == []
+
+    async def test_replay_armed_after_initial_send(self):
+        """After the initial send, a mid-stream reconnect replays the frames."""
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS()
+        provider._ws = fake_ws
+
+        provider._pending_text = "Hello"
+        await provider._replay_request()
+        assert len(fake_ws._sent) == 2
+        assert json.loads(fake_ws._sent[0]) == {"type": "Speak", "text": "Hello"}
+        assert json.loads(fake_ws._sent[1]) == {"type": "Flush"}
+
     async def test_stop_sends_flush_and_closes_ws(self):
         provider = self._make_provider()
         fake_ws = FakeReconnectingWS()

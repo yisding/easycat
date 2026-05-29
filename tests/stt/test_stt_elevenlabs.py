@@ -356,6 +356,49 @@ async def test_elevenlabs_realtime_drops_late_final_after_timeout_promotion(monk
     assert finals[0].text == "hello wor"
 
 
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_keeps_late_final_when_no_partial_promoted(monkeypatch):
+    # The commit times out but no partial ever arrived, so nothing was
+    # promoted to a FINAL.  A real committed transcript arriving afterwards
+    # is the turn's only transcript and must NOT be dropped.
+    monkeypatch.setattr(elevenlabs_provider, "_FINAL_TRANSCRIPT_TIMEOUT_S", 0.05)
+
+    ws = _BlockingWebSocket([])
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    config = ElevenLabsSTTConfig(api_key="k", mode="realtime", ws_connect=mock_connect)
+    stt = ElevenLabsSTT(config)
+
+    collected: list = []
+    await stt.start_stream()
+
+    async def _collect() -> None:
+        async for event in stt.events():
+            collected.append(event)
+
+    collect_task = asyncio.create_task(_collect())
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+    await stt.send_audio(chunk)
+
+    # No partial arrives; the commit times out without promoting anything.
+    assert await stt._send_commit(wait_for_final=True) is True
+    assert stt._dropping_pending_final is False
+
+    # The committed transcript shows up late — it is the only transcript
+    # for the turn and must be emitted, not dropped.
+    stt._handle_json_message(json.loads(_el_transcript("hello world", is_final=True)))
+
+    await stt.end_stream()
+    await collect_task
+    events = collected
+
+    finals = [e for e in events if e.type == STTEventType.FINAL]
+    assert len(finals) == 1
+    assert finals[0].text == "hello world"
+
+
 # ── Batch mode ───────────────────────────────────────────────────
 
 

@@ -200,6 +200,14 @@ class ElevenLabsSTT(WebSocketSTTBase):
 
         self._final_received = None
         try:
+            # ElevenLabs keeps the realtime socket open after delivering the
+            # committed transcript, so ``recv_iter`` would otherwise block in
+            # the receive loop until ``_close_active_websocket`` hits its close
+            # timeout.  Close the socket first to wake the receive loop, then
+            # drain it — this keeps the turn-to-agent latency low.
+            ws = self._ws
+            if ws is not None:
+                await ws.close()
             await self._close_active_websocket()
         except asyncio.CancelledError:
             raise
@@ -260,7 +268,12 @@ class ElevenLabsSTT(WebSocketSTTBase):
                         )
                     )
                     self._partial_text = ""
-                self._dropping_pending_final = True
+                    # Only suppress the late committed transcript when we
+                    # actually promoted a partial to a FINAL.  If no partial
+                    # ever arrived, a real ``committed_transcript`` showing up
+                    # during the close/drain path is the turn's only
+                    # transcript and must not be dropped.
+                    self._dropping_pending_final = True
         return True
 
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
