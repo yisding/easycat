@@ -5,6 +5,11 @@ on:
     - cron: "17 9 * * *"
   workflow_dispatch:
 
+# Minimal default token scope for every job (only checkout needs read).
+# Individual jobs override this if they ever need more.
+permissions:
+  contents: read
+
 jobs:
   full-local:
     name: Nightly Full Local

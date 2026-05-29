@@ -3,6 +3,11 @@ name: Release Validation
 on:
   workflow_dispatch:
 
+# Minimal default token scope for every job (only checkout needs read).
+# Individual jobs override this if they ever need more.
+permissions:
+  contents: read
+
 jobs:
   release-validation:
     name: Release Validation
