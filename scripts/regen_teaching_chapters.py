@@ -107,7 +107,12 @@ def extract_symbol(source: str, symbol: str) -> tuple[str, int, int]:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if node.name == symbol:
                 lines = source.splitlines()
+                # ast reports node.lineno at the `def`/`class` line, which drops
+                # any decorators above it. Start at the first decorator so the
+                # snippet stays copy-paste correct (e.g. @dataclass).
                 start = node.lineno
+                if node.decorator_list:
+                    start = min(start, node.decorator_list[0].lineno)
                 end = node.end_lineno or start
                 return "\n".join(lines[start - 1 : end]) + "\n", start, end
     raise KeyError(f"symbol {symbol!r} not found")

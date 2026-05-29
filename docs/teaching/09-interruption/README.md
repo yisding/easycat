@@ -150,6 +150,7 @@ Next turn, the LLM's memory matches the user's.
 
 <!-- BEGIN auto:snippet src=estimate.py symbol=TurnLedger -->
 ```python
+@dataclass
 class TurnLedger:
     """Per-turn record of what the bot tried to say vs. what played.
 

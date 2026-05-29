@@ -29,7 +29,15 @@ from pathlib import Path
 
 _CROSS_LINK = re.compile(r"\((\.{1,2}(?:/\d{2}-[^/)]+)?)/\)")
 _PY_DEEP_LINK = re.compile(r"\((?P<rel>(?:\./|\.\./)[^)\s]+?\.py(?:#L\d+(?:-L\d+)?)?)\)")
-_EDIT_BRANCH = "main"
+# `edit_uri` looks like ``edit/<branch>/<path>/`` (or ``blob/<branch>/...``);
+# the second path segment is the branch the blob URLs should point at.
+_BRANCH_FROM_EDIT_URI = re.compile(r"(?:edit|blob|tree)/([^/]+)/")
+
+
+def _edit_branch(config) -> str:
+    """Derive the blob branch from MkDocs' configured ``edit_uri``."""
+    m = _BRANCH_FROM_EDIT_URI.match(config.get("edit_uri") or "")
+    return m.group(1) if m else "main"
 
 
 def on_files(files, config):
@@ -56,6 +64,7 @@ def _rewrite_py_links(markdown: str, page, config) -> str:
     docs_root = Path(config["docs_dir"]).resolve()
     repo_root = Path(config["config_file_path"]).resolve().parent
     page_dir = (docs_root / page.file.src_path).parent
+    branch = _edit_branch(config)
 
     def _sub(m: re.Match[str]) -> str:
         rel = m.group("rel")
@@ -65,7 +74,7 @@ def _rewrite_py_links(markdown: str, page, config) -> str:
             repo_rel = resolved.relative_to(repo_root)
         except ValueError:
             return m.group(0)
-        url = f"{repo_url}/blob/{_EDIT_BRANCH}/{repo_rel.as_posix()}"
+        url = f"{repo_url}/blob/{branch}/{repo_rel.as_posix()}"
         if hash_part:
             url += f"#{hash_part}"
         return f"({url})"
