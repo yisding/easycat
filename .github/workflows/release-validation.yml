@@ -11,7 +11,6 @@ jobs:
     environment: release-validation
     env:
       VALIDATION_ARTIFACTS_DIR: ${{ github.workspace }}/.easycat/validation/release/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
-      RELEASE_VENV: ${{ runner.temp }}/easycat-release-venv
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
       ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
@@ -31,6 +30,14 @@ jobs:
           done
       - run: uv sync --group dev --python 3.12
       - run: uv build --sdist --wheel
+      - name: Configure release venv path
+        # `runner.temp` is not available in a job-level `env:` block (no
+        # runner is assigned when job env is evaluated), which made GitHub
+        # reject this whole workflow at validation time. Set RELEASE_VENV
+        # here, where the runner context exists. Keeping it under
+        # $RUNNER_TEMP leaves the venv outside the workspace, which the
+        # "Verify installed package outside source tree" step relies on.
+        run: echo "RELEASE_VENV=$RUNNER_TEMP/easycat-release-venv" >> "$GITHUB_ENV"
       - name: Create clean install environment
         run: uv venv "$RELEASE_VENV" --python 3.12
       - name: Install built wheel and test tools
