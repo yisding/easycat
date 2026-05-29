@@ -12,9 +12,17 @@ from easycat.audio_format import AudioChunk, AudioFormat
 logger = logging.getLogger(__name__)
 
 # Cache of which optional resampling backend resolved, to avoid re-importing
-# (and re-logging real failures) on every chunk. Values: "soxr", "scipy",
-# "linear", or None when not yet probed.
+# on every chunk. Values: "soxr", "scipy", "linear", or None when not yet
+# probed. This reflects which backend is *available*, not whether it last
+# succeeded: a transient runtime failure falls back to linear for that one
+# chunk only and the high-quality backend is retried on the next chunk.
 _resolved_backend: str | None = None
+
+# Track whether a real runtime failure for each backend has already been
+# logged, so we warn once (with a traceback) rather than on every chunk while
+# still retrying the high-quality backend. A transient native-lib hiccup must
+# not permanently degrade quality for the lifetime of the process.
+_logged_runtime_failure: set[str] = set()
 
 
 def pcm_to_wav(pcm_data: bytes, fmt: AudioFormat) -> bytes:
@@ -66,9 +74,10 @@ def resample(data: bytes, from_rate: int, to_rate: int) -> bytes:
 
     global _resolved_backend
 
-    # Resolve the best available backend once and cache the result, so a real
-    # runtime failure (vs. a missing import) is logged rather than silently
-    # downgrading the audio quality on every chunk.
+    # Resolve the best available backend once and cache the result. A runtime
+    # failure does not change this cache, so the high-quality backend is
+    # retried on every chunk and only the (logged-once) failures fall back to
+    # linear for the affected chunk.
     if _resolved_backend is None:
         _resolved_backend = _resolve_resample_backend()
 
@@ -111,50 +120,75 @@ def _resolve_resample_backend() -> str:
 
 
 def _resample_soxr(data: bytes, from_rate: int, to_rate: int) -> bytes | None:
-    """Resample via soxr; return ``None`` (and log once) on a real failure."""
-    global _resolved_backend
-    try:
-        import numpy as np  # type: ignore[import-untyped]
-        import soxr  # type: ignore[import-not-found]
+    """Resample via soxr; return ``None`` on a real failure.
 
-        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        resampled = soxr.resample(samples, from_rate, to_rate)
-        out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
-        return out.tobytes()
+    A failure falls back to linear for this chunk only; soxr is retried on the
+    next chunk. The failure is logged once (with a traceback) to surface a
+    quality regression without spamming the log on every chunk.
+    """
+    try:
+        return _resample_soxr_impl(data, from_rate, to_rate)
     except Exception:
-        logger.warning(
-            "soxr resampling failed; falling back to linear interpolation "
-            "(lower quality). Suppressing further soxr attempts.",
-            exc_info=True,
-        )
-        _resolved_backend = "linear"
+        _log_runtime_failure_once("soxr")
         return None
+
+
+def _resample_soxr_impl(data: bytes, from_rate: int, to_rate: int) -> bytes:
+    import numpy as np  # type: ignore[import-untyped]
+    import soxr  # type: ignore[import-not-found]
+
+    samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+    resampled = soxr.resample(samples, from_rate, to_rate)
+    out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+    return out.tobytes()
 
 
 def _resample_scipy(data: bytes, from_rate: int, to_rate: int) -> bytes | None:
-    """Resample via scipy; return ``None`` (and log once) on a real failure."""
-    global _resolved_backend
+    """Resample via scipy; return ``None`` on a real failure.
+
+    A failure falls back to linear for this chunk only; scipy is retried on the
+    next chunk. The failure is logged once (with a traceback) to surface a
+    quality regression without spamming the log on every chunk.
+    """
     try:
-        import math
-
-        import numpy as np  # type: ignore[import-untyped]
-        from scipy.signal import resample_poly  # type: ignore[import-not-found]
-
-        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        g = math.gcd(from_rate, to_rate)
-        up = to_rate // g
-        down = from_rate // g
-        resampled = resample_poly(samples, up, down)
-        out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
-        return out.tobytes()
+        return _resample_scipy_impl(data, from_rate, to_rate)
     except Exception:
-        logger.warning(
-            "scipy resampling failed; falling back to linear interpolation "
-            "(lower quality). Suppressing further scipy attempts.",
-            exc_info=True,
-        )
-        _resolved_backend = "linear"
+        _log_runtime_failure_once("scipy")
         return None
+
+
+def _resample_scipy_impl(data: bytes, from_rate: int, to_rate: int) -> bytes:
+    import math
+
+    import numpy as np  # type: ignore[import-untyped]
+    from scipy.signal import resample_poly  # type: ignore[import-not-found]
+
+    samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+    g = math.gcd(from_rate, to_rate)
+    up = to_rate // g
+    down = from_rate // g
+    resampled = resample_poly(samples, up, down)
+    out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+    return out.tobytes()
+
+
+def _log_runtime_failure_once(backend: str) -> None:
+    """Warn (with traceback) the first time ``backend`` fails at runtime.
+
+    Subsequent failures for the same backend are silent to avoid per-chunk log
+    spam, but the backend itself is still retried on later chunks.
+    """
+    if backend in _logged_runtime_failure:
+        return
+    _logged_runtime_failure.add(backend)
+    logger.warning(
+        "%s resampling failed; falling back to linear interpolation (lower "
+        "quality) for this chunk. The high-quality backend will be retried on "
+        "subsequent chunks; suppressing further %s failure logs.",
+        backend,
+        backend,
+        exc_info=True,
+    )
 
 
 def _resample_linear(data: bytes, from_rate: int, to_rate: int) -> bytes:

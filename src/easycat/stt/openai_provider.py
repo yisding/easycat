@@ -19,7 +19,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class OpenAISTTConfig:
-    """Configuration for the OpenAI STT provider."""
+    """Configuration for the OpenAI STT provider.
+
+    .. note::
+
+       ``api_key`` defaults to ``""`` to support the inject-the-key-later
+       workflow (e.g. constructing the config first and assigning the key
+       before use).  A missing key is therefore *not* validated at
+       construction time — it surfaces on the first live transcription
+       request rather than eagerly.  The :func:`easycat.stt.factory` path
+       still fail-fasts on an empty key.
+    """
 
     api_key: str = ""
     model: str = "gpt-4o-transcribe"

@@ -54,7 +54,10 @@ class DeepgramTTS(TTSBase):
         self._config = config
         self._ws: ReconnectingWebSocket | None = None
         # Text of the in-flight utterance, replayed by the on_reconnect hook
-        # so a mid-stream drop resumes synthesis instead of aborting it.
+        # so a mid-stream drop restarts the utterance from the top instead of
+        # aborting it. Known tradeoff: Deepgram synthesis is one-shot per
+        # utterance, so any audio already emitted before the drop is re-emitted
+        # after the restart (audible repetition), not a seamless resume.
         self._pending_text: str | None = None
         # Strong references to fire-and-forget Error-emit tasks so the event
         # loop does not garbage-collect them before ``bus.emit`` completes.
@@ -94,8 +97,12 @@ class DeepgramTTS(TTSBase):
         """Re-send the Speak + Flush frames after a reconnect.
 
         Deepgram synthesis is one-shot per utterance, so replaying the text
-        and flush restarts it on the fresh socket. Without this hook a
-        transient drop would re-raise out of recv_iter and abort synthesis.
+        and flush restarts it from the top on the fresh socket — it does NOT
+        resume from the drop point. Any audio already emitted before the drop
+        is re-emitted, producing audible repetition; this is an accepted
+        tradeoff of stateless one-shot replay in exchange for not aborting the
+        utterance entirely. Without this hook a transient drop would re-raise
+        out of recv_iter and abort synthesis.
         """
         ws = self._ws
         text = self._pending_text
@@ -133,7 +140,9 @@ class DeepgramTTS(TTSBase):
             await self._ws.send(json.dumps({"type": "Flush"}))
 
             # Request is now live on a connected stream: arm replay so a
-            # *mid-stream* reconnect re-sends these frames and resumes synthesis.
+            # *mid-stream* reconnect re-sends these frames and restarts the
+            # utterance from the top (see ``_replay_request`` for the
+            # duplicate-audio tradeoff).
             self._pending_text = text
 
             # Receive audio chunks
@@ -152,14 +161,27 @@ class DeepgramTTS(TTSBase):
                     ctrl_type = ctrl.get("type")
                     if ctrl_type == "Flushed":
                         break
-                    if ctrl_type in ("Error", "Warning"):
+                    if ctrl_type == "Error":
                         # Deepgram surfaces invalid model / rate-limit /
-                        # quota rejections as Error (or Warning) frames.
-                        # Route them through the journal-visible Error event
-                        # and stop the loop so the failure is observable
-                        # instead of silently waiting for a socket close.
+                        # quota rejections as Error frames. Route them through
+                        # the journal-visible Error event and stop the loop so
+                        # the failure is observable instead of silently waiting
+                        # for a socket close.
                         self._emit_provider_error_from_msg(ctrl)
                         break
+                    if ctrl_type == "Warning":
+                        # Warning frames are non-fatal advisories (e.g.
+                        # TEXT_LENGTH_WARNING or the Flush rate-limit warning)
+                        # that do not prevent the connection from continuing.
+                        # Log and keep receiving so synthesis is not truncated.
+                        logger.info(
+                            "Deepgram TTS warning: %s",
+                            ctrl.get("description")
+                            or ctrl.get("message")
+                            or ctrl.get("reason")
+                            or ctrl,
+                        )
+                        continue
 
         except Exception as exc:
             if not self._cancelled:
@@ -211,10 +233,12 @@ class DeepgramTTS(TTSBase):
             or "Deepgram TTS error"
         )
         exc = RuntimeError(f"Deepgram TTS error: {message}")
+        # Note: the frame ``type`` ("Error") is redundant and is intentionally
+        # not attached as ``ws_close_code`` — that note key is reserved for an
+        # actual WebSocket close code (see the synthesis-exception path).
         self._emit_provider_error(
             exc,
             code=msg.get("code"),
-            ws_close_code=msg.get("type"),
         )
 
     def _emit_provider_error(self, exc: BaseException, **context: Any) -> None:

@@ -95,8 +95,11 @@ class CartesiaTTS(TTSBase):
         self._ws: ReconnectingWebSocket | None = None
         self._context_id: str | None = None
         # The synthesis request frame for the in-flight utterance, replayed
-        # by the on_reconnect hook so a mid-stream drop transparently resumes
-        # instead of aborting the utterance.
+        # by the on_reconnect hook so a mid-stream drop restarts the utterance
+        # from the top instead of aborting it. Known tradeoff: Cartesia
+        # synthesis is one-shot, so any audio already emitted before the drop
+        # is re-emitted after the restart (audible repetition), not a seamless
+        # resume.
         self._pending_request: str | None = None
         # Strong references to fire-and-forget Error-emit tasks so the event
         # loop does not garbage-collect them before ``bus.emit`` completes.
@@ -124,8 +127,12 @@ class CartesiaTTS(TTSBase):
 
         Cartesia synthesis is one-shot: the request frame carries the full
         transcript, so replaying it restarts the utterance from the top on a
-        fresh socket. Without this hook a transient drop would re-raise out of
-        recv_iter and abort the utterance.
+        fresh socket — it does NOT resume from the drop point. Any audio
+        already emitted before the drop is re-emitted, producing audible
+        repetition; this is an accepted tradeoff of stateless one-shot replay
+        in exchange for not aborting the utterance entirely. Without this hook
+        a transient drop would re-raise out of recv_iter and abort the
+        utterance.
         """
         ws = self._ws
         request = self._pending_request
@@ -173,7 +180,8 @@ class CartesiaTTS(TTSBase):
             await self._ws.connect()
             await self._ws.send(request)
             # Request is now live: arm replay so a *mid-stream* reconnect
-            # re-sends it and resumes synthesis.
+            # re-sends it and restarts the utterance from the top (see
+            # ``_replay_request`` for the duplicate-audio tradeoff).
             self._pending_request = request
 
             async for message in self._ws.recv_iter():

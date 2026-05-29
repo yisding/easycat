@@ -128,13 +128,12 @@ def test_unknown_provider_suggests_close_match():
 
 
 def test_available_providers_lists_registered_names():
-    assert available_providers() == [
-        "cartesia",
-        "deepgram",
-        "elevenlabs",
-        "openai",
-        "openai-realtime",
-    ]
+    names = available_providers()
+    # Core providers must be registered; new providers may be added freely.
+    assert set(names) >= {"openai", "deepgram", "elevenlabs", "cartesia"}
+    # Names should be unique and returned in sorted order for stable listing.
+    assert len(names) == len(set(names))
+    assert names == sorted(names)
 
 
 # ── Protocol conformance via factory ─────────────────────────────

@@ -64,11 +64,31 @@ def test_cancel_without_running_loop() -> None:
     asyncio.run(confirm())
 
 
-def test_does_not_touch_event_private_loop() -> None:
-    """Regression: cancel() must not depend on asyncio.Event._loop."""
-    import easycat.cancel as cancel_mod
+def test_cancel_with_closed_bound_loop_still_sets() -> None:
+    """Regression: cancel() must not depend on asyncio.Event._loop.
 
-    src = cancel_mod.__file__
-    with open(src, encoding="utf-8") as fh:
-        text = fh.read()
-    assert "_event._loop" not in text
+    A token bound to a now-closed loop must fall back to setting the event
+    directly instead of probing/relying on private CPython loop internals.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        token = loop.run_until_complete(_make_token())
+    finally:
+        loop.close()
+
+    # The loop the token captured is closed; cancel() from outside any loop
+    # must still succeed and flip the flag without touching Event internals.
+    assert token.is_cancelled is False
+    token.cancel()
+    assert token.is_cancelled is True
+
+    async def confirm() -> None:
+        await asyncio.wait_for(token.wait(), timeout=1.0)
+
+    # A fresh loop sees the already-cancelled token and returns immediately.
+    asyncio.run(confirm())
+
+
+async def _make_token() -> CancelToken:
+    """Build a CancelToken bound to the currently running loop."""
+    return CancelToken()

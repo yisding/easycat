@@ -213,6 +213,13 @@ class TestWebRTCTransportConformance:
         assert not t.is_connected
         assert not t.has_client
 
+    def test_echo_cancellation_default_is_on(self):
+        # Deliberate flip from the prior implicit ``False`` default: WebRTC is a
+        # browser-mic transport and matches WebSocket's EasyCat-side AEC default.
+        from easycat.runtime.capabilities import default_echo_cancellation_enabled
+
+        assert default_echo_cancellation_enabled(WebRTCTransport()) is True
+
 
 class TestWebRTCIngressQueueOwnership:
     @pytest.mark.asyncio

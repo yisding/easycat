@@ -459,9 +459,13 @@ async def test_sustained_chunk_errors_tear_down_session():
     await router._run_pipeline()
 
     errors = [evt for evt in state["emitted"] if isinstance(evt, Error)]
-    # One Error per failed frame up to the threshold; the threshold frame
-    # re-raises into the fatal handler which emits one more Error.
-    assert len(errors) == threshold + 1
+    # Exactly one Error per failed frame, including the threshold frame that
+    # tears the session down: the fatal frame surfaces a single Error (no
+    # duplicate from the outer handler), so the count is the threshold, not
+    # threshold + 1.
+    assert len(errors) == threshold
+    # The session is torn down once the threshold is hit.
+    assert state["running"] is False
 
 
 @pytest.mark.asyncio

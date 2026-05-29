@@ -59,9 +59,9 @@ class TtsChunk(NamedTuple):
     """A sentence-level TTS call's contribution to the playback timeline.
 
     Shared shape consumed by both :func:`_estimate_text_spoken` and
-    :func:`_all_tts_audio_delivered`.  Being a :class:`NamedTuple`, it stays
-    tuple-compatible with existing ``(text, audio_bytes, completed)`` call
-    sites, so producers can keep appending plain 3-tuples.
+    :func:`_all_tts_audio_delivered`.  Producers (``TurnRunner._process_tts``)
+    construct these explicitly; being a :class:`NamedTuple` it also stays
+    tuple-compatible, so positional unpacking below keeps working.
     """
 
     text: str
@@ -70,7 +70,7 @@ class TtsChunk(NamedTuple):
 
 
 def _estimate_text_spoken(
-    tts_chunks: list[TtsChunk] | list[tuple[str, int, bool]],
+    tts_chunks: list[TtsChunk],
     audio_bytes_sent: int,
 ) -> str:
     """Estimate what text the user heard based on TTS audio delivered.
@@ -110,7 +110,7 @@ def _estimate_text_spoken(
 
 
 def _all_tts_audio_delivered(
-    tts_chunks: list[TtsChunk] | list[tuple[str, int, bool]],
+    tts_chunks: list[TtsChunk],
     audio_bytes_delivered: int,
 ) -> bool:
     """Whether all synthesized TTS audio has been delivered/heard.
@@ -266,7 +266,7 @@ def estimate_and_notify_interruption(
     agent: Any,
     token: CancelToken | None,
     turn: TurnContext,
-    tts_chunks: list[TtsChunk] | list[tuple[str, int, bool]],
+    tts_chunks: list[TtsChunk],
     *,
     tts_playback_started: bool,
     tts_playback_cut_short: bool = False,

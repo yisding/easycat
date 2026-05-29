@@ -22,18 +22,33 @@ def _pcm16_bytes(n_samples: int = 240) -> bytes:
 class FakeReconnectingWS:
     """Mock ReconnectingWebSocket for testing Deepgram TTS."""
 
-    def __init__(self, messages: list[bytes | str] | None = None):
+    def __init__(
+        self,
+        messages: list[bytes | str] | None = None,
+        on_reconnect=None,
+        reconnect_after: int | None = None,
+    ):
         self._messages = messages or []
         self._sent: list[str | bytes] = []
         self._closed = False
+        # ``on_reconnect`` mirrors the hook the provider passes to the real
+        # ReconnectingWebSocket constructor. ``reconnect_after`` (when set)
+        # makes ``recv_iter`` invoke that hook after yielding that many
+        # messages, simulating a mid-stream recv_iter-driven reconnect.
+        self._on_reconnect = on_reconnect
+        self._reconnect_after = reconnect_after
         self.connect = AsyncMock()
 
     async def send(self, message: str | bytes) -> None:
         self._sent.append(message)
 
     async def recv_iter(self):
-        for msg in self._messages:
+        for i, msg in enumerate(self._messages):
             yield msg
+            if self._reconnect_after is not None and i + 1 == self._reconnect_after:
+                result = self._on_reconnect()
+                if asyncio.iscoroutine(result):
+                    await result
 
     async def close(self) -> None:
         self._closed = True
@@ -187,6 +202,45 @@ class TestDeepgramTTS:
         assert json.loads(fake_ws._sent[0]) == {"type": "Speak", "text": "Hello"}
         assert json.loads(fake_ws._sent[1]) == {"type": "Flush"}
 
+    async def test_replay_request_resends_frames_mid_stream(self):
+        """A mid-stream recv_iter-driven reconnect replays the Speak/Flush frames.
+
+        Drives the on_reconnect hook after the first audio chunk and asserts
+        the Speak + Flush frames are re-sent on the (fake) socket, restarting
+        the utterance from the top.
+        """
+        provider = self._make_provider()
+        flushed = json.dumps({"type": "Flushed"})
+        fake_ws = FakeReconnectingWS(
+            messages=[_pcm16_bytes(120), flushed],
+            on_reconnect=provider._replay_request,
+            reconnect_after=1,
+        )
+
+        with patch.object(provider, "_create_ws", return_value=fake_ws):
+            async for _ in provider.synthesize("Hello"):
+                pass
+
+        # Initial Speak + Flush, then the replayed Speak + Flush.
+        assert [json.loads(m) for m in fake_ws._sent] == [
+            {"type": "Speak", "text": "Hello"},
+            {"type": "Flush"},
+            {"type": "Speak", "text": "Hello"},
+            {"type": "Flush"},
+        ]
+
+    async def test_replay_request_noop_when_cancelled(self):
+        """Replay is a no-op once the provider is cancelled."""
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS()
+        provider._ws = fake_ws
+        provider._pending_text = "Hello"
+        await provider.cancel()
+
+        await provider._replay_request()
+
+        assert fake_ws._sent == []
+
     async def test_stop_sends_flush_and_closes_ws(self):
         provider = self._make_provider()
         fake_ws = FakeReconnectingWS()
@@ -225,6 +279,34 @@ class TestDeepgramTTS:
         assert err.provider == "deepgram"
         notes = getattr(err.exception, "__notes__", [])
         assert any("code=INVALID_MODEL" in n for n in notes)
+        # The frame type ("Error") is redundant and must not be attached as a
+        # ws_close_code note — that key is reserved for an actual WS close code.
+        assert not any(n.startswith("ws_close_code=") for n in notes)
+
+    async def test_warning_frame_does_not_truncate_or_emit_error(self):
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+
+        provider = DeepgramTTS(DeepgramTTSConfig(api_key="k", event_bus=bus))
+        # A Warning frame arrives mid-stream; synthesis must continue and the
+        # audio after it must still be delivered (no premature break).
+        warning_frame = json.dumps({"type": "Warning", "description": "TEXT_LENGTH_WARNING"})
+        flushed = json.dumps({"type": "Flushed"})
+        messages = [_pcm16_bytes(240), warning_frame, _pcm16_bytes(240), flushed]
+        fake_ws = FakeReconnectingWS(messages=messages)
+
+        with patch.object(provider, "_create_ws", return_value=fake_ws):
+            events = []
+            async for event in provider.synthesize("test"):
+                events.append(event)
+
+        await asyncio.sleep(0)
+        # Warning is non-fatal: no Error emitted and all audio delivered.
+        assert errors == []
+        assert len(events) == 2
+        for e in events:
+            assert e.type == TTSEventType.AUDIO
 
     async def test_synthesis_exception_posted_to_event_bus(self):
         bus = EventBus()

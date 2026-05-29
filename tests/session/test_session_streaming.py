@@ -43,6 +43,7 @@ from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
 from easycat.session.interruption import (
+    TtsChunk,
     _all_tts_audio_delivered,
     _audio_bytes_acknowledged,
     _audio_bytes_likely_heard,
@@ -609,6 +610,22 @@ def test_all_tts_audio_delivered_requires_completed_synthesis():
 def test_all_tts_audio_delivered_zero_audio_is_still_fully_delivered():
     chunks = [("", 0, True)]
     assert _all_tts_audio_delivered(chunks, 0)
+
+
+def test_tts_chunk_named_fields_flow_through_consumers():
+    # The producer (TurnRunner._process_tts) builds TtsChunk instances, so the
+    # consumers must accept them by named field as well as positionally.
+    chunks = [
+        TtsChunk(text="Hello. ", audio_bytes=320, completed=True),
+        TtsChunk(text="How are you?", audio_bytes=640, completed=True),
+    ]
+    assert chunks[0].text == "Hello. "
+    assert chunks[0].audio_bytes == 320
+    assert chunks[0].completed is True
+
+    assert _estimate_text_spoken(chunks, 960) == "Hello. How are you?"
+    assert _all_tts_audio_delivered(chunks, 960)
+    assert not _all_tts_audio_delivered(chunks, 959)
 
 
 def test_audio_bytes_likely_heard_without_cutoff_uses_all_bytes():

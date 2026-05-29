@@ -120,6 +120,7 @@ class OpenAIAgentsBridge:
         pending_tool_calls: dict[str, str] = {}
         interrupted = False
         cursor_exited = False
+        handoff_cursor: ExecutionCursor | None = None
 
         try:
             async for event in result.stream_events():
@@ -201,6 +202,11 @@ class OpenAIAgentsBridge:
                     )
                     recorder.record_unit_entered(new_cursor)
                     recorder.record_unit_exited(new_cursor.with_committable(True), reason=None)
+                    # Surface the handoff-target cursor lifecycle on the stream
+                    # too, so out-of-band consumers see a balanced enter/exit
+                    # for the new cursor across the handoff (emitted below,
+                    # after the original cursor's cursor_exited).
+                    handoff_cursor = new_cursor
                 else:
                     try:
                         recorder.record_unit_exited(
@@ -213,6 +219,12 @@ class OpenAIAgentsBridge:
         # Balance the cursor_entered emitted at stream start so stream-level
         # cursor events are well-formed for out-of-band consumers.
         yield AgentBridgeEvent(kind="cursor_exited", cursor=agent_cursor)
+        if handoff_cursor is not None:
+            # Mirror the recorder-level enter/exit of the handoff-target cursor
+            # on the stream so out-of-band consumers see a balanced lifecycle
+            # for the new cursor as well, not just the original one.
+            yield AgentBridgeEvent(kind="cursor_entered", cursor=handoff_cursor)
+            yield AgentBridgeEvent(kind="cursor_exited", cursor=handoff_cursor)
         yield AgentBridgeEvent(
             kind="done",
             text=accumulated,

@@ -198,7 +198,14 @@ class JournalView:
             # in every backend, so we won't miss records that were appended
             # between the previous iteration's yield and this call.
             records = self._journal.read(start=cursor)
-            if records and records[0].sequence > cursor:
+            # Real sequences start at 1 (the ring buffer's ``_seq`` and the
+            # SQLite counter both pre-increment from 0).  Only treat a jump as
+            # an eviction gap when ``cursor`` pointed at a sequence that could
+            # actually have existed (``cursor >= 1``).  ``from_sequence=0`` (the
+            # documented "replay full history then live-tail" cursor) points
+            # below the first real sequence, so the first record arriving at
+            # sequence 1 is not a gap — it is the real start of history.
+            if records and cursor >= 1 and records[0].sequence > cursor:
                 # The oldest record we wanted (sequence == cursor) was evicted
                 # before we could read it.  Surface the gap in-band.
                 gap = records[0].sequence - cursor
@@ -587,6 +594,15 @@ class InMemoryRingBuffer:
         # sequence number.  ``append`` returns -1 in degraded mode, and keeping
         # the marker at -1 means ``latest_sequence`` does not advance past a
         # sequence that no ``append`` return value corresponds to.
+        #
+        # The -1 marker is a deliberate *out-of-band* signal.  Because
+        # ``read(start)`` filters ``sequence >= start`` and ``follow()`` always
+        # uses a cursor ``>= 0``, this marker is intentionally NOT delivered
+        # through the normal ``read()``/``follow()`` record stream.  Consumers
+        # MUST consult the ``degraded`` property (kept in sync below and on
+        # ``JournalView``) to detect degradation, not scan the record stream.
+        # The marker is still recoverable for forensic inspection via
+        # ``read(start=-1)`` / ``slice()``.
         marker = JournalDegraded(
             sequence=-1,
             session_id=session_id,
@@ -713,7 +729,6 @@ class SqliteJournal:
                 self._original_session_id = (
                     prior_session_row[0] if prior_session_row else session_id
                 )
-                self._recovered = True
                 crash_dir = root / "crash-dumps"
                 crash_dir.mkdir(parents=True, exist_ok=True)
                 crash_path = crash_dir / f"{session_id}.sqlite"
@@ -753,6 +768,12 @@ class SqliteJournal:
                         # contract) instead of continuing the prior counter and
                         # interleaving prior-session rows under the same id.
                         self._conn.execute("DELETE FROM journal")
+                        # Only now — after the crash dump was copied AND the live
+                        # journal truncated — is the recovery fully successful.
+                        # Setting the flag here (rather than before the copy)
+                        # guarantees the seq=0 recovery marker is emitted only on
+                        # a consistent "started fresh at sequence=1" state.
+                        self._recovered = True
                         logger.info(
                             "Recovered unclean journal for session %s (%d records) → %s",
                             session_id,
@@ -765,6 +786,33 @@ class SqliteJournal:
                             session_id,
                             exc_info=True,
                         )
+                        # The copy or a PRAGMA may have failed after we closed the
+                        # connection (close happens before copy).  Reopen it so the
+                        # rest of __init__ does not run against a closed handle, and
+                        # truncate the prior-session rows directly: _recovered stays
+                        # False (no recovery marker), but the new session must still
+                        # start fresh rather than interleave prior-session records.
+                        try:
+                            self._conn.close()
+                        except sqlite3.Error:
+                            pass
+                        self._conn = sqlite3.connect(
+                            str(self._db_path),
+                            check_same_thread=False,
+                            isolation_level=None,
+                        )
+                        self._conn.execute("PRAGMA journal_mode=WAL")
+                        self._conn.execute("PRAGMA synchronous=NORMAL")
+                        self._conn.execute("PRAGMA wal_autocheckpoint=0")
+                        try:
+                            self._conn.execute("DELETE FROM journal")
+                        except sqlite3.Error:
+                            logger.warning(
+                                "Failed to truncate live journal after crash-dump "
+                                "failure for session %s",
+                                session_id,
+                                exc_info=True,
+                            )
 
             if row is not None and prior_count > 0:
                 # Clean reuse — prior session closed normally. Truncate stale

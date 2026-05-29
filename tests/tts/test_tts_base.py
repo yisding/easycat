@@ -152,33 +152,40 @@ class TestTTSBase:
         assert event.type == TTSEventType.MARKERS
         assert event.markers == markers
 
-    def test_normalize_odd_length_chunk_does_not_crash(self):
-        """A streaming chunk with an odd byte count (a 16-bit sample split at
-        the boundary) must normalize without raising struct.error."""
+    def test_make_audio_event_odd_chunk_with_resample_does_not_crash(self):
+        """An odd-length frame routed through the real _make_audio_event ->
+        _normalize_audio resample path must not raise struct.error: the
+        sub-sample byte is held back by _sample_carry before resample."""
         base = TTSBase(output_format=PCM16_MONO_24K)
         base._start_synthesis()
         # 5 bytes at 16kHz -> resampled to 24kHz; the trailing byte is held.
-        result = base._normalize_audio(b"\x01\x02\x03\x04\x05", PCM16_MONO_16K)
-        assert isinstance(result, bytes)
-        assert base._resample_carry == b"\x05"
+        event = base._make_audio_event(b"\x01\x02\x03\x04\x05", PCM16_MONO_16K)
+        assert event.audio is not None
+        assert isinstance(event.audio.data, bytes)
+        assert base._sample_carry == b"\x05"
 
-    def test_normalize_carries_split_sample_across_chunks(self):
-        """The byte held back from one chunk is prepended to the next, so no
-        audio sample is lost or corrupted at chunk boundaries."""
+    def test_make_audio_event_carries_split_sample_across_resample_chunks(self):
+        """Through the real call path, the byte held back from one resampled
+        frame is prepended to the next so no sample is lost or corrupted."""
         base = TTSBase(output_format=PCM16_MONO_24K)
         base._start_synthesis()
-        # First chunk: 3 bytes -> one full sample consumed, one byte carried.
-        base._normalize_audio(b"\xaa\xbb\xcc", PCM16_MONO_16K)
-        assert base._resample_carry == b"\xcc"
+        # First chunk: 3 bytes -> one full sample resampled, one byte carried.
+        base._make_audio_event(b"\xaa\xbb\xcc", PCM16_MONO_16K)
+        assert base._sample_carry == b"\xcc"
         # Second chunk: carry (1) + 1 byte = 2 bytes -> a full sample, no carry.
-        base._normalize_audio(b"\xdd", PCM16_MONO_16K)
-        assert base._resample_carry == b""
+        base._make_audio_event(b"\xdd", PCM16_MONO_16K)
+        assert base._sample_carry == b""
 
-    def test_start_synthesis_resets_carry(self):
+    def test_end_synthesis_drops_subsample_carry(self):
+        """A leftover sub-sample byte that no frame completed is intentionally
+        dropped (not emitted) when synthesis ends, and cleared so it cannot
+        leak into the next turn."""
         base = TTSBase(output_format=PCM16_MONO_24K)
-        base._resample_carry = b"\x99"
         base._start_synthesis()
-        assert base._resample_carry == b""
+        base._make_audio_event(b"\x01\x02\x03", PCM16_MONO_24K)
+        assert base._sample_carry == b"\x03"
+        base._end_synthesis()
+        assert base._sample_carry == b""
 
     def test_normalize_stereo_to_mono(self):
         base = TTSBase(output_format=PCM16_MONO_24K)

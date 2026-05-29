@@ -100,8 +100,11 @@ class ElevenLabsTTS(TTSBase):
         self._response: httpx.Response | None = None
         self._ws: ReconnectingWebSocket | None = None
         # Init/text/EOS frames for the in-flight utterance, replayed by the
-        # on_reconnect hook so a mid-stream drop resumes synthesis instead of
-        # aborting it.
+        # on_reconnect hook so a mid-stream drop restarts the utterance from
+        # the top instead of aborting it. Known tradeoff: replaying the full
+        # init+text+EOS sequence restarts synthesis, so any audio already
+        # emitted before the drop is re-emitted (audible repetition), not a
+        # seamless resume.
         self._pending_messages: tuple[str, ...] | None = None
         # Strong references to fire-and-forget Error-emit tasks so the event
         # loop does not garbage-collect them before ``bus.emit`` completes.
@@ -247,7 +250,8 @@ class ElevenLabsTTS(TTSBase):
         try:
             await self._send_ws_messages(ws, messages)
             # Request is now live: arm replay so a *mid-stream* reconnect
-            # re-sends these frames and resumes synthesis.
+            # re-sends these frames and restarts the utterance from the top
+            # (see ``_replay_request`` for the duplicate-audio tradeoff).
             self._pending_messages = messages
             return ws
         except Exception:
@@ -310,10 +314,13 @@ class ElevenLabsTTS(TTSBase):
     async def _replay_request(self) -> None:
         """Re-send the init/text/EOS frames after a reconnect.
 
-        ElevenLabs streaming is stateful: the init + text + EOS sequence must
-        be replayed on the fresh socket for synthesis to resume. Without this
-        hook a transient drop would re-raise out of recv_iter and abort the
-        utterance.
+        ElevenLabs streaming is stateful: the init + text + EOS sequence is
+        replayed on the fresh socket, which restarts the utterance from the
+        top — it does NOT resume from the drop point. Any audio already
+        emitted before the drop is re-emitted, producing audible repetition;
+        this is an accepted tradeoff of stateless one-shot replay in exchange
+        for not aborting the utterance entirely. Without this hook a transient
+        drop would re-raise out of recv_iter and abort the utterance.
         """
         ws = self._ws
         messages = self._pending_messages

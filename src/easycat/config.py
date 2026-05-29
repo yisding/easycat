@@ -22,7 +22,7 @@ from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents.base import NULL_RECORDER, AgentTurnInput
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
-from easycat.providers import Transport
+from easycat.providers import Transport, TransportLike
 from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
 from easycat.runtime.capabilities import (
     bind_identity_sink_if_supported,
@@ -1068,7 +1068,9 @@ def create_text_session(
 
     Accepts a :class:`TextSessionConfig` (the ``create_*(config)`` shape
     shared with :func:`create_session`) or, for back-compat, the legacy
-    loose keyword arguments. The two forms are mutually exclusive.
+    loose keyword arguments. The two forms are mutually exclusive: passing
+    a ``config`` together with any non-default loose keyword raises
+    :class:`ValueError`.
 
     The returned session supports :meth:`Session.send_text` for
     request/response agent interaction without STT, TTS, VAD, or
@@ -1078,7 +1080,27 @@ def create_text_session(
     Raises :class:`RuntimeError` if the caller attempts to call
     :meth:`Session.start` on a text session.
     """
-    if config is None:
+    if config is not None:
+        _loose = {
+            "agent": (agent, None),
+            "session_id": (session_id, None),
+            "debug": (debug, "off"),
+            "journal_backend": (journal_backend, "sqlite"),
+            "journal_retention": (journal_retention, "archive"),
+            "wrap_agent": (wrap_agent, True),
+            "agent_runner": (agent_runner, None),
+            "agent_model": (agent_model, None),
+            "remote_agent_api_key": (remote_agent_api_key, None),
+            "mcp_servers": (mcp_servers, None),
+        }
+        _supplied = [name for name, (value, default) in _loose.items() if value != default]
+        if _supplied:
+            raise ValueError(
+                "create_text_session() accepts either a TextSessionConfig or loose "
+                "keyword arguments, not both; remove the config argument or these "
+                f"keyword(s): {', '.join(sorted(_supplied))}."
+            )
+    else:
         config = TextSessionConfig(
             agent=agent,
             session_id=session_id,
@@ -1284,13 +1306,23 @@ def _wire_outbound_pipeline(
 
 
 def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
-    if isinstance(config, Transport):
+    # Discriminate a pre-built transport *instance* from a transport *config*
+    # using the narrow audio contract (TransportLike) rather than the full
+    # Transport protocol. The full protocol also requires version_info(), so
+    # checking it here would silently reject custom transports that satisfy the
+    # audio contract but do not implement version_info(), routing them to the
+    # config-factory path and raising a misleading "Unsupported ..." error.
+    if isinstance(config, TransportLike):
         if hasattr(config, "_event_bus") and getattr(config, "_event_bus") is None:
             config._event_bus = event_bus
         return config
     factory = _TRANSPORT_FACTORIES.get(type(config))
     if factory is None:
-        raise ValueError("Unsupported transport configuration type.")
+        raise ValueError(
+            f"Unsupported transport configuration type: {type(config).__name__!r}. "
+            "Pass a known transport config or a transport instance implementing "
+            "the connect/disconnect/receive_audio/send_audio contract."
+        )
     return factory(config, event_bus)
 
 

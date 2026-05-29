@@ -658,3 +658,20 @@ def test_text_session_config_validates_debug():
 
     with pytest.raises(ValueError, match="Invalid debug"):
         TextSessionConfig(agent=_DummyAgent(), debug="loud")  # type: ignore[arg-type]
+
+
+def test_create_text_session_rejects_config_plus_loose_kwargs():
+    from easycat.config import TextSessionConfig, create_text_session
+
+    config = TextSessionConfig(agent=_DummyAgent())
+    with pytest.raises(ValueError, match="not both"):
+        create_text_session(config, agent=_DummyAgent())
+
+
+def test_create_text_session_config_with_default_kwargs_ok():
+    from easycat.config import TextSessionConfig, create_text_session
+
+    # Passing config alongside only default-valued kwargs is allowed.
+    config = TextSessionConfig(agent=_DummyAgent(), debug="off")
+    session = create_text_session(config, debug="off")
+    assert session is not None

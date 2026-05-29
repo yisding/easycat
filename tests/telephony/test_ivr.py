@@ -247,6 +247,42 @@ class TestIVRAgentDecision:
             nav.stop()
 
     @pytest.mark.asyncio
+    async def test_agent_crash_then_timeout_is_transient(self) -> None:
+        """A crash followed by a slow retry is transient, like timeout-then-timeout.
+
+        The first-attempt crash and the first-attempt timeout retry tails must
+        treat an identical retry ``TimeoutError`` the same way: re-arm the prompt
+        timeout and wait rather than escalating to hangup.
+        """
+        bus = EventBus()
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+        call_count = 0
+
+        async def crash_then_slow_agent(ctx: dict) -> dict:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise KeyError("transient crash")
+            await asyncio.sleep(1.0)  # exceed agent_timeout_s on the retry
+            return {"action": "dtmf", "digits": "1"}
+
+        cfg = IVRNavigatorConfig(agent_timeout_s=0.05, agent_retry_delay_s=0.0)
+        nav = IVRNavigator(bus, agent_callback=crash_then_slow_agent, config=cfg)
+        nav.start()
+        nav.activate()
+        try:
+            await bus.emit(STTFinal(text="Press 1 for sales"))
+            # First crash, retry times out → transient: re-arm, no hangup.
+            assert call_count == 2
+            hangups = [a for a in actions if a.type == IVRActionType.HANGUP]
+            assert len(hangups) == 0
+            assert nav._active is True
+            assert nav._prompt_timeout_task is not None
+        finally:
+            nav.stop()
+
+    @pytest.mark.asyncio
     async def test_agent_receives_full_context(self) -> None:
         bus = EventBus()
         captured_contexts: list[dict] = []

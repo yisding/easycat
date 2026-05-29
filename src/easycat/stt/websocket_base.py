@@ -165,8 +165,18 @@ class WebSocketSTTBase(STTBase):
         msg: dict[str, Any],
         *,
         default_message: str | None = None,
+        override_message: str | None = None,
     ) -> None:
-        message = msg.get("message") or msg.get("title") or default_message or "unknown error"
+        # ``override_message`` lets a provider surface a field it considers
+        # more descriptive (e.g. Deepgram's ``description``) ahead of the
+        # generic ``message``/``title`` fallbacks.
+        message = (
+            override_message
+            or msg.get("message")
+            or msg.get("title")
+            or default_message
+            or "unknown error"
+        )
         exc = RuntimeError(f"{self._provider_log_label} STT error: {message}")
         self._emit_provider_error(
             exc,

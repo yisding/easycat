@@ -29,7 +29,17 @@ _FINAL_TRANSCRIPT_TIMEOUT_S = 5.0
 
 @dataclass
 class ElevenLabsSTTConfig:
-    """Configuration for the ElevenLabs STT provider."""
+    """Configuration for the ElevenLabs STT provider.
+
+    .. note::
+
+       ``api_key`` defaults to ``""`` to support the inject-the-key-later
+       workflow (e.g. constructing the config first and assigning the key
+       before use).  A missing key is therefore *not* validated at
+       construction time — it surfaces on the first live request rather
+       than eagerly.  The :func:`easycat.stt.factory` path still
+       fail-fasts on an empty key.
+    """
 
     api_key: str = ""
     model: str | None = None

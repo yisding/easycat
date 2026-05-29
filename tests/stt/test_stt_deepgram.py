@@ -442,6 +442,10 @@ async def test_deepgram_error_message_posted_to_event_bus():
     err = errors[0]
     assert err.stage == ErrorStage.STT
     assert err.provider == "deepgram"
+    # The more descriptive ``description`` field must win over the generic
+    # ``message`` so the surfaced text is actionable.
+    assert "Sample rate is not supported" in str(err.exception)
+    assert "invalid configuration" not in str(err.exception)
 
 
 # ── Live integration ─────────────────────────────────────────────

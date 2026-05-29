@@ -53,6 +53,7 @@ from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._streaming import consume_agent_stream
 from easycat.session.interruption import (
+    TtsChunk,
     estimate_and_notify_interruption,
 )
 from easycat.session.interruption import (
@@ -309,7 +310,7 @@ class TurnRunner:
         # later turn must not be retro-truncated as "interrupted during
         # playback".
         tts_playback_cut_short = False
-        tts_chunks: list[tuple[str, int, bool]] = []
+        tts_chunks: list[TtsChunk] = []
         tts_should_stop = False
 
         # ── TTS consumer task ──
@@ -331,10 +332,14 @@ class TurnRunner:
                     if payload is None:
                         break
                     if token and token.is_cancelled:
-                        tts_chunks.append((_text_for_estimation_timeline(payload), 0, False))
+                        tts_chunks.append(
+                            TtsChunk(_text_for_estimation_timeline(payload), 0, False)
+                        )
                         break
                     if self._tts.is_playback_suppressed:
-                        tts_chunks.append((_text_for_estimation_timeline(payload), 0, False))
+                        tts_chunks.append(
+                            TtsChunk(_text_for_estimation_timeline(payload), 0, False)
+                        )
                         break
 
                     if not started:
@@ -354,7 +359,7 @@ class TurnRunner:
                         ),
                     )
                     tts_chunks.append(
-                        (
+                        TtsChunk(
                             _text_for_estimation_timeline(payload),
                             result.audio_bytes,
                             result.completed,
@@ -380,7 +385,7 @@ class TurnRunner:
             while not tts_queue.empty():
                 remaining = tts_queue.get_nowait()
                 if remaining is not None:
-                    tts_chunks.append((_text_for_estimation_timeline(remaining), 0, False))
+                    tts_chunks.append(TtsChunk(_text_for_estimation_timeline(remaining), 0, False))
 
             if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
                 tts_should_stop = await self._tts.finalize_speaking_turn(

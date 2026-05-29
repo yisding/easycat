@@ -168,6 +168,34 @@ class EchoCanceller(VersionedProvider, Protocol):
 
 
 @runtime_checkable
+class TransportLike(Protocol):
+    """Narrow structural contract for an already-constructed transport.
+
+    This mirrors :class:`Transport`'s audio/connection surface but deliberately
+    omits :meth:`VersionedProvider.version_info`. It exists so that the identity
+    discrimination in ``_create_transport`` (distinguishing a pre-built transport
+    instance from a transport *config*) does not silently reject third-party
+    transports that satisfy the audio contract but predate ``version_info()``.
+    """
+
+    async def connect(self) -> None:
+        """Establish the transport connection."""
+        ...
+
+    async def disconnect(self) -> None:
+        """Close the transport connection."""
+        ...
+
+    def receive_audio(self) -> AsyncIterator[AudioChunk]:
+        """Return an async iterator that yields incoming audio chunks."""
+        ...
+
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        """Send an audio chunk to the remote end."""
+        ...
+
+
+@runtime_checkable
 class Transport(VersionedProvider, Protocol):
     """Audio transport interface for sending/receiving audio.
 

@@ -360,31 +360,30 @@ class GenericWorkflowBridge:
     ) -> AsyncIterator[AgentBridgeEvent]:
         # Check for streaming variant first.
         if hasattr(self._workflow, "on_user_turn_streaming"):
-            # Accumulate streamed text into ``_last_output`` so streaming
-            # shallow workflows expose ``structured_output`` just like the
-            # awaitable / plain-value branches below (which set it from the
-            # full result).  Without this, ``structured_output`` is always
-            # ``None`` for streaming shallow mode — a silent parity gap.
-            accumulated = ""
+            # Streaming chunks are inherently unstructured text, so we leave
+            # ``_last_output`` at its ``None`` default rather than emitting the
+            # concatenated text as ``structured_output``.  That would merely
+            # duplicate the ``done`` event's ``text`` field and could surface a
+            # partial-but-presented-as-complete value on barge-in cancel.  This
+            # matches the deep-mode streaming branch, which likewise leaves
+            # ``structured_output`` unset for streamed chunks; the awaitable /
+            # plain-value branches still expose a real structured object.
             async for chunk in self._workflow.on_user_turn_streaming(turn_input.text):
                 if cancel_token and cancel_token.is_cancelled:
                     break
                 if chunk:
-                    accumulated += str(chunk)
                     yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
-            self._last_output = accumulated
             return
 
         result = self._workflow.on_user_turn(turn_input.text)
         if inspect.isasyncgen(result):
-            accumulated = ""
+            # See streaming note above: leave ``_last_output`` unset for
+            # streamed chunks (parity with deep mode, no partial-on-cancel).
             async for chunk in result:
                 if cancel_token and cancel_token.is_cancelled:
                     break
                 if chunk:
-                    accumulated += str(chunk)
                     yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
-            self._last_output = accumulated
         elif inspect.isawaitable(result):
             output = await result
             self._last_output = output
@@ -415,7 +414,7 @@ class GenericWorkflowBridge:
                 if cancel_token and cancel_token.is_cancelled:
                     break
                 if chunk:
-                    yield AgentBridgeEvent(kind="text_delta", text=chunk)
+                    yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
         elif inspect.isawaitable(result):
             output = await result
             self._last_output = output

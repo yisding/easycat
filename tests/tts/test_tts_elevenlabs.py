@@ -62,6 +62,9 @@ class FakeReconnectingWS:
         fail_send_at: set[int] | None = None,
         recv_started: asyncio.Event | None = None,
         recv_wait: asyncio.Event | None = None,
+        on_reconnect=None,
+        reconnect_after: int | None = None,
+        **_kwargs,
     ):
         self._messages = messages or []
         self._sent: list[str | bytes] = []
@@ -71,6 +74,12 @@ class FakeReconnectingWS:
         self._fail_send_at = fail_send_at or set()
         self._recv_started = recv_started
         self._recv_wait = recv_wait
+        # ``on_reconnect`` mirrors the hook the provider passes to the real
+        # ReconnectingWebSocket constructor. ``reconnect_after`` (when set)
+        # makes ``recv_iter`` invoke that hook after yielding that many
+        # messages, simulating a mid-stream recv_iter-driven reconnect.
+        self._on_reconnect = on_reconnect
+        self._reconnect_after = reconnect_after
         self.connect = AsyncMock(side_effect=self._mark_connected)
 
     async def _mark_connected(self) -> None:
@@ -89,8 +98,14 @@ class FakeReconnectingWS:
     async def recv_iter(self):
         if self._recv_started is not None:
             self._recv_started.set()
-        for msg in self._messages:
+        for i, msg in enumerate(self._messages):
             yield msg
+            if self._reconnect_after is not None and i + 1 == self._reconnect_after:
+                # Simulate the ReconnectingWebSocket re-establishing the
+                # socket mid-stream and firing the provider's recovery hook.
+                result = self._on_reconnect()
+                if asyncio.iscoroutine(result):
+                    await result
         if self._recv_wait is not None:
             await self._recv_wait.wait()
 
@@ -395,6 +410,62 @@ class TestElevenLabsTTSWebSocket:
         fresh_ws.connect.assert_awaited_once()
         assert [json.loads(msg)["text"] for msg in stale_ws._sent] == [" "]
         assert [json.loads(msg)["text"] for msg in fresh_ws._sent] == [" ", "Test", ""]
+
+    async def test_replay_request_resends_armed_messages_mid_stream(self):
+        """A mid-stream recv_iter-driven reconnect replays the armed request.
+
+        Drives the on_reconnect hook after one audio frame and asserts the
+        full init/text/EOS sequence is re-sent on the same (fake) socket,
+        restarting the utterance from the top.
+        """
+        provider = self._make_provider()
+        # Fire the hook after the first audio frame, then finish.
+        fake_ws = FakeReconnectingWS(
+            messages=[self._audio_message(120), self._final_message()],
+            on_reconnect=provider._replay_request,
+            reconnect_after=1,
+        )
+
+        with patch(
+            "easycat.tts.elevenlabs_tts.ReconnectingWebSocket",
+            return_value=fake_ws,
+        ):
+            async for _ in provider.synthesize("Test"):
+                pass
+
+        sent_texts = [json.loads(msg)["text"] for msg in fake_ws._sent]
+        # Initial send (init/text/EOS) followed by the full replayed sequence.
+        assert sent_texts == [" ", "Test", "", " ", "Test", ""]
+
+    async def test_replay_request_noop_when_unarmed(self):
+        """Replay is a no-op when armed state is None (initial-connect retry).
+
+        Mirrors the race the arming gate prevents: ``_connect_with_retry``
+        fires on_reconnect for retries during the *initial* connect, before
+        the request has been sent, so ``_pending_messages`` is still None and
+        nothing should be re-sent.
+        """
+        provider = self._make_provider()
+        # Use a real (unconnected) fake socket so send() would record frames.
+        fake_ws = FakeReconnectingWS()
+        provider._ws = fake_ws
+        provider._pending_messages = None
+
+        await provider._replay_request()
+
+        assert fake_ws._sent == []
+
+    async def test_replay_request_noop_when_cancelled(self):
+        """Replay is a no-op once the provider is cancelled."""
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS()
+        provider._ws = fake_ws
+        provider._pending_messages = provider._build_ws_messages("Test")
+        await provider.cancel()
+
+        await provider._replay_request()
+
+        assert fake_ws._sent == []
 
     async def test_synthesize_ws_task_cancellation_closes_socket(self):
         provider = self._make_provider()

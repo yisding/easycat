@@ -93,11 +93,13 @@ class DeepgramSTT(WebSocketSTTBase):
         msg_type = msg.get("type", "")
         if msg_type == "Error":
             # Deepgram error frames carry the human-readable text under
-            # ``description`` (and sometimes ``message``); surface it to the
-            # event bus / journal like Cartesia and OpenAI Realtime do.
+            # ``description`` (and sometimes ``message``); the ``description``
+            # is the more descriptive field, so surface it via
+            # ``override_message`` so it wins over the generic ``message``.
             self._emit_provider_error_from_message(
                 msg,
-                default_message=msg.get("description") or "Deepgram STT error",
+                override_message=msg.get("description"),
+                default_message="Deepgram STT error",
             )
             return
         if self._config.is_flux:

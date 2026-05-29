@@ -323,9 +323,13 @@ class WebRTCTransport(_AudioQueueMixin):
 
     _transport_name = "WebRTC"
     reports_audio_delivery = True
-    # Browser-mic transport like WebSocket: the browser's WebRTC stack already
-    # applies echo cancellation, so default it on to match WebSocket rather than
-    # silently falling back to False via getattr.
+    # Deliberate flip from the prior implicit ``False`` default (which came from
+    # ``getattr(..., False)`` when no attribute was declared): WebRTC is a
+    # browser-mic transport like WebSocket, so it adopts the same EasyCat-side
+    # AEC default of ``True`` for consistency across browser transports.
+    # NOTE: browser WebRTC stacks may already apply their own echo cancellation;
+    # if double-processing degrades audio, set ``enable_echo_cancellation=False``
+    # explicitly on the session.
     default_echo_cancellation_enabled = True
 
     def __init__(self, config: WebRTCTransportConfig | None = None) -> None:
@@ -500,7 +504,7 @@ class WebRTCTransport(_AudioQueueMixin):
             # logger.debug line lost outside the debug bundle.
             self._emit_degraded(
                 _DEGRADED_OUTBOUND_QUEUE_FULL,
-                f"dropped {len(chunk.data)}-byte TTS frame; outbound queue full",
+                f"dropped {len(pcm_data)}-byte TTS frame; outbound queue full",
             )
         return accepted
 

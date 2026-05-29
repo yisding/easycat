@@ -165,13 +165,22 @@ class ReconnectingWebSocket:
             raise RuntimeError("WebSocket has been closed")
         if not self._connected.is_set():
             # Only wait if a reconnect could plausibly restore the socket.
-            # A socket that has never connected fails fast.
+            # A socket that has never connected fails fast. A socket whose
+            # ``_ws`` has been nulled with no reconnect in flight is terminally
+            # dead (e.g. recv_iter gave up after a failed reconnect): fast-fail
+            # rather than burning the full wait timeout on a known-dead socket.
             if not self._ever_connected:
+                raise RuntimeError("WebSocket is not connected")
+            if self._ws is None and not self._connect_lock.locked():
                 raise RuntimeError("WebSocket is not connected")
             try:
                 await asyncio.wait_for(self._connected.wait(), timeout=self._send_wait_timeout)
             except TimeoutError as exc:
                 raise RuntimeError("WebSocket is not connected") from exc
+            # close() (and other paths) may wake us by setting ``_connected``;
+            # re-check the closed flag before snapshotting a now-closing socket.
+            if self._closed:
+                raise RuntimeError("WebSocket has been closed")
         ws = self._ws
         if ws is None:
             raise RuntimeError("WebSocket is not connected")
@@ -244,7 +253,12 @@ class ReconnectingWebSocket:
                     async with self._connect_lock:
                         await self._connect_with_retry()
                 except ConnectionError:
+                    # Reconnect is exhausted and the socket is terminally dead.
+                    # Null ``_ws`` (it still references the closed connection)
+                    # so a later send()/recv() fast-fails in ``_await_connected``
+                    # instead of waiting out the full reconnect timeout.
                     logger.error("Reconnection failed; ending recv_iter")
+                    self._ws = None
                     return
 
     async def close(self) -> None:

@@ -231,19 +231,31 @@ class _SlowStreamingWorkflow:
 
 
 class TestStreamingStructuredOutput:
-    """Finding 2 — streaming shallow mode populates structured_output."""
+    """Finding 2 — streaming shallow mode leaves structured_output as None.
+
+    Streamed chunks are inherently unstructured text. Emitting the joined
+    text as ``structured_output`` would merely duplicate the ``done`` event's
+    ``text`` field (and could surface a partial value on barge-in cancel), so
+    the bridge leaves it ``None`` — matching deep-mode streaming.
+    """
 
     @pytest.mark.asyncio
-    async def test_streaming_variant_sets_structured_output(self):
+    async def test_streaming_variant_leaves_structured_output_none(self):
         bridge = GenericWorkflowBridge(workflow=_ShallowStreamingWorkflow())
         rec = _recorder()
         done = None
+        text = ""
         async for ev in bridge.invoke(AgentTurnInput.from_text("hello world"), rec):
-            if ev.kind == "done":
+            if ev.kind == "text_delta":
+                text += ev.text
+            elif ev.kind == "done":
                 done = ev
         assert done is not None
-        # Previously this was always None for the streaming branch.
-        assert done.structured_output == "hello world "
+        # Streaming chunks are unstructured: text is delivered but
+        # structured_output stays None rather than duplicating the text.
+        assert text == "hello world "
+        assert done.text == "hello world "
+        assert done.structured_output is None
 
 
 class TestCursorCleanupOnCancel:

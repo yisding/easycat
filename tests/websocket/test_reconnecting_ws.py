@@ -359,6 +359,83 @@ class TestReconnectingWebSocket:
         # consumers see a normal end-of-stream, not an unhandled exception.
         assert messages == ["msg1"]
 
+    async def test_send_fast_fails_after_recv_iter_gives_up(self):
+        """Finding 1: a send after recv_iter gives up fast-fails.
+
+        When a recv_iter-driven reconnect is exhausted the socket is
+        terminally dead (``_ws`` nulled, ``_connected`` cleared, no reconnect
+        in flight). A subsequent send() must raise immediately rather than
+        burning the full ``_send_wait_timeout`` waiting on a reconnect that
+        will never happen.
+        """
+        config = ReconnectConfig(base_delay=0.01, max_retries=1, jitter_factor=0.0)
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=config,
+            on_reconnect=AsyncMock(),
+        )
+        # Give it a generous wait timeout so a slow path would be observable.
+        ws._send_wait_timeout = 5.0
+
+        close_frame = websockets.frames.Close(1006, "abnormal")
+
+        class DroppingConnection:
+            def __init__(self):
+                self.close_code = None
+                self.close = AsyncMock()
+
+            def __aiter__(self):
+                return self._iter()
+
+            async def _iter(self):
+                yield "msg1"
+                raise websockets.exceptions.ConnectionClosed(close_frame, None)
+
+        ws._ws = DroppingConnection()
+
+        with patch(
+            "easycat.reconnecting_ws.websockets.connect",
+            new_callable=AsyncMock,
+            side_effect=ConnectionError("down"),
+        ):
+            async for _ in ws.recv_iter():
+                pass
+
+        # recv_iter nulled the socket on give-up.
+        assert ws._ws is None
+
+        # send() must fast-fail well under the (5s) wait timeout.
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        with pytest.raises(RuntimeError, match="not connected"):
+            await ws.send("frame")
+        assert loop.time() - start < 1.0
+
+    async def test_send_raises_when_close_wakes_blocked_sender(self):
+        """Finding 2: a sender woken by close() raises instead of using the socket.
+
+        close() sets ``_connected`` to wake any blocked sender before nulling
+        ``_ws``. The woken sender must observe ``_closed`` and raise rather
+        than snapshotting and writing to the now-closing socket.
+        """
+        ws = self._make_ws(base_delay=0.01, max_retries=2, jitter_factor=0.0)
+        old_conn = FakeWSConnection()
+        ws._ws = old_conn
+        ws._ever_connected = True
+        ws._connected.clear()
+        ws._send_wait_timeout = 5.0
+
+        send_task = asyncio.create_task(ws.send("frame"))
+        await asyncio.sleep(0)  # let send() block on the event
+        assert not send_task.done()
+
+        await ws.close()
+
+        with pytest.raises(RuntimeError, match="closed"):
+            await send_task
+        # The frame never landed on the closing socket.
+        assert old_conn._sent == []
+
     async def test_recv_iter_no_reconnect_after_explicit_close(self):
         ws = self._make_ws(base_delay=0.01)
 

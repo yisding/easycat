@@ -27,13 +27,11 @@ class TTSBase:
         self._output_format = output_format
         self._cancelled = False
         self._active = False
-        # Leftover odd byte carried across chunks so a 16-bit PCM sample is
-        # never split at an arbitrary streaming-chunk boundary before resample.
-        self._resample_carry = b""
         # Leftover sub-sample bytes carried across _make_audio_event calls so
         # every emitted AudioChunk is sample-aligned, even when no resample
         # happens (e.g. a WS frame whose length is not a multiple of the
-        # sample width).
+        # sample width). _make_audio_event aligns the buffer here before any
+        # downmix/resample, so _normalize_audio always receives whole samples.
         self._sample_carry = b""
 
     @property
@@ -48,11 +46,20 @@ class TTSBase:
         """Mark synthesis as active and reset cancellation state."""
         self._cancelled = False
         self._active = True
-        self._resample_carry = b""
         self._sample_carry = b""
 
     def _end_synthesis(self) -> None:
-        """Mark synthesis as complete."""
+        """Mark synthesis as complete.
+
+        Any non-empty ``_sample_carry`` here is a sub-sample remainder (at
+        most ``sample_width - 1`` bytes, i.e. less than one whole 16-bit
+        sample) that no following frame ever completed. It is intentionally
+        dropped rather than zero-padded and emitted: a fabricated partial
+        sample would inject a click far more audible than the at-most
+        half-sample of silence lost, and emitting from here would force a
+        return-value contract onto every subclass's synthesis loop.
+        """
+        self._sample_carry = b""
         self._active = False
 
     def _make_audio_event(self, data: bytes, fmt: AudioFormat | None = None) -> TTSEvent:
@@ -96,15 +103,9 @@ class TTSBase:
             data = to_mono(data, source_format.channels)
 
         if source_format.sample_rate != self._output_format.sample_rate:
-            # Prepend any leftover byte from the previous chunk and hold back a
-            # new trailing odd byte so a 16-bit sample is never split across
-            # streaming chunks (which would corrupt audio or crash resample).
-            data = self._resample_carry + data
-            if len(data) % 2:
-                self._resample_carry = data[-1:]
-                data = data[:-1]
-            else:
-                self._resample_carry = b""
+            # ``data`` is already sample-aligned: _make_audio_event held back
+            # any sub-sample remainder in _sample_carry before calling here, so
+            # resample never sees a split 16-bit sample.
             data = resample(data, source_format.sample_rate, self._output_format.sample_rate)
 
         return data

@@ -243,6 +243,36 @@ def test_latency_and_live_failure_classification_share_one_taxonomy() -> None:
     assert classify_live_failure("schema drift detected") == "provider_drift"
 
 
+def test_failure_classification_precedence_pins_cross_category_messages() -> None:
+    """Pin the deliberate precedence for messages that match two categories.
+
+    These are the cross-category conflicts the unified token table must resolve
+    intentionally: QUOTA wins over AUTH (a 429 is the actionable signal even
+    with an auth word), and DRIFT wins over NETWORK so schema-drift detection is
+    never masked by an incidental network word.
+    """
+    from easycat.validation.latency import FailureCategory, classify_failure_category
+    from easycat.validation.runner import classify_live_failure
+
+    # QUOTA before AUTH: "429 unauthorized" carries both a quota token (429) and
+    # an auth token (unauthorized); the quota signal must win.
+    assert classify_failure_category("429 unauthorized") is FailureCategory.QUOTA
+    assert classify_live_failure("429 unauthorized") == "provider_quota"
+    assert classify_latency_failure("429 unauthorized") == "provider_rate_limit"
+
+    # DRIFT before NETWORK: "schema mismatch on connection close" carries both a
+    # drift token (schema) and a network token (connection); drift must win so
+    # live validation still reports 'provider_drift'.
+    assert (
+        classify_failure_category("schema mismatch on connection close") is FailureCategory.DRIFT
+    )
+    assert classify_live_failure("schema mismatch on connection close") == "provider_drift"
+    assert (
+        classify_latency_failure("schema mismatch on connection close")
+        == "easycat_latency_regression"
+    )
+
+
 def test_latency_runner_writes_report_and_smoke_latest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -57,6 +57,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class _PipelineTornDown(Exception):
+    """Sentinel raised by the per-chunk handler once consecutive failures hit
+    the fatal threshold.
+
+    The per-chunk handler has *already* emitted the terminating
+    :class:`Error` for the offending exception, so this sentinel exists only
+    to break out of the receive loop and trigger teardown.  The outer
+    ``except`` recognizes it and suppresses the second emit, so the fatal
+    frame surfaces exactly one ``Error`` like every other frame.
+    """
+
+
 class AudioRouter:
     """Routes audio between the transport and the pipeline stages.
 
@@ -365,12 +377,22 @@ class AudioRouter:
                             "Pipeline exceeded %d consecutive chunk errors; tearing down",
                             self._MAX_CONSECUTIVE_CHUNK_ERRORS,
                         )
-                        raise
+                        # Break out via a sentinel rather than re-raising
+                        # ``exc``: the Error for ``exc`` was already emitted
+                        # just above, so re-raising it would make the outer
+                        # handler emit a duplicate Error for the same fatal
+                        # frame.  The outer handler suppresses this sentinel.
+                        raise _PipelineTornDown from exc
                     continue
                 else:
                     consecutive_errors = 0
 
         except asyncio.CancelledError:
+            pass
+        except _PipelineTornDown:
+            # Terminal teardown after sustained per-chunk failures.  The
+            # Error was already emitted by the per-chunk handler; do not
+            # emit a second one for the same fatal frame.
             pass
         except Exception as exc:
             logger.exception("Pipeline error")

@@ -834,7 +834,22 @@ class FailureCategory(StrEnum):
 # Single source of truth for error-token matching, ordered by precedence.
 # Tokens are matched against a normalized message (lowercased, with "_" and
 # "-" collapsed to spaces) so both word- and identifier-style errors match.
+#
+# Precedence is deliberate and pinned by tests for the cross-category messages
+# that the two paths historically disagreed on:
+#   * QUOTA before AUTH: a rate-limit/quota signal (e.g. "429 unauthorized") is
+#     the actionable one (back off / wait), so it wins over a co-occurring auth
+#     token. This matches the original `classify_live_failure` ordering.
+#   * DRIFT before NETWORK: schema-drift detection is a core purpose of live
+#     validation (it feeds `_capability_status` -> status 'provider_drift'), so
+#     a drift signal must not be masked by an incidental network word (e.g.
+#     "schema mismatch on connection close"). This restores the original
+#     `classify_live_failure` ordering, which checked DRIFT before NETWORK.
 _FAILURE_CATEGORY_TOKENS: tuple[tuple[FailureCategory, tuple[str, ...]], ...] = (
+    (
+        FailureCategory.QUOTA,
+        ("rate limit", "ratelimit", "429", "quota", "too many requests"),
+    ),
     (
         FailureCategory.AUTH,
         (
@@ -847,13 +862,9 @@ _FAILURE_CATEGORY_TOKENS: tuple[tuple[FailureCategory, tuple[str, ...]], ...] = 
             "403",
         ),
     ),
-    (
-        FailureCategory.QUOTA,
-        ("rate limit", "ratelimit", "429", "quota", "too many requests"),
-    ),
     (FailureCategory.TIMEOUT, ("timeout", "timed out", "deadline")),
-    (FailureCategory.NETWORK, ("dns", "network", "connection")),
     (FailureCategory.DRIFT, ("schema", "unknown event", "drift")),
+    (FailureCategory.NETWORK, ("dns", "network", "connection")),
     (FailureCategory.REGRESSION, ("assert", "failed", "traceback")),
 )
 
