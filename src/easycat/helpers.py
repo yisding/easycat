@@ -85,18 +85,66 @@ def run(config: EasyConfig) -> None:
         logging.getLogger("easycat").setLevel(_resolve_easycat_log_level(default=logging.INFO))
 
     session = create_session(config)
-    if sys.stderr.isatty() and not os.getenv("PYTEST_CURRENT_TEST"):
+    if (
+        sys.stderr.isatty()
+        and not os.getenv("PYTEST_CURRENT_TEST")
+        and not os.getenv("EASYCAT_QUIET")
+    ):
+        print(_wired_summary(config), file=sys.stderr)
         attach_runtime_feedback(session)
 
     async def _run() -> None:
-        await session.start()
-        stop_event = asyncio.Event()
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, stop_event.set)
-        try:
+        # ``async with`` is the one public teardown idiom: __aenter__
+        # starts the session and __aexit__ tears it down with
+        # ``stop(force=True)``.
+        async with session:
+            stop_event = asyncio.Event()
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, stop_event.set)
             await stop_event.wait()
-        finally:
-            await session.shutdown()
 
     asyncio.run(_run())
+
+
+# Transport-config type -> human label for the "what got wired" summary.
+# There is no transport-name registry (``config.py``'s transport map is
+# type -> factory), so the summary owns this small lookup itself.
+_TRANSPORT_LABELS: dict[str, str] = {
+    "LocalTransportConfig": "local-mic",
+    "WebRTCTransportConfig": "browser",
+    "TwilioTransportConfig": "phone",
+    "WebSocketTransportConfig": "websocket",
+    "WebTransportTransportConfig": "webtransport",
+}
+
+
+def _wired_summary(config: EasyConfig) -> str:
+    """One-line "what got wired" summary for the TTY happy path.
+
+    Names the resolved STT, TTS, and transport, plus echo cancellation
+    as a resolved on/off (annotated ``(auto)`` only when the caller left
+    ``enable_echo_cancellation`` unset, i.e. the value was derived from
+    the transport default).  By the time ``run()`` sees ``config`` its
+    ``__post_init__`` has already resolved the string shortcuts and the
+    echo-cancellation tri-state, so these reads never hit ``None``.
+    """
+    from easycat.config import _provider_display_name
+
+    stt_label = _provider_display_name(config.stt, "STT") if config.stt is not None else "none"
+    tts_label = _provider_display_name(config.tts, "TTS") if config.tts is not None else "none"
+    transport_label = _TRANSPORT_LABELS.get(
+        type(config.transport).__name__,
+        type(config.transport).__name__.replace("Config", ""),
+    )
+
+    echo = config.echo_cancellation
+    echo_on = bool(echo.enabled) if echo is not None else False
+    echo_label = "on" if echo_on else "off"
+    if config.enable_echo_cancellation is None:
+        echo_label += " (auto)"
+
+    return (
+        f"easycat: wired stt={stt_label}, tts={tts_label}, "
+        f"transport={transport_label}, echo-cancel={echo_label}"
+    )

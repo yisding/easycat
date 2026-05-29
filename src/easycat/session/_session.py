@@ -1123,7 +1123,7 @@ class Session:
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
         """Exit the context manager, tearing the session down cleanly."""
-        await self.shutdown()
+        await self.stop(force=True)
 
     async def wait_closed(self) -> None:
         """Block until the session has been stopped or shut down.
@@ -1267,8 +1267,18 @@ class Session:
                 await self.transport.disconnect()
             raise
 
-    async def stop(self) -> None:
-        """Gracefully stop the session and release live backend resources."""
+    async def stop(self, *, force: bool = False) -> None:
+        """Stop the session and release live backend resources.
+
+        The single public teardown verb.  ``force=False`` (the default)
+        drains in-flight work gracefully; ``force=True`` aggressively
+        cancels the pipeline / TTS / outbound tasks first (the former
+        ``shutdown()`` behavior) for when a graceful stop is hung on a
+        misbehaving provider.
+
+        Prefer the ``async with session:`` context manager, which calls
+        this for you on exit.
+        """
         if self._closed or self._stopping:
             return
         self._stopping = True
@@ -1293,24 +1303,71 @@ class Session:
                 except (asyncio.CancelledError, Exception):
                     pass
 
-            # Always perform cleanup — even when the ingress loop already
-            # flipped ``_is_running`` to False (e.g. after a transport
-            # disconnect).  Each step is individually guarded and safe to
-            # call when no work was started.
-            pipeline_task = self._audio_router.pipeline_task
-            if pipeline_task and pipeline_task is not current_task and not pipeline_task.done():
-                pipeline_task.cancel()
-                try:
-                    await pipeline_task
-                except asyncio.CancelledError:
-                    logger.debug(
-                        "TTS processing task was cancelled; ensuring"
-                        " BotStoppedSpeaking is emitted if needed."
-                    )
+            if force:
+                # Force path: aggressively cancel every pipeline task and
+                # signal scoped work before awaiting any handle so the
+                # force-cancel ordering is preserved.
+                tasks: list[asyncio.Task[Any]] = []
+                pipeline_task = self._audio_router.pipeline_task
+                if pipeline_task and not pipeline_task.done():
+                    pipeline_task.cancel()
+                    tasks.append(pipeline_task)
+                # STT teardown is delegated to STTCommitter.cancel() below
+                # (it cancels the consumer task, ends the stream, and drains
+                # scoped commit/pause tasks) — matching 92f8ebf's move away
+                # from an ad-hoc stt_task cancel here.
+                current_tts_task = self._tts_scheduler.current_task
+                if current_tts_task and not current_tts_task.done():
+                    current_tts_task.cancel()
+                    tasks.append(current_tts_task)
+                outbound_task = self._audio_router.outbound_task
+                if outbound_task and not outbound_task.done():
+                    outbound_task.cancel()
+                    tasks.append(outbound_task)
 
-            await self._cancel_greeting_task()
-            await self._stt_committer.cancel(turn)
-            await self._tts_scheduler.cancel()
+                # Signal scoped work before awaiting other task handles so
+                # migrated shutdown work preserves the previous force-cancel
+                # ordering. Drain below after every task observed cancellation.
+                self._runtime_scope.cancel()
+                for task in tasks:
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                await self._stt_committer.cancel(turn)
+                # RuntimeScope-owned work currently covers heartbeat,
+                # greeting, and STT segment commit/pause tasks. These can
+                # outlive the pipeline/STT consumer handles above, so the
+                # force path drains the scope before provider teardown.
+                await self._runtime_scope.cancel_and_drain()
+                self._stt_committer.clear_task_handles()
+                self._greeting_task = None
+                self._heartbeat_task = None
+            else:
+                # Graceful path: always perform cleanup — even when the
+                # ingress loop already flipped ``_is_running`` to False
+                # (e.g. after a transport disconnect).  Each step is
+                # individually guarded and safe to call when no work was
+                # started.
+                pipeline_task = self._audio_router.pipeline_task
+                if (
+                    pipeline_task
+                    and pipeline_task is not current_task
+                    and not pipeline_task.done()
+                ):
+                    pipeline_task.cancel()
+                    try:
+                        await pipeline_task
+                    except asyncio.CancelledError:
+                        logger.debug(
+                            "TTS processing task was cancelled; ensuring"
+                            " BotStoppedSpeaking is emitted if needed."
+                        )
+
+                await self._cancel_greeting_task()
+                await self._stt_committer.cancel(turn)
+                await self._tts_scheduler.cancel()
+
             for checker in self._health_checkers:
                 await checker.stop()
             self._health_checkers = []
@@ -1319,7 +1376,8 @@ class Session:
                 self._outbound_queue.close()
             # Cancel the outbound drain task BEFORE disconnecting the
             # transport — otherwise the task may hang on send_audio()
-            # with a disconnected transport.
+            # with a disconnected transport.  (The force path already
+            # cancelled it above; stop_outbound is idempotent.)
             await self._audio_router.stop_outbound()
             await self._runtime_scope.cancel_and_drain("pipeline_heartbeat")
             self._heartbeat_task = None
@@ -1331,104 +1389,32 @@ class Session:
                 pass
             await self._close_audio_providers()
             self._turn = None
-            self.destroy()
+            self._destroy()
             self._mark_closed()
         finally:
             self._mark_observability_inactive()
             self._stopping = False
 
     async def shutdown(self) -> None:
-        """Force-cancel in-flight work, then release live backend resources."""
-        if self._closed or self._stopping:
-            return
-        self._stopping = True
-        self._is_running = False
+        """Force-cancel in-flight work, then release backend resources.
 
-        try:
-            turn = self._turn
-            if turn:
-                turn.cancel_token.cancel()
+        Thin alias for ``stop(force=True)`` kept so existing callers
+        (and the ``async with`` exit path) need not change.  New code
+        should prefer ``async with session:`` or ``stop(force=...)``.
+        """
+        await self.stop(force=True)
 
-            # Cancel any in-flight text turn.
-            text_token = self._turn_runner.text_turn_cancel_token
-            if text_token:
-                text_token.cancel()
-            text_task = self._turn_runner.active_text_turn
-            if text_task is not None and not text_task.done():
-                text_task.cancel()
-                try:
-                    await text_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-
-            tasks: list[asyncio.Task[Any]] = []
-            pipeline_task = self._audio_router.pipeline_task
-            if pipeline_task and not pipeline_task.done():
-                pipeline_task.cancel()
-                tasks.append(pipeline_task)
-            # STT teardown is delegated to STTCommitter.cancel() below
-            # (it cancels the consumer task, ends the stream, and drains
-            # scoped commit/pause tasks) — matching 92f8ebf's move away
-            # from an ad-hoc stt_task cancel here.
-            current_tts_task = self._tts_scheduler.current_task
-            if current_tts_task and not current_tts_task.done():
-                current_tts_task.cancel()
-                tasks.append(current_tts_task)
-            outbound_task = self._audio_router.outbound_task
-            if outbound_task and not outbound_task.done():
-                outbound_task.cancel()
-                tasks.append(outbound_task)
-
-            # Signal scoped work before awaiting other task handles so
-            # migrated shutdown work preserves the previous force-cancel
-            # ordering. Drain below after every task has observed cancellation.
-            self._runtime_scope.cancel()
-            for task in tasks:
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
-            await self._stt_committer.cancel(turn)
-            # RuntimeScope-owned work currently covers heartbeat, greeting,
-            # and STT segment commit/pause tasks. These can outlive the
-            # pipeline/STT consumer handles above, so shutdown drains the
-            # scope before provider teardown returns.
-            await self._runtime_scope.cancel_and_drain()
-            self._stt_committer.clear_task_handles()
-            self._greeting_task = None
-            self._heartbeat_task = None
-
-            for checker in self._health_checkers:
-                await checker.stop()
-            self._health_checkers = []
-            self._stop_helpers()
-            if not self._outbound_queue_external:
-                self._outbound_queue.close()
-            await self.transport.disconnect()
-            await self._turn_manager.shutdown()
-            try:
-                await aclose_if_supported(self.agent)
-            except Exception:
-                pass
-            await self._close_audio_providers()
-            self._turn = None
-            self.destroy()
-            self._mark_closed()
-        finally:
-            self._mark_observability_inactive()
-            self._stopping = False
-
-    def close(self) -> None:
+    def _close(self) -> None:
         """Finalize the session journal without tearing down backends.
 
         Writes the clean-close marker so the journal is marked as
         properly shut down. This is the logical end-of-session marker,
         not the physical resource teardown step.
 
-        Most callers should use :meth:`destroy` or the higher-level
-        :meth:`stop` / :meth:`shutdown`, which release live backend
-        resources while preserving a read-only post-stop debug surface.
-        Safe to call multiple times.
+        Internal: the public teardown path is ``async with session:`` or
+        :meth:`stop`, which call :meth:`_destroy` (and hence this) for
+        you while preserving a read-only post-stop debug surface.  Safe
+        to call multiple times.
         """
         if self._flushed:
             return
@@ -1436,18 +1422,19 @@ class Session:
         if self._journal:
             self._journal.finalize()
 
-    def destroy(self) -> None:
+    def _destroy(self) -> None:
         """Release live debug backends while keeping post-stop inspection working.
 
         This closes backend resources such as SQLite connections,
         Litestream sidecars, libSQL sync threads, and in-memory artifact
         stores. The session retains a read-only postmortem view, so
         ``session.journal.read()`` and ``export_debug_bundle()`` continue
-        to work after :meth:`stop` / :meth:`shutdown`.
+        to work after :meth:`stop`.
 
-        Safe to call multiple times.
+        Internal: invoked by :meth:`stop` (and the ``async with`` exit
+        path).  Safe to call multiple times.
         """
-        self.close()  # ensure the clean-close marker is written first
+        self._close()  # ensure the clean-close marker is written first
 
         if self._journal:
             live_journal = self._journal
