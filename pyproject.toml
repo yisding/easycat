@@ -37,7 +37,7 @@ cartesia = []
 telephony = ["fastapi>=0.110.0", "python-multipart>=0.0.29", "twilio>=9.0.0", "uvicorn>=0.29.0"]
 aec = ["livekit>=1.0.0"]
 local = ["sounddevice>=0.4.6"]
-rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.31.0"]
+rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.33.0"]
 # TEN VAD has a non-permissive license, so we do not vendor its
 # binaries.  Users who accept the license can opt in here.
 ten-vad = ["numpy>=1.24.0", "onnxruntime>=1.16.0", "ten-vad>=1.0.6.8"]
@@ -55,7 +55,7 @@ quickstart = [
     "openai>=1.0.0",
     "openai-agents>=0.6.2",
     "pyrnnoise>=0.3.0",
-    "requests>=2.31.0",
+    "requests>=2.33.0",
     "numpy>=1.24.0",
     "onnxruntime>=1.16.0",
 ]
@@ -74,7 +74,7 @@ all = [
     "python-multipart>=0.0.29",
     "sounddevice>=0.4.6",
     "pyrnnoise>=0.3.0",
-    "requests>=2.31.0",
+    "requests>=2.33.0",
     "twilio>=9.0.0",
     "uvicorn>=0.29.0",
     "numpy>=1.24.0",
