@@ -117,7 +117,11 @@ class DeepgramTTS(TTSBase):
         self._start_synthesis()
         self._ws = self._create_ws()
         text = coerce_tts_input(payload).text
-        self._pending_text = text
+        # Leave replay disarmed until the request has actually been sent on a
+        # connected stream. ``on_reconnect`` fires for retries during the
+        # *initial* connect too, and arming earlier would replay the Speak/
+        # Flush frames before the sends below, duplicating the utterance.
+        self._pending_text = None
 
         try:
             await self._ws.connect()
@@ -127,6 +131,10 @@ class DeepgramTTS(TTSBase):
 
             # Send flush to signal end of text input
             await self._ws.send(json.dumps({"type": "Flush"}))
+
+            # Request is now live on a connected stream: arm replay so a
+            # *mid-stream* reconnect re-sends these frames and resumes synthesis.
+            self._pending_text = text
 
             # Receive audio chunks
             async for message in self._ws.recv_iter():

@@ -163,11 +163,18 @@ class CartesiaTTS(TTSBase):
         self._context_id = context_id
 
         request = json.dumps(self._build_request(text, context_id))
-        self._pending_request = request
+        # Leave replay disarmed until the request has actually been sent on a
+        # connected stream. ``on_reconnect`` fires for retries during the
+        # *initial* connect too, and arming earlier would replay the request
+        # before the send below, duplicating the utterance.
+        self._pending_request = None
 
         try:
             await self._ws.connect()
             await self._ws.send(request)
+            # Request is now live: arm replay so a *mid-stream* reconnect
+            # re-sends it and resumes synthesis.
+            self._pending_request = request
 
             async for message in self._ws.recv_iter():
                 if self._cancelled:

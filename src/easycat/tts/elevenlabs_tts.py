@@ -237,11 +237,18 @@ class ElevenLabsTTS(TTSBase):
     async def _start_ws_stream(self, text: str) -> ReconnectingWebSocket:
         """Send the full ElevenLabs stream-init sequence, retrying once on stale sockets."""
         messages = self._build_ws_messages(text)
-        self._pending_messages = messages
+        # Leave replay disarmed until the request has actually been sent on a
+        # connected stream. ``on_reconnect`` fires for retries during the
+        # *initial* connect too, and arming earlier would replay the
+        # init/text/EOS frames before the sends below, duplicating the utterance.
+        self._pending_messages = None
         ws = await self._connect_ws()
 
         try:
             await self._send_ws_messages(ws, messages)
+            # Request is now live: arm replay so a *mid-stream* reconnect
+            # re-sends these frames and resumes synthesis.
+            self._pending_messages = messages
             return ws
         except Exception:
             if self._cancelled:
@@ -249,6 +256,7 @@ class ElevenLabsTTS(TTSBase):
             await self._close_ws()
             ws = await self._connect_ws()
             await self._send_ws_messages(ws, messages)
+            self._pending_messages = messages
             return ws
 
     def _build_ws_messages(self, text: str) -> tuple[str, str, str]:
