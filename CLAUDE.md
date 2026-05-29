@@ -61,9 +61,9 @@ uv run python examples/ws_server.py  # Run an example
 
 ## Session Lifecycle
 
-- `await session.stop()` and `await session.shutdown()` both end in full backend teardown via `Session.destroy()`
-- `Session.close()` is lower-level and only writes the journal clean-close marker; it is not the normal shutdown path
-- After a clean `stop()` or `shutdown()`, `session.journal.read()` and `session.export_debug_bundle(...)` must still work through the preserved read-only postmortem view
+- `await session.stop()` is the single public teardown verb: `force=False` (default) drains in-flight work gracefully, `force=True` cancels it first. `async with session:` is the preferred idiom (it calls `stop(force=True)` on exit); `session.shutdown()` remains as a thin alias for `stop(force=True)`
+- Backend teardown (SQLite/Litestream/libSQL/artifact stores) and the journal clean-close marker are handled internally by `stop()` via the private `Session._destroy()` / `Session._close()` primitives — these are not public entry points
+- After a clean `stop()`, `session.journal.read()` and `session.export_debug_bundle(...)` must still work through the preserved read-only postmortem view
 
 ## Style
 

@@ -56,6 +56,33 @@ def test_factory_unused_kwargs_are_stored_not_substituted() -> None:
     assert err.context["provider"] == "foo"
 
 
+def test_rendered_message_carries_fix_and_explain_hint() -> None:
+    """A registered error's ``str()`` includes the fix and the explain hint."""
+    rendered = str(EASYCAT_E101(target="/tmp/demo"))
+    assert "EASYCAT_E101: " in rendered
+    assert "Fix:" in rendered
+    assert "easycat explain EASYCAT_E101" in rendered
+
+
+def test_rendered_message_unknown_code_is_bare() -> None:
+    """An unregistered code renders ``CODE: message`` with no fix/hint."""
+    rendered = str(EasyCatError("EASYCAT_E999", "boom"))
+    assert rendered == "EASYCAT_E999: boom"
+
+
+def test_render_survives_braced_fix_missing_context() -> None:
+    """A fix template with a placeholder absent from context falls back."""
+    code = "EASYCAT_TEST_RENDER"
+    register(code, "headline", cause="c", fix="set {missing} now")
+    try:
+        err = EasyCatError(code, "headline")
+        rendered = str(err)
+        assert "Fix: set {missing} now" in rendered
+        assert "easycat explain EASYCAT_TEST_RENDER" in rendered
+    finally:
+        REGISTRY.pop(code, None)
+
+
 def test_suggest_codes_returns_close_matches() -> None:
     matches = suggest_codes("EASYCAT_E10")
     assert any(m.startswith("EASYCAT_E1") for m in matches)

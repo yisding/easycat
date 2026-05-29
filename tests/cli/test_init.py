@@ -133,6 +133,54 @@ def test_init_escapes_agent_literals(
     compile(agent_py.read_text(encoding="utf-8"), str(agent_py), "exec")
 
 
+def test_init_renders_non_ascii_instructions_intact(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Em-dashes and other non-ASCII survive into agent.py, not \\uXXXX escapes."""
+    monkeypatch.chdir(tmp_path)
+    instructions = "Keep answers short — you're speaking aloud, naïvité ☕."
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "agent_instructions": instructions,
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    agent_py = tmp_path / "demo" / "agent.py"
+    text = agent_py.read_text(encoding="utf-8")
+    assert instructions in text
+    assert "\\u" not in text
+    compile(text, str(agent_py), "exec")
+
+
+def test_init_omits_cache_artifacts(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No generated path may contain a cache dir or a compiled .pyc."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "openai-agents"})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git", "--json"])
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+
+    forbidden = {"__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache"}
+    for path in project.rglob("*"):
+        parts = set(path.relative_to(project).parts)
+        assert not (parts & forbidden), f"shipped a cache artifact: {path}"
+        assert path.suffix != ".pyc", f"shipped a compiled artifact: {path}"
+
+    # The reported file manifest is equally clean.
+    payload = json.loads(result.stdout)
+    for rel in payload["files"]:
+        assert not (set(Path(rel).parts) & forbidden), rel
+        assert not rel.endswith(".pyc"), rel
+
+    # The legitimate top-level .gitignore is still shipped.
+    assert (project / ".gitignore").exists()
+
+
 # ── Error paths ──────────────────────────────────────────────────────
 
 
