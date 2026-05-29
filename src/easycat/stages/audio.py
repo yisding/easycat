@@ -74,10 +74,15 @@ class AudioStage:
             input_ref=input_ref,
             data_extra=start_extra,
         )
+        # Track which component is in flight so a raised exception is
+        # attributed to the provider that actually failed (the noise reducer
+        # vs. the echo canceller), not always to ``self._provider``.
+        error_provider = type(self._provider).__name__.lower()
         try:
             chunk = input
             chunk = await self._provider.process(chunk)
             if self._echo_canceller is not None:
+                error_provider = type(self._echo_canceller).__name__.lower()
                 chunk = await self._echo_canceller.process(chunk)
             result = chunk
         except Exception as exc:
@@ -86,7 +91,7 @@ class AudioStage:
                 "easycat.provider.errors.total",
                 attributes={
                     "easycat.surface": "stt",
-                    "easycat.provider": type(self._provider).__name__.lower(),
+                    "easycat.provider": error_provider,
                     "easycat.error_type": type(exc).__name__,
                 },
             )

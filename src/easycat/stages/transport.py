@@ -87,6 +87,11 @@ class TransportStage:
                         attributes={"easycat.surface": "tts"},
                     )
                 delivered = await self._provider.send_audio(input)
+                if not delivered:
+                    # A falsy return is a silent drop, not a successful send;
+                    # tag the latency sample so drops are distinguishable from
+                    # deliveries in easycat.stage.latency.
+                    result_attr = "drop"
         except Exception as exc:
             result_attr = "fail"
             observability.increment_counter(
