@@ -369,6 +369,14 @@ class TurnRunner:
             except Exception:
                 logger.exception("TTS streaming error")
 
+            # Decide whether playback was cut short by a barge-in *now* — while
+            # still inside _process_tts and before ``finalize_speaking_turn``
+            # emits bot_stopped_speaking (after which the next turn can start and
+            # cancel this turn's now-superseded token). ``is_cancelled`` here
+            # therefore reflects a cancellation observed *during* this turn's
+            # playback, not a later turn retroactively cancelling the token.
+            tts_playback_cut_short = bool(token and token.is_cancelled)
+
             while not tts_queue.empty():
                 remaining = tts_queue.get_nowait()
                 if remaining is not None:
@@ -385,12 +393,6 @@ class TurnRunner:
                     self._turn_manager.reset()
                 else:
                     self._reset_turn_state()
-
-            # Whether playback was cut short by a barge-in is decided here, at
-            # the moment playback finishes — i.e. whether the token was already
-            # cancelled *during* this turn's playback.  A later turn cancelling
-            # this (now-superseded) token must not retroactively flip this.
-            tts_playback_cut_short = bool(token and token.is_cancelled)
 
         # ── Run agent stream + TTS concurrently ──
 
