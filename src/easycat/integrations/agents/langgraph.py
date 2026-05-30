@@ -32,6 +32,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Sequence
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -53,6 +54,7 @@ from easycat.integrations.agents.base import (
     FrameworkStateSnapshot,
     InterruptionPlan,
     UnitKind,
+    run_interruption_journal_protocol,
 )
 from easycat.integrations.agents.langchain import _close_top_ended_cursors
 from easycat.runtime.records import ErrorInfo
@@ -90,6 +92,29 @@ logger = logging.getLogger(__name__)
 # need to narrow the surface for performance on a very chatty graph can
 # still opt in via ``include_types=``.
 _DEFAULT_INCLUDE_TYPES: tuple[str, ...] | None = None
+
+
+@dataclass
+class _LangGraphTurnAccumulator:
+    """Mutable per-turn streaming state shared across the invoke split.
+
+    :meth:`LangGraphBridge._drive_stream` writes the streamed text and
+    the "model tokens streamed" flag onto this holder so
+    :meth:`LangGraphBridge._finalize_done` can read them after the
+    stream generator returns (a generator's locals don't survive its
+    return, so the state has to live on a shared object instead).
+    """
+
+    accumulated: str = ""
+    # Whether the *model/chain* path (``translate_stream_event``)
+    # streamed any text, tracked separately from ``get_stream_writer``
+    # custom-chunk text.  A graph can speak a progress chunk via
+    # ``get_stream_writer({"text": ...})`` and then write its real answer
+    # as a final ``AIMessage`` without streaming model tokens;
+    # ``accumulated`` would be non-empty (the progress text) so the
+    # final-message fallback would be skipped and the caller would only
+    # hear the progress narration.
+    model_text_streamed: bool = False
 
 
 class LangGraphBridge:
@@ -365,27 +390,12 @@ class LangGraphBridge:
         # produces any assistant output (see the cancel paths below).
         self._turn_produced_no_assistant = False
 
-        accumulated = ""
-        # Whether the *model/chain* path (``translate_stream_event``)
-        # streamed any text, tracked separately from ``get_stream_writer``
-        # custom-chunk text.  A graph can speak a progress chunk via
-        # ``get_stream_writer({"text": ...})`` and then write its real
-        # answer as a final ``AIMessage`` without streaming model tokens;
-        # ``accumulated`` would be non-empty (the progress text) so the
-        # final-message fallback below would be skipped and the caller
-        # would only hear the progress narration.
-        model_text_streamed = False
+        acc = _LangGraphTurnAccumulator()
         # Cursors open inside this turn, keyed by LangChain ``run_id``.
         # Each node entry opens a workflow_node cursor; each chat_model
         # call opens a model_node cursor.  Closing is driven by the
         # matching ``_end`` event for the same run_id.
         open_cursors: dict[str, ExecutionCursor] = {}
-        # Run ids whose ``_end`` event arrived while a sibling cursor
-        # was still on top of the recorder stack (parallel nodes / models
-        # running concurrently) — closed in LIFO order once the
-        # obstructing sibling(s) also end so the recorder's strict stack
-        # invariant holds.
-        ended_runs: set[str] = set()
         # Previously seen ``(node, langgraph_step)`` at each subgraph
         # namespace, so we can emit handoff triples when a node changes
         # at the same level *across* super-steps.  The step is tracked
@@ -396,17 +406,6 @@ class LangGraphBridge:
         # Checkpoint ids we've already emitted state_snapshot records
         # for, so the post-turn history walk records each id once.
         seen_checkpoints: set[str] = set()
-        # Shared state for tool-call deduplication and LCEL root-chain
-        # dedup — see :func:`translate_stream_event` for details.  Under
-        # LangGraph the outermost ``on_chain_start`` is the graph (not an
-        # LCEL root), so the translator instead treats each LangGraph
-        # *node entry* as root-equivalent: a plain ``RunnableLambda`` /
-        # LCEL node's own composed stream reaches the translator while
-        # the node's deeper LCEL children stay deduped (so a node that is
-        # ``RunnableLambda(f) | RunnableLambda(g)`` doesn't narrate its
-        # intermediate value).  Model double-speak is still handled by
-        # ``chains_with_model_descendants``.
-        tool_state: dict[str, Any] = {}
 
         config = self._config()
         # Pre-turn baseline for the post-turn checkpoint trail: the
@@ -415,123 +414,17 @@ class LangGraphBridge:
         # Read from instance state rather than a ``get_state`` probe so
         # the turn doesn't pay an extra checkpointer round-trip.
         baseline_checkpoint_id = self._last_checkpoint_id
-        input_payload = self._build_input(turn_input.text, turn_input.context)
-        # Honour a caller-pinned resume/time-travel checkpoint for *this*
-        # turn's stream only, then consume the cursor: LangGraph treats
-        # ``configurable.checkpoint_id`` as "run from this checkpoint", so
-        # carrying it forward (or into this turn's post-stream
-        # ``get_state``) would keep forking the original snapshot and read
-        # stale state.  ``config`` (from ``_config()``, unpinned) is used
-        # for every post-turn read so they see the freshly forked head.
-        stream_config = self._resume_config()
-        self._resume_checkpoint_id = None
-        stream_kwargs: dict[str, Any] = {
-            "version": "v2",
-            "config": stream_config,
-            "stream_mode": list(_DEFAULT_STREAM_MODES),
-        }
-        if self._include_types is not None:
-            stream_kwargs["include_types"] = self._include_types
 
-        try:
-            stream = self._graph.astream_events(input_payload, **stream_kwargs)
-            async for event in stream:
-                if cancel_token and cancel_token.is_cancelled:
-                    recorder.record_cancellation_boundary(
-                        mode=CancellationMode.IMMEDIATE_STOP,
-                        reason="cancel_token_set",
-                    )
-                    # A cancel token set mid-stream (barge-in) breaks out
-                    # through the *normal* completion path below, not the
-                    # ``BaseException`` cleanup — so the cancelled node's
-                    # partial assistant text the caller already heard would
-                    # never be written to the checkpoint.  Commit it now
-                    # (before the post-loop transient-context purge and
-                    # checkpoint-trail walk, mirroring the BaseException
-                    # path) so a follow-up ``apply_interruption()``
-                    # truncates *this* turn's AI message instead of
-                    # rewriting the previous turn's and corrupting prior
-                    # LangGraph conversation state.
-                    self._commit_partial_assistant(accumulated)
-                    if not accumulated:
-                        # Nothing committed (cancelled before the first
-                        # token): there is no current-turn AI message,
-                        # so the follow-up interruption rewrite must
-                        # no-op rather than hit the previous turn.
-                        self._turn_produced_no_assistant = True
-                    break
-
-                graph_chunk = self._extract_graph_stream_chunk(event)
-                if graph_chunk is not None:
-                    mode_name, payload = graph_chunk
-                    for bridge_event in self._handle_graph_stream_chunk(
-                        mode_name, payload, recorder
-                    ):
-                        if bridge_event.kind == "text_delta":
-                            accumulated += bridge_event.text
-                        yield bridge_event
-                    continue
-
-                for bridge_event in self._handle_cursor_lifecycle(
-                    event,
-                    recorder,
-                    agent_cursor,
-                    open_cursors,
-                    last_node_by_ns,
-                    ended_runs,
-                ):
-                    yield bridge_event
-
-                for bridge_event in translate_stream_event(event, recorder, state=tool_state):
-                    if bridge_event.kind == "text_delta":
-                        accumulated += bridge_event.text
-                        model_text_streamed = True
-                    yield bridge_event
-        except Exception as exc:
-            for cursor in reversed(list(open_cursors.values())):
-                try:
-                    recorder.record_unit_exited(cursor, reason="error")
-                except Exception:
-                    logger.debug("Failed to close cursor during error cleanup", exc_info=True)
-            recorder.record_framework_error(ErrorInfo.from_exception(exc))
-            recorder.record_unit_exited(agent_cursor, reason="error")
-            self._purge_transient_context()
-            raise
-        except BaseException:
-            # The default ``AgentRunner`` enforces its timeout by
-            # cancelling the pending ``__anext__()`` (and then calling
-            # ``aclose()``), injecting ``asyncio.CancelledError`` /
-            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
-            # block above is skipped and any open workflow/model/agent
-            # cursors would be left unexited (breaking the recorder's
-            # stack invariant) and this turn's transient context would
-            # leak into the checkpointed graph state.  Clean both up
-            # defensively before re-raising; no ``record_framework_error``
-            # since a cancelled turn isn't a framework fault.
-            for cursor in reversed(list(open_cursors.values())):
-                try:
-                    recorder.record_unit_exited(cursor, reason="error")
-                except Exception:
-                    logger.debug("Failed to close cursor during cancel cleanup", exc_info=True)
-            try:
-                recorder.record_unit_exited(agent_cursor, reason="error")
-            except Exception:
-                logger.debug("Failed to close agent cursor during cancel cleanup", exc_info=True)
-            # The cancelled node never returned, so its partial assistant
-            # output isn't in the checkpoint.  Commit it now (before the
-            # purge) so a follow-up ``apply_interruption()`` truncates
-            # *this* turn's AI message — without this the rewrite targets
-            # the previous turn's last AI message and barge-in corrupts
-            # prior conversation state.
-            self._commit_partial_assistant(accumulated)
-            if not accumulated:
-                # Cancelled before the first token: nothing committed and
-                # the node never wrote an AIMessage, so a follow-up
-                # interruption rewrite must no-op (the only AI message in
-                # the checkpoint belongs to the *previous* turn).
-                self._turn_produced_no_assistant = True
-            self._purge_transient_context()
-            raise
+        async for bridge_event in self._drive_stream(
+            turn_input,
+            recorder,
+            agent_cursor,
+            cancel_token,
+            acc,
+            open_cursors,
+            last_node_by_ns,
+        ):
+            yield bridge_event
 
         for cursor in reversed(list(open_cursors.values())):
             recorder.record_unit_exited(cursor.with_committable(True), reason=None)
@@ -569,31 +462,192 @@ class LangGraphBridge:
         except Exception:  # pragma: no cover — best-effort.
             logger.debug("Failed to fetch final LangGraph state", exc_info=True)
 
-        # Decide the recorded ``done.text`` (and the text consumers fall
-        # back to when nothing streamed).  Three shapes:
-        #
-        # * Chat-model tokens streamed.  Usually those *are* the answer,
-        #   but a node can stream a model call and then write a
-        #   *transformed* ``AIMessage`` to state
-        #   (``AIMessage(content=f"Final: {reply.content}")``).  When the
-        #   graph's final AI message differs from the raw streamed text
-        #   the streamed tokens were internal model output, so prefer the
-        #   final message — otherwise ``done.text``/``structured_output``
-        #   record the unmodified internal output instead of the graph's
-        #   actual reply.  (Live TTS already spoke the raw tokens; that
-        #   speculative-streaming gap is unavoidable without buffering
-        #   every node's output, and re-emitting here would double-speak,
-        #   so we only correct the recorded transcript.)
-        # * Nothing streamed but a node wrote a final ``AIMessage``
-        #   (synchronous LLM, transformed output, plain
-        #   ``RunnableLambda``).  Fall back to that message's text — but
-        #   only when the tail is actually an AI message, else a graph
-        #   that completes without appending an assistant reply (a
-        #   conditional path returning ``{}``, an edge straight to END)
-        #   would surface the user's own utterance and TTS would repeat
-        #   the caller's voice back.
-        # * Otherwise speak whatever streamed (custom chunks, or nothing).
-        if model_text_streamed:
+        async for bridge_event in self._finalize_done(acc, agent_cursor, recorder):
+            yield bridge_event
+
+    async def _drive_stream(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        agent_cursor: ExecutionCursor,
+        cancel_token: CancelToken | None,
+        acc: _LangGraphTurnAccumulator,
+        open_cursors: dict[str, ExecutionCursor],
+        last_node_by_ns: dict[tuple[str, ...], tuple[str, Any]],
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        """Drive ``astream_events`` for one turn, yielding bridge events.
+
+        Holds the streaming loop plus its ``except Exception`` /
+        ``except BaseException`` cleanup.  Accumulated text and the
+        "model tokens streamed" flag are written onto ``acc`` so the
+        post-stream finalize step (:meth:`_finalize_done`) can read them
+        after the generator returns; ``open_cursors`` is mutated in place
+        for the same reason.  Behaviour is identical to the inline loop —
+        the cancellation/commit ordering documented in the cancel-path
+        comments below is load-bearing and unchanged.
+        """
+        # Run ids whose ``_end`` event arrived while a sibling cursor
+        # was still on top of the recorder stack (parallel nodes / models
+        # running concurrently) — closed in LIFO order once the
+        # obstructing sibling(s) also end so the recorder's strict stack
+        # invariant holds.
+        ended_runs: set[str] = set()
+        # Shared state for tool-call deduplication and LCEL root-chain
+        # dedup — see :func:`translate_stream_event` for details.  Under
+        # LangGraph the outermost ``on_chain_start`` is the graph (not an
+        # LCEL root), so the translator instead treats each LangGraph
+        # *node entry* as root-equivalent: a plain ``RunnableLambda`` /
+        # LCEL node's own composed stream reaches the translator while
+        # the node's deeper LCEL children stay deduped (so a node that is
+        # ``RunnableLambda(f) | RunnableLambda(g)`` doesn't narrate its
+        # intermediate value).  Model double-speak is still handled by
+        # ``chains_with_model_descendants``.
+        tool_state: dict[str, Any] = {}
+
+        input_payload = self._build_input(turn_input.text, turn_input.context)
+        # Honour a caller-pinned resume/time-travel checkpoint for *this*
+        # turn's stream only, then consume the cursor: LangGraph treats
+        # ``configurable.checkpoint_id`` as "run from this checkpoint", so
+        # carrying it forward (or into this turn's post-stream
+        # ``get_state``) would keep forking the original snapshot and read
+        # stale state.  ``config`` (from ``_config()``, unpinned) is used
+        # for every post-turn read so they see the freshly forked head.
+        stream_config = self._resume_config()
+        self._resume_checkpoint_id = None
+        stream_kwargs: dict[str, Any] = {
+            "version": "v2",
+            "config": stream_config,
+            "stream_mode": list(_DEFAULT_STREAM_MODES),
+        }
+        if self._include_types is not None:
+            stream_kwargs["include_types"] = self._include_types
+
+        try:
+            stream = self._graph.astream_events(input_payload, **stream_kwargs)
+            async for event in stream:
+                if cancel_token and cancel_token.is_cancelled:
+                    recorder.record_cancellation_boundary(
+                        mode=CancellationMode.IMMEDIATE_STOP,
+                        reason="cancel_token_set",
+                    )
+                    # A cancel token set mid-stream (barge-in) breaks out
+                    # through the *normal* completion path below, not the
+                    # ``BaseException`` cleanup — so the cancelled node's
+                    # partial assistant text the caller already heard would
+                    # never be written to the checkpoint.  Commit it now
+                    # (before the post-loop transient-context purge and
+                    # checkpoint-trail walk, mirroring the BaseException
+                    # path) so a follow-up ``apply_interruption()``
+                    # truncates *this* turn's AI message instead of
+                    # rewriting the previous turn's and corrupting prior
+                    # LangGraph conversation state.
+                    self._commit_partial_assistant(acc.accumulated)
+                    if not acc.accumulated:
+                        # Nothing committed (cancelled before the first
+                        # token): there is no current-turn AI message,
+                        # so the follow-up interruption rewrite must
+                        # no-op rather than hit the previous turn.
+                        self._turn_produced_no_assistant = True
+                    break
+
+                graph_chunk = self._extract_graph_stream_chunk(event)
+                if graph_chunk is not None:
+                    mode_name, payload = graph_chunk
+                    for bridge_event in self._handle_graph_stream_chunk(
+                        mode_name, payload, recorder
+                    ):
+                        if bridge_event.kind == "text_delta":
+                            acc.accumulated += bridge_event.text
+                        yield bridge_event
+                    continue
+
+                self._handle_cursor_lifecycle(
+                    event,
+                    recorder,
+                    agent_cursor,
+                    open_cursors,
+                    last_node_by_ns,
+                    ended_runs,
+                )
+
+                for bridge_event in translate_stream_event(event, recorder, state=tool_state):
+                    if bridge_event.kind == "text_delta":
+                        acc.accumulated += bridge_event.text
+                        acc.model_text_streamed = True
+                    yield bridge_event
+        except Exception as exc:
+            for cursor in reversed(list(open_cursors.values())):
+                recorder.safe_exit_cursor(cursor)
+            recorder.record_framework_error(ErrorInfo.from_exception(exc))
+            recorder.record_unit_exited(agent_cursor, reason="error")
+            self._purge_transient_context()
+            raise
+        except BaseException:
+            # The default ``AgentRunner`` enforces its timeout by
+            # cancelling the pending ``__anext__()`` (and then calling
+            # ``aclose()``), injecting ``asyncio.CancelledError`` /
+            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
+            # block above is skipped and any open workflow/model/agent
+            # cursors would be left unexited (breaking the recorder's
+            # stack invariant) and this turn's transient context would
+            # leak into the checkpointed graph state.  Clean both up
+            # defensively before re-raising; no ``record_framework_error``
+            # since a cancelled turn isn't a framework fault.
+            for cursor in reversed(list(open_cursors.values())):
+                recorder.safe_exit_cursor(cursor)
+            recorder.safe_exit_cursor(agent_cursor)
+            # The cancelled node never returned, so its partial assistant
+            # output isn't in the checkpoint.  Commit it now (before the
+            # purge) so a follow-up ``apply_interruption()`` truncates
+            # *this* turn's AI message — without this the rewrite targets
+            # the previous turn's last AI message and barge-in corrupts
+            # prior conversation state.
+            self._commit_partial_assistant(acc.accumulated)
+            if not acc.accumulated:
+                # Cancelled before the first token: nothing committed and
+                # the node never wrote an AIMessage, so a follow-up
+                # interruption rewrite must no-op (the only AI message in
+                # the checkpoint belongs to the *previous* turn).
+                self._turn_produced_no_assistant = True
+            self._purge_transient_context()
+            raise
+
+    async def _finalize_done(
+        self,
+        acc: _LangGraphTurnAccumulator,
+        agent_cursor: ExecutionCursor,
+        recorder: AgentRecorder,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        """Decide the recorded ``done.text`` and emit the terminal event.
+
+        Reads the streamed text / ``model_text_streamed`` flag off
+        ``acc`` and ``self._last_output`` (set by the post-stream
+        ``get_state``).  Three shapes:
+
+        * Chat-model tokens streamed.  Usually those *are* the answer,
+          but a node can stream a model call and then write a
+          *transformed* ``AIMessage`` to state
+          (``AIMessage(content=f"Final: {reply.content}")``).  When the
+          graph's final AI message differs from the raw streamed text
+          the streamed tokens were internal model output, so prefer the
+          final message — otherwise ``done.text``/``structured_output``
+          record the unmodified internal output instead of the graph's
+          actual reply.  (Live TTS already spoke the raw tokens; that
+          speculative-streaming gap is unavoidable without buffering
+          every node's output, and re-emitting here would double-speak,
+          so we only correct the recorded transcript.)
+        * Nothing streamed but a node wrote a final ``AIMessage``
+          (synchronous LLM, transformed output, plain
+          ``RunnableLambda``).  Fall back to that message's text — but
+          only when the tail is actually an AI message, else a graph
+          that completes without appending an assistant reply (a
+          conditional path returning ``{}``, an edge straight to END)
+          would surface the user's own utterance and TTS would repeat
+          the caller's voice back.
+        * Otherwise speak whatever streamed (custom chunks, or nothing).
+        """
+        accumulated = acc.accumulated
+        if acc.model_text_streamed:
             if _message_is_ai(self._last_output):
                 final_text = _extract_message_text(self._last_output)
                 spoken_text = final_text if final_text else accumulated
@@ -652,46 +706,14 @@ class LangGraphBridge:
         caused_by_signal_id: str | None = None,
     ) -> None:
         plan = self._plan_interruption(delivered_text, mode)
-
-        actual_pre_ref = plan.pre_state_ref
-        if recorder is not None:
-            actual_pre_ref = recorder.record_state_snapshot(
-                plan.pre_state_ref,
-                payload=self._serialize_framework_state(),
-            )
-
-        if recorder is not None:
-            try:
-                recorder.record_state_committed(
-                    mutation_kind=plan.mutation_kind,
-                    pre_state_ref=actual_pre_ref,
-                    post_state_ref=plan.post_state_ref,
-                )
-            except Exception:
-                return
-
-        try:
-            self._apply_planned_mutation(plan)
-        except Exception as exc:
-            if recorder is not None:
-                recorder.record_interruption_apply_failed(
-                    mutation_kind=plan.mutation_kind,
-                    pre_state_ref=actual_pre_ref,
-                    post_state_ref=plan.post_state_ref,
-                    failure_error=ErrorInfo.from_exception(exc),
-                )
-            raise
-
-        if recorder is not None:
-            recorder.record_state_snapshot(
-                plan.post_state_ref,
-                payload=self._serialize_framework_state(),
-            )
-            recorder.record_cancellation_boundary(
-                mode=mode,
-                reason=plan.mutation_kind,
-                caused_by_signal_id=caused_by_signal_id,
-            )
+        run_interruption_journal_protocol(
+            plan,
+            mode,
+            recorder,
+            caused_by_signal_id,
+            serialize_state=self._serialize_framework_state,
+            apply_mutation=self._apply_planned_mutation,
+        )
 
     def reset(self) -> None:
         self._thread_id = str(uuid.uuid4())
@@ -925,16 +947,10 @@ class LangGraphBridge:
         """
         if recorder is not None and open_cursors is not None:
             for cursor in reversed(list(open_cursors.values())):
-                try:
-                    recorder.record_unit_exited(cursor, reason="error")
-                except Exception:
-                    logger.debug("Failed to close cursor during HITL error", exc_info=True)
+                recorder.safe_exit_cursor(cursor)
             open_cursors.clear()
         if recorder is not None and agent_cursor is not None:
-            try:
-                recorder.record_unit_exited(agent_cursor, reason="error")
-            except Exception:
-                logger.debug("Failed to close agent cursor during HITL error", exc_info=True)
+            recorder.safe_exit_cursor(agent_cursor)
         previews: list[str] = []
         try:
             for it in interrupts:
@@ -960,14 +976,14 @@ class LangGraphBridge:
         open_cursors: dict[str, ExecutionCursor],
         last_node_by_ns: dict[tuple[str, ...], str],
         ended_runs: set[str],
-    ) -> list[AgentBridgeEvent]:
+    ) -> None:
         """Open / close workflow_node + model_node cursors for one event.
 
         Each node invocation in a LangGraph run appears as an
         ``on_chain_start`` event whose ``metadata`` carries
         ``langgraph_node``, ``langgraph_checkpoint_ns`` and
         ``langgraph_step``.  We open a workflow_node cursor keyed by
-        ``run_id`` and emit a handoff triple whenever the active node
+        ``run_id`` and record a framework handoff whenever the active node
         at a given checkpoint_ns changes.
 
         Chat-model calls open a ``model_node`` cursor nested inside the
@@ -976,9 +992,9 @@ class LangGraphBridge:
         cursor by ``run_id`` — parallel branches whose ends arrive while
         a sibling cursor is still the stack top are deferred via
         ``ended_runs`` and flushed in LIFO order so the recorder's
-        strict stack invariant is preserved.
+        strict stack invariant is preserved.  All transitions are journaled
+        via the recorder; this method yields no stream events.
         """
-        events: list[AgentBridgeEvent] = []
         event_type = event.get("event")
         metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
         node_name = metadata.get("langgraph_node")
@@ -1004,7 +1020,7 @@ class LangGraphBridge:
             ):
                 run_id = str(event.get("run_id") or uuid4().hex[:8])
                 if run_id in open_cursors:
-                    return events
+                    return
 
                 prev_entry = last_node_by_ns.get(parent_ns)
                 if prev_entry is not None:
@@ -1026,14 +1042,6 @@ class LangGraphBridge:
                             to_unit=node_name,
                             reason="langgraph_edge",
                         )
-                        events.append(
-                            AgentBridgeEvent(
-                                kind="handoff",
-                                from_unit=prev_node,
-                                to_unit=node_name,
-                                reason="langgraph_edge",
-                            )
-                        )
 
                 cursor = ExecutionCursor(
                     unit_id=f"node-{run_id}",
@@ -1052,7 +1060,7 @@ class LangGraphBridge:
         elif event_type in ("on_chat_model_start", "on_llm_start"):
             run_id = str(event.get("run_id") or uuid4().hex[:8])
             if run_id in open_cursors:
-                return events
+                return
             cursor = ExecutionCursor(
                 unit_id=f"model-{run_id}",
                 unit_kind=UnitKind.MODEL_NODE,
@@ -1071,8 +1079,6 @@ class LangGraphBridge:
             if run_id and run_id in open_cursors:
                 ended_runs.add(run_id)
                 _close_top_ended_cursors(recorder, open_cursors, ended_runs)
-
-        return events
 
     def _nearest_parent_id(
         self,

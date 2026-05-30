@@ -15,6 +15,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -36,6 +37,7 @@ from easycat.integrations.agents.base import (
     FrameworkStateSnapshot,
     InterruptionPlan,
     UnitKind,
+    run_interruption_journal_protocol,
 )
 from easycat.runtime.records import ErrorInfo
 
@@ -52,6 +54,34 @@ logger = logging.getLogger(__name__)
 # that want to narrow the surface for performance can opt in via
 # ``include_types=``.
 _DEFAULT_INCLUDE_TYPES: tuple[str, ...] | None = None
+
+
+@dataclass
+class _LangChainTurnAccumulator:
+    """Mutable per-turn streaming state shared across the invoke split.
+
+    :meth:`LangChainBridge._drive_stream` writes the streamed text and
+    the captured top-level chain output onto this holder so
+    :meth:`LangChainBridge._finalize_done` can read them after the
+    stream generator returns (a generator's locals don't survive its
+    return, so the state has to live on a shared object instead).
+    """
+
+    accumulated: str = ""
+    # Top-level chain ``run_id`` so we can capture its
+    # ``on_chain_end.data.output`` as ``structured_output`` — non-text
+    # runnables (``RunnableLambda(lambda _: {"answer": 42})``,
+    # ``.with_structured_output(...)``) produce no ``text_delta`` and
+    # would otherwise expose an empty string.
+    root_run_id: str | None = None
+    captured_output: Any = None
+    captured_output_set: bool = False
+    # Set when the loop breaks because the cancel token was tripped
+    # mid-stream (barge-in).  Unlike a timeout/``aclose()`` (which raises
+    # into the ``BaseException`` cleanup), this break falls through to
+    # the normal completion path, so the wrapped-store mirroring that
+    # path skips must be done explicitly in the finalize step.
+    cancelled: bool = False
 
 
 class LangChainBridge:
@@ -219,37 +249,57 @@ class LangChainBridge:
         )
         recorder.record_unit_entered(agent_cursor)
 
-        accumulated = ""
+        acc = _LangChainTurnAccumulator()
         # Open ``model_node`` cursors for ``on_chat_model_*`` events, keyed
         # by LangChain ``run_id`` so start/end always pair even when the
         # runnable interleaves multiple model calls.
         open_cursors: dict[str, ExecutionCursor] = {}
+
+        async for bridge_event in self._drive_stream(
+            turn_input, recorder, agent_cursor, cancel_token, acc, open_cursors
+        ):
+            yield bridge_event
+
+        for cursor in reversed(list(open_cursors.values())):
+            recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+        open_cursors.clear()
+
+        async for bridge_event in self._finalize_done(turn_input, recorder, agent_cursor, acc):
+            yield bridge_event
+
+    async def _drive_stream(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        agent_cursor: ExecutionCursor,
+        cancel_token: CancelToken | None,
+        acc: _LangChainTurnAccumulator,
+        open_cursors: dict[str, ExecutionCursor],
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        """Drive ``astream_events`` for one turn, yielding bridge events.
+
+        Holds the streaming loop plus its ``except Exception`` /
+        ``except BaseException`` cleanup.  Streamed text, the captured
+        top-level chain output and the mid-stream-cancel flag are written
+        onto ``acc`` so the post-stream finalize step
+        (:meth:`_finalize_done`) can read them after the generator
+        returns; ``open_cursors`` is mutated in place for the same
+        reason.  Behaviour is identical to the inline loop — the
+        cancellation/history ordering documented in the cancel-path
+        comments below is load-bearing and unchanged.
+        """
         # Run ids whose ``_end`` event arrived while a sibling cursor was
         # still on top of the recorder stack — closed in LIFO order once
         # the obstructing sibling(s) also end, preserving the recorder's
         # strict stack invariant for ``RunnableParallel`` / concurrent
         # runs.
         ended_runs: set[str] = set()
-        # Track the top-level chain's ``run_id`` so we can capture its
-        # ``on_chain_end.data.output`` as ``structured_output`` — non-text
-        # runnables (``RunnableLambda(lambda _: {"answer": 42})``,
-        # ``.with_structured_output(...)``) produce no ``text_delta`` and
-        # would otherwise expose an empty string here.
-        root_run_id: str | None = None
-        captured_output: Any = None
-        captured_output_set = False
         # Shared state for translator-side bookkeeping: tool-call dedup
         # across the chat_model ``tool_call_chunks`` path and the
         # ``on_tool_start`` / ``on_tool_end`` path, plus the set of chain
         # run-ids that have a model descendant (used to suppress chain
         # streams that would otherwise duplicate model tokens).
         tool_state: dict[str, Any] = {}
-        # Set when the loop breaks because the cancel token was tripped
-        # mid-stream (barge-in).  Unlike a timeout/``aclose()`` (which
-        # raises into the ``BaseException`` cleanup), this break falls
-        # through to the normal completion path, so the wrapped-store
-        # mirroring that path skips must be done explicitly below.
-        cancelled = False
 
         input_payload = self._build_input(turn_input.text, turn_input.context)
         stream_kwargs: dict[str, Any] = {
@@ -267,36 +317,33 @@ class LangChainBridge:
                         mode=CancellationMode.IMMEDIATE_STOP,
                         reason="cancel_token_set",
                     )
-                    cancelled = True
+                    acc.cancelled = True
                     break
 
                 event_type = event.get("event") if isinstance(event, dict) else None
                 if event_type == "on_chain_start" and not (event.get("parent_ids") or ()):
-                    if root_run_id is None:
+                    if acc.root_run_id is None:
                         rid = str(event.get("run_id") or "")
                         if rid:
-                            root_run_id = rid
+                            acc.root_run_id = rid
                 if event_type == "on_chain_end":
                     rid = str(event.get("run_id") or "")
-                    if root_run_id is not None and rid == root_run_id:
+                    if acc.root_run_id is not None and rid == acc.root_run_id:
                         raw_data = event.get("data")
                         data_dict = raw_data if isinstance(raw_data, dict) else {}
-                        captured_output = data_dict.get("output") if data_dict else None
-                        captured_output_set = True
+                        acc.captured_output = data_dict.get("output") if data_dict else None
+                        acc.captured_output_set = True
 
                 self._handle_cursor_lifecycle(
                     event, recorder, agent_cursor, open_cursors, ended_runs
                 )
                 for bridge_event in translate_stream_event(event, recorder, state=tool_state):
                     if bridge_event.kind == "text_delta":
-                        accumulated += bridge_event.text
+                        acc.accumulated += bridge_event.text
                     yield bridge_event
         except Exception as exc:
             for cursor in reversed(list(open_cursors.values())):
-                try:
-                    recorder.record_unit_exited(cursor, reason="error")
-                except Exception:
-                    logger.debug("Failed to close cursor during error cleanup", exc_info=True)
+                recorder.safe_exit_cursor(cursor)
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
             raise
@@ -313,14 +360,8 @@ class LangChainBridge:
             # ``record_framework_error``: a cancelled turn isn't a
             # framework fault.
             for cursor in reversed(list(open_cursors.values())):
-                try:
-                    recorder.record_unit_exited(cursor, reason="error")
-                except Exception:
-                    logger.debug("Failed to close cursor during cancel cleanup", exc_info=True)
-            try:
-                recorder.record_unit_exited(agent_cursor, reason="error")
-            except Exception:
-                logger.debug("Failed to close agent cursor during cancel cleanup", exc_info=True)
+                recorder.safe_exit_cursor(cursor)
+            recorder.safe_exit_cursor(agent_cursor)
             # The normal completion path below records this turn into
             # history; a mid-stream cancel (timeout / barge-in aclose())
             # skips it.  Persist the partial turn here — mirroring the
@@ -330,26 +371,37 @@ class LangChainBridge:
             # rewriting the previous turn's (or no-opping on turn one),
             # which would corrupt/lose conversation history on barge-in.
             try:
-                self._append_to_history(turn_input.text, accumulated)
+                self._append_to_history(turn_input.text, acc.accumulated)
                 # ``RunnableWithMessageHistory`` reloads its own per-session
                 # store next turn (ignoring the shadow list); the wrapper's
                 # save listener never ran on this cancelled turn, so also
                 # persist the partial turn there or the store-mirrored
                 # ``apply_interruption()`` rewrite would hit the prior turn.
-                self._mirror_partial_turn_to_store(turn_input.text, accumulated)
+                self._mirror_partial_turn_to_store(turn_input.text, acc.accumulated)
             except Exception:
                 logger.debug("Failed to preserve partial LangChain turn on cancel", exc_info=True)
             raise
 
-        for cursor in reversed(list(open_cursors.values())):
-            recorder.record_unit_exited(cursor.with_committable(True), reason=None)
-        open_cursors.clear()
+    async def _finalize_done(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        agent_cursor: ExecutionCursor,
+        acc: _LangChainTurnAccumulator,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        """Capture output, persist history, and emit the terminal event.
 
+        Reads the streamed text / captured chain output / mid-stream
+        cancel flag off ``acc``.  Behaviour is identical to the inline
+        post-stream block — the history-persistence and store-mirroring
+        ordering is load-bearing and unchanged.
+        """
+        accumulated = acc.accumulated
         # Prefer the top-level chain's actual output for ``structured_output``
         # (a dict / BaseModel / arbitrary value).  Fall back to the
         # accumulated text only when no ``on_chain_end`` was observed — e.g.
         # bare-chat-model runnables that never emit a chain event.
-        self._last_output = captured_output if captured_output_set else accumulated
+        self._last_output = acc.captured_output if acc.captured_output_set else accumulated
 
         # When the top-level chain output is text that differs from the
         # raw model tokens, an LCEL stage *after* the model transformed
@@ -365,13 +417,13 @@ class LangChainBridge:
         # except when nothing streamed, where ``done.text`` is the
         # consumer's only spoken text and must carry the real answer.
         final_text = accumulated
-        if captured_output_set:
-            output_text = _plain_chunk_text(captured_output)
+        if acc.captured_output_set:
+            output_text = _plain_chunk_text(acc.captured_output)
             if output_text and output_text != accumulated:
                 final_text = output_text
 
         self._append_to_history(turn_input.text, final_text)
-        if cancelled:
+        if acc.cancelled:
             # A cancel-token break stops the stream before a wrapped
             # ``RunnableWithMessageHistory``'s end-of-run save listener
             # fires, so this turn never reaches the backing store (only
@@ -409,46 +461,14 @@ class LangChainBridge:
         caused_by_signal_id: str | None = None,
     ) -> None:
         plan = self._plan_interruption(delivered_text, mode)
-
-        actual_pre_ref = plan.pre_state_ref
-        if recorder is not None:
-            actual_pre_ref = recorder.record_state_snapshot(
-                plan.pre_state_ref,
-                payload=self._serialize_framework_state(),
-            )
-
-        if recorder is not None:
-            try:
-                recorder.record_state_committed(
-                    mutation_kind=plan.mutation_kind,
-                    pre_state_ref=actual_pre_ref,
-                    post_state_ref=plan.post_state_ref,
-                )
-            except Exception:
-                return
-
-        try:
-            self._apply_planned_mutation(plan)
-        except Exception as exc:
-            if recorder is not None:
-                recorder.record_interruption_apply_failed(
-                    mutation_kind=plan.mutation_kind,
-                    pre_state_ref=actual_pre_ref,
-                    post_state_ref=plan.post_state_ref,
-                    failure_error=ErrorInfo.from_exception(exc),
-                )
-            raise
-
-        if recorder is not None:
-            recorder.record_state_snapshot(
-                plan.post_state_ref,
-                payload=self._serialize_framework_state(),
-            )
-            recorder.record_cancellation_boundary(
-                mode=mode,
-                reason=plan.mutation_kind,
-                caused_by_signal_id=caused_by_signal_id,
-            )
+        run_interruption_journal_protocol(
+            plan,
+            mode,
+            recorder,
+            caused_by_signal_id,
+            serialize_state=self._serialize_framework_state,
+            apply_mutation=self._apply_planned_mutation,
+        )
 
     def reset(self) -> None:
         self._message_history.clear()

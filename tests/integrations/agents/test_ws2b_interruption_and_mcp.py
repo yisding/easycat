@@ -181,28 +181,43 @@ class TestApplyInterruptionFourStepOrder:
         [OpenAIAgentsBridge, PydanticAIBridge, GenericWorkflowBridge],
     )
     def test_four_step_method_calls_present(self, bridge_cls):
-        """Each bridge has _plan_interruption, _apply_planned_mutation,
-        and the public apply_interruption references both."""
+        """Each bridge has _plan_interruption, _apply_planned_mutation, and
+        the public apply_interruption plans then delegates the four-step
+        atomic write ordering to the shared
+        ``run_interruption_journal_protocol`` helper, wiring its own
+        ``_apply_planned_mutation`` in as the mutation callback."""
         assert hasattr(bridge_cls, "_plan_interruption")
         assert hasattr(bridge_cls, "_apply_planned_mutation")
         assert hasattr(bridge_cls, "apply_interruption")
 
-        # AST-level: verify apply_interruption calls both helpers.
+        # AST-level: verify apply_interruption plans the mutation, delegates to
+        # the shared journal protocol, and passes _apply_planned_mutation as the
+        # mutation callback.
         import textwrap
 
         source = textwrap.dedent(inspect.getsource(bridge_cls.apply_interruption))
         tree = ast.parse(source)
 
         call_names = set()
+        attr_names = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 call_names.add(node.func.attr)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                call_names.add(node.func.id)
+            if isinstance(node, ast.Attribute):
+                attr_names.add(node.attr)
 
         assert "_plan_interruption" in call_names, (
             f"{bridge_cls.__name__}.apply_interruption must call _plan_interruption"
         )
-        assert "_apply_planned_mutation" in call_names, (
-            f"{bridge_cls.__name__}.apply_interruption must call _apply_planned_mutation"
+        assert "run_interruption_journal_protocol" in call_names, (
+            f"{bridge_cls.__name__}.apply_interruption must delegate to "
+            "run_interruption_journal_protocol"
+        )
+        assert "_apply_planned_mutation" in attr_names, (
+            f"{bridge_cls.__name__}.apply_interruption must wire "
+            "_apply_planned_mutation as the mutation callback"
         )
 
     @pytest.mark.parametrize(

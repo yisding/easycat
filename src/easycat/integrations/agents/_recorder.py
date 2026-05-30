@@ -105,6 +105,19 @@ class JournalAgentRecorder:
             },
         )
 
+    def safe_exit_cursor(self, cursor: ExecutionCursor, reason: str | None = "error") -> None:
+        """Close ``cursor`` defensively, swallowing recorder errors.
+
+        Bridges call this from their error / cancellation cleanup arms so a
+        recorder fault can't mask the original exception while still keeping
+        the strict enter/exit stack invariant intact for the postmortem
+        journal.  Logs and continues on failure; never raises.
+        """
+        try:
+            self.record_unit_exited(cursor, reason=reason)
+        except Exception:
+            logger.debug("Failed to close cursor %r during cleanup", cursor.unit_id, exc_info=True)
+
     @contextmanager
     def unit(
         self, cursor: ExecutionCursor, *, commit_on_exit: bool = True

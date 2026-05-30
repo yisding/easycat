@@ -31,6 +31,7 @@ from easycat.integrations.agents.base import (
     FrameworkStateSnapshot,
     InterruptionPlan,
     UnitKind,
+    run_interruption_journal_protocol,
 )
 from easycat.runtime.records import ErrorInfo
 
@@ -100,7 +101,6 @@ class OpenAIAgentsBridge:
             committable=False,
         )
         recorder.record_unit_entered(agent_cursor)
-        yield AgentBridgeEvent(kind="cursor_entered", cursor=agent_cursor)
 
         saved_mcp_servers = getattr(self._agent, "mcp_servers", None)
         try:
@@ -120,7 +120,6 @@ class OpenAIAgentsBridge:
         pending_tool_calls: dict[str, str] = {}
         interrupted = False
         cursor_exited = False
-        handoff_cursor: ExecutionCursor | None = None
 
         try:
             async for event in result.stream_events():
@@ -202,29 +201,10 @@ class OpenAIAgentsBridge:
                     )
                     recorder.record_unit_entered(new_cursor)
                     recorder.record_unit_exited(new_cursor.with_committable(True), reason=None)
-                    # Surface the handoff-target cursor lifecycle on the stream
-                    # too, so out-of-band consumers see a balanced enter/exit
-                    # for the new cursor across the handoff (emitted below,
-                    # after the original cursor's cursor_exited).
-                    handoff_cursor = new_cursor
                 else:
-                    try:
-                        recorder.record_unit_exited(
-                            agent_cursor.with_committable(True), reason=None
-                        )
-                    except Exception:
-                        logger.debug("Failed to close agent cursor during cleanup", exc_info=True)
+                    recorder.safe_exit_cursor(agent_cursor.with_committable(True), reason=None)
 
         self._last_output = getattr(result, "final_output", None)
-        # Balance the cursor_entered emitted at stream start so stream-level
-        # cursor events are well-formed for out-of-band consumers.
-        yield AgentBridgeEvent(kind="cursor_exited", cursor=agent_cursor)
-        if handoff_cursor is not None:
-            # Mirror the recorder-level enter/exit of the handoff-target cursor
-            # on the stream so out-of-band consumers see a balanced lifecycle
-            # for the new cursor as well, not just the original one.
-            yield AgentBridgeEvent(kind="cursor_entered", cursor=handoff_cursor)
-            yield AgentBridgeEvent(kind="cursor_exited", cursor=handoff_cursor)
         yield AgentBridgeEvent(
             kind="done",
             text=accumulated,
@@ -250,52 +230,14 @@ class OpenAIAgentsBridge:
     ) -> None:
         # Step 1: plan the mutation.
         plan = self._plan_interruption(delivered_text, mode)
-
-        # Step 1b: persist pre-mutation state snapshot.
-        actual_pre_ref = plan.pre_state_ref
-        if recorder is not None:
-            actual_pre_ref = recorder.record_state_snapshot(
-                plan.pre_state_ref,
-                payload=self._serialize_framework_state(),
-            )
-
-        # Step 2: write FrameworkStateCommitted to the journal.
-        if recorder is not None:
-            try:
-                recorder.record_state_committed(
-                    mutation_kind=plan.mutation_kind,
-                    pre_state_ref=actual_pre_ref,
-                    post_state_ref=plan.post_state_ref,
-                )
-            except Exception:
-                # Journal in degraded mode — skip mutation, runtime falls back.
-                return
-
-        # Step 3: apply the planned mutation.
-        try:
-            self._apply_planned_mutation(plan)
-        except Exception as exc:
-            # Step 4a: mutation failed — write InterruptionApplyFailed.
-            if recorder is not None:
-                recorder.record_interruption_apply_failed(
-                    mutation_kind=plan.mutation_kind,
-                    pre_state_ref=actual_pre_ref,
-                    post_state_ref=plan.post_state_ref,
-                    failure_error=ErrorInfo.from_exception(exc),
-                )
-            raise
-
-        # Step 4b: success — persist post-mutation state and write boundary.
-        if recorder is not None:
-            recorder.record_state_snapshot(
-                plan.post_state_ref,
-                payload=self._serialize_framework_state(),
-            )
-            recorder.record_cancellation_boundary(
-                mode=mode,
-                reason=plan.mutation_kind,
-                caused_by_signal_id=caused_by_signal_id,
-            )
+        run_interruption_journal_protocol(
+            plan,
+            mode,
+            recorder,
+            caused_by_signal_id,
+            serialize_state=self._serialize_framework_state,
+            apply_mutation=self._apply_planned_mutation,
+        )
 
     def _serialize_framework_state(self) -> bytes:
         """Serialize message history for artifact storage."""
@@ -355,6 +297,17 @@ class OpenAIAgentsBridge:
         self._previous_response_id = None
         self._pending_interruption = None
         self._last_output = None
+
+    def configure_runtime(
+        self,
+        *,
+        mcp_servers: list[str] | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        """Apply session-level MCP servers (model/api_key are unused here)."""
+        if mcp_servers is not None:
+            self._mcp_servers = list(mcp_servers)
 
     # ── History post-processing ───────────────────────────────────
 

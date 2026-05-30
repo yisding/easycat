@@ -206,10 +206,7 @@ class AgentRunner:
             # invariant for the postmortem journal.  Close it defensively
             # before re-raising.
             self._history.pop()
-            try:
-                recorder.record_unit_exited(cursor, reason="error")
-            except Exception:
-                logger.debug("Failed to close agent cursor during cancel cleanup", exc_info=True)
+            recorder.safe_exit_cursor(cursor)
             raise
 
         self._history.append({"role": "assistant", "content": response})

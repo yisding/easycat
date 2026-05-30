@@ -8,13 +8,16 @@ intermediate adapter layer.
 from __future__ import annotations
 
 import enum
-from collections.abc import AsyncIterator, Iterator
+import logging
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from easycat.cancel import CancelToken
 from easycat.runtime.records import ErrorInfo
+
+logger = logging.getLogger(__name__)
 
 # ── Enums ────────────────────────────────────────────────────────
 
@@ -118,10 +121,6 @@ AgentEventKind = Literal[
     "tool_delta",
     "tool_result",
     "done",
-    "cursor_entered",
-    "cursor_exited",
-    "handoff",
-    "state_snapshot",
 ]
 
 
@@ -157,6 +156,80 @@ class InterruptionPlan:
     framework_instructions: dict[str, Any] = field(default_factory=dict)
 
 
+def run_interruption_journal_protocol(
+    plan: InterruptionPlan,
+    mode: CancellationMode,
+    recorder: AgentRecorder | None,
+    caused_by_signal_id: str | None,
+    *,
+    serialize_state: Callable[[], bytes],
+    apply_mutation: Callable[[InterruptionPlan], None],
+) -> None:
+    """Run the four-step atomic interruption-journal protocol once.
+
+    Bridges build an :class:`InterruptionPlan` and provide ``serialize_state``
+    / ``apply_mutation`` callbacks; this helper owns the journal write
+    ordering (plan → ``FrameworkStateCommitted`` → apply → paired
+    success/failure) so the degraded-journal guards live in one place
+    instead of being copy-pasted across every bridge.
+    """
+    # Step 1b: persist pre-mutation state snapshot.
+    actual_pre_ref = plan.pre_state_ref
+    if recorder is not None:
+        actual_pre_ref = recorder.record_state_snapshot(
+            plan.pre_state_ref,
+            payload=serialize_state(),
+        )
+
+    # Step 2: write FrameworkStateCommitted to the journal.
+    if recorder is not None:
+        try:
+            recorder.record_state_committed(
+                mutation_kind=plan.mutation_kind,
+                pre_state_ref=actual_pre_ref,
+                post_state_ref=plan.post_state_ref,
+            )
+        except Exception:
+            # Journal in degraded mode — skip mutation, runtime falls back.
+            return
+
+    # Step 3: apply the planned mutation.
+    try:
+        apply_mutation(plan)
+    except Exception as exc:
+        # Step 4a: mutation failed — write InterruptionApplyFailed.
+        if recorder is not None:
+            recorder.record_interruption_apply_failed(
+                mutation_kind=plan.mutation_kind,
+                pre_state_ref=actual_pre_ref,
+                post_state_ref=plan.post_state_ref,
+                failure_error=ErrorInfo.from_exception(exc),
+            )
+        raise
+
+    # Step 4b: success — persist post-mutation state and write boundary.
+    # The mutation already applied, so a degraded journal here must not
+    # re-raise; we log and continue, keeping the success path symmetric
+    # with the step-2 degraded-journal guard above.
+    if recorder is not None:
+        try:
+            recorder.record_state_snapshot(
+                plan.post_state_ref,
+                payload=serialize_state(),
+            )
+            recorder.record_cancellation_boundary(
+                mode=mode,
+                reason=plan.mutation_kind,
+                caused_by_signal_id=caused_by_signal_id,
+            )
+        except Exception:
+            logger.debug(
+                "interruption post-snapshot/boundary journal write failed; "
+                "mutation already applied",
+                exc_info=True,
+            )
+
+
 # ── Recorder types ───────────────────────────────────────────────
 
 
@@ -180,6 +253,17 @@ class AgentRecorder(Protocol):
     def record_unit_entered(self, cursor: ExecutionCursor) -> None: ...
 
     def record_unit_exited(self, cursor: ExecutionCursor, reason: str | None = None) -> None: ...
+
+    def safe_exit_cursor(self, cursor: ExecutionCursor, reason: str | None = "error") -> None:
+        """Close ``cursor`` defensively, swallowing recorder errors.
+
+        Used by bridges in their error / cancellation cleanup arms (where
+        ``AgentRunner``-injected ``CancelledError`` / ``GeneratorExit``
+        skips the normal exit) so the recorder's strict enter/exit stack
+        invariant is preserved without a recorder fault masking the
+        original exception.  Logs and continues on failure; never raises.
+        """
+        ...
 
     @contextmanager
     def unit(
@@ -249,6 +333,9 @@ class NullAgentRecorder:
         pass
 
     def record_unit_exited(self, cursor: ExecutionCursor, reason: str | None = None) -> None:
+        pass
+
+    def safe_exit_cursor(self, cursor: ExecutionCursor, reason: str | None = "error") -> None:
         pass
 
     @contextmanager
@@ -372,6 +459,31 @@ class ExternalAgentBridge(Protocol):
     def reset(self) -> None:
         """Clear all framework state for a fresh session."""
         ...
+
+    # NOTE: ``configure_runtime`` is an *optional* extension surface, not a
+    # required member of this protocol.  It is intentionally **not** declared
+    # in the protocol body because ``ExternalAgentBridge`` is
+    # ``@runtime_checkable`` — adding it here would make ``isinstance(obj,
+    # ExternalAgentBridge)`` return ``False`` for every bridge / ``AgentRunner``
+    # that legitimately no-ops it.  The session factory probes for it with
+    # ``getattr(bridge, "configure_runtime", None)`` (see
+    # ``easycat.config._apply_runtime_settings``) and falls back to the
+    # historical private-attribute path when absent.  Bridges that consume
+    # session-level ``mcp_servers`` / ``model`` / ``api_key`` settings
+    # implement the following signature::
+    #
+    #     def configure_runtime(
+    #         self,
+    #         *,
+    #         mcp_servers: list[str] | None = None,
+    #         model: str | None = None,
+    #         api_key: str | None = None,
+    #     ) -> None: ...
+    #
+    # ``mcp_servers`` is a list of EasyCat MCP URI strings; ``None`` means
+    # "leave unchanged".  Passing an empty list explicitly clears any
+    # previously-configured servers so a bridge reused across sessions does
+    # not leak the prior list.
 
 
 # ── Errors ───────────────────────────────────────────────────────
