@@ -12,8 +12,13 @@ before any property test is collected. Two profiles are provided:
 
 Select a profile with the ``HYPOTHESIS_PROFILE`` environment variable
 (e.g. ``HYPOTHESIS_PROFILE=ci uv run pytest``). When unset, ``dev`` is
-used. Importing this module is a no-op if Hypothesis is not installed,
-so the suite still collects in a minimal environment.
+used. ``register_hypothesis_profiles()`` is a no-op when Hypothesis is
+not installed, so importing this module and wiring it into ``conftest.py``
+never breaks a minimal environment. That safety does *not* extend to
+collection: the ``*_property.py`` modules import Hypothesis at module
+load, so any environment that collects them (the default / ``quick``
+slice) must have Hypothesis installed -- it ships in the ``dev`` group and
+is added explicitly to the wheel-only release-validation workflow.
 """
 
 from __future__ import annotations
