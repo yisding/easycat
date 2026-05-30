@@ -31,11 +31,11 @@ uv run python examples/ws_server.py  # Run an example
   - `_tts_scheduler.py` — `TTSScheduler.prepare()` builds and normalizes TTS payload text (the former `_tts_helpers.py` job) and schedules synthesis/playback.
   - `_stt_committer.py` — Commits finalized STT transcripts into the turn lifecycle.
   - `interruption.py` — Audio-byte estimation for barge-in: maps TTS output back to what the user heard.
-  - `text.py` — Sentence splitting, markdown checking, speech energy detection, and spoken-text normalization (`_text_for_spoken_estimation`, `_text_for_estimation_timeline`).
+  - `text.py` — Sentence splitting, markdown checking, speech energy detection, and spoken-text timeline normalization (`_text_for_estimation_timeline`). The audio-byte→text estimation itself (`_estimate_text_spoken`) lives in `interruption.py`.
   - `_types.py` — `SessionConfig`, `TurnState`, `Agent` protocol.
 - `config.py` — `EasyConfig` (simplified, auto-wires OpenAI providers) and `SessionConfig` (advanced, explicit providers). `create_session()` factory builds a wired Session.
 - `events.py` — `EventBus` pub/sub with sync/async handlers. Two event layers: provider-scoped (`STTEvent`, `TTSEvent`) emitted by providers, mapped to EasyCat-level events (`STTFinal`, `TTSAudio`, `TurnStarted`, etc.) by Session.
-- `providers.py` — `@runtime_checkable` Protocol definitions for all provider interfaces (`STTProvider`, `TTSProvider`, `VADProvider`, `Transport`, `NoiseReducer`). Providers use duck typing, not inheritance.
+- `providers.py` — `@runtime_checkable` Protocol definitions for all provider interfaces (`STTProvider`, `TTSProvider`, `VADProvider`, `Transport`, `NoiseReducer`, `EchoCanceller`). Providers use duck typing, not inheritance.
 - `turn_manager.py` — 5-state FSM (IDLE → USER_SPEAKING → USER_PAUSED → PROCESSING → BOT_SPEAKING) with pre-roll buffering and interruption detection. Supports VAD (automatic) and PUSH_TO_TALK turn modes.
 - `runtime/` — Journal-based debug-first runtime. `ExecutionJournal` records events, spans, and metrics. `JournalView` provides query access. The journal is the single source of truth for all observability.
 - `stages/` — Pipeline stages wrapping providers with a uniform `execute` / `snapshot_state` / `handle_upstream` surface and optional journal recording. `Stage` protocol defined in `stages/base.py`.

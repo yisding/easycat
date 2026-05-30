@@ -530,7 +530,7 @@
 +    )
      client = AsyncOpenAI()
      tts = create_tts_provider(
-         TTSProviderConfig(provider="openai", settings={"api_key": os.environ["OPENAI_API_KEY"]})
+         TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
 @@ -333,7 +299,7 @@
          )
  

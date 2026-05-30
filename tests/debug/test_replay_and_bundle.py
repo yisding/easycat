@@ -537,6 +537,41 @@ class TestBundlePartialJournal:
         with pytest.raises(FileNotFoundError):
             RunBundle.from_partial_journal(tmp_path / "nonexistent.sqlite")
 
+    def test_from_partial_journal_surfaces_degradation(self, tmp_path):
+        """A bundle loaded from a degraded SQLite file must expose the
+        degradation signal — the journal_degraded marker is persisted to disk
+        and flows into the bundle records (regression for runtime-observability-1).
+        """
+        from easycat.runtime.journal import SqliteJournal
+
+        j = SqliteJournal("degraded-sess", data_dir=tmp_path)
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        # Non-JSON data forces a write failure -> degraded mode, but the
+        # connection survives so the marker is written and committed.
+        assert (
+            j.append(
+                kind=JournalRecordKind.EVENT,
+                name="boom",
+                session_id="degraded-sess",
+                data=circular,
+            )
+            == -1
+        )
+        assert j.degraded
+        j.close()
+
+        db_path = tmp_path / "journals" / "degraded-sess.sqlite"
+        bundle = RunBundle.from_partial_journal(db_path)
+        degraded = [
+            r
+            for r in bundle.records()
+            if r.get("kind") == JournalRecordKind.DEGRADED.value
+            and r.get("name") == "journal_degraded"
+        ]
+        assert len(degraded) == 1
+        assert degraded[0]["sequence"] == -1
+
 
 # ── TestBundleDiscovery ─────────────────────────────────────────
 

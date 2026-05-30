@@ -86,8 +86,6 @@ class StubVAD:
         min_speech_duration_ms: int = 250,
         min_silence_duration_ms: int = 150,
         sensitivity: float = 0.5,
-        pre_roll_ms: int = 100,
-        post_roll_ms: int = 100,
     ) -> None:
         pass
 

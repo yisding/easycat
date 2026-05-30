@@ -114,22 +114,16 @@ _STT_CONFIG_CLASSES = [cfg_cls for _provider_cls, cfg_cls in _STT_REGISTRY.value
 _TTS_CONFIG_CLASSES = [cfg_cls for _provider_cls, cfg_cls in _TTS_REGISTRY.values()]
 
 
-# Configs whose ``create_*_provider_from_config`` branch must inject
-# the session's EventBus. Mirrors the ``needs_event_bus`` tuple in
-# ``stt/factory.py`` and the per-type branches in ``tts/factory.py``.
-# Drift between this set and the factory branches is exactly the kind
-# of regression phase 1 below catches.
-_STT_REQUIRES_EVENT_BUS: set[type] = {
-    DeepgramSTTConfig,
-    ElevenLabsSTTConfig,
-    OpenAIRealtimeSTTConfig,
-    CartesiaSTTConfig,
-}
-_TTS_REQUIRES_EVENT_BUS: set[type] = {
-    DeepgramTTSConfig,
-    ElevenLabsTTSConfig,
-    CartesiaTTSConfig,
-}
+def _requires_event_bus(config_cls: type) -> bool:
+    """Whether a config's factory branch must inject the session EventBus.
+
+    Computed structurally — a config "needs an event bus" iff it declares
+    an ``event_bus`` field — exactly the way ``create_*_provider_from_config``
+    now decides. The guard verifies the invariant independently rather than
+    mirroring a hand-maintained list that could silently drift from the
+    factories.
+    """
+    return any(f.name == "event_bus" for f in fields(config_cls))
 
 
 class _UpperAgent:
@@ -199,11 +193,11 @@ async def test_session_wiring_for_every_provider_pair(
         # the config, then passes that copy to the provider. Reading
         # ``provider._config.event_bus`` is the only way to verify the
         # copy actually carried the bus through to the provider.
-        if stt_config_cls in _STT_REQUIRES_EVENT_BUS:
+        if _requires_event_bus(stt_config_cls):
             assert real_stt._config.event_bus is bus, (
                 f"{stt_config_cls.__name__}: EventBus not injected by factory"
             )
-        if tts_config_cls in _TTS_REQUIRES_EVENT_BUS:
+        if _requires_event_bus(tts_config_cls):
             assert real_tts._config.event_bus is bus, (
                 f"{tts_config_cls.__name__}: EventBus not injected by factory"
             )
