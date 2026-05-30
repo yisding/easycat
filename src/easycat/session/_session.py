@@ -18,7 +18,7 @@ from uuid import uuid4
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat._health_check import PeriodicHealthChecker
-from easycat._log_context import bind_session
+from easycat._log_context import bind_session, bind_turn
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -685,6 +685,7 @@ class Session:
     def _reset_turn_state(self) -> None:
         """Clear turn correlation state and reset the turn manager."""
         turn = self._turn
+        bind_turn(None)
         self._stt_committer.cancel_scheduled()
         self._stt_committer.cancel_inflight()
         self._stt_committer.resolve_pending(turn, "")

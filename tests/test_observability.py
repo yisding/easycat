@@ -328,13 +328,19 @@ def test_substring_forbidden_attributes_fail(forbidden: str) -> None:
 
 
 def test_allowed_keys_checked_before_substring_guard() -> None:
-    # ``gen_ai.operation.name`` would not trip a substring, but this guards the
-    # ordering invariant: explicit allow-list membership wins over substrings.
     result = observability.sanitize_attributes(
         {"easycat.surface": "tts", "gen_ai.request.model": "gpt-test"},
         allowed_keys=observability.SPAN_ATTRIBUTE_KEYS,
     )
     assert result == {"easycat.surface": "tts", "gen_ai.request.model": "gpt-test"}
+
+
+def test_forbidden_keys_checked_before_allow_list() -> None:
+    with pytest.raises(ValueError, match="forbidden observability attribute: prompt"):
+        observability.sanitize_attributes(
+            {"prompt": "secret"},
+            allowed_keys=frozenset({"prompt"}),
+        )
 
 
 def test_no_allowed_key_contains_a_forbidden_substring() -> None:

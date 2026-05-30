@@ -122,8 +122,8 @@ There are two independent knobs, and they control different things:
   | `level` | log level name |
   | `logger` | logger name (e.g. `easycat.session._session`) |
   | `msg` | formatted message |
-  | `session_id` | bound session id, or `null` |
-  | `turn_id` | bound turn id, or `null` |
+  | `session_id` | bound session id, or `-` |
+  | `turn_id` | bound turn id, or `-` |
   | `exc` | formatted traceback (only present when an exception is attached) |
 
 - **`debug=`** (`"off"` / `"light"` / `"full"` on `EasyConfig`) — controls the

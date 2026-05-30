@@ -41,7 +41,8 @@ _color_enabled = color_enabled
 
 
 # Primary output console (stdout; what scripts capture).
-stdout_console = Console(force_terminal=color_enabled(), no_color=not color_enabled())
+_stdout_color_enabled = color_enabled()
+stdout_console = Console(force_terminal=_stdout_color_enabled, no_color=not _stdout_color_enabled)
 
 # Diagnostic/log console (stderr; never captured for JSON output).
 # Shared with runtime feedback so ``NO_COLOR``/``CI`` are honored uniformly.
