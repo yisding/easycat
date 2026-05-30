@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 import websockets
 from websockets.asyncio.server import Server, ServerConnection
@@ -23,6 +23,43 @@ logger = logging.getLogger(__name__)
 # WebRTC / WebTransport), so it lives here rather than in any one transport.
 # Transport-specific codes stay in their own modules.
 _DEGRADED_INBOUND_QUEUE_FULL = "inbound_queue_full"
+
+
+def _enqueue_inbound_chunk(
+    queue: asyncio.Queue[AudioChunk | None],
+    chunk: AudioChunk,
+    *,
+    emit_degraded: Callable[..., None],
+    context: str,
+) -> None:
+    """Best-effort enqueue for inbound audio, dropping + degrading when full.
+
+    The single definition of the inbound queue-full drop path, shared by every
+    transport.  ``_AudioQueueMixin._enqueue_chunk`` delegates here, and
+    standalone session helpers that hold an injected queue + emitter (e.g.
+    WebTransport's per-session helper) call it directly so the drop message,
+    degraded code, and logging stay in lock-step.
+
+    Parameters
+    ----------
+    queue:
+        The inbound audio queue.
+    chunk:
+        The audio chunk to enqueue.
+    emit_degraded:
+        Callable matching ``_emit_degraded(reason, detail, *, fatal=False)``
+        used to surface the drop on the session event bus.
+    context:
+        Log-friendly transport/context name used when the queue is full.
+    """
+    try:
+        queue.put_nowait(chunk)
+    except asyncio.QueueFull:
+        logger.warning("Inbound %s audio queue full — dropping frame", context)
+        emit_degraded(
+            _DEGRADED_INBOUND_QUEUE_FULL,
+            f"dropped {len(chunk.data)}-byte {context} frame; inbound queue full",
+        )
 
 
 # ── Shared queue / receive_audio logic ────────────────────────────
@@ -97,6 +134,21 @@ class _AudioQueueMixin:
         self._emit_tasks.add(task)
         task.add_done_callback(self._emit_tasks.discard)
 
+    async def _drain_emit_tasks(self) -> None:
+        """Await any in-flight fire-and-forget ``_emit_degraded`` tasks.
+
+        Called from ``disconnect`` so a transport torn down with emit tasks
+        still pending does not leave them dangling into interpreter shutdown
+        ("Task was destroyed but it is pending"). Late emits are already safe
+        (the journal sink no-ops after :meth:`Session._destroy`), so this is
+        lifecycle tidiness, not correctness.
+        """
+        if not self._emit_tasks:
+            return
+        # Snapshot: the done-callback mutates ``_emit_tasks`` during gather.
+        pending = list(self._emit_tasks)
+        await asyncio.gather(*pending, return_exceptions=True)
+
     def _reset_audio_queue(self) -> None:
         """Reinitialize the queue to clear any stale sentinels from a previous session."""
         self._in_queue = asyncio.Queue(maxsize=self._max_pending_chunks)
@@ -142,14 +194,12 @@ class _AudioQueueMixin:
         context:
             Log-friendly transport/context name used when the queue is full.
         """
-        try:
-            self._in_queue.put_nowait(chunk)
-        except asyncio.QueueFull:
-            logger.warning("Inbound %s audio queue full — dropping frame", context)
-            self._emit_degraded(
-                _DEGRADED_INBOUND_QUEUE_FULL,
-                f"dropped {len(chunk.data)}-byte {context} frame; inbound queue full",
-            )
+        _enqueue_inbound_chunk(
+            self._in_queue,
+            chunk,
+            emit_degraded=self._emit_degraded,
+            context=context,
+        )
 
     async def receive_audio(self) -> AsyncIterator[AudioChunk]:
         """Yield audio chunks until a ``None`` sentinel is received."""
@@ -253,6 +303,7 @@ class _ServerTransportBase(_AudioQueueMixin):
 
         self._enqueue_sentinel()
         self._connected = False
+        await self._drain_emit_tasks()
 
     @property
     def has_client(self) -> bool:

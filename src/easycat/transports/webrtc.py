@@ -448,35 +448,42 @@ class WebRTCTransport(_AudioQueueMixin):
         if not self._connected:
             return
 
-        # Cancel the inbound audio consumer task.
-        if self._consume_task is not None and not self._consume_task.done():
-            self._consume_task.cancel()
-            try:
-                await self._consume_task
-            except asyncio.CancelledError:
-                pass
-            self._consume_task = None
+        # Serialize against ``_handle_offer`` so an in-flight ``/offer`` cannot
+        # interleave with teardown: a new offer either finishes before we start
+        # (its PC is then torn down below) or starts after us and bails because
+        # ``_connected`` is False. Clear ``_connected`` first, under the lock, so
+        # any offer handler queued behind us observes the disconnected state.
+        async with self._offer_lock:
+            self._connected = False
 
-        # Close the peer connection.
-        if self._pc is not None:
-            await self._pc.close()
-            self._pc = None
+            # Cancel the inbound audio consumer task.
+            if self._consume_task is not None and not self._consume_task.done():
+                self._consume_task.cancel()
+                try:
+                    await self._consume_task
+                except asyncio.CancelledError:
+                    pass
+                self._consume_task = None
 
-        self._outbound.stop()  # no-op by design; track is discarded with the PC
+            # Close the peer connection.
+            if self._pc is not None:
+                await self._pc.close()
+                self._pc = None
 
-        # Shut down HTTP server.
-        if self._site is not None:
-            await self._site.stop()
-            self._site = None
-        if self._runner is not None:
-            await self._runner.cleanup()
-            self._runner = None
-        self._app = None
-        self._has_bundled_client = False
+            self._outbound.stop()  # no-op by design; track is discarded with the PC
 
-        self._enqueue_sentinel()
-        self._connected = False
-        self._client_connected.clear()
+            # Shut down HTTP server.
+            if self._site is not None:
+                await self._site.stop()
+                self._site = None
+            if self._runner is not None:
+                await self._runner.cleanup()
+                self._runner = None
+            self._app = None
+            self._has_bundled_client = False
+
+            self._enqueue_sentinel()
+            self._client_connected.clear()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Send an audio chunk to the remote WebRTC peer."""
@@ -519,9 +526,24 @@ class WebRTCTransport(_AudioQueueMixin):
         async with self._offer_lock:
             return await self._handle_offer_locked(request)
 
+    def _unavailable_response(self) -> Any:
+        """Build a 503 response for offers received while disconnected."""
+        web = self._web
+        return web.Response(
+            status=503,
+            text=json.dumps({"error": "Transport is shutting down"}),
+            content_type="application/json",
+            headers=_CORS_HEADERS,
+        )
+
     async def _handle_offer_locked(self, request: Any) -> Any:
         """Handle an SDP offer with peer replacement serialized."""
         web = self._web
+        # Bail before doing any work if teardown has already begun. ``disconnect``
+        # clears ``_connected`` under ``_offer_lock``, so once we hold the lock the
+        # value is stable for the duration of this handler.
+        if not self._connected:
+            return self._unavailable_response()
         aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
         RTCPeerConnection = aiortc.RTCPeerConnection
         RTCSessionDescription = aiortc.RTCSessionDescription
@@ -586,6 +608,15 @@ class WebRTCTransport(_AudioQueueMixin):
         pc = None
         try:
             pc = RTCPeerConnection(rtc_config)
+
+            # Re-check teardown before committing the new peer. ``disconnect``
+            # holds ``_offer_lock`` across its whole teardown, so ``_connected``
+            # cannot have flipped here, but this keeps the commit guarded if that
+            # locking ever changes — discard the half-built PC rather than leak it.
+            if not self._connected:
+                await pc.close()
+                self._pc = None
+                return self._unavailable_response()
             self._pc = pc
 
             # Reset outbound track for the new connection.
