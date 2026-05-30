@@ -223,17 +223,26 @@ class ClassificationGate:
         return buffered + late
 
     async def discard(self) -> None:
-        """Cancel timeout and discard buffered audio, keeping the gate closed.
+        """Cancel timeout, discard buffered opener audio, and open the gate.
 
         Used when leaving CLASSIFYING for non-human states (VOICEMAIL,
-        SCREENING, IVR) so that the remaining opener TTS chunks are still
-        blocked by the gate instead of leaking to the outbound queue.
-        Also invokes the async flush callback (with an empty list) so that
-        hold audio is cancelled even when no opener audio was buffered.
+        SCREENING, IVR): the opener must not play, so its buffered chunks are
+        dropped.  The gate is then fully opened (``_closed = False`` and the
+        TTSAudio subscription removed) so that any later TTS — e.g. a
+        ``VoicemailPolicy.LEAVE_MESSAGE`` voicemail drop, or the agent's
+        speech once a non-human state resolves to HUMAN — reaches the
+        transport instead of being silently buffered with no timeout to
+        release it.  Also invokes the async flush callback (with an empty
+        list) so that hold audio is cancelled even when no opener audio was
+        buffered.
         """
         self._cancel_timeout()
         self._hold_audio_playing = False
         self._buffer.clear()
+        self._closed = False
+        if self._started:
+            self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
+            self._started = False
         if self._on_flush_async:
             await self._on_flush_async([])
 
@@ -489,18 +498,24 @@ class OutboundCallStateMachine:
 
         # Release classification gate when leaving CLASSIFYING.
         # Only re-enqueue buffered opener audio for HUMAN/UNKNOWN — for
-        # VOICEMAIL, SCREENING, and IVR the opener should not be played
-        # and the gate stays closed to block any remaining TTS chunks.
+        # VOICEMAIL, SCREENING, and IVR the opener should not be played, so
+        # discard() drops the buffered opener and fully opens the gate.
+        # Opening it (rather than leaving it closed) means later TTS — e.g. a
+        # leave-message voicemail drop, or agent speech once a non-human
+        # state resolves to HUMAN — is no longer silently buffered with no
+        # timeout to flush it.
         if old == OutboundCallState.CLASSIFYING and self._gate.is_buffering:
             if new_state in {OutboundCallState.HUMAN, OutboundCallState.UNKNOWN}:
                 await self._gate.flush_and_release()
             else:
                 await self._gate.discard()
 
-        # Reopen the gate when SCREENING, IVR, or VOICEMAIL resolves to HUMAN.
-        # discard() above kept the gate closed to block opener TTS during
-        # classification, but once the callee is confirmed human the gate
-        # must open so normal agent TTS can reach the transport.
+        # Defensive reopen: if the gate is somehow still buffering when
+        # SCREENING, IVR, or VOICEMAIL resolves to HUMAN (e.g. it was closed
+        # by a future code path other than the CLASSIFYING entry above),
+        # flush it so normal agent TTS can reach the transport.  In the
+        # current flow discard() has already opened the gate, so this is a
+        # no-op.
         if (
             old
             in {OutboundCallState.SCREENING, OutboundCallState.IVR, OutboundCallState.VOICEMAIL}

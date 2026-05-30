@@ -22,24 +22,6 @@ _TERMINAL_DISPOSITIONS: dict[OutboundCallState, str] = {
 }
 
 
-@dataclass(frozen=True)
-class NumberHealthWarning:
-    """Emitted when a number's answer rate drops below threshold."""
-
-    number: str
-    answer_rate: float
-    block_count: int
-
-
-@dataclass(frozen=True)
-class NumberRotationSuggested:
-    """Emitted when a number should be rotated out due to blocking."""
-
-    number: str
-    block_count: int
-    reason: str
-
-
 @dataclass
 class _CallRecord:
     """Internal record of a call from a specific number."""
@@ -111,6 +93,9 @@ class NumberHealthMonitor:
         disposition: str = "",
     ) -> None:
         """Record a call outcome for a number."""
+        if not number:
+            # Defense-in-depth: never file analytics under an empty key.
+            return
         now = time.monotonic()
         records = self._records[number]
         records.append(
@@ -176,11 +161,17 @@ class NumberHealthMonitor:
             self._records[number] = active
         return active
 
-    def _resolve_number(self, call_sid: str, event_number: str | None) -> str:
-        """Resolve the from-number for a call, using the call_sid mapping as fallback."""
+    def _resolve_number(self, call_sid: str, event_number: str | None) -> str | None:
+        """Resolve the from-number for a call.
+
+        Returns the event's number when present, else the number tracked for
+        this ``call_sid``. Returns ``None`` when neither is available so callers
+        can skip recording rather than filing analytics under an empty or
+        SID-shaped phantom key (e.g. placement failures emit an empty SID).
+        """
         if event_number:
             return event_number
-        return self._call_sid_to_number.get(call_sid, call_sid)
+        return self._call_sid_to_number.get(call_sid)
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
         # Guard against duplicate CallInitiated for the same call_sid
@@ -236,6 +227,10 @@ class NumberHealthMonitor:
         if not self._mark_terminal(event.call_sid):
             return
         number = self._resolve_number(event.call_sid, event.number)
+        if number is None:
+            # Unresolvable number (e.g. placement-failure CallFailed with an
+            # empty SID): skip recording rather than poison analytics.
+            return
         self._decrement_concurrent(number)
         is_blocked = event.reason in BLOCK_REASONS
         self.record_call(number, answered=False, blocked=is_blocked)
@@ -245,6 +240,8 @@ class NumberHealthMonitor:
         if not self._mark_terminal(event.call_sid):
             return
         number = self._resolve_number(event.call_sid, event.number)
+        if number is None:
+            return
         self._decrement_concurrent(number)
         duration = event.duration_s or 0.0
         self.record_call(

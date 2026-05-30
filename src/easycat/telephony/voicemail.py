@@ -138,6 +138,13 @@ class VoicemailDetector:
     speech duration. If continuous speech exceeds the monologue threshold, it
     emits ``VoicemailDetected(result="machine")``.
 
+    It also subscribes to :class:`CallInitiated` / :class:`CallAnswered` so
+    that, like its peer detectors (``STTAMDFusionClassifier``,
+    ``CallScreeningDetector``, ``VoicemailPolicyHandler``), it resets its
+    per-call state for each new outbound call in a multi-call session and
+    stamps emitted events with the active ``call_sid`` (so the state machine
+    can enforce its stale-event guard).
+
     Also provides :meth:`process_audio` for beep detection on raw audio chunks.
     """
 
@@ -151,6 +158,7 @@ class VoicemailDetector:
         self._speech_start: float | None = None
         self._has_emitted = False
         self._started = False
+        self._call_sid: str = ""
 
         # Beep detection state — tracks cumulative tone duration in seconds
         self._tone_duration_s: float = 0.0
@@ -162,8 +170,10 @@ class VoicemailDetector:
         return self._has_emitted
 
     def start(self) -> None:
-        """Subscribe to VAD events for monologue detection."""
+        """Subscribe to VAD and call lifecycle events for monologue detection."""
         if not self._started:
+            self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
+            self._event_bus.subscribe(CallAnswered, self._on_call_answered)
             self._event_bus.subscribe(VADStartSpeaking, self._on_speech_start)
             self._event_bus.subscribe(VADStopSpeaking, self._on_speech_stop)
             self._started = True
@@ -171,10 +181,13 @@ class VoicemailDetector:
     def stop(self) -> None:
         """Unsubscribe and reset state."""
         if self._started:
+            self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
+            self._event_bus.unsubscribe(CallAnswered, self._on_call_answered)
             self._event_bus.unsubscribe(VADStartSpeaking, self._on_speech_start)
             self._event_bus.unsubscribe(VADStopSpeaking, self._on_speech_stop)
             self._started = False
         self.reset()
+        self._call_sid = ""
 
     def reset(self) -> None:
         """Reset detection state without unsubscribing."""
@@ -182,6 +195,17 @@ class VoicemailDetector:
         self._has_emitted = False
         self._tone_duration_s = 0.0
         self._beep_detected = False
+
+    async def _on_call_initiated(self, event: CallInitiated) -> None:
+        """Reset detection state for a new outbound call."""
+        self.reset()
+        if event.call_sid:
+            self._call_sid = event.call_sid
+
+    async def _on_call_answered(self, event: CallAnswered) -> None:
+        """Track the active call_sid so emitted events can be stamped."""
+        if event.call_sid:
+            self._call_sid = event.call_sid
 
     async def _on_speech_start(self, event: VADStartSpeaking) -> None:
         """Track start of speech for monologue detection."""
@@ -197,7 +221,9 @@ class VoicemailDetector:
 
         if duration >= self._config.monologue_threshold_s:
             self._has_emitted = True
-            await self._event_bus.emit(VoicemailDetected(result="machine", source="detector"))
+            await self._event_bus.emit(
+                VoicemailDetected(result="machine", source="detector", call_sid=self._call_sid)
+            )
 
     async def process_audio(self, pcm16_data: bytes, sample_rate: int | None = None) -> bool:
         """Analyze a PCM16 audio chunk for beep detection.
@@ -235,7 +261,9 @@ class VoicemailDetector:
             if self._tone_duration_s * 1000 >= cfg.min_duration_ms:
                 self._beep_detected = True
                 self._has_emitted = True
-                await self._event_bus.emit(VoicemailDetected(result="machine", source="detector"))
+                await self._event_bus.emit(
+                    VoicemailDetected(result="machine", source="detector", call_sid=self._call_sid)
+                )
                 return True
         else:
             self._tone_duration_s = 0.0

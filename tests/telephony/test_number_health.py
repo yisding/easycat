@@ -85,6 +85,51 @@ class TestNumberHealthMonitor:
         finally:
             monitor.stop()
 
+    @pytest.mark.asyncio
+    async def test_placement_failure_does_not_create_phantom_buckets(self) -> None:
+        """A CallFailed with an empty SID and no number records nothing.
+
+        ``place_call`` emits ``CallFailed(call_sid="", reason=...)`` when
+        ``calls.create`` fails. Such an event has no resolvable from-number, so
+        the monitor must not file a phantom record under an empty key.
+        """
+        bus = EventBus()
+        monitor = NumberHealthMonitor(bus)
+        monitor.start()
+        try:
+            await bus.emit(CallFailed(call_sid="", reason="error placing call"))
+            assert "" not in monitor._records
+            assert dict(monitor._records) == {}
+        finally:
+            monitor.stop()
+
+    @pytest.mark.asyncio
+    async def test_untracked_sid_failure_does_not_masquerade_as_number(self) -> None:
+        """A failure for an untracked SID with no number is skipped, not keyed by SID."""
+        bus = EventBus()
+        monitor = NumberHealthMonitor(bus)
+        monitor.start()
+        try:
+            await bus.emit(CallFailed(call_sid="CA-untracked", reason="busy"))
+            assert "CA-untracked" not in monitor._records
+            assert dict(monitor._records) == {}
+        finally:
+            monitor.stop()
+
+    @pytest.mark.asyncio
+    async def test_tracked_sid_failure_without_number_uses_from_number(self) -> None:
+        """When the SID is tracked, the failure is recorded under the from-number."""
+        bus = EventBus()
+        monitor = NumberHealthMonitor(bus)
+        monitor.start()
+        try:
+            await bus.emit(CallInitiated(call_sid="CA2", to="+15551234567", from_="+15557654321"))
+            await bus.emit(CallFailed(call_sid="CA2", reason="busy"))
+            assert len(monitor._records["+15557654321"]) == 1
+            assert monitor._records["+15557654321"][0].answered is False
+        finally:
+            monitor.stop()
+
 
 class TestCallDispositionTracker:
     def test_records_disposition(self) -> None:

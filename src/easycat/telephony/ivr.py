@@ -74,8 +74,6 @@ class IVRNavigatorConfig:
     prompt_timeout_s: float = 15.0
     agent_timeout_s: float = 10.0
     agent_retry_delay_s: float = 2.0
-    dtmf_inter_digit_delay: bool = True
-    ivr_dtmf_verify: bool = False
     hold_silence_threshold_s: float = 10.0
 
 
@@ -264,59 +262,10 @@ class IVRNavigator:
             "history": [{"prompt": p, "action": a} for p, a in self._history],
         }
 
-        try:
-            result = await asyncio.wait_for(
-                self._agent_callback(context),
-                timeout=self._config.agent_timeout_s,
-            )
-        except TimeoutError:
-            logger.warning("IVR agent timed out, retrying after delay")
-            await asyncio.sleep(self._config.agent_retry_delay_s)
-            try:
-                result = await asyncio.wait_for(
-                    self._agent_callback(context),
-                    timeout=self._config.agent_timeout_s,
-                )
-            except TimeoutError:
-                # Transient: the agent is slow/unreachable. Re-arm the prompt
-                # timeout and wait for the next prompt rather than hanging up.
-                logger.warning("IVR agent retry timed out")
-                self._start_prompt_timeout()
-                return
-            except Exception:
-                # Hard failure (e.g. a crashing callback) on the retry too —
-                # this is deterministic, not transient, so escalate to hangup
-                # instead of pointlessly re-arming the prompt timeout.
-                logger.exception("IVR agent retry crashed; escalating to hangup")
-                self._active = False
-                await self._event_bus.emit(
-                    IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
-                )
-                return
-        except Exception:
-            # Hard failure on the first attempt: give the callback one more
-            # chance after a delay (transient bugs / flaky deps), then escalate.
-            logger.warning("IVR agent callback crashed, retrying after delay")
-            await asyncio.sleep(self._config.agent_retry_delay_s)
-            try:
-                result = await asyncio.wait_for(
-                    self._agent_callback(context),
-                    timeout=self._config.agent_timeout_s,
-                )
-            except TimeoutError:
-                # Transient: a slow retry is the same condition the timeout path
-                # treats leniently, regardless of how the first attempt failed.
-                # Re-arm the prompt timeout and wait rather than hanging up.
-                logger.warning("IVR agent retry timed out")
-                self._start_prompt_timeout()
-                return
-            except Exception:
-                logger.exception("IVR agent retry also crashed; escalating to hangup")
-                self._active = False
-                await self._event_bus.emit(
-                    IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
-                )
-                return
+        result = await self._call_agent_with_retry(context)
+        if result is None:
+            # Retry path already handled escalation (hangup) or re-arm (wait).
+            return
 
         action_str = result.get("action", "wait")
 
@@ -334,10 +283,7 @@ class IVRNavigator:
             self._menu_depth += 1
 
             if self._menu_depth > self._config.max_depth:
-                self._active = False
-                await self._event_bus.emit(
-                    IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
-                )
+                await self._escalate_to_hangup()
                 return
 
             action = IVRAction(
@@ -362,14 +308,62 @@ class IVRNavigator:
                     )
 
         elif action_str == "hangup":
-            self._active = False
-            await self._event_bus.emit(
-                IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
-            )
+            await self._escalate_to_hangup()
 
         else:
             # "wait" — do nothing, wait for next prompt.
             self._start_prompt_timeout()
+
+    async def _call_agent_with_retry(self, context: dict[str, object]) -> dict[str, str] | None:
+        """Call the agent callback with one delayed retry.
+
+        Returns the agent's result dict on success. Returns ``None`` when the
+        attempt could not be completed and escalation has already been handled:
+
+        * A slow/timed-out retry is treated as **transient** — the prompt
+          timeout is re-armed and we wait for the next prompt.
+        * A crashing retry is treated as **deterministic** — we escalate to
+          hangup rather than pointlessly re-arming.
+
+        The first failure (timeout or crash) is always retried once after a
+        delay; only the second attempt's outcome decides re-arm vs hangup.
+        """
+        assert self._agent_callback is not None  # guarded by caller
+        try:
+            return await asyncio.wait_for(
+                self._agent_callback(context),
+                timeout=self._config.agent_timeout_s,
+            )
+        except TimeoutError:
+            logger.warning("IVR agent timed out, retrying after delay")
+        except Exception:
+            logger.warning("IVR agent callback crashed, retrying after delay")
+
+        await asyncio.sleep(self._config.agent_retry_delay_s)
+        try:
+            return await asyncio.wait_for(
+                self._agent_callback(context),
+                timeout=self._config.agent_timeout_s,
+            )
+        except TimeoutError:
+            # Transient: the agent is slow/unreachable. Re-arm the prompt
+            # timeout and wait for the next prompt rather than hanging up.
+            logger.warning("IVR agent retry timed out")
+            self._start_prompt_timeout()
+            return None
+        except Exception:
+            # Deterministic failure (e.g. a crashing callback) on the retry too:
+            # escalate to hangup instead of pointlessly re-arming.
+            logger.exception("IVR agent retry crashed; escalating to hangup")
+            await self._escalate_to_hangup()
+            return None
+
+    async def _escalate_to_hangup(self) -> None:
+        """Deactivate navigation and emit a terminal HANGUP action."""
+        self._active = False
+        await self._event_bus.emit(
+            IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
+        )
 
     # ── Hold detection ─────────────────────────────────────────────
 

@@ -14,6 +14,7 @@ from easycat.events import CallFailed, EventBus
 from easycat.telephony.call_state import OutboundCallStateMachine
 from easycat.telephony.compliance import DNCList
 from easycat.telephony.number_health import CallDispositionTracker
+from easycat.telephony.screening import CallScreeningDetector
 
 
 class TestVoicemailDetectionConfig:
@@ -36,6 +37,29 @@ class TestVoicemailDetectionConfig:
     def test_detect_mode_maps_to_enable(self) -> None:
         cfg = VoicemailDetectionConfig(mode="detect")
         assert cfg.to_twilio_params()["amd_mode"] == "Enable"
+
+    @pytest.mark.parametrize("bad", [0, -1])
+    def test_non_positive_detection_timeout_rejected(self, bad: int) -> None:
+        # detection_timeout_s flows into asyncio.sleep with no runtime guard,
+        # so non-positive values must fail fast at construction.
+        with pytest.raises(ValueError, match="detection_timeout_s must be positive"):
+            VoicemailDetectionConfig(detection_timeout_s=bad)
+
+    @pytest.mark.parametrize(
+        "field_name",
+        ["speech_threshold_ms", "speech_end_threshold_ms", "silence_timeout_ms"],
+    )
+    def test_negative_threshold_rejected(self, field_name: str) -> None:
+        with pytest.raises(ValueError, match=f"{field_name} must be non-negative"):
+            VoicemailDetectionConfig(**{field_name: -1})
+
+    def test_zero_thresholds_allowed(self) -> None:
+        cfg = VoicemailDetectionConfig(
+            speech_threshold_ms=0,
+            speech_end_threshold_ms=0,
+            silence_timeout_ms=0,
+        )
+        assert cfg.speech_threshold_ms == 0
 
 
 class TestOutboundCallConfig:
@@ -134,6 +158,39 @@ class TestOutboundCallConfig:
         cfg = OutboundCallConfig(from_number="+1555", callee_language="es")
         assert cfg.callee_language == "es"
 
+    @pytest.mark.parametrize("bad", [0, -1])
+    def test_non_positive_classification_gate_timeout_rejected(self, bad: float) -> None:
+        with pytest.raises(ValueError, match="classification_gate_timeout_s must be positive"):
+            OutboundCallConfig(from_number="+1555", classification_gate_timeout_s=bad)
+
+    @pytest.mark.parametrize("bad", [0, -1])
+    def test_non_positive_max_call_duration_rejected(self, bad: int) -> None:
+        with pytest.raises(ValueError, match="max_call_duration_s must be positive"):
+            OutboundCallConfig(from_number="+1555", max_call_duration_s=bad)
+
+    @pytest.mark.parametrize("bad", [0, -1])
+    def test_non_positive_max_screening_turns_rejected(self, bad: int) -> None:
+        with pytest.raises(ValueError, match="max_screening_turns must be positive"):
+            OutboundCallConfig(from_number="+1555", max_screening_turns=bad)
+
+    def test_negative_late_voicemail_window_rejected(self) -> None:
+        with pytest.raises(ValueError, match="late_voicemail_window_s must be non-negative"):
+            OutboundCallConfig(from_number="+1555", late_voicemail_window_s=-1.0)
+
+    def test_negative_voicemail_pickup_window_rejected(self) -> None:
+        with pytest.raises(ValueError, match="voicemail_pickup_window_s must be non-negative"):
+            OutboundCallConfig(from_number="+1555", voicemail_pickup_window_s=-1.0)
+
+    def test_zero_windows_allowed(self) -> None:
+        # Zero disables the window in the state machine; it is valid config.
+        cfg = OutboundCallConfig(
+            from_number="+1555",
+            late_voicemail_window_s=0.0,
+            voicemail_pickup_window_s=0.0,
+        )
+        assert cfg.late_voicemail_window_s == 0.0
+        assert cfg.voicemail_pickup_window_s == 0.0
+
 
 class TestTelephonyConfigExtension:
     def test_enable_outbound_flag(self) -> None:
@@ -169,6 +226,24 @@ class TestTelephonyConfigExtension:
             i for i, helper in enumerate(helpers) if isinstance(helper, OutboundCallStateMachine)
         )
         assert tracker_index < sm_index
+
+    def test_outbound_helpers_wire_inbound_track_filter_on_screening(self) -> None:
+        """Screening detector defaults to the inbound track filter.
+
+        Defense-in-depth so the bot's own speech (transcription_track="both")
+        cannot trigger a false screening match.  The filter accepts track-less
+        events, so it does not break screening in the common pipeline.
+        """
+        bus = EventBus()
+        helpers = _create_telephony_helpers(
+            bus,
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(from_number="+15559876543"),
+            ),
+        )
+        screening = next(helper for helper in helpers if isinstance(helper, CallScreeningDetector))
+        assert screening._track_filter == "inbound"
 
     @pytest.mark.asyncio
     async def test_outbound_helpers_record_specific_failed_disposition(self) -> None:

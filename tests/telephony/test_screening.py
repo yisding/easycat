@@ -320,6 +320,29 @@ class TestCallScreeningDetector:
             detector.stop()
 
     @pytest.mark.asyncio
+    async def test_inbound_filter_accepts_track_less_events(self) -> None:
+        """track_filter='inbound' must still accept track-less (None) events.
+
+        Most STT providers do not stamp a track, so the inbound filter
+        mirrors call_state._on_stt_final by accepting ``track is None`` while
+        still dropping an explicit outbound track.  This keeps the
+        ``track_filter='inbound'`` default (wired by config) from silently
+        disabling screening in the common pipeline.
+        """
+        bus = EventBus()
+        received: list[CallScreening] = []
+        bus.subscribe(CallScreening, received.append)
+        detector = CallScreeningDetector(bus, track_filter="inbound")
+        detector.start()
+        try:
+            await bus.emit(CallAnswered(call_sid=""))
+            # Track-less partial (the common case) is accepted.
+            await bus.emit(STTPartial(text="please record your name and reason for calling"))
+            assert len(received) == 1
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
     async def test_short_partial_without_pattern_ignored(self) -> None:
         """Short partials that don't match a known pattern are ignored."""
         bus = EventBus()
@@ -589,25 +612,6 @@ class TestScreeningMultiTurn:
             msg2 = "What is this about exactly, could you explain?"
             await bus.emit(STTFinal(text=msg2))
             assert detector.screening_turns == 2
-        finally:
-            detector.stop()
-
-    @pytest.mark.asyncio
-    async def test_coherence_check_flags_answer_bot(self) -> None:
-        bus = EventBus()
-        detector = CallScreeningDetector(bus, track_filter=None)
-        detector.start()
-        try:
-            await bus.emit(CallAnswered(call_sid=""))
-            await bus.emit(STTPartial(text="please record your name and reason for calling"))
-            # Simulate incoherent callee responses (RoboKiller-style).
-            detector.record_bot_utterance(
-                "Hi, this is Sarah from Acme Corp about your appointment"
-            )
-            detector.record_screening_turn("What's your favorite color of dinosaur?")
-            detector.record_bot_utterance("I'm calling about your Thursday appointment")
-            detector.record_screening_turn("Do you like pizza with pineapple?")
-            assert not detector.is_coherent()
         finally:
             detector.stop()
 

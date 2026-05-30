@@ -756,6 +756,47 @@ class TestClassificationGate:
         finally:
             gate.stop()
 
+    @pytest.mark.asyncio
+    async def test_gate_opens_on_classifying_to_voicemail_so_leave_message_plays(self) -> None:
+        """CLASSIFYING -> VOICEMAIL fully opens the gate (regression).
+
+        ``discard()`` must drop the buffered opener *and* open the gate.  If
+        it left the gate closed, a subsequent leave-message voicemail drop
+        would be buffered forever (no timeout in VOICEMAIL) and silently
+        dropped on overflow, leaving an empty voicemail.
+        """
+        from easycat.audio_format import AudioChunk, AudioFormat
+
+        bus = EventBus()
+        sm = OutboundCallStateMachine(
+            bus,
+            classification_timeout_s=60,
+            classification_gate=True,
+        )
+        sm.start()
+        fmt = AudioFormat(sample_rate=16000, channels=1, sample_width=2)
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            assert sm.state == OutboundCallState.CLASSIFYING
+            assert sm.gate.is_buffering
+            # Opener TTS is buffered while classifying.
+            await bus.emit(TTSAudio(chunk=AudioChunk(data=b"\x00" * 100, format=fmt)))
+            assert len(sm.gate.buffer) == 1
+
+            # Machine detected -> VOICEMAIL.  The opener is discarded and the
+            # gate fully opens.
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert sm.state == OutboundCallState.VOICEMAIL
+            assert not sm.gate.is_buffering
+            assert len(sm.gate.buffer) == 0
+
+            # A leave-message TTS drop now reaches the transport instead of
+            # being buffered and silently dropped.
+            await bus.emit(TTSAudio(chunk=AudioChunk(data=b"\x01" * 100, format=fmt)))
+            assert len(sm.gate.buffer) == 0
+        finally:
+            sm.stop()
+
 
 # ── SmartTurn suppression ────────────────────────────────────────
 
@@ -1110,8 +1151,10 @@ class TestVoicemailPickupDetection:
             assert sm.gate.is_buffering
             await bus.emit(VoicemailDetected(result="machine"))
             assert sm.state == OutboundCallState.VOICEMAIL
-            # Gate stays closed after discard (blocks remaining TTS).
-            assert sm.gate.is_buffering
+            # Gate fully opens after discard: the opener is dropped but later
+            # TTS (e.g. a leave-message drop, or agent speech on pickup) must
+            # reach the transport rather than buffer with no timeout to flush.
+            assert not sm.gate.is_buffering
             await bus.emit(STTFinal(text="Hello?"))
             assert sm.state == OutboundCallState.HUMAN
             assert not sm.gate.is_buffering
