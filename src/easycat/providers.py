@@ -29,6 +29,22 @@ class VersionedProvider(Protocol):
     ``version_info()`` on every wired provider. Implementing this method is a
     de-facto part of the provider contract; mixing this Protocol into each
     provider interface makes that dependency explicit and type-checkable.
+
+    Field conventions
+    -----------------
+    The returned mapping is free-form, but for postmortem diagnosis to be
+    legible across providers the following keys carry an agreed meaning:
+
+    - ``provider``: stable short name of the provider (e.g. ``"openai"``).
+    - ``model``: the model that actually produced the output for this
+      session. For providers that connect with a separate "connection"
+      model distinct from the transcription/generation model, also report
+      that under ``connection_model`` rather than dropping it.
+    - ``api_version``: the provider HTTP/WS API version (e.g. ``"v1"``).
+    - ``sdk_version``: the version of the transport library the *active
+      mode* actually uses — ``"websockets"`` when the provider streams over
+      a WebSocket, ``"httpx"`` when it issues HTTP requests. Providers with
+      a runtime mode switch must mirror the branch they will actually take.
     """
 
     def version_info(self) -> dict[str, str]:
@@ -47,6 +63,16 @@ class STTProvider(VersionedProvider, Protocol):
     via the `events()` async iterator. Session consumes these and emits
     EasyCat-level STTPartial/STTFinal events. Providers never emit EasyCat
     events directly.
+
+    Optional teardown hook
+    ----------------------
+    Session invokes an ``async def aclose(self) -> None`` (or sync/async
+    ``close``) on the provider during ``stop()``/``close`` via
+    ``runtime.capabilities.close_if_supported``. It is *not* a required
+    member of this Protocol (so stubs like ``NoopSTT`` stay conformant and
+    ``isinstance`` checks keep working), but providers that hold a socket
+    or an ``httpx`` client should implement it to release those resources
+    on session teardown rather than relying on garbage collection.
     """
 
     async def start_stream(self) -> None:
@@ -82,7 +108,21 @@ class TTSProvider(VersionedProvider, Protocol):
     """Text-to-speech provider interface.
 
     Call `synthesize` with text to get an async iterator of TTSEvent objects.
-    Session maps these to EasyCat-level TTSAudio/TTSMarkers events.
+    Session maps these to EasyCat-level TTSAudio/TTSMarkers events. Note that
+    ``TTSMarkers`` is a best-effort, debug-only event carrying the provider's
+    *native* alignment shape (not a normalized cross-provider schema); see
+    :class:`~easycat.events.TTSMarkers` for the contract.
+
+    Optional teardown hook
+    ----------------------
+    Session invokes an ``async def aclose(self) -> None`` (or sync/async
+    ``close``) on the provider during ``stop()``/``close`` via
+    ``runtime.capabilities.close_if_supported``. It is *not* a required
+    member of this Protocol (so stubs like ``NoopTTS`` stay conformant and
+    ``isinstance`` checks keep working), but providers that hold a socket
+    or an ``httpx`` client (e.g. ``OpenAITTS``, ``ElevenLabsTTS``) should
+    implement it to release those resources on session teardown rather
+    than relying on garbage collection.
     """
 
     @property
@@ -113,7 +153,7 @@ class VADProvider(VersionedProvider, Protocol):
     Process audio chunks and yield speech start/stop events.
     """
 
-    async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
+    def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process an audio chunk and yield any VAD events (start/stop speaking)."""
         ...
 
@@ -123,10 +163,8 @@ class VADProvider(VersionedProvider, Protocol):
         min_speech_duration_ms: int = 250,
         min_silence_duration_ms: int = 150,
         sensitivity: float = 0.5,
-        pre_roll_ms: int = 100,
-        post_roll_ms: int = 100,
     ) -> None:
-        """Configure VAD thresholds and buffering parameters."""
+        """Configure VAD thresholds."""
         ...
 
 
@@ -227,7 +265,9 @@ class Transport(VersionedProvider, Protocol):
         """Discard queued outbound audio (e.g. during barge-in).
 
         Transports that buffer outbound audio should drop pending data.
-        The default implementation is a no-op for transports without
-        outbound buffering.
+        This method is optional: transports without outbound buffering may
+        omit it entirely. The Session invokes it only through
+        ``runtime.capabilities.clear_audio_if_supported()``, which skips
+        transports that don't implement it.
         """
         ...

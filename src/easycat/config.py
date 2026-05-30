@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
@@ -41,52 +41,26 @@ from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.factory import STTConfig, create_stt_provider_from_config, parse_stt_string
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.stubs import NoopAgent
-from easycat.telephony.call_state import (
-    OutboundCallState,
-    OutboundCallStateMachine,
-)
-from easycat.telephony.dtmf import DTMFAggregator, DTMFAggregatorConfig
-from easycat.telephony.ivr import (
-    AgentCallback,
-    DTMFDelivery,
-    IVRAction,
-    IVRActionType,
-    IVRNavigator,
-)
-from easycat.telephony.number_health import (
-    CallDispositionTracker,
-    NumberHealthMonitor,
-)
-from easycat.telephony.outbound import OutboundCallManager
-from easycat.telephony.retry import RetryStrategy, RetryStrategyConfig
-from easycat.telephony.screening import (
-    CallScreeningDetector,
-    ScreeningResponse,
-    screening_patterns_for_languages,
-)
-from easycat.telephony.session_actions import (
-    TwilioSessionActionConfig,
-    TwilioSessionActionExecutor,
-)
-from easycat.telephony.voicemail import (
-    PostScreeningVoicemailDetector,
-    STTAMDFusionClassifier,
-    VoicemailDetector,
-    VoicemailDetectorConfig,
-    VoicemailPolicyHandler,
-)
+
+# Lightweight, config-only dataclasses needed at *module* scope — for the
+# ``TransportConfig`` union, ``field(default_factory=...)`` defaults, and the
+# runtime ``isinstance`` checks in ``_align_tts_config_to_transport``. These
+# submodule imports stay cheap because ``easycat.telephony`` /
+# ``easycat.transports`` load their members lazily (PEP 562), so none of them
+# drags in the rest of the telephony / transport stack. The heavier runtime
+# classes (state machines, navigators, transport implementations, the outbound
+# call manager, etc.) are imported lazily inside the factory functions that
+# actually build a session — see ``_create_transport`` /
+# ``_create_telephony_helpers`` / ``_create_outbound_helpers`` /
+# ``_create_action_executors`` — so touching ``EasyConfig`` never pulls them in.
+from easycat.telephony.dtmf import DTMFAggregatorConfig
+from easycat.telephony.voicemail import VoicemailDetectorConfig
 from easycat.timeouts import TimeoutConfig
-from easycat.transports.local import LocalTransport, LocalTransportConfig
-from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
-from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
-from easycat.transports.websocket import (
-    WebSocketTransport,
-    WebSocketTransportConfig,
-)
-from easycat.transports.webtransport import (
-    WebTransportTransport,
-    WebTransportTransportConfig,
-)
+from easycat.transports.local import LocalTransportConfig
+from easycat.transports.twilio_media import TwilioTransportConfig
+from easycat.transports.webrtc import WebRTCTransportConfig
+from easycat.transports.websocket import WebSocketTransportConfig
+from easycat.transports.webtransport import WebTransportTransportConfig
 from easycat.tts.cartesia_tts import CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
@@ -95,7 +69,39 @@ from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, create_vad
 
+if TYPE_CHECKING:
+    # Annotation-only references to telephony runtime types. Kept out of the
+    # module-level import set (which would re-trigger the telephony fan-out)
+    # because ``from __future__ import annotations`` makes these lazy strings.
+    from easycat.telephony.call_state import OutboundCallStateMachine
+    from easycat.telephony.ivr import AgentCallback, DTMFDelivery
+    from easycat.telephony.outbound import OutboundCallManager
+    from easycat.telephony.retry import RetryStrategyConfig
+    from easycat.telephony.screening import CallScreeningDetector, ScreeningResponse
+    from easycat.telephony.session_actions import TwilioSessionActionConfig
+
 logger = logging.getLogger(__name__)
+
+
+# Lazily-resolved telephony runtime classes. Kept out of the module-level
+# import set (see the import note at the top of this module) so a
+# non-telephony session never loads the outbound stack. They are still exposed
+# as module attributes via PEP 562 ``__getattr__`` so the factory functions can
+# reference them through the module namespace and tests can ``monkeypatch`` them.
+_LAZY_RUNTIME_IMPORTS = {
+    "OutboundCallManager": "easycat.telephony.outbound",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_path = _LAZY_RUNTIME_IMPORTS.get(name)
+    if module_path is not None:
+        import importlib
+
+        value = getattr(importlib.import_module(module_path), name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @contextmanager
@@ -136,9 +142,11 @@ def _resolve_easycat_log_level(*, default: int) -> int:
     """Read ``EASYCAT_LOG_LEVEL`` and map it to a logging level.
 
     Unknown values fall back to the caller-supplied default so a typo
-    doesn't silence the logger entirely.  Exposed at module scope so
-    both ``EasyConfig._apply_debug_defaults`` and
-    ``easycat.run`` converge on the same policy.
+    doesn't silence the logger entirely.  Exposed at module scope so the
+    single console-logging entry point
+    (``easycat._logging.enable_console_logging``) applies one consistent
+    ``EASYCAT_LOG_LEVEL`` policy across both
+    ``EasyConfig._apply_debug_defaults`` and ``easycat.run``.
     """
     raw = os.getenv("EASYCAT_LOG_LEVEL", "").strip().lower()
     if not raw:
@@ -165,6 +173,29 @@ def _closest_elevenlabs_output_format(rate: int) -> str:
     return f"pcm_{closest}"
 
 
+def _align_pcm_rate_tts_config_to_transport(
+    tts_config: DeepgramTTSConfig | CartesiaTTSConfig,
+    target_format: AudioFormat,
+) -> TTSConfig:
+    """Align a PCM-rate TTS config (Deepgram/Cartesia) to the transport.
+
+    Shared by the two providers that expose a ``sample_rate`` field and a
+    PCM ``output_format``: only re-target when the config still holds the
+    24kHz defaults, then clamp the provider sample rate to a supported
+    16k/24k value before adopting the transport's output format.
+    """
+    if tts_config.sample_rate != 24000 or tts_config.output_format != PCM16_MONO_24K:
+        return tts_config
+    provider_rate = (
+        target_format.sample_rate if target_format.sample_rate in (16000, 24000) else 24000
+    )
+    return replace(
+        tts_config,
+        sample_rate=provider_rate,
+        output_format=target_format,
+    )
+
+
 def _align_tts_config_to_transport(
     tts_config: TTSConfig,
     transport: TransportConfig,
@@ -178,29 +209,12 @@ def _align_tts_config_to_transport(
             return tts_config
         return replace(tts_config, output_format=target_format)
 
-    if isinstance(tts_config, DeepgramTTSConfig):
-        if tts_config.sample_rate != 24000 or tts_config.output_format != PCM16_MONO_24K:
-            return tts_config
-        provider_rate = (
-            target_format.sample_rate if target_format.sample_rate in (16000, 24000) else 24000
-        )
-        return replace(
-            tts_config,
-            sample_rate=provider_rate,
-            output_format=target_format,
-        )
-
-    if isinstance(tts_config, CartesiaTTSConfig):
-        if tts_config.sample_rate != 24000 or tts_config.output_format != PCM16_MONO_24K:
-            return tts_config
-        provider_rate = (
-            target_format.sample_rate if target_format.sample_rate in (16000, 24000) else 24000
-        )
-        return replace(
-            tts_config,
-            sample_rate=provider_rate,
-            output_format=target_format,
-        )
+    # Deepgram and Cartesia share an identical "clamp the provider sample_rate
+    # to 16k/24k, then adopt the transport's PCM output_format" rule, so the
+    # logic lives in one shared helper rather than two copy-paste branches that
+    # could drift apart. Both configs expose ``sample_rate``/``output_format``.
+    if isinstance(tts_config, (DeepgramTTSConfig, CartesiaTTSConfig)):
+        return _align_pcm_rate_tts_config_to_transport(tts_config, target_format)
 
     if isinstance(tts_config, ElevenLabsTTSConfig):
         if tts_config.output_format != "pcm_24000" or tts_config.audio_format != PCM16_MONO_24K:
@@ -212,6 +226,18 @@ def _align_tts_config_to_transport(
         )
 
     return tts_config
+
+
+def _require_positive(name: str, value: float) -> None:
+    """Raise ``ValueError`` if ``value`` is not strictly positive."""
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+
+
+def _require_non_negative(name: str, value: float) -> None:
+    """Raise ``ValueError`` if ``value`` is negative."""
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
 
 
 @dataclass
@@ -244,6 +270,16 @@ class VoicemailDetectionConfig:
     speech_threshold_ms: int = 2400
     speech_end_threshold_ms: int = 1200
     silence_timeout_ms: int = 5000
+
+    def __post_init__(self) -> None:
+        # ``detection_timeout_s`` flows into ``asyncio.sleep`` in the outbound
+        # state machine with no runtime guard, so a non-positive value either
+        # raises an uncaught ``ValueError`` (negative) or instantly
+        # misclassifies the call (zero) — fail fast at construction instead.
+        _require_positive("detection_timeout_s", self.detection_timeout_s)
+        _require_non_negative("speech_threshold_ms", self.speech_threshold_ms)
+        _require_non_negative("speech_end_threshold_ms", self.speech_end_threshold_ms)
+        _require_non_negative("silence_timeout_ms", self.silence_timeout_ms)
 
     def to_twilio_params(self) -> dict[str, Any]:
         """Render as the kwargs :class:`OutboundCallManager` expects today."""
@@ -299,10 +335,14 @@ class OutboundCallConfig:
     retry_strategy: RetryStrategyConfig | None = None
 
     def __post_init__(self) -> None:
-        if self.classification_gate_timeout_s <= 0:
-            raise ValueError("classification_gate_timeout_s must be positive")
-        if self.max_call_duration_s <= 0:
-            raise ValueError("max_call_duration_s must be positive")
+        _require_positive("classification_gate_timeout_s", self.classification_gate_timeout_s)
+        _require_positive("max_call_duration_s", self.max_call_duration_s)
+        _require_positive("max_screening_turns", self.max_screening_turns)
+        # The late/pickup windows are ``> 0``-guarded in the state machine
+        # (a non-positive value simply disables the window), but reject
+        # negatives for clarity since they are never meaningful.
+        _require_non_negative("late_voicemail_window_s", self.late_voicemail_window_s)
+        _require_non_negative("voicemail_pickup_window_s", self.voicemail_pickup_window_s)
 
 
 @dataclass
@@ -326,15 +366,32 @@ TransportConfig = (
     | WebTransportTransportConfig
     | Transport
 )
-_TRANSPORT_FACTORIES: dict[type[TransportConfig], Any] = {
-    LocalTransportConfig: lambda config, event_bus: LocalTransport(config),
-    WebSocketTransportConfig: lambda config, event_bus: WebSocketTransport(config),
-    TwilioTransportConfig: lambda config, event_bus: TwilioTransport(
-        config=config, event_bus=event_bus
-    ),
-    WebRTCTransportConfig: lambda config, event_bus: WebRTCTransport(config),
-    WebTransportTransportConfig: lambda config, event_bus: WebTransportTransport(config),
-}
+
+
+def _transport_factories() -> dict[type[TransportConfig], Any]:
+    """Build the ``{config type -> factory}`` map, importing transport
+    implementation classes lazily so they never load at config import time.
+
+    Keyed by config type and rebuilt on each ``_create_transport`` call;
+    Python's import cache makes the second build essentially free, and
+    sessions are not built in hot loops, so the cost is irrelevant next
+    to keeping ``EasyConfig`` cold starts free of every transport SDK.
+    """
+    from easycat.transports.local import LocalTransport
+    from easycat.transports.twilio_media import TwilioTransport
+    from easycat.transports.webrtc import WebRTCTransport
+    from easycat.transports.websocket import WebSocketTransport
+    from easycat.transports.webtransport import WebTransportTransport
+
+    return {
+        LocalTransportConfig: lambda config, event_bus: LocalTransport(config),
+        WebSocketTransportConfig: lambda config, event_bus: WebSocketTransport(config),
+        TwilioTransportConfig: lambda config, event_bus: TwilioTransport(
+            config=config, event_bus=event_bus
+        ),
+        WebRTCTransportConfig: lambda config, event_bus: WebRTCTransport(config),
+        WebTransportTransportConfig: lambda config, event_bus: WebTransportTransport(config),
+    }
 
 
 class EasyConfigError(ValueError):
@@ -404,13 +461,31 @@ def _inject_agent_runtime(
     """Push session-level MCP/model/key settings into the bridge.
 
     Unwraps an ``AgentRunner`` to reach the inner bridge.  Does not
-    return a new agent — mutates ``_mcp_servers`` / ``_model`` /
-    ``_api_key`` on the bridge in place, which is the shape bridges
-    expect.
+    return a new agent — applies settings to the bridge in place.
+
+    Prefers the declared :meth:`ExternalAgentBridge.configure_runtime`
+    surface when the bridge exposes it (every built-in bridge that
+    consumes these settings does), so the wiring targets a documented
+    contract instead of private attribute names.  Falls back to the
+    historical private-attribute mutation for bridges that predate the
+    method, keeping back-compat.
     """
     from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 
     inner = agent._agent if isinstance(agent, AgentRunner) else agent
+
+    configure = getattr(inner, "configure_runtime", None)
+    if callable(configure):
+        # Always pass mcp_servers (even empty) so a bridge reused across
+        # sessions doesn't leak a previous MCP list.
+        configure(
+            mcp_servers=list(mcp_servers),
+            model=agent_model or None,
+            api_key=remote_agent_api_key or None,
+        )
+        return
+
+    # Back-compat path for bridges without configure_runtime.
     if hasattr(inner, "_mcp_servers"):
         # Always overwrite (even with empty tuple) so a bridge reused
         # across sessions doesn't leak a previous MCP list.
@@ -506,6 +581,11 @@ class EasyConfig(_AgentSessionConfig):
     """Top-level configuration for EasyCat sessions.
 
     Fields:
+        enable_noise_reduction: Opt-in noise reduction. Defaults to
+            ``False``, so the out-of-the-box pipeline does **not** denoise
+            mic input. Set ``True`` (or pass an explicit ``noise_reduction``
+            config) to wire the reducer; note auto-mode still falls back to
+            a passthrough reducer unless Krisp or RNNoise is installed.
         mcp_servers: Optional list of MCP server URIs to pass through to
             agent bridges.  Accepted schemes: ``stdio://``, ``sse://``,
             ``http://``, ``https://``.  Frozen per session — mid-session
@@ -865,6 +945,27 @@ def create_session(config: EasyConfig) -> Session:
         smart_turn = create_smart_turn(config.smart_turn)
         if smart_turn is not None:
             turn_config = replace(turn_config, endpoint_detector=smart_turn)
+            # There are two decision knobs for the same endpoint call:
+            # ``SmartTurnConfig.threshold`` (used by the provider to compute
+            # ``prediction``) and ``TurnManagerConfig.endpoint_threshold``
+            # (re-decides on ``probability`` at the manager and wins when set).
+            # To stop them diverging silently, when the user has not set an
+            # explicit manager threshold (default ``None``), derive it from the
+            # provider threshold so the single ``smart_turn.threshold`` knob is
+            # authoritative. An explicit ``endpoint_threshold`` still wins, but
+            # we warn when it disagrees with the provider threshold so the
+            # precedence is never a hidden footgun.
+            if turn_config.endpoint_threshold is None:
+                turn_config = replace(turn_config, endpoint_threshold=config.smart_turn.threshold)
+            elif turn_config.endpoint_threshold != config.smart_turn.threshold:
+                logger.warning(
+                    "Both turn_taking.endpoint_threshold (%.3f) and "
+                    "smart_turn.threshold (%.3f) are set to different values; "
+                    "the manager-level endpoint_threshold wins and the provider "
+                    "threshold is ignored. Set only one to avoid confusion.",
+                    turn_config.endpoint_threshold,
+                    config.smart_turn.threshold,
+                )
 
         telephony_helpers = _create_telephony_helpers(
             event_bus,
@@ -875,11 +976,7 @@ def create_session(config: EasyConfig) -> Session:
 
         # Extract audio gate from the outbound call state machine, if present.
         audio_gate = None
-        _outbound_sm = None
-        for h in telephony_helpers:
-            if isinstance(h, OutboundCallStateMachine):
-                _outbound_sm = h
-                break
+        _outbound_sm = _find_outbound_state_machine(telephony_helpers)
 
         if _outbound_sm is not None:
 
@@ -1001,14 +1098,8 @@ def _install_record_to_hook(
         return
 
     original_stop = session.stop
-    original_shutdown = session.shutdown
-    already_exported = False
 
     async def _export_bundle() -> None:
-        nonlocal already_exported
-        if already_exported:
-            return
-        already_exported = True
         try:
             record_to.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -1018,20 +1109,17 @@ def _install_record_to_hook(
         except Exception:
             logger.exception("Failed to record debug bundle to %s", record_to)
 
-    async def _wrapped_stop() -> None:
+    async def _wrapped_stop(*, force: bool = False) -> None:
         try:
-            await original_stop()
+            await original_stop(force=force)
         finally:
             await _export_bundle()
 
-    async def _wrapped_shutdown() -> None:
-        try:
-            await original_shutdown()
-        finally:
-            await _export_bundle()
-
+    # ``shutdown()`` already delegates to ``stop(force=True)``, so wrapping
+    # ``stop`` alone covers every teardown path (``stop``, ``shutdown``, and
+    # the ``async with`` exit). The wrapper preserves the keyword-only
+    # ``force`` parameter so the graceful-vs-force distinction survives.
     session.stop = _wrapped_stop  # type: ignore[method-assign]
-    session.shutdown = _wrapped_shutdown  # type: ignore[method-assign]
 
 
 def _maybe_launch_debugger_ui(session: Session) -> None:
@@ -1113,6 +1201,66 @@ class TextSessionConfig(_AgentSessionConfig):
             agent_model=self.agent_model,
         )
 
+    @classmethod
+    def from_kwargs(
+        cls,
+        config: TextSessionConfig | None,
+        *,
+        agent: Any = None,
+        session_id: str | None = None,
+        debug: Literal["off", "light", "full"] = "off",
+        journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
+        journal_retention: Literal["archive", "delete"] = "archive",
+        wrap_agent: bool = True,
+        agent_runner: AgentRunnerConfig | None = None,
+        agent_model: str | None = None,
+        remote_agent_api_key: str | None = None,
+        mcp_servers: list[str] | None = None,
+    ) -> TextSessionConfig:
+        """Resolve the config-or-loose-kwargs calling convention to one config.
+
+        :func:`create_text_session` accepts either a fully-built
+        ``TextSessionConfig`` or the legacy loose keyword arguments. The two
+        forms are mutually exclusive: passing a ``config`` together with any
+        non-default loose keyword raises :class:`ValueError`. Keeping the
+        default table here, next to the dataclass fields it must track, keeps
+        the factory body declarative and the field list maintained in one
+        place.
+        """
+        if config is not None:
+            loose = {
+                "agent": (agent, None),
+                "session_id": (session_id, None),
+                "debug": (debug, "off"),
+                "journal_backend": (journal_backend, "sqlite"),
+                "journal_retention": (journal_retention, "archive"),
+                "wrap_agent": (wrap_agent, True),
+                "agent_runner": (agent_runner, None),
+                "agent_model": (agent_model, None),
+                "remote_agent_api_key": (remote_agent_api_key, None),
+                "mcp_servers": (mcp_servers, None),
+            }
+            supplied = [name for name, (value, default) in loose.items() if value != default]
+            if supplied:
+                raise ValueError(
+                    "create_text_session() accepts either a TextSessionConfig or loose "
+                    "keyword arguments, not both; remove the config argument or these "
+                    f"keyword(s): {', '.join(sorted(supplied))}."
+                )
+            return config
+        return cls(
+            agent=agent,
+            session_id=session_id,
+            debug=debug,
+            journal_backend=journal_backend,
+            journal_retention=journal_retention,
+            wrap_agent=wrap_agent,
+            agent_runner=agent_runner,
+            agent_model=agent_model,
+            remote_agent_api_key=remote_agent_api_key,
+            mcp_servers=mcp_servers,
+        )
+
 
 def create_text_session(
     config: TextSessionConfig | None = None,
@@ -1144,39 +1292,19 @@ def create_text_session(
     Raises :class:`RuntimeError` if the caller attempts to call
     :meth:`Session.start` on a text session.
     """
-    if config is not None:
-        _loose = {
-            "agent": (agent, None),
-            "session_id": (session_id, None),
-            "debug": (debug, "off"),
-            "journal_backend": (journal_backend, "sqlite"),
-            "journal_retention": (journal_retention, "archive"),
-            "wrap_agent": (wrap_agent, True),
-            "agent_runner": (agent_runner, None),
-            "agent_model": (agent_model, None),
-            "remote_agent_api_key": (remote_agent_api_key, None),
-            "mcp_servers": (mcp_servers, None),
-        }
-        _supplied = [name for name, (value, default) in _loose.items() if value != default]
-        if _supplied:
-            raise ValueError(
-                "create_text_session() accepts either a TextSessionConfig or loose "
-                "keyword arguments, not both; remove the config argument or these "
-                f"keyword(s): {', '.join(sorted(_supplied))}."
-            )
-    else:
-        config = TextSessionConfig(
-            agent=agent,
-            session_id=session_id,
-            debug=debug,
-            journal_backend=journal_backend,
-            journal_retention=journal_retention,
-            wrap_agent=wrap_agent,
-            agent_runner=agent_runner,
-            agent_model=agent_model,
-            remote_agent_api_key=remote_agent_api_key,
-            mcp_servers=mcp_servers,
-        )
+    config = TextSessionConfig.from_kwargs(
+        config,
+        agent=agent,
+        session_id=session_id,
+        debug=debug,
+        journal_backend=journal_backend,
+        journal_retention=journal_retention,
+        wrap_agent=wrap_agent,
+        agent_runner=agent_runner,
+        agent_model=agent_model,
+        remote_agent_api_key=remote_agent_api_key,
+        mcp_servers=mcp_servers,
+    )
 
     agent = config.agent
     session_id = config.session_id
@@ -1333,16 +1461,14 @@ def _wire_outbound_pipeline(
     response handler so that TTS audio is buffered, replayed, and the bot
     responds to screening prompts.
     """
+    from easycat.telephony.screening import ScreeningResponse
+
     wiring = _OutboundPipelineWiring(session)
 
     sm.set_gate_flush_callback(wiring.flush_gated_audio)
     sm.gate.set_hold_audio_callback(wiring.play_hold_audio)
 
-    _screening_detector: CallScreeningDetector | None = None
-    for _h in helpers:
-        if isinstance(_h, CallScreeningDetector):
-            _screening_detector = _h
-            break
+    _screening_detector = _find_screening_detector(helpers)
 
     async def _on_screening_response(event: ScreeningResponse) -> None:
         if event.mode == "agent" and _screening_detector is not None:
@@ -1381,7 +1507,7 @@ def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
         if hasattr(config, "_event_bus") and getattr(config, "_event_bus") is None:
             config._event_bus = event_bus
         return config
-    factory = _TRANSPORT_FACTORIES.get(type(config))
+    factory = _transport_factories().get(type(config))
     if factory is None:
         raise ValueError(
             f"Unsupported transport configuration type: {type(config).__name__!r}. "
@@ -1389,6 +1515,34 @@ def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
             "the connect/disconnect/receive_audio/send_audio contract."
         )
     return factory(config, event_bus)
+
+
+def _find_outbound_state_machine(
+    helpers: Sequence[Any],
+) -> OutboundCallStateMachine | None:
+    """Recover the outbound state machine from a helpers bag, if present.
+
+    Single named lookup so ``create_session`` and ``_wire_outbound_pipeline``
+    stop re-deriving it via ad-hoc ``isinstance`` scans over ``list[Any]``.
+    """
+    from easycat.telephony.call_state import OutboundCallStateMachine
+
+    for helper in helpers:
+        if isinstance(helper, OutboundCallStateMachine):
+            return helper
+    return None
+
+
+def _find_screening_detector(
+    helpers: Sequence[Any],
+) -> CallScreeningDetector | None:
+    """Recover the call-screening detector from a helpers bag, if present."""
+    from easycat.telephony.screening import CallScreeningDetector
+
+    for helper in helpers:
+        if isinstance(helper, CallScreeningDetector):
+            return helper
+    return None
 
 
 def _create_telephony_helpers(
@@ -1402,9 +1556,13 @@ def _create_telephony_helpers(
         return helpers
 
     if config.enable_dtmf_aggregator:
+        from easycat.telephony.dtmf import DTMFAggregator
+
         helpers.append(DTMFAggregator(event_bus, config.dtmf_aggregator))
 
     if config.enable_voicemail_detector:
+        from easycat.telephony.voicemail import VoicemailDetector
+
         helpers.append(VoicemailDetector(event_bus, config.voicemail_detector))
 
     if config.enable_outbound_call_manager and config.outbound:
@@ -1418,6 +1576,8 @@ def _create_action_executors(config: TelephonyConfig | None) -> list[SessionActi
     if config is None:
         return executors
     if config.twilio_actions is not None:
+        from easycat.telephony.session_actions import TwilioSessionActionExecutor
+
         executors.append(TwilioSessionActionExecutor(config.twilio_actions))
     return executors
 
@@ -1430,6 +1590,28 @@ def _create_outbound_helpers(
     dnc_list: Any | None = None,
 ) -> None:
     """Build and wire the outbound call pipeline helpers."""
+    # Telephony runtime classes are imported here (not at module scope) so a
+    # non-telephony session never loads the outbound stack — see the import
+    # note at the top of this module.
+    from easycat import config as _config_module
+    from easycat.telephony.call_state import OutboundCallState, OutboundCallStateMachine
+    from easycat.telephony.ivr import IVRAction, IVRActionType, IVRNavigator
+    from easycat.telephony.number_health import CallDispositionTracker, NumberHealthMonitor
+    from easycat.telephony.retry import RetryStrategy
+    from easycat.telephony.screening import (
+        CallScreeningDetector,
+        screening_patterns_for_languages,
+    )
+    from easycat.telephony.voicemail import (
+        PostScreeningVoicemailDetector,
+        STTAMDFusionClassifier,
+        VoicemailPolicyHandler,
+    )
+
+    # Resolve the manager through the module namespace (PEP 562 ``__getattr__``)
+    # rather than a direct ``from ... import`` so tests can ``monkeypatch`` it.
+    OutboundCallManager = _config_module.OutboundCallManager
+
     # STT+AMD fusion classifier — must be wired before the state machine
     # so that raw AMD events are intercepted and re-emitted with source="fusion".
     fusion = STTAMDFusionClassifier(event_bus)
@@ -1481,7 +1663,11 @@ def _create_outbound_helpers(
             screening_use_agent=oc.screening_use_agent,
             max_screening_turns=oc.max_screening_turns,
             patterns=_screening_patterns,
-            track_filter=None,
+            # Defense-in-depth: only analyze inbound (callee) transcripts so
+            # the bot's own speech (when transcription_track="both") cannot
+            # trigger a false screening match — mirroring the hard-coded
+            # inbound filter in call_state._on_stt_final.
+            track_filter="inbound",
         )
         helpers.append(screening)
 

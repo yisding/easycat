@@ -375,6 +375,61 @@ def test_create_session_auto_adapts_pydantic_agents():
     assert isinstance(session.agent._agent, PydanticAIBridge)
 
 
+def test_inject_agent_runtime_uses_configure_runtime_surface():
+    """A bridge declaring configure_runtime gets settings via that method."""
+    from easycat.config import _inject_agent_runtime
+
+    class _Bridge:
+        def __init__(self) -> None:
+            self.seen: dict[str, object] = {}
+
+        def configure_runtime(self, *, mcp_servers=None, model=None, api_key=None):
+            self.seen = {"mcp_servers": mcp_servers, "model": model, "api_key": api_key}
+
+    bridge = _Bridge()
+    _inject_agent_runtime(
+        bridge,
+        mcp_servers=("stdio://srv",),
+        agent_model="gpt-x",
+        remote_agent_api_key="key-123",
+    )
+    assert bridge.seen == {
+        "mcp_servers": ["stdio://srv"],
+        "model": "gpt-x",
+        "api_key": "key-123",
+    }
+
+
+def test_inject_agent_runtime_falls_back_to_private_attrs():
+    """A bridge without configure_runtime still gets _mcp_servers (back-compat)."""
+    from easycat.config import _inject_agent_runtime
+
+    class _LegacyBridge:
+        def __init__(self) -> None:
+            self._mcp_servers = None
+
+    bridge = _LegacyBridge()
+    _inject_agent_runtime(bridge, mcp_servers=("stdio://srv",))
+    assert bridge._mcp_servers == ["stdio://srv"]
+
+
+def test_inject_agent_runtime_clears_mcp_when_empty():
+    """An empty mcp_servers must overwrite a stale list (no leak across sessions)."""
+    from easycat.config import _inject_agent_runtime
+
+    class _Bridge:
+        def __init__(self) -> None:
+            self.mcp = ["stale"]
+
+        def configure_runtime(self, *, mcp_servers=None, model=None, api_key=None):
+            if mcp_servers is not None:
+                self.mcp = list(mcp_servers)
+
+    bridge = _Bridge()
+    _inject_agent_runtime(bridge, mcp_servers=())
+    assert bridge.mcp == []
+
+
 def test_create_session_does_not_mutate_turn_taking_config():
     turn_cfg = TurnManagerConfig(endpoint_detector=None)
     config = EasyConfig(
@@ -560,6 +615,63 @@ def test_create_session_keeps_vad_enabled_for_flux_when_smart_turn_enabled(
     assert create_vad_called is True
     assert session._enable_vad is True
     assert session._auto_turn_from_stt_final is False
+
+
+def _stub_audio_backends(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub VAD / noise reduction so create_session never needs a backend."""
+
+    class _VAD:
+        async def process(self, chunk):
+            if False:
+                yield chunk
+
+        def configure(self, **kwargs):
+            pass
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    monkeypatch.setattr("easycat.config.create_vad", lambda *_a, **_k: _VAD())
+    monkeypatch.setattr("easycat.config.create_noise_reducer", lambda *_a, **_k: _NoiseReducer())
+
+
+def test_create_session_derives_endpoint_threshold_from_smart_turn(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """When endpoint_threshold is left None, it is derived from smart_turn.threshold."""
+    _stub_audio_backends(monkeypatch)
+    config = EasyConfig(
+        openai_api_key="test-key",
+        smart_turn=SmartTurnConfig(enabled=True, threshold=0.7),
+        agent=_DummyAgent(),
+    )
+
+    session = create_session(config)
+
+    assert session._turn_manager._config.endpoint_threshold == 0.7
+    # The source config must not be mutated.
+    assert config.turn_taking.endpoint_threshold is None
+
+
+def test_create_session_endpoint_threshold_overrides_smart_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """An explicit manager endpoint_threshold wins and warns when it diverges."""
+    _stub_audio_backends(monkeypatch)
+    config = EasyConfig(
+        openai_api_key="test-key",
+        turn_taking=TurnManagerConfig(endpoint_threshold=0.8),
+        smart_turn=SmartTurnConfig(enabled=True, threshold=0.5),
+        agent=_DummyAgent(),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="easycat.config"):
+        session = create_session(config)
+
+    assert session._turn_manager._config.endpoint_threshold == 0.8
+    assert any("endpoint_threshold" in rec.message for rec in caplog.records)
 
 
 def test_create_session_keeps_vad_enabled_for_flux_when_voicemail_detector_enabled(

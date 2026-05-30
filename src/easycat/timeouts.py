@@ -8,12 +8,32 @@ session recovery.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_provider_name(provider: Any, fallback: str) -> str:
+    """Derive a provider's reported name from ``version_info()``.
+
+    Every provider implements ``version_info()`` returning a ``provider``
+    key. The base-class default is ``"unknown"``; treat that (and a
+    missing key) as no signal and fall back to the generic stage label so
+    timeout diagnostics name the real backend when it is known.
+    """
+    version_info = getattr(provider, "version_info", None)
+    if callable(version_info):
+        try:
+            name = version_info().get("provider")
+        except Exception:
+            name = None
+        if name and name != "unknown":
+            return name
+    return fallback
 
 
 # ── Timeout error types ────────────────────────────────────────────
@@ -139,6 +159,13 @@ async def with_tts_timeout(
                 timed_out = True
                 break
     finally:
+        # Deterministically finalize the wrapped source on consumer break
+        # (barge-in / cancellation) or timeout, instead of leaving the
+        # provider's underlying stream generator (WS/HTTP) to GC.
+        aclose = getattr(events_iter, "aclose", None)
+        if callable(aclose):
+            with contextlib.suppress(Exception):
+                await aclose()
         if timed_out:
             err = TTSTimeoutError(provider_name, timeout)
             logger.warning(str(err))

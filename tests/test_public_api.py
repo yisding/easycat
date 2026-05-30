@@ -142,6 +142,55 @@ def test_public_api_symbols_resolve() -> None:
         assert getattr(easycat, name) is not None
 
 
+def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
+    """Cold-start guard: ``import easycat; easycat.EasyConfig`` must not drag
+    in the telephony runtime stack or heavy transport SDKs.
+
+    Runs in a fresh interpreter so the test process's own imports don't
+    pollute ``sys.modules``. ``config.py`` may load the two telephony
+    *config-only* submodules (``dtmf`` / ``voicemail``) for its dataclass
+    defaults, but the runtime classifiers (state machines, IVR navigator,
+    outbound manager, screening, number health, retries, twiml, session
+    actions, compliance) must stay lazy.
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, easycat\n"
+        "easycat.EasyConfig\n"
+        "tele = sorted(m for m in sys.modules if m.startswith('easycat.telephony'))\n"
+        "print('\\n'.join(tele))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    loaded = {line for line in result.stdout.splitlines() if line}
+    # Only the package and the two config-only submodules are allowed.
+    allowed = {
+        "easycat.telephony",
+        "easycat.telephony.dtmf",
+        "easycat.telephony.voicemail",
+    }
+    forbidden = loaded - allowed
+    assert not forbidden, f"EasyConfig eager-loaded telephony runtime modules: {sorted(forbidden)}"
+    # The runtime classifiers in particular must not be present.
+    for mod in (
+        "easycat.telephony.call_state",
+        "easycat.telephony.outbound",
+        "easycat.telephony.ivr",
+        "easycat.telephony.screening",
+        "easycat.telephony.number_health",
+        "easycat.telephony.retry",
+        "easycat.telephony.session_actions",
+        "easycat.telephony.twiml",
+    ):
+        assert mod not in loaded
+
+
 def test_culled_symbols_remain_available_from_modules() -> None:
     from easycat.debug.testing import load_bundle
     from easycat.integrations.agents import AgentRunner, AgentRunnerConfig

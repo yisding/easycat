@@ -26,12 +26,45 @@ def require_env(name: str) -> str:
     return value
 
 
+def _install_shutdown_signal_handlers(
+    loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event
+) -> bool:
+    """Wire SIGINT/SIGTERM to set ``stop_event``.
+
+    Returns ``True`` when at least one handler was installed.  On Windows
+    the default ``ProactorEventLoop`` raises ``NotImplementedError`` from
+    ``add_signal_handler``; we swallow it so callers can fall back to
+    ``KeyboardInterrupt``-driven shutdown instead of surfacing an
+    asyncio-internals traceback.
+    """
+    installed = False
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+            installed = True
+        except (NotImplementedError, RuntimeError, ValueError):
+            # NotImplementedError: ProactorEventLoop on Windows.
+            # RuntimeError/ValueError: handler set off the main thread.
+            pass
+    return installed
+
+
 async def wait_for_shutdown_signal(session: Session) -> None:
-    """Run until SIGINT/SIGTERM, then stop the session cleanly."""
+    """Run until SIGINT/SIGTERM, then stop the session cleanly.
+
+    On platforms where the event loop cannot register signal handlers
+    (e.g. Windows' ``ProactorEventLoop``), falls back to letting
+    ``KeyboardInterrupt`` propagate so the caller's teardown still runs.
+    """
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
+    if not _install_shutdown_signal_handlers(loop, stop_event):
+        # No signal handler support: block until cancelled / KeyboardInterrupt.
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await session.stop()
+        return
 
     await stop_event.wait()
     await session.stop()
@@ -111,11 +144,20 @@ def run(config: EasyConfig) -> None:
         async with session:
             stop_event = asyncio.Event()
             loop = asyncio.get_running_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, stop_event.set)
-            await stop_event.wait()
+            if _install_shutdown_signal_handlers(loop, stop_event):
+                await stop_event.wait()
+            else:
+                # No signal-handler support (e.g. Windows ProactorEventLoop).
+                # Block until KeyboardInterrupt; asyncio.run propagates it and
+                # ``async with session`` still tears the session down cleanly.
+                await asyncio.Event().wait()
 
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        # Ctrl+C on the fallback (signal-handler-less) path: exit cleanly
+        # instead of dumping a traceback. Teardown already ran via __aexit__.
+        pass
 
 
 # Transport-config type -> human label for the "what got wired" summary.
@@ -155,7 +197,14 @@ def _wired_summary(config: EasyConfig) -> str:
     if config.enable_echo_cancellation is None:
         echo_label += " (auto)"
 
+    # Noise reduction is opt-in: a reducer is only wired when
+    # ``enable_noise_reduction`` is set or an explicit config is provided
+    # (mirrors the create_session gating in config.py).
+    nr_on = config.enable_noise_reduction or config.noise_reduction is not None
+    nr_label = "on" if nr_on else "off"
+
     return (
         f"easycat: wired stt={stt_label}, tts={tts_label}, "
-        f"transport={transport_label}, echo-cancel={echo_label}"
+        f"transport={transport_label}, noise-reduction={nr_label}, "
+        f"echo-cancel={echo_label}"
     )

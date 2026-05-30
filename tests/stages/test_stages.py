@@ -510,6 +510,61 @@ class TestStageExecuteRecording:
         assert "stage_start" in names
         assert "stage_complete" in names
 
+    async def test_agent_stage_replace_last_assistant_text_journals(self):
+        """Routing the post-turn rewrite through the stage records the
+        framework-state mutation on the journal recording boundary."""
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        stage = AgentStage(_StubAgent(), journal=journal)
+        stage.replace_last_assistant_text("cleaned", ctx=ctx, turn_id="turn-x")
+        records = [r for r in journal.read() if r.name == "replace_last_assistant_text"]
+        assert len(records) == 1
+        assert records[0].turn_id == "turn-x"
+        assert records[0].data["stage"] == "agent"
+        assert records[0].data["text"] == "cleaned"
+
+    async def test_agent_stage_apply_interruption_threads_recorder(self):
+        """The stage's apply_interruption passes a journal-backed recorder to
+        the bridge so four-step interruption records flow to the journal."""
+        from collections.abc import AsyncIterator
+
+        from easycat.integrations.agents.base import (
+            AgentBridgeEvent,
+            CancellationMode,
+        )
+        from tests._bridge_helpers import _TestBridgeBase
+
+        seen: dict[str, object] = {}
+
+        class _RecordingBridge(_TestBridgeBase):
+            async def invoke(
+                self, turn_input, recorder, cancel_token=None
+            ) -> AsyncIterator[AgentBridgeEvent]:
+                yield AgentBridgeEvent(kind="done", text="hi")
+
+            def configure_runtime(self, **kwargs):
+                pass
+
+            def apply_interruption(
+                self, delivered_text, mode, recorder=None, caused_by_signal_id=None
+            ):
+                seen["delivered"] = delivered_text
+                seen["recorder_is_none"] = recorder is None
+
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        stage = AgentStage(_RecordingBridge(), journal=journal)
+        stage.apply_interruption(
+            "heard this",
+            CancellationMode.IMMEDIATE_STOP,
+            ctx=ctx,
+            turn_id="turn-y",
+        )
+        assert seen["delivered"] == "heard this"
+        # A recorder must be threaded so the bridge can journal its
+        # four-step atomic interruption write ordering.
+        assert seen["recorder_is_none"] is False
+
     async def test_transport_stage_returns_true_when_send_audio_returns_true(self):
         class _DeliveringTransport:
             async def send_audio(self, chunk):

@@ -291,6 +291,80 @@ class AgentStage:
                     data_extra={"response": final_text},
                 )
 
+    # ── Post-turn framework-state mutations ─────────────────────
+    #
+    # These thread the same journal sink the streaming path uses so that
+    # interruption / last-assistant rewrites land on the recording
+    # boundary (stages are the documented debug/replay surface) instead of
+    # reaching around the stage straight to the live bridge.  Without this,
+    # the journal captured agent streaming but not the mutations applied to
+    # the same bridge on the hardest-to-debug path (barge-in).
+
+    def apply_interruption(
+        self,
+        delivered_text: str,
+        mode: Any,
+        *,
+        ctx: RunContext | None = None,
+        turn_id: str | None = None,
+        caused_by_signal_id: str | None = None,
+    ) -> None:
+        """Apply a barge-in to the bridge, threading a journal recorder.
+
+        The recorder lets the bridge emit its four-step atomic
+        interruption records (plan → committed → apply → success/failure)
+        tied to this turn, matching the streaming path's recording.
+        """
+        run_ctx = self._journal_ctx(ctx) if ctx is not None else None
+        recorder = self._make_recorder(turn_id, run_ctx) if run_ctx is not None else None
+        self._provider.apply_interruption(
+            delivered_text,
+            mode,
+            recorder=recorder,
+            caused_by_signal_id=caused_by_signal_id,
+        )
+
+    def append_interruption_note(
+        self,
+        note: str,
+        *,
+        ctx: RunContext | None = None,
+        turn_id: str | None = None,
+    ) -> None:
+        """Append an interruption note to the bridge and journal the fact."""
+        if ctx is not None:
+            journal_append_event(
+                self._journal_ctx(ctx),
+                stage=self.name,
+                name="interruption_note",
+                turn_id=turn_id,
+                data_extra={"note": note},
+            )
+        self._provider.append_interruption_note(note)
+
+    def replace_last_assistant_text(
+        self,
+        text: str,
+        *,
+        ctx: RunContext | None = None,
+        turn_id: str | None = None,
+    ) -> None:
+        """Rewrite the bridge's last assistant entry and journal the rewrite.
+
+        Records the framework-state mutation on the stage boundary so a
+        postmortem reflects the cleaned text the next turn conditions on,
+        not just the raw streamed output.
+        """
+        if ctx is not None:
+            journal_append_event(
+                self._journal_ctx(ctx),
+                stage=self.name,
+                name="replace_last_assistant_text",
+                turn_id=turn_id,
+                data_extra={"text": text},
+            )
+        self._provider.replace_last_assistant_text(text)
+
     def snapshot_state(self) -> StageStateSnapshot:
         return StageStateSnapshot(
             stage_name=self.name,
