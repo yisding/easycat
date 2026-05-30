@@ -2,9 +2,11 @@
 
 Two commands land here:
 
-Bundle files are ZIP archives regardless of whether they use ``.zip``,
-``.bundle``, or ``.easycat-bundle``. The ``--json`` flag controls CLI
-summary output; it is not a separate bundle file format.
+Exported bundle files are ZIP archives regardless of whether they use
+``.zip``, ``.bundle``, or ``.easycat-bundle``. Crash dumps are instead
+``.sqlite`` journals (one per crashed session) and are inspected via the
+partial-journal recovery path. The ``--json`` flag controls CLI summary
+output; it is not a separate bundle file format.
 
 ``bundles list``
     Print every bundle found in ``.easycat/recordings`` and
@@ -34,6 +36,7 @@ from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_json, json_envelope, stderr_console, stdout_console
 from easycat.debug.bundle import (
     BundleError,
+    BundleVersionError,
     RunBundle,
     checkpoint_id,
     discover_bundles,
@@ -53,11 +56,12 @@ bundles_app = typer.Typer(
 
 def _format_size(num_bytes: int) -> str:
     """Human-friendly byte count.  Keep the format stable for scripting."""
+    size = float(num_bytes)
     for unit in ("B", "KB", "MB", "GB"):
-        if num_bytes < 1024 or unit == "GB":
-            return f"{num_bytes:.0f}{unit}" if unit == "B" else f"{num_bytes / 1024:.1f}{unit}"
-        num_bytes //= 1024
-    return f"{num_bytes}B"
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}GB"
 
 
 def _format_mtime(mtime: float) -> str:
@@ -175,6 +179,18 @@ def list_bundles(
     stdout_console.print(table)
 
 
+def _crash_dump_artifact_root(sqlite_path: Path) -> Path | None:
+    """Locate the sibling artifact dir for a ``crash-dumps/<id>.sqlite`` file.
+
+    Crash dumps live at ``.easycat/crash-dumps/<session_id>.sqlite`` and
+    their artifacts at ``.easycat/artifacts/<session_id>/`` (see the
+    storage layout in ``runtime/DURABILITY.md``).  Return that directory
+    if it exists, else ``None`` so the journal is loaded without blobs.
+    """
+    artifact_root = sqlite_path.parent.parent / "artifacts" / sqlite_path.stem
+    return artifact_root if artifact_root.is_dir() else None
+
+
 def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
     """Load and render the bundle summary used by all inspect aliases."""
     if not bundle_path.exists():
@@ -182,7 +198,21 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
         raise typer.Exit(5)
 
     try:
-        bundle = RunBundle.load(bundle_path)
+        if bundle_path.suffix == ".sqlite":
+            # Crash-dump SQLite journals are not ZIP archives; load them
+            # via the partial-journal path with their sibling artifacts.
+            bundle = RunBundle.from_partial_journal(
+                bundle_path,
+                artifact_root=_crash_dump_artifact_root(bundle_path),
+            )
+        else:
+            bundle = RunBundle.load(bundle_path)
+    except BundleVersionError as exc:
+        stderr_console.print(
+            f"  [red]✗[/] Bundle was written by a newer easycat ({exc}); "
+            "upgrade easycat to inspect it."
+        )
+        raise typer.Exit(6) from None
     except BundleError as exc:
         stderr_console.print(f"  [red]✗[/] Bundle corrupt or unreadable: {exc}")
         raise typer.Exit(5) from None
@@ -236,7 +266,11 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
 @cli_command
 def show_bundle(
     bundle_path: Path = typer.Argument(
-        ..., help="Path to a ZIP bundle archive (``.zip``, ``.bundle``, or ``.easycat-bundle``)."
+        ...,
+        help=(
+            "Path to a ZIP bundle archive (``.zip``, ``.bundle``, or "
+            "``.easycat-bundle``) or a crash-dump ``.sqlite`` journal."
+        ),
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
@@ -247,7 +281,11 @@ def show_bundle(
 @cli_command
 def inspect_bundle(
     bundle_path: Path = typer.Argument(
-        ..., help="Path to a ZIP bundle archive (``.zip``, ``.bundle``, or ``.easycat-bundle``)."
+        ...,
+        help=(
+            "Path to a ZIP bundle archive (``.zip``, ``.bundle``, or "
+            "``.easycat-bundle``) or a crash-dump ``.sqlite`` journal."
+        ),
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:

@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import EventBus, TTSAudio
@@ -17,7 +18,6 @@ from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._audio_router import AudioRouter
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._tts_scheduler import TTSScheduler
-from easycat.session._turn_context import TurnContext
 from easycat.stages.audio import AudioStage
 from easycat.stages.stt import STTStage
 from easycat.stages.transport import TransportStage
@@ -398,4 +398,4 @@ async def test_synthesize_sentences_raises_not_implemented() -> None:
     turn = TurnContext("turn-1", CancelToken())
 
     with pytest.raises(NotImplementedError):
-        await scheduler.synthesize_sentences(payloads=None, cancel_token=None, turn=turn)
+        await scheduler._synthesize_sentences(payloads=None, cancel_token=None, turn=turn)

@@ -218,7 +218,7 @@ def test_live_validation_skips_missing_secret_in_non_strict_mode(
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     commands: list[list[str]] = []
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         commands.append(command)
         return CommandResult(exit_code=0, stdout="", stderr="")
 
@@ -251,7 +251,7 @@ def test_live_validation_fails_missing_secret_for_explicit_strict_provider(
         surfaces=["stt"],
         strict=True,
         artifacts_dir=tmp_path,
-        command_runner=lambda command: CommandResult(exit_code=0, stdout="", stderr=""),
+        command_runner=lambda command, *, env: CommandResult(exit_code=0, stdout="", stderr=""),
         started_at=datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC),
     )
 
@@ -272,7 +272,7 @@ def test_live_validation_runs_configured_provider_and_redacts_reports(
     monkeypatch.setenv("OPENAI_API_KEY", secret)
     commands: list[list[str]] = []
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         commands.append(command)
         return CommandResult(exit_code=0, stdout=f"ok {secret}", stderr="")
 
@@ -306,7 +306,7 @@ def test_live_validation_rejects_unknown_provider_selector(tmp_path: Path) -> No
     result = run_live_validation(
         providers=["opneai"],
         artifacts_dir=tmp_path,
-        command_runner=lambda command: CommandResult(exit_code=0, stdout="", stderr=""),
+        command_runner=lambda command, *, env: CommandResult(exit_code=0, stdout="", stderr=""),
         started_at=datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC),
     )
 
@@ -325,7 +325,7 @@ def test_live_validation_redacts_exact_runtime_secret_values(
     secret = "plain-runtime-token-value"
     monkeypatch.setenv("OPENAI_API_KEY", secret)
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         return CommandResult(exit_code=1, stdout=f"stdout {secret}", stderr=f"stderr {secret}")
 
     result = run_live_validation(
@@ -353,7 +353,9 @@ def test_live_validation_preserves_provider_quota_failure_class(
         providers=["openai"],
         surfaces=["stt"],
         artifacts_dir=tmp_path,
-        command_runner=lambda command: CommandResult(exit_code=1, stderr="429 quota exceeded"),
+        command_runner=lambda command, *, env: CommandResult(
+            exit_code=1, stderr="429 quota exceeded"
+        ),
         started_at=datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC),
     )
 
@@ -375,7 +377,7 @@ def test_live_validation_release_mode_is_audited_in_command(
         surfaces=["stt"],
         release=True,
         artifacts_dir=tmp_path,
-        command_runner=lambda command: CommandResult(exit_code=0, stdout="", stderr=""),
+        command_runner=lambda command, *, env: CommandResult(exit_code=0, stdout="", stderr=""),
         started_at=datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC),
     )
 
@@ -387,7 +389,7 @@ def test_validation_runner_quick_writes_report_junit_logs_and_latest(tmp_path: P
     commands: list[list[str]] = []
     secret = "sk-" + ("b" * 32)
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         commands.append(command)
         junit_arg = next(arg for arg in command if arg.startswith("--junitxml="))
         Path(junit_arg.removeprefix("--junitxml=")).write_text("<testsuite />")
@@ -429,8 +431,8 @@ def test_validation_runner_quick_writes_report_junit_logs_and_latest(tmp_path: P
 
 
 def test_validation_runner_embeds_reliability_samples_for_stress_slices(tmp_path: Path) -> None:
-    def fake_command_runner(command: list[str]) -> CommandResult:
-        reliability_path = Path(os.environ["EASYCAT_RELIABILITY_SAMPLES_PATH"])
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        reliability_path = Path(env["EASYCAT_RELIABILITY_SAMPLES_PATH"])
         reliability_path.write_text(
             json.dumps(
                 [
@@ -468,7 +470,7 @@ def test_validation_runner_embeds_reliability_samples_for_stress_slices(tmp_path
 
 
 def test_validation_runner_failed_pytest_still_writes_report(tmp_path: Path) -> None:
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         return CommandResult(exit_code=5, stdout="", stderr="no tests collected")
 
     result = run_validation_slice(
@@ -487,7 +489,7 @@ def test_validation_runner_failed_pytest_still_writes_report(tmp_path: Path) -> 
 
 
 def test_validation_runner_creates_isolated_run_directories(tmp_path: Path) -> None:
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         return CommandResult(exit_code=0, stdout="", stderr="")
 
     first = run_validation_slice(
@@ -511,7 +513,7 @@ def test_validation_runner_creates_isolated_run_directories(tmp_path: Path) -> N
 def test_validation_main_dispatches_socket_slice(tmp_path: Path) -> None:
     commands: list[list[str]] = []
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         commands.append(command)
         return CommandResult(exit_code=0, stdout="", stderr="")
 
@@ -527,7 +529,7 @@ def test_validation_main_dispatches_socket_slice(tmp_path: Path) -> None:
 def test_validation_main_dispatches_stress_slice(tmp_path: Path) -> None:
     commands: list[list[str]] = []
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         commands.append(command)
         return CommandResult(exit_code=0, stdout="", stderr="")
 
@@ -548,7 +550,7 @@ def test_validation_runner_can_use_installed_wheel_pytest_command(
     monkeypatch.setenv("EASYCAT_VALIDATION_PYTEST_COMMAND", "/tmp/venv/bin/python -m pytest")
     monkeypatch.setenv("EASYCAT_VALIDATION_TEST_PATHS", f"/repo/tests{os.pathsep}/repo/smoke")
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         commands.append(command)
         return CommandResult(exit_code=0, stdout="", stderr="")
 

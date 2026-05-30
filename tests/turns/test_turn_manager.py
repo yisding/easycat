@@ -377,6 +377,53 @@ async def test_barge_in_starts_new_turn():
 
 
 @pytest.mark.asyncio
+async def test_barge_in_during_processing_cancels_inflight_token():
+    """VAD start during PROCESSING is a barge-in that cancels the in-flight turn.
+
+    Drives IDLE -> USER_SPEAKING -> USER_PAUSED -> PROCESSING (via the silence
+    timeout) then fires VADStartSpeaking.  Asserts a second TurnStarted is
+    emitted, the prior cancel token is cancelled (so the in-flight agent run is
+    stopped), and a fresh token is issued for the new turn.
+    """
+    bus = EventBus()
+    config = TurnManagerConfig(end_of_turn_silence_ms=10)
+    cancel_called = [False]
+
+    async def mock_cancel():
+        cancel_called[0] = True
+        await bus.emit(Interruption())  # Real callback emits Interruption
+
+    tm = TurnManager(bus, config=config, cancel_turn_callback=mock_cancel)
+    collector = EventCollector(bus)
+
+    # IDLE -> USER_SPEAKING -> USER_PAUSED -> PROCESSING via silence timeout
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+    await asyncio.sleep(0.05)
+    assert tm.state == TurnManagerState.PROCESSING
+
+    # Capture the in-flight turn's cancel token before the barge-in.
+    inflight_token = tm.cancel_token
+    assert inflight_token is not None
+    assert not inflight_token.is_cancelled
+
+    # User re-speaks while the agent is processing -> barge-in.
+    await tm.on_vad_event(VADStartSpeaking())
+
+    assert cancel_called[0]
+    assert tm.state == TurnManagerState.USER_SPEAKING
+    # Prior token cancelled so the stale agent response cannot leak through.
+    assert inflight_token.is_cancelled
+    # A fresh, non-cancelled token was issued for the new turn.
+    assert tm.cancel_token is not None
+    assert tm.cancel_token is not inflight_token
+    assert not tm.cancel_token.is_cancelled
+    # A new TurnStarted was emitted (original turn + barge-in turn).
+    turn_started_count = sum(1 for n in collector.type_names if n == "TurnStarted")
+    assert turn_started_count == 2
+
+
+@pytest.mark.asyncio
 async def test_barge_in_via_push_to_talk():
     """Manual start_turn during BotSpeaking should also trigger barge-in."""
     bus = EventBus()
@@ -510,3 +557,13 @@ async def test_bot_stopped_speaking_ignored_when_not_bot_speaking():
     await tm.bot_stopped_speaking()
     assert tm.state == TurnManagerState.IDLE
     assert "BotStoppedSpeaking" not in collector.type_names
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["end_of_turn_silence_ms", "stt_segment_silence_ms", "pre_roll_ms"],
+)
+def test_config_rejects_negative_values(field):
+    """Negative timing values should fail at construction with a clear error."""
+    with pytest.raises(ValueError, match=field):
+        TurnManagerConfig(**{field: -1})

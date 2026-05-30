@@ -160,11 +160,13 @@ async def test_apply_interruption_truncates_last_assistant():
 
 
 @pytest.mark.asyncio
-async def test_apply_interruption_empty_text_uses_ellipsis():
+async def test_apply_interruption_empty_text_clears_assistant():
+    # Parity with every real bridge: an interruption before any audio was
+    # delivered rewrites the assistant message to "" (not a bare "...").
     runner = AgentRunner(EchoAgent())
     await _drain(runner, "hello")
     runner.apply_interruption("", CancellationMode.IMMEDIATE_STOP)
-    assert runner.history[-1] == {"role": "assistant", "content": "..."}
+    assert runner.history[-1] == {"role": "assistant", "content": ""}
 
 
 @pytest.mark.asyncio
@@ -290,6 +292,62 @@ async def test_bridge_delegation_honors_configured_timeout():
         await _drain(runner, "hello")
     assert exc.value.timeout == 0.05
     assert runner.history == []
+
+
+class _SucceedThenHangBridge:
+    """Replies normally on the first turn, then hangs forever."""
+
+    COMMITTABLE_BOUNDARIES: dict = {}
+
+    def __init__(self):
+        self.turn = 0
+
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        self.turn += 1
+        if self.turn == 1:
+            yield AgentBridgeEvent(kind="text_delta", text="ok")
+            yield AgentBridgeEvent(kind="done", text="ok")
+            return
+        await asyncio.sleep(999)
+        yield AgentBridgeEvent(kind="done", text="never")  # pragma: no cover
+
+    def snapshot_state(self):
+        from easycat.integrations.agents.base import FrameworkStateSnapshot
+
+        return FrameworkStateSnapshot(fields={}, kind="succeed-then-hang")
+
+    def apply_interruption(self, delivered_text, mode, recorder=None, caused_by_signal_id=None):
+        pass
+
+    def replace_last_assistant_text(self, text):
+        pass
+
+    def append_interruption_note(self, note):
+        pass
+
+    def reset(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_bridge_timeout_leaves_no_dangling_user_entry():
+    # Regression: a timed-out bridge turn must not record a user message into
+    # the runner's advisory shadow history, since the inner bridge owns the
+    # authoritative (partial) turn state and cannot be rolled back.
+    runner = AgentRunner(_SucceedThenHangBridge(), AgentRunnerConfig(timeout=0.05))
+    await _drain(runner, "first")
+    assert runner.history == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "ok"},
+    ]
+    with pytest.raises(AgentTimeoutError):
+        await _drain(runner, "second")
+    # The timed-out turn left the shadow history untouched (no orphan user
+    # entry) so the next turn won't double-feed context.
+    assert runner.history == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "ok"},
+    ]
 
 
 class _ContextCapturingBridge:

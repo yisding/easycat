@@ -45,10 +45,22 @@ def _validate_aec_fallback_policy(policy: str) -> EchoCancellationFallbackPolicy
 
 
 def _frame_samples_for_rate(sample_rate: int) -> int:
-    """Return the number of samples in a 10 ms frame at the given rate."""
-    if sample_rate in _FRAME_SAMPLES_BY_RATE:
-        return _FRAME_SAMPLES_BY_RATE[sample_rate]
-    return sample_rate // 100
+    """Return the number of samples in a 10 ms frame at the given rate.
+
+    WebRTC's AudioProcessingModule (AEC3) only supports a fixed set of sample
+    rates. Feeding it an ``AudioFrame`` at an arbitrary rate either errors
+    inside LiveKit or silently degrades cancellation, so unsupported rates are
+    rejected here rather than fed through with a best-effort ``//100`` frame.
+    """
+    samples = _FRAME_SAMPLES_BY_RATE.get(sample_rate)
+    if samples is None:
+        supported = ", ".join(str(r) for r in sorted(_FRAME_SAMPLES_BY_RATE))
+        raise ValueError(
+            f"Unsupported sample rate {sample_rate} Hz for WebRTC AEC. "
+            f"Supported rates: {supported}. Resample to one of these "
+            "(e.g. 16000 or 48000) before echo cancellation."
+        )
+    return samples
 
 
 def _split_frames(data: bytes, frame_bytes: int) -> list[bytes]:
@@ -76,7 +88,22 @@ class LiveKitAEC:
     def __init__(self) -> None:
         self._rtc = require_module("livekit.rtc", extra="aec", purpose="Echo cancellation")
         self._apm: Any = self._rtc.AudioProcessingModule(echo_cancellation=True)
+        # AEC requires the near-end (process) and far-end (feed_reference)
+        # streams to share a sample rate. We capture the first rate seen on
+        # either side and reject any later mismatch.
+        self._stream_rate: int | None = None
         logger.info("LiveKit AEC initialized")
+
+    def _check_stream_rate(self, sample_rate: int) -> None:
+        """Ensure near-end and far-end streams use the same sample rate."""
+        if self._stream_rate is None:
+            self._stream_rate = sample_rate
+        elif sample_rate != self._stream_rate:
+            raise ValueError(
+                "AEC near-end and far-end sample rates must match: "
+                f"already processing at {self._stream_rate} Hz but received "
+                f"{sample_rate} Hz. Resample both streams to a common rate."
+            )
 
     def close(self) -> None:
         """Release AudioProcessingModule resources."""
@@ -94,6 +121,7 @@ class LiveKitAEC:
         """
         fmt = chunk.format
         frame_samples = _frame_samples_for_rate(fmt.sample_rate)
+        self._check_stream_rate(fmt.sample_rate)
         frame_bytes = frame_samples * fmt.frame_size
         frames = _split_frames(chunk.data, frame_bytes)
 
@@ -116,6 +144,7 @@ class LiveKitAEC:
         """Feed a far-end (speaker) audio chunk as the AEC reference signal."""
         fmt = chunk.format
         frame_samples = _frame_samples_for_rate(fmt.sample_rate)
+        self._check_stream_rate(fmt.sample_rate)
         frame_bytes = frame_samples * fmt.frame_size
         frames = _split_frames(chunk.data, frame_bytes)
 

@@ -24,8 +24,9 @@ easycat bundles  # list captured debug bundles
 easycat inspect  # summarise one captured debug bundle
 ```
 
-The fastest path from empty directory to a running session is
-`easycat init` followed by `easycat doctor` to validate the environment.
+From an empty directory, `easycat init` scaffolds the canonical
+`run(EasyConfig.mic(agent=...))` shape (the same one shown above), then
+`easycat doctor` validates your environment before the first run.
 
 ## Validation Workflow
 
@@ -49,13 +50,23 @@ integration behavior:
 uv run python scripts/validate.py socket
 ```
 
-Live, latency, stress, and release validation are still planned public CLI
-surfaces. Until `easycat validate ...` lands, use the marker/direct entry
-points in [`plan/validation/README.md`](plan/validation/README.md). The planned
-public replacement for the quick script is `easycat validate quick`; it does
-not exist yet. When the public command is added, `--json` will remain the
-stdout machine-readable CLI envelope, while persisted validation reports will
-use `--report PATH`.
+The same lanes are available through the public `easycat validate` command,
+which is the recommended entry point:
+
+```bash
+easycat validate quick      # deterministic local validation (same as the script lane)
+easycat validate socket     # localhost socket / transport integration validation
+easycat validate stress     # local stress validation and saturation-signal capture
+easycat validate latency    # live latency validation (add --smoke or --sweep)
+easycat validate live       # live provider canaries (filter with --provider / --surface)
+easycat validate report PATH # render a concise summary of a saved report JSON
+```
+
+`--json` emits the standard machine-readable stdout envelope, `--report PATH`
+writes a persisted validation report JSON, and `--junit PATH` writes JUnit XML
+(available on the `quick`, `socket`, and `stress` lanes). For the lower-level
+marker/direct entry points, see
+[`plan/validation/README.md`](plan/validation/README.md).
 
 Flaky quarantine is explicit debt. Use
 `@pytest.mark.flaky(issue="...", owner="...", review_by="YYYY-MM-DD")`; missing
@@ -74,7 +85,7 @@ cassette status, and live canaries.
 - Passive supervisor listen-in via session audio fan-out on the EventBus
 - STT providers: OpenAI, Deepgram, ElevenLabs, Cartesia
 - TTS providers: OpenAI, Deepgram, ElevenLabs, Cartesia
-- VAD providers: Silero (open-source), optional TEN VAD (non-permissive license), and Krisp (commercial)
+- VAD providers: Silero (open-source), FunASR ONNX VAD (open-source), optional TEN VAD (non-permissive license), and Krisp (commercial)
 - Noise reduction: RNNoise (open-source), Krisp (commercial), passthrough fallback
 - Transports: Local (sounddevice), WebSocket server, WebRTC (aiortc), Twilio Media Streams server
 - Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers, outbound calling (Twilio), screening + IVR navigation, per-number health / retry / compliance gates, caller-ID propagation to the agent or tools
@@ -89,37 +100,61 @@ OpenAI Agents SDK and PydanticAI objects via `auto_adapt_agent`, so you don't
 have to wrap them yourself.
 
 ### Quickstart (EasyConfig)
+A voice bot in three lines — `run(EasyConfig.mic(agent=...))` is the one
+canonical shape, identical in this README, `examples/openai_agents_voice.py`,
+and the file `easycat init` scaffolds:
+
 ```python
 from agents import Agent
 
-from easycat import EasyConfig, create_session
+from easycat import EasyConfig, run
 
-agent = Agent(
-    name="Support",
-    instructions="Help customers with account issues.",
+run(
+    EasyConfig.mic(
+        agent=Agent(name="assistant", instructions="You are a helpful voice assistant.")
+    )
 )
-
-config = EasyConfig(
-    openai_api_key="your-api-key",
-    agent=agent,
-)
-session = create_session(config)
 ```
 
 > Note: `EasyConfig` will automatically wire **OpenAI Realtime STT
-> (gpt-realtime) + OpenAI TTS** if you provide `openai_api_key` and do
-> not override `stt` or `tts`. The Realtime STT streams transcription
-> over a WebSocket as audio arrives — sub-second stop-to-final latency,
-> not a batch upload at end of turn. The Realtime API is priced
-> separately from `/v1/audio/transcriptions`; see OpenAI's pricing page.
-> If you omit the API key, you must supply `stt` and `tts` configs
-> explicitly. For most users, `EasyConfig` + `create_session` is the
-> fastest way to get a working pipeline.
+> (gpt-realtime) + OpenAI TTS** from `OPENAI_API_KEY` (picked up from the
+> environment) when you do not override `stt` or `tts`. The Realtime STT
+> streams transcription over a WebSocket as audio arrives — sub-second
+> stop-to-final latency, not a batch upload at end of turn. The Realtime
+> API is priced separately from `/v1/audio/transcriptions`; see OpenAI's
+> pricing page. If you omit the API key, you must supply `stt` and `tts`
+> configs explicitly.
 >
 > The underlying bridge classes live in `easycat.integrations.agents`
 > (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`,
-> `LlamaAgentsBridge`, `RemoteResponsesAPIBridge`) for callers who want to
-> construct them by hand.
+> `LlamaAgentsBridge`, `RemoteResponsesAPIBridge`, `LangChainBridge`,
+> `LangGraphBridge`) for callers who want to construct them by hand.
+
+### Advanced: own the lifecycle
+`run()` hides the asyncio/signal/teardown ceremony. When you need to
+subscribe to events, run inside an existing event loop, or do work
+between turns, reach for `create_session(...)` and drive it with the one
+public teardown idiom — `async with session:` (it starts the session on
+entry and calls `stop(force=True)` on exit):
+
+```python
+import asyncio
+
+from agents import Agent
+
+from easycat import EasyConfig, STTFinal, create_session
+
+agent = Agent(name="Support", instructions="Help customers with account issues.")
+
+
+async def main() -> None:
+    async with create_session(EasyConfig.mic(agent=agent)) as session:
+        session.subscribe_event(STTFinal, lambda e: print("You said:", e.text))
+        await session.wait_closed()
+
+
+asyncio.run(main())
+```
 
 ## Telephony (inbound + outbound)
 
@@ -307,10 +342,10 @@ voice-only surfaces.
 
 ## Session lifecycle
 
-- `await session.stop()` performs graceful shutdown and releases live backend resources.
-- `await session.shutdown()` force-cancels in-flight work, then releases the same live backend resources.
-- `Session.close()` is lower-level and only finalizes the journal's clean-close marker.
-- After a clean `stop()` or `shutdown()`, postmortem inspection is still supported: `session.journal.read()` and `session.export_debug_bundle(...)` continue to work.
+- `async with session:` is the one public teardown idiom — entering starts the session, exiting calls `stop(force=True)`.
+- `await session.stop()` is the single public teardown verb: the default (`force=False`) drains in-flight work gracefully; `force=True` aggressively cancels the pipeline first.
+- `await session.wait_closed()` blocks until the session has stopped — the idiomatic pair for `async with session: await session.wait_closed()`.
+- After a clean `stop()`, postmortem inspection is still supported: `session.journal.read()` and `session.export_debug_bundle(...)` continue to work.
 
 
 ## Pre-TTS output processors (easy mode)
@@ -662,11 +697,12 @@ uv run python examples/openai_agents_voice.py
 The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
 SDK, RNNoise dependencies, numpy, and onnxruntime. It does not include TEN VAD;
 install that optional extra separately only if you accept its non-permissive
-license. If you prefer Silero VAD (requires torch), install extras individually:
+license. Silero VAD runs on its bundled ONNX model via `onnxruntime` (already
+in `quickstart`) — no torch required. If you want a leaner install with Silero,
+add extras individually:
 
 ```
-uv sync --extra local --extra openai --extra openai-agents --extra rnnoise
-uv pip install torch
+uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad
 ```
 
 Optional dependencies you may need depending on providers/transports:
@@ -674,7 +710,8 @@ Optional dependencies you may need depending on providers/transports:
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
 - numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
 - ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license)
-- torch (Silero VAD)
+- numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad` — runs the bundled ONNX model
+- torch (optional Silero VAD CPU/GPU speed-up; falls back to the bundled ONNX model when absent)
 - pyrnnoise + requests (RNNoise noise reduction backend)
 - Krisp SDK (krisp_audio)
 - Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs, Cartesia

@@ -9,11 +9,9 @@ import pytest
 from easycat.events import Error, ErrorStage, EventBus
 from easycat.timeouts import (
     AgentTimeoutError,
-    STTTimeoutError,
     TimeoutConfig,
     TTSTimeoutError,
     with_agent_timeout,
-    with_stt_timeout,
     with_tts_timeout,
 )
 
@@ -51,64 +49,20 @@ class TestTimeoutConfig:
         cfg = TimeoutConfig(stt_timeout=5.0, agent_timeout=15.0, tts_first_byte_timeout=3.0)
         assert cfg.stt_timeout == 5.0
 
-
-# ── STT timeout (Task 8.3) ────────────────────────────────────────
-
-
-class TestSTTTimeout:
-    async def test_no_timeout_when_events_arrive(self):
-        events = _slow_iter(["partial", "final"], delay=0.0)
-        result = await _collect(with_stt_timeout(events, timeout=1.0))
-        assert result == ["partial", "final"]
-
-    async def test_timeout_fires_when_stt_stalls(self):
-        async def stalling_iter():
-            yield "partial"
-            await asyncio.sleep(10)  # stall
-            yield "final"
-
-        with pytest.raises(STTTimeoutError) as exc_info:
-            await _collect(with_stt_timeout(stalling_iter(), timeout=0.05))
-
-        assert "stt" in str(exc_info.value).lower()
-        assert exc_info.value.timeout == 0.05
-
-    async def test_timeout_emits_error_event(self):
-        event_bus = EventBus()
-        errors = []
-
-        async def handler(event):
-            errors.append(event)
-
-        event_bus.subscribe(Error, handler)
-
-        async def stalling():
-            await asyncio.sleep(10)
-            yield "never"
-
-        with pytest.raises(STTTimeoutError):
-            await _collect(
-                with_stt_timeout(
-                    stalling(),
-                    timeout=0.05,
-                    provider_name="deepgram",
-                    event_bus=event_bus,
-                )
-            )
-
-        assert len(errors) == 1
-        assert errors[0].stage == ErrorStage.STT
-        assert isinstance(errors[0].exception, STTTimeoutError)
-
-    async def test_provider_name_in_error(self):
-        async def stalling():
-            await asyncio.sleep(10)
-            yield "never"
-
-        with pytest.raises(STTTimeoutError) as exc_info:
-            await _collect(with_stt_timeout(stalling(), timeout=0.05, provider_name="elevenlabs"))
-
-        assert exc_info.value.provider_name == "elevenlabs"
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            ("stt_timeout", 0.0),
+            ("stt_timeout", -1.0),
+            ("agent_timeout", 0.0),
+            ("agent_timeout", -1.0),
+            ("tts_first_byte_timeout", 0.0),
+            ("tts_first_byte_timeout", -1.0),
+        ],
+    )
+    def test_non_positive_timeout_rejected(self, field, value):
+        with pytest.raises(ValueError, match=field):
+            TimeoutConfig(**{field: value})
 
 
 # ── Agent timeout (Task 8.4) ──────────────────────────────────────

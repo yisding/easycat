@@ -7,6 +7,7 @@ and records execution state to the journal via :class:`AgentRecorder`.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -37,6 +38,8 @@ try:
     from agents import Runner  # type: ignore[import-untyped]
 except ImportError:
     Runner = None  # type: ignore[assignment,misc]
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIAgentsBridge:
@@ -117,6 +120,7 @@ class OpenAIAgentsBridge:
         pending_tool_calls: dict[str, str] = {}
         interrupted = False
         cursor_exited = False
+        handoff_cursor: ExecutionCursor | None = None
 
         try:
             async for event in result.stream_events():
@@ -157,9 +161,20 @@ class OpenAIAgentsBridge:
             cursor_exited = True
             raise
         finally:
+            # This ``finally`` also runs on ``GeneratorExit`` /
+            # ``CancelledError`` injected by ``AgentRunner``'s timeout/
+            # barge-in ``aclose()`` (neither is an ``Exception`` so the
+            # block above is skipped).  ``result.to_input_list()`` can
+            # raise when the stream was cancelled mid-flight; guard it so
+            # the agent cursor below is *always* closed, otherwise it is
+            # left without a ``unit_exited`` record and breaks the
+            # recorder's strict stack invariant for the postmortem journal.
             if hasattr(self._agent, "mcp_servers"):
                 self._agent.mcp_servers = saved_mcp_servers
-            self._message_history = result.to_input_list()
+            try:
+                self._message_history = result.to_input_list()
+            except Exception:
+                pass
             if self._use_previous_response_id:
                 self._previous_response_id = getattr(result, "last_response_id", None)
             if not cursor_exited:
@@ -168,7 +183,9 @@ class OpenAIAgentsBridge:
                     # Record handoff.
                     old_name = getattr(self._agent, "name", "unknown")
                     new_name = getattr(last_agent, "name", "unknown")
-                    recorder.record_unit_exited(agent_cursor, reason="handoff")
+                    recorder.record_unit_exited(
+                        agent_cursor.with_committable(True), reason="handoff"
+                    )
                     recorder.record_framework_handoff(
                         from_unit=old_name,
                         to_unit=new_name,
@@ -185,10 +202,29 @@ class OpenAIAgentsBridge:
                     )
                     recorder.record_unit_entered(new_cursor)
                     recorder.record_unit_exited(new_cursor.with_committable(True), reason=None)
+                    # Surface the handoff-target cursor lifecycle on the stream
+                    # too, so out-of-band consumers see a balanced enter/exit
+                    # for the new cursor across the handoff (emitted below,
+                    # after the original cursor's cursor_exited).
+                    handoff_cursor = new_cursor
                 else:
-                    recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
+                    try:
+                        recorder.record_unit_exited(
+                            agent_cursor.with_committable(True), reason=None
+                        )
+                    except Exception:
+                        logger.debug("Failed to close agent cursor during cleanup", exc_info=True)
 
         self._last_output = getattr(result, "final_output", None)
+        # Balance the cursor_entered emitted at stream start so stream-level
+        # cursor events are well-formed for out-of-band consumers.
+        yield AgentBridgeEvent(kind="cursor_exited", cursor=agent_cursor)
+        if handoff_cursor is not None:
+            # Mirror the recorder-level enter/exit of the handoff-target cursor
+            # on the stream so out-of-band consumers see a balanced lifecycle
+            # for the new cursor as well, not just the original one.
+            yield AgentBridgeEvent(kind="cursor_entered", cursor=handoff_cursor)
+            yield AgentBridgeEvent(kind="cursor_exited", cursor=handoff_cursor)
         yield AgentBridgeEvent(
             kind="done",
             text=accumulated,

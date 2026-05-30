@@ -38,7 +38,26 @@ class EasyCatError(Exception):
         self.code = code
         self.message = message
         self.context = context
-        super().__init__(f"{code}: {message}")
+        super().__init__(self._render())
+
+    def _render(self) -> str:
+        """Render ``CODE: message`` with the registry fix + explain hint.
+
+        Reads ``REGISTRY`` at call time (module global), so an
+        ``EasyCatError`` constructed before its code is registered still
+        renders correctly. The ``entry.fix.format`` call is guarded like
+        the factory's headline substitution so a future braced fix
+        template cannot turn into a constructor-time ``KeyError``.
+        """
+        base = f"{self.code}: {self.message}"
+        entry = REGISTRY.get(self.code)
+        if entry is None:
+            return base
+        try:
+            fix = entry.fix.format(**self.context) if self.context else entry.fix
+        except (KeyError, IndexError):
+            fix = entry.fix
+        return f"{base}\n  Fix: {fix}\n  Run `easycat explain {self.code}` for details."
 
 
 @dataclass
@@ -308,6 +327,155 @@ EASYCAT_E208 = register(
 
 
 # ══════════════════════════════════════════════════════════════════
+# E3xx — runtime (session execution)
+# ══════════════════════════════════════════════════════════════════
+
+EASYCAT_E301 = register(
+    "EASYCAT_E301",
+    "STT provider {provider!r} timed out after {timeout:.1f}s.",
+    cause=(
+        "The speech-to-text provider did not produce a transcript "
+        "within the configured `stt_timeout`. The provider may be slow, "
+        "unreachable, or the audio stream may have stalled."
+    ),
+    fix=(
+        "Increase `TimeoutConfig.stt_timeout` if the provider is simply "
+        "slow, or check network connectivity to the STT provider. "
+        "Inspect the session journal Error record (tagged with this "
+        "code) for the failing turn."
+    ),
+    example="TimeoutConfig(stt_timeout=20.0)",
+    related=["EASYCAT_E204"],
+)
+
+EASYCAT_E302 = register(
+    "EASYCAT_E302",
+    "Agent timed out after {timeout:.1f}s.",
+    cause=(
+        "The agent did not return a response within the configured "
+        "`agent_timeout`. A tool call, model call, or downstream service "
+        "is likely hanging."
+    ),
+    fix=(
+        "Increase `TimeoutConfig.agent_timeout` for long-running agents, "
+        "or add per-tool timeouts inside the agent. Inspect the session "
+        "journal Error record (tagged with this code) for the turn that "
+        "stalled."
+    ),
+    example="TimeoutConfig(agent_timeout=60.0)",
+    related=["EASYCAT_E301", "EASYCAT_E303"],
+)
+
+EASYCAT_E303 = register(
+    "EASYCAT_E303",
+    "TTS provider {provider!r} timed out after {timeout:.1f}s.",
+    cause=(
+        "The text-to-speech provider did not produce its first audio "
+        "frame within the configured `tts_first_byte_timeout`. The "
+        "provider may be slow, unreachable, or rejected the request."
+    ),
+    fix=(
+        "Increase `TimeoutConfig.tts_first_byte_timeout` if the provider "
+        "is slow to start, or check network connectivity to the TTS "
+        "provider. Inspect the session journal Error record (tagged "
+        "with this code)."
+    ),
+    example="TimeoutConfig(tts_first_byte_timeout=8.0)",
+    related=["EASYCAT_E302"],
+)
+
+EASYCAT_E304 = register(
+    "EASYCAT_E304",
+    "Provider {provider!r} became unreachable mid-call: {detail}",
+    cause=(
+        "A live provider connection dropped during an active session "
+        "(network blip, server-side disconnect, or the provider closed "
+        "the stream). Unlike `easycat doctor` probes, this happens "
+        "while audio is flowing."
+    ),
+    fix=(
+        "EasyCat will attempt to reconnect automatically; persistent "
+        "failures surface as EASYCAT_E305. Check network stability and "
+        "the provider's status page. The session journal Error record "
+        "carries this code for correlation."
+    ),
+    example="",
+    related=["EASYCAT_E204", "EASYCAT_E305"],
+)
+
+EASYCAT_E305 = register(
+    "EASYCAT_E305",
+    "Provider {provider!r} reconnect exhausted after {attempts} attempt(s).",
+    cause=(
+        "EasyCat retried a dropped provider connection up to the "
+        "configured limit and every attempt failed. The session can no "
+        "longer reach the provider."
+    ),
+    fix=(
+        "Check sustained network connectivity and the provider's status "
+        "page, then restart the session. Raise the reconnect attempt "
+        "limit only if the outage is expected to be transient."
+    ),
+    example="",
+    related=["EASYCAT_E304"],
+)
+
+
+# ══════════════════════════════════════════════════════════════════
+# E4xx — bundle / replay
+# ══════════════════════════════════════════════════════════════════
+
+EASYCAT_E401 = register(
+    "EASYCAT_E401",
+    "Failed to write debug bundle to {path}: {detail}",
+    cause=(
+        "Serializing the session run bundle to disk failed — usually a "
+        "read-only path, a full disk, or a permissions problem."
+    ),
+    fix=(
+        "Verify the target directory is writable and has free space "
+        "(see EASYCAT_E207 / EASYCAT_E208), then re-export the bundle."
+    ),
+    example="session.export_debug_bundle('/tmp/run.zip')",
+    related=["EASYCAT_E207", "EASYCAT_E208", "EASYCAT_E402"],
+)
+
+EASYCAT_E402 = register(
+    "EASYCAT_E402",
+    "Failed to load debug bundle from {path}: {detail}",
+    cause=(
+        "The bundle could not be read or parsed — the file is missing, "
+        "truncated, not a valid EasyCat bundle, or was produced by an "
+        "incompatible schema version."
+    ),
+    fix=(
+        "Confirm the path points at a complete bundle produced by a "
+        "compatible EasyCat version. Re-export from the source session "
+        "if the file is corrupt."
+    ),
+    example="load_bundle('/tmp/run.zip')",
+    related=["EASYCAT_E401", "EASYCAT_E403"],
+)
+
+EASYCAT_E403 = register(
+    "EASYCAT_E403",
+    "Replay diverged from recorded bundle: {detail}",
+    cause=(
+        "Replaying a recorded bundle produced output that no longer "
+        "matches the recording — pipeline behavior changed, or the "
+        "bundle was recorded with a different configuration."
+    ),
+    fix=(
+        "Inspect the divergence detail and the bundle's recorded config. "
+        "If the change is intentional, re-record the bundle; otherwise "
+        "treat the divergence as a regression."
+    ),
+    example="",
+    related=["EASYCAT_E402"],
+)
+
+
+# ══════════════════════════════════════════════════════════════════
 # E5xx — CLI usage
 # ══════════════════════════════════════════════════════════════════
 
@@ -346,5 +514,13 @@ __all__ = [
     "EASYCAT_E206",
     "EASYCAT_E207",
     "EASYCAT_E208",
+    "EASYCAT_E301",
+    "EASYCAT_E302",
+    "EASYCAT_E303",
+    "EASYCAT_E304",
+    "EASYCAT_E305",
+    "EASYCAT_E401",
+    "EASYCAT_E402",
+    "EASYCAT_E403",
     "EASYCAT_E501",
 ]

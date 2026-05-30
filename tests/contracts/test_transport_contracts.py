@@ -49,6 +49,9 @@ class _ContractTransport:
     async def push_audio(self, chunk: AudioChunk) -> None:
         await self._incoming.put(chunk)
 
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "contract-transport"}
+
 
 def test_transport_contract_matrix_has_rows() -> None:
     rows = [row for row in PROVIDER_SURFACE_CONTRACTS if row.surface == "transport"]

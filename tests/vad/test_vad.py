@@ -175,6 +175,46 @@ def test_silero_falls_back_to_onnx_after_torch_failure(monkeypatch: pytest.Monke
     assert vad._backend == "onnx"
 
 
+@pytest.mark.asyncio
+async def test_silero_downmixes_stereo_to_mono(monkeypatch: pytest.MonkeyPatch):
+    """Interleaved stereo input is downmixed before frame slicing."""
+    from easycat.audio_format import AudioFormat
+
+    seen: list[int] = []
+
+    class _FakeOnnxModel:
+        def predict(self, samples: list[float], sample_rate: int) -> float:
+            assert sample_rate == 16000
+            seen.append(len(samples))
+            return 0.1
+
+        def reset_states(self) -> None:
+            pass
+
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = _FakeOnnxModel()
+        self._backend = "onnx"
+        self._torch = None
+
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+
+    vad = SileroVAD()
+
+    # 512 mono frames worth of audio interleaved across 2 channels => 1024
+    # int16 samples. Without downmix, frame slicing would read 2x the frames
+    # at the wrong sample boundaries.
+    stereo_fmt = AudioFormat(sample_rate=16000, channels=2, sample_width=2)
+    data = struct.pack(f"<{512 * 2}h", *([1000] * (512 * 2)))
+    chunk = AudioChunk(data=data, format=stereo_fmt)
+
+    async for _ in vad.process(chunk):
+        pass
+
+    # After downmix there are exactly 512 mono samples => one 512-sample frame.
+    assert seen == [512]
+
+
 # ── KrispVAD tests ──────────────────────────────────────────────────
 
 
@@ -360,11 +400,8 @@ async def test_funasr_vad_process_streaming_segments(monkeypatch: pytest.MonkeyP
     events = []
     async for event in vad.process(_make_chunk(1000)):
         events.append(event)
-    async for event in vad.process(_make_chunk(0)):
-        events.append(event)
-    # _evaluate_speech latches silence on the first silent frame and
-    # emits VADStopSpeaking on the next one, so feed an extra empty
-    # frame to drive the state machine past that latch.
+    # With min_silence_duration_ms=0 the stop event fires on the first silent
+    # frame, mirroring the speech path (no extra empty frame needed).
     async for event in vad.process(_make_chunk(0)):
         events.append(event)
 

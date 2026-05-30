@@ -70,11 +70,19 @@ class _IdentitySinkTransport:
     def bind_identity_sink(self, sink) -> None:
         self.identity_sink = sink
 
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "identity-sink"}
+
 
 def test_easycat_config_requires_stt_tts(monkeypatch: pytest.MonkeyPatch):
+    # No key resolved and no stt/tts configured now routes through the
+    # error catalog as EASYCAT_E203 (an EasyCatError, not a ValueError).
+    from easycat.errors import EasyCatError
+
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(ValueError):
+    with pytest.raises(EasyCatError) as excinfo:
         EasyConfig()
+    assert excinfo.value.code == "EASYCAT_E203"
 
 
 def test_easycat_config_openai_defaults():
@@ -636,3 +644,162 @@ def test_debug_bool_true_rejected():
 def test_debug_bool_false_rejected():
     with pytest.raises(ValueError, match="Invalid debug=False"):
         EasyConfig(openai_api_key="test-key", debug=False)
+
+
+# ── provider display name in missing-API-key errors ───────────────────
+
+
+def test_missing_api_key_error_uses_catalog_name_for_deepgram():
+    with pytest.raises(ValueError, match=r"deepgram STT requires an API key"):
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+        )
+
+
+def test_missing_api_key_error_uses_catalog_name_for_openai_tts():
+    with pytest.raises(ValueError, match=r"openai TTS requires an API key"):
+        EasyConfig(
+            stt=OpenAIRealtimeSTTConfig(api_key="stt-key"),
+            tts=OpenAITTSConfig(api_key=""),
+        )
+
+
+# ── missing-key routes through EASYCAT_E203 ────────────────────────────
+
+
+def test_missing_openai_key_with_no_stt_tts_raises_e203(monkeypatch: pytest.MonkeyPatch):
+    from easycat.errors import EasyCatError
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(EasyCatError) as excinfo:
+        EasyConfig()
+    assert excinfo.value.code == "EASYCAT_E203"
+    assert excinfo.value.context == {"var": "OPENAI_API_KEY"}
+
+
+def test_easyconfig_is_keyword_only(monkeypatch: pytest.MonkeyPatch):
+    """Positional construction must fail loudly, never silently mis-bind.
+
+    Regression guard for the ``_AgentSessionConfig`` base extraction: a base
+    dataclass injects its fields before the subclass's in the generated
+    ``__init__``, so without ``kw_only=True`` a positional
+    ``EasyConfig("sk-...")`` would bind the key to ``agent`` instead of
+    ``openai_api_key``. ``kw_only`` turns that into a ``TypeError``.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    with pytest.raises(TypeError):
+        EasyConfig("sk-test")  # type: ignore[misc]  # positional is rejected
+    # The keyword form still works and resolves the key correctly.
+    cfg = EasyConfig(openai_api_key="sk-test")
+    assert cfg.openai_api_key == "sk-test"
+    assert cfg.agent is None
+
+
+# ── agent shape fail-fast at construction ──────────────────────────────
+
+
+def _stub_audio_backends(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub VAD/noise-reduction so create_session reaches the agent check.
+
+    The agent shape check sits after VAD creation in ``create_session``;
+    stub the audio backends so the check is reached even when no real VAD
+    backend is installed in the test environment.
+    """
+
+    class _VAD:
+        async def process(self, chunk):
+            if False:
+                yield chunk
+
+        def configure(self, **kwargs):
+            pass
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    monkeypatch.setattr("easycat.config.create_vad", lambda *_a, **_k: _VAD())
+    monkeypatch.setattr("easycat.config.create_noise_reducer", lambda *_a, **_k: _NoiseReducer())
+
+
+def test_create_session_rejects_bogus_agent(monkeypatch: pytest.MonkeyPatch):
+    from easycat.config import EasyConfigError
+
+    _stub_audio_backends(monkeypatch)
+    config = EasyConfig(openai_api_key="test-key", agent=object())
+    with pytest.raises(EasyConfigError, match=r"async run"):
+        create_session(config)
+
+
+def test_create_session_rejects_sync_run_agent(monkeypatch: pytest.MonkeyPatch):
+    from easycat.config import EasyConfigError
+
+    _stub_audio_backends(monkeypatch)
+
+    class SyncRunAgent:
+        def run(self, text: str) -> str:
+            return text
+
+    config = EasyConfig(openai_api_key="test-key", agent=SyncRunAgent())
+    with pytest.raises(EasyConfigError, match=r"async run"):
+        create_session(config)
+
+
+def test_create_session_accepts_valid_async_run_agent(monkeypatch: pytest.MonkeyPatch):
+    _stub_audio_backends(monkeypatch)
+    config = EasyConfig(openai_api_key="test-key", agent=_DummyAgent())
+    session = create_session(config)
+    assert isinstance(session.agent, AgentRunner)
+
+
+def test_create_session_skips_agent_check_when_wrap_agent_false(monkeypatch: pytest.MonkeyPatch):
+    # wrap_agent=False is the deliberate custom-bridge escape hatch — the
+    # shape check is skipped so a non-Agent object passes construction
+    # without raising EasyConfigError.
+    _stub_audio_backends(monkeypatch)
+    config = EasyConfig(openai_api_key="test-key", agent=object(), wrap_agent=False)
+    session = create_session(config)
+    assert session is not None
+
+
+# ── text session config object form ───────────────────────────────────
+
+
+def test_create_text_session_accepts_config_object():
+    from easycat.config import TextSessionConfig, create_text_session
+
+    config = TextSessionConfig(agent=_DummyAgent(), debug="off")
+    session = create_text_session(config)
+    assert session is not None
+
+
+def test_create_text_session_kwargs_still_supported():
+    from easycat.config import create_text_session
+
+    session = create_text_session(agent=_DummyAgent(), debug="off")
+    assert session is not None
+
+
+def test_text_session_config_validates_debug():
+    from easycat.config import TextSessionConfig
+
+    with pytest.raises(ValueError, match="Invalid debug"):
+        TextSessionConfig(agent=_DummyAgent(), debug="loud")  # type: ignore[arg-type]
+
+
+def test_create_text_session_rejects_config_plus_loose_kwargs():
+    from easycat.config import TextSessionConfig, create_text_session
+
+    config = TextSessionConfig(agent=_DummyAgent())
+    with pytest.raises(ValueError, match="not both"):
+        create_text_session(config, agent=_DummyAgent())
+
+
+def test_create_text_session_config_with_default_kwargs_ok():
+    from easycat.config import TextSessionConfig, create_text_session
+
+    # Passing config alongside only default-valued kwargs is allowed.
+    config = TextSessionConfig(agent=_DummyAgent(), debug="off")
+    session = create_text_session(config, debug="off")
+    assert session is not None

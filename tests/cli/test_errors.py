@@ -56,9 +56,62 @@ def test_factory_unused_kwargs_are_stored_not_substituted() -> None:
     assert err.context["provider"] == "foo"
 
 
+def test_rendered_message_carries_fix_and_explain_hint() -> None:
+    """A registered error's ``str()`` includes the fix and the explain hint."""
+    rendered = str(EASYCAT_E101(target="/tmp/demo"))
+    assert "EASYCAT_E101: " in rendered
+    assert "Fix:" in rendered
+    assert "easycat explain EASYCAT_E101" in rendered
+
+
+def test_rendered_message_unknown_code_is_bare() -> None:
+    """An unregistered code renders ``CODE: message`` with no fix/hint."""
+    rendered = str(EasyCatError("EASYCAT_E999", "boom"))
+    assert rendered == "EASYCAT_E999: boom"
+
+
+def test_render_survives_braced_fix_missing_context() -> None:
+    """A fix template with a placeholder absent from context falls back."""
+    code = "EASYCAT_TEST_RENDER"
+    register(code, "headline", cause="c", fix="set {missing} now")
+    try:
+        err = EasyCatError(code, "headline")
+        rendered = str(err)
+        assert "Fix: set {missing} now" in rendered
+        assert "easycat explain EASYCAT_TEST_RENDER" in rendered
+    finally:
+        REGISTRY.pop(code, None)
+
+
 def test_suggest_codes_returns_close_matches() -> None:
     matches = suggest_codes("EASYCAT_E10")
     assert any(m.startswith("EASYCAT_E1") for m in matches)
+
+
+def test_runtime_and_bundle_ranges_are_registered() -> None:
+    """The documented E3xx (runtime) and E4xx (bundle/replay) ranges exist."""
+    for code in (
+        "EASYCAT_E301",
+        "EASYCAT_E302",
+        "EASYCAT_E303",
+        "EASYCAT_E304",
+        "EASYCAT_E305",
+        "EASYCAT_E401",
+        "EASYCAT_E402",
+        "EASYCAT_E403",
+    ):
+        assert code in REGISTRY
+
+
+def test_runtime_timeout_errors_carry_registered_codes() -> None:
+    """Timeout exceptions expose stable codes that exist in the registry."""
+    from easycat.timeouts import AgentTimeoutError, STTTimeoutError, TTSTimeoutError
+
+    assert STTTimeoutError("stt", 1.0).code == "EASYCAT_E301"
+    assert AgentTimeoutError(1.0).code == "EASYCAT_E302"
+    assert TTSTimeoutError("tts", 1.0).code == "EASYCAT_E303"
+    for err in (STTTimeoutError("stt", 1.0), AgentTimeoutError(1.0), TTSTimeoutError("tts", 1.0)):
+        assert err.code in REGISTRY
 
 
 def test_exit_code_mapping() -> None:

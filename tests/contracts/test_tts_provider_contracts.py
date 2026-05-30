@@ -35,6 +35,9 @@ class _ContractTTS:
     async def cancel(self) -> None:
         self.cancel_calls += 1
 
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "contract-tts"}
+
 
 def test_tts_provider_contract_matrix_has_rows() -> None:
     rows = [row for row in PROVIDER_SURFACE_CONTRACTS if row.surface == "tts"]

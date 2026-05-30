@@ -102,6 +102,48 @@ class TestTTSBase:
         assert event.audio.format == PCM16_MONO_24K
         assert len(event.audio.data) > len(data)
 
+    def test_make_audio_event_aligns_odd_frame_without_resample(self):
+        """An odd-length frame at the output sample rate (no resample) must be
+        emitted sample-aligned, with the trailing byte carried to the next."""
+        base = TTSBase(output_format=PCM16_MONO_24K)
+        base._start_synthesis()
+        # 5 bytes, source == output format so no resample path runs.
+        event = base._make_audio_event(b"\x01\x02\x03\x04\x05", PCM16_MONO_24K)
+        assert event.audio is not None
+        assert len(event.audio.data) % 2 == 0
+        assert event.audio.data == b"\x01\x02\x03\x04"
+        assert base._sample_carry == b"\x05"
+
+    def test_make_audio_event_carries_split_sample_across_frames(self):
+        """The byte held back from one frame is prepended to the next so no
+        sample is lost or corrupted at a streaming-frame boundary."""
+        base = TTSBase(output_format=PCM16_MONO_24K)
+        base._start_synthesis()
+        first = base._make_audio_event(b"\xaa\xbb\xcc", PCM16_MONO_24K)
+        assert first.audio is not None
+        assert first.audio.data == b"\xaa\xbb"
+        assert base._sample_carry == b"\xcc"
+        second = base._make_audio_event(b"\xdd", PCM16_MONO_24K)
+        assert second.audio is not None
+        assert second.audio.data == b"\xcc\xdd"
+        assert base._sample_carry == b""
+
+    def test_make_audio_event_aligns_without_explicit_format(self):
+        """Even when no source format is passed, an odd frame is aligned to the
+        output sample width."""
+        base = TTSBase(output_format=PCM16_MONO_24K)
+        base._start_synthesis()
+        event = base._make_audio_event(b"\x01\x02\x03")
+        assert event.audio is not None
+        assert len(event.audio.data) % 2 == 0
+        assert base._sample_carry == b"\x03"
+
+    def test_start_synthesis_resets_sample_carry(self):
+        base = TTSBase(output_format=PCM16_MONO_24K)
+        base._sample_carry = b"\x99"
+        base._start_synthesis()
+        assert base._sample_carry == b""
+
     def test_make_markers_event(self):
         base = TTSBase()
         markers = [{"word": "hello", "start": 0.0, "end": 0.5}]
@@ -109,6 +151,41 @@ class TestTTSBase:
 
         assert event.type == TTSEventType.MARKERS
         assert event.markers == markers
+
+    def test_make_audio_event_odd_chunk_with_resample_does_not_crash(self):
+        """An odd-length frame routed through the real _make_audio_event ->
+        _normalize_audio resample path must not raise struct.error: the
+        sub-sample byte is held back by _sample_carry before resample."""
+        base = TTSBase(output_format=PCM16_MONO_24K)
+        base._start_synthesis()
+        # 5 bytes at 16kHz -> resampled to 24kHz; the trailing byte is held.
+        event = base._make_audio_event(b"\x01\x02\x03\x04\x05", PCM16_MONO_16K)
+        assert event.audio is not None
+        assert isinstance(event.audio.data, bytes)
+        assert base._sample_carry == b"\x05"
+
+    def test_make_audio_event_carries_split_sample_across_resample_chunks(self):
+        """Through the real call path, the byte held back from one resampled
+        frame is prepended to the next so no sample is lost or corrupted."""
+        base = TTSBase(output_format=PCM16_MONO_24K)
+        base._start_synthesis()
+        # First chunk: 3 bytes -> one full sample resampled, one byte carried.
+        base._make_audio_event(b"\xaa\xbb\xcc", PCM16_MONO_16K)
+        assert base._sample_carry == b"\xcc"
+        # Second chunk: carry (1) + 1 byte = 2 bytes -> a full sample, no carry.
+        base._make_audio_event(b"\xdd", PCM16_MONO_16K)
+        assert base._sample_carry == b""
+
+    def test_end_synthesis_drops_subsample_carry(self):
+        """A leftover sub-sample byte that no frame completed is intentionally
+        dropped (not emitted) when synthesis ends, and cleared so it cannot
+        leak into the next turn."""
+        base = TTSBase(output_format=PCM16_MONO_24K)
+        base._start_synthesis()
+        base._make_audio_event(b"\x01\x02\x03", PCM16_MONO_24K)
+        assert base._sample_carry == b"\x03"
+        base._end_synthesis()
+        assert base._sample_carry == b""
 
     def test_normalize_stereo_to_mono(self):
         base = TTSBase(output_format=PCM16_MONO_24K)

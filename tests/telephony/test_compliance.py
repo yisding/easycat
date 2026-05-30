@@ -8,6 +8,7 @@ from easycat.telephony.compliance import (
     check_calling_hours,
     detect_opt_out,
     lookup_timezone,
+    match_opt_out_phrase,
 )
 
 
@@ -37,6 +38,19 @@ class TestCallingHoursEnforcement:
     def test_unknown_timezone_blocks_call(self) -> None:
         # Area code 999 is not in the mapping — should block conservatively.
         assert not check_calling_hours("+19995551234")
+
+    def test_non_nanp_number_does_not_resolve_timezone(self) -> None:
+        # A non-US E.164 number (UK) must not be misrouted to a US timezone.
+        assert lookup_timezone("+442012345678") is None
+        # And the call must be blocked rather than allowed via a guessed tz.
+        assert not check_calling_hours("+442012345678")
+
+    def test_malformed_short_number_returns_none(self) -> None:
+        # Too few digits to be a NANP number — no area code guessing.
+        assert lookup_timezone("212") is None
+
+    def test_bare_ten_digit_number_resolves(self) -> None:
+        assert lookup_timezone("2125551234") == "America/New_York"
 
 
 class TestAIDisclosure:
@@ -75,3 +89,18 @@ class TestDNCIntegration:
         assert detect_opt_out("stop calling me")
         assert detect_opt_out("I want to opt out")
         assert not detect_opt_out("Hello, how are you?")
+
+    def test_opt_out_word_boundaries(self) -> None:
+        # "opt out" must not match inside unrelated words/phrases.
+        assert not detect_opt_out("I am weighing my options out loud")
+        assert match_opt_out_phrase("opt outage report") is None
+
+    def test_opt_out_negation_guard(self) -> None:
+        assert not detect_opt_out("I do not want to opt out of anything else right now")
+        assert not detect_opt_out("please don't stop calling me")
+        assert not detect_opt_out("I won't unsubscribe")
+
+    def test_opt_out_broadened_phrases(self) -> None:
+        assert detect_opt_out("Please remove me from your list")
+        assert detect_opt_out("take my number off")
+        assert detect_opt_out("remove me")

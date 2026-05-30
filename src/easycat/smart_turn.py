@@ -32,7 +32,7 @@ class SmartTurnResult:
     """Result from smart-turn detection."""
 
     prediction: int  # 1 = complete (turn ended), 0 = incomplete
-    probability: float  # sigmoid probability of completion
+    probability: float  # sigmoid probability of completion (0.0–1.0)
 
 
 @runtime_checkable
@@ -319,6 +319,11 @@ class SmartTurnONNX:
 
         outputs = self._session.run(None, {"input_features": input_features})
         probability = outputs[0][0].item()
+        # Strict-greater boundary: probability *equal* to the threshold counts
+        # as incomplete (prediction=0).  With the default threshold of 0.5 a
+        # probability of exactly 0.5 therefore stays incomplete.  Callers that
+        # need a different decision point can either set ``threshold`` here or,
+        # at the TurnManager layer, decide on ``probability`` directly.
         prediction = 1 if probability > self._threshold else 0
 
         return SmartTurnResult(prediction=prediction, probability=probability)
@@ -349,6 +354,10 @@ class SmartTurnConfig:
 
     enabled: bool = False
     model_path: str = field(default_factory=lambda: _BUNDLED_MODEL)
+    # Decision threshold for the provider's prediction.  A turn is classified
+    # "complete" only when the model's probability is *strictly greater* than
+    # this value, so probability == threshold (e.g. exactly 0.5 by default)
+    # stays "incomplete".
     threshold: float = 0.5
 
 

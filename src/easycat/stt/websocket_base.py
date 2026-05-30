@@ -9,10 +9,22 @@ from typing import Any
 
 import websockets
 
-from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
+from easycat.reconnecting_ws import ReconnectCallback, ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase
 
 logger = logging.getLogger(__name__)
+
+
+async def _noop_reconnect() -> None:
+    """Present-but-empty reconnect hook.
+
+    Passed to :class:`ReconnectingWebSocket` for providers whose entire
+    session config travels in the connection URL (query params), so no
+    re-configuration is needed after a transparent reconnect.  Its mere
+    presence flips ``recv_iter`` from "re-raise on drop" to "reconnect and
+    keep yielding"; without it those providers would silently die on any
+    transient disconnect.
+    """
 
 
 class WebSocketSTTBase(STTBase):
@@ -33,6 +45,9 @@ class WebSocketSTTBase(STTBase):
         self._ws: ReconnectingWebSocket | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._provider_event_bus: Any | None = None
+        # Strong references to fire-and-forget Error-emit tasks so the event
+        # loop does not garbage-collect them before ``bus.emit`` completes.
+        self._emit_tasks: set[asyncio.Task[Any]] = set()
 
     async def _connect_websocket(
         self,
@@ -41,13 +56,20 @@ class WebSocketSTTBase(STTBase):
         headers: dict[str, str],
         event_bus: Any | None = None,
         connect_fn: Any | None = None,
+        on_reconnect: ReconnectCallback | None = None,
     ) -> ReconnectingWebSocket:
+        # Query-param-configured providers (e.g. Deepgram, Cartesia) carry
+        # their entire session config in the URL, so they need no re-config
+        # callback — but ``recv_iter`` only reconnects when *some* hook is
+        # present.  Default to a no-op so transient drops reconnect instead
+        # of ending the receive loop and silently killing the stream.
         ws = ReconnectingWebSocket(
             url=url,
             config=ReconnectConfig(extra_headers=headers),
             event_bus=event_bus,
             provider_name=self._provider_name,
             connect_fn=connect_fn,
+            on_reconnect=on_reconnect or _noop_reconnect,
         )
         self._ws = ws
         self._provider_event_bus = event_bus
@@ -143,8 +165,18 @@ class WebSocketSTTBase(STTBase):
         msg: dict[str, Any],
         *,
         default_message: str | None = None,
+        override_message: str | None = None,
     ) -> None:
-        message = msg.get("message") or msg.get("title") or default_message or "unknown error"
+        # ``override_message`` lets a provider surface a field it considers
+        # more descriptive (e.g. Deepgram's ``description``) ahead of the
+        # generic ``message``/``title`` fallbacks.
+        message = (
+            override_message
+            or msg.get("message")
+            or msg.get("title")
+            or default_message
+            or "unknown error"
+        )
         exc = RuntimeError(f"{self._provider_log_label} STT error: {message}")
         self._emit_provider_error(
             exc,
@@ -166,7 +198,7 @@ class WebSocketSTTBase(STTBase):
             except Exception:  # pragma: no cover - pre-3.11
                 pass
         try:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 bus.emit(
                     Error(
                         exception=exc,
@@ -177,6 +209,11 @@ class WebSocketSTTBase(STTBase):
             )
         except RuntimeError:  # no running loop
             logger.debug("Could not emit provider error - no running loop", exc_info=True)
+            return
+        # Keep a strong reference until the emit completes; the event loop
+        # only holds a weak one, so an untracked task can be GC'd mid-flight.
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
 
     @property
     def _provider_log_label(self) -> str:

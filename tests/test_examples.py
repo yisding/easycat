@@ -425,13 +425,17 @@ def test_examples_can_run_as_scripts_without_package_import_errors(script_path: 
 
     assert completed.returncode != 0
     assert "ModuleNotFoundError" not in completed.stderr
-    # Examples using ``easycat.run(...)`` / ``EasyConfig.*()`` fail at
-    # config validation with "STT configuration is required." when no
-    # provider env var is set; others call ``require_env`` and emit
-    # "OPENAI_API_KEY is required." — accept either.
+    # Examples using ``easycat.run(...)`` / ``EasyConfig.mic|browser|phone()``
+    # now route the no-key path through the error catalog, failing config
+    # validation with ``EASYCAT_E203: Missing API key: OPENAI_API_KEY`` when
+    # no provider env var is set. A few still surface the bare
+    # "STT configuration is required." (e.g. an explicit non-key config gap),
+    # and others call ``require_env`` and emit "OPENAI_API_KEY is required."
+    # — accept any of the three.
     assert (
         "OPENAI_API_KEY is required." in completed.stderr
         or "STT configuration is required." in completed.stderr
+        or "Missing API key: OPENAI_API_KEY" in completed.stderr
     )
 
 

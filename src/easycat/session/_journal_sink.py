@@ -187,6 +187,15 @@ class SessionJournalSink:
                 stage = getattr(event, "stage", None)
                 if hasattr(stage, "value"):
                     data["stage"] = stage.value
+                provider = getattr(event, "provider", None)
+                if provider:
+                    data["provider"] = provider
+                code = getattr(event, "code", None)
+                if code:
+                    # Stable EASYCAT_Exxx code from the Error event; keep it in
+                    # ``data`` so exported journals stay machine-correlatable
+                    # (ErrorInfo has no dedicated field for it).
+                    data["code"] = code
                 error = ErrorInfo.from_exception(exc)
             self.journal.append(
                 kind=kind,

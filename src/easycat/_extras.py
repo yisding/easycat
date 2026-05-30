@@ -21,6 +21,15 @@ def require_module(
         raise ImportError(f"{label} requires the {module_name} package.{hint}")
     try:
         return importlib.import_module(module_name)
+    except ImportError as exc:
+        # The package itself is present (find_spec succeeded above) but importing it
+        # failed because one of its own dependencies is missing or broken. This is
+        # common for optional extras that pull native/transitive deps.
+        hint = f" Install with: uv add easycat[{extra}]." if extra else ""
+        label = purpose or module_name
+        raise ImportError(
+            f"{label} could not import {module_name} (a dependency failed to load): {exc}.{hint}"
+        ) from exc
     except OSError as exc:
         hint = f" Install with: uv add easycat[{extra}]." if extra else ""
         label = purpose or module_name

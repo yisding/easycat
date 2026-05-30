@@ -52,9 +52,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class OpenAIRealtimeSTTConfig:
-    """Configuration for the OpenAI Realtime streaming STT provider."""
+    """Configuration for the OpenAI Realtime streaming STT provider.
 
-    api_key: str
+    .. note::
+
+       ``api_key`` defaults to ``""`` to support the inject-the-key-later
+       workflow (e.g. constructing the config first and assigning the key
+       before use).  A missing key is therefore *not* validated at
+       construction time — it surfaces on the first WebSocket connection
+       rather than eagerly.  The :func:`easycat.stt.factory` path still
+       fail-fasts on an empty key.
+    """
+
+    api_key: str = ""
     model: str = "gpt-4o-transcribe"
     connection_model: str = "gpt-realtime-mini"
     language: str | None = None
@@ -102,6 +112,9 @@ class OpenAIRealtimeSTT(STTBase):
         # ``.completed`` to be dropped instead of producing a second
         # ``STTFinal`` for the same turn.  Cleared on the next commit.
         self._dropping_pending_final: bool = False
+        # Strong references to fire-and-forget Error-emit tasks so the event
+        # loop does not garbage-collect them before ``bus.emit`` completes.
+        self._emit_tasks: set[asyncio.Task[Any]] = set()
 
     def _websocket_url(self) -> str:
         """Build the Realtime WebSocket URL with the required realtime model."""
@@ -449,11 +462,16 @@ class OpenAIRealtimeSTT(STTBase):
                 except Exception:  # pragma: no cover - pre-3.11
                     pass
         try:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 bus.emit(Error(exception=exc, stage=ErrorStage.STT, provider="openai-realtime"))
             )
         except RuntimeError:  # no running loop
             logger.debug("Could not emit provider error — no running loop", exc_info=True)
+            return
+        # Keep a strong reference until the emit completes; the event loop
+        # only holds a weak one, so an untracked task can be GC'd mid-flight.
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
 
     def version_info(self) -> dict[str, str]:
         return {

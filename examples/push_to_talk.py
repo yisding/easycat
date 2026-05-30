@@ -122,7 +122,7 @@ async def main() -> None:
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
-        await session.shutdown()
+        await session.stop(force=True)
 
 
 if __name__ == "__main__":

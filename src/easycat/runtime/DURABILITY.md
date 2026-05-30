@@ -105,6 +105,21 @@ exists without a `clean_close` marker):
 SQLite's native WAL recovery handles any uncheckpointed WAL pages
 automatically — no special handling is needed.
 
+### Backend support
+
+Crash recovery (crash-dump promotion + `RecoveredSessionMarker` at
+`sequence=0` + truncating the live journal to start fresh at
+`sequence=1`) is provided by the **SQLite** and **`sqlite+litestream`**
+backends only.
+
+The **libSQL** backend (`journal_backend="libsql"`) does **not**
+implement crash recovery. It mirrors only the clean-reuse truncation:
+if a session id is reused after a clean close, the prior records are
+deleted. If a libSQL session is reused after an unclean shutdown, it
+continues appending into the existing table with a continued sequence
+counter and emits **no** recovery marker. Use the SQLite backend if
+crash-recovery semantics are required.
+
 ## Storage layout
 
 ```
@@ -129,17 +144,21 @@ automatically — no special handling is needed.
 EasyCat distinguishes between logical finalization and physical backend
 teardown:
 
-- `Session.close()` writes the journal's clean-close marker but keeps the
-  live backend open. This is a low-level primitive, not the normal
-  shutdown path.
-- `Session.destroy()` closes live backend resources such as SQLite
-  connections, Litestream sidecars, libSQL sync threads, and in-memory
-  artifact stores.
-- `await session.stop()` and `await session.shutdown()` both end by
-  calling `destroy()`. The difference is cancellation strategy, not
-  whether resources are released.
+- `Session._close()` (internal) writes the journal's clean-close marker
+  but keeps the live backend open. This is a low-level primitive, not a
+  public teardown entry point.
+- `Session._destroy()` (internal) closes live backend resources such as
+  SQLite connections, Litestream sidecars, libSQL sync threads, and
+  in-memory artifact stores.
+- `await session.stop()` is the one public teardown verb: `force=False`
+  (default) drains in-flight work gracefully, `force=True` cancels it
+  first. Both end by calling `_destroy()` — the difference is
+  cancellation strategy, not whether resources are released.
+  `async with session:` is the preferred idiom (it calls
+  `stop(force=True)` on exit); `session.shutdown()` is a thin alias for
+  `stop(force=True)`.
 
-Post-stop inspection is still supported: after a clean `stop()` or
-`shutdown()`, `session.journal.read()` and
-`session.export_debug_bundle(...)` continue to work through a read-only
-postmortem view. New journal writes are no longer accepted.
+Post-stop inspection is still supported: after a clean `stop()`,
+`session.journal.read()` and `session.export_debug_bundle(...)` continue
+to work through a read-only postmortem view. New journal writes are no
+longer accepted.

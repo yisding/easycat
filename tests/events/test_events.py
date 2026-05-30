@@ -224,6 +224,25 @@ def test_error_event():
     assert event.stage == ErrorStage.STT
 
 
+def test_error_event_defaults_code_to_none_for_uncoded_exception():
+    event = Error(exception=RuntimeError("boom"))
+    assert event.code is None
+
+
+def test_error_event_derives_code_from_exception():
+    from easycat.timeouts import AgentTimeoutError
+
+    event = Error(exception=AgentTimeoutError(timeout=1.0), stage=ErrorStage.AGENT)
+    assert event.code == "EASYCAT_E302"
+
+
+def test_error_event_explicit_code_overrides_exception_code():
+    from easycat.timeouts import AgentTimeoutError
+
+    event = Error(exception=AgentTimeoutError(timeout=1.0), code="EASYCAT_E999")
+    assert event.code == "EASYCAT_E999"
+
+
 def test_event_base_fields_are_keyword_only():
     ts = 123.456
     exc = RuntimeError("boom")

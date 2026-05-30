@@ -9,19 +9,27 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from easycat.validation.latency import (
+    DEFAULT_RELIABILITY_BUDGETS,
+    FailureCategory,
+    LatencyComparisonThresholds,
     LatencyMode,
     LatencySample,
     LatencyStageDurations,
+    ReliabilityBudget,
+    ReliabilitySample,
     build_latency_artifact,
     build_reliability_artifact,
+    classify_failure_category,
     classify_latency_failure,
+    compare_latency_baseline,
+    evaluate_reliability_budgets,
     latency_pytest_args,
     load_latency_samples,
     load_reliability_samples,
@@ -78,7 +86,7 @@ class ValidationRunResult:
     exit_code: int
 
 
-CommandRunner = Callable[[list[str]], CommandResult]
+CommandRunner = Callable[..., CommandResult]
 
 
 def validation_exit_code_from_pytest(pytest_exit_code: int) -> int:
@@ -126,16 +134,12 @@ def run_validation_slice(
     if junit_prefix:
         command.append(f"--junit-prefix={junit_prefix}")
 
-    old_reliability_samples_path = os.environ.get("EASYCAT_RELIABILITY_SAMPLES_PATH")
-    os.environ["EASYCAT_RELIABILITY_SAMPLES_PATH"] = str(reliability_samples_path)
+    command_env = {
+        **os.environ,
+        "EASYCAT_RELIABILITY_SAMPLES_PATH": str(reliability_samples_path),
+    }
     started_monotonic = time.perf_counter()
-    try:
-        result = command_runner(command)
-    finally:
-        if old_reliability_samples_path is None:
-            os.environ.pop("EASYCAT_RELIABILITY_SAMPLES_PATH", None)
-        else:
-            os.environ["EASYCAT_RELIABILITY_SAMPLES_PATH"] = old_reliability_samples_path
+    result = command_runner(command, env=command_env)
     duration_s = time.perf_counter() - started_monotonic
     finished_at = datetime.now(UTC)
 
@@ -144,6 +148,7 @@ def run_validation_slice(
 
     exit_code = validation_exit_code_from_pytest(result.exit_code)
     reliability_failure = _load_reliability_failure(reliability_samples_path)
+    reliability_budget_failure: ValidationFailure | None = None
     reliability_payload: dict[str, object] | None = None
     if reliability_samples_path.exists() and reliability_failure is None:
         reliability_samples = load_reliability_samples(reliability_samples_path.read_text())
@@ -151,7 +156,8 @@ def run_validation_slice(
             samples=reliability_samples,
             generated_at=finished_at,
         )
-    if reliability_failure is not None:
+        reliability_budget_failure = _reliability_budget_failure(reliability_samples)
+    if reliability_failure is not None or reliability_budget_failure is not None:
         exit_code = 1
     status = "pass" if exit_code == 0 else "fail"
 
@@ -187,6 +193,8 @@ def run_validation_slice(
         )
     if reliability_failure is not None:
         failures.append(reliability_failure)
+    if reliability_budget_failure is not None:
+        failures.append(reliability_budget_failure)
 
     run = ValidationRun(
         run_id=run_id,
@@ -199,6 +207,7 @@ def run_validation_slice(
         tool_exit_codes={
             "pytest": result.exit_code,
             **({"reliability_samples": 1} if reliability_failure is not None else {}),
+            **({"reliability_budget": 1} if reliability_budget_failure is not None else {}),
         },
         git=_collect_git_metadata(),
         environment=_collect_environment_metadata(),
@@ -234,11 +243,18 @@ def run_latency_validation(
     *,
     artifacts_dir: str | Path = ".easycat/validation",
     report_path: str | Path | None = None,
-    require_samples: bool = False,
+    require_samples: bool | None = None,
+    baseline_path: str | Path | None = None,
     command_runner: CommandRunner | None = None,
     started_at: datetime | None = None,
 ) -> ValidationRunResult:
     mode = LatencyMode(mode)
+    # A SWEEP that legitimately produces zero samples (skipped tests, missing
+    # credentials) must fail rather than silently report pass with an empty
+    # percentiles block. SMOKE may legitimately produce no samples, so it stays
+    # opt-in. An explicit ``require_samples`` value always wins.
+    if require_samples is None:
+        require_samples = mode is LatencyMode.SWEEP
     command_runner = command_runner or _run_subprocess
     started_at = started_at or datetime.now(UTC)
     artifacts_root = Path(artifacts_dir)
@@ -263,22 +279,13 @@ def run_latency_validation(
         *[_resolve_validation_test_arg(arg) for arg in latency_pytest_args(mode)],
     ]
 
-    old_samples_path = os.environ.get("EASYCAT_LATENCY_SAMPLES_PATH")
-    old_reliability_samples_path = os.environ.get("EASYCAT_RELIABILITY_SAMPLES_PATH")
-    os.environ["EASYCAT_LATENCY_SAMPLES_PATH"] = str(samples_path)
-    os.environ["EASYCAT_RELIABILITY_SAMPLES_PATH"] = str(reliability_samples_path)
+    command_env = {
+        **os.environ,
+        "EASYCAT_LATENCY_SAMPLES_PATH": str(samples_path),
+        "EASYCAT_RELIABILITY_SAMPLES_PATH": str(reliability_samples_path),
+    }
     started_monotonic = time.perf_counter()
-    try:
-        result = command_runner(command)
-    finally:
-        if old_samples_path is None:
-            os.environ.pop("EASYCAT_LATENCY_SAMPLES_PATH", None)
-        else:
-            os.environ["EASYCAT_LATENCY_SAMPLES_PATH"] = old_samples_path
-        if old_reliability_samples_path is None:
-            os.environ.pop("EASYCAT_RELIABILITY_SAMPLES_PATH", None)
-        else:
-            os.environ["EASYCAT_RELIABILITY_SAMPLES_PATH"] = old_reliability_samples_path
+    result = command_runner(command, env=command_env)
     duration_s = time.perf_counter() - started_monotonic
     finished_at = datetime.now(UTC)
 
@@ -296,9 +303,11 @@ def run_latency_validation(
             failure_class="latency_artifact_error",
         )
     reliability_failure = _load_reliability_failure(reliability_samples_path)
-    reliability_samples = []
+    reliability_samples: list[ReliabilitySample] = []
+    reliability_budget_failure: ValidationFailure | None = None
     if reliability_samples_path.exists() and reliability_failure is None:
         reliability_samples = load_reliability_samples(reliability_samples_path.read_text())
+        reliability_budget_failure = _reliability_budget_failure(reliability_samples)
 
     required_samples_failure: ValidationFailure | None = None
     if require_samples and not samples:
@@ -318,6 +327,17 @@ def run_latency_validation(
         reliability_samples=reliability_samples,
         generated_at=finished_at,
     )
+
+    baseline_load_failure: ValidationFailure | None = None
+    baseline_comparison: dict[str, Any] | None = None
+    if baseline_path is not None:
+        baseline_comparison, baseline_load_failure = _compare_against_baseline(
+            current=latency_payload,
+            baseline_path=Path(baseline_path),
+        )
+        if baseline_comparison is not None:
+            latency_payload["baseline"] = baseline_comparison
+
     _write_atomic(latency_path, json.dumps(latency_payload, indent=2, sort_keys=True) + "\n")
     _write_atomic(
         artifacts_root / "latency" / f"{mode.value}-latest.json",
@@ -334,11 +354,16 @@ def run_latency_validation(
             details={"violations": list(budget_violations)},
         )
 
+    baseline_regression_failure = _baseline_comparison_failure(baseline_comparison)
+
     if (
         sample_load_failure is not None
         or reliability_failure is not None
+        or reliability_budget_failure is not None
         or required_samples_failure is not None
         or budget_failure is not None
+        or baseline_load_failure is not None
+        or baseline_regression_failure is not None
     ):
         exit_code = 1
     status = "pass" if exit_code == 0 else "fail"
@@ -363,10 +388,16 @@ def run_latency_validation(
         failures.append(sample_load_failure)
     if reliability_failure is not None:
         failures.append(reliability_failure)
+    if reliability_budget_failure is not None:
+        failures.append(reliability_budget_failure)
     if required_samples_failure is not None:
         failures.append(required_samples_failure)
     if budget_failure is not None:
         failures.append(budget_failure)
+    if baseline_load_failure is not None:
+        failures.append(baseline_load_failure)
+    if baseline_regression_failure is not None:
+        failures.append(baseline_regression_failure)
 
     artifacts: dict[str, ArtifactRef] = {
         "report": ArtifactRef(kind="validation_report", path=str(run_report_path)),
@@ -390,8 +421,15 @@ def run_latency_validation(
             "pytest": result.exit_code,
             **({"latency_samples": 1} if sample_load_failure is not None else {}),
             **({"reliability_samples": 1} if reliability_failure is not None else {}),
+            **({"reliability_budget": 1} if reliability_budget_failure is not None else {}),
             **({"required_latency_samples": 1} if required_samples_failure is not None else {}),
             **({"latency_budget": 1} if budget_failure is not None else {}),
+            **({"latency_baseline": 1} if baseline_load_failure is not None else {}),
+            **(
+                {"latency_baseline_regression": 1}
+                if baseline_regression_failure is not None
+                else {}
+            ),
         },
         git=_collect_git_metadata(),
         environment=_collect_environment_metadata(),
@@ -403,6 +441,9 @@ def run_latency_validation(
             check_artifacts=check_artifacts,
             budget_failure=budget_failure,
             budget_violations=budget_violations,
+            baseline_comparison=baseline_comparison,
+            baseline_load_failure=baseline_load_failure,
+            baseline_regression_failure=baseline_regression_failure,
         ),
         failures=failures,
         latency=latency_payload,
@@ -561,7 +602,7 @@ def run_live_validation(
             ).to_dict()
         else:
             command = _live_pytest_command(spec)
-            command_result = command_runner(command)
+            command_result = command_runner(command, env={**os.environ})
             duration_s = time.perf_counter() - check_started
             stdout_log.append(command_result.stdout)
             stderr_log.append(command_result.stderr)
@@ -671,19 +712,20 @@ def run_live_validation(
     )
 
 
+# Live-path vocabulary (preserved for back-compat and `_capability_status`).
+_LIVE_FAILURE_CLASSES: dict[FailureCategory, str] = {
+    FailureCategory.AUTH: "auth_or_quota",
+    FailureCategory.QUOTA: "provider_quota",
+    FailureCategory.TIMEOUT: "network",
+    FailureCategory.NETWORK: "network",
+    FailureCategory.DRIFT: "provider_drift",
+    FailureCategory.REGRESSION: "easycat_regression",
+    FailureCategory.OTHER: "environment",
+}
+
+
 def classify_live_failure(message: str) -> str:
-    lowered = message.lower()
-    if any(token in lowered for token in ("quota", "rate limit", "429")):
-        return "provider_quota"
-    if any(token in lowered for token in ("unauthorized", "forbidden", "401", "403")):
-        return "auth_or_quota"
-    if any(token in lowered for token in ("schema", "unknown event", "drift")):
-        return "provider_drift"
-    if any(token in lowered for token in ("timeout", "dns", "network", "connection")):
-        return "network"
-    if any(token in lowered for token in ("assert", "failed", "traceback")):
-        return "easycat_regression"
-    return "environment"
+    return _LIVE_FAILURE_CLASSES[classify_failure_category(message)]
 
 
 def _load_reliability_failure(path: Path) -> ValidationFailure | None:
@@ -698,6 +740,27 @@ def _load_reliability_failure(path: Path) -> ValidationFailure | None:
             failure_class="reliability_artifact_error",
         )
     return None
+
+
+def _reliability_budget_failure(
+    samples: Sequence[ReliabilitySample],
+    budgets: Sequence[ReliabilityBudget] = DEFAULT_RELIABILITY_BUDGETS,
+) -> ValidationFailure | None:
+    """Surface eligible reliability samples that breach a reliability budget.
+
+    Mirrors the latency budget gate: a saturated event loop, a memory leak,
+    dropped audio frames, or a degraded journal in any eligible sample fails
+    the run instead of silently passing once the samples merely parse.
+    """
+    violations = evaluate_reliability_budgets(samples, budgets)
+    if not violations:
+        return None
+    return ValidationFailure(
+        name="reliability.budget",
+        message="reliability budget violated",
+        failure_class="reliability_budget",
+        details={"violations": [violation.to_dict() for violation in violations]},
+    )
 
 
 def _live_selector_errors(
@@ -745,8 +808,11 @@ def _latency_checks(
     check_artifacts: dict[str, ArtifactRef],
     budget_failure: ValidationFailure | None,
     budget_violations: Sequence[Any],
+    baseline_comparison: dict[str, Any] | None = None,
+    baseline_load_failure: ValidationFailure | None = None,
+    baseline_regression_failure: ValidationFailure | None = None,
 ) -> list[ValidationCheck]:
-    """Split pytest + budget evaluation into distinct ValidationCheck entries.
+    """Split pytest + budget + baseline evaluation into distinct checks.
 
     A budget failure used to share the single `pytest.latency.<mode>` check
     with pytest, so a passing pytest exit (0) with a budget violation would
@@ -755,7 +821,8 @@ def _latency_checks(
 
     Budget evaluation is skipped for SMOKE mode upstream in
     `build_latency_artifact`, so no `latency.budget` check is recorded for
-    smoke runs.
+    smoke runs. A `latency.baseline` check is only recorded when a baseline
+    artifact was supplied (or failed to load).
     """
     checks: list[ValidationCheck] = [
         ValidationCheck(
@@ -779,7 +846,107 @@ def _latency_checks(
                 details={"violations": list(budget_violations)} if budget_violations else {},
             )
         )
+    if baseline_comparison is not None or baseline_load_failure is not None:
+        baseline_failed = (
+            baseline_load_failure is not None or baseline_regression_failure is not None
+        )
+        details: dict[str, Any] = {}
+        if baseline_comparison is not None:
+            details = {
+                "status": baseline_comparison.get("status"),
+                "conditions": baseline_comparison.get("conditions", []),
+            }
+        elif baseline_load_failure is not None:
+            details = {"message": baseline_load_failure.message}
+        checks.append(
+            ValidationCheck(
+                name="latency.baseline",
+                status="fail" if baseline_failed else "pass",
+                duration_s=0.0,
+                details=details,
+            )
+        )
     return checks
+
+
+def _compare_against_baseline(
+    *,
+    current: Mapping[str, Any],
+    baseline_path: Path,
+) -> tuple[dict[str, Any] | None, ValidationFailure | None]:
+    """Load a stored baseline artifact and compare the current run against it.
+
+    Returns ``(comparison, failure)`` where ``comparison`` is the
+    ``compare_latency_baseline`` result (embedded into the latency artifact's
+    ``baseline`` field) and ``failure`` describes an unreadable/invalid
+    baseline file. Exactly one of the two is meaningful per call.
+    """
+    try:
+        raw = baseline_path.read_text()
+    except OSError as exc:
+        return None, ValidationFailure(
+            name="latency.baseline",
+            message=f"could not read latency baseline {baseline_path}: {exc}",
+            failure_class="latency_baseline_error",
+        )
+    try:
+        baseline_payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return None, ValidationFailure(
+            name="latency.baseline",
+            message=f"invalid latency baseline JSON {baseline_path}: {exc}",
+            failure_class="latency_baseline_error",
+        )
+    if not isinstance(baseline_payload, Mapping):
+        return None, ValidationFailure(
+            name="latency.baseline",
+            message=f"latency baseline {baseline_path} must be a JSON object",
+            failure_class="latency_baseline_error",
+        )
+    try:
+        comparison = compare_latency_baseline(
+            current,
+            baseline_payload,
+            thresholds=LatencyComparisonThresholds(),
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        return None, ValidationFailure(
+            name="latency.baseline",
+            message=f"could not compare latency baseline {baseline_path}: {exc}",
+            failure_class="latency_baseline_error",
+        )
+    return comparison, None
+
+
+def _baseline_comparison_failure(
+    comparison: dict[str, Any] | None,
+) -> ValidationFailure | None:
+    """Surface a fail/drift baseline comparison as a ValidationFailure."""
+    if comparison is None:
+        return None
+    status = comparison.get("status")
+    if status not in ("fail", "drift"):
+        return None
+    conditions = comparison.get("conditions")
+    offending = [
+        condition
+        for condition in (conditions if isinstance(conditions, list) else [])
+        if isinstance(condition, Mapping) and condition.get("status") == status
+    ]
+    failure_class = "easycat_latency_regression" if status == "fail" else "provider_api_drift"
+    return ValidationFailure(
+        name="latency.baseline",
+        message=f"latency baseline comparison reported {status}",
+        failure_class=failure_class,
+        details={"status": status, "conditions": offending},
+    )
+
+
+# Marker key/value written into a synthetic failure sample's free-form ``debug``
+# map so consumers can filter the fabricated entry out of the ``samples`` list.
+# It never measured a real turn; it only carries the pytest failure reason.
+LATENCY_SYNTHETIC_SAMPLE_DEBUG_KEY = "synthetic"
+LATENCY_SYNTHETIC_FAILURE_SAMPLE = "pytest_failure"
 
 
 def _latency_failure_sample(mode: LatencyMode, message: str) -> LatencySample:
@@ -790,6 +957,7 @@ def _latency_failure_sample(mode: LatencyMode, message: str) -> LatencySample:
         warmup=False,
         timestamp_source="time.monotonic",
         stages=LatencyStageDurations(),
+        debug={LATENCY_SYNTHETIC_SAMPLE_DEBUG_KEY: LATENCY_SYNTHETIC_FAILURE_SAMPLE},
         missing_stage_reason=message,
         failure_class=failure_class,
     )
@@ -824,8 +992,18 @@ def main(
     return result.exit_code
 
 
-def _run_subprocess(command: list[str]) -> CommandResult:
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+def _run_subprocess(
+    command: list[str],
+    *,
+    env: Mapping[str, str] | None = None,
+) -> CommandResult:
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=dict(env) if env is not None else None,
+    )
     return CommandResult(
         exit_code=completed.returncode,
         stdout=completed.stdout,

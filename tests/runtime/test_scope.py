@@ -4,7 +4,46 @@ import asyncio
 
 import pytest
 
-from easycat.runtime.scope import RuntimeScope
+from easycat.runtime.scope import JournalSink, RuntimeScope
+
+
+def test_create_journaled_task_records_lifecycle_via_structural_sink() -> None:
+    class RecordingSink:
+        def __init__(self) -> None:
+            self.records: list[dict[str, object]] = []
+
+        def current_turn_id(self, turn_id: str | None = None) -> str | None:
+            return turn_id or "turn-1"
+
+        def append_record(
+            self,
+            *,
+            name: str,
+            turn_id: str | None = None,
+            data: dict[str, object] | None = None,
+        ) -> None:
+            self.records.append({"name": name, "turn_id": turn_id, "data": data})
+
+    sink = RecordingSink()
+    # A duck-typed sink satisfies the runtime-owned protocol structurally,
+    # so the runtime layer needs no dependency on the session package.
+    assert isinstance(sink, JournalSink)
+
+    scope = RuntimeScope()
+
+    async def work() -> str:
+        return "ok"
+
+    async def run() -> None:
+        task = scope.create_journaled_task(work(), name="job", journal_sink=sink)
+        await scope.drain("job")
+        assert task.result() == "ok"
+
+    asyncio.run(run())
+
+    names = [r["name"] for r in sink.records]
+    assert names == ["task_scheduled", "task_completed"]
+    assert all(r["turn_id"] == "turn-1" for r in sink.records)
 
 
 @pytest.mark.asyncio

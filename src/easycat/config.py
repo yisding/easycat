@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import logging
 import os
 from collections.abc import Iterator, Sequence
@@ -16,13 +17,15 @@ from uuid import uuid4
 
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
+from easycat.errors import EASYCAT_E203
 from easycat.events import CallInitiated, CallScreening, CallStateChanged, EventBus, TTSAudio
+from easycat.integrations.agents import ExternalAgentBridge
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents.base import NULL_RECORDER, AgentTurnInput
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
-from easycat.providers import Transport
+from easycat.providers import Transport, TransportLike
 from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
 from easycat.runtime.capabilities import (
     bind_identity_sink_if_supported,
@@ -30,6 +33,7 @@ from easycat.runtime.capabilities import (
 )
 from easycat.runtime.journal import create_journal
 from easycat.session._session import Session
+from easycat.session._types import Agent as _AgentProto
 from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
@@ -418,8 +422,87 @@ def _inject_agent_runtime(
             inner._api_key = remote_agent_api_key
 
 
-@dataclass
-class EasyConfig:
+def _validate_agent_shape(adapted: Any, *, wrap_agent: bool) -> None:
+    """Fail fast when ``agent=`` won't survive the first turn.
+
+    Called on the ``auto_adapt_agent`` output *before* the
+    :class:`AgentRunner` wrap — ``AgentRunner`` satisfies both contracts,
+    so a post-wrap check would be a no-op.  A fully-built
+    :class:`ExternalAgentBridge` is accepted as-is.  Otherwise the object
+    must satisfy the :class:`Agent` protocol *and* expose an
+    ``async run`` method: ``@runtime_checkable`` only checks method-name
+    presence, so the :func:`inspect.iscoroutinefunction` tightening is
+    what actually catches a sync / non-callable ``run``.  Skipped when
+    ``wrap_agent`` is False so deliberate custom-bridge flows pass.
+    """
+    if not wrap_agent or isinstance(adapted, ExternalAgentBridge):
+        return
+    run_attr = getattr(adapted, "run", None)
+    if not (isinstance(adapted, _AgentProto) and inspect.iscoroutinefunction(run_attr)):
+        raise EasyConfigError(
+            "agent must expose `async run(text) -> str` or be a recognized "
+            "framework agent (see auto_adapt_agent's supported list)."
+        )
+
+
+def _provider_display_name(cfg: Any, kind: Literal["STT", "TTS"]) -> str:
+    """Human-facing label for a provider config in error messages.
+
+    Prefers the registered provider name from the STT/TTS
+    :class:`~easycat._provider_catalog.ProviderCatalog` (e.g.
+    ``"deepgram STT"``) so the missing-API-key error reads consistently
+    for every registered provider. Falls back to the config class name
+    when the config type isn't in the catalog (e.g. a custom config).
+    """
+    if kind == "STT":
+        from easycat.stt.factory import _CATALOG as catalog
+    else:
+        from easycat.tts.factory import _CATALOG as catalog
+
+    cfg_type = type(cfg)
+    for provider_name, (_provider_cls, config_cls) in catalog.providers.items():
+        if config_cls is cfg_type:
+            return f"{provider_name} {kind}"
+    return type(cfg).__name__.replace("Config", "")
+
+
+@dataclass(kw_only=True)
+class _AgentSessionConfig:
+    """Shared agent / journal / debug fields for both session configs.
+
+    Extracted so :class:`EasyConfig` (audio sessions) and
+    :class:`TextSessionConfig` (text-only sessions) declare the
+    agent/journal/debug knobs once instead of copying them.
+
+    Both this base and its subclasses are ``@dataclass(kw_only=True)``:
+    a base dataclass injects its fields *before* the subclass's in the
+    generated ``__init__``, so without ``kw_only`` a positional
+    ``EasyConfig("sk-...")`` would silently mis-bind ``"sk-..."`` to
+    ``agent`` instead of ``openai_api_key``.  Keyword-only construction
+    makes that a loud ``TypeError`` and decouples the public field order
+    from this internal split.
+    """
+
+    agent: Any = None
+    agent_model: str | None = None
+    remote_agent_api_key: str | None = None
+    agent_runner: AgentRunnerConfig | None = None
+    # When True (default), a plain ``async run(text) -> str`` agent is
+    # auto-wrapped in :class:`AgentRunner` so it gets timeout, history,
+    # and cancellation handling out of the box.  Set to ``False`` only
+    # when you are passing in a fully-constructed
+    # :class:`ExternalAgentBridge` and want to drive it without the
+    # ``AgentRunner`` defaults — useful for tests and for bridges that
+    # implement their own retry/timeout policy.
+    wrap_agent: bool = True
+    debug: Literal["off", "light", "full"] = "off"
+    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
+    journal_retention: Literal["archive", "delete"] = "archive"
+    mcp_servers: list[str] | None = None
+
+
+@dataclass(kw_only=True)
+class EasyConfig(_AgentSessionConfig):
     """Top-level configuration for EasyCat sessions.
 
     Fields:
@@ -442,27 +525,11 @@ class EasyConfig:
     smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
     telephony: TelephonyConfig | None = None
-    agent: Any = None
-    agent_model: str | None = None
-    remote_agent_api_key: str | None = None
-    agent_runner: AgentRunnerConfig | None = None
-    # When True (default), a plain ``async run(text) -> str`` agent is
-    # auto-wrapped in :class:`AgentRunner` so it gets timeout, history,
-    # and cancellation handling out of the box.  Set to ``False`` only
-    # when you are passing in a fully-constructed
-    # :class:`ExternalAgentBridge` and want to drive it without the
-    # ``AgentRunner`` defaults — useful for tests and for bridges that
-    # implement their own retry/timeout policy.
-    wrap_agent: bool = True
     strip_markdown: bool = False
     auto_align_tts_output_to_transport: bool = True
     output_processors: Sequence[LLMOutputProcessor] = ()
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
-    debug: Literal["off", "light", "full"] = "off"
-    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
-    journal_retention: Literal["archive", "delete"] = "archive"
-    mcp_servers: list[str] | None = None
     # When set, every session exports a timestamped debug bundle to this
     # directory on stop/shutdown — the "always be recording" flow so a
     # user who hits a real failure already has the bundle saved to disk
@@ -574,18 +641,22 @@ class EasyConfig:
         logger.debug("EasyCat debug mode enabled (level=%s)", logging.getLevelName(level))
 
     def _validate(self) -> None:
+        # The #1 first-run mistake: no key resolved and nothing
+        # configured.  Route it through the error catalog so the user
+        # sees the missing env var (and its fix) instead of a symptom
+        # they never touched.
+        if (self.stt is None or self.tts is None) and not self.openai_api_key:
+            raise EASYCAT_E203(var="OPENAI_API_KEY")
         if self.stt is None:
             raise ValueError("STT configuration is required.")
         if self.tts is None:
             raise ValueError("TTS configuration is required.")
-        for cfg in (self.stt, self.tts):
+        for cfg, kind in ((self.stt, "STT"), (self.tts, "TTS")):
             if hasattr(cfg, "api_key") and not cfg.api_key:
-                name = (
-                    type(cfg)
-                    .__name__.replace("Config", "")
-                    .replace("STT", " STT")
-                    .replace("TTS", " TTS")
-                )
+                # Keep the per-provider display-name ValueError here —
+                # there is no (cfg, kind) -> env-var helper today, and the
+                # None-branch fix above captures ~all of the leverage.
+                name = _provider_display_name(cfg, kind)
                 raise ValueError(f"{name} requires an API key.")
 
     # ── Factory presets ──────────────────────────────────────────
@@ -599,7 +670,14 @@ class EasyConfig:
 
     @classmethod
     def mic(cls, **kwargs: Any) -> EasyConfig:
-        """Local-microphone preset — the default developer setup."""
+        """Local-microphone preset — the default developer setup.
+
+        Next: pass ``stt=``/``tts=`` to swap providers (each needs that
+        provider's API key **and** its extra, e.g.
+        ``stt="deepgram/nova-2"`` needs ``DEEPGRAM_API_KEY`` +
+        ``easycat[deepgram]``); use ``browser()``/``phone()`` to serve
+        the same bot on another surface.
+        """
         kwargs.setdefault("transport", LocalTransportConfig())
         return cls(**kwargs)
 
@@ -609,6 +687,12 @@ class EasyConfig:
 
         Enables echo cancellation by default because browser clients
         loop transport audio back through the mic.
+
+        Next: browser needs a server process + the ``easycat[webrtc]``
+        extra — see ``examples/webrtc_server.py``.  Swapping ``stt=``/
+        ``tts=`` providers needs that provider's API key **and** its
+        extra (e.g. ``stt="deepgram/nova-2"`` → ``DEEPGRAM_API_KEY`` +
+        ``easycat[deepgram]``).
         """
         kwargs.setdefault("transport", WebRTCTransportConfig())
         kwargs.setdefault("enable_echo_cancellation", True)
@@ -620,6 +704,12 @@ class EasyConfig:
 
         Uses the Twilio Media Streams transport and leaves echo-cancel
         on its tri-state default (off for PSTN, which has no loopback).
+
+        Next: phone needs a server process + the ``easycat[telephony]``
+        extra — see ``examples/twilio_app.py``.  Swapping ``stt=``/
+        ``tts=`` providers needs that provider's API key **and** its
+        extra (e.g. ``stt="deepgram/nova-2"`` → ``DEEPGRAM_API_KEY`` +
+        ``easycat[deepgram]``).
         """
         kwargs.setdefault("transport", TwilioTransportConfig())
         return cls(**kwargs)
@@ -732,12 +822,12 @@ def create_session(config: EasyConfig) -> Session:
             if config.enable_noise_reduction or config.noise_reduction is not None
             else None
         )
-        # enable_echo_cancellation acts as a shortcut: when True and no
-        # explicit EchoCancellationConfig is provided, auto-construct one
-        # with enabled=True so the LiveKit backend is actually activated.
+        # ``EasyConfig.__post_init__`` always resolves ``echo_cancellation``
+        # to a concrete config (honoring the tri-state ``enable_echo_cancellation``
+        # via ``_default_echo_cancellation_for_transport``), so it is never None
+        # here.
         echo_cfg = config.echo_cancellation
-        if echo_cfg is None:
-            echo_cfg = EchoCancellationConfig(enabled=bool(config.enable_echo_cancellation))
+        assert echo_cfg is not None
         echo_canceller = create_echo_canceller(echo_cfg)
         transport = _create_transport(config.transport, event_bus)
 
@@ -751,6 +841,7 @@ def create_session(config: EasyConfig) -> Session:
                 agent_model=config.agent_model,
                 remote_agent_api_key=config.remote_agent_api_key,
             )
+            _validate_agent_shape(agent, wrap_agent=config.wrap_agent)
             if config.wrap_agent and not isinstance(agent, AgentRunner):
                 runner_cfg = config.agent_runner or AgentRunnerConfig()
                 agent = AgentRunner(agent, runner_cfg)
@@ -995,9 +1086,38 @@ def _maybe_launch_debugger_ui(session: Session) -> None:
         logger.exception("Debugger UI failed to start; continuing without it.")
 
 
+@dataclass(kw_only=True)
+class TextSessionConfig(_AgentSessionConfig):
+    """Configuration for a text-only Session (no audio pipeline).
+
+    Mirrors the shared journal/debug/agent fields of :class:`EasyConfig`
+    (both inherit :class:`_AgentSessionConfig`) so ``create_session`` and
+    ``create_text_session`` accept a single config object of the
+    ``create_*(config)`` shape. Audio-only fields
+    (``stt``/``tts``/``vad``/``transport``/etc.) have no analogue here
+    because text sessions never enter the audio pipeline.
+
+    Validated by the same :func:`_validate_common` as :class:`EasyConfig`.
+    """
+
+    session_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_common(
+            debug=self.debug,
+            journal_backend=self.journal_backend,
+            journal_retention=self.journal_retention,
+            mcp_servers=self.mcp_servers,
+            session_id=self.session_id,
+            agent=self.agent,
+            agent_model=self.agent_model,
+        )
+
+
 def create_text_session(
+    config: TextSessionConfig | None = None,
     *,
-    agent: Any,
+    agent: Any = None,
     session_id: str | None = None,
     debug: Literal["off", "light", "full"] = "off",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
@@ -1010,6 +1130,12 @@ def create_text_session(
 ) -> Session:
     """Create a text-only Session (no audio pipeline).
 
+    Accepts a :class:`TextSessionConfig` (the ``create_*(config)`` shape
+    shared with :func:`create_session`) or, for back-compat, the legacy
+    loose keyword arguments. The two forms are mutually exclusive: passing
+    a ``config`` together with any non-default loose keyword raises
+    :class:`ValueError`.
+
     The returned session supports :meth:`Session.send_text` for
     request/response agent interaction without STT, TTS, VAD, or
     transport.  Useful for testing agent logic and building text-based
@@ -1018,15 +1144,50 @@ def create_text_session(
     Raises :class:`RuntimeError` if the caller attempts to call
     :meth:`Session.start` on a text session.
     """
-    _validate_common(
-        debug=debug,
-        journal_backend=journal_backend,
-        journal_retention=journal_retention,
-        mcp_servers=mcp_servers,
-        session_id=session_id,
-        agent=agent,
-        agent_model=agent_model,
-    )
+    if config is not None:
+        _loose = {
+            "agent": (agent, None),
+            "session_id": (session_id, None),
+            "debug": (debug, "off"),
+            "journal_backend": (journal_backend, "sqlite"),
+            "journal_retention": (journal_retention, "archive"),
+            "wrap_agent": (wrap_agent, True),
+            "agent_runner": (agent_runner, None),
+            "agent_model": (agent_model, None),
+            "remote_agent_api_key": (remote_agent_api_key, None),
+            "mcp_servers": (mcp_servers, None),
+        }
+        _supplied = [name for name, (value, default) in _loose.items() if value != default]
+        if _supplied:
+            raise ValueError(
+                "create_text_session() accepts either a TextSessionConfig or loose "
+                "keyword arguments, not both; remove the config argument or these "
+                f"keyword(s): {', '.join(sorted(_supplied))}."
+            )
+    else:
+        config = TextSessionConfig(
+            agent=agent,
+            session_id=session_id,
+            debug=debug,
+            journal_backend=journal_backend,
+            journal_retention=journal_retention,
+            wrap_agent=wrap_agent,
+            agent_runner=agent_runner,
+            agent_model=agent_model,
+            remote_agent_api_key=remote_agent_api_key,
+            mcp_servers=mcp_servers,
+        )
+
+    agent = config.agent
+    session_id = config.session_id
+    debug = config.debug
+    journal_backend = config.journal_backend
+    journal_retention = config.journal_retention
+    wrap_agent = config.wrap_agent
+    agent_runner = config.agent_runner
+    agent_model = config.agent_model
+    remote_agent_api_key = config.remote_agent_api_key
+    mcp_servers = config.mcp_servers
 
     sid = session_id or f"session-{uuid4().hex[:12]}"
     artifact_store = _create_artifact_store(sid, debug)
@@ -1055,6 +1216,7 @@ def create_text_session(
                 agent_model=agent_model,
                 remote_agent_api_key=remote_agent_api_key,
             )
+            _validate_agent_shape(adapted, wrap_agent=wrap_agent)
         if wrap_agent and not isinstance(adapted, AgentRunner):
             runner_cfg = agent_runner or AgentRunnerConfig()
             adapted = AgentRunner(adapted, runner_cfg)
@@ -1209,13 +1371,23 @@ def _wire_outbound_pipeline(
 
 
 def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
-    if isinstance(config, Transport):
+    # Discriminate a pre-built transport *instance* from a transport *config*
+    # using the narrow audio contract (TransportLike) rather than the full
+    # Transport protocol. The full protocol also requires version_info(), so
+    # checking it here would silently reject custom transports that satisfy the
+    # audio contract but do not implement version_info(), routing them to the
+    # config-factory path and raising a misleading "Unsupported ..." error.
+    if isinstance(config, TransportLike):
         if hasattr(config, "_event_bus") and getattr(config, "_event_bus") is None:
             config._event_bus = event_bus
         return config
     factory = _TRANSPORT_FACTORIES.get(type(config))
     if factory is None:
-        raise ValueError("Unsupported transport configuration type.")
+        raise ValueError(
+            f"Unsupported transport configuration type: {type(config).__name__!r}. "
+            "Pass a known transport config or a transport instance implementing "
+            "the connect/disconnect/receive_audio/send_audio contract."
+        )
     return factory(config, event_bus)
 
 

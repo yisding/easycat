@@ -184,8 +184,18 @@ def latency(
     ] = None,
     require_samples: Annotated[
         bool,
-        typer.Option("--require-samples", help="Fail when no latency samples are produced."),
+        typer.Option(
+            "--require-samples",
+            help="Fail when no latency samples are produced (default for --sweep).",
+        ),
     ] = False,
+    baseline: Annotated[
+        Path | None,
+        typer.Option(
+            "--baseline",
+            help="Stored latency artifact to compare against for regression/drift detection.",
+        ),
+    ] = None,
     artifacts_dir: Annotated[
         Path,
         typer.Option("--artifacts-dir", help="Validation artifact root directory."),
@@ -197,11 +207,14 @@ def latency(
         raise typer.Exit(2)
 
     mode = LatencyMode.SWEEP if sweep else LatencyMode.SMOKE
+    # When the flag is not passed, defer to the runner's mode-aware default
+    # (SWEEP requires samples, SMOKE does not) instead of forcing it off.
     result = run_latency_validation(
         mode,
         artifacts_dir=artifacts_dir,
         report_path=report,
-        require_samples=require_samples,
+        require_samples=True if require_samples else None,
+        baseline_path=baseline,
     )
     if report is not None and not report.exists():
         _write_report_copy(report, result)

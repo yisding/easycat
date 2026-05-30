@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from easycat.events import STTEventType
+from easycat.events import Error, ErrorStage, EventBus, STTEventType
 from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
@@ -76,6 +76,9 @@ def _deepgram_turn_info(
 
 def _make_deepgram_stt(
     messages: list[str | bytes] | None = None,
+    *,
+    event_bus=None,
+    model: str = "nova-2",
 ) -> tuple[DeepgramSTT, MockWebSocket]:
     """Create a DeepgramSTT with a mocked WebSocket."""
     ws = MockWebSocket(messages or [])
@@ -83,7 +86,12 @@ def _make_deepgram_stt(
     async def mock_connect(url: str, **kwargs) -> MockWebSocket:
         return ws
 
-    config = DeepgramSTTConfig(api_key="test-key", ws_connect=mock_connect)
+    config = DeepgramSTTConfig(
+        api_key="test-key",
+        model=model,
+        ws_connect=mock_connect,
+        event_bus=event_bus,
+    )
     return DeepgramSTT(config), ws
 
 
@@ -137,6 +145,32 @@ async def test_deepgram_sends_audio_bytes():
     # Audio chunks should have been sent as raw bytes
     audio_sent = [s for s in ws.sent if isinstance(s, bytes)]
     assert len(audio_sent) == len(chunks)
+
+
+@pytest.mark.asyncio
+async def test_deepgram_resamples_mismatched_rate_instead_of_raising():
+    # Deepgram is configured for 16 kHz but receives 48 kHz audio. It should
+    # resample down to its configured rate rather than raising a ValueError,
+    # matching the realtime providers' contract.
+    from easycat.audio_format import AudioChunk, AudioFormat
+
+    stt, ws = _make_deepgram_stt([])
+    stt._config.sample_rate = 16000
+
+    pcm_48k = generate_pcm_sine(duration_ms=100, sample_rate=48000)
+    chunk = AudioChunk(
+        data=pcm_48k,
+        format=AudioFormat(sample_rate=48000, channels=1, sample_width=2),
+    )
+
+    await stt.start_stream()
+    await stt.send_audio(chunk)
+    await stt.end_stream()
+
+    audio_sent = [s for s in ws.sent if isinstance(s, bytes)]
+    assert len(audio_sent) == 1
+    # Resampled 48k -> 16k should be roughly one third the byte count.
+    assert len(audio_sent[0]) < len(pcm_48k)
 
 
 @pytest.mark.asyncio
@@ -344,6 +378,74 @@ async def test_deepgram_flux_parses_turn_info_updates_and_end_of_turn():
     assert events[1].type == STTEventType.FINAL
     assert events[1].text == "hello world"
     assert events[1].confidence == 0.88
+
+
+# ── Segment commit (Finalize) ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_deepgram_commit_segment_sends_finalize_frame():
+    stt, ws = _make_deepgram_stt([])
+    await stt.start_stream()
+
+    result = await stt.commit_segment()
+    assert result is True
+
+    json_sent = [json.loads(s) for s in ws.sent if isinstance(s, str)]
+    assert any(msg.get("type") == "Finalize" for msg in json_sent)
+
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_deepgram_commit_segment_before_start_returns_false():
+    stt, _ = _make_deepgram_stt([])
+    assert await stt.commit_segment() is False
+
+
+@pytest.mark.asyncio
+async def test_deepgram_flux_commit_segment_returns_false():
+    stt, ws = _make_deepgram_stt([], model="flux-general-en")
+    await stt.start_stream()
+
+    assert await stt.commit_segment() is False
+
+    json_sent = [json.loads(s) for s in ws.sent if isinstance(s, str)]
+    assert not any(msg.get("type") == "Finalize" for msg in json_sent)
+
+    await stt.end_stream()
+
+
+# ── Errors ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_deepgram_error_message_posted_to_event_bus():
+    bus = EventBus()
+    errors: list[Error] = []
+    bus.subscribe(Error, lambda e: errors.append(e))
+
+    error_frame = json.dumps(
+        {
+            "type": "Error",
+            "description": "Sample rate is not supported",
+            "message": "invalid configuration",
+        }
+    )
+    stt, _ = _make_deepgram_stt([error_frame], event_bus=bus)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert len(events) == 0
+    assert len(errors) == 1
+    err = errors[0]
+    assert err.stage == ErrorStage.STT
+    assert err.provider == "deepgram"
+    # The more descriptive ``description`` field must win over the generic
+    # ``message`` so the surfaced text is actionable.
+    assert "Sample rate is not supported" in str(err.exception)
+    assert "invalid configuration" not in str(err.exception)
 
 
 # ── Live integration ─────────────────────────────────────────────

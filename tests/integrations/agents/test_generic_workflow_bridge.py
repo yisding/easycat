@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
@@ -215,3 +216,63 @@ class TestCommittableBoundaries:
     def test_boundaries_present(self):
         assert hasattr(GenericWorkflowBridge, "COMMITTABLE_BOUNDARIES")
         assert len(GenericWorkflowBridge.COMMITTABLE_BOUNDARIES) > 0
+
+
+class _SlowStreamingWorkflow:
+    """Shallow streaming workflow that blocks until cancelled."""
+
+    async def on_user_turn(self, text: str) -> str:
+        return f"Echo: {text}"
+
+    async def on_user_turn_streaming(self, text: str) -> AsyncIterator[str]:
+        yield "first "
+        await asyncio.sleep(10)
+        yield "never"
+
+
+class TestStreamingStructuredOutput:
+    """Finding 2 — streaming shallow mode leaves structured_output as None.
+
+    Streamed chunks are inherently unstructured text. Emitting the joined
+    text as ``structured_output`` would merely duplicate the ``done`` event's
+    ``text`` field (and could surface a partial value on barge-in cancel), so
+    the bridge leaves it ``None`` — matching deep-mode streaming.
+    """
+
+    @pytest.mark.asyncio
+    async def test_streaming_variant_leaves_structured_output_none(self):
+        bridge = GenericWorkflowBridge(workflow=_ShallowStreamingWorkflow())
+        rec = _recorder()
+        done = None
+        text = ""
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hello world"), rec):
+            if ev.kind == "text_delta":
+                text += ev.text
+            elif ev.kind == "done":
+                done = ev
+        assert done is not None
+        # Streaming chunks are unstructured: text is delivered but
+        # structured_output stays None rather than duplicating the text.
+        assert text == "hello world "
+        assert done.text == "hello world "
+        assert done.structured_output is None
+
+
+class TestCursorCleanupOnCancel:
+    """Finding 1 — cursor stack stays balanced on GeneratorExit/cancel."""
+
+    @pytest.mark.asyncio
+    async def test_shallow_streaming_aclose_balances_cursor(self):
+        bridge = GenericWorkflowBridge(workflow=_SlowStreamingWorkflow())
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+        gen = bridge.invoke(AgentTurnInput.from_text("hi"), rec)
+        # Consume the first chunk, then abort mid-stream (barge-in / timeout).
+        first = await gen.__anext__()
+        assert first.kind == "text_delta"
+        await gen.aclose()
+        # The workflow cursor must have been closed despite the
+        # GeneratorExit injected by aclose(), leaving a balanced stack.
+        assert rec._open_cursors == []
+        names = [r.name for r in journal.read()]
+        assert names.count("unit_entered") == names.count("unit_exited")

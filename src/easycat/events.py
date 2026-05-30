@@ -427,12 +427,25 @@ class Error(Event):
 
     ``stage`` identifies the pipeline stage (STT, agent, TTS, or general
     pipeline).  ``provider`` optionally names the provider implementation
-    that raised the error.
+    that raised the error.  ``code`` is a stable ``EASYCAT_Exxx`` code
+    when available, making journal ``Error`` records machine-correlatable
+    with ``easycat explain``; it defaults to the wrapped exception's
+    ``code`` attribute (e.g. the runtime timeout errors expose one) and
+    falls back to ``None`` for uncoded exceptions.
     """
 
     exception: BaseException
     stage: ErrorStage = ErrorStage.PIPELINE
     provider: str | None = None
+    code: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.code is None:
+            inferred = getattr(self.exception, "code", None)
+            if isinstance(inferred, str) and inferred:
+                # Frozen dataclass: bypass the immutability guard to
+                # backfill the code derived from the wrapped exception.
+                object.__setattr__(self, "code", inferred)
 
 
 # Session actions (agent-requested)

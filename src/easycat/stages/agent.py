@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -9,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat import _observability as observability
+from easycat._turn_context import TurnContext
 from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents._recorder import JournalAgentRecorder
@@ -20,7 +22,6 @@ from easycat.integrations.agents.base import (
 )
 from easycat.runtime.context import RunContext
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
-from easycat.session._turn_context import TurnContext
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
@@ -79,7 +80,6 @@ class AgentStage:
         self._artifact_store = artifact_store
         self._session_id = session_id
         self._mcp_servers = mcp_servers
-        self._last_snapshot = StageStateSnapshot(stage_name=self.name)
         # Shadow history forwarded as ``turn_input.context`` when the
         # provider is a raw bridge (not wrapped in :class:`AgentRunner`).
         # AgentRunner already tracks its own history and forwards it, so
@@ -91,9 +91,25 @@ class AgentStage:
 
     # ── Recorder construction ───────────────────────────────────
 
-    def _make_recorder(self, turn_id: str | None) -> JournalAgentRecorder:
+    def _journal_ctx(self, ctx: RunContext) -> RunContext:
+        """Return *ctx*, substituting the constructor journal as a fallback.
+
+        Keeps the stage-event path (``journal_append_event``, which uses
+        ``ctx.journal``) and the recorder path on a single recording sink
+        even when the RunContext was built without a journal.
+        """
+        if ctx.journal is None and self._journal is not None:
+            return dataclasses.replace(ctx, journal=self._journal)
+        return ctx
+
+    def _make_recorder(self, turn_id: str | None, ctx: RunContext) -> JournalAgentRecorder:
+        # Prefer the per-run ``ctx.journal`` so the recorder writes to the
+        # same sink as ``journal_append_event`` (which always uses
+        # ``ctx.journal``).  ``self._journal`` is only a fallback for
+        # direct construction where the caller wired a journal into the
+        # stage but not into the RunContext.
         return JournalAgentRecorder(
-            journal=self._journal,
+            journal=ctx.journal if ctx.journal is not None else self._journal,
             artifact_store=self._artifact_store,
             context=RecorderContext(
                 run_id=f"run-{uuid4().hex[:8]}",
@@ -132,6 +148,7 @@ class AgentStage:
         to ``turn_input.context``; Session uses it to surface caller-ID
         metadata when ``caller_id_exposure == "system_message"``.
         """
+        ctx = self._journal_ctx(ctx)
         bridge = self._provider
         state_before = self.snapshot_state()
         journal_append_event(
@@ -143,7 +160,7 @@ class AgentStage:
             data_extra={"input": input if isinstance(input, str) else str(input)},
         )
 
-        recorder = self._make_recorder(turn.id)
+        recorder = self._make_recorder(turn.id, ctx)
         input_text = input if isinstance(input, str) else str(input)
         base_context = list(self._history) if self._tracks_history else []
         if (
@@ -341,6 +358,11 @@ class AgentStage:
         signal: ControlSignal,
         ctx: RunContext | None = None,
     ) -> None:
+        """Observe and journal an upstream control signal (no cancel here).
+
+        Cancellation is owned by the ``CancelOrchestrator`` / turn runner;
+        this method only records that the stage saw the signal.
+        """
         logger.debug("AgentStage received upstream signal: %s", signal)
         if ctx is not None:
-            journal_append_control_signal(ctx, stage=self.name, signal=signal)
+            journal_append_control_signal(self._journal_ctx(ctx), stage=self.name, signal=signal)

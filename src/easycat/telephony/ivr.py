@@ -21,13 +21,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from easycat.events import EventBus, IVRAction, IVRActionType, STTFinal
-from easycat.telephony.dtmf import VALID_DTMF_DIGITS
 from easycat.telephony.screening import EARLY_MEDIA_PHRASES as _EARLY_MEDIA_PATTERNS
+from easycat.telephony.twiml import VALID_DTMF_OUTPUT_CHARS, twiml_play_digits
 
 logger = logging.getLogger(__name__)
-
-# Valid DTMF characters: standard digits + W/w pauses for inter-digit delays.
-_VALID_DTMF = VALID_DTMF_DIGITS | frozenset("wW")
 
 # Heuristic patterns that indicate IVR prompts.
 _IVR_PATTERNS: list[re.Pattern[str]] = [
@@ -132,9 +129,14 @@ class DTMFDelivery:
         if not self._client or not self._call_sid:
             return False
 
-        # Validate that digits contains only valid DTMF characters to
-        # prevent TwiML injection via the agent callback.
-        if not digits or not all(c in _VALID_DTMF for c in digits):
+        # Validate against the shared whitelist (VALID_DTMF_OUTPUT_CHARS, the
+        # single source of truth in twiml.py) to prevent TwiML injection via the
+        # agent callback.  This is an all-or-nothing contract: if any character
+        # is invalid the whole input is suspect, so reject it rather than play a
+        # partial.  We check the charset directly (rather than calling
+        # sanitize_dtmf_digits, which logs its own "stripped" warning) so this
+        # rejection path emits exactly one, accurate log line.
+        if not digits or any(c not in VALID_DTMF_OUTPUT_CHARS for c in digits):
             logger.warning("Invalid DTMF digits rejected: %r", digits)
             return False
 
@@ -142,7 +144,11 @@ class DTMFDelivery:
         if self._inter_digit_delay and len(digits) > 1:
             digits = "W".join(digits)
 
-        twiml = f'<Response><Play digits="{digits}"/><Pause length="30"/></Response>'
+        # Route through the shared output helper for the ``<Play>`` element, then
+        # append the keep-alive pause this REST update needs.
+        play = twiml_play_digits(digits)
+        inner = play[play.index("<Response>") + len("<Response>") : play.index("</Response>")]
+        twiml = f'<Response>{inner}<Pause length="30"/></Response>'
 
         try:
             await asyncio.to_thread(self._client.calls(self._call_sid).update, twiml=twiml)
@@ -271,14 +277,46 @@ class IVRNavigator:
                     self._agent_callback(context),
                     timeout=self._config.agent_timeout_s,
                 )
-            except (TimeoutError, Exception):
-                logger.exception("IVR agent retry also failed")
+            except TimeoutError:
+                # Transient: the agent is slow/unreachable. Re-arm the prompt
+                # timeout and wait for the next prompt rather than hanging up.
+                logger.warning("IVR agent retry timed out")
                 self._start_prompt_timeout()
                 return
+            except Exception:
+                # Hard failure (e.g. a crashing callback) on the retry too —
+                # this is deterministic, not transient, so escalate to hangup
+                # instead of pointlessly re-arming the prompt timeout.
+                logger.exception("IVR agent retry crashed; escalating to hangup")
+                self._active = False
+                await self._event_bus.emit(
+                    IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
+                )
+                return
         except Exception:
-            logger.exception("IVR agent callback failed")
-            self._start_prompt_timeout()
-            return
+            # Hard failure on the first attempt: give the callback one more
+            # chance after a delay (transient bugs / flaky deps), then escalate.
+            logger.warning("IVR agent callback crashed, retrying after delay")
+            await asyncio.sleep(self._config.agent_retry_delay_s)
+            try:
+                result = await asyncio.wait_for(
+                    self._agent_callback(context),
+                    timeout=self._config.agent_timeout_s,
+                )
+            except TimeoutError:
+                # Transient: a slow retry is the same condition the timeout path
+                # treats leniently, regardless of how the first attempt failed.
+                # Re-arm the prompt timeout and wait rather than hanging up.
+                logger.warning("IVR agent retry timed out")
+                self._start_prompt_timeout()
+                return
+            except Exception:
+                logger.exception("IVR agent retry also crashed; escalating to hangup")
+                self._active = False
+                await self._event_bus.emit(
+                    IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
+                )
+                return
 
         action_str = result.get("action", "wait")
 

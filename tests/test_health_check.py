@@ -121,3 +121,106 @@ class TestPeriodicHealthChecker:
         await checker.stop()
 
         assert len(errors) >= 1
+
+    async def test_failure_threshold_delays_escalation(self):
+        event_bus = EventBus()
+        errors = []
+        event_bus.subscribe(Error, lambda e: errors.append(e))
+
+        checker = PeriodicHealthChecker(
+            UnhealthyProvider(),
+            provider_name="stale_ws",
+            event_bus=event_bus,
+            failure_threshold=3,
+        )
+
+        await checker.check_once()
+        assert checker.is_unhealthy is False
+        assert errors == []
+
+        await checker.check_once()
+        assert checker.is_unhealthy is False
+        assert errors == []
+
+        await checker.check_once()
+        assert checker.is_unhealthy is True
+        assert len(errors) == 1
+
+    async def test_error_emitted_once_on_transition(self):
+        event_bus = EventBus()
+        errors = []
+        event_bus.subscribe(Error, lambda e: errors.append(e))
+
+        checker = PeriodicHealthChecker(
+            UnhealthyProvider(),
+            provider_name="stale_ws",
+            event_bus=event_bus,
+        )
+
+        for _ in range(5):
+            await checker.check_once()
+
+        # De-duplicated: only the healthy->unhealthy transition emits.
+        assert len(errors) == 1
+
+    async def test_on_unhealthy_callback_fires_once(self):
+        calls = []
+
+        async def on_unhealthy(name):
+            calls.append(name)
+
+        checker = PeriodicHealthChecker(
+            UnhealthyProvider(),
+            provider_name="stale_ws",
+            on_unhealthy=on_unhealthy,
+        )
+
+        for _ in range(3):
+            await checker.check_once()
+
+        assert calls == ["stale_ws"]
+
+    async def test_on_recovered_callback_after_unhealthy(self):
+        recovered = []
+
+        async def on_recovered(name):
+            recovered.append(name)
+
+        class FlakyProvider:
+            def __init__(self) -> None:
+                self.healthy = False
+
+            async def health_check(self) -> bool:
+                return self.healthy
+
+        provider = FlakyProvider()
+        checker = PeriodicHealthChecker(
+            provider,
+            provider_name="flaky_ws",
+            on_recovered=on_recovered,
+        )
+
+        await checker.check_once()
+        assert checker.is_unhealthy is True
+        assert recovered == []
+
+        provider.healthy = True
+        await checker.check_once()
+        assert checker.is_unhealthy is False
+        assert recovered == ["flaky_ws"]
+
+    async def test_sync_callback_supported(self):
+        calls = []
+        checker = PeriodicHealthChecker(
+            UnhealthyProvider(),
+            provider_name="stale_ws",
+            on_unhealthy=lambda name: calls.append(name),
+        )
+        await checker.check_once()
+        assert calls == ["stale_ws"]
+
+    def test_invalid_failure_threshold(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            PeriodicHealthChecker(UnhealthyProvider(), failure_threshold=0)

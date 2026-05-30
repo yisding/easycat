@@ -60,6 +60,12 @@ class AgentRunner:
     delegated.  Otherwise ``AgentRunner`` keeps its own chat history,
     applies timeouts and cancellation, and emits a single
     ``text_delta`` + ``done`` event pair from :meth:`invoke`.
+
+    When wrapping a stateful bridge the runner's ``_history`` is only
+    *advisory* — the inner bridge owns the authoritative conversation
+    state.  The shadow history is mirrored from a turn only after that
+    turn completes successfully, so it never claims a timed-out/errored
+    turn that the inner bridge has already partially committed.
     """
 
     COMMITTABLE_BOUNDARIES: dict[UnitKind | str, CommitRule] = {
@@ -101,6 +107,16 @@ class AgentRunner:
             # Forward runner-managed history so multi-turn bridges that rely
             # on turn_input.context stay stateful across turns.  Any context
             # the caller already set takes precedence.
+            #
+            # The inner bridge owns the authoritative turn state: it records
+            # the user message and any partial assistant output into its own
+            # durable store (e.g. checkpointer / message history) and keeps
+            # that partial state intentionally on cancel/timeout.  We cannot
+            # roll the inner bridge back, so we only mirror a turn into the
+            # runner's *advisory* shadow ``_history`` after the inner turn has
+            # completed successfully.  This keeps the shadow list and the
+            # bridge's real history from drifting apart on timeout/error
+            # (which previously caused the next turn to double-feed context).
             bridge_input = turn_input
             if not turn_input.context and self._history:
                 bridge_input = AgentTurnInput(
@@ -108,45 +124,38 @@ class AgentRunner:
                     context=list(self._history),
                     turn_id=turn_input.turn_id,
                 )
-            self._history.append({"role": "user", "content": turn_input.text})
             accumulated = ""
             done_text = ""
             timeout = self._config.timeout
             deadline = time.monotonic() + timeout if timeout is not None else None
             inner_iter = self._agent.invoke(bridge_input, recorder, cancel_token)
             timed_out = False
-            try:
-                while True:
-                    try:
-                        if deadline is not None:
-                            remaining = deadline - time.monotonic()
-                            if remaining <= 0:
-                                timed_out = True
-                                break
-                            event = await asyncio.wait_for(
-                                inner_iter.__anext__(), timeout=remaining
-                            )
-                        else:
-                            event = await inner_iter.__anext__()
-                    except StopAsyncIteration:
-                        break
-                    except TimeoutError:
-                        timed_out = True
-                        break
-                    kind = getattr(event, "kind", None)
-                    text = getattr(event, "text", "") or ""
-                    if kind == "text_delta":
-                        accumulated += text
-                    elif kind == "done":
-                        done_text = text
-                    yield event
-            except Exception:
-                if self._history and self._history[-1].get("role") == "user":
-                    self._history.pop()
-                raise
+            while True:
+                try:
+                    if deadline is not None:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            timed_out = True
+                            break
+                        event = await asyncio.wait_for(inner_iter.__anext__(), timeout=remaining)
+                    else:
+                        event = await inner_iter.__anext__()
+                except StopAsyncIteration:
+                    break
+                except TimeoutError:
+                    timed_out = True
+                    break
+                kind = getattr(event, "kind", None)
+                text = getattr(event, "text", "") or ""
+                if kind == "text_delta":
+                    accumulated += text
+                elif kind == "done":
+                    done_text = text
+                yield event
             if timed_out:
-                if self._history and self._history[-1].get("role") == "user":
-                    self._history.pop()
+                # Let the inner bridge keep its own partial state; the runner
+                # never recorded this turn, so its shadow history stays in
+                # sync without a manual rollback.
                 aclose = getattr(inner_iter, "aclose", None)
                 if aclose is not None:
                     try:
@@ -154,6 +163,8 @@ class AgentRunner:
                     except Exception:
                         pass
                 raise AgentTimeoutError(timeout or 0)
+            # Mirror the completed turn into the advisory shadow history.
+            self._history.append({"role": "user", "content": turn_input.text})
             final_text = done_text or accumulated
             if final_text:
                 self._history.append({"role": "assistant", "content": final_text})
@@ -185,6 +196,20 @@ class AgentRunner:
         except Exception:
             self._history.pop()
             recorder.record_unit_exited(cursor, reason="error")
+            raise
+        except BaseException:
+            # A parent ``aclose()`` (barge-in) injects ``GeneratorExit`` /
+            # ``CancelledError`` while ``run()`` is awaited; neither is an
+            # ``Exception`` so the blocks above are skipped and the
+            # still-open agent cursor would be left without a
+            # ``unit_exited`` record, breaking the recorder's strict stack
+            # invariant for the postmortem journal.  Close it defensively
+            # before re-raising.
+            self._history.pop()
+            try:
+                recorder.record_unit_exited(cursor, reason="error")
+            except Exception:
+                logger.debug("Failed to close agent cursor during cancel cleanup", exc_info=True)
             raise
 
         self._history.append({"role": "assistant", "content": response})
@@ -218,7 +243,11 @@ class AgentRunner:
         recorder: AgentRecorder | None = None,
         caused_by_signal_id: str | None = None,
     ) -> None:
-        replacement = delivered_text + "..." if delivered_text else "..."
+        # Match the truncation form used by every real bridge: an empty
+        # delivered_text clears the assistant message to "" (not a bare
+        # "..."), keeping interruption semantics consistent across the
+        # apply_interruption contract.
+        replacement = delivered_text + "..." if delivered_text else ""
         for i in range(len(self._history) - 1, -1, -1):
             if self._history[i].get("role") == "assistant":
                 self._history[i] = {"role": "assistant", "content": replacement}

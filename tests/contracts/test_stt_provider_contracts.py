@@ -45,6 +45,9 @@ class _ContractSTT:
                 break
             yield event
 
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "contract-stt"}
+
 
 def test_stt_provider_contract_matrix_has_rows() -> None:
     rows = [row for row in PROVIDER_SURFACE_CONTRACTS if row.surface == "stt"]

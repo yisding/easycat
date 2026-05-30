@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import pytest
 
+from easycat.errors import EasyCatError
 from easycat.stt.cartesia_provider import CartesiaSTT
 from easycat.stt.deepgram_provider import DeepgramSTT
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT
-from easycat.stt.factory import STTProviderConfig, create_stt_provider
+from easycat.stt.factory import STTProviderConfig, available_providers, create_stt_provider
 from easycat.stt.openai_provider import OpenAISTT
 
 # ── Factory creates correct provider types ───────────────────────
@@ -94,14 +95,16 @@ def test_factory_passes_elevenlabs_params():
 
 def test_factory_rejects_non_string_provider():
     config = STTProviderConfig(provider=None, api_key="k")  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="Unknown STT provider"):
+    with pytest.raises(EasyCatError) as exc_info:
         create_stt_provider(config)
+    assert exc_info.value.code == "EASYCAT_E104"
 
 
 def test_factory_rejects_unknown_provider():
     config = STTProviderConfig(provider="unknown", api_key="k")
-    with pytest.raises(ValueError, match="Unknown STT provider"):
+    with pytest.raises(EasyCatError) as exc_info:
         create_stt_provider(config)
+    assert exc_info.value.code == "EASYCAT_E104"
 
 
 def test_factory_rejects_empty_api_key():
@@ -112,8 +115,25 @@ def test_factory_rejects_empty_api_key():
 
 def test_factory_error_message_lists_providers():
     config = STTProviderConfig(provider="bad", api_key="k")
-    with pytest.raises(ValueError, match="deepgram"):
+    with pytest.raises(EasyCatError, match="deepgram") as exc_info:
         create_stt_provider(config)
+    assert exc_info.value.code == "EASYCAT_E104"
+
+
+def test_unknown_provider_suggests_close_match():
+    # 'deepgrm' is close enough to 'deepgram' for the fuzzy hint.
+    config = STTProviderConfig(provider="deepgrm", api_key="k")
+    with pytest.raises(EasyCatError, match="Did you mean 'deepgram'"):
+        create_stt_provider(config)
+
+
+def test_available_providers_lists_registered_names():
+    names = available_providers()
+    # Core providers must be registered; new providers may be added freely.
+    assert set(names) >= {"openai", "deepgram", "elevenlabs", "cartesia"}
+    # Names should be unique and returned in sorted order for stable listing.
+    assert len(names) == len(set(names))
+    assert names == sorted(names)
 
 
 # ── Protocol conformance via factory ─────────────────────────────

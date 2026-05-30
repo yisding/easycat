@@ -11,7 +11,7 @@ from easycat.validation.provider_capabilities import (
     ProviderIdentifier,
 )
 
-Surface = Literal["stt", "tts", "vad", "transport", "agent_bridge"]
+Surface = Literal["stt", "tts", "agent_bridge"]
 LiveStatus = Literal[
     "not_requested",
     "expected_skip",
@@ -35,6 +35,9 @@ class ProviderSurfaceSpec:
     schema_status: str = "unknown"
     live_canary_status: str = "required"
     live_pytest_target: str = ""
+    # Public/documented default voice identifiers for TTS surfaces. Empty for
+    # non-TTS surfaces (and for TTS providers that expose no catalogable voice).
+    default_voices: tuple[str, ...] = ()
 
     @property
     def artifact_key(self) -> str:
@@ -111,6 +114,7 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         required_extra="openai",
         credential_env_var="OPENAI_API_KEY",
         live_pytest_target="tests/tts/test_tts_openai.py::TestOpenAITTS::test_live_openai_tts",
+        default_voices=("alloy",),
     ),
     ProviderSurfaceSpec(
         provider="deepgram",
@@ -137,6 +141,7 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         live_pytest_target=(
             "tests/tts/test_tts_elevenlabs.py::TestElevenLabsTTSGeneral::test_live_elevenlabs_tts"
         ),
+        default_voices=("EXAVITQu4vr4xnSDxMaL",),
     ),
     ProviderSurfaceSpec(
         provider="cartesia",
@@ -148,6 +153,7 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         required_extra="cartesia",
         credential_env_var="CARTESIA_API_KEY",
         live_pytest_target="tests/tts/test_tts_cartesia.py::TestCartesiaTTS::test_live_cartesia_tts",
+        default_voices=("6ccbfb76-1fc6-48f7-b71d-91ac6298247b",),
     ),
     ProviderSurfaceSpec(
         provider="openai-agents",
@@ -217,9 +223,22 @@ def build_provider_capability_report(
         status=_capability_status(live_status, failure_class),
         live_checked_at=live_checked_at,
         models=(ProviderIdentifier(spec.model_api_version, safe=True),),
+        voices=_spec_voices(spec),
         latency=latency,
         failure_class=failure_class,
     )
+
+
+def _spec_voices(spec: ProviderSurfaceSpec) -> tuple[ProviderIdentifier, ...]:
+    """Catalog the documented default voice identifiers for a TTS surface.
+
+    Only TTS surfaces expose voices. The identifiers are framework-documented
+    public defaults, so they are marked ``safe=True`` (redacted but preserved)
+    rather than fully suppressed.
+    """
+    if spec.surface != "tts":
+        return ()
+    return tuple(ProviderIdentifier(voice, safe=True) for voice in spec.default_voices)
 
 
 def _surface_capabilities(spec: ProviderSurfaceSpec) -> ProviderCapabilities:
@@ -246,32 +265,10 @@ def _surface_capabilities(spec: ProviderSurfaceSpec) -> ProviderCapabilities:
             alignment=spec.provider in {"elevenlabs", "cartesia"},
             ssml=spec.provider == "elevenlabs",
         )
-    if spec.surface == "agent_bridge":
-        return ProviderCapabilities(
-            streaming=streaming,
-            streaming_behavior="agent_event_stream",
-            finalization_behavior="agent_done_event",
-            markers=False,
-            alignment=False,
-            ssml=False,
-        )
-    if spec.surface == "transport":
-        return ProviderCapabilities(
-            input_audio_formats=("pcm16",),
-            output_audio_formats=("pcm16",),
-            streaming=True,
-            streaming_behavior="duplex_audio_frames",
-            finalization_behavior="transport_close",
-            markers=True,
-            alignment=False,
-            ssml=False,
-        )
     return ProviderCapabilities(
-        input_audio_formats=("pcm16",),
-        output_audio_formats=("speech_segments",),
-        streaming=True,
-        streaming_behavior="frame_analysis",
-        finalization_behavior="speech_boundary",
+        streaming=streaming,
+        streaming_behavior="agent_event_stream",
+        finalization_behavior="agent_done_event",
         markers=False,
         alignment=False,
         ssml=False,
@@ -291,12 +288,13 @@ def _capability_status(live_status: LiveStatus | str, failure_class: str | None)
         return "auth_failure"
     if failure_class == "provider_drift":
         return "provider_drift"
-    return "failure" if str(live_status).startswith("failed") else str(live_status)
+    # Any remaining status (including 'failed*', 'not_requested', or an
+    # unrecognized/typo'd value) collapses to the closed-Literal 'failure'
+    # rather than echoing an out-of-contract string into the status field.
+    return "failure"
 
 
 def _api_version_header_behavior(spec: ProviderSurfaceSpec) -> str:
-    if spec.surface in {"transport", "vad"}:
-        return "not_applicable"
     return "provider_default"
 
 

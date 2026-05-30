@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,7 +22,13 @@ from easycat.validation.latency import (
     latency_pytest_args,
 )
 from easycat.validation.report import ValidationRun
-from easycat.validation.runner import CommandResult, ValidationRunResult, run_latency_validation
+from easycat.validation.runner import (
+    LATENCY_SYNTHETIC_FAILURE_SAMPLE,
+    LATENCY_SYNTHETIC_SAMPLE_DEBUG_KEY,
+    CommandResult,
+    ValidationRunResult,
+    run_latency_validation,
+)
 
 
 def test_latency_pytest_args_smoke_selects_single_probe() -> None:
@@ -213,13 +218,68 @@ def test_latency_failure_classification_handles_provider_failures() -> None:
     assert classify_latency_failure("baseline p50 exceeded") == "easycat_latency_regression"
 
 
+def test_latency_and_live_failure_classification_share_one_taxonomy() -> None:
+    """Both classifiers must derive from the same canonical FailureCategory so
+    auth/quota/timeout/drift tokens can never silently disagree between paths."""
+    from easycat.validation.latency import FailureCategory, classify_failure_category
+    from easycat.validation.runner import classify_live_failure
+
+    cases = {
+        "invalid_api_key": FailureCategory.AUTH,
+        "429 rate limit hit": FailureCategory.QUOTA,
+        "request timed out": FailureCategory.TIMEOUT,
+        "schema drift detected": FailureCategory.DRIFT,
+        "connection reset": FailureCategory.NETWORK,
+    }
+    for message, category in cases.items():
+        assert classify_failure_category(message) is category
+        # Each path emits its own (back-compatible) vocabulary, but both are
+        # driven by the single category function above.
+        assert isinstance(classify_latency_failure(message), str)
+        assert isinstance(classify_live_failure(message), str)
+
+    assert classify_live_failure("invalid_api_key") == "auth_or_quota"
+    assert classify_live_failure("429 rate limit hit") == "provider_quota"
+    assert classify_live_failure("schema drift detected") == "provider_drift"
+
+
+def test_failure_classification_precedence_pins_cross_category_messages() -> None:
+    """Pin the deliberate precedence for messages that match two categories.
+
+    These are the cross-category conflicts the unified token table must resolve
+    intentionally: QUOTA wins over AUTH (a 429 is the actionable signal even
+    with an auth word), and DRIFT wins over NETWORK so schema-drift detection is
+    never masked by an incidental network word.
+    """
+    from easycat.validation.latency import FailureCategory, classify_failure_category
+    from easycat.validation.runner import classify_live_failure
+
+    # QUOTA before AUTH: "429 unauthorized" carries both a quota token (429) and
+    # an auth token (unauthorized); the quota signal must win.
+    assert classify_failure_category("429 unauthorized") is FailureCategory.QUOTA
+    assert classify_live_failure("429 unauthorized") == "provider_quota"
+    assert classify_latency_failure("429 unauthorized") == "provider_rate_limit"
+
+    # DRIFT before NETWORK: "schema mismatch on connection close" carries both a
+    # drift token (schema) and a network token (connection); drift must win so
+    # live validation still reports 'provider_drift'.
+    assert (
+        classify_failure_category("schema mismatch on connection close") is FailureCategory.DRIFT
+    )
+    assert classify_live_failure("schema mismatch on connection close") == "provider_drift"
+    assert (
+        classify_latency_failure("schema mismatch on connection close")
+        == "easycat_latency_regression"
+    )
+
+
 def test_latency_runner_writes_report_and_smoke_latest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("CI", raising=False)
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
-        samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        samples_path = Path(env["EASYCAT_LATENCY_SAMPLES_PATH"])
         samples_path.write_text(
             json.dumps(
                 [
@@ -252,7 +312,7 @@ def test_latency_runner_writes_report_and_smoke_latest(
 
 
 def test_latency_runner_embeds_reliability_samples(tmp_path: Path) -> None:
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         sample = LatencySample(
             sample_id="sample-1",
             condition_id="baseline",
@@ -268,8 +328,8 @@ def test_latency_runner_embeds_reliability_samples(tmp_path: Path) -> None:
             eligible=False,
             signals=ReliabilitySignals(journal_degraded=False, active_sessions=1),
         )
-        Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"]).write_text(json.dumps([sample.to_dict()]))
-        reliability_path = Path(os.environ["EASYCAT_RELIABILITY_SAMPLES_PATH"])
+        Path(env["EASYCAT_LATENCY_SAMPLES_PATH"]).write_text(json.dumps([sample.to_dict()]))
+        reliability_path = Path(env["EASYCAT_RELIABILITY_SAMPLES_PATH"])
         reliability_path.parent.mkdir(parents=True, exist_ok=True)
         reliability_path.write_text(json.dumps([reliability.to_dict()]))
         return CommandResult(exit_code=0, stdout="", stderr="")
@@ -289,7 +349,7 @@ def test_latency_runner_embeds_reliability_samples(tmp_path: Path) -> None:
 def test_latency_runner_writes_failure_sample_when_pytest_fails_before_sample(
     tmp_path: Path,
 ) -> None:
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         return CommandResult(exit_code=1, stdout="", stderr="invalid_api_key")
 
     result = run_latency_validation(
@@ -301,14 +361,19 @@ def test_latency_runner_writes_failure_sample_when_pytest_fails_before_sample(
 
     assert result.exit_code == 1
     report = json.loads(result.report_path.read_text())
-    assert report["latency"]["samples"][0]["missing_stage_reason"] == "invalid_api_key"
-    assert report["latency"]["samples"][0]["failure_class"] == "provider_auth"
+    synthetic = report["latency"]["samples"][0]
+    assert synthetic["missing_stage_reason"] == "invalid_api_key"
+    assert synthetic["failure_class"] == "provider_auth"
+    # The fabricated sample is tagged so consumers can filter it from counts.
+    assert synthetic["debug"][LATENCY_SYNTHETIC_SAMPLE_DEBUG_KEY] == (
+        LATENCY_SYNTHETIC_FAILURE_SAMPLE
+    )
     assert report["failures"][0]["failure_class"] == "provider_auth"
 
 
 def test_latency_runner_reports_malformed_samples_without_crashing(tmp_path: Path) -> None:
-    def fake_command_runner(command: list[str]) -> CommandResult:
-        samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        samples_path = Path(env["EASYCAT_LATENCY_SAMPLES_PATH"])
         samples_path.write_text("{not-json")
         return CommandResult(exit_code=0, stdout="", stderr="")
 
@@ -322,14 +387,20 @@ def test_latency_runner_reports_malformed_samples_without_crashing(tmp_path: Pat
     assert result.exit_code == 1
     report = json.loads(result.report_path.read_text())
     assert report["status"] == "fail"
-    assert report["tool_exit_codes"] == {"latency_samples": 1, "pytest": 0}
+    # SWEEP requires samples by default, so an unloadable artifact also trips the
+    # required-samples gate alongside the load-error gate.
+    assert report["tool_exit_codes"] == {
+        "latency_samples": 1,
+        "pytest": 0,
+        "required_latency_samples": 1,
+    }
     assert report["failures"][0]["name"] == "latency.samples"
     assert (result.run_dir / "latency" / "sweep.json").exists()
     assert (tmp_path / "latency" / "sweep-latest.json").exists()
 
 
 def test_latency_runner_can_require_samples_for_release_gates(tmp_path: Path) -> None:
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         return CommandResult(exit_code=0, stdout="skipped", stderr="")
 
     result = run_latency_validation(
@@ -347,10 +418,67 @@ def test_latency_runner_can_require_samples_for_release_gates(tmp_path: Path) ->
     assert report["failures"][0]["message"] == "required latency validation produced no samples"
 
 
+def test_latency_runner_sweep_requires_samples_by_default(tmp_path: Path) -> None:
+    """An empty SWEEP run must fail rather than silently report pass."""
+
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        return CommandResult(exit_code=0, stdout="skipped", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["status"] == "fail"
+    assert report["tool_exit_codes"]["required_latency_samples"] == 1
+
+
+def test_latency_runner_smoke_allows_empty_samples_by_default(tmp_path: Path) -> None:
+    """SMOKE may legitimately produce no samples, so an empty run still passes."""
+
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        return CommandResult(exit_code=0, stdout="skipped", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SMOKE,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 0
+    assert report["status"] == "pass"
+    assert "required_latency_samples" not in report["tool_exit_codes"]
+
+
+def test_latency_runner_sweep_require_samples_can_be_disabled(tmp_path: Path) -> None:
+    """Passing require_samples=False explicitly overrides the SWEEP default."""
+
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        return CommandResult(exit_code=0, stdout="skipped", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        require_samples=False,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 0
+    assert "required_latency_samples" not in report["tool_exit_codes"]
+
+
 def test_latency_runner_reports_malformed_reliability_samples_without_crashing(
     tmp_path: Path,
 ) -> None:
-    def fake_command_runner(command: list[str]) -> CommandResult:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         sample = LatencySample(
             sample_id="sample-1",
             condition_id="baseline",
@@ -358,8 +486,8 @@ def test_latency_runner_reports_malformed_reliability_samples_without_crashing(
             timestamp_source="event_monotonic",
             stages=LatencyStageDurations(total_ms=750.0),
         )
-        Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"]).write_text(json.dumps([sample.to_dict()]))
-        Path(os.environ["EASYCAT_RELIABILITY_SAMPLES_PATH"]).write_text("{not-json")
+        Path(env["EASYCAT_LATENCY_SAMPLES_PATH"]).write_text(json.dumps([sample.to_dict()]))
+        Path(env["EASYCAT_RELIABILITY_SAMPLES_PATH"]).write_text("{not-json")
         return CommandResult(exit_code=0, stdout="", stderr="")
 
     result = run_latency_validation(
@@ -424,7 +552,8 @@ def test_validate_latency_cli_runs_smoke_and_writes_report(
     assert report_path.exists()
     assert called["mode"] == LatencyMode.SMOKE
     assert called["report_path"] == report_path
-    assert called["require_samples"] is False
+    # No --require-samples flag: defer to the runner's mode-aware default.
+    assert called["require_samples"] is None
 
 
 def test_validate_latency_cli_can_require_samples(
@@ -697,8 +826,8 @@ def test_latency_baseline_comparison_refuses_unversioned_condition_baseline() ->
 def test_latency_runner_fails_when_budget_violated(tmp_path: Path) -> None:
     """Pytest passes but per-stage budgets blow out -> exit 1 with budget failure."""
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
-        samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        samples_path = Path(env["EASYCAT_LATENCY_SAMPLES_PATH"])
         # Ten non-warmup samples with values comfortably above every stage in
         # DEFAULT_BUDGETS (total p95 8000 ms, tts_ttfb p95 1500 ms, llm_ttft p95
         # 2500 ms).
@@ -746,8 +875,8 @@ def test_latency_runner_fails_when_budget_violated(tmp_path: Path) -> None:
 def test_latency_runner_passes_when_budgets_satisfied(tmp_path: Path) -> None:
     """When all latency budgets are met, no budget failure is appended."""
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
-        samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        samples_path = Path(env["EASYCAT_LATENCY_SAMPLES_PATH"])
         samples = [
             LatencySample(
                 sample_id=f"sample-{index}",
@@ -784,8 +913,8 @@ def test_latency_runner_records_separate_pytest_and_budget_checks(tmp_path: Path
     """When pytest passes but a budget violates, the pytest check stays `pass`
     and a distinct `latency.budget` check captures the failure."""
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
-        samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        samples_path = Path(env["EASYCAT_LATENCY_SAMPLES_PATH"])
         samples = [
             LatencySample(
                 sample_id=f"sample-{index}",
@@ -832,8 +961,8 @@ def test_latency_runner_smoke_mode_omits_budget_check(tmp_path: Path) -> None:
     """Smoke mode skips budget evaluation (single slow sample tolerated);
     no `latency.budget` check should be recorded."""
 
-    def fake_command_runner(command: list[str]) -> CommandResult:
-        samples_path = Path(os.environ["EASYCAT_LATENCY_SAMPLES_PATH"])
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        samples_path = Path(env["EASYCAT_LATENCY_SAMPLES_PATH"])
         samples = [
             LatencySample(
                 sample_id="smoke-slow",
@@ -863,3 +992,109 @@ def test_latency_runner_smoke_mode_omits_budget_check(tmp_path: Path) -> None:
     assert report["status"] == "pass"
     assert "latency_budget" not in report["tool_exit_codes"]
     assert "latency.budget" not in {check["name"] for check in report["checks"]}
+
+
+def _baseline_aware_command_runner(total_ms: float):
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        samples_path = Path(env["EASYCAT_LATENCY_SAMPLES_PATH"])
+        samples = [
+            LatencySample(
+                sample_id=f"baseline-{index}",
+                condition_id="baseline",
+                warmup=False,
+                timestamp_source="time.monotonic",
+                provider={"stt": "openai-realtime", "region": "us-east-1"},
+                model={"llm": "gpt-5.4", "tts": "gpt-4o-mini-tts"},
+                transport={"kind": "websocket"},
+                debug={"journal": "off"},
+                stages=LatencyStageDurations(total_ms=total_ms),
+            ).to_dict()
+            for index in range(3)
+        ]
+        samples_path.write_text(json.dumps(samples))
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    return fake_command_runner
+
+
+def test_latency_runner_flags_regression_against_supplied_baseline(tmp_path: Path) -> None:
+    """A stored baseline drives regression detection through the runner."""
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(json.dumps(_latency_artifact_for_comparison(total_ms=1000.0)))
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=_baseline_aware_command_runner(1500.0),
+        baseline_path=baseline_path,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["status"] == "fail"
+    assert report["tool_exit_codes"]["latency_baseline_regression"] == 1
+    baseline_failures = [
+        failure for failure in report["failures"] if failure["name"] == "latency.baseline"
+    ]
+    assert baseline_failures
+    assert baseline_failures[0]["failure_class"] == "easycat_latency_regression"
+    assert report["latency"]["baseline"]["kind"] == "latency_baseline_comparison"
+    assert report["latency"]["baseline"]["status"] == "fail"
+    checks_by_name = {check["name"]: check for check in report["checks"]}
+    assert checks_by_name["latency.baseline"]["status"] == "fail"
+
+
+def test_latency_runner_passes_baseline_within_thresholds(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(json.dumps(_latency_artifact_for_comparison(total_ms=1000.0)))
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=_baseline_aware_command_runner(1010.0),
+        baseline_path=baseline_path,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 0
+    assert report["status"] == "pass"
+    assert report["latency"]["baseline"]["status"] == "pass"
+    assert "latency_baseline_regression" not in report["tool_exit_codes"]
+
+
+def test_latency_runner_reports_unreadable_baseline(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text("{not-json")
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=_baseline_aware_command_runner(1000.0),
+        baseline_path=baseline_path,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["tool_exit_codes"]["latency_baseline"] == 1
+    baseline_failures = [
+        failure for failure in report["failures"] if failure["name"] == "latency.baseline"
+    ]
+    assert baseline_failures
+    assert baseline_failures[0]["failure_class"] == "latency_baseline_error"
+
+
+def test_latency_runner_without_baseline_leaves_not_configured(tmp_path: Path) -> None:
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=_baseline_aware_command_runner(1000.0),
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 0
+    assert report["latency"]["baseline"]["comparison"] == "not_configured"
+    assert "latency.baseline" not in {check["name"] for check in report["checks"]}

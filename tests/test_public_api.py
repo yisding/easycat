@@ -47,6 +47,7 @@ PUBLIC_API_SNAPSHOT = (
     "STTFinal",
     "STTPartial",
     "STTProvider",
+    "STTProviderConfig",
     "Session",
     "SessionActions",
     "SessionAudioBroadcaster",
@@ -56,6 +57,7 @@ PUBLIC_API_SNAPSHOT = (
     "TTSAudio",
     "TTSMarkers",
     "TTSProvider",
+    "TTSProviderConfig",
     "TelephonyConfig",
     "Transport",
     "TurnEnded",
@@ -77,8 +79,14 @@ PUBLIC_API_SNAPSHOT = (
     "WebTransportTransportConfig",
     "attach_runtime_feedback",
     "auto_adapt_agent",
+    "available_stt_providers",
+    "available_tts_providers",
+    "create_noise_reducer",
     "create_session",
+    "create_stt_provider",
     "create_text_session",
+    "create_tts_provider",
+    "create_vad",
     "default_pronunciation_processors",
     "export_debug_bundle",
     "require_env",
@@ -90,7 +98,7 @@ PUBLIC_API_SNAPSHOT = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 80
+    assert len(easycat.__all__) <= 85
 
 
 def test_curated_public_api_lazy_imports() -> None:
@@ -107,6 +115,28 @@ def test_curated_public_api_lazy_imports() -> None:
     assert create_session.__name__ == "create_session"
 
 
+def test_documented_factory_surface_is_importable() -> None:
+    # The quick.py docstring and CLAUDE.md advertise these as the canonical
+    # top-level factory functions, so they must resolve from ``easycat``.
+    from easycat import (
+        STTProviderConfig,
+        TTSProviderConfig,
+        create_noise_reducer,
+        create_session,
+        create_stt_provider,
+        create_tts_provider,
+        create_vad,
+    )
+
+    assert create_session.__name__ == "create_session"
+    assert create_stt_provider.__name__ == "create_stt_provider"
+    assert create_tts_provider.__name__ == "create_tts_provider"
+    assert create_vad.__name__ == "create_vad"
+    assert create_noise_reducer.__name__ == "create_noise_reducer"
+    assert STTProviderConfig.__name__ == "STTProviderConfig"
+    assert TTSProviderConfig.__name__ == "TTSProviderConfig"
+
+
 def test_public_api_symbols_resolve() -> None:
     for name in easycat.__all__:
         assert getattr(easycat, name) is not None
@@ -118,12 +148,10 @@ def test_culled_symbols_remain_available_from_modules() -> None:
     from easycat.quick import speak, transcribe_file
     from easycat.session import split_at_sentence_boundaries
     from easycat.session.actions import CoreSessionActionExecutor
-    from easycat.stt.factory import STTProviderConfig, create_stt_provider
 
     assert "AgentRunner" not in easycat.__all__
     assert "AgentRunnerConfig" not in easycat.__all__
     assert "CoreSessionActionExecutor" not in easycat.__all__
-    assert "STTProviderConfig" not in easycat.__all__
     assert "load_bundle" not in easycat.__all__
     assert "speak" not in easycat.__all__
     assert "transcribe_file" not in easycat.__all__
@@ -131,8 +159,6 @@ def test_culled_symbols_remain_available_from_modules() -> None:
     assert AgentRunner.__name__ == "AgentRunner"
     assert AgentRunnerConfig.__name__ == "AgentRunnerConfig"
     assert CoreSessionActionExecutor.__name__ == "CoreSessionActionExecutor"
-    assert STTProviderConfig.__name__ == "STTProviderConfig"
-    assert create_stt_provider.__name__ == "create_stt_provider"
     assert load_bundle.__name__ == "load_bundle"
     assert speak.__name__ == "speak"
     assert transcribe_file.__name__ == "transcribe_file"

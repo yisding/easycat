@@ -6,13 +6,40 @@ import base64
 import hashlib
 import hmac
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from xml.sax.saxutils import escape, quoteattr
 
 from easycat.events import DTMF, EventBus
+from easycat.telephony.dtmf import VALID_DTMF_DIGITS
 
 logger = logging.getLogger(__name__)
+
+# Characters allowed in TwiML ``digits``/``sendDigits`` attributes: standard
+# DTMF digits (ITU-T Q.23) plus ``W``/``w`` inter-digit pause markers.  This is
+# the single source of truth shared with :class:`DTMFDelivery` so both DTMF
+# output paths enforce the same anti-injection whitelist.
+VALID_DTMF_OUTPUT_CHARS = VALID_DTMF_DIGITS | frozenset("wW")
+
+
+def sanitize_dtmf_digits(digits: str) -> str:
+    """Strip characters outside :data:`VALID_DTMF_OUTPUT_CHARS` from *digits*.
+
+    TwiML ``digits``/``sendDigits`` attributes must only carry DTMF digits and
+    ``W``/``w`` pause markers.  Stripping anything else closes the TwiML
+    injection / garbage surface that bare XML attribute quoting would otherwise
+    leave open.  Dropped characters are logged at WARNING level.
+    """
+    if not digits:
+        return ""
+    sanitized = "".join(c for c in digits if c in VALID_DTMF_OUTPUT_CHARS)
+    if sanitized != digits:
+        logger.warning(
+            "Stripped invalid DTMF characters from output digits: %r -> %r",
+            digits,
+            sanitized,
+        )
+    return sanitized
 
 
 # ── Twilio webhook validation ────────────────────────────────────
@@ -21,26 +48,99 @@ logger = logging.getLogger(__name__)
 def validate_twilio_webhook_signature(
     *,
     auth_token: str,
-    url: str,
+    url: str | Iterable[str],
     params: Mapping[str, Any] | Sequence[tuple[str, Any]],
     signature: str | None,
 ) -> bool:
     """Validate Twilio's ``X-Twilio-Signature`` webhook header.
 
     ``url`` must be the exact public URL Twilio requested, including query
-    string.  Apps behind a proxy/load balancer should reconstruct that public
-    URL from trusted forwarded headers or framework proxy support before
-    calling this helper.
+    string.  Apps behind a TLS-terminating proxy/load balancer should
+    reconstruct that public URL with :func:`reconstruct_public_url` (or pass a
+    list of candidate URLs) so a rewritten scheme/host does not silently break
+    validation.
+
+    Args:
+        auth_token: The Twilio auth token used to sign the request.
+        url: The exact public URL (string) Twilio requested, or an iterable of
+            candidate URLs to try (validation succeeds if any candidate
+            matches).  Candidate lists are useful behind proxies where the
+            reconstructed scheme/host is ambiguous.
+        params: The POST form parameters from the webhook request.
+        signature: The value of the ``X-Twilio-Signature`` header.
     """
     if not auth_token or not signature:
         return False
 
-    expected = compute_twilio_webhook_signature(
-        auth_token=auth_token,
-        url=url,
-        params=params,
-    )
-    return hmac.compare_digest(expected, signature.strip())
+    candidates = [url] if isinstance(url, str) else list(url)
+    if not candidates:
+        return False
+
+    provided = signature.strip()
+    for candidate in candidates:
+        expected = compute_twilio_webhook_signature(
+            auth_token=auth_token,
+            url=candidate,
+            params=params,
+        )
+        if hmac.compare_digest(expected, provided):
+            return True
+    return False
+
+
+def reconstruct_public_url(
+    headers: Mapping[str, Any],
+    path: str,
+    *,
+    trust_proxy: bool = False,
+    default_scheme: str = "https",
+) -> str:
+    """Reconstruct the public URL Twilio requested from request headers.
+
+    Behind a TLS-terminating load balancer the request the app sees (``http``,
+    internal host) differs from the public URL Twilio signed (``https``, public
+    host), which is the most common cause of silent signature-validation
+    failures.  This helper rebuilds that public URL.
+
+    Header lookups are case-insensitive.  ``X-Forwarded-Proto`` and
+    ``X-Forwarded-Host`` are only honored when *trust_proxy* is ``True`` — these
+    headers are client-controllable and must only be trusted when the app sits
+    behind a proxy that overwrites them.  When *trust_proxy* is ``False`` the
+    scheme falls back to *default_scheme* and the host comes from the ``Host``
+    header.
+
+    Args:
+        headers: The request headers (any case-insensitive mapping).
+        path: The request path including any query string (e.g. ``"/twiml?x=1"``).
+        trust_proxy: Honor ``X-Forwarded-*`` headers when ``True``.
+        default_scheme: Scheme to assume when no trusted proxy scheme is found.
+
+    Returns:
+        The reconstructed absolute public URL, or the bare *path* if no host
+        header is available.
+    """
+    lookup = {str(key).lower(): value for key, value in headers.items()}
+
+    def _first(value: Any) -> str:
+        """Take the first comma-separated entry of a forwarded header value."""
+        return str(value).split(",")[0].strip()
+
+    scheme = default_scheme
+    host = lookup.get("host")
+    if trust_proxy:
+        forwarded_proto = lookup.get("x-forwarded-proto")
+        if forwarded_proto:
+            scheme = _first(forwarded_proto)
+        forwarded_host = lookup.get("x-forwarded-host")
+        if forwarded_host:
+            host = _first(forwarded_host)
+
+    if not host:
+        return path
+
+    if not path.startswith("/"):
+        path = "/" + path
+    return f"{scheme}://{str(host).strip()}{path}"
 
 
 def compute_twilio_webhook_signature(
@@ -128,13 +228,17 @@ def twiml_play_digits(digits: str) -> str:
     Produces a ``<Response><Play digits="..."/></Response>`` fragment that
     Twilio will render as audible DTMF tones on the call.
 
+    Characters outside :data:`VALID_DTMF_OUTPUT_CHARS` (DTMF digits plus
+    ``W``/``w`` pauses) are stripped before rendering to prevent injecting
+    arbitrary text into Twilio's ``digits`` attribute.
+
     Args:
         digits: Digit string to play (e.g. ``"1234#"``).
 
     Returns:
         Complete TwiML ``<Response>`` document as a string.
     """
-    safe = quoteattr(digits)
+    safe = quoteattr(sanitize_dtmf_digits(digits))
     return f'<?xml version="1.0" encoding="UTF-8"?><Response><Play digits={safe}/></Response>'
 
 
@@ -157,7 +261,7 @@ def twiml_dial_send_digits(
     Returns:
         Complete TwiML ``<Response>`` document as a string.
     """
-    safe_digits = quoteattr(send_digits)
+    safe_digits = quoteattr(sanitize_dtmf_digits(send_digits))
     safe_number = escape(phone_number)
     dial_attrs = ""
     if caller_id:
@@ -183,8 +287,9 @@ def twiml_dial_number(
     if caller_id:
         dial_attrs = f" callerId={quoteattr(caller_id)}"
     number_attrs = ""
-    if send_digits:
-        number_attrs = f" sendDigits={quoteattr(send_digits)}"
+    safe_send_digits = sanitize_dtmf_digits(send_digits)
+    if safe_send_digits:
+        number_attrs = f" sendDigits={quoteattr(safe_send_digits)}"
     say = f"<Say>{escape(preamble)}</Say>" if preamble else ""
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'

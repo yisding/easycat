@@ -208,6 +208,22 @@ class RemoteResponsesAPIBridge:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
             raise
+        except BaseException:
+            # The default ``AgentRunner`` enforces its timeout by
+            # cancelling the pending ``__anext__()`` (and then calling
+            # ``aclose()``), injecting ``asyncio.CancelledError`` /
+            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
+            # blocks above are skipped and the still-open agent cursor
+            # would be left without a ``unit_exited`` record, breaking the
+            # recorder's strict stack invariant for the postmortem journal.
+            # Close it defensively (so a recorder error can't mask the
+            # cancellation) before re-raising; no ``record_framework_error``
+            # since a cancelled turn isn't a framework fault.
+            try:
+                recorder.record_unit_exited(agent_cursor, reason="error")
+            except Exception:
+                logger.debug("Failed to close agent cursor during cancel cleanup", exc_info=True)
+            raise
 
         # On successful (non-interrupted) completion, update chain state.
         if not interrupted and response_id:
@@ -230,6 +246,9 @@ class RemoteResponsesAPIBridge:
         self._pending_turn_metadata = None
 
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
+        # Balance the cursor_entered emitted at stream start so stream-level
+        # cursor events are well-formed for out-of-band consumers.
+        yield AgentBridgeEvent(kind="cursor_exited", cursor=agent_cursor)
         yield AgentBridgeEvent(
             kind="done",
             text=accumulated,

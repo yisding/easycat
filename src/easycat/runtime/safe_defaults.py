@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import fields as dc_fields
+from dataclasses import is_dataclass
 from typing import Any
 from urllib.parse import urlparse
 
@@ -93,23 +94,43 @@ def _is_secret_name(name: str) -> bool:
 
 
 def _safe_repr(val: Any) -> str:
-    """repr() that redacts secret-looking fields in nested dataclasses.
+    """repr() that redacts secret-looking fields at any nesting depth.
 
-    For plain scalars this is just ``repr(val)``.  For dataclass values
-    it rebuilds a repr string with secret fields (api_key, token, …)
-    replaced by ``'***'``.
+    For plain scalars this is just ``repr(val)``.  For dataclass / dict /
+    list / tuple / set values it walks the structure and replaces secret
+    fields (api_key, token, …) with ``'***'`` before rendering, so nested
+    credential-bearing sub-configs cannot leak into the snapshot.
     """
-    try:
-        nested = dc_fields(val)
-    except TypeError:
-        return repr(val)
-    parts: list[str] = []
-    for f in nested:
-        if _is_secret_name(f.name):
-            parts.append(f"{f.name}='***'")
-        else:
-            parts.append(f"{f.name}={repr(getattr(val, f.name))}")
-    return f"{type(val).__name__}({', '.join(parts)})"
+
+    def render(v: Any) -> str:
+        # Dataclass instance (but not a dataclass *type*): rebuild a repr
+        # string with secret fields redacted and other fields recursed into.
+        if is_dataclass(v) and not isinstance(v, type):
+            parts: list[str] = []
+            for f in dc_fields(v):
+                if _is_secret_name(f.name):
+                    parts.append(f"{f.name}='***'")
+                else:
+                    parts.append(f"{f.name}={render(getattr(v, f.name))}")
+            return f"{type(v).__name__}({', '.join(parts)})"
+        if isinstance(v, dict):
+            items = []
+            for k, item in v.items():
+                if isinstance(k, str) and _is_secret_name(k):
+                    items.append(f"{k!r}: '***'")
+                else:
+                    items.append(f"{k!r}: {render(item)}")
+            return "{" + ", ".join(items) + "}"
+        if isinstance(v, list):
+            return "[" + ", ".join(render(item) for item in v) + "]"
+        if isinstance(v, tuple):
+            inner = ", ".join(render(item) for item in v)
+            return f"({inner},)" if len(v) == 1 else f"({inner})"
+        if isinstance(v, (set, frozenset)):
+            return "{" + ", ".join(render(item) for item in v) + "}"
+        return repr(v)
+
+    return render(val)
 
 
 def safe_config_snapshot(config: object) -> dict[str, Any]:

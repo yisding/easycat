@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import signal
@@ -14,6 +15,7 @@ from unittest import mock
 import pytest
 
 from easycat.runtime.journal import (
+    JournalView,
     LitestreamSqliteJournal,
     SqliteJournal,
     create_journal,
@@ -22,6 +24,7 @@ from easycat.runtime.journal import (
 from easycat.runtime.records import (
     ErrorInfo,
     JournalRecordKind,
+    RecoveredSessionMarker,
 )
 from easycat.runtime.safe_defaults import safe_env_snapshot
 
@@ -152,6 +155,22 @@ class TestSqliteJournalBasics:
         assert rec.timing.wall_ns > 0
         assert rec.timing.mono_ns > 0
 
+    async def test_follow_from_zero_does_not_emit_spurious_gap(self, journal):
+        # from_sequence=0 must replay history without a synthetic follow_gap:
+        # SQLite retains every record, so the first yielded record is the real
+        # record at sequence 1, not a BufferOverflow gap notice.
+        view = JournalView(journal)
+        journal.append(kind=JournalRecordKind.EVENT, name="e1", session_id="test-session")
+        journal.append(kind=JournalRecordKind.EVENT, name="e2", session_id="test-session")
+
+        gen = view.follow(from_sequence=0, poll_interval=0.01)
+        first = await asyncio.wait_for(gen.__anext__(), timeout=2.0)
+        await gen.aclose()
+
+        assert first.sequence == 1
+        assert first.name == "e1"
+        assert "dropped_from" not in first.data
+
 
 class TestSqliteJournalLifecycle:
     def test_close_sets_clean_marker(self, tmp_path):
@@ -224,6 +243,55 @@ class TestCrashRecovery:
         assert recovery[0].name == "recovered_session"
         j2.close()
 
+    def test_recovery_marker_roundtrips_as_typed_subclass(self, tmp_path):
+        # First session: write two records, then simulate an unclean crash.
+        j1 = SqliteJournal("sess", data_dir=tmp_path)
+        j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
+        j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
+        j1._conn.execute("COMMIT")
+        j1._conn.close()
+        j1._closed = True
+
+        # Second session: the recovery marker must round-trip through SQLite as
+        # a RecoveredSessionMarker with its typed fields populated, not collapse
+        # to a base JournalRecord.
+        j2 = SqliteJournal("sess", data_dir=tmp_path)
+        records = j2.read(start=0)
+        recovery = [r for r in records if r.kind == JournalRecordKind.RECOVERY]
+        assert len(recovery) == 1
+        marker = recovery[0]
+        assert isinstance(marker, RecoveredSessionMarker)
+        assert marker.recovered_record_count == 2
+        assert marker.original_session_id == "sess"
+        j2.close()
+
+    def test_recovery_resets_sequence_and_drops_prior_records(self, tmp_path):
+        # First session: write two records, then simulate an unclean crash.
+        j1 = SqliteJournal("sess", data_dir=tmp_path)
+        j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
+        j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
+        j1._conn.execute("COMMIT")
+        j1._conn.close()
+        j1._closed = True
+
+        # Second session: recovery must truncate the live journal so the new
+        # session starts fresh at sequence=1 (DURABILITY.md contract).
+        j2 = SqliteJournal("sess", data_dir=tmp_path)
+        assert j2._recovered is True
+
+        # No prior-session EVENT records leak into the live journal.
+        before = j2.read(start=0)
+        assert [r.name for r in before if r.kind == JournalRecordKind.EVENT] == []
+
+        # The first real append after recovery starts at sequence=1.
+        seq = j2.append(kind=JournalRecordKind.EVENT, name="fresh", session_id="sess")
+        assert seq == 1
+
+        events = [r for r in j2.read(start=0) if r.kind == JournalRecordKind.EVENT]
+        assert [r.name for r in events] == ["fresh"]
+        assert [r.sequence for r in events] == [1]
+        j2.close()
+
     def test_crash_dump_promoted(self, tmp_path):
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
@@ -236,6 +304,37 @@ class TestCrashRecovery:
 
         crash_dump = tmp_path / "crash-dumps" / "sess.sqlite"
         assert crash_dump.exists()
+
+    def test_crash_dump_copy_failure_leaves_consistent_state(self, tmp_path):
+        # If the crash-dump copy raises after the connection was closed (and
+        # before the DELETE/reopen), recovery must not leave the journal in a
+        # half-recovered state: no recovery marker may be emitted alongside
+        # un-truncated prior-session rows, the connection must be reopened so
+        # the rest of __init__ runs, and the new session must still start fresh.
+        j1 = SqliteJournal("sess", data_dir=tmp_path)
+        j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
+        j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
+        j1._conn.execute("COMMIT")
+        j1._conn.close()
+        j1._closed = True
+
+        with mock.patch(
+            "easycat.runtime.journal.shutil.copy2",
+            side_effect=OSError("disk full"),
+        ):
+            j2 = SqliteJournal("sess", data_dir=tmp_path)
+
+        # The copy failed, so recovery did not fully succeed: no recovery marker.
+        assert j2._recovered is False
+        records = j2.read(start=0)
+        assert [r for r in records if r.kind == JournalRecordKind.RECOVERY] == []
+        # Prior-session rows were truncated — the new session starts fresh.
+        assert [r.name for r in records if r.kind == JournalRecordKind.EVENT] == []
+        # The connection was reopened: appends work and start at sequence=1.
+        seq = j2.append(kind=JournalRecordKind.EVENT, name="fresh", session_id="sess")
+        assert seq == 1
+        assert j2.degraded is False
+        j2.close()
 
     def test_clean_close_no_recovery(self, tmp_path):
         j1 = SqliteJournal("sess", data_dir=tmp_path)
@@ -276,10 +375,17 @@ class TestCrashRecovery:
         records = j2.read(start=0)
         recovery = [r for r in records if r.kind == JournalRecordKind.RECOVERY]
         assert len(recovery) == 1
-        assert [r.name for r in records if r.kind == JournalRecordKind.EVENT] == [
-            "before_finalize",
-            "after_finalize",
+        # The live journal is truncated on recovery; the prior session's
+        # records survive only in the crash dump, not the new session.
+        assert [r.name for r in records if r.kind == JournalRecordKind.EVENT] == []
+        crash_dump = tmp_path / "crash-dumps" / "sess.sqlite"
+        crash_conn = sqlite3.connect(str(crash_dump))
+        dumped = [
+            row[0]
+            for row in crash_conn.execute("SELECT name FROM journal ORDER BY sequence").fetchall()
         ]
+        crash_conn.close()
+        assert dumped == ["before_finalize", "after_finalize"]
         j2.close()
 
     def test_uncommitted_append_after_finalize_keeps_clean_marker(self, tmp_path):
@@ -393,13 +499,24 @@ class TestCrashRecovery:
         recovery = [r for r in records if r.kind == JournalRecordKind.RECOVERY]
         assert len(recovery) == 1
         assert recovery[0].sequence == 0
+        assert recovery[0].data["recovered_record_count"] == n_records
 
+        # The live journal is truncated on recovery; committed records are
+        # preserved in the crash dump for offline post-mortem analysis.
         event_records = [r for r in records if r.kind == JournalRecordKind.EVENT]
-        assert len(event_records) == n_records
+        assert event_records == []
 
         j2.close()
 
-        assert (tmp_path / "crash-dumps" / "crash-sess.sqlite").exists()
+        crash_dump = tmp_path / "crash-dumps" / "crash-sess.sqlite"
+        assert crash_dump.exists()
+        crash_conn = sqlite3.connect(str(crash_dump))
+        dumped = crash_conn.execute(
+            "SELECT COUNT(*) FROM journal WHERE kind = ?",
+            (JournalRecordKind.EVENT.value,),
+        ).fetchone()[0]
+        crash_conn.close()
+        assert dumped == n_records
 
 
 class TestRetention:

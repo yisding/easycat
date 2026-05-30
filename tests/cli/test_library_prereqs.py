@@ -41,7 +41,12 @@ def test_run_is_exposed_publicly() -> None:
 
 
 class _StubSession:
-    """Session double that records lifecycle calls."""
+    """Session double that records lifecycle calls.
+
+    ``run()`` drives teardown through the ``async with session:`` idiom,
+    so the stub maps ``__aenter__``/``__aexit__`` onto ``start``/
+    ``shutdown`` the same way the real :class:`Session` does.
+    """
 
     def __init__(self) -> None:
         self.events: list[str] = []
@@ -51,6 +56,13 @@ class _StubSession:
 
     async def shutdown(self) -> None:
         self.events.append("shutdown")
+
+    async def __aenter__(self) -> _StubSession:
+        await self.start()
+        return self
+
+    async def __aexit__(self, *exc) -> None:  # noqa: ANN002
+        await self.shutdown()
 
     def subscribe_event(self, *a, **kw) -> None:  # noqa: ANN002,ANN003
         self.events.append("subscribe")

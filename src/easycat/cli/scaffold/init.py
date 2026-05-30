@@ -83,6 +83,14 @@ _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
 # the audio pipeline entirely, so those fields are rejected up front.
 _VOICE_TEMPLATES: frozenset[str] = frozenset({"openai-agents", "pydantic-ai"})
 
+# Directory names that may sit in the live template source at install time
+# (cache artifacts from running ruff/pytest/mypy against the templates) but
+# must never ship into a freshly scaffolded project.  ``*.pyc`` files are
+# filtered separately by suffix.
+_COPY_IGNORE: frozenset[str] = frozenset(
+    {"__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache"}
+)
+
 
 def _templates_root() -> Path:
     """Filesystem path to the bundled templates directory."""
@@ -242,8 +250,13 @@ def _extra_env_vars(cfg: InitConfig) -> str:
 
 
 def _python_string_literal_contents(value: str) -> str:
-    """Render escaped contents for a double-quoted Python string literal."""
-    return json.dumps(value)[1:-1]
+    """Render escaped contents for a double-quoted Python string literal.
+
+    ``ensure_ascii=False`` keeps non-ASCII characters (em-dashes, accents,
+    CJK, …) intact in the generated ``agent.py`` instead of emitting
+    ``\\uXXXX`` escapes, while still escaping ``\\``, ``"``, and newlines.
+    """
+    return json.dumps(value, ensure_ascii=False)[1:-1]
 
 
 def _substitutions(cfg: InitConfig, project_name: str) -> dict[str, str]:
@@ -295,6 +308,8 @@ def _copy_template(template_name: str, target: Path, mapping: dict[str, str]) ->
     written: list[Path] = []
     for source in sorted(src_root.rglob("*")):
         if source.is_dir():
+            continue
+        if any(part in _COPY_IGNORE for part in source.parts) or source.suffix == ".pyc":
             continue
         rel = source.relative_to(src_root)
         dest = target / rel

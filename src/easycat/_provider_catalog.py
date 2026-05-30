@@ -71,6 +71,34 @@ class ProviderCatalog:
             raise ValueError(f"Unsupported {self.kind} configuration type.")
         return provider_cls
 
+    def validate_name(self, provider: object) -> str:
+        """Normalize and validate a provider name against the registry.
+
+        Returns the lowercased, registered provider name. Raises the
+        shared :data:`~easycat.errors.EASYCAT_E104` (with a fuzzy-match
+        ``Did you mean?`` hint) when the name is unknown — the same error
+        path as :meth:`parse_string`, so the typed-config and
+        string-shortcut entry points report unknown providers
+        identically.
+
+        Raises:
+            EasyCatError (EASYCAT_E104): Unknown (or non-string) provider,
+                with fuzzy-match suggestion.
+        """
+        from easycat.errors import EASYCAT_E104
+
+        name = provider.strip().lower() if isinstance(provider, str) else ""
+        if name not in self.providers:
+            available = self.available_names()
+            suggestion = get_close_matches(name, available, n=1, cutoff=0.5)
+            hint = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
+            raise EASYCAT_E104(
+                provider=provider,
+                available=", ".join(available),
+                hint=hint,
+            )
+        return name
+
     def parse_string(self, spec: str) -> Any:
         """Parse a ``"provider/model"`` (or bare ``"provider"``) shortcut.
 
@@ -86,21 +114,11 @@ class ProviderCatalog:
             EasyCatError (EASYCAT_E203): Missing required API key env
                 var.
         """
-        from easycat.errors import EASYCAT_E104, EASYCAT_E203
+        from easycat.errors import EASYCAT_E203
 
         provider, _, model = spec.partition("/")
-        provider = provider.strip().lower()
         model = model.strip() or None
-
-        if provider not in self.providers:
-            available = self.available_names()
-            suggestion = get_close_matches(provider, available, n=1, cutoff=0.5)
-            hint = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
-            raise EASYCAT_E104(
-                provider=provider,
-                available=", ".join(available),
-                hint=hint,
-            )
+        provider = self.validate_name(provider)
 
         env_var = self.env_vars[provider]
         api_key = os.getenv(env_var, "")
