@@ -95,10 +95,16 @@ conflicts = [
 
 [dependency-groups]
 dev = [
+    "diff-cover>=9.2",
+    "hypothesis>=6.100",
+    "mutmut>=3.2.3",
+    "mypy>=1.18",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.0",
+    "pytest-cov>=6.0",
     "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.9",
 ]
 
@@ -115,6 +121,9 @@ select = ["E", "F", "I", "W", "UP"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Surface the slowest tests so regressions in test latency stay visible
+# (core pytest CLI flags, so strict_config=true is unaffected).
+addopts = "--durations=15 --durations-min=1.0"
 testpaths = ["tests"]
 strict_markers = true
 strict_config = true
@@ -147,4 +156,111 @@ markers = [
     "agent_bridge: agent bridge contract or live coverage",
     "requires_extra(name): test requires an optional dependency extra",
     "provider(name): generic provider metadata for custom provider filtering",
+]
+
+[tool.mypy]
+python_version = "3.11"
+# Lenient-start: the default pass is informational and never fails on
+# missing optional-dependency stubs (numpy / onnxruntime / openai-agents /
+# livekit etc. are not installed in the lint env).
+ignore_missing_imports = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src"
+# cli/scaffold/templates contain duplicate top-level module names
+# (e.g. `agent`: openai-agents/agent.py, text-chat/agent.py,
+# pydantic-ai/agent.py) which crash mypy with exit code 2
+# ("Duplicate module named 'agent'"); mirror the ruff extend-exclude.
+exclude = [
+    "src/easycat/cli/scaffold/templates/",
+]
+# Keep the default whole-repo pass quiet and non-pedantic so it is a
+# pleasant "informational" signal; the gated core lives in the override
+# below and is ratcheted package-by-package.
+warn_unused_ignores = false
+warn_redundant_casts = true
+
+# --- GATED core. Day-one this is exactly the package that is already
+# --- clean (easycat.debug = 0 errors with these settings). Ratchet by
+# --- adding modules to this list as they reach zero errors:
+# ---   easycat.stages.*   (2 errors today)
+# ---   easycat.runtime.*  (3 errors today)
+# ---   easycat.session.*  (13 errors today)
+# --- NOTE: deliberately NOT enabling warn_return_any here - it surfaces
+# --- a no-any-return error in debug/bundle.py:205 and would turn the
+# --- day-one gate RED. Add it (and fix the return) in a later ratchet.
+[[tool.mypy.overrides]]
+module = [
+    "easycat.debug.*",
+]
+disallow_untyped_defs = false
+check_untyped_defs = true
+warn_unused_ignores = true
+
+[tool.coverage.run]
+source = ["src/easycat"]
+branch = true
+# coverage.py reads these tables, not pytest, so strict_config is unaffected.
+omit = [
+    "src/easycat/stubs.py",
+    "src/easycat/__main__.py",
+    "src/easycat/cli/__main__.py",
+    "src/easycat/cli/scaffold/templates/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if typing.TYPE_CHECKING:",
+    "@(typing\\.)?overload",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+    "if __name__ == .__main__.:",
+]
+
+[tool.mutmut]
+# OPT-IN mutation testing. Run manually/nightly, NEVER per-PR:
+#   uv run --group dev mutmut run
+#   uv run --group dev mutmut results
+# Scope is deliberately a handful of PURE-LOGIC modules with strong,
+# fast unit tests -- mutation testing on async/IO/provider code is
+# slow and noisy. Expand `paths_to_mutate` only as targeted coverage grows.
+# NOTE: the key MUST be `paths_to_mutate` -- mutmut 3.x silently ignores any
+# unknown key and falls back to guessing (which mutates the whole src/ tree).
+paths_to_mutate = [
+    "src/easycat/session/text.py",
+    "src/easycat/session/interruption.py",
+    "src/easycat/_audio_utils.py",
+    "src/easycat/strip_markdown.py",
+]
+# Only run the focused unit tests that actually exercise the modules
+# above, so each mutant is checked in seconds, not against all ~3300
+# tests. `-p no:cacheprovider` keeps the copied mutants/ tree clean.
+pytest_add_cli_args_test_selection = [
+    "tests/test_strip_markdown.py",
+    "tests/audio/test_audio_utils.py",
+    "tests/session/test_session_helpers.py",
+    "tests/session/test_session_streaming.py",
+]
+# mutmut copies source + the selected tests into a mutants/ tree and
+# re-runs pytest there. The selected tests import tests-package support
+# modules (conftest.py -> tests._marker_lint; test_session_streaming.py
+# -> tests._bridge_helpers), so these must be copied too or every mutant
+# errors on import and is miscounted.
+also_copy = [
+    "tests/__init__.py",
+    "tests/conftest.py",
+    "tests/_marker_lint.py",
+    "tests/_bridge_helpers.py",
+]
+# Disable the global 60s timeout (mutmut applies its own per-mutant
+# timeout) and silence collection-cache noise inside the mutants copy.
+pytest_add_cli_args = [
+    "-o",
+    "timeout=0",
+    "-p",
+    "no:cacheprovider",
 ]

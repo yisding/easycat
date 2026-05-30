@@ -52,7 +52,7 @@ jobs:
           set -eu
           pip install -e ".[quickstart]"
           PYTHONPATH=src python -m compileall -q docs/teaching/
-          for f in $(find docs/teaching -name '*.py'); do
+          find docs/teaching -name '*.py' -print0 | while IFS= read -r -d '' f; do
             python -c "import ast; ast.parse(open('$f').read())"
           done
           # Spot-check the three wrong-version-first scripts compile *and*

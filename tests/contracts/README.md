@@ -10,4 +10,3 @@ by default and cover normalized provider behavior, protocol cassette replay,
 schema drift fingerprints, and bridge event grammar. A provider surface must
 have a row in `provider_surface_matrix.py` or an explicit exclusion with a
 reason before it can be considered covered.
-

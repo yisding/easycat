@@ -6,7 +6,10 @@ import socket
 
 import pytest
 
+from tests._hypothesis_profiles import register_hypothesis_profiles
 from tests._marker_lint import validate_flaky_marker, validate_provider_surface_markers
+
+register_hypothesis_profiles()
 
 
 def _can_bind_localhost() -> bool:

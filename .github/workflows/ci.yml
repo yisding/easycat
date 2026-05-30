@@ -22,6 +22,27 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
 
+  typecheck:
+    name: Type Check (mypy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev --python 3.12
+      # Advisory: full-repo type report. Never fails the build today
+      # (~104 known errors across optional providers / config.py);
+      # surfaces the count so we can ratchet it down over time.
+      - name: mypy (advisory, whole repo)
+        continue-on-error: true
+        run: uv run --python 3.12 mypy src/easycat
+      # Gate: the clean core must stay green. Scoped + silent follow-imports
+      # so only the gated package's own files are graded.
+      - name: mypy (gate, clean core)
+        run: uv run --python 3.12 mypy --follow-imports=silent src/easycat/debug
+
   test:
     name: Validate Quick
     runs-on: ubuntu-latest
@@ -50,6 +71,42 @@ jobs:
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/junit.xml
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stdout.log
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stderr.log
+
+  coverage:
+    name: Coverage (report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # diff-cover needs origin/main history
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev --python 3.12
+      # pytest --cov (NOT `coverage run -m pytest -n auto`, which reports 0%
+      # under xdist). Safe slice mirrors `easycat validate quick` exactly.
+      - name: Run safe slice with coverage
+        run: >-
+          uv run --python 3.12 pytest -q
+          -m "not integration_socket and not integration_live and not slow and not stress and not flaky"
+          --cov --cov-report=term-missing --cov-report=xml:coverage.xml
+      # Report-only: PRs see how much of the changed lines they cover.
+      # Does NOT fail the build yet (see opt-in --fail-under below).
+      - name: Diff coverage vs main
+        if: github.event_name == 'pull_request'
+        run: >-
+          uv run --python 3.12 diff-cover coverage.xml
+          --compare-branch=origin/${{ github.base_ref }}
+          --markdown-report=diff-cover.md || true
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            coverage.xml
+            diff-cover.md
 
   integration-socket:
     name: Validate Socket

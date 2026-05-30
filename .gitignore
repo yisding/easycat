@@ -22,3 +22,13 @@ build/
 # Claude Code transient scheduler lock
 .claude/scheduled_tasks.lock
 site/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Mutation testing (mutmut)
+mutants/
+.mutmut-cache
