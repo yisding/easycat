@@ -42,8 +42,6 @@ class VADConfig:
     min_speech_duration_ms: int = 250
     min_silence_duration_ms: int = 150
     sensitivity: float | None = None
-    pre_roll_ms: int = 100
-    post_roll_ms: int = 100
 
     def __post_init__(self) -> None:
         self.backend = _validate_vad_backend(self.backend)
@@ -51,8 +49,6 @@ class VADConfig:
         _validate_positive_int("funasr_intra_op_num_threads", self.funasr_intra_op_num_threads)
         _validate_non_negative_ms("min_speech_duration_ms", self.min_speech_duration_ms)
         _validate_non_negative_ms("min_silence_duration_ms", self.min_silence_duration_ms)
-        _validate_non_negative_ms("pre_roll_ms", self.pre_roll_ms)
-        _validate_non_negative_ms("post_roll_ms", self.post_roll_ms)
         if self.sensitivity is not None:
             _validate_vad_sensitivity(self.sensitivity)
 
@@ -62,9 +58,9 @@ def create_vad(config: VADConfig | None = None) -> Any:
 
     Selection order:
       1. If config.backend == "silero": use Silero (fail if unavailable)
-      2. If config.backend == "funasr": use FunASR ONNX VAD (fail if unavailable)
-      3. If config.backend == "ten": use TEN VAD (fail if unavailable)
-      4. If config.backend == "krisp": use Krisp (fail if unavailable)
+      2. If config.backend == "ten": use TEN VAD (fail if unavailable)
+      3. If config.backend == "krisp": use Krisp (fail if unavailable)
+      4. If config.backend == "funasr": use FunASR ONNX VAD (fail if unavailable)
       5. If config.backend == "auto" (default):
          - Try Silero first (permissively-licensed, bundled ONNX model)
          - Fall back to FunASR ONNX VAD
@@ -89,8 +85,6 @@ def create_vad(config: VADConfig | None = None) -> Any:
             min_speech_duration_ms=cfg.min_speech_duration_ms,
             min_silence_duration_ms=cfg.min_silence_duration_ms,
             sensitivity=sensitivity,
-            pre_roll_ms=cfg.pre_roll_ms,
-            post_roll_ms=cfg.post_roll_ms,
         )
         return vad
 

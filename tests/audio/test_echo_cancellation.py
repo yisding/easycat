@@ -110,8 +110,13 @@ async def test_livekit_aec_process_mocked():
 
 
 @pytest.mark.asyncio
-async def test_livekit_aec_process_trims_padding():
-    """LiveKitAEC.process trims zero-padding from the last frame."""
+async def test_livekit_aec_process_buffers_subframe_remainder():
+    """A sub-frame remainder is buffered rather than zero-padded mid-stream.
+
+    AEC3 advances its adaptive filter a whole 10 ms frame at a time, so a
+    chunk that is not an exact multiple of a frame must only submit its whole
+    frames and carry the sub-frame tail forward to the next call.
+    """
     mock_rtc = MagicMock()
     mock_apm = MagicMock()
 
@@ -125,16 +130,26 @@ async def test_livekit_aec_process_trims_padding():
     with patch("easycat.echo_cancellation.require_module", return_value=mock_rtc):
         aec = LiveKitAEC()
 
-    # 15ms at 16kHz = 240 samples = 480 bytes (not a multiple of 10ms frame = 320 bytes)
+    # 15ms at 16kHz = 240 samples = 480 bytes; frame = 10ms = 160 samples = 320 bytes.
+    # Only one whole frame (320 bytes) is processed; the remaining 160 bytes is buffered.
     samples = [200] * 240
     data = struct.pack(f"<{len(samples)}h", *samples)
     chunk = AudioChunk(data=data, format=PCM16_MONO_16K)
 
     result = await aec.process(chunk)
 
-    # Output should be trimmed to original length
-    assert len(result.data) == len(data)
-    assert mock_apm.process_stream.call_count == 2  # ceil(480/320) = 2
+    assert mock_apm.process_stream.call_count == 1  # one whole 320-byte frame
+    assert len(result.data) == 320  # no mid-stream zero-padding
+    assert len(aec._near_buffer) == 160  # sub-frame remainder carried forward
+
+    # A follow-up chunk of 80 samples (160 bytes) completes the buffered frame,
+    # flushing exactly one more whole frame without padding.
+    more = struct.pack("<80h", *([200] * 80))
+    result2 = await aec.process(AudioChunk(data=more, format=PCM16_MONO_16K))
+
+    assert mock_apm.process_stream.call_count == 2
+    assert len(result2.data) == 320
+    assert aec._near_buffer == b""
 
 
 def test_livekit_aec_feed_reference_mocked():

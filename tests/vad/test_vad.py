@@ -552,15 +552,11 @@ async def test_krisp_vad_configure():
             min_speech_duration_ms=100,
             min_silence_duration_ms=200,
             sensitivity=0.8,
-            pre_roll_ms=50,
-            post_roll_ms=50,
         )
 
         assert vad._min_speech_duration_ms == 100
         assert vad._min_silence_duration_ms == 200
         assert vad._threshold == pytest.approx(0.2)  # 1.0 - 0.8
-        assert vad._pre_roll_ms == 50
-        assert vad._post_roll_ms == 50
     finally:
         del sys.modules["krisp_audio"]
 
@@ -588,11 +584,8 @@ def test_vad_factory_revalidates_mutated_backend():
     [
         ("min_speech_duration_ms", -1, "min_speech_duration_ms must be non-negative"),
         ("min_silence_duration_ms", -1, "min_silence_duration_ms must be non-negative"),
-        ("pre_roll_ms", -1, "pre_roll_ms must be non-negative"),
-        ("post_roll_ms", -1, "post_roll_ms must be non-negative"),
         ("min_speech_duration_ms", float("nan"), "min_speech_duration_ms"),
         ("min_silence_duration_ms", float("inf"), "min_silence_duration_ms"),
-        ("pre_roll_ms", float("-inf"), "pre_roll_ms"),
         ("sensitivity", -0.1, "sensitivity must be between 0 and 1"),
         ("sensitivity", 1.1, "sensitivity must be between 0 and 1"),
         ("sensitivity", float("nan"), "sensitivity must be a number between 0 and 1"),
@@ -616,11 +609,8 @@ def test_vad_config_validates_numeric_knobs(field: str, value: object, message: 
     [
         ({"min_speech_duration_ms": -1}, "min_speech_duration_ms must be non-negative"),
         ({"min_silence_duration_ms": -1}, "min_silence_duration_ms must be non-negative"),
-        ({"pre_roll_ms": -1}, "pre_roll_ms must be non-negative"),
-        ({"post_roll_ms": -1}, "post_roll_ms must be non-negative"),
         ({"min_speech_duration_ms": float("nan")}, "min_speech_duration_ms"),
         ({"min_silence_duration_ms": float("inf")}, "min_silence_duration_ms"),
-        ({"post_roll_ms": float("-inf")}, "post_roll_ms"),
         ({"sensitivity": -0.1}, "sensitivity must be between 0 and 1"),
         ({"sensitivity": 1.1}, "sensitivity must be between 0 and 1"),
         ({"sensitivity": float("nan")}, "sensitivity must be a number between 0 and 1"),
@@ -886,3 +876,107 @@ async def test_short_noise_burst_no_event():
         assert not any(isinstance(e, VADStartSpeaking) for e in events)
     finally:
         del sys.modules["krisp_audio"]
+
+
+# ── Deterministic teardown (close) tests ─────────────────────────────
+
+
+def test_silero_close_releases_model(monkeypatch: pytest.MonkeyPatch):
+    """SileroVAD.close() drops the model and inner onnxruntime session."""
+
+    class _FakeOnnxModel:
+        def __init__(self) -> None:
+            self._session = object()
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+            self._session = None
+
+        def reset_states(self) -> None:
+            pass
+
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = _FakeOnnxModel()
+        self._backend = "onnx"
+        self._torch = None
+
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+
+    vad = SileroVAD()
+    inner = vad._model
+    assert inner is not None
+
+    vad.close()
+
+    assert inner.closed is True
+    assert vad._model is None
+    assert vad._torch is None
+
+
+def test_silero_onnx_model_close_drops_session():
+    """_SileroOnnxModel.close() releases the InferenceSession reference."""
+    model = vad_silero_module._SileroOnnxModel.__new__(vad_silero_module._SileroOnnxModel)
+    model._session = object()
+    model.close()
+    assert model._session is None
+
+
+def test_ten_vad_close_releases_handle():
+    """TenVAD.close() drops the native ten_vad handle."""
+    import sys
+
+    mock_ten_vad = MagicMock()
+    mock_ten_vad.TenVad.return_value = MagicMock()
+    sys.modules["ten_vad"] = mock_ten_vad
+    sys.modules["numpy"] = types.SimpleNamespace(int16="int16")
+    try:
+        vad = TenVAD()
+        assert vad._ten_vad is not None
+        vad.close()
+        assert vad._ten_vad is None
+        assert vad._buffer == b""
+    finally:
+        del sys.modules["ten_vad"]
+        del sys.modules["numpy"]
+
+
+def test_funasr_vad_close_releases_model(monkeypatch: pytest.MonkeyPatch):
+    """FunASROnnxVAD.close() drops the model handle and streaming cache."""
+
+    def _initialize(self: FunASROnnxVAD) -> None:
+        self._numpy = object()
+        self._model = object()
+        self._param_dict = {"in_cache": ["cached"]}
+
+    monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
+
+    vad = FunASROnnxVAD()
+    assert vad._model is not None
+
+    vad.close()
+
+    assert vad._model is None
+    assert vad._buffer == b""
+    assert vad._param_dict == {"in_cache": []}
+
+
+@pytest.mark.asyncio
+async def test_close_if_supported_invokes_vad_close(monkeypatch: pytest.MonkeyPatch):
+    """Session teardown's close_if_supported reaches the VAD close hook."""
+    from easycat.runtime.capabilities import close_if_supported
+
+    def _initialize(self: FunASROnnxVAD) -> None:
+        self._numpy = object()
+        self._model = object()
+        self._param_dict = {"in_cache": []}
+
+    monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
+
+    vad = FunASROnnxVAD()
+    assert vad._model is not None
+
+    await close_if_supported(vad)
+
+    assert vad._model is None

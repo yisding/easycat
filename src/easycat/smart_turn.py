@@ -358,6 +358,13 @@ class SmartTurnConfig:
     # "complete" only when the model's probability is *strictly greater* than
     # this value, so probability == threshold (e.g. exactly 0.5 by default)
     # stays "incomplete".
+    #
+    # Precedence: when you build a session via ``EasyConfig``/``create_session``
+    # and leave ``TurnManagerConfig.endpoint_threshold`` unset (``None``), this
+    # value is propagated to the manager so it stays the single source of truth.
+    # If you also set ``turn_taking.endpoint_threshold`` to a *different* value,
+    # the manager-level threshold wins and this one is ignored (a warning is
+    # logged) — set only one of the two to avoid surprises.
     threshold: float = 0.5
 
 

@@ -59,8 +59,6 @@ class _VADBase:
         self._threshold: float = 0.5
         self._min_speech_duration_ms: int = 250
         self._min_silence_duration_ms: int = 150
-        self._pre_roll_ms: int = 100
-        self._post_roll_ms: int = 100
 
         # Internal state
         self._is_speaking: bool = False
@@ -74,22 +72,16 @@ class _VADBase:
         min_speech_duration_ms: int = 250,
         min_silence_duration_ms: int = 150,
         sensitivity: float = 0.5,
-        pre_roll_ms: int = 100,
-        post_roll_ms: int = 100,
     ) -> None:
-        """Configure VAD thresholds and buffering parameters."""
+        """Configure VAD thresholds."""
         _validate_non_negative_ms("min_speech_duration_ms", min_speech_duration_ms)
         _validate_non_negative_ms("min_silence_duration_ms", min_silence_duration_ms)
         _validate_vad_sensitivity(sensitivity)
-        _validate_non_negative_ms("pre_roll_ms", pre_roll_ms)
-        _validate_non_negative_ms("post_roll_ms", post_roll_ms)
 
         self._min_speech_duration_ms = min_speech_duration_ms
         self._min_silence_duration_ms = min_silence_duration_ms
         # Sensitivity maps inversely to threshold: higher sensitivity = lower threshold
         self._threshold = 1.0 - sensitivity
-        self._pre_roll_ms = pre_roll_ms
-        self._post_roll_ms = post_roll_ms
 
     def _evaluate_speech(self, speech_prob: float, now: float) -> Iterator[Event]:
         """Evaluate a single speech probability against the state machine.
@@ -134,6 +126,29 @@ class _VADBase:
         self._speech_start_time = None
         self._silence_start_time = None
         self._speech_confirmed = False
+
+    def close(self) -> None:
+        """Release any native model/session handle held by the backend.
+
+        Default behaviour drops the ``_model``/``_session`` reference (if the
+        subclass holds one) so the underlying onnxruntime session or native
+        handle is reclaimed promptly rather than waiting for GC.  Backends with
+        a richer wrapper (e.g. an inner model exposing its own ``close``) or a
+        differently-named handle override this; see ``SileroVAD``/``TenVAD``.
+        This makes the cleanup contract uniform across the subpackage so the
+        ``close`` hook invoked by ``Session.stop()`` is honoured by every
+        backend, not just the commercial ones.
+        """
+        inner_close = getattr(getattr(self, "_model", None), "close", None)
+        if callable(inner_close):
+            try:
+                inner_close()
+            except Exception:
+                pass
+        if hasattr(self, "_model"):
+            self._model = None
+        if hasattr(self, "_session"):
+            self._session = None
 
     def version_info(self) -> dict[str, str]:
         return {

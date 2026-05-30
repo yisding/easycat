@@ -92,6 +92,14 @@ class LiveKitAEC:
         # streams to share a sample rate. We capture the first rate seen on
         # either side and reject any later mismatch.
         self._stream_rate: int | None = None
+        # Per-stream remainder buffers. AEC3 advances its adaptive filter a
+        # whole 10 ms frame at a time, so chunks that are not exact multiples
+        # of a frame must not be zero-padded mid-stream (that injects silence
+        # into the filter and desyncs near-end/far-end alignment). Instead we
+        # accumulate raw PCM per direction and only submit whole frames,
+        # retaining the sub-frame remainder for the next call.
+        self._near_buffer: bytes = b""
+        self._far_buffer: bytes = b""
         logger.info("LiveKit AEC initialized")
 
     def _check_stream_rate(self, sample_rate: int) -> None:
@@ -108,6 +116,8 @@ class LiveKitAEC:
     def close(self) -> None:
         """Release AudioProcessingModule resources."""
         self._apm = None
+        self._near_buffer = b""
+        self._far_buffer = b""
 
     def __del__(self) -> None:
         self.close()
@@ -116,19 +126,28 @@ class LiveKitAEC:
         """Process a near-end (microphone) audio chunk through AEC.
 
         LiveKit's APM modifies the ``AudioFrame`` in place, so we wrap
-        each 10 ms slice, invoke ``process_stream``, then reassemble
+        each whole 10 ms slice, invoke ``process_stream``, then reassemble
         from the frame's (now-processed) data buffer.
+
+        AEC3 advances its adaptive filter a full 10 ms per frame, so a
+        chunk that does not end on a frame boundary leaves a sub-frame
+        remainder buffered for the next call rather than being zero-padded
+        into the filter. The returned chunk therefore covers exactly the
+        whole frames processed this call, which may differ in length from
+        the input by less than one 10 ms frame.
         """
         fmt = chunk.format
         frame_samples = _frame_samples_for_rate(fmt.sample_rate)
         self._check_stream_rate(fmt.sample_rate)
         frame_bytes = frame_samples * fmt.frame_size
-        frames = _split_frames(chunk.data, frame_bytes)
 
+        self._near_buffer += chunk.data
         processed_parts: list[bytes] = []
-        for frame_bytes_slice in frames:
+        while len(self._near_buffer) >= frame_bytes:
+            frame_data = self._near_buffer[:frame_bytes]
+            self._near_buffer = self._near_buffer[frame_bytes:]
             af = self._rtc.AudioFrame(
-                data=frame_bytes_slice,
+                data=frame_data,
                 sample_rate=fmt.sample_rate,
                 num_channels=fmt.channels,
                 samples_per_channel=frame_samples,
@@ -136,21 +155,28 @@ class LiveKitAEC:
             self._apm.process_stream(af)
             processed_parts.append(bytes(af.data))
 
-        # Trim to original length (last frame may have been zero-padded).
-        joined = b"".join(processed_parts)[: len(chunk.data)]
+        joined = b"".join(processed_parts)
         return AudioChunk(data=joined, format=fmt, timestamp=chunk.timestamp)
 
     def feed_reference(self, chunk: AudioChunk) -> None:
-        """Feed a far-end (speaker) audio chunk as the AEC reference signal."""
+        """Feed a far-end (speaker) audio chunk as the AEC reference signal.
+
+        Mirrors ``process``: only whole 10 ms frames are submitted to
+        ``process_reverse_stream`` and the sub-frame remainder is buffered
+        for the next call so the reverse stream stays frame-aligned with the
+        near-end stream rather than being zero-padded mid-stream.
+        """
         fmt = chunk.format
         frame_samples = _frame_samples_for_rate(fmt.sample_rate)
         self._check_stream_rate(fmt.sample_rate)
         frame_bytes = frame_samples * fmt.frame_size
-        frames = _split_frames(chunk.data, frame_bytes)
 
-        for frame_bytes_slice in frames:
+        self._far_buffer += chunk.data
+        while len(self._far_buffer) >= frame_bytes:
+            frame_data = self._far_buffer[:frame_bytes]
+            self._far_buffer = self._far_buffer[frame_bytes:]
             af = self._rtc.AudioFrame(
-                data=frame_bytes_slice,
+                data=frame_data,
                 sample_rate=fmt.sample_rate,
                 num_channels=fmt.channels,
                 samples_per_channel=frame_samples,

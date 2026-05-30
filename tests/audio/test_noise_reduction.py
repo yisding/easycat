@@ -57,6 +57,55 @@ async def test_rnnoise_process_mocked():
     assert mock_rnnoise.process_mono_frame.called
 
 
+@pytest.mark.asyncio
+async def test_rnnoise_buffers_subframe_remainder_across_chunks():
+    """Non-480-aligned chunks must not be zero-padded mid-stream.
+
+    RNNoise is a stateful recurrent denoiser; padding the tail of every chunk
+    would inject silence between chunk boundaries.  The reducer must instead
+    buffer the sub-frame remainder and only submit whole 480-sample frames,
+    deferring the rest to the next call (and flushing on ``flush()``).
+    """
+    np = pytest.importorskip("numpy")
+
+    seen_frames: list = []
+    mock_rnnoise = MagicMock()
+    mock_rnnoise.FRAME_SIZE = 480
+
+    def record_frame(state, frame):
+        seen_frames.append(np.array(frame, copy=True))
+        return frame, 0.0
+
+    mock_rnnoise.process_mono_frame.side_effect = record_frame
+    mock_rnnoise.create.return_value = MagicMock()
+
+    with patch("easycat.noise_reduction.require_module", return_value=mock_rnnoise):
+        reducer = RNNoiseReducer()
+
+    from easycat.audio_format import PCM16_MONO_48K
+
+    # Already at 48 kHz so no resampling reshapes the frame boundaries.
+    # 500 samples = one whole 480-sample frame + a 20-sample remainder.
+    first = struct.pack("<500h", *([1000] * 500))
+    await reducer.process(AudioChunk(data=first, format=PCM16_MONO_48K))
+    # Exactly one whole frame submitted; the 20-sample tail is buffered.
+    assert len(seen_frames) == 1
+    assert len(reducer._buffer_48k) == 20 * 2
+
+    # Next chunk of 460 samples completes the buffered tail to a full frame.
+    second = struct.pack("<460h", *([2000] * 460))
+    await reducer.process(AudioChunk(data=second, format=PCM16_MONO_48K))
+    assert len(seen_frames) == 2
+    # No frame submitted mid-stream contained a zero-padded silence tail
+    # (every value is one of the two real amplitudes we wrote).
+    for frame in seen_frames:
+        assert not (frame == 0).any()
+
+    # Flush drains the final partial frame (zero-padded only at end-of-stream).
+    reducer.flush()
+    assert reducer._buffer_48k == b""
+
+
 def test_rnnoise_uses_pyrnnoise_state_lifecycle():
     """RNNoiseReducer should create and destroy pyrnnoise state."""
     mock_rnnoise = MagicMock()
@@ -158,6 +207,34 @@ def test_factory_explicit_rnnoise_fails():
     ):
         with pytest.raises(RuntimeError, match="RNNoise"):
             create_noise_reducer(NoiseReducerConfig(backend="rnnoise"))
+
+
+def test_factory_auto_fallback_policy_error_raises():
+    """auto + fallback_policy='error' should fail loudly with an install hint."""
+    with patch(
+        "easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")
+    ):
+        with pytest.raises(RuntimeError, match="easycat\\[rnnoise\\]"):
+            create_noise_reducer(NoiseReducerConfig(backend="auto", fallback_policy="error"))
+
+
+def test_factory_auto_fallback_policy_passthrough_warns(caplog: pytest.LogCaptureFixture):
+    """auto + default passthrough policy should warn but return passthrough."""
+    import logging
+
+    with patch(
+        "easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")
+    ):
+        with caplog.at_level(logging.WARNING, logger="easycat.noise_reduction"):
+            reducer = create_noise_reducer(NoiseReducerConfig(backend="auto"))
+    assert isinstance(reducer, PassthroughNoiseReducer)
+    assert any("passthrough" in record.message.lower() for record in caplog.records)
+
+
+def test_noise_reducer_config_rejects_unknown_fallback_policy():
+    """NoiseReducerConfig should reject typo fallback_policy strings."""
+    with pytest.raises(ValueError, match="Unknown noise reducer fallback_policy 'boom'"):
+        NoiseReducerConfig(fallback_policy="boom")  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
