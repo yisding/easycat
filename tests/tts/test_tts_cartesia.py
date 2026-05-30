@@ -304,6 +304,25 @@ class TestCartesiaTTS:
 
         assert fake_ws._sent == []
 
+    async def test_replay_request_resets_sample_carry(self):
+        """A held sub-sample byte is dropped before the utterance restarts.
+
+        Without this reset, an odd-byte remainder left in ``_sample_carry``
+        when the socket dropped would be prepended to the restarted-from-top
+        stream's first chunk, shifting every replayed sample by one byte.
+        """
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS()
+        provider._ws = fake_ws
+        provider._pending_request = json.dumps({"transcript": "Hello"})
+        # Simulate a split 16-bit sample held across the dropped frame.
+        provider._sample_carry = b"\x01"
+
+        await provider._replay_request()
+
+        assert provider._sample_carry == b""
+        assert len(fake_ws._sent) == 1
+
     async def test_ignores_malformed_json(self):
         provider = self._make_provider()
         messages = [

@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from easycat._provider_helpers import get_package_version
+from easycat._provider_helpers import ProviderErrorEmitter, get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
-from easycat.events import TTSEvent
+from easycat.events import ErrorStage, TTSEvent
 from easycat.tts.base import TTSBase
 from easycat.tts.input import TTSInput, coerce_tts_input
 
@@ -31,15 +31,22 @@ class OpenAITTSConfig:
     speed: float = 1.0
     base_url: str = "https://api.openai.com/v1"
     output_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_24K)
+    # Declaring this field lets ``create_tts_provider_from_config`` auto-wire
+    # the session event bus (it detects the field structurally), so OpenAI TTS
+    # emits journal-visible provider Errors on failure like the WS providers.
+    event_bus: object | None = None
 
 
-class OpenAITTS(TTSBase):
+class OpenAITTS(ProviderErrorEmitter, TTSBase):
     """TTS provider using OpenAI's Audio API.
 
     Uses the `audio/speech` endpoint with `response_format=pcm` to get
     raw PCM16 audio at 24kHz, avoiding any need for MP3/Opus decoding.
     Streaming is done via httpx's async streaming response.
     """
+
+    _error_stage = ErrorStage.TTS
+    _provider_error_name = "openai"
 
     def __init__(self, config: OpenAITTSConfig) -> None:
         super().__init__(output_format=config.output_format)
@@ -53,6 +60,7 @@ class OpenAITTS(TTSBase):
             timeout=httpx.Timeout(30.0, connect=10.0),
         )
         self._response: httpx.Response | None = None
+        self._init_emit_tasks()
 
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using OpenAI Audio API with streaming response.
@@ -94,11 +102,18 @@ class OpenAITTS(TTSBase):
             logger.error(
                 "OpenAI TTS API error: %s %s", exc.response.status_code, exc.response.text
             )
+            self._emit_provider_error(
+                exc, http_status=exc.response.status_code, body=exc.response.text[:400]
+            )
             raise
         except httpx.HTTPError as exc:
             if not self._cancelled:
                 logger.error("OpenAI TTS HTTP error: %s", exc)
+                self._emit_provider_error(exc)
                 raise
+            # A connection error that races a barge-in cancel is expected; log
+            # at debug so the masked failure is still recoverable from a bundle.
+            logger.debug("OpenAI TTS HTTP error after cancel: %s", exc)
         finally:
             self._response = None
             self._end_synthesis()
@@ -120,6 +135,9 @@ class OpenAITTS(TTSBase):
     async def close(self) -> None:
         """Close the underlying HTTP client."""
         await self._client.aclose()
+        # Await any in-flight fire-and-forget Error-emit tasks so teardown does
+        # not leave them dangling into interpreter shutdown.
+        await self._drain_emit_tasks()
 
     def version_info(self) -> dict[str, str]:
         return {

@@ -15,7 +15,7 @@ from easycat.tts.factory import (
     create_tts_provider,
     create_tts_provider_from_config,
 )
-from easycat.tts.openai_tts import OpenAITTS
+from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 
 
 class TestTTSProviderConfig:
@@ -256,6 +256,17 @@ class TestCreateTTSProviderFromConfig:
 
         assert isinstance(provider, ElevenLabsTTS)
         assert provider._config.event_bus is existing_event_bus
+
+    def test_injects_event_bus_for_openai_when_missing(self):
+        # OpenAI declares an ``event_bus`` field so the structural detection in
+        # ``create_tts_provider_from_config`` auto-wires it for provider Errors.
+        config = OpenAITTSConfig(api_key="test")
+        event_bus = EventBus()
+
+        provider = create_tts_provider_from_config(config, event_bus)
+
+        assert isinstance(provider, OpenAITTS)
+        assert provider._config.event_bus is event_bus
 
     def test_injects_event_bus_for_cartesia_when_missing(self):
         config = CartesiaTTSConfig(api_key="test")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from typing import Any
 
 from easycat._provider_catalog import ProviderCatalog
@@ -119,11 +119,12 @@ def create_tts_provider_from_config(config: TTSConfig, event_bus: EventBus) -> T
     """
     provider_cls = _provider_for_config(type(config))
     provider_config = config
-    needs_event_bus = isinstance(
-        config,
-        (DeepgramTTSConfig, ElevenLabsTTSConfig, CartesiaTTSConfig),
-    )
-    if needs_event_bus and config.event_bus is None:
+    # Derive "needs an event bus" structurally from the dataclass itself
+    # (it declares an ``event_bus`` field) rather than from a hand-maintained
+    # isinstance tuple — so any future event-bus-aware provider is included
+    # automatically.
+    has_event_bus_field = any(f.name == "event_bus" for f in fields(config))
+    if has_event_bus_field and config.event_bus is None:
         provider_config = replace(config, event_bus=event_bus)
     return provider_cls(provider_config)
 

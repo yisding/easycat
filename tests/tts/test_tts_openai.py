@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import struct
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,7 +10,7 @@ import httpx
 import pytest
 
 from easycat.audio_format import PCM16_MONO_24K
-from easycat.events import TTSEventType
+from easycat.events import Error, ErrorStage, EventBus, TTSEventType
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 from tests.tts._harness import extract_audio_chunks, verify_pcm16_audio
 
@@ -151,6 +152,44 @@ class TestOpenAITTS:
     async def test_http_error_propagated(self):
         provider = self._make_provider()
         fake_response = FakeStreamResponse([], status_code=429)
+
+        with patch.object(provider._client, "stream", return_value=fake_response):
+            with pytest.raises(httpx.HTTPStatusError):
+                async for _ in provider.synthesize("error test"):
+                    pass
+
+    async def test_http_error_posted_to_event_bus(self):
+        """An HTTP status error emits a journal-visible provider Error.
+
+        Brings OpenAI to parity with the WebSocket providers: a recorded
+        bundle of an OpenAI TTS outage now carries a provider-scoped Error
+        with HTTP status/body context, not just a logger line.
+        """
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+
+        provider = OpenAITTS(OpenAITTSConfig(api_key="k", event_bus=bus))
+        fake_response = FakeStreamResponse([], status_code=429)
+
+        with patch.object(provider._client, "stream", return_value=fake_response):
+            with pytest.raises(httpx.HTTPStatusError):
+                async for _ in provider.synthesize("error test"):
+                    pass
+
+        # Event bus emission is scheduled via create_task — yield once.
+        await asyncio.sleep(0)
+        assert len(errors) == 1
+        err = errors[0]
+        assert err.stage == ErrorStage.TTS
+        assert err.provider == "openai"
+        notes = getattr(err.exception, "__notes__", [])
+        assert any("http_status=429" in n for n in notes)
+
+    async def test_no_event_bus_does_not_raise_on_error(self):
+        """Without an event bus the error path stays a no-op (still raises)."""
+        provider = self._make_provider()
+        fake_response = FakeStreamResponse([], status_code=500)
 
         with patch.object(provider._client, "stream", return_value=fake_response):
             with pytest.raises(httpx.HTTPStatusError):

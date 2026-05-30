@@ -6,6 +6,7 @@ audio queueing — into one reusable helper.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from collections.abc import Callable
@@ -14,7 +15,7 @@ from typing import Any
 
 from easycat._bounded_queue import BoundedAudioQueue
 from easycat.events import EventBus, TTSAudio, TTSEventType, TTSMarkers
-from easycat.timeouts import TimeoutConfig, with_tts_timeout
+from easycat.timeouts import TimeoutConfig, resolve_provider_name, with_tts_timeout
 from easycat.tts.input import TTSInput, coerce_tts_input
 
 logger = logging.getLogger(__name__)
@@ -131,46 +132,53 @@ class TTSSynthesizer:
             tts_iter = with_tts_timeout(
                 tts_iter,
                 timeout=self._timeout_config.tts_first_byte_timeout,
-                provider_name="tts",
+                provider_name=resolve_provider_name(self._tts, "tts"),
                 event_bus=self._event_bus,
             )
 
-        async for tts_event in tts_iter:
-            if token and token.is_cancelled:
-                result.completed = False
-                break
-            if is_active and not is_active():
-                result.completed = False
-                break
+        # Consume under aclosing() so breaking the loop (cancellation /
+        # inactivity / barge-in) deterministically finalizes the timeout
+        # wrapper and the underlying provider stream instead of deferring
+        # their cleanup to non-deterministic GC.
+        async with contextlib.aclosing(tts_iter) as tts_stream:
+            async for tts_event in tts_stream:
+                if token and token.is_cancelled:
+                    result.completed = False
+                    break
+                if is_active and not is_active():
+                    result.completed = False
+                    break
 
-            if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
-                result.audio_bytes += len(tts_event.audio.data)
-                session_id, turn_id = (
-                    self._correlation_ids() if self._correlation_ids else (None, None)
-                )
-                await self._event_bus.emit(
-                    TTSAudio(
-                        chunk=tts_event.audio,
-                        session_id=session_id,
-                        turn_id=turn_id,
-                        bypass_gate=bypass_gate,
+                if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
+                    result.audio_bytes += len(tts_event.audio.data)
+                    session_id, turn_id = (
+                        self._correlation_ids() if self._correlation_ids else (None, None)
                     )
-                )
-                if not result.audio_produced:
-                    result.audio_produced = True
-                    result.first_audio_time = time.monotonic()
-                if not gated_at_start and (
-                    bypass_gate or not (self._audio_gate and self._audio_gate())
-                ):
-                    await self._outbound_queue.put(tts_event.audio)
+                    await self._event_bus.emit(
+                        TTSAudio(
+                            chunk=tts_event.audio,
+                            session_id=session_id,
+                            turn_id=turn_id,
+                            bypass_gate=bypass_gate,
+                        )
+                    )
+                    if not result.audio_produced:
+                        result.audio_produced = True
+                        result.first_audio_time = time.monotonic()
+                    if not gated_at_start and (
+                        bypass_gate or not (self._audio_gate and self._audio_gate())
+                    ):
+                        await self._outbound_queue.put(tts_event.audio)
 
-            elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
-                session_id, turn_id = (
-                    self._correlation_ids() if self._correlation_ids else (None, None)
-                )
-                await self._event_bus.emit(
-                    TTSMarkers(markers=tts_event.markers, session_id=session_id, turn_id=turn_id)
-                )
+                elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
+                    session_id, turn_id = (
+                        self._correlation_ids() if self._correlation_ids else (None, None)
+                    )
+                    await self._event_bus.emit(
+                        TTSMarkers(
+                            markers=tts_event.markers, session_id=session_id, turn_id=turn_id
+                        )
+                    )
 
         return result
 
