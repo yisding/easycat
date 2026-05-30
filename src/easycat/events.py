@@ -162,7 +162,17 @@ class TTSAudio(Event):
 
 @dataclass(frozen=True)
 class TTSMarkers(Event):
-    """Word/viseme alignment markers from TTS."""
+    """Best-effort alignment markers from TTS.
+
+    ``markers`` is a list of *provider-native* alignment payloads, NOT a
+    normalized cross-provider schema: Cartesia emits word-level
+    ``word_timestamps`` objects while ElevenLabs emits char-level
+    ``alignment`` dicts, and some providers (e.g. Deepgram) emit none. The
+    journal records them opaquely for forensic/debug use; consumers MUST NOT
+    assume a uniform shape. A typed, normalized marker schema (mirroring the
+    STT-side :class:`WordTimestamp`) is the migration path if a portable
+    cross-provider consumer is ever needed.
+    """
 
     markers: list[dict[str, Any]]
 
@@ -629,9 +639,15 @@ class EventBus:
         Exceptions in handlers are logged but do not prevent other handlers from running.
         """
         event_type = type(event)
-        handlers = list(self._all_handlers)
+        # Build the handler list lazily.  This runs on the per-audio-chunk hot
+        # path, so avoid the ``list(...)`` copy when there are no global
+        # handlers, and read ``_handlers`` with ``.get`` so an emit with no
+        # subscriber does not mutate the defaultdict with an empty bucket.
+        handlers: list[EventHandler] = list(self._all_handlers) if self._all_handlers else []
         for cls in event_type.__mro__:
-            handlers.extend(self._handlers[cls])
+            bucket = self._handlers.get(cls)
+            if bucket:
+                handlers.extend(bucket)
             if cls is Event:
                 break
         for handler in handlers:

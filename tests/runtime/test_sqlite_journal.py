@@ -205,6 +205,55 @@ class TestSqliteJournalLifecycle:
         assert seq == -1
         assert journal.degraded
 
+    def test_degraded_persists_marker_to_file(self, tmp_path):
+        # Trigger degraded mode with a write the connection survives (non-JSON
+        # data raises before the INSERT) so the best-effort marker can be
+        # written and committed to disk.
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        assert (
+            j.append(
+                kind=JournalRecordKind.EVENT,
+                name="fail",
+                session_id="sess",
+                data=circular,
+            )
+            == -1
+        )
+        assert j.degraded
+
+        # The degradation signal must be recoverable from the file itself.
+        conn = sqlite3.connect(f"file:{tmp_path / 'journals' / 'sess.sqlite'}?mode=ro", uri=True)
+        state = conn.execute("SELECT value FROM session_state WHERE key = 'degraded'").fetchone()
+        degraded_rows = conn.execute(
+            "SELECT sequence, name FROM journal WHERE kind = ?",
+            (JournalRecordKind.DEGRADED.value,),
+        ).fetchall()
+        conn.close()
+        assert state == ("1",)
+        assert degraded_rows == [(-1, "journal_degraded")]
+        j.close()
+
+    def test_readonly_journal_surfaces_persisted_degraded(self, tmp_path):
+        from easycat.runtime.journal import ReadonlySqliteJournal
+
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="fail",
+            session_id="sess",
+            data=circular,
+        )
+        j.close()
+
+        # A read-only journal opened fresh from the file (no live flag) must
+        # still report degradation via the persisted session_state marker.
+        ro = ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite")
+        assert ro.degraded is True
+
     def test_double_close_is_safe(self, tmp_path):
         j = SqliteJournal("sess", data_dir=tmp_path)
         j.close()
@@ -226,8 +275,9 @@ class TestCrashRecovery:
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
         j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
-        # Simulate crash: commit the transaction but skip close().
-        j1._conn.execute("COMMIT")
+        # Simulate crash: skip close().  append() already committed each record
+        # via the production path, so the records are durable without a manual
+        # COMMIT — that is exactly the SIGKILL guarantee we rely on.
         j1._conn.close()
         j1._closed = True
 
@@ -245,10 +295,10 @@ class TestCrashRecovery:
 
     def test_recovery_marker_roundtrips_as_typed_subclass(self, tmp_path):
         # First session: write two records, then simulate an unclean crash.
+        # append() commits each record via the production path; no manual COMMIT.
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
         j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
-        j1._conn.execute("COMMIT")
         j1._conn.close()
         j1._closed = True
 
@@ -267,10 +317,10 @@ class TestCrashRecovery:
 
     def test_recovery_resets_sequence_and_drops_prior_records(self, tmp_path):
         # First session: write two records, then simulate an unclean crash.
+        # append() commits each record via the production path; no manual COMMIT.
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
         j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
-        j1._conn.execute("COMMIT")
         j1._conn.close()
         j1._closed = True
 
@@ -295,7 +345,7 @@ class TestCrashRecovery:
     def test_crash_dump_promoted(self, tmp_path):
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
-        j1._conn.execute("COMMIT")
+        # append() commits via the production path; no manual COMMIT.
         j1._conn.close()
         j1._closed = True
 
@@ -314,7 +364,7 @@ class TestCrashRecovery:
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
         j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
-        j1._conn.execute("COMMIT")
+        # append() commits via the production path; no manual COMMIT.
         j1._conn.close()
         j1._closed = True
 
@@ -454,6 +504,30 @@ class TestCrashRecovery:
         assert not (tmp_path / "crash-dumps" / "sess.sqlite").exists()
         j2.close()
 
+    def test_append_commits_without_manual_flush(self, tmp_path):
+        """Every append() must be durable on its own — a second read-only
+        connection sees the row before any flush()/finalize()/close().
+
+        This is the unit-level guard for the DURABILITY.md SIGKILL contract:
+        if the per-append commit regresses, the read below returns nothing.
+        """
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        j.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
+        j.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
+
+        # Read via an independent read-only connection — sees only committed data.
+        ro = sqlite3.connect(f"file:{tmp_path / 'journals' / 'sess.sqlite'}?mode=ro", uri=True)
+        names = [
+            row[0]
+            for row in ro.execute(
+                "SELECT name FROM journal WHERE kind = ? ORDER BY sequence",
+                (JournalRecordKind.EVENT.value,),
+            ).fetchall()
+        ]
+        ro.close()
+        assert names == ["ev1", "ev2"]
+        j.close()
+
     @pytest.mark.skipif(
         sys.platform == "win32",
         reason="SIGKILL not available on Windows",
@@ -475,7 +549,8 @@ class TestCrashRecovery:
                     name=f"event_{{i}}",
                     session_id="crash-sess",
                 )
-            j.flush()
+            # No manual flush(): the production append() path must commit each
+            # record on its own so SIGKILL preserves them (DURABILITY.md).
             print("READY", flush=True)
             time.sleep(60)
         """)

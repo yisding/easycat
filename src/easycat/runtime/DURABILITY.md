@@ -9,11 +9,25 @@ The SQLite journal backend (`debug="full"`) survives:
 - **Segfaults** — native library crashes
 - **Telephony disconnects** — remote peer hangup, network loss
 
-**Zero committed records are lost.** This is inherent to the write
-path: SQLite commits go through `write()` into the kernel page cache
-under `PRAGMA synchronous=NORMAL`. The kernel owns the dirty pages
-and flushes them to the block device regardless of Python process
-state. No `fsync()` is called on the hot path.
+**Every committed record survives.** `SqliteJournal.append()` commits
+each record as part of the append itself (one `COMMIT` per `append()`,
+followed by a fresh `BEGIN`), so the worst-case application-crash loss
+window is bounded by the single in-flight `append()` that had not yet
+returned when the process died. Once `append()` returns, the record is
+committed and durable against SIGKILL/OOM/segfault.
+
+This is inherent to the write path: SQLite commits go through `write()`
+into the kernel page cache under `PRAGMA synchronous=NORMAL`. The kernel
+owns the dirty pages and flushes them to the block device regardless of
+Python process state. No `fsync()` is called on the hot path, so the
+per-append commit costs only a `write()` (no storage I/O) and stays
+within the per-turn latency budget.
+
+The only deliberate exception is a post-`finalize()` append: those are
+wrapped in a `SAVEPOINT` and intentionally left uncommitted until the
+next `close()`/`finalize()`, so that a crash after a clean finalize
+leaves the durable database looking cleanly closed (see "Session
+teardown contract").
 
 ### Why this works
 

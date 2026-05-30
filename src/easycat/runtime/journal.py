@@ -133,6 +133,10 @@ class JournalView:
     def filter_by_stage(self, stage_name: str) -> list[JournalRecord]:
         """Return records whose ``data['stage']`` or ``data['observed_stage']``
         matches *stage_name*.  Mirrors :meth:`RunBundle.filter_by_stage`.
+
+        Postmortem convenience: ``stage`` lives in the unindexed JSON ``data``
+        column, so this reads and deserializes every record and its cost scales
+        with persisted session length.
         """
         results: list[JournalRecord] = []
         for r in self._journal.read():
@@ -149,11 +153,12 @@ class JournalView:
 
     def lookup_by_sequence(self, seq: int) -> JournalRecord | None:
         """Return the record with the given sequence number, or ``None``.
-        Mirrors :meth:`RunBundle.lookup_by_sequence`."""
-        for r in self._journal.read():
-            if r.sequence == seq:
-                return r
-        return None
+        Mirrors :meth:`RunBundle.lookup_by_sequence`.
+
+        ``sequence`` is the primary key, so this is a bounded ``read(start, 1)``
+        lookup rather than a full-table scan."""
+        recs = self._journal.read(start=seq, limit=1)
+        return recs[0] if recs and recs[0].sequence == seq else None
 
     async def follow(
         self,
@@ -228,6 +233,16 @@ class JournalView:
         return True
 
     @property
+    def latest_sequence(self) -> int:
+        """The highest sequence number appended so far (``0`` when empty).
+
+        Re-exposes the backend's O(1) counter so callers can cheaply detect
+        journal growth (e.g. a live-tail loop gating on append) without
+        re-reading or re-serializing the whole journal.
+        """
+        return self._journal.latest_sequence
+
+    @property
     def degraded(self) -> bool:
         return self._journal.degraded
 
@@ -300,7 +315,19 @@ class ReadonlySqliteJournal:
 
     @property
     def degraded(self) -> bool:
-        return self._degraded
+        # Honor an explicit flag from the live backend, but also surface the
+        # persisted ``degraded`` session_state marker so a bundle loaded fresh
+        # from the .sqlite file (no live signal) still reports degradation.
+        if self._degraded:
+            return True
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT value FROM session_state WHERE key = 'degraded'"
+                ).fetchone()
+        except sqlite3.Error:
+            return False
+        return bool(row and row[0] == "1")
 
     @property
     def db_path(self) -> Path:
@@ -632,12 +659,12 @@ CREATE TABLE IF NOT EXISTS journal (
     sequence     INTEGER PRIMARY KEY,
     session_id   TEXT    NOT NULL,
     kind         TEXT    NOT NULL,
-    op_id        TEXT    NOT NULL DEFAULT '',
+    op_id        TEXT    NOT NULL DEFAULT '',  -- reserved WS3 placeholder (always '')
     name         TEXT    NOT NULL DEFAULT '',
     wall_ns      INTEGER NOT NULL DEFAULT 0,
     mono_ns      INTEGER NOT NULL DEFAULT 0,
     cpu_ns       INTEGER NOT NULL DEFAULT 0,
-    queue_ns     INTEGER NOT NULL DEFAULT 0,
+    queue_ns     INTEGER NOT NULL DEFAULT 0,  -- reserved WS3 placeholder (always 0)
     turn_id      TEXT,
     data         TEXT    NOT NULL DEFAULT '{}',
     error_type   TEXT,
@@ -657,6 +684,125 @@ CREATE TABLE IF NOT EXISTS session_state (
 );
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 """
+
+
+# Single source of truth for the persisted INSERT shared by every SQL backend
+# (SqliteJournal / LibsqlJournal).  Keeping the column list, placeholders, and
+# the value-tuple builder (``_encode_journal_row``) together guarantees the two
+# backends cannot silently diverge — a column add/reorder is a one-place change
+# that ``_row_to_record`` round-trips identically for both.
+_JOURNAL_INSERT_SQL = (
+    "INSERT INTO journal "
+    "(sequence, session_id, kind, op_id, name, wall_ns, mono_ns, cpu_ns, "
+    "queue_ns, turn_id, data, error_type, error_msg, error_tb, error_notes, "
+    "input_ref, output_ref, tags) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+)
+
+
+def _encode_journal_row(
+    *,
+    sequence: int,
+    session_id: str,
+    kind: JournalRecordKind,
+    name: str,
+    wall_ns: int,
+    mono_ns: int,
+    cpu_ns: int,
+    turn_id: str | None,
+    data: dict[str, Any] | None,
+    error: ErrorInfo | None,
+    tags: frozenset[str],
+    input_ref: str | None,
+    output_ref: str | None,
+) -> tuple[Any, ...]:
+    """Build the column-order value tuple for ``_JOURNAL_INSERT_SQL``.
+
+    ``op_id`` and ``queue_ns`` are written explicitly (``''`` / ``0``) so the
+    persisted column set matches ``_row_to_record`` and does not rely on silent
+    SQL DEFAULTs.  They are reserved for WS3 stage timing; there is no
+    ``append()`` channel to populate them yet, so they are guaranteed-zero
+    placeholders for now.
+    """
+    return (
+        sequence,
+        session_id,
+        kind.value,
+        "",  # op_id (reserved WS3 placeholder)
+        name,
+        wall_ns,
+        mono_ns,
+        cpu_ns,
+        0,  # queue_ns (reserved WS3 placeholder)
+        turn_id,
+        json.dumps(data or {}, default=str),
+        error.type if error else None,
+        error.message if error else None,
+        error.traceback if error else None,
+        error.notes if error else None,
+        input_ref,
+        output_ref,
+        ",".join(sorted(tags)) if tags else "",
+    )
+
+
+def _persist_degraded_marker(conn: Any, session_id: str, exc: Exception) -> None:
+    """Best-effort: record that a SQL-backed journal entered degraded mode.
+
+    Makes degradation recoverable from the persisted file itself (so a bundle
+    loaded fresh from disk can tell the journal silently dropped records), to
+    match the in-memory backend which appends a ``JournalDegraded`` marker.
+
+    Two complementary signals are written, both best-effort because the very
+    write failure that triggered degraded mode may also block these:
+
+    * a ``degraded`` key in ``session_state`` — a cheap durable flag that
+      ``ReadonlySqliteJournal`` / bundle loading surface without scanning
+      records;
+    * a ``JournalDegraded`` row in the ``journal`` table at ``sequence=-1``
+      (mirroring ``InMemoryRingBuffer``), so ``slice(kind=DEGRADED)`` and
+      ``read(start=-1)`` rehydrate it via the existing ``_row_to_record``
+      branch that was otherwise dead for the persistent backends.
+
+    The journal table has a ``sequence INTEGER PRIMARY KEY`` so a second
+    failure is idempotent via ``INSERT OR REPLACE``.
+    """
+    now_wall = time.time_ns()
+    now_mono = time.monotonic_ns()
+    now_cpu = time.process_time_ns()
+    data = json.dumps(
+        {"error_type": type(exc).__name__, "error_message": str(exc)},
+        default=str,
+    )
+    try:
+        conn.execute("INSERT OR REPLACE INTO session_state (key, value) VALUES ('degraded', '1')")
+    except Exception:
+        logger.debug("Failed to persist degraded session_state marker", exc_info=True)
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO journal "
+            "(sequence, session_id, kind, name, wall_ns, mono_ns, cpu_ns, data, tags) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                -1,
+                session_id,
+                JournalRecordKind.DEGRADED.value,
+                "journal_degraded",
+                now_wall,
+                now_mono,
+                now_cpu,
+                data,
+                "",
+            ),
+        )
+    except Exception:
+        logger.debug("Failed to persist degraded journal marker", exc_info=True)
+    # Commit so the markers survive process death even though no further
+    # append() (which would otherwise COMMIT) will run after degraded mode.
+    try:
+        conn.commit()
+    except Exception:
+        logger.debug("Failed to commit degraded markers", exc_info=True)
 
 
 class SqliteJournal:
@@ -976,11 +1122,12 @@ class SqliteJournal:
                 pass
 
     def finalize(self) -> None:
-        """Write clean_close marker and run retention without closing the connection.
+        """Write clean_close marker and checkpoint the WAL without closing the connection.
 
-        The connection remains open and a new transaction is started so that
-        subsequent ``append()`` calls (e.g. post-stop debug events) are still
-        wrapped in a transaction.
+        Retention is intentionally deferred to ``close()`` so it never blocks
+        a turn (see the comment in ``close()``).  The connection remains open
+        and a new transaction is started so that subsequent ``append()`` calls
+        (e.g. post-stop debug events) are still wrapped in a transaction.
         """
         if self._closed:
             return
@@ -1037,9 +1184,6 @@ class SqliteJournal:
         now_wall = time.time_ns()
         now_mono = time.monotonic_ns()
         now_cpu = time.process_time_ns()
-        data_json = json.dumps(data or {}, default=str)
-        error_notes = error.notes if error else None
-        tags_csv = ",".join(sorted(tags)) if tags else ""
 
         with self._lock:
             clear_clean_close = self._clean_close_marked
@@ -1050,36 +1194,22 @@ class SqliteJournal:
                     self._clear_clean_close_marker_before_write()
                 self._seq += 1
                 seq = self._seq
-                # op_id and queue_ns are written explicitly (currently '' / 0)
-                # so the persisted column set matches ``_row_to_record`` and
-                # does not rely on silent SQL DEFAULTs.  They are reserved for
-                # WS3 stage timing; there is no append() channel to populate
-                # them yet, so they are guaranteed-zero placeholders for now.
                 self._conn.execute(
-                    "INSERT INTO journal "
-                    "(sequence, session_id, kind, op_id, name, wall_ns, mono_ns, cpu_ns, "
-                    "queue_ns, turn_id, data, error_type, error_msg, error_tb, error_notes, "
-                    "input_ref, output_ref, tags) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        seq,
-                        session_id,
-                        kind.value,
-                        "",
-                        name,
-                        now_wall,
-                        now_mono,
-                        now_cpu,
-                        0,
-                        turn_id,
-                        data_json,
-                        error.type if error else None,
-                        error.message if error else None,
-                        error.traceback if error else None,
-                        error_notes,
-                        input_ref,
-                        output_ref,
-                        tags_csv,
+                    _JOURNAL_INSERT_SQL,
+                    _encode_journal_row(
+                        sequence=seq,
+                        session_id=session_id,
+                        kind=kind,
+                        name=name,
+                        wall_ns=now_wall,
+                        mono_ns=now_mono,
+                        cpu_ns=now_cpu,
+                        turn_id=turn_id,
+                        data=data,
+                        error=error,
+                        tags=tags,
+                        input_ref=input_ref,
+                        output_ref=output_ref,
                     ),
                 )
             except Exception:
@@ -1092,6 +1222,19 @@ class SqliteJournal:
             if clear_clean_close:
                 self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
                 self._clean_close_marked = False
+            else:
+                # Commit on every append so records genuinely survive process
+                # death (SIGKILL/OOM/segfault), honoring the DURABILITY.md
+                # contract.  Under ``synchronous=NORMAL`` this is only a
+                # ``write()`` into the kernel page cache (no fsync), so the
+                # per-turn latency budget still holds.  Reopen a transaction so
+                # ``flush()``/``finalize()``/``close()`` always find an active
+                # one to COMMIT and the post-finalize SAVEPOINT machinery keeps
+                # working.  The post-finalize branch is intentionally NOT
+                # committed here: it must stay rolled-back-able so a crash after
+                # ``finalize()`` leaves the durable DB looking cleanly closed.
+                self._conn.execute("COMMIT")
+                self._conn.execute("BEGIN")
         return seq
 
     def _clear_clean_close_marker_before_write(self) -> None:
@@ -1101,6 +1244,16 @@ class SqliteJournal:
         self._degraded = True
         observe_gauge("easycat.journal.degraded", 1)
         logger.warning("Journal entered degraded mode: %s: %s", type(exc).__name__, exc)
+        # After finalize() the journal is contractually "cleanly closed": a
+        # failed post-finalize append must leave no durable trace (the
+        # SAVEPOINT in _do_append already rolled its write back, restoring the
+        # clean_close marker).  Persisting a degraded marker here would both
+        # add a spurious journal row and COMMIT, defeating that rollback and
+        # making a crash-after-finalize DB look uncleanly closed.  Skip it.
+        if self._clean_close_marked:
+            return
+        with self._lock:
+            _persist_degraded_marker(self._conn, session_id, exc)
 
     @staticmethod
     def _row_to_record(row: tuple[Any, ...]) -> JournalRecord:
@@ -1604,32 +1757,22 @@ class LibsqlJournal:
         with self._lock:
             self._seq += 1
             seq = self._seq
-            # op_id / queue_ns are reserved WS3 placeholders (see SqliteJournal).
             self._conn.execute(
-                "INSERT INTO journal "
-                "(sequence, session_id, kind, op_id, name, wall_ns, mono_ns, cpu_ns, "
-                "queue_ns, turn_id, data, error_type, error_msg, error_tb, error_notes, "
-                "input_ref, output_ref, tags) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    seq,
-                    session_id,
-                    kind.value,
-                    "",
-                    name,
-                    now_wall,
-                    now_mono,
-                    now_cpu,
-                    0,
-                    turn_id,
-                    json.dumps(data or {}, default=str),
-                    error.type if error else None,
-                    error.message if error else None,
-                    error.traceback if error else None,
-                    error.notes if error else None,
-                    input_ref,
-                    output_ref,
-                    ",".join(sorted(tags)) if tags else "",
+                _JOURNAL_INSERT_SQL,
+                _encode_journal_row(
+                    sequence=seq,
+                    session_id=session_id,
+                    kind=kind,
+                    name=name,
+                    wall_ns=now_wall,
+                    mono_ns=now_mono,
+                    cpu_ns=now_cpu,
+                    turn_id=turn_id,
+                    data=data,
+                    error=error,
+                    tags=tags,
+                    input_ref=input_ref,
+                    output_ref=output_ref,
                 ),
             )
             self._conn.commit()
@@ -1647,6 +1790,8 @@ class LibsqlJournal:
         self._degraded = True
         observe_gauge("easycat.journal.degraded", 1)
         logger.warning("Journal entered degraded mode: %s: %s", type(exc).__name__, exc)
+        with self._lock:
+            _persist_degraded_marker(self._conn, session_id, exc)
 
 
 # ── Retention ────────────────────────────────────────────────────
