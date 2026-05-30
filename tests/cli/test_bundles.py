@@ -13,6 +13,28 @@ from typer.testing import CliRunner
 from easycat.cli._app import app
 from easycat.cli.debug.bundles import _format_size
 from easycat.debug.bundle import FORMAT_VERSION
+from easycat.debug.export import export_debug_bundle
+from easycat.runtime.records import ErrorInfo, JournalRecord, TimingInfo
+
+
+class _FakeJournal:
+    """Minimal journal stub exposing ``read`` for ``export_debug_bundle``."""
+
+    def __init__(self, records: list[JournalRecord]) -> None:
+        self._records = records
+
+    def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
+        return self._records[start:]
+
+
+class _FakeSession:
+    """Minimal session stub for driving the real bundle export path."""
+
+    def __init__(self, *, records: list[JournalRecord]) -> None:
+        self._debug = "light"
+        self._journal = _FakeJournal(records)
+        self._artifact_store = None
+        self._config = None
 
 
 def _make_bundle(path: Path, records: list[dict]) -> None:
@@ -99,55 +121,68 @@ def test_bundles_list_json(cli: CliRunner, tmp_path: Path) -> None:
 
 
 def test_bundles_show_summary(cli: CliRunner, tmp_path: Path) -> None:
+    # Regression: drive the fixture through the real ``export_debug_bundle``
+    # serialization so the journal records carry the production shape — the
+    # timestamp nested under ``timing.wall_ns`` and tool calls recorded under
+    # the snake_case name ``tool_call_started`` (not the CamelCase event
+    # class name). The summary must surface duration and tool_calls correctly.
+    records = [
+        JournalRecord(
+            sequence=1,
+            session_id="sess-xyz",
+            name="turn_started",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=1_000_000_000),
+        ),
+        JournalRecord(
+            sequence=2,
+            session_id="sess-xyz",
+            name="stt_final",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=1_100_000_000),
+            data={"text": "hi"},
+        ),
+        JournalRecord(
+            sequence=3,
+            session_id="sess-xyz",
+            name="tool_call_started",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=1_200_000_000),
+            data={"tool_name": "calc"},
+        ),
+        JournalRecord(
+            sequence=4,
+            session_id="sess-xyz",
+            name="error",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=1_300_000_000),
+            error=ErrorInfo(type="BoomError", message="kaboom"),
+        ),
+        JournalRecord(
+            sequence=5,
+            session_id="sess-xyz",
+            name="turn_ended",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=1_400_000_000),
+        ),
+    ]
     bundle = tmp_path / "demo.zip"
-    _make_bundle(
-        bundle,
-        [
-            {
-                "sequence": 1,
-                "name": "TurnStarted",
-                "turn_id": "t1",
-                "session_id": "sess-xyz",
-                "wall_ns": 1_000_000_000,
-            },
-            {
-                "sequence": 2,
-                "name": "STTFinal",
-                "turn_id": "t1",
-                "wall_ns": 1_100_000_000,
-                "data": {"text": "hi"},
-            },
-            {
-                "sequence": 3,
-                "name": "ToolCallStarted",
-                "turn_id": "t1",
-                "wall_ns": 1_200_000_000,
-                "data": {"tool": "calc"},
-            },
-            {
-                "sequence": 4,
-                "name": "Error",
-                "turn_id": "t1",
-                "wall_ns": 1_300_000_000,
-                "error": {"type": "BoomError", "message": "kaboom"},
-            },
-            {
-                "sequence": 5,
-                "name": "TurnEnded",
-                "turn_id": "t1",
-                "wall_ns": 1_400_000_000,
-            },
-        ],
-    )
+    export_debug_bundle(_FakeSession(records=records), bundle)
 
-    result = cli.invoke(app, ["bundles", "show", str(bundle)])
+    result = cli.invoke(app, ["bundles", "show", str(bundle), "--json"])
     assert result.exit_code == 0, result.stderr
-    assert "sess-xyz" in result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["session_id"] == "sess-xyz"
+    # duration_ms = (last - first) / 1e6 = 400.
+    assert payload["duration_ms"] == pytest.approx(400.0)
+    assert payload["tool_calls"] == 1
+    assert payload["errors"] == 1
+
+    human = cli.invoke(app, ["bundles", "show", str(bundle)])
+    assert human.exit_code == 0, human.stderr
+    assert "sess-xyz" in human.stdout
     # duration_ms = (last - first) / 1e6 = 400 → "400.0ms"
-    assert "400.0ms" in result.stdout
-    assert "replay_entry_points" in result.stdout
-    # cp_7 is the user-facing id for sequence 7 from the manifest.
-    assert "cp_7" in result.stdout
+    assert "400.0ms" in human.stdout
 
 
 def test_bundles_show_json(cli: CliRunner, tmp_path: Path) -> None:

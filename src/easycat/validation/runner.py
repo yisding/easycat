@@ -24,6 +24,7 @@ from easycat.validation.latency import (
     LatencyStageDurations,
     ReliabilityBudget,
     ReliabilitySample,
+    _is_ci,
     build_latency_artifact,
     build_reliability_artifact,
     classify_failure_category,
@@ -227,6 +228,8 @@ def run_validation_slice(
 
     _write_atomic(run_report_path, run.to_json())
     if requested_report_path is not None:
+        # Authoritative writer of the CLI ``--report`` path; the CLI relies
+        # on this and does not write the report itself.
         _write_atomic(requested_report_path, run.to_json())
     _write_atomic(artifacts_root / "latest.json", run.to_json())
     result_report_path = requested_report_path or run_report_path
@@ -452,6 +455,8 @@ def run_latency_validation(
 
     _write_atomic(run_report_path, run.to_json())
     if requested_report_path is not None:
+        # Authoritative writer of the CLI ``--report`` path; the CLI relies
+        # on this and does not write the report itself.
         _write_atomic(requested_report_path, run.to_json())
     _write_atomic(artifacts_root / "latest.json", run.to_json())
     return ValidationRunResult(
@@ -702,6 +707,8 @@ def run_live_validation(
 
     _write_atomic(run_report_path, run.to_json())
     if requested_report_path is not None:
+        # Authoritative writer of the CLI ``--report`` path; the CLI relies
+        # on this and does not write the report itself.
         _write_atomic(requested_report_path, run.to_json())
     _write_atomic(artifacts_root / "latest.json", run.to_json())
     return ValidationRunResult(
@@ -1112,7 +1119,7 @@ def _collect_environment_metadata() -> ValidationEnvironment:
     return ValidationEnvironment(
         python=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         platform=platform.platform(),
-        ci=bool(os.environ.get("CI")),
+        ci=_is_ci(),
         env_vars={name: name in os.environ for name in PROVIDER_ENV_VARS},
     )
 

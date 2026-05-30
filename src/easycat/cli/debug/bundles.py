@@ -25,7 +25,6 @@ output; it is not a separate bundle file format.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -38,7 +37,6 @@ from easycat.debug.bundle import (
     BundleError,
     BundleVersionError,
     RunBundle,
-    checkpoint_id,
     discover_bundles,
 )
 
@@ -85,14 +83,24 @@ def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
         turn_id = record.get("turn_id")
         if turn_id:
             turns.add(str(turn_id))
+        # Crash-dump SQLite journals flatten the timestamp to a top-level
+        # ``wall_ns``; exported ZIP bundles keep the ``JournalRecord`` shape
+        # with the timestamp nested under ``timing.wall_ns``. Read both.
         wall_ns = record.get("wall_ns")
+        if wall_ns is None:
+            timing = record.get("timing")
+            if isinstance(timing, dict):
+                wall_ns = timing.get("wall_ns")
         if isinstance(wall_ns, int):
             if first_wall_ns is None:
                 first_wall_ns = wall_ns
             last_wall_ns = wall_ns
         if record.get("error"):
             errors += 1
-        if record.get("name") == "ToolCallStarted":
+        # The journal sink records tool calls under the snake_case name
+        # ``tool_call_started`` (see ``SessionJournalSink``), not the
+        # CamelCase event class name.
+        if record.get("name") == "tool_call_started":
             tool_calls += 1
 
     duration_ms: float | None = None
@@ -300,7 +308,3 @@ bundles_app.command(name="show", help="Summarise a single bundle.")(show_bundle)
 
 
 __all__: list[str] = ["bundles_app", "inspect_bundle"]
-
-# Silence "imported but unused" for shared-helper imports that stay in
-# the file for parity with other CLI modules.
-_ = (json, checkpoint_id)

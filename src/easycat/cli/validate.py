@@ -9,7 +9,6 @@ import typer
 from easycat.cli._output import emit_json, json_envelope, stdout_console
 from easycat.validation.latency import LatencyMode
 from easycat.validation.runner import (
-    ValidationRunResult,
     run_latency_validation,
     run_live_validation,
     run_validation_slice,
@@ -40,8 +39,6 @@ def _run_slice(
         junit_path=junit,
         junit_prefix=junit_prefix,
     )
-    if report is not None and not report.exists():
-        _write_report_copy(report, result)
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"
@@ -216,8 +213,6 @@ def latency(
         require_samples=True if require_samples else None,
         baseline_path=baseline,
     )
-    if report is not None and not report.exists():
-        _write_report_copy(report, result)
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"
@@ -278,8 +273,6 @@ def live(
         artifacts_dir=artifacts_dir,
         report_path=report,
     )
-    if report is not None and not report.exists():
-        _write_report_copy(report, result)
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"
@@ -429,8 +422,3 @@ def _render_artifacts(artifacts: object) -> None:
         suffix = "" if Path(str(path)).exists() else " [missing]"
         stdout_console.file.write(f"artifact {name}: {path}{suffix}\n")
         stdout_console.file.flush()
-
-
-def _write_report_copy(path: Path, result: ValidationRunResult) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(result.run.to_json())

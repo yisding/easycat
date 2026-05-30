@@ -439,10 +439,9 @@ def build_latency_artifact(
     percentiles = _build_percentile_block(samples)
     # Budgets enforce tail-latency SLOs and are only meaningful when the run
     # produced enough samples for those tails to be statistically eligible.
-    # SMOKE runs are explicitly low-sample (p95 is marked ineligible by
-    # `_summarize_totals`), so one slow probe would otherwise turn the default
-    # `easycat validate latency` invocation into a hard fail. Skip budget
-    # evaluation in SMOKE; sweep runs continue to enforce.
+    # SMOKE runs are explicitly low-sample, so one slow probe would otherwise
+    # turn the default `easycat validate latency` invocation into a hard fail.
+    # Skip budget evaluation in SMOKE; sweep runs continue to enforce.
     budget_violations = (
         [violation.to_dict() for violation in evaluate_budgets(percentiles, effective_budgets)]
         if mode is not LatencyMode.SMOKE
@@ -458,7 +457,7 @@ def build_latency_artifact(
         "clock_source": clock_source,
         "samples": [sample.to_dict() for sample in samples],
         "reliability_samples": [sample.to_dict() for sample in reliability_samples or []],
-        "summary": _summarize_samples(mode, samples),
+        "summary": _summarize_samples(samples),
         "percentiles": percentiles,
         "budget_violations": budget_violations,
     }
@@ -604,7 +603,7 @@ def _build_percentile_block(samples: list[LatencySample]) -> dict[str, Any]:
     return {"overall": overall, "by_condition": by_condition}
 
 
-def _summarize_samples(mode: LatencyMode, samples: list[LatencySample]) -> dict[str, Any]:
+def _summarize_samples(samples: list[LatencySample]) -> dict[str, Any]:
     grouped: dict[str, list[float]] = defaultdict(list)
     for sample in samples:
         if sample.warmup or sample.failure_class:
@@ -613,8 +612,7 @@ def _summarize_samples(mode: LatencyMode, samples: list[LatencySample]) -> dict[
             grouped[sample.condition_id].append(sample.stages.total_ms)
 
     return {
-        condition_id: _summarize_totals(mode, totals)
-        for condition_id, totals in sorted(grouped.items())
+        condition_id: _summarize_totals(totals) for condition_id, totals in sorted(grouped.items())
     }
 
 
@@ -787,28 +785,16 @@ def _baseline_version(artifact: Mapping[str, Any], condition_id: str) -> str | N
     return f"{version}:{condition_id}"
 
 
-def _summarize_totals(mode: LatencyMode, totals: list[float]) -> dict[str, Any]:
+def _summarize_totals(totals: list[float]) -> dict[str, Any]:
+    # Percentiles are intentionally omitted here: the `percentiles` block
+    # (built via `LatencyPercentileStats.from_values`) is the single source of
+    # truth for p50/p90/p95/p99. Reporting nearest-rank percentiles here too
+    # produced a second, divergent set of numbers in the same artifact.
     sorted_totals = sorted(totals)
-    p50_eligible = mode is LatencyMode.SWEEP and len(sorted_totals) >= 3
-    p90_eligible = mode is LatencyMode.SWEEP and len(sorted_totals) >= 10
-    p95_eligible = mode is LatencyMode.SWEEP and len(sorted_totals) >= 20
-    p99_eligible = mode is LatencyMode.SWEEP and len(sorted_totals) >= 100
     return {
         "count": len(sorted_totals),
-        "p50_ms": _percentile_value(sorted_totals, 0.5, p50_eligible),
-        "p90_ms": _percentile_value(sorted_totals, 0.9, p90_eligible),
-        "p95_ms": _percentile_value(sorted_totals, 0.95, p95_eligible),
-        "p99_ms": _percentile_value(sorted_totals, 0.99, p99_eligible),
         "median_ms": median(sorted_totals) if sorted_totals else None,
     }
-
-
-def _percentile_value(values: list[float], percentile: float, eligible: bool) -> dict[str, Any]:
-    value = None
-    if values and eligible:
-        index = min(len(values) - 1, round((len(values) - 1) * percentile))
-        value = values[index]
-    return {"eligible": eligible, "value": value}
 
 
 class FailureCategory(StrEnum):
@@ -895,11 +881,22 @@ def classify_latency_failure(message: str) -> str:
     return _LATENCY_FAILURE_CLASSES[classify_failure_category(message)]
 
 
+def _is_ci() -> bool:
+    """Whether we appear to be running under CI.
+
+    Shared by every validation environment-metadata builder so the
+    slice/live report and the latency report tag the identical environment
+    with the same ``ci`` value. Accepts the GitHub-Actions-style ``CI=true``
+    plus the generic ``CI=1``/``CI=yes`` set used by other providers.
+    """
+    return os.environ.get("CI", "").strip().lower() in {"1", "true", "yes"}
+
+
 def _latency_environment_metadata() -> dict[str, Any]:
     return {
         "python": sys.version.split()[0],
         "platform": platform.platform(),
-        "ci": os.environ.get("CI") == "true",
+        "ci": _is_ci(),
         "env_vars": {
             "OPENAI_API_KEY": bool(os.environ.get("OPENAI_API_KEY")),
             "DEEPGRAM_API_KEY": bool(os.environ.get("DEEPGRAM_API_KEY")),

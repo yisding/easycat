@@ -92,10 +92,14 @@ def test_latency_artifact_marks_low_sample_percentiles_ineligible() -> None:
     assert artifact["clock_source"] == "time.monotonic"
     assert artifact["samples"][0]["sample_id"] == "sample-1"
     assert artifact["summary"]["baseline"]["count"] == 1
-    assert artifact["summary"]["baseline"]["p50_ms"]["eligible"] is False
-    assert artifact["summary"]["baseline"]["p90_ms"]["eligible"] is False
-    assert artifact["summary"]["baseline"]["p95_ms"]["eligible"] is False
-    assert artifact["summary"]["baseline"]["p99_ms"]["eligible"] is False
+    # The summary block no longer duplicates per-percentile numbers; the
+    # `percentiles` block is the single source of truth (see _summarize_totals).
+    assert artifact["summary"]["baseline"]["median_ms"] == 750.0
+    assert "p50_ms" not in artifact["summary"]["baseline"]
+    assert artifact["percentiles"]["overall"]["total_ms"]["count"] == 1
+    # A single low-sample SMOKE run must never enforce tail budgets, so one
+    # slow probe can't turn the default invocation into a hard fail.
+    assert artifact["budget_violations"] == []
 
 
 def test_latency_artifact_preserves_missing_stage_and_failure_class() -> None:
@@ -533,10 +537,15 @@ def test_validate_latency_cli_runs_smoke_and_writes_report(
         result_report = tmp_path / "run" / "report.json"
         result_report.parent.mkdir()
         result_report.write_text(run.to_json())
+        # Mirror the real runner contract: it is the authoritative writer of
+        # the requested ``--report`` path (the CLI no longer copies it).
+        requested = kwargs.get("report_path")
+        if requested is not None:
+            Path(requested).write_text(run.to_json())
         return ValidationRunResult(
             run=run,
             run_dir=result_report.parent,
-            report_path=result_report,
+            report_path=requested or result_report,
             exit_code=0,
         )
 

@@ -99,9 +99,6 @@ class BundleRecoveryError(BundleError): ...
 class DebugCaptureDisabledError(BundleError): ...
 
 
-class DebugCaptureUnavailableError(BundleError): ...
-
-
 # Artifact refs are the content-addressed SHA-256 hex digests produced
 # by ``ArtifactStore.put``. This regex validates that incoming refs
 # match that format — purely a structural sanity check on the ref
