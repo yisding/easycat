@@ -4,9 +4,10 @@ from pathlib import Path
 
 import yaml
 
-WORKFLOW = Path(".github/workflows/ci.yml")
-NIGHTLY_WORKFLOW = Path(".github/workflows/nightly-validation.yml")
-RELEASE_WORKFLOW = Path(".github/workflows/release-validation.yml")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+NIGHTLY_WORKFLOW = REPO_ROOT / ".github/workflows/nightly-validation.yml"
+RELEASE_WORKFLOW = REPO_ROOT / ".github/workflows/release-validation.yml"
 
 
 def _workflow_text() -> str:
