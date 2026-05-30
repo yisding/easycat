@@ -625,20 +625,19 @@ class EasyConfig(_AgentSessionConfig):
         return EchoCancellationConfig(enabled=enable_aec)
 
     def _apply_debug_defaults(self) -> None:
-        """Enable verbose logging when debug mode is active.
+        """Enable console logging when debug mode is active.
 
         ``EASYCAT_LOG_LEVEL`` (``debug|info|warning|error``) overrides
         the default level so users can keep ``debug="light"`` wiring on
         while dialling the log verbosity up or down without code
         changes — mirrors ``LIVEKIT_LOG_LEVEL`` / ``UVICORN_LOG_LEVEL``.
+        The default is INFO (matching :func:`easycat.run`); DEBUG is only
+        selected when ``EASYCAT_LOG_LEVEL`` explicitly requests it.
         """
-        if not logging.root.handlers:
-            logging.basicConfig(
-                level=logging.DEBUG,
-                format="%(asctime)s %(name)s %(levelname)s %(message)s",
-            )
-        level = _resolve_easycat_log_level(default=logging.DEBUG)
-        logging.getLogger("easycat").setLevel(level)
+        from easycat._logging import enable_console_logging
+
+        enable_console_logging()
+        level = logging.getLogger("easycat").level
         logger.debug("EasyCat debug mode enabled (level=%s)", logging.getLevelName(level))
 
     def _validate(self) -> None:

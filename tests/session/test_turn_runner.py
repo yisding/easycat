@@ -8,11 +8,13 @@ decomposition.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock
 
 import pytest
 
+from easycat._log_context import CorrelationFilter, bind_turn
 from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
@@ -169,6 +171,20 @@ def _config(**overrides) -> SessionConfig:
     return SessionConfig(**base)
 
 
+def _current_turn_log_context() -> str:
+    record = logging.LogRecord(
+        name="easycat.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="hi",
+        args=(),
+        exc_info=None,
+    )
+    CorrelationFilter().filter(record)
+    return str(record.turn_id)
+
+
 # ── Tests ──────────────────────────────────────────────────────────
 
 
@@ -197,6 +213,20 @@ async def test_on_turn_started_creates_turn_context() -> None:
     assert session._turn is not None
     assert session._turn.id == "t-1"
     assert session._stt_committer.is_active
+
+
+@pytest.mark.asyncio
+async def test_on_turn_started_does_not_leave_task_bound_to_turn() -> None:
+    """Turn startup tags its own logs but does not leak into later task logs."""
+    bind_turn(None)
+    session = Session(_config())
+    session._is_running = True
+
+    await session._turn_runner.on_turn_started(TurnStarted(turn_id="t-context"))
+
+    assert session._turn is not None
+    assert session._turn.id == "t-context"
+    assert _current_turn_log_context() == "-"
 
 
 @pytest.mark.asyncio
@@ -391,6 +421,21 @@ async def test_send_text_runs_agent_without_audio() -> None:
     )
     response = await session.send_text("hello")
     assert response == "Reply."
+
+
+@pytest.mark.asyncio
+async def test_send_text_clears_turn_log_context_after_turn() -> None:
+    """The caller task should not keep the text turn id after send_text returns."""
+    bind_turn(None)
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            agent=_SimpleStreamingAgent(),
+        )
+    )
+
+    assert await session.send_text("hello") == "Reply."
+    assert _current_turn_log_context() == "-"
 
 
 @pytest.mark.asyncio

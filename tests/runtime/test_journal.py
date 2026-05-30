@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 
 from easycat.runtime.journal import InMemoryRingBuffer, JournalView, create_journal
@@ -178,7 +179,7 @@ class TestInMemoryRingBufferThreadSafety:
 
 
 class TestDegradedMode:
-    def test_degraded_on_internal_error(self, capsys):
+    def test_degraded_on_internal_error(self, caplog):
         j = InMemoryRingBuffer(capacity=10)
         # Simulate a broken internal by making _do_append raise
 
@@ -187,17 +188,18 @@ class TestDegradedMode:
 
         j._do_append = broken
 
-        seq = j.append(
-            kind=JournalRecordKind.EVENT,
-            name="e1",
-            session_id="s1",
-        )
+        with caplog.at_level(logging.WARNING, logger="easycat"):
+            seq = j.append(
+                kind=JournalRecordKind.EVENT,
+                name="e1",
+                session_id="s1",
+            )
         assert seq == -1
         assert j.degraded is True
 
-        # Stderr should have the degraded marker
-        captured = capsys.readouterr()
-        assert "journal degraded" in captured.err
+        # The degraded transition should emit a WARNING on the easycat logger.
+        assert "Journal entered degraded mode" in caplog.text
+        assert any(rec.levelno == logging.WARNING for rec in caplog.records)
 
     def test_degraded_marker_does_not_advance_sequence(self):
         j = InMemoryRingBuffer(capacity=10)
@@ -240,19 +242,19 @@ class TestDegradedMode:
         normal = j.read()
         assert all(r.kind != JournalRecordKind.DEGRADED for r in normal)
 
-    def test_subsequent_appends_silently_dropped(self, capsys):
+    def test_subsequent_appends_silently_dropped(self, caplog):
         j = InMemoryRingBuffer(capacity=10)
         j._degraded = True
 
-        seq = j.append(
-            kind=JournalRecordKind.EVENT,
-            name="e1",
-            session_id="s1",
-        )
+        with caplog.at_level(logging.WARNING, logger="easycat"):
+            seq = j.append(
+                kind=JournalRecordKind.EVENT,
+                name="e1",
+                session_id="s1",
+            )
         assert seq == -1
-        # No stderr output for subsequent drops
-        captured = capsys.readouterr()
-        assert captured.err == ""
+        # No warning is logged for subsequent drops once already degraded.
+        assert caplog.records == []
 
 
 class TestJournalView:

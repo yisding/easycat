@@ -307,6 +307,48 @@ def test_forbidden_observability_attributes_fail(forbidden: str) -> None:
         observability.sanitize_attributes({forbidden: "secret"})
 
 
+@pytest.mark.parametrize(
+    "forbidden",
+    [
+        "easycat.transcript",
+        "user_prompt",
+        "message_content",
+        "raw_text",
+        "request_body",
+        "client_secret",
+        "auth_token",
+    ],
+)
+def test_substring_forbidden_attributes_fail(forbidden: str) -> None:
+    with pytest.raises(ValueError, match=f"forbidden observability attribute: {forbidden}"):
+        observability.sanitize_attributes(
+            {forbidden: "secret"},
+            allowed_keys=observability.SPAN_ATTRIBUTE_KEYS,
+        )
+
+
+def test_allowed_keys_checked_before_substring_guard() -> None:
+    result = observability.sanitize_attributes(
+        {"easycat.surface": "tts", "gen_ai.request.model": "gpt-test"},
+        allowed_keys=observability.SPAN_ATTRIBUTE_KEYS,
+    )
+    assert result == {"easycat.surface": "tts", "gen_ai.request.model": "gpt-test"}
+
+
+def test_forbidden_keys_checked_before_allow_list() -> None:
+    with pytest.raises(ValueError, match="forbidden observability attribute: prompt"):
+        observability.sanitize_attributes(
+            {"prompt": "secret"},
+            allowed_keys=frozenset({"prompt"}),
+        )
+
+
+def test_no_allowed_key_contains_a_forbidden_substring() -> None:
+    for key in observability.SPAN_ATTRIBUTE_KEYS:
+        low = key.lower()
+        assert not any(substring in low for substring in observability._FORBIDDEN_SUBSTRINGS), key
+
+
 def test_metric_attributes_reject_span_only_genai_keys() -> None:
     with pytest.raises(ValueError, match="unsupported observability attribute: gen_ai.system"):
         observability.record_histogram(

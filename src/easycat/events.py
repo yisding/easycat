@@ -1,4 +1,11 @@
-"""Event types and EventBus dispatch system for EasyCat."""
+"""Event types and EventBus dispatch system for EasyCat.
+
+The EventBus drives application behavior — it is NOT an observability sink.
+For durable, replayable records use ``session.journal`` or
+``export_debug_bundle()``; for production telemetry configure an OpenTelemetry
+SDK; for human diagnostics use the ``easycat`` stdlib logger
+(``EASYCAT_LOG_LEVEL``). See docs/observability.md for the four-layer model.
+"""
 
 from __future__ import annotations
 

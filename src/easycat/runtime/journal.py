@@ -11,7 +11,6 @@ import shutil
 import signal
 import sqlite3
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -616,10 +615,6 @@ class InMemoryRingBuffer:
                 "error_message": str(exc),
             },
         )
-        print(
-            f"[easycat] journal degraded: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
         logger.warning("Journal entered degraded mode: %s: %s", type(exc).__name__, exc)
         # Try to write the marker — best-effort.
         try:
@@ -1105,10 +1100,6 @@ class SqliteJournal:
     def _enter_degraded(self, session_id: str, exc: Exception) -> None:
         self._degraded = True
         observe_gauge("easycat.journal.degraded", 1)
-        print(
-            f"[easycat] journal degraded: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
         logger.warning("Journal entered degraded mode: %s: %s", type(exc).__name__, exc)
 
     @staticmethod
@@ -1655,10 +1646,6 @@ class LibsqlJournal:
     def _enter_degraded(self, session_id: str, exc: Exception) -> None:
         self._degraded = True
         observe_gauge("easycat.journal.degraded", 1)
-        print(
-            f"[easycat] journal degraded: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
         logger.warning("Journal entered degraded mode: %s: %s", type(exc).__name__, exc)
 
 

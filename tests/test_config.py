@@ -606,9 +606,34 @@ def test_create_session_keeps_vad_enabled_for_flux_when_voicemail_detector_enabl
 # ── debug mode tests ──────────────────────────────────────────────────
 
 
-def test_debug_mode_sets_easycat_logger_to_debug():
+@pytest.fixture
+def _restore_easycat_logger():
+    """Snapshot/restore easycat logger state so debug-mode tests stay isolated."""
+    logger = logging.getLogger("easycat")
+    handlers = logger.handlers[:]
+    level = logger.level
+    propagate = logger.propagate
+    try:
+        yield logger
+    finally:
+        logger.handlers[:] = handlers
+        logger.setLevel(level)
+        logger.propagate = propagate
+
+
+def test_debug_mode_defaults_easycat_logger_to_info(_restore_easycat_logger):
     EasyConfig(openai_api_key="test-key", debug="full")
-    assert logging.getLogger("easycat").level == logging.DEBUG
+    # H4: EASYCAT_LOG_LEVEL has a single meaning — INFO by default, DEBUG only
+    # when the env var explicitly requests it (mirrors run()).
+    assert _restore_easycat_logger.level == logging.INFO
+
+
+def test_debug_mode_honors_env_debug_level(
+    monkeypatch: pytest.MonkeyPatch, _restore_easycat_logger
+):
+    monkeypatch.setenv("EASYCAT_LOG_LEVEL", "debug")
+    EasyConfig(openai_api_key="test-key", debug="full")
+    assert _restore_easycat_logger.level == logging.DEBUG
 
 
 def test_debug_bool_true_rejected():

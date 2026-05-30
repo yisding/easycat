@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from easycat import _observability as observability
+from easycat._log_context import bind_turn
 from easycat._turn_context import TurnContext, TurnHandle
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -175,25 +176,30 @@ class TurnRunner:
         cancel_token = self._turn_manager.cancel_token or CancelToken()
         turn = TurnContext(turn_id=event.turn_id, cancel_token=cancel_token)
         self._turn.set(turn)
-        self._audio.reset_speech_detection()
-        self._tts.set_playback_suppressed(False)
-
-        # Start STT stream
+        # Tag startup records for this turn without leaving the EventBus task
+        # pinned to the turn after this handler returns.
+        bind_turn(turn.id)
         try:
+            self._audio.reset_speech_detection()
+            self._tts.set_playback_suppressed(False)
+
+            # Start STT stream
             stt = self._stt_provider()
             await stt.start_stream()
             self._stt.mark_active()
             self._stt.start_event_loop(turn)
+
+            # Prime STT with pre-roll frames captured by TurnManager
+            for chunk in self._turn_manager.turn_audio:
+                await self._stt_stage.execute(chunk, self._run_ctx, turn)
+                turn.stt_has_uncommitted_audio = True
         except Exception as exc:
             logger.exception("Failed to start STT stream")
             await self._emit(Error(exception=exc, stage=ErrorStage.STT))
             self._stt.mark_inactive()
             return
-
-        # Prime STT with pre-roll frames captured by TurnManager
-        for chunk in self._turn_manager.turn_audio:
-            await self._stt_stage.execute(chunk, self._run_ctx, turn)
-            turn.stt_has_uncommitted_audio = True
+        finally:
+            bind_turn(None)
 
     def schedule_turn_ended(self, event: TurnEnded) -> None:
         """Schedule end-of-turn processing without blocking other handlers.
@@ -210,12 +216,16 @@ class TurnRunner:
             current_tts_task.cancel()
         gen = self._turn.generation
         turn = self._turn.current
-        new_task = self._runtime_scope.create_journaled_task(
-            self.on_turn_ended(event, gen, turn=turn),
-            name="on_turn_ended",
-            journal_sink=self._journal_sink,
-            turn_id=event.turn_id,
-        )
+        bind_turn(event.turn_id)
+        try:
+            new_task = self._runtime_scope.create_journaled_task(
+                self.on_turn_ended(event, gen, turn=turn),
+                name="on_turn_ended",
+                journal_sink=self._journal_sink,
+                turn_id=event.turn_id,
+            )
+        finally:
+            bind_turn(None)
         self._tts.current_task = new_task
         new_task.add_done_callback(self._runtime_scope.log_task_exception)
 
@@ -226,15 +236,18 @@ class TurnRunner:
         turn: TurnContext | None = None,
     ) -> None:
         """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
-        if self._turn.generation != generation:
-            return
-        if turn and turn.cancel_token.is_cancelled:
-            return
-        if self._turn_manager.state != TurnManagerState.PROCESSING:
-            return
-        if turn:
-            turn.end_time = event.timestamp
-        await self.handle_end_of_speech(turn=turn)
+        try:
+            if self._turn.generation != generation:
+                return
+            if turn and turn.cancel_token.is_cancelled:
+                return
+            if self._turn_manager.state != TurnManagerState.PROCESSING:
+                return
+            if turn:
+                turn.end_time = event.timestamp
+            await self.handle_end_of_speech(turn=turn)
+        finally:
+            bind_turn(None)
 
     # ── Pipeline ───────────────────────────────────────────────────
 
@@ -551,11 +564,12 @@ class TurnRunner:
 
     async def _execute_text_turn(self, text: str, cancel_token: CancelToken | None = None) -> str:
         turn_id = f"turn-{uuid4().hex[:12]}"
-        await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn_id))
         response = ""
         t0 = time.monotonic()
         result_attr = "fail"
+        bind_turn(turn_id)
         try:
+            await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn_id))
             await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn_id))
             structured_output = None
             self._text_turn_accumulated = ""
@@ -661,21 +675,27 @@ class TurnRunner:
             )
             raise
         finally:
-            with observability.span(
-                "easycat.turn.commit",
-                {
-                    "easycat.surface": "agent_bridge",
-                    "easycat.result": result_attr,
-                },
-            ):
-                observability.record_histogram(
-                    "easycat.turn.latency",
-                    time.monotonic() - t0,
-                    {"easycat.surface": "agent_bridge", "easycat.result": result_attr},
-                )
-                observability.increment_counter(
-                    "easycat.turns.total",
-                    attributes={"easycat.surface": "agent_bridge", "easycat.result": result_attr},
-                )
-                await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn_id))
+            try:
+                with observability.span(
+                    "easycat.turn.commit",
+                    {
+                        "easycat.surface": "agent_bridge",
+                        "easycat.result": result_attr,
+                    },
+                ):
+                    observability.record_histogram(
+                        "easycat.turn.latency",
+                        time.monotonic() - t0,
+                        {"easycat.surface": "agent_bridge", "easycat.result": result_attr},
+                    )
+                    observability.increment_counter(
+                        "easycat.turns.total",
+                        attributes={
+                            "easycat.surface": "agent_bridge",
+                            "easycat.result": result_attr,
+                        },
+                    )
+                    await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn_id))
+            finally:
+                bind_turn(None)
         return response
