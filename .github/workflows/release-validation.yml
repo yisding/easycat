@@ -49,7 +49,10 @@ jobs:
         run: |
           WHEEL_PATH="$(find "$GITHUB_WORKSPACE/dist" -name '*.whl' | head -n 1)"
           uv pip install --python "$RELEASE_VENV/bin/python" "easycat[openai,openai-agents] @ file://$WHEEL_PATH"
-          uv pip install --python "$RELEASE_VENV/bin/python" pytest pytest-asyncio
+          # hypothesis is needed at collection time: the quick slice includes
+          # unmarked property-based tests (tests/**/*_property.py) that import
+          # it at module level, so the wheel-only env must provide it too.
+          uv pip install --python "$RELEASE_VENV/bin/python" pytest pytest-asyncio hypothesis
       - name: Verify installed package outside source tree
         working-directory: ${{ runner.temp }}
         env:
