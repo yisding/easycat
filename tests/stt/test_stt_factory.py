@@ -127,6 +127,46 @@ def test_unknown_provider_suggests_close_match():
         create_stt_provider(config)
 
 
+def test_factory_rejects_invalid_params():
+    # Mirrors the TTS factory: an unknown param surfaces as a ValueError
+    # rather than a raw TypeError from the config constructor.
+    config = STTProviderConfig(provider="openai", api_key="k", params={"not_a_real_field": True})
+    with pytest.raises(ValueError, match="Invalid params for 'openai' STT provider"):
+        create_stt_provider(config)
+
+
+# ── Symmetry with TTSProviderConfig ──────────────────────────────
+
+
+def test_factory_accepts_nested_params_api_key():
+    # An ``api_key`` nested in ``params`` is honored, mirroring the TTS
+    # factory, so the two sibling configs accept the same shapes.
+    config = STTProviderConfig(provider="openai", params={"api_key": "nested-key"})
+    provider = create_stt_provider(config)
+    assert isinstance(provider, OpenAISTT)
+    assert provider._config.api_key == "nested-key"
+
+
+def test_factory_top_level_api_key_takes_precedence_over_params():
+    config = STTProviderConfig(
+        provider="openai", api_key="top-key", params={"api_key": "nested-key"}
+    )
+    provider = create_stt_provider(config)
+    assert provider._config.api_key == "top-key"
+
+
+def test_factory_accepts_deprecated_settings_alias():
+    # ``settings`` is a deprecated alias for ``params``; it must keep
+    # working so it stays symmetric with TTSProviderConfig.
+    config = STTProviderConfig(
+        provider="openai", settings={"api_key": "settings-key", "model": "whisper-1"}
+    )
+    provider = create_stt_provider(config)
+    assert isinstance(provider, OpenAISTT)
+    assert provider._config.api_key == "settings-key"
+    assert provider._config.model == "whisper-1"
+
+
 def test_available_providers_lists_registered_names():
     names = available_providers()
     # Core providers must be registered; new providers may be added freely.

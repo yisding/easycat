@@ -295,6 +295,15 @@ async def test_deepgram_ignores_empty_transcript():
 # ── URL building ─────────────────────────────────────────────────
 
 
+def test_deepgram_config_constructs_without_api_key():
+    # ``api_key`` defaults to ``""`` to support the inject-the-key-later
+    # workflow, matching every sibling STT/TTS config (no construction-time
+    # TypeError when the key is supplied later).
+    config = DeepgramSTTConfig(model="nova-2")
+    assert config.api_key == ""
+    assert config.model == "nova-2"
+
+
 def test_deepgram_build_url():
     config = DeepgramSTTConfig(
         api_key="k",

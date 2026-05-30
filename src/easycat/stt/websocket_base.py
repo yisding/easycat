@@ -9,6 +9,8 @@ from typing import Any
 
 import websockets
 
+from easycat._provider_helpers import ProviderErrorEmitter
+from easycat.events import ErrorStage
 from easycat.reconnecting_ws import ReconnectCallback, ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase
 
@@ -27,8 +29,10 @@ async def _noop_reconnect() -> None:
     """
 
 
-class WebSocketSTTBase(STTBase):
+class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
     """Base class for STT providers backed by a streaming WebSocket."""
+
+    _error_stage = ErrorStage.STT
 
     def __init__(
         self,
@@ -45,9 +49,12 @@ class WebSocketSTTBase(STTBase):
         self._ws: ReconnectingWebSocket | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._provider_event_bus: Any | None = None
-        # Strong references to fire-and-forget Error-emit tasks so the event
-        # loop does not garbage-collect them before ``bus.emit`` completes.
-        self._emit_tasks: set[asyncio.Task[Any]] = set()
+        self._init_emit_tasks()
+
+    def _resolve_event_bus(self) -> Any | None:
+        # STT carries the bus per connection (set in ``_connect_websocket``),
+        # not on a static config object like the TTS providers do.
+        return self._provider_event_bus
 
     async def _connect_websocket(
         self,
@@ -91,26 +98,42 @@ class WebSocketSTTBase(STTBase):
             return False
         return True
 
-    async def _close_active_websocket(self) -> None:
-        """Drain the receive loop, then close the underlying WebSocket."""
+    async def _close_active_websocket(self, *, close_before_drain: bool = False) -> None:
+        """Drain the receive loop, then close the underlying WebSocket.
+
+        Some providers (e.g. ElevenLabs/OpenAI realtime STT) keep the
+        socket open after delivering the final transcript, so draining
+        first would block in ``recv_iter`` until the close timeout fires.
+        Pass ``close_before_drain=True`` to close the socket up front —
+        waking the receive loop so it returns promptly — then drain it.
+        ``ReconnectingWebSocket.close()`` is idempotent, so the later
+        close in ``_drain_and_close`` is a harmless no-op.
+        """
         ws = self._ws
         receive_task = self._receive_task
         if ws is None:
             return
         try:
-            await self._drain_and_close(ws, receive_task)
+            await self._drain_and_close(ws, receive_task, close_before_drain=close_before_drain)
         finally:
             if self._ws is ws:
                 self._ws = None
             if self._receive_task is receive_task:
                 self._receive_task = None
             self._provider_event_bus = None
+            await self._drain_emit_tasks()
 
     async def _drain_and_close(
         self,
         ws: ReconnectingWebSocket,
         receive_task: asyncio.Task[None] | None,
+        *,
+        close_before_drain: bool = False,
     ) -> None:
+        if close_before_drain:
+            # Close first to wake a receive loop that would otherwise block
+            # waiting for the provider to close a socket it keeps open.
+            await ws.close()
         try:
             if receive_task is not None:
                 try:
@@ -151,6 +174,7 @@ class WebSocketSTTBase(STTBase):
         except Exception:
             logger.exception("Error in %s receive loop", self._provider_log_label)
         finally:
+            self._on_receive_loop_end()
             queue.put_nowait(None)
 
     async def _handle_ws_bytes_message(self, message: bytes) -> None:
@@ -159,6 +183,17 @@ class WebSocketSTTBase(STTBase):
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
         """Handle one decoded JSON message from the provider."""
         raise NotImplementedError
+
+    def _on_receive_loop_end(self) -> None:
+        """Hook run once the receive loop exits, before the sentinel is queued.
+
+        The default does nothing.  Providers that gate ``_on_start`` on a
+        post-connect "ready" future (e.g. the OpenAI Realtime
+        ``session.update`` handshake) override this to fail-fast that
+        future when the socket drops before the session is acknowledged —
+        otherwise the start waiter would block for its full timeout
+        instead of surfacing the close immediately.
+        """
 
     def _emit_provider_error_from_message(
         self,
@@ -183,37 +218,6 @@ class WebSocketSTTBase(STTBase):
             code=msg.get("code"),
             status_code=msg.get("status_code"),
         )
-
-    def _emit_provider_error(self, exc: BaseException, **context: Any) -> None:
-        bus = self._provider_event_bus
-        if bus is None:
-            return
-        from easycat.events import Error, ErrorStage
-
-        for key, value in context.items():
-            if value is None:
-                continue
-            try:
-                exc.add_note(f"{key}={value}")  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover - pre-3.11
-                pass
-        try:
-            task = asyncio.create_task(
-                bus.emit(
-                    Error(
-                        exception=exc,
-                        stage=ErrorStage.STT,
-                        provider=self._provider_error_name,
-                    )
-                )
-            )
-        except RuntimeError:  # no running loop
-            logger.debug("Could not emit provider error - no running loop", exc_info=True)
-            return
-        # Keep a strong reference until the emit completes; the event loop
-        # only holds a weak one, so an untracked task can be GC'd mid-flight.
-        self._emit_tasks.add(task)
-        task.add_done_callback(self._emit_tasks.discard)
 
     @property
     def _provider_log_label(self) -> str:

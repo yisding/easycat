@@ -15,9 +15,19 @@ from easycat.stt.websocket_base import WebSocketSTTBase
 
 @dataclass
 class DeepgramSTTConfig:
-    """Configuration for the Deepgram STT provider."""
+    """Configuration for the Deepgram STT provider.
 
-    api_key: str
+    .. note::
+
+       ``api_key`` defaults to ``""`` to support the inject-the-key-later
+       workflow (e.g. constructing the config first and assigning the key
+       before use).  A missing key is therefore *not* validated at
+       construction time — it surfaces on the first live request rather
+       than eagerly.  The :func:`easycat.stt.factory` path still
+       fail-fasts on an empty key.
+    """
+
+    api_key: str = ""
     model: str = "nova-2"
     language: str = "en"
     encoding: str = "linear16"
@@ -118,6 +128,10 @@ class DeepgramSTT(WebSocketSTTBase):
         if not transcript:
             return
 
+        # ``confidence`` and ``word_timestamps`` are provider-captured metadata
+        # carried on STTEvent. They are not yet consumed by the pipeline (the
+        # session reads only ``text``/``track``); populate them so the data is
+        # available to future observability/journal wiring.
         confidence = best.get("confidence")
         is_final = msg.get("is_final", False)
         word_timestamps = word_timestamps_from_words(best.get("words"))

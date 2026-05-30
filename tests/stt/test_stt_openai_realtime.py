@@ -191,6 +191,30 @@ async def test_openai_realtime_model_is_set_via_session_update():
     )
 
 
+def test_openai_realtime_version_info_reports_transcription_model():
+    """version_info keeps the canonical 4-key shape and reports the
+    transcription ``model`` (not the connection model).
+
+    The transcription model and the realtime ``connection_model`` are
+    distinct config knobs; ``version_info`` deliberately surfaces only the
+    transcription ``model`` so it matches the cross-provider shape invariant
+    guarded by ``tests/runtime/test_version_info.py``.  The connection model
+    is exercised separately via the websocket URL.
+    """
+    config = OpenAIRealtimeSTTConfig(
+        api_key="sk-test",
+        model="gpt-4o-mini-transcribe",
+        connection_model="gpt-realtime-mini",
+    )
+    # The two models stay distinct on the config.
+    assert config.model == "gpt-4o-mini-transcribe"
+    assert config.connection_model == "gpt-realtime-mini"
+
+    info = OpenAIRealtimeSTT(config).version_info()
+    assert set(info.keys()) == {"provider", "model", "api_version", "sdk_version"}
+    assert info["model"] == "gpt-4o-mini-transcribe"
+
+
 @pytest.mark.asyncio
 async def test_openai_realtime_merges_explicit_connection_model_into_existing_query_string():
     factory = _MockWSFactory([_make_transcription_completed("hi")])
@@ -499,7 +523,7 @@ async def test_openai_realtime_drops_late_completed_after_timeout() -> None:
     emitted: list[STTEvent] = []
     stt._emit_event = emitted.append  # type: ignore[method-assign]
 
-    stt._handle_message(
+    stt._handle_json_message(
         {
             "type": "conversation.item.input_audio_transcription.completed",
             "transcript": "revised transcript",
@@ -524,20 +548,20 @@ async def test_openai_realtime_next_commit_reemits_after_drop() -> None:
     stt._emit_event = emitted.append  # type: ignore[method-assign]
 
     # First message: the late .completed from the previous turn — dropped.
-    stt._handle_message(
+    stt._handle_json_message(
         {
             "type": "conversation.item.input_audio_transcription.completed",
             "transcript": "stale",
         }
     )
     # Next turn's delta + .completed — must emit normally.
-    stt._handle_message(
+    stt._handle_json_message(
         {
             "type": "conversation.item.input_audio_transcription.delta",
             "delta": "fresh transcript",
         }
     )
-    stt._handle_message(
+    stt._handle_json_message(
         {
             "type": "conversation.item.input_audio_transcription.completed",
             "transcript": "fresh transcript",
@@ -571,6 +595,89 @@ async def test_openai_realtime_final_from_partials_when_no_transcript():
     finals = [e for e in events if e.type == STTEventType.FINAL]
     assert len(finals) == 1
     assert finals[0].text == "hello"
+
+
+# ── Shared WebSocket lifecycle (WebSocketSTTBase reuse) ──────────
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_close_drains_receive_loop_with_shared_timeout() -> None:
+    """The realtime ``end`` path uses the shared base close semantics:
+    close-before-drain wakes the receive loop, which drains within the
+    base ``_close_timeout`` rather than being re-implemented locally."""
+    factory = _MockWSFactory([_make_transcription_completed("done")])
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    stt = OpenAIRealtimeSTT(config)
+
+    await collect_stt_events(stt, make_audio_chunks(generate_pcm_sine(duration_ms=100)))
+
+    # Receive task and socket are released through the shared base teardown.
+    assert stt._ws is None
+    assert stt._receive_task is None
+    # The mock socket was closed (close-before-drain on the realtime path).
+    assert factory.connection.close_code == 1000
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_close_cancels_stuck_receive_loop() -> None:
+    """If the receive loop will not exit, the shared close path cancels it
+    after ``_close_timeout`` instead of hanging the end-of-turn forever."""
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt._close_timeout = 0.05
+
+    class _StuckWS:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def _never_returns() -> None:
+        # Ignores close() — only a cancel can stop it, exercising the
+        # shared base's TimeoutError -> cancel fallback.
+        while True:
+            await asyncio.sleep(0.01)
+
+    ws = _StuckWS()
+    stt._ws = ws  # type: ignore[assignment]
+    stt._receive_task = asyncio.create_task(_never_returns())
+
+    await asyncio.wait_for(stt._close_active_websocket(close_before_drain=True), timeout=1.0)
+
+    assert ws.closed is True
+    assert stt._ws is None
+    assert stt._receive_task is None
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_receive_loop_end_fails_pending_handshake() -> None:
+    """When the socket drops before ``session.updated`` arrives, the
+    base receive-loop-end hook rejects the pending ``_session_ready``
+    future so ``_on_start`` surfaces the close instead of waiting out
+    its full timeout."""
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    loop = asyncio.get_running_loop()
+    stt._session_ready = loop.create_future()
+
+    stt._on_receive_loop_end()
+
+    assert stt._session_ready.done()
+    with pytest.raises(RuntimeError, match="closed before session was ready"):
+        stt._session_ready.result()
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_receive_loop_end_leaves_resolved_future() -> None:
+    """The hook must not clobber an already-resolved handshake future."""
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    loop = asyncio.get_running_loop()
+    stt._session_ready = loop.create_future()
+    stt._session_ready.set_result(None)
+
+    stt._on_receive_loop_end()
+
+    # No exception was injected over the successful result.
+    assert stt._session_ready.result() is None
 
 
 # ── Reusability ─────────────────────────────────────────────────
