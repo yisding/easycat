@@ -30,6 +30,7 @@ def register_hypothesis_profiles() -> None:
     """Register and load the active Hypothesis profile (no-op if absent)."""
     try:
         from hypothesis import HealthCheck, settings
+        from hypothesis.errors import InvalidArgument
     except ImportError:
         return
 
@@ -47,4 +48,18 @@ def register_hypothesis_profiles() -> None:
         print_blob=True,
         suppress_health_check=[HealthCheck.too_slow],
     )
-    settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
+    # An unregistered HYPOTHESIS_PROFILE (typo, or a slice name like "nightly")
+    # would otherwise raise at conftest import time and abort collection of the
+    # *entire* suite, not just the property tests. Fall back to "dev" instead.
+    requested = os.environ.get("HYPOTHESIS_PROFILE", "dev")
+    try:
+        settings.load_profile(requested)
+    except InvalidArgument:
+        import warnings
+
+        warnings.warn(
+            f"Unknown HYPOTHESIS_PROFILE={requested!r}; falling back to 'dev' "
+            "(valid profiles: dev, ci).",
+            stacklevel=2,
+        )
+        settings.load_profile("dev")

@@ -17,6 +17,11 @@ jobs:
     timeout-minutes: 45
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/nightly/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
+      # Run property tests under the thorough Hypothesis profile (500 examples,
+      # non-derandomized) on the nightly schedule -- PRs stay on the fast "dev"
+      # default. Without this, the "ci" profile registered in
+      # tests/_hypothesis_profiles.py is never selected by any workflow.
+      HYPOTHESIS_PROFILE: ci
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
