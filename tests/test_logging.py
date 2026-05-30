@@ -306,6 +306,27 @@ def test_make_handler_uses_rich_when_color_enabled(monkeypatch: pytest.MonkeyPat
     assert isinstance(_make_handler(), RichHandler)
 
 
+def test_make_handler_rich_renders_correlation_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The interactive (color) path must still surface session/turn ids."""
+    monkeypatch.delenv("EASYCAT_LOG_FORMAT", raising=False)
+    monkeypatch.setattr("easycat._console.color_enabled", lambda: True)
+    handler = _make_handler()
+    record = logging.LogRecord(
+        name="easycat.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="hi",
+        args=(),
+        exc_info=None,
+    )
+    record.session_id = "sess-9"
+    record.turn_id = "turn-3"
+    rendered = handler.format(record)
+    assert "sess-9" in rendered
+    assert "turn-3" in rendered
+
+
 def test_make_handler_plain_stream_when_color_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("EASYCAT_LOG_FORMAT", raising=False)
     monkeypatch.setattr("easycat._console.color_enabled", lambda: False)

@@ -18,6 +18,9 @@ import sys
 _HANDLER_TAG = "_easycat_console"
 
 _LOG_FORMAT = "%(asctime)s [%(session_id)s/%(turn_id)s] %(name)s %(levelname)s %(message)s"
+# RichHandler renders time/level/logger in its own columns, so the Rich format
+# only needs to prepend the correlation ids to the message column.
+_RICH_LOG_FORMAT = "[%(session_id)s/%(turn_id)s] %(message)s"
 
 
 def enable_console_logging(level: int | str | None = None, *, force: bool = False) -> None:
@@ -124,11 +127,16 @@ def _make_handler() -> logging.Handler:
         from rich.console import Console
         from rich.logging import RichHandler
 
-        return RichHandler(
+        handler = RichHandler(
             console=Console(stderr=True, force_terminal=True),
             show_path=False,
             rich_tracebacks=True,
         )
+        # Without a formatter, RichHandler renders only %(message)s, dropping the
+        # session/turn ids the CorrelationFilter populates. Prepend them to the
+        # message column so the interactive color path stays correlated too.
+        handler.setFormatter(logging.Formatter(_RICH_LOG_FORMAT))
+        return handler
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter(_LOG_FORMAT))
     return handler
