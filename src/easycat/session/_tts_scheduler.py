@@ -39,9 +39,9 @@ from easycat.providers import TTSProvider
 from easycat.runtime.context import RunContext
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.stages.tts import TTSStage
-from easycat.timeouts import TimeoutConfig, TTSTimeoutError
+from easycat.timeouts import TimeoutConfig
 from easycat.tts.input import TTSInput, strip_ssml_tags
-from easycat.turn_manager import TurnManager, TurnManagerState
+from easycat.turn_manager import TurnManager
 
 if TYPE_CHECKING:
     from easycat._turn_context import TurnContext
@@ -183,9 +183,9 @@ class TTSScheduler:
     ) -> bool:
         """Run the end-of-turn drain → stop → drain → clear sequence.
 
-        Shared by the streaming agent path (``TurnRunner._process_tts``)
-        and the single-shot :meth:`synthesize` path so the barge-in /
-        clear semantics cannot diverge between the two.
+        The single owner of the bot-speaking stop / turn-clear decision:
+        the streaming agent path (``TurnRunner._process_tts``) calls this
+        so the barge-in / clear semantics live in exactly one place.
 
         Drains pending session actions (end_call, transfer) *before*
         transitioning the turn manager to IDLE so no new turn can sneak
@@ -215,67 +215,6 @@ class TTSScheduler:
             self._clear_turn()
         return should_stop
 
-    async def synthesize(
-        self,
-        payload: TTSInput | str,
-        token: CancelToken | None,
-        *,
-        turn: TurnContext | None = None,
-        is_active: Callable[[], bool] | None = None,
-    ) -> bool:
-        """Synthesize TTS for a complete payload and emit audio events.
-
-        Returns ``True`` if a drained session action signalled that the
-        session should stop.
-
-        ``is_active`` is accepted for callers that want to drive the
-        synthesizer's per-chunk gating themselves (the streaming agent
-        loop does); when ``None`` we fall back to today's behaviour of
-        gating on ``TurnManager.state == BOT_SPEAKING`` outside the
-        classification gate.
-        """
-        should_stop = False
-        if isinstance(payload, str):
-            payload = self.prepare(payload, is_streaming=False, is_final=True)
-        if turn is None:
-            turn = self._current_turn()
-        gated = self._is_gated()
-        if not gated:
-            await self._turn_manager.bot_started_speaking()
-        try:
-            effective_is_active = is_active or (
-                None
-                if gated
-                else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-            )
-            result = await self._synth.synthesize(
-                payload,
-                token,
-                is_active=effective_is_active,
-            )
-            if result.first_audio_time is not None and turn:
-                turn.first_tts_audio_time = result.first_audio_time
-        except (asyncio.CancelledError, TTSTimeoutError):
-            pass
-        finally:
-            if (
-                not gated
-                and self._current_turn() is turn
-                and turn is not None
-                and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-            ):
-                should_stop = await self.finalize_speaking_turn(turn)
-            elif gated and self._current_turn() is turn and turn is not None:
-                # Gated opener TTS is buffered — reset to IDLE so the
-                # callee's speech can start new turns while we wait for
-                # classification.  Keep the active turn alive so that
-                # when the gate flushes and replays buffered audio,
-                # the router can still call record_audio_sent() and
-                # send playback marks.
-                self._audio_router.reset_speech_detection()
-                self._turn_manager.reset()
-        return should_stop
-
     async def synthesize_bypass(self, text: str) -> None:
         """Synthesize text via TTS, bypassing the classification gate.
 
@@ -292,11 +231,11 @@ class TTSScheduler:
     ) -> object:
         """Reserved private placeholder for sentence-level pipelining.
 
-        Not yet implemented — current behaviour is one-at-a-time
-        synthesis via :meth:`synthesize`.  Kept private so the scheduler's
-        public surface only advertises implemented methods; the hook
-        exists so the pipelining change is a local one when it lands
-        (see workstream-tts-pipelining).
+        Not yet implemented — current behaviour is one-at-a-time synthesis
+        driven by ``TurnRunner._process_tts`` via ``synthesizer.synthesize``.
+        Kept private so the scheduler's public surface only advertises
+        implemented methods; the hook exists so the pipelining change is a
+        local one when it lands (see workstream-tts-pipelining).
         """
         raise NotImplementedError("sentence-level TTS pipelining is not implemented yet")
 

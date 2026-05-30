@@ -427,6 +427,85 @@ async def test_consume_agent_stream_captures_done_on_cancel_without_tool_calls()
     assert result.structured_output == {"answer": 42}
 
 
+async def test_consume_agent_stream_applies_backpressure_on_bounded_queue():
+    """A fast producer against a bounded queue blocks on put() rather than
+    growing unbounded, then proceeds once the consumer drains."""
+    from easycat.session._streaming import consume_agent_stream
+
+    cancel_token = CancelToken()
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        for _ in range(5):
+            yield AgentBridgeEvent(kind="text_delta", text="Hello world. ")
+        yield AgentBridgeEvent(kind="done", text="")
+
+    turn = TurnContext(turn_id="t1", cancel_token=cancel_token)
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue(maxsize=1)
+
+    consumer_task = asyncio.create_task(
+        consume_agent_stream(
+            _stream,
+            cancel_token=cancel_token,
+            tts_queue=tts_queue,
+            emit=AsyncMock(),
+            prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+            strip_md=False,
+            turn=turn,
+        )
+    )
+
+    # With maxsize=1 and multiple sentences, the producer must block on put()
+    # until the queue is drained; it cannot accumulate without bound.
+    await asyncio.sleep(0)
+    assert tts_queue.qsize() <= 1
+
+    # Drain so the producer can finish.
+    drained: list[TTSInput] = []
+    while True:
+        item = await tts_queue.get()
+        if item is None:
+            break
+        drained.append(item)
+
+    result = await consumer_task
+    assert result.error is None
+    assert len(drained) >= 1
+
+
+async def test_consume_agent_stream_sentinel_skipped_when_consumer_stopped():
+    """If the bounded queue is full and the consumer stopped draining, the
+    stop sentinel is dropped instead of deadlocking the finally block."""
+    from easycat.session._streaming import consume_agent_stream
+
+    cancel_token = CancelToken()
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        # Cancel up front so the producer takes the cancellation break before
+        # putting anything, exercising the finally-block sentinel put.
+        cancel_token.cancel()
+        yield AgentBridgeEvent(kind="done", text="final")
+
+    turn = TurnContext(turn_id="t1", cancel_token=cancel_token)
+    # Pre-fill the queue to capacity so the sentinel put_nowait would raise
+    # QueueFull; the producer must swallow it rather than block forever.
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue(maxsize=1)
+    tts_queue.put_nowait(TTSInput(text="already here"))
+
+    result = await asyncio.wait_for(
+        consume_agent_stream(
+            _stream,
+            cancel_token=cancel_token,
+            tts_queue=tts_queue,
+            emit=AsyncMock(),
+            prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+            strip_md=False,
+            turn=turn,
+        ),
+        timeout=2.0,
+    )
+    assert result.interrupted is True
+
+
 # ── Sentence boundary helper tests ────────────────────────────────
 
 
@@ -2415,6 +2494,16 @@ async def test_streaming_strip_markdown_writes_journal_record():
         "original_text": "Go to **Settings** first.",
         "stripped_text": "Go to Settings first.",
     }
+    # The last-assistant rewrite is routed through AgentStage so the
+    # framework-state mutation lands on the journal recording boundary
+    # alongside the streamed text (xc-architecture consistency fix).
+    rewrites = [
+        record for record in journal.read() if record.name == "replace_last_assistant_text"
+    ]
+    assert len(rewrites) == 1
+    assert rewrites[0].turn_id == "turn-stream-markdown"
+    assert rewrites[0].data["stage"] == "agent"
+    assert rewrites[0].data["text"] == "Go to Settings first."
 
 
 @pytest.mark.asyncio
@@ -2897,8 +2986,13 @@ async def test_streaming_interruption_prefers_cancel_token_timestamp(
 
 
 @pytest.mark.asyncio
-async def test_synthesize_tts_does_not_clear_newer_turn_id() -> None:
-    """_synthesize_tts should not clear _current_turn_id after a newer turn starts."""
+async def test_streaming_turn_does_not_clear_newer_turn_id() -> None:
+    """run_streaming_agent must not clear _turn after a newer turn starts.
+
+    Drives the live streaming path (the only production TTS path) and
+    swaps the active turn mid-flight; the post-loop guard keyed on turn
+    identity *and* generation must leave the newer turn intact.
+    """
 
     class DelayedTTS(FakeTTS):
         async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
@@ -2911,16 +3005,18 @@ async def test_synthesize_tts_does_not_clear_newer_turn_id() -> None:
             transport=FakeTransport(),
             vad=FakeVAD(),
             stt=FakeSTT(transcript="test"),
-            agent=FastDoneAgent(),
+            agent=SlowStreamingAgent(),
             tts=DelayedTTS(),
             noise_reducer=FakeNoiseReducer(),
             turn_manager_config=_FAST_TURN,
         )
     )
 
-    session._turn = TurnContext("turn-old", CancelToken())
-    task = asyncio.create_task(session._tts_scheduler.synthesize("hello", token=CancelToken()))
+    old_turn = TurnContext("turn-old", CancelToken())
+    session._turn = old_turn
+    task = asyncio.create_task(session._run_streaming_agent("hello", token=None, turn=old_turn))
     await asyncio.sleep(0.01)
+    # A newer turn supersedes the old one while the stream is still running.
     session._turn = TurnContext("turn-new", CancelToken())
 
     await task

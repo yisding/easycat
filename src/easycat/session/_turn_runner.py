@@ -42,9 +42,6 @@ from easycat.events import (
     Error,
     ErrorStage,
     EventBus,
-    ToolCallDelta,
-    ToolCallResult,
-    ToolCallStarted,
     TurnEnded,
     TurnStarted,
 )
@@ -52,7 +49,7 @@ from easycat.runtime.context import RunContext
 from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
-from easycat.session._streaming import consume_agent_stream
+from easycat.session._streaming import consume_agent_stream, emit_tool_event
 from easycat.session.interruption import (
     TtsChunk,
     estimate_and_notify_interruption,
@@ -187,16 +184,31 @@ class TurnRunner:
             stt = self._stt_provider()
             await stt.start_stream()
             self._stt.mark_active()
-            self._stt.start_event_loop(turn)
 
-            # Prime STT with pre-roll frames captured by TurnManager
+            # Prime STT with pre-roll frames captured by TurnManager.
+            # The background event consumer is started only after the stream
+            # is open and pre-roll priming succeeds, so a failure here cannot
+            # leave an orphaned consumer task running against a half-open
+            # stream for the rest of the session.
             for chunk in self._turn_manager.turn_audio:
                 await self._stt_stage.execute(chunk, self._run_ctx, turn)
                 turn.stt_has_uncommitted_audio = True
+
+            self._stt.start_event_loop(turn)
         except Exception as exc:
             logger.exception("Failed to start STT stream")
             await self._emit(Error(exception=exc, stage=ErrorStage.STT))
-            self._stt.mark_inactive()
+            # Full per-turn teardown: close the (possibly half-open) stream,
+            # cancel/await any STT consumer task, mark inactive, and resolve
+            # pending futures so no live STT work or stale turn is left behind.
+            try:
+                await self._stt.cancel(turn)
+            except Exception:
+                logger.debug("STT teardown after start failure raised", exc_info=True)
+            # Clear the turn pointer and return the TurnManager toward IDLE so
+            # the caller doesn't sit in USER_SPEAKING until the silence timeout.
+            if self._turn.current is turn:
+                self._reset_turn_state()
             return
         finally:
             bind_turn(None)
@@ -297,6 +309,27 @@ class TurnRunner:
         await self._emit(AgentRequestStarted())
         await self.run_streaming_agent(transcript, token, turn=turn)
 
+    def _reset_turn_manager_preserving_token(self) -> None:
+        """Reset the TurnManager to IDLE without cancelling the live turn token.
+
+        ``TurnManager.reset()`` cancels its active ``cancel_token`` before
+        clearing it (the documented teardown semantics shared with barge-in).
+        The gated-replay keep-alive path needs the manager returned to IDLE
+        with its buffers cleared, but the *current* turn's token must stay
+        live — the concurrently-running agent stream and the buffered gated
+        replay still depend on it.  Detach the manager's token reference
+        first so ``reset()`` has nothing to cancel; the turn retains its own
+        token via ``turn.cancel_token`` / the captured ``token`` local.
+        """
+        manager = self._turn_manager
+        # Snapshot the live token then detach it from the manager so reset()
+        # cancels nothing.  We restore the reference on the (unlikely) event
+        # the manager has no token, to avoid changing observable state.
+        live_token = manager.cancel_token
+        if live_token is not None:
+            manager._cancel_token = None
+        manager.reset()
+
     # ── Streaming agent path ───────────────────────────────────────
 
     async def run_streaming_agent(
@@ -315,7 +348,13 @@ class TurnRunner:
             turn = self._turn.current
         assert turn is not None
         turn_gen = self._turn.generation
-        tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+        # Bounded so a fast agent against a slow/stalled TTS consumer applies
+        # natural backpressure via consume_agent_stream's awaited put(),
+        # matching the BoundedAudioQueue convention used elsewhere in the
+        # pipeline.  The payloads are lightweight per-sentence text, so 64 is
+        # ample headroom; the producer is bounded by agent_timeout and runs
+        # inside the cancellable agent_task, so a full queue cannot deadlock.
+        tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue(maxsize=64)
         tts_playback_started = False
         # True only if playback was cut off mid-stream by a cancelled token
         # (a genuine barge-in), as opposed to the queue draining naturally.
@@ -406,9 +445,18 @@ class TurnRunner:
                 )
             elif started and not tts_playback_started:
                 if gated:
-                    # Keep current turn alive for gated replay mark accounting
+                    # Keep current turn alive for gated replay mark accounting.
+                    # ``TurnManager.reset()`` now cancels the active token before
+                    # dropping it (so barge-in/idle teardown cooperatively stops
+                    # bound work).  Here we deliberately want the *opposite*: the
+                    # turn's token (still in use by the concurrently-running agent
+                    # stream and the gated replay) must survive the manager reset,
+                    # or the agent turn is killed mid-flight and never emits its
+                    # AgentFinal.  Detach the live token from the manager before
+                    # resetting so reset() has nothing to cancel; the turn keeps
+                    # its own token.
                     self._audio.reset_speech_detection()
-                    self._turn_manager.reset()
+                    self._reset_turn_manager_preserving_token()
                 else:
                     self._reset_turn_state()
 
@@ -486,7 +534,11 @@ class TurnRunner:
             )
             if stripped != original_text:
                 accumulated_text = stripped
-                self._agent().replace_last_assistant_text(stripped)
+                # Route through the stage so the framework-state rewrite lands
+                # on the journal recording boundary alongside the streamed text.
+                self._agent_stage.replace_last_assistant_text(
+                    stripped, ctx=self._run_ctx, turn_id=turn.id
+                )
 
         if (accumulated_text or structured_output is not None) and stream_succeeded:
             await self._emit(
@@ -499,7 +551,7 @@ class TurnRunner:
             pass
 
         interruption_notification = estimate_and_notify_interruption(
-            self._agent(),
+            self._agent_stage,
             token,
             turn,
             tts_chunks,
@@ -510,6 +562,7 @@ class TurnRunner:
             latency_compensation_ms=self._cancel.latency_compensation_ms,
             ack_stale_ms=self._cancel.ack_stale_ms,
             ack_tail_cap_ms=self._cancel.ack_tail_cap_ms,
+            ctx=self._run_ctx,
         )
         if interruption_notification is not None:
             self._cancel.record_interruption(
@@ -547,7 +600,10 @@ class TurnRunner:
                 except (asyncio.CancelledError, Exception):
                     pass
                 notified = _notify_bridge_interruption(
-                    self._agent(), delivered, self._cancel.interruption_mode
+                    self._agent_stage,
+                    delivered,
+                    self._cancel.interruption_mode,
+                    ctx=self._run_ctx,
                 )
                 self._cancel.record_interruption(
                     source="text_session",
@@ -604,39 +660,24 @@ class TurnRunner:
                             turn_id=turn_id,
                         )
                     )
-                elif kind == "tool_started":
-                    with observability.span(
-                        "easycat.agent.tool",
-                        {
-                            "easycat.stage": "agent",
-                            "easycat.surface": "agent_bridge",
-                        },
-                    ):
-                        await self._emit(
-                            ToolCallStarted(
-                                tool_name=event.tool_name,
-                                call_id=event.call_id,
-                                session_id=self._session_id,
-                                turn_id=turn_id,
-                            )
-                        )
-                elif kind == "tool_delta":
-                    await self._emit(
-                        ToolCallDelta(
-                            call_id=event.call_id,
-                            delta=event.text,
-                            session_id=self._session_id,
-                            turn_id=turn_id,
-                        )
-                    )
-                elif kind == "tool_result":
-                    await self._emit(
-                        ToolCallResult(
-                            call_id=event.call_id,
-                            result=event.result,
-                            session_id=self._session_id,
-                            turn_id=turn_id,
-                        )
+                else:
+                    # tool_started / tool_delta / tool_result share the same
+                    # event-translation as the voice path via emit_tool_event,
+                    # so the two cannot drift.  The per-tool observability span
+                    # is text-path specific and threaded in via tool_span.
+                    await emit_tool_event(
+                        event,
+                        kind,
+                        emit=self._emit,
+                        session_id=self._session_id,
+                        turn_id=turn_id,
+                        tool_span=lambda: observability.span(
+                            "easycat.agent.tool",
+                            {
+                                "easycat.stage": "agent",
+                                "easycat.surface": "agent_bridge",
+                            },
+                        ),
                     )
             response = accumulated
             elapsed_ms = (time.monotonic() - t0) * 1000

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from easycat._bounded_queue import BoundedAudioQueue
+from easycat._bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
@@ -321,6 +321,23 @@ def test_stt_segment_silence_ms_forwarded_to_committer():
         )
     )
     assert session._stt_committer._segment_silence_ms == 250
+
+
+def test_enable_noise_reduction_with_passthrough_does_not_raise():
+    """enable_noise_reduction=True + a passthrough reducer must not crash.
+
+    Graceful degradation when no optional backend is installed mirrors
+    PassthroughAEC: ``create_noise_reducer`` already logs an actionable
+    warning, so the Session must warn-and-continue rather than reject the
+    passthrough at construction (the former noop-guard contradiction).
+    """
+    session = Session(
+        _full_config(
+            noise_reducer=PassthroughNoiseReducer(),
+            enable_noise_reduction=True,
+        )
+    )
+    assert session is not None
 
 
 # ── CancelToken tests ──────────────────────────────────────────────
@@ -775,6 +792,16 @@ async def test_turn_state_changed_recorded_on_transition():
     assert ("user_speaking", "processing") in pairs
 
 
+def test_outbound_queue_default_policy_is_drop_newest():
+    """The played-back (TTS) queue must not use DROP_OLDEST.
+
+    Dropping the *oldest* unsent bot audio makes the listener hear the
+    utterance jump forward mid-sentence; DROP_NEWEST trims only the tail.
+    """
+    session = Session(_full_config())
+    assert session._outbound_queue.policy == DropPolicy.DROP_NEWEST
+
+
 @pytest.mark.asyncio
 async def test_audio_queue_drop_recorded_when_queue_overflows():
     """BoundedAudioQueue drops must land in the journal via the
@@ -788,13 +815,14 @@ async def test_audio_queue_drop_recorded_when_queue_overflows():
     chunk = _make_chunk(n_bytes=320)
     await q.put(chunk)
     await q.put(chunk)
-    # This one should be dropped (DROP_OLDEST policy).
+    # This one should be dropped (DROP_NEWEST policy — played-back speech
+    # trims the tail, never the beginning).
     await q.put(chunk)
 
     drops = [r for r in journal.read() if r.name == "audio_queue_drop"]
     assert len(drops) == 1
     assert drops[0].data["queue"] == "outbound_audio"
-    assert drops[0].data["kind"] == "drop_oldest"
+    assert drops[0].data["kind"] == "drop_newest"
     assert drops[0].data["total_drops"] == 1
 
 
@@ -1336,7 +1364,7 @@ async def test_tts_audio_and_markers_are_journaled_with_artifact_ref():
     )
     session._turn = TurnContext("turn-tts-audio", CancelToken())
 
-    await session._tts_scheduler.synthesize("hello", token=None)
+    await session._tts_scheduler.synthesizer.synthesize("hello", token=None)
 
     audio_records = [record for record in journal.read() if record.name == "tts_audio"]
     marker_records = [record for record in journal.read() if record.name == "tts_markers"]
@@ -1581,6 +1609,37 @@ async def test_session_events_include_correlation_ids():
     assert seen
     for event in seen:
         assert event.session_id == session.session_id
+
+
+@pytest.mark.asyncio
+async def test_active_turn_gated_to_non_idle_state():
+    """``_active_turn`` and the correlation/TTS scheduler share one IDLE gate.
+
+    The live ``self._turn`` pointer is deliberately kept alive past IDLE for
+    gated-TTS playback-mark bookkeeping, but it must not count as the active
+    turn (no stale turn_id stamping, no stale TTS correlation) once the turn
+    manager has returned to IDLE.
+    """
+    session = Session(_full_config())
+    session._turn = TurnContext("turn-active", CancelToken())
+
+    # The TTS scheduler stamps the same active-turn id onto synthesized audio,
+    # so it must share the exact gate via the same ``_active_turn`` helper.
+    tts_correlation = session._tts_scheduler._synth._correlation_ids
+
+    # Active while the turn manager is mid-turn.
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    assert session._active_turn() is session._turn
+    stamped = session._with_correlation(AudioIn(chunk=_make_chunk()))
+    assert stamped.turn_id == "turn-active"
+    assert tts_correlation() == (session.session_id, "turn-active")
+
+    # Once IDLE, the still-alive turn pointer must not be treated as active.
+    session._turn_manager._state = TurnManagerState.IDLE
+    assert session._active_turn() is None
+    not_stamped = session._with_correlation(AudioIn(chunk=_make_chunk()))
+    assert not_stamped.turn_id is None
+    assert tts_correlation() == (session.session_id, None)
 
 
 @pytest.mark.asyncio

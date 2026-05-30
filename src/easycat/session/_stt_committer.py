@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from easycat.events import (
     Error,
@@ -43,7 +43,7 @@ from easycat.events import (
 from easycat.providers import STTProvider
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
-from easycat.timeouts import STTTimeoutError, TimeoutConfig
+from easycat.timeouts import STTTimeoutError, TimeoutConfig, resolve_provider_name
 from easycat.turn_manager import TurnManagerState
 
 if TYPE_CHECKING:
@@ -51,6 +51,40 @@ if TYPE_CHECKING:
     from easycat.turn_manager import TurnManager
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class PendingCommitReporter(Protocol):
+    """Optional STT-provider capability: report uncommitted audio size.
+
+    Providers that can measure how much audio is buffered but not yet
+    committed implement ``pending_commit_bytes()`` so the journal can
+    record *why* a segment commit was accepted or skipped. This is an
+    opt-in capability, not part of the core ``STTProvider`` contract;
+    providers that cannot report it are simply not instances of this
+    Protocol and the committer records ``None``.
+
+    The proper home for this Protocol is ``easycat.providers`` alongside
+    ``VersionedProvider``; it lives here until that and the provider-side
+    ``pending_commit_bytes()`` implementations can be added together.
+    """
+
+    def pending_commit_bytes(self) -> int | None:
+        """Return bytes buffered since the last successful commit, if known."""
+        ...
+
+
+def _pending_commit_bytes(provider: STTProvider) -> int | None:
+    """Read a provider's uncommitted-audio byte count, if it exposes one.
+
+    Prefers the type-checkable :class:`PendingCommitReporter` surface and
+    falls back to the legacy private ``_bytes_since_last_commit`` field that
+    ``OpenAIRealtimeSTT`` currently exposes, so journal data is preserved
+    until the provider grows a public ``pending_commit_bytes()`` method.
+    """
+    if isinstance(provider, PendingCommitReporter):
+        return provider.pending_commit_bytes()
+    return getattr(provider, "_bytes_since_last_commit", None)
 
 
 class STTCommitter:
@@ -96,21 +130,22 @@ class STTCommitter:
     def is_active(self) -> bool:
         return self._active
 
+    @property
+    def stt_task(self) -> asyncio.Task[None] | None:
+        """The background STT event-consumer task, if one is running.
+
+        Read-only handle used by teardown/diagnostics to confirm the
+        consumer has been cancelled (or was never started).
+        """
+        return self._stt_task
+
     def mark_active(self) -> None:
         self._active = True
 
     def mark_inactive(self) -> None:
         self._active = False
 
-    # ── Task handles (read-only access for shutdown bookkeeping) ──
-
-    @property
-    def stt_task(self) -> asyncio.Task[None] | None:
-        return self._stt_task
-
-    @property
-    def segment_commit_task(self) -> asyncio.Task[None] | None:
-        return self._segment_commit_task
+    # ── Task handles ──────────────────────────────────────────────
 
     def clear_task_handles(self) -> None:
         """Clear cached task handles (used during shutdown drain)."""
@@ -203,9 +238,9 @@ class STTCommitter:
         # Pull the provider's pending-commit byte count (if exposed)
         # into the journal so bundles show *why* a commit was skipped
         # or accepted.  ``OpenAIRealtimeSTT`` tracks this precisely;
-        # providers without the attribute report None and the journal
+        # providers that cannot report it record None and the journal
         # reader treats it as unknown.
-        pending_bytes = getattr(self._stt_getter(), "_bytes_since_last_commit", None)
+        pending_bytes = _pending_commit_bytes(self._stt_getter())
         self._journal_sink.append_record(
             name="stt_segment_commit_requested",
             turn_id=turn.id,
@@ -257,8 +292,9 @@ class STTCommitter:
                 else:
                     await future
             except TimeoutError:
-                err = STTTimeoutError("stt", timeout)
-                await self._emit(Error(exception=err, stage=ErrorStage.STT))
+                name = resolve_provider_name(self._stt_getter(), "stt")
+                err = STTTimeoutError(name, timeout)
+                await self._emit(Error(exception=err, stage=ErrorStage.STT, provider=name))
                 return False
             except asyncio.CancelledError:
                 raise
@@ -362,4 +398,5 @@ class STTCommitter:
                 await self._stt_task
             except (asyncio.CancelledError, Exception):
                 pass
+        self._stt_task = None
         self.resolve_pending(turn, "")

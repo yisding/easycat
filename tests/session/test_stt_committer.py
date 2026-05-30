@@ -233,7 +233,57 @@ async def test_await_pending_returns_false_on_timeout_and_emits_error() -> None:
 
     ok = await committer.await_pending(turn)
     assert ok is False
-    assert any(e.stage == ErrorStage.STT for e in errors)
+    stt_errors = [e for e in errors if e.stage == ErrorStage.STT]
+    assert stt_errors
+    # A provider without version_info() falls back to the generic "stt" label.
+    assert stt_errors[0].provider == "stt"
+
+
+@pytest.mark.asyncio
+async def test_await_pending_timeout_error_names_real_provider() -> None:
+    class _NamedSTT(_RecordingSTT):
+        def version_info(self) -> dict[str, str]:
+            return {"provider": "deepgram"}
+
+    bus = EventBus()
+    errors: list[Error] = []
+    bus.subscribe(Error, lambda e: errors.append(e))
+    journal = InMemoryRingBuffer(capacity=64)
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="sess",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+
+    async def _emit(event):
+        await bus.emit(event)
+
+    no_turn = TurnContext("no-turn", CancelToken())
+    tm = TurnManager(bus, config=TurnManagerConfig())
+    committer = STTCommitter(
+        stt=lambda: _NamedSTT(),
+        event_bus=bus,
+        journal_sink=sink,
+        runtime_scope=RuntimeScope(),
+        timeout_config=TimeoutConfig(stt_timeout=0.05),
+        segment_silence_ms=0,
+        no_turn=no_turn,
+        current_turn=lambda: None,
+        turn_manager=tm,
+        emit=_emit,
+        auto_turn_from_stt_final=lambda: False,
+    )
+    turn = _new_turn()
+    turn.pending_stt_segment_futures.append(asyncio.get_running_loop().create_future())
+
+    ok = await committer.await_pending(turn)
+    assert ok is False
+    stt_errors = [e for e in errors if e.stage == ErrorStage.STT]
+    assert stt_errors
+    assert stt_errors[0].provider == "deepgram"
+    assert "deepgram" in str(stt_errors[0].exception)
 
 
 @pytest.mark.asyncio

@@ -66,3 +66,28 @@ def test_chunk_has_speech_energy_is_bool_and_threshold_monotonic(
     assert isinstance(loud, bool)
     # A lower threshold can only make the gate more (or equally) permissive.
     assert loud or not quiet
+
+
+@given(samples=st.lists(_INT16, max_size=200), threshold=st.integers(min_value=1, max_value=40000))
+def test_chunk_has_speech_energy_matches_reference_peak(
+    samples: list[int],
+    threshold: int,
+) -> None:
+    # The batch decode must agree with a straightforward reference scan,
+    # including the abs(-32768) widening edge case.
+    data = struct.pack(f"<{len(samples)}h", *samples)
+    chunk = AudioChunk(data=data, format=PCM16_MONO_16K)
+    expected = bool(samples) and max(abs(s) for s in samples) >= threshold
+    assert _chunk_has_speech_energy(chunk, threshold=threshold) is expected
+
+
+def test_chunk_has_speech_energy_handles_min_int16_and_odd_byte() -> None:
+    # abs(-32768) must not wrap negative under the numpy path.
+    chunk = AudioChunk(data=struct.pack("<h", -32768), format=PCM16_MONO_16K)
+    assert _chunk_has_speech_energy(chunk, threshold=32768) is True
+    assert _chunk_has_speech_energy(chunk, threshold=32769) is False
+    # An odd trailing byte is dropped rather than crashing struct/numpy.
+    odd = struct.pack("<h", 1000) + b"\x7f"
+    odd_chunk = AudioChunk(data=odd, format=PCM16_MONO_16K)
+    assert _chunk_has_speech_energy(odd_chunk, threshold=500) is True
+    assert _chunk_has_speech_energy(odd_chunk, threshold=2000) is False

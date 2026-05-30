@@ -137,6 +137,14 @@ class SessionConfig:
     journal: ExecutionJournal | None = None
     artifact_store: ArtifactStore | None = None
     session_id: str | None = None
+    # Override the played-back (TTS -> transport) audio queue. The default
+    # Session queue uses ``DropPolicy.DROP_NEWEST`` (max_size 200) so that,
+    # under transport backpressure, only the tail of the bot's utterance is
+    # trimmed — never the beginning. Inject a ``BoundedAudioQueue`` with
+    # ``DropPolicy.BLOCK`` here when you want real backpressure on the
+    # synthesizer instead. ``DropPolicy.DROP_OLDEST`` is unsuitable for
+    # played-back speech: it discards the earliest unsent audio, making the
+    # listener hear the utterance jump forward mid-sentence.
     outbound_queue: BoundedAudioQueue | None = None
     telephony_helpers: Sequence[SessionHelper] = ()
     audio_gate: Callable[[], bool] | None = None

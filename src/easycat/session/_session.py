@@ -220,8 +220,19 @@ class Session:
                 noops.append("tts")
             if cfg.enable_vad and is_passthrough_provider(self.vad):
                 noops.append("vad")
+            # A passthrough noise reducer is a legitimate graceful-degradation
+            # outcome (no optional backend installed), mirroring PassthroughAEC.
+            # ``create_noise_reducer`` already logs an actionable warning — and
+            # ``NoiseReducerConfig(fallback_policy="error")`` is the opt-in for
+            # fail-loud — so enabling noise reduction without a backend must
+            # warn-and-continue rather than crash at Session construction.
             if cfg.enable_noise_reduction and is_passthrough_provider(self.noise_reducer):
-                noops.append("noise_reducer")
+                logger.warning(
+                    "Noise reduction is enabled but the configured noise_reducer is a "
+                    "passthrough (no real backend); audio will pass through unchanged. "
+                    "Install easycat[rnnoise] or configure Krisp, or set "
+                    "NoiseReducerConfig(fallback_policy='error') to fail loudly instead."
+                )
             if is_passthrough_provider(self.transport):
                 noops.append("transport")
             if cfg.agent is None and is_passthrough_provider(self.agent):
@@ -312,9 +323,16 @@ class Session:
         # consumer); Session constructs it once and hands the same
         # instance to both.  Router takes ownership for drain semantics
         # after construction.
+        # Outbound (played-back) speech must NOT use DROP_OLDEST: dropping
+        # the *earliest* still-unsent bot audio makes the listener hear the
+        # utterance jump forward mid-sentence. DROP_NEWEST instead trims only
+        # the tail when the transport falls behind — a clean cut that the
+        # interruption estimator already models. (Callers wanting real
+        # backpressure can inject a BLOCK-policy queue via
+        # ``SessionConfig.outbound_queue``.)
         self._outbound_queue_external = cfg.outbound_queue is not None
         self._outbound_queue_max_size = 200
-        self._outbound_queue_policy = DropPolicy.DROP_OLDEST
+        self._outbound_queue_policy = DropPolicy.DROP_NEWEST
         self._outbound_queue_name = "outbound_audio"
         self._outbound_queue = cfg.outbound_queue or BoundedAudioQueue(
             max_size=self._outbound_queue_max_size,
@@ -397,9 +415,7 @@ class Session:
             mcp_servers=tuple(cfg.mcp_servers),
         )
         self._turn_stage = TurnStage(
-            self._turn_manager._config.endpoint_detector  # type: ignore[attr-defined]
-            if self._turn_manager._config is not None  # type: ignore[attr-defined]
-            else None,
+            self._turn_manager.endpoint_detector,
             journal=self._journal,
         )
 
@@ -466,9 +482,7 @@ class Session:
             timeout_config=self._timeout_config,
             correlation_ids=lambda: (
                 self.session_id,
-                self._turn.id
-                if self._turn and self._turn_manager.state != TurnManagerState.IDLE
-                else None,
+                active.id if (active := self._active_turn()) else None,
             ),
             audio_gate=cfg.audio_gate,
             output_processors=list(cfg.output_processors),
@@ -545,19 +559,32 @@ class Session:
         # Plug the TurnStage into the TurnManager's endpoint-detector call
         # so smart-turn decisions go through stage.execute() and produce
         # journal records.
-        if self._turn_manager._config is not None:  # type: ignore[attr-defined]
-            if self._turn_manager._config.endpoint_detector is not None:  # type: ignore[attr-defined]
-                self._turn_manager.bind_endpoint_stage(
-                    self._turn_stage,
-                    run_ctx_getter=lambda: self._run_ctx,
-                    turn_getter=lambda: self._turn or self._no_turn,
-                )
+        if self._turn_manager.endpoint_detector is not None:
+            self._turn_manager.bind_endpoint_stage(
+                self._turn_stage,
+                run_ctx_getter=lambda: self._run_ctx,
+                turn_getter=lambda: self._turn or self._no_turn,
+            )
 
     @staticmethod
     def _default_timeout_config():
         from easycat.timeouts import TimeoutConfig
 
         return TimeoutConfig()
+
+    def _active_turn(self) -> TurnContext | None:
+        """Return the turn that is currently *active* for correlation purposes.
+
+        This is deliberately stricter than the live ``self._turn`` pointer.  In
+        the gated-TTS path ``self._turn`` is kept alive after the turn manager
+        resets to IDLE for playback-mark bookkeeping, but events emitted (and
+        TTS scheduled) during that window must not carry the old turn's ID.
+        Treat the turn as active only while the turn manager has not returned
+        to IDLE.
+        """
+        if self._turn and self._turn_manager.state != TurnManagerState.IDLE:
+            return self._turn
+        return None
 
     def _with_correlation(self, event: Any) -> Any:
         """Attach session/turn identifiers to events when supported."""
@@ -567,16 +594,7 @@ class Session:
         if hasattr(event, "session_id") and getattr(event, "session_id", None) is None:
             kwargs["session_id"] = self.session_id
         if hasattr(event, "turn_id") and getattr(event, "turn_id", None) is None:
-            # Only stamp a turn_id when the turn manager is actively in a
-            # turn.  In the gated-TTS path self._turn is kept alive after the
-            # turn manager resets to IDLE for playback-mark bookkeeping, but
-            # events emitted during that window (AudioIn, VAD, etc.) should
-            # not carry the old turn's ID.
-            active_turn = (
-                self._turn
-                if self._turn and self._turn_manager.state != TurnManagerState.IDLE
-                else None
-            )
+            active_turn = self._active_turn()
             kwargs["turn_id"] = active_turn.id if active_turn else None
         return replace(event, **kwargs) if kwargs else event
 
@@ -699,47 +717,11 @@ class Session:
         """Whether the classification gate is currently buffering TTS audio."""
         return self._audio_gate is not None and self._audio_gate()
 
-    # Read-only delegates for the interruption-config knobs owned by
-    # :class:`CancelOrchestrator`, so external tests/tools that read
-    # these off Session keep working.
-    @property
-    def _interruption_mode(self) -> str:
-        return self._cancel.interruption_mode
-
-    @property
-    def _interruption_latency_compensation_ms(self) -> int:
-        return self._cancel.latency_compensation_ms
-
-    @property
-    def _interruption_ack_stale_ms(self) -> int:
-        return self._cancel.ack_stale_ms
-
-    @property
-    def _interruption_ack_tail_cap_ms(self) -> int:
-        return self._cancel.ack_tail_cap_ms
-
     # ── Properties ─────────────────────────────────────────────
 
     def subscribe_event(self, event_type: type, handler: EventHandler) -> None:
         """Subscribe to a session event via the underlying EventBus."""
         self.event_bus.subscribe(event_type, handler)
-
-    def subscribe_events(
-        self, event_types: tuple[type, ...] | list[type], handler: EventHandler
-    ) -> list[tuple[type, EventHandler]]:
-        """Subscribe a single handler to multiple event types at once.
-
-        Accepts any of the event group tuples from :mod:`easycat.events`
-        (e.g. ``ALL_EVENTS``, ``STT_EVENTS``) or an ad-hoc sequence.
-
-        Returns a list of ``(event_type, handler)`` registrations that can be
-        passed to :meth:`unsubscribe_handlers`.
-        """
-        registrations: list[tuple[type, EventHandler]] = []
-        for event_type in event_types:
-            self.event_bus.subscribe(event_type, handler)
-            registrations.append((event_type, handler))
-        return registrations
 
     def unsubscribe_event(self, event_type: type, handler: EventHandler) -> None:
         """Unsubscribe a handler previously attached with ``subscribe_event``."""
@@ -1392,7 +1374,7 @@ class Session:
             try:
                 await aclose_if_supported(self.agent)
             except Exception:
-                pass
+                logger.debug("Error closing agent during stop", exc_info=True)
             await self._close_audio_providers()
             self._turn = None
             self._destroy()
@@ -1519,8 +1501,9 @@ class Session:
         producing text (which will simply not be synthesized).
 
         Importantly, this does NOT cancel ``_current_tts_task`` — that
-        task is the entire ``_on_turn_ended`` coroutine which includes
-        the agent consumer.  Cancelling it would abort the agent stream.
+        task is the entire ``TurnRunner.on_turn_ended`` coroutine which
+        includes the agent consumer.  Cancelling it would abort the
+        agent stream.
         """
         self._tts_scheduler.set_playback_suppressed(True)
         await self._tts_scheduler.synthesizer.cancel()
@@ -1749,14 +1732,6 @@ class Session:
     def _schedule_turn_ended(self, event: TurnEnded) -> None:
         self._turn_runner.schedule_turn_ended(event)
 
-    async def _on_turn_ended(
-        self,
-        event: TurnEnded,
-        generation: int,
-        turn: TurnContext | None = None,
-    ) -> None:
-        await self._turn_runner.on_turn_ended(event, generation, turn=turn)
-
     async def _handle_end_of_speech(self, turn: TurnContext | None = None) -> None:
         await self._turn_runner.handle_end_of_speech(turn=turn)
 
@@ -1769,9 +1744,6 @@ class Session:
     ) -> None:
         await self._turn_runner.run_streaming_agent(transcript, token, turn=turn)
 
-    async def _execute_text_turn(self, text: str, cancel_token: CancelToken | None = None) -> str:
-        return await self._turn_runner._execute_text_turn(text, cancel_token)
-
     # ── Internal helpers ───────────────────────────────────────
 
     def _maybe_attach_event_bus(self, provider: Any) -> None:
@@ -1783,13 +1755,21 @@ class Session:
                 setattr(cfg, "event_bus", self.event_bus)
                 attached = True
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to attach session EventBus to %r; provider-scoped events may be muted",
+                    provider,
+                    exc_info=True,
+                )
         has_unset_bus = hasattr(provider, "_event_bus") and getattr(provider, "_event_bus") is None
         if not attached and has_unset_bus:
             try:
                 setattr(provider, "_event_bus", self.event_bus)
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to attach session EventBus to %r; provider-scoped events may be muted",
+                    provider,
+                    exc_info=True,
+                )
 
     # ── Text mode ──────────────────────────────────────────────
 
