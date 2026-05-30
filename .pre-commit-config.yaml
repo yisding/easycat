@@ -9,3 +9,42 @@ repos:
     # Run the formatter.
     - id: ruff-format
       exclude: ^src/easycat/cli/scaffold/templates/
+
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+    - id: check-yaml
+      # mkdocs.yml uses the `!!python/name:` custom tag (pymdownx superfences),
+      # which check-yaml's SafeLoader cannot parse. The workflows still get
+      # validated; mkdocs config syntax is exercised by the docs build.
+      exclude: ^mkdocs\.yml$
+    - id: end-of-file-fixer
+      # Skip content maintained verbatim by other tooling: byte-exact
+      # cassettes, rendered scaffolding, vendored model artifacts, perf-result
+      # fixtures, the generated teaching chapters (docs.yml runs
+      # `regen_teaching_chapters.py --check`), and archived planning notes.
+      exclude: ^(tests/cassettes/|src/easycat/cli/scaffold/templates/|src/easycat/models/|perf/|docs/teaching/|plan/)
+    - id: trailing-whitespace
+      exclude: ^(tests/cassettes/|src/easycat/cli/scaffold/templates/|src/easycat/models/|perf/|docs/teaching/|plan/)
+
+- repo: https://github.com/codespell-project/codespell
+  rev: v2.4.1
+  hooks:
+    - id: codespell
+      # Cassettes are byte-exact provider fixtures; templates are rendered
+      # scaffolding; the lock file and caches are generated; plan/ holds
+      # historical planning notes; *.csv are eval ground-truth datasets;
+      # models/ are vendored numeric artifacts.
+      args:
+        - --skip=*.lock,uv.lock,tests/cassettes/**,src/easycat/cli/scaffold/templates/**,.ruff_cache,.mypy_cache,.pytest_cache,.git,plan/**,*.csv,src/easycat/models/**
+        # crate/nin/assertin: prior allowances. The rest are intentional:
+        # foreign-language robocall-screening phrases (raison/sie/nome/ist,
+        # German/French/Portuguese), truncated test transcripts ("hel" for
+        # hello), a deliberate template substring, and the valid spelling
+        # "unparseable".
+        - --ignore-words-list=crate,nin,assertin,hel,ist,sie,nome,raison,copie,templat,unparseable,re-declaring,implementors,clen,whats
+
+- repo: https://github.com/rhysd/actionlint
+  rev: v1.7.7
+  hooks:
+    - id: actionlint
