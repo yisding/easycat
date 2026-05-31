@@ -371,7 +371,7 @@ class TestBundleExport:
             line = zf.read("journal.ndjson").decode("utf-8").strip()
         exported = json.loads(line)
         assert exported["kind"] == "metric"
-        assert exported["timing"] == {"wall_ns": 1, "mono_ns": 2, "cpu_ns": 3, "queue_ns": 0}
+        assert exported["timing"] == {"wall_ns": 1, "mono_ns": 2, "cpu_ns": 3}
         assert exported["data"]["policy"] == "allow"
         assert exported["data"]["nested"]["kind"] == "event"
         assert exported["data"]["mixed_set"] == ["a", 1]

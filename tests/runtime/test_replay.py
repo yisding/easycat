@@ -87,12 +87,12 @@ class TestMaskNondeterministic:
 
     def test_dotted_paths_strip_nested_keys(self):
         data = {
-            "timing": {"wall_ns": 123, "queue_ns": 456, "stage_ms": 789},
+            "timing": {"wall_ns": 123, "cpu_ns": 456, "stage_ms": 789},
             "value": 1,
         }
         out = mask_nondeterministic(data)
         assert "wall_ns" not in out["timing"]
-        assert "queue_ns" not in out["timing"]
+        assert "cpu_ns" not in out["timing"]
         # Fields not in REPLAY_IGNORE_FIELDS survive.
         assert out["timing"]["stage_ms"] == 789
         assert out["value"] == 1

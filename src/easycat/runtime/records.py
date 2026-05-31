@@ -31,7 +31,6 @@ class TimingInfo:
     wall_ns: int = 0  # time.time_ns()
     mono_ns: int = 0  # time.monotonic_ns()
     cpu_ns: int = 0  # time.process_time_ns() — CPU time spent in process
-    queue_ns: int = 0  # reserved for WS3 stage queue time; no write path yet (always 0)
 
 
 @dataclass(frozen=True)
@@ -86,7 +85,6 @@ class JournalRecord:
     sequence: int
     session_id: str
     kind: JournalRecordKind = JournalRecordKind.EVENT
-    op_id: str = ""
     name: str = ""
     timing: TimingInfo = field(default_factory=TimingInfo)
     turn_id: str | None = None
@@ -230,7 +228,7 @@ class RecoveredSessionMarker(JournalRecord):
 
     On SQLite persistence the typed fields below are mirrored into the base
     ``data`` dict (the journal table has no dedicated columns for them) and
-    rehydrated by ``SqliteJournal._row_to_record`` on read.
+    rehydrated by ``_SqlJournalBase._row_to_record`` on read.
     """
 
     kind: JournalRecordKind = JournalRecordKind.RECOVERY

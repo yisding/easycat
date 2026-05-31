@@ -355,9 +355,7 @@ def _record_to_dict(record: Any) -> dict[str, Any]:
         out[attr] = value
     timing = getattr(record, "timing", None)
     if timing is not None:
-        out["timing"] = {
-            k: getattr(timing, k, None) for k in ("wall_ns", "mono_ns", "cpu_ns", "queue_ns")
-        }
+        out["timing"] = {k: getattr(timing, k, None) for k in ("wall_ns", "mono_ns", "cpu_ns")}
     error = getattr(record, "error", None)
     if error is not None:
         out["error"] = {

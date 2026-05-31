@@ -339,7 +339,7 @@ class ReadonlySqliteJournal:
     def _query(self, sql: str, params: list[Any]) -> list[JournalRecord]:
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [SqliteJournal._row_to_record(r) for r in rows]
+        return [_SqlJournalBase._row_to_record(r) for r in rows]
 
 
 # ── Frozen snapshot (read-only in-memory journal) ────────────────
@@ -659,12 +659,10 @@ CREATE TABLE IF NOT EXISTS journal (
     sequence     INTEGER PRIMARY KEY,
     session_id   TEXT    NOT NULL,
     kind         TEXT    NOT NULL,
-    op_id        TEXT    NOT NULL DEFAULT '',  -- reserved WS3 placeholder (always '')
     name         TEXT    NOT NULL DEFAULT '',
     wall_ns      INTEGER NOT NULL DEFAULT 0,
     mono_ns      INTEGER NOT NULL DEFAULT 0,
     cpu_ns       INTEGER NOT NULL DEFAULT 0,
-    queue_ns     INTEGER NOT NULL DEFAULT 0,  -- reserved WS3 placeholder (always 0)
     turn_id      TEXT,
     data         TEXT    NOT NULL DEFAULT '{}',
     error_type   TEXT,
@@ -693,10 +691,10 @@ INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 # that ``_row_to_record`` round-trips identically for both.
 _JOURNAL_INSERT_SQL = (
     "INSERT INTO journal "
-    "(sequence, session_id, kind, op_id, name, wall_ns, mono_ns, cpu_ns, "
-    "queue_ns, turn_id, data, error_type, error_msg, error_tb, error_notes, "
+    "(sequence, session_id, kind, name, wall_ns, mono_ns, cpu_ns, "
+    "turn_id, data, error_type, error_msg, error_tb, error_notes, "
     "input_ref, output_ref, tags) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 
@@ -716,24 +714,15 @@ def _encode_journal_row(
     input_ref: str | None,
     output_ref: str | None,
 ) -> tuple[Any, ...]:
-    """Build the column-order value tuple for ``_JOURNAL_INSERT_SQL``.
-
-    ``op_id`` and ``queue_ns`` are written explicitly (``''`` / ``0``) so the
-    persisted column set matches ``_row_to_record`` and does not rely on silent
-    SQL DEFAULTs.  They are reserved for WS3 stage timing; there is no
-    ``append()`` channel to populate them yet, so they are guaranteed-zero
-    placeholders for now.
-    """
+    """Build the column-order value tuple for ``_JOURNAL_INSERT_SQL``."""
     return (
         sequence,
         session_id,
         kind.value,
-        "",  # op_id (reserved WS3 placeholder)
         name,
         wall_ns,
         mono_ns,
         cpu_ns,
-        0,  # queue_ns (reserved WS3 placeholder)
         turn_id,
         json.dumps(data or {}, default=str),
         error.type if error else None,
@@ -805,7 +794,205 @@ def _persist_degraded_marker(conn: Any, session_id: str, exc: Exception) -> None
         logger.debug("Failed to commit degraded markers", exc_info=True)
 
 
-class SqliteJournal:
+class _SqlJournalBase:
+    """Shared implementation for the SQL-backed journals.
+
+    ``SqliteJournal`` (local WAL) and ``LibsqlJournal`` (embedded replica)
+    persist to identically-shaped ``journal`` tables and only differ in how
+    they open the connection and commit/sync a write.  Everything that reads
+    the table or wraps a write — the ``append()`` guard+timing wrapper,
+    ``read()``/``slice()``, the ``latest_sequence``/``degraded``/``db_path``
+    properties, and the ``_row_to_record`` decoder — is identical and lives
+    here so the two backends cannot silently diverge.
+
+    Subclasses set ``_conn``, ``_lock``, ``_seq``, ``_degraded``, ``_closed``,
+    and ``_db_path`` in their own ``__init__`` and override ``_do_append``,
+    ``_enter_degraded``, ``flush``, ``finalize``, and ``close`` with the
+    connection-specific commit/sync semantics.  The in-memory ring buffer is
+    deliberately NOT a subclass: its ``append`` guard omits ``_closed`` and its
+    ``_do_append``/``_enter_degraded`` operate on a deque, not a connection.
+    """
+
+    _conn: Any
+    _lock: threading.Lock
+    _seq: int
+    _degraded: bool
+    _closed: bool
+    _db_path: Path
+
+    # ── ExecutionJournal interface (shared) ───────────────────────
+
+    def append(
+        self,
+        kind: JournalRecordKind,
+        name: str,
+        session_id: str,
+        turn_id: str | None = None,
+        data: dict[str, Any] | None = None,
+        error: ErrorInfo | None = None,
+        tags: frozenset[str] = frozenset(),
+        input_ref: str | None = None,
+        output_ref: str | None = None,
+    ) -> int:
+        started = time.perf_counter()
+        result = "fail"
+        if self._degraded or self._closed:
+            record_histogram(
+                "easycat.journal.append.latency",
+                time.perf_counter() - started,
+                {"easycat.result": result},
+            )
+            return -1
+        try:
+            sequence = self._do_append(
+                kind,
+                name,
+                session_id,
+                turn_id,
+                data,
+                error,
+                tags,
+                input_ref,
+                output_ref,
+            )
+            result = "pass"
+            return sequence
+        except Exception as exc:
+            self._enter_degraded(session_id, exc)
+            return -1
+        finally:
+            record_histogram(
+                "easycat.journal.append.latency",
+                time.perf_counter() - started,
+                {"easycat.result": result},
+            )
+
+    def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
+        with self._lock:
+            sql = "SELECT * FROM journal WHERE sequence >= ? ORDER BY sequence"
+            params: list[Any] = [start]
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(limit)
+            rows = self._conn.execute(sql, params).fetchall()
+        return [self._row_to_record(r) for r in rows]
+
+    def slice(
+        self,
+        *,
+        kind: JournalRecordKind | None = None,
+        session_id: str | None = None,
+    ) -> list[JournalRecord]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if kind is not None:
+            clauses.append("kind = ?")
+            params.append(kind.value)
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM journal{where} ORDER BY sequence", params
+            ).fetchall()
+        return [self._row_to_record(r) for r in rows]
+
+    @property
+    def latest_sequence(self) -> int:
+        with self._lock:
+            return self._seq
+
+    @property
+    def degraded(self) -> bool:
+        return self._degraded
+
+    @property
+    def db_path(self) -> Path:
+        return self._db_path
+
+    # ── Connection-specific hooks (overridden by subclasses) ───────
+
+    def _do_append(
+        self,
+        kind: JournalRecordKind,
+        name: str,
+        session_id: str,
+        turn_id: str | None,
+        data: dict[str, Any] | None,
+        error: ErrorInfo | None,
+        tags: frozenset[str],
+        input_ref: str | None = None,
+        output_ref: str | None = None,
+    ) -> int:
+        raise NotImplementedError
+
+    def _enter_degraded(self, session_id: str, exc: Exception) -> None:
+        raise NotImplementedError
+
+    # ── Shared row decoder ─────────────────────────────────────────
+
+    @staticmethod
+    def _row_to_record(row: tuple[Any, ...]) -> JournalRecord:
+        (
+            sequence,
+            session_id,
+            kind_str,
+            name,
+            wall_ns,
+            mono_ns,
+            cpu_ns,
+            turn_id,
+            data_str,
+            error_type,
+            error_msg,
+            error_tb,
+            error_notes,
+            input_ref,
+            output_ref,
+            tags_str,
+        ) = row
+        error = None
+        if error_type:
+            error = ErrorInfo(
+                type=error_type,
+                message=error_msg or "",
+                traceback=error_tb,
+                notes=error_notes,
+            )
+        tag_set = frozenset(tags_str.split(",")) if tags_str else frozenset()
+        kind = JournalRecordKind(kind_str)
+        data = json.loads(data_str) if data_str else {}
+        common = dict(
+            sequence=sequence,
+            session_id=session_id,
+            kind=kind,
+            name=name,
+            timing=TimingInfo(wall_ns=wall_ns, mono_ns=mono_ns, cpu_ns=cpu_ns),
+            turn_id=turn_id,
+            data=data,
+            error=error,
+            input_ref=input_ref,
+            output_ref=output_ref,
+            tags=tag_set,
+        )
+        # Reconstruct typed subclasses so their schema-declared fields are
+        # populated on SQLite round-trip rather than collapsing to the base
+        # JournalRecord.  Subclass-only fields are sourced from ``data``.
+        if kind is JournalRecordKind.RECOVERY and name == "recovered_session":
+            return RecoveredSessionMarker(
+                recovered_record_count=int(data.get("recovered_record_count", 0)),
+                original_session_id=str(data.get("original_session_id", "")),
+                **common,
+            )
+        if kind is JournalRecordKind.CONTROL and name == "buffer_overflow":
+            return BufferOverflow(**common)
+        if kind is JournalRecordKind.DEGRADED and name == "journal_degraded":
+            return JournalDegraded(**common)
+        return JournalRecord(**common)
+
+
+class SqliteJournal(_SqlJournalBase):
     """WAL-mode SQLite journal backend.
 
     - ``PRAGMA synchronous=NORMAL`` — writes go to the kernel page cache,
@@ -1003,82 +1190,9 @@ class SqliteJournal:
             )
 
     # ── ExecutionJournal interface ────────────────────────────────
-
-    def append(
-        self,
-        kind: JournalRecordKind,
-        name: str,
-        session_id: str,
-        turn_id: str | None = None,
-        data: dict[str, Any] | None = None,
-        error: ErrorInfo | None = None,
-        tags: frozenset[str] = frozenset(),
-        input_ref: str | None = None,
-        output_ref: str | None = None,
-    ) -> int:
-        started = time.perf_counter()
-        result = "fail"
-        if self._degraded or self._closed:
-            record_histogram(
-                "easycat.journal.append.latency",
-                time.perf_counter() - started,
-                {"easycat.result": result},
-            )
-            return -1
-        try:
-            sequence = self._do_append(
-                kind,
-                name,
-                session_id,
-                turn_id,
-                data,
-                error,
-                tags,
-                input_ref,
-                output_ref,
-            )
-            result = "pass"
-            return sequence
-        except Exception as exc:
-            self._enter_degraded(session_id, exc)
-            return -1
-        finally:
-            record_histogram(
-                "easycat.journal.append.latency",
-                time.perf_counter() - started,
-                {"easycat.result": result},
-            )
-
-    def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
-        with self._lock:
-            sql = "SELECT * FROM journal WHERE sequence >= ? ORDER BY sequence"
-            params: list[Any] = [start]
-            if limit is not None:
-                sql += " LIMIT ?"
-                params.append(limit)
-            rows = self._conn.execute(sql, params).fetchall()
-        return [self._row_to_record(r) for r in rows]
-
-    def slice(
-        self,
-        *,
-        kind: JournalRecordKind | None = None,
-        session_id: str | None = None,
-    ) -> list[JournalRecord]:
-        clauses: list[str] = []
-        params: list[Any] = []
-        if kind is not None:
-            clauses.append("kind = ?")
-            params.append(kind.value)
-        if session_id is not None:
-            clauses.append("session_id = ?")
-            params.append(session_id)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        with self._lock:
-            rows = self._conn.execute(
-                f"SELECT * FROM journal{where} ORDER BY sequence", params
-            ).fetchall()
-        return [self._row_to_record(r) for r in rows]
+    # append(), read(), slice(), latest_sequence, degraded, db_path, and
+    # _row_to_record are inherited from _SqlJournalBase.  Only the
+    # commit/checkpoint-specific overrides live here.
 
     def close(self) -> None:
         if self._closed:
@@ -1153,19 +1267,6 @@ class SqliteJournal:
                 self._conn.execute("BEGIN")
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
-
-    @property
-    def latest_sequence(self) -> int:
-        with self._lock:
-            return self._seq
-
-    @property
-    def degraded(self) -> bool:
-        return self._degraded
-
-    @property
-    def db_path(self) -> Path:
-        return self._db_path
 
     # ── Internals ─────────────────────────────────────────────────
 
@@ -1254,68 +1355,6 @@ class SqliteJournal:
             return
         with self._lock:
             _persist_degraded_marker(self._conn, session_id, exc)
-
-    @staticmethod
-    def _row_to_record(row: tuple[Any, ...]) -> JournalRecord:
-        (
-            sequence,
-            session_id,
-            kind_str,
-            op_id,
-            name,
-            wall_ns,
-            mono_ns,
-            cpu_ns,
-            queue_ns,
-            turn_id,
-            data_str,
-            error_type,
-            error_msg,
-            error_tb,
-            error_notes,
-            input_ref,
-            output_ref,
-            tags_str,
-        ) = row
-        error = None
-        if error_type:
-            error = ErrorInfo(
-                type=error_type,
-                message=error_msg or "",
-                traceback=error_tb,
-                notes=error_notes,
-            )
-        tag_set = frozenset(tags_str.split(",")) if tags_str else frozenset()
-        kind = JournalRecordKind(kind_str)
-        data = json.loads(data_str) if data_str else {}
-        common = dict(
-            sequence=sequence,
-            session_id=session_id,
-            kind=kind,
-            op_id=op_id,
-            name=name,
-            timing=TimingInfo(wall_ns=wall_ns, mono_ns=mono_ns, cpu_ns=cpu_ns, queue_ns=queue_ns),
-            turn_id=turn_id,
-            data=data,
-            error=error,
-            input_ref=input_ref,
-            output_ref=output_ref,
-            tags=tag_set,
-        )
-        # Reconstruct typed subclasses so their schema-declared fields are
-        # populated on SQLite round-trip rather than collapsing to the base
-        # JournalRecord.  Subclass-only fields are sourced from ``data``.
-        if kind is JournalRecordKind.RECOVERY and name == "recovered_session":
-            return RecoveredSessionMarker(
-                recovered_record_count=int(data.get("recovered_record_count", 0)),
-                original_session_id=str(data.get("original_session_id", "")),
-                **common,
-            )
-        if kind is JournalRecordKind.CONTROL and name == "buffer_overflow":
-            return BufferOverflow(**common)
-        if kind is JournalRecordKind.DEGRADED and name == "journal_degraded":
-            return JournalDegraded(**common)
-        return JournalRecord(**common)
 
 
 # ── Litestream adapter ──────────────────────────────────────────
@@ -1512,7 +1551,7 @@ class LitestreamSqliteJournal:
 # ── libSQL adapter ──────────────────────────────────────────────
 
 
-class LibsqlJournal:
+class LibsqlJournal(_SqlJournalBase):
     """Journal backend using the libSQL embedded-replica SDK.
 
     Reads are local; appends commit locally and sync to the remote
@@ -1603,82 +1642,9 @@ class LibsqlJournal:
         )
 
     # ── ExecutionJournal interface ───────────────────────────────
-
-    def append(
-        self,
-        kind: JournalRecordKind,
-        name: str,
-        session_id: str,
-        turn_id: str | None = None,
-        data: dict[str, Any] | None = None,
-        error: ErrorInfo | None = None,
-        tags: frozenset[str] = frozenset(),
-        input_ref: str | None = None,
-        output_ref: str | None = None,
-    ) -> int:
-        started = time.perf_counter()
-        result = "fail"
-        if self._degraded or self._closed:
-            record_histogram(
-                "easycat.journal.append.latency",
-                time.perf_counter() - started,
-                {"easycat.result": result},
-            )
-            return -1
-        try:
-            sequence = self._do_append(
-                kind,
-                name,
-                session_id,
-                turn_id,
-                data,
-                error,
-                tags,
-                input_ref,
-                output_ref,
-            )
-            result = "pass"
-            return sequence
-        except Exception as exc:
-            self._enter_degraded(session_id, exc)
-            return -1
-        finally:
-            record_histogram(
-                "easycat.journal.append.latency",
-                time.perf_counter() - started,
-                {"easycat.result": result},
-            )
-
-    def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
-        with self._lock:
-            sql = "SELECT * FROM journal WHERE sequence >= ? ORDER BY sequence"
-            params: list[Any] = [start]
-            if limit is not None:
-                sql += " LIMIT ?"
-                params.append(limit)
-            rows = self._conn.execute(sql, params).fetchall()
-        return [SqliteJournal._row_to_record(r) for r in rows]
-
-    def slice(
-        self,
-        *,
-        kind: JournalRecordKind | None = None,
-        session_id: str | None = None,
-    ) -> list[JournalRecord]:
-        clauses: list[str] = []
-        params: list[Any] = []
-        if kind is not None:
-            clauses.append("kind = ?")
-            params.append(kind.value)
-        if session_id is not None:
-            clauses.append("session_id = ?")
-            params.append(session_id)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        with self._lock:
-            rows = self._conn.execute(
-                f"SELECT * FROM journal{where} ORDER BY sequence", params
-            ).fetchall()
-        return [SqliteJournal._row_to_record(r) for r in rows]
+    # append(), read(), slice(), latest_sequence, degraded, db_path, and
+    # _row_to_record are inherited from _SqlJournalBase.  Only the
+    # sync-specific overrides live here.
 
     def flush(self) -> None:
         if self._closed:
@@ -1723,19 +1689,6 @@ class LibsqlJournal:
             self._conn.close()
         except Exception:
             pass
-
-    @property
-    def latest_sequence(self) -> int:
-        with self._lock:
-            return self._seq
-
-    @property
-    def degraded(self) -> bool:
-        return self._degraded
-
-    @property
-    def db_path(self) -> Path:
-        return self._db_path
 
     # ── Internals ────────────────────────────────────────────────
 
