@@ -862,9 +862,9 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     When VADStopSpeaking fires, ``STTCommitter.schedule`` creates
     a task that calls ``stt.commit_segment``.  If SmartTurn immediately
     declares the turn complete, ``TurnEnded`` fires before the commit
-    task has a chance to cancel — and previously ``_schedule_turn_ended``
+    task has a chance to cancel — and previously ``schedule_turn_ended``
     only cancelled the *scheduled* task, not the *in-flight* one.  That
-    left ``commit_segment`` racing with ``_handle_end_of_speech``'s
+    left ``commit_segment`` racing with ``handle_end_of_speech``'s
     ``end_stream`` which issues its own commit: the first commit
     cleared the STT server's buffer and the second commit failed with
     "buffer too small".
@@ -902,7 +902,7 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
 
     session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
     await asyncio.sleep(0.001)
-    session._schedule_turn_ended(TurnEnded(turn_id="race-turn"))
+    session._turn_runner.schedule_turn_ended(TurnEnded(turn_id="race-turn"))
     for _ in range(20):
         await asyncio.sleep(0.01)
 
@@ -1095,7 +1095,7 @@ async def test_handle_end_of_speech_clears_turn_id_on_stt_timeout():
     # clears the turn instead of running the agent.
     session._turn.pending_stt_segment_futures.append(asyncio.get_running_loop().create_future())
 
-    await session._handle_end_of_speech()
+    await session._turn_runner.handle_end_of_speech()
 
     assert session._turn is None
     assert session.turn_state == TurnState.IDLE
@@ -1106,7 +1106,7 @@ async def test_handle_end_of_speech_clears_turn_id_on_empty_transcript():
     session = Session(_full_config())
     session._turn = TurnContext("turn-stale", CancelToken())
 
-    await session._handle_end_of_speech()
+    await session._turn_runner.handle_end_of_speech()
 
     assert session._turn is None
     assert session.turn_state == TurnState.IDLE
@@ -1141,7 +1141,7 @@ async def test_pause_commit_keeps_turn_open_but_collects_segment_final():
 
 @pytest.mark.asyncio
 async def test_handle_end_of_speech_no_duplicate_stt_final():
-    """_handle_end_of_speech must not re-emit per-segment STTFinals."""
+    """handle_end_of_speech must not re-emit per-segment STTFinals."""
     session = Session(_full_config())
     session._turn = TurnContext("turn-stale", CancelToken())
     session._turn.append_stt_segment("hello")
@@ -1151,7 +1151,7 @@ async def test_handle_end_of_speech_no_duplicate_stt_final():
     session.event_bus.subscribe(STTFinal, lambda e: timeline.append(e))
     session.event_bus.subscribe(AgentFinal, lambda e: timeline.append(e))
 
-    await session._handle_end_of_speech()
+    await session._turn_runner.handle_end_of_speech()
 
     stt_finals = [e for e in timeline if isinstance(e, STTFinal)]
     assert len(stt_finals) == 0
@@ -1172,7 +1172,7 @@ async def test_streaming_agent_timeout_emits_error_and_leaves_state_idle():
     session.event_bus.subscribe(Error, lambda e: errors.append(e))
     session._turn = TurnContext("turn-stale", CancelToken())
 
-    await session._run_streaming_agent("call me at 415-555-2671", token=None)
+    await session._turn_runner.run_streaming_agent("call me at 415-555-2671", token=None)
 
     assert session.turn_state == TurnState.IDLE
     assert any(isinstance(e.exception, AgentTimeoutError) for e in errors)
@@ -1188,7 +1188,7 @@ async def test_streaming_agent_strip_markdown_writes_journal_record():
     session = Session(_full_config(agent=MarkdownAgent(), journal=journal, strip_markdown=True))
     session._turn = TurnContext("turn-markdown", CancelToken())
 
-    await session._run_streaming_agent("help", token=None)
+    await session._turn_runner.run_streaming_agent("help", token=None)
 
     records = [record for record in journal.read() if record.name == "markdown_stripped"]
     assert records, "expected a markdown_stripped record"
@@ -1686,7 +1686,7 @@ async def test_playback_mark_ack_scoped_to_current_turn():
     # ── Second turn (replaces the TurnContext) ──
     session._is_running = True
     with patch.object(session._stt_committer, "start_event_loop"):
-        await session._on_turn_started(TurnStarted())
+        await session._turn_runner.on_turn_started(TurnStarted())
     session._is_running = False
 
     await session._outbound_queue.put(_make_chunk())
@@ -1824,7 +1824,7 @@ async def test_session_applies_output_processors_before_tts() -> None:
     )
 
     session._turn = TurnContext("turn-output-proc", CancelToken())
-    await session._run_streaming_agent("call me at 415-555-2671", token=None)
+    await session._turn_runner.run_streaming_agent("call me at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].text.startswith("speak: ")
@@ -1862,7 +1862,7 @@ async def test_session_falls_back_to_plain_when_ssml_not_supported() -> None:
     )
 
     session._turn = TurnContext("turn-ssml-fallback", CancelToken())
-    await session._run_streaming_agent("call AT&T at 415-555-2671", token=None)
+    await session._turn_runner.run_streaming_agent("call AT&T at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].format == "plain"
@@ -1901,7 +1901,7 @@ async def test_session_falls_back_to_plain_unescapes_ssml_entities() -> None:
     )
 
     session._turn = TurnContext("turn-ssml-unescape", CancelToken())
-    await session._run_streaming_agent("Call AT&T at 415-555-2671", token=None)
+    await session._turn_runner.run_streaming_agent("Call AT&T at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].format == "plain"
@@ -1942,7 +1942,7 @@ async def test_session_composes_phonetic_and_phone_processors() -> None:
     )
 
     session._turn = TurnContext("turn-phonetic", CancelToken())
-    await session._run_streaming_agent("call Siobhan at 415-555-2671", token=None)
+    await session._turn_runner.run_streaming_agent("call Siobhan at 415-555-2671", token=None)
 
     assert tts.payloads
     # provider doesn't support SSML, so we should receive plain text fallback.

@@ -1318,30 +1318,6 @@ class Session:
             except Exception:
                 logger.debug("Error closing %s provider", name, exc_info=True)
 
-    # ── Test-compat shims ──────────────────────────────────────
-    #
-    # The turn-loop logic lives on :class:`TurnRunner`.  These thin
-    # delegates exist only so tests that poke Session's private turn
-    # surface keep working — don't add logic here.
-
-    async def _on_turn_started(self, event: TurnStarted) -> None:
-        await self._turn_runner.on_turn_started(event)
-
-    def _schedule_turn_ended(self, event: TurnEnded) -> None:
-        self._turn_runner.schedule_turn_ended(event)
-
-    async def _handle_end_of_speech(self, turn: TurnContext | None = None) -> None:
-        await self._turn_runner.handle_end_of_speech(turn=turn)
-
-    async def _run_streaming_agent(
-        self,
-        transcript: str,
-        token: CancelToken | None,
-        *,
-        turn: TurnContext | None = None,
-    ) -> None:
-        await self._turn_runner.run_streaming_agent(transcript, token, turn=turn)
-
     # ── Internal helpers ───────────────────────────────────────
 
     def _maybe_attach_event_bus(self, provider: Any) -> None:

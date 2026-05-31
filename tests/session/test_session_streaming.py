@@ -1063,7 +1063,7 @@ async def test_streaming_done_terminates_session_consumption() -> None:
     session.event_bus.subscribe(ToolCallStarted, lambda e: tool_started.append(e))
 
     session._turn = TurnContext("test-turn", CancelToken())
-    await session._run_streaming_agent("hello", token=None)
+    await session._turn_runner.run_streaming_agent("hello", token=None)
 
     assert [event.text for event in deltas] == ["Alpha."]
     assert len(finals) == 1
@@ -1095,7 +1095,7 @@ async def test_streaming_structured_only_done_emits_final_without_tts() -> None:
     session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
 
     session._turn = TurnContext("test-turn", CancelToken())
-    await session._run_streaming_agent("hello", token=None)
+    await session._turn_runner.run_streaming_agent("hello", token=None)
 
     assert len(finals) == 1
     assert finals[0].text == ""
@@ -1124,7 +1124,7 @@ async def test_streaming_done_only_bridge_synthesizes_audio() -> None:
     session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
 
     session._turn = TurnContext("test-turn", CancelToken())
-    await session._run_streaming_agent("hello", token=None)
+    await session._turn_runner.run_streaming_agent("hello", token=None)
 
     assert len(finals) == 1
     assert finals[0].text == "Hello from done-only bridge."
@@ -1156,9 +1156,9 @@ async def test_streaming_agent_timeout_does_not_poison_next_turn() -> None:
     session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
 
     session._turn = TurnContext("turn-1", CancelToken())
-    await session._run_streaming_agent("first", token=None)
+    await session._turn_runner.run_streaming_agent("first", token=None)
     session._turn = TurnContext("turn-2", CancelToken())
-    await session._run_streaming_agent("second", token=None)
+    await session._turn_runner.run_streaming_agent("second", token=None)
 
     assert len(errors) == 1
     assert errors[0].stage == ErrorStage.AGENT
@@ -1192,9 +1192,9 @@ async def test_streaming_tts_timeout_does_not_poison_next_turn() -> None:
     session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
 
     session._turn = TurnContext("turn-1", CancelToken())
-    await session._run_streaming_agent("first", token=None)
+    await session._turn_runner.run_streaming_agent("first", token=None)
     session._turn = TurnContext("turn-2", CancelToken())
-    await session._run_streaming_agent("second", token=None)
+    await session._turn_runner.run_streaming_agent("second", token=None)
 
     assert len(errors) == 1
     assert errors[0].stage == ErrorStage.TTS
@@ -1484,7 +1484,7 @@ async def test_streaming_done_flushes_tts_before_stream_cleanup_finishes():
     )
 
     session._turn = TurnContext("test-turn", CancelToken())
-    task = asyncio.create_task(session._run_streaming_agent("hello", token=None))
+    task = asyncio.create_task(session._turn_runner.run_streaming_agent("hello", token=None))
     await asyncio.wait_for(tts.started.wait(), timeout=0.2)
     await task
 
@@ -1753,7 +1753,7 @@ async def test_session_barge_in_after_agent_done_calls_notify_interruption():
         token.cancel()
 
     cancel_task = asyncio.create_task(_cancel_during_tts_playback())
-    await session._run_streaming_agent("test", token=token)
+    await session._turn_runner.run_streaming_agent("test", token=token)
     await cancel_task
 
     assert agent.interruption_notified
@@ -1787,7 +1787,7 @@ async def test_session_barge_in_writes_interruption_journal_record():
         token.cancel()
 
     cancel_task = asyncio.create_task(_cancel_during_tts_playback())
-    await session._run_streaming_agent("test", token=token)
+    await session._turn_runner.run_streaming_agent("test", token=token)
     await cancel_task
 
     records = [
@@ -2046,7 +2046,7 @@ async def test_session_barge_in_records_dequeued_unsynthesized_text_as_incomplet
     await session.start()
     try:
         session._turn = TurnContext("test-turn", token)
-        await session._run_streaming_agent("hello", token=token)
+        await session._turn_runner.run_streaming_agent("hello", token=token)
     finally:
         await session.stop()
 
@@ -2120,7 +2120,7 @@ async def test_session_barge_in_records_queued_unsynthesized_text_as_incomplete(
     await session.start()
     try:
         session._turn = TurnContext("test-turn", token)
-        await session._run_streaming_agent("hello", token=token)
+        await session._turn_runner.run_streaming_agent("hello", token=token)
     finally:
         await session.stop()
 
@@ -2202,7 +2202,7 @@ async def test_session_barge_in_drain_records_timeline_strings(monkeypatch: pyte
     await session.start()
     try:
         session._turn = TurnContext("test-turn", token)
-        await session._run_streaming_agent("hello", token=token)
+        await session._turn_runner.run_streaming_agent("hello", token=token)
     finally:
         await session.stop()
 
@@ -2483,7 +2483,7 @@ async def test_streaming_strip_markdown_writes_journal_record():
     session._turn = TurnContext("turn-stream-markdown", CancelToken())
     session._drain_session_actions = AsyncMock(return_value=False)
 
-    await session._run_streaming_agent("help", token=None)
+    await session._turn_runner.run_streaming_agent("help", token=None)
 
     records = [record for record in journal.read() if record.name == "markdown_stripped"]
     assert len(records) == 1
@@ -2911,13 +2911,13 @@ async def test_streaming_strip_markdown_failed_turn_does_not_rewrite_prior_histo
     )
 
     session._turn = TurnContext("turn-1", CancelToken())
-    await session._run_streaming_agent("first", token=None)
+    await session._turn_runner.run_streaming_agent("first", token=None)
     assert runner.history[-1]["role"] == "assistant"
     assert runner.history[-1]["content"] == "First answer."
     history_after_success = [entry.copy() for entry in runner.history]
 
     session._turn = TurnContext("turn-2", CancelToken())
-    await session._run_streaming_agent("second", token=None)
+    await session._turn_runner.run_streaming_agent("second", token=None)
     assert runner.history == history_after_success
 
 
@@ -2975,7 +2975,7 @@ async def test_streaming_interruption_prefers_cancel_token_timestamp(
         token.cancel()
 
     cancel_task = asyncio.create_task(_cancel_during_tts_playback())
-    await session._run_streaming_agent("test", token=token)
+    await session._turn_runner.run_streaming_agent("test", token=token)
     await cancel_task
 
     # The cutoff must come from the token's own cancellation time (set by
@@ -3014,7 +3014,9 @@ async def test_streaming_turn_does_not_clear_newer_turn_id() -> None:
 
     old_turn = TurnContext("turn-old", CancelToken())
     session._turn = old_turn
-    task = asyncio.create_task(session._run_streaming_agent("hello", token=None, turn=old_turn))
+    task = asyncio.create_task(
+        session._turn_runner.run_streaming_agent("hello", token=None, turn=old_turn)
+    )
     await asyncio.sleep(0.01)
     # A newer turn supersedes the old one while the stream is still running.
     session._turn = TurnContext("turn-new", CancelToken())
