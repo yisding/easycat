@@ -355,10 +355,8 @@ class ElevenLabsTTS(_WSTTSBase):
         if self._client is not None:
             await self._client.aclose()
             self._client = None
-        await self._close_ws()
-        # Await any in-flight fire-and-forget Error-emit tasks so teardown does
-        # not leave them dangling into interpreter shutdown.
-        await self._drain_emit_tasks()
+        # Base close() closes the WebSocket and drains the Error-emit tasks.
+        await super().close()
 
     def version_info(self) -> dict[str, str]:
         # Report the transport library the active mode actually uses:

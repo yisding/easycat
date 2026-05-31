@@ -57,3 +57,14 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
                 logger.debug("Error closing %s WebSocket", self._provider_log_label, exc_info=True)
             finally:
                 self._ws = None
+
+    async def close(self) -> None:
+        """Close the WebSocket and drain in-flight Error-emit tasks.
+
+        Shared teardown for every WS TTS provider (Cartesia/Deepgram inherit
+        this as-is; ElevenLabs extends it for its HTTP client) so the
+        fire-and-forget ``_emit_provider_error`` tasks are awaited rather than
+        left dangling into interpreter shutdown.
+        """
+        await self._close_ws()
+        await self._drain_emit_tasks()

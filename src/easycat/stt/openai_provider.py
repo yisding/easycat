@@ -82,20 +82,9 @@ class OpenAISTT(STTBase):
         self._audio_format = None
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
-        if self._audio_format is None:
-            self._audio_format = chunk.format
-        elif chunk.format != self._audio_format:
-            # The buffered PCM is wrapped into a single WAV header built from
-            # the first-seen format, so a mid-stream rate/channel change would
-            # be silently mislabeled (garbled / wrong-pitch transcript).  Fail
-            # loud instead, matching ``STTBase._validate_audio``'s style.  No
-            # bundled transport can reach this (they resample inbound audio to
-            # a fixed pipeline rate before STT); this guards custom transports.
-            raise ValueError(
-                "OpenAI STT received a mid-stream audio format change "
-                f"({self._audio_format} -> {chunk.format}); the batch path "
-                "requires a uniform format for the whole utterance"
-            )
+        self._audio_format = self._latch_uniform_format(
+            self._audio_format, chunk, provider_label="OpenAI STT"
+        )
         self._buffer.extend(chunk.data)
 
     async def _on_end(self) -> None:

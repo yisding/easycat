@@ -521,8 +521,17 @@ def _install_record_to_hook(
         return
 
     original_stop = session.stop
+    already_exported = False
 
     async def _export_bundle() -> None:
+        # ``Session.stop`` is idempotent (repeat calls from SessionManager
+        # teardown, the ``async with`` exit, and an explicit caller all no-op
+        # after the first), so guard the export too — otherwise each repeat
+        # stop() writes a duplicate timestamped bundle.
+        nonlocal already_exported
+        if already_exported:
+            return
+        already_exported = True
         try:
             record_to.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")

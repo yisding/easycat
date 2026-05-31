@@ -70,6 +70,10 @@ def _to_jsonable(value: Any) -> Any:
     else is returned unchanged (the journal's ``json.dumps`` default-handler
     still catches anything left non-serializable).
     """
+    # Common case (a plain string/number/bool result) is already JSON-native;
+    # skip the model_dump/dataclass probing entirely.
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
     dump = getattr(value, "model_dump", None)
     if callable(dump):
         try:

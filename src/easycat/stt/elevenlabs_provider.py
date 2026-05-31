@@ -142,20 +142,9 @@ class ElevenLabsSTT(WebSocketSTTBase):
         if self._config.mode == "realtime":
             await self._send_realtime(chunk)
         else:
-            if self._audio_format is None:
-                self._audio_format = chunk.format
-            elif chunk.format != self._audio_format:
-                # The buffered PCM is wrapped into a single WAV header built
-                # from the first-seen format, so a mid-stream rate/channel
-                # change would be silently mislabeled.  Fail loud instead,
-                # mirroring ``STTBase._validate_audio``.  Bundled transports
-                # resample inbound audio to a fixed pipeline rate before STT,
-                # so this only guards custom transports.
-                raise ValueError(
-                    "ElevenLabs batch STT received a mid-stream audio format "
-                    f"change ({self._audio_format} -> {chunk.format}); the "
-                    "batch path requires a uniform format for the whole utterance"
-                )
+            self._audio_format = self._latch_uniform_format(
+                self._audio_format, chunk, provider_label="ElevenLabs batch STT"
+            )
             self._buffer.extend(chunk.data)
 
     async def _on_end(self) -> None:
