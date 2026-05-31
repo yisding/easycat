@@ -61,9 +61,16 @@ class OpenAIRealtimeSTTConfig:
     """
 
     api_key: str = ""
-    model: str = "gpt-4o-transcribe"
-    connection_model: str = "gpt-realtime-mini"
+    model: str = "gpt-realtime-whisper"
+    # Transcription-only Realtime WebSocket sessions connect with
+    # ``intent=transcription``.  Set this to a realtime voice model (for
+    # example, ``gpt-realtime-mini``) only when intentionally using the
+    # legacy realtime-session transcription path.
+    connection_model: str | None = None
     language: str | None = None
+    # Optional latency/accuracy tradeoff for ``gpt-realtime-whisper``.
+    # Supported by OpenAI: minimal, low, medium, high, xhigh.
+    delay: str | None = None
     ws_url: str = "wss://api.openai.com/v1/realtime"
     # Optional WebSocket factory override for testing.
     # Signature: async (url, **kwargs) -> connection
@@ -111,10 +118,13 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         self._dropping_pending_final: bool = False
 
     def _websocket_url(self) -> str:
-        """Build the Realtime WebSocket URL with the required realtime model."""
+        """Build the Realtime WebSocket URL for transcription mode."""
         parts = urlsplit(self._config.ws_url)
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
-        query.setdefault("model", self._config.connection_model)
+        if self._config.connection_model:
+            query.setdefault("model", self._config.connection_model)
+        else:
+            query.setdefault("intent", "transcription")
         return urlunsplit(
             (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
         )
@@ -197,10 +207,12 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         transcription: dict[str, Any] = {"model": self._config.model}
         if self._config.language:
             transcription["language"] = self._config.language
+        if self._config.delay:
+            transcription["delay"] = self._config.delay
         session_update: dict[str, Any] = {
             "type": "session.update",
             "session": {
-                "type": "realtime",
+                "type": "realtime" if self._config.connection_model else "transcription",
                 "audio": {
                     "input": {
                         "format": {
