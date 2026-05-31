@@ -151,6 +151,7 @@ def test_parse_stt_bare_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     cfg = parse_stt_string("openai-realtime")
     assert isinstance(cfg, OpenAIRealtimeSTTConfig)
+    assert cfg.model == "gpt-realtime-whisper"
     assert cfg.api_key == "sk-test"
 
 

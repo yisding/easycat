@@ -117,7 +117,7 @@ run(
 ```
 
 > Note: `EasyConfig` will automatically wire **OpenAI Realtime STT
-> (gpt-realtime) + OpenAI TTS** from `OPENAI_API_KEY` (picked up from the
+> (gpt-realtime-whisper) + OpenAI TTS** from `OPENAI_API_KEY` (picked up from the
 > environment) when you do not override `stt` or `tts`. The Realtime STT
 > streams transcription over a WebSocket as audio arrives — sub-second
 > stop-to-final latency, not a batch upload at end of turn. The Realtime

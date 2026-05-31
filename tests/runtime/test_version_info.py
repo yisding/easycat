@@ -48,7 +48,7 @@ class TestSTTProviderVersionInfo:
         info = OpenAIRealtimeSTT(config).version_info()
         assert set(info.keys()) == EXPECTED_KEYS
         assert info["provider"] == "openai-realtime"
-        assert info["model"] == "gpt-4o-transcribe"
+        assert info["model"] == "gpt-realtime-whisper"
 
     def test_deepgram_stt(self):
         config = DeepgramSTTConfig(api_key="test")
