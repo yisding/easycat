@@ -98,7 +98,7 @@ async def test_greeting_plays_once_on_call_answered() -> None:
     session.synthesize_bypass = AsyncMock()  # type: ignore[method-assign]
 
     await session.event_bus.emit(CallAnswered(call_sid="CA1"))
-    task = session._greeting_task
+    task = session._greeting.task
     assert task is not None
     await session.event_bus.emit(CallAnswered(call_sid="CA2"))  # warm-transfer sim
     await task
@@ -126,13 +126,13 @@ async def test_greeting_does_not_block_call_answered_dispatch() -> None:
     await session.event_bus.emit(CallAnswered(call_sid="CA1"))
 
     assert later_handlers == ["CA1"]
-    assert session._greeting_task is not None
+    assert session._greeting.task is not None
     await asyncio.wait_for(started.wait(), timeout=1.0)
-    assert session._greeting_spoken is False
+    assert session._greeting.spoken is False
 
     release.set()
-    await session._greeting_task
-    assert session._greeting_spoken is True
+    await session._greeting.task
+    assert session._greeting.spoken is True
 
 
 @pytest.mark.asyncio
@@ -141,17 +141,17 @@ async def test_greeting_marks_spoken_only_after_success() -> None:
     session.synthesize_bypass = AsyncMock(side_effect=[RuntimeError("tts failed"), None])  # type: ignore[method-assign]
 
     await session.event_bus.emit(CallAnswered(call_sid="CA1"))
-    first = session._greeting_task
+    first = session._greeting.task
     assert first is not None
     await first
-    assert session._greeting_spoken is False
+    assert session._greeting.spoken is False
 
     await session.event_bus.emit(CallAnswered(call_sid="CA1"))
-    second = session._greeting_task
+    second = session._greeting.task
     assert second is not None
     await second
 
-    assert session._greeting_spoken is True
+    assert session._greeting.spoken is True
     assert session.synthesize_bypass.await_count == 2
 
 

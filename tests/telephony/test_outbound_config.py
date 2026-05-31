@@ -212,13 +212,14 @@ class TestTelephonyConfigExtension:
 
     def test_outbound_helpers_start_disposition_tracker_before_state_machine(self) -> None:
         bus = EventBus()
-        helpers = _create_telephony_helpers(
+        result = _create_telephony_helpers(
             bus,
             TelephonyConfig(
                 enable_outbound_call_manager=True,
                 outbound=OutboundCallConfig(from_number="+15559876543"),
             ),
         )
+        helpers = result.helpers
         tracker_index = next(
             i for i, helper in enumerate(helpers) if isinstance(helper, CallDispositionTracker)
         )
@@ -226,6 +227,8 @@ class TestTelephonyConfigExtension:
             i for i, helper in enumerate(helpers) if isinstance(helper, OutboundCallStateMachine)
         )
         assert tracker_index < sm_index
+        # The typed result surfaces the state machine by name, no isinstance scan.
+        assert result.state_machine is helpers[sm_index]
 
     def test_outbound_helpers_wire_inbound_track_filter_on_screening(self) -> None:
         """Screening detector defaults to the inbound track filter.
@@ -235,14 +238,15 @@ class TestTelephonyConfigExtension:
         events, so it does not break screening in the common pipeline.
         """
         bus = EventBus()
-        helpers = _create_telephony_helpers(
+        result = _create_telephony_helpers(
             bus,
             TelephonyConfig(
                 enable_outbound_call_manager=True,
                 outbound=OutboundCallConfig(from_number="+15559876543"),
             ),
         )
-        screening = next(helper for helper in helpers if isinstance(helper, CallScreeningDetector))
+        screening = result.screening_detector
+        assert isinstance(screening, CallScreeningDetector)
         assert screening._track_filter == "inbound"
 
     @pytest.mark.asyncio
@@ -254,7 +258,7 @@ class TestTelephonyConfigExtension:
                 enable_outbound_call_manager=True,
                 outbound=OutboundCallConfig(from_number="+15559876543"),
             ),
-        )
+        ).helpers
         tracker = next(helper for helper in helpers if isinstance(helper, CallDispositionTracker))
 
         for helper in helpers:
@@ -280,7 +284,7 @@ class TestTelephonyConfigExtension:
             def stop(self) -> None:
                 pass
 
-        monkeypatch.setattr("easycat.config.OutboundCallManager", _Manager)
+        monkeypatch.setattr("easycat.config._factory.OutboundCallManager", _Manager)
 
         dnc = DNCList()
         helpers = _create_telephony_helpers(
@@ -294,7 +298,7 @@ class TestTelephonyConfigExtension:
                 ),
             ),
             dnc_list=dnc,
-        )
+        ).helpers
 
         manager = next(helper for helper in helpers if isinstance(helper, _Manager))
         assert manager.dnc_list is dnc

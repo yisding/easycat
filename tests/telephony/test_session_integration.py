@@ -50,7 +50,7 @@ class TestOutboundSessionCreation:
                 ivr_agent_callback=_dummy_agent,
             ),
         )
-        helpers = _create_telephony_helpers(bus, config)
+        helpers = _create_telephony_helpers(bus, config).helpers
         types = [type(h).__name__ for h in helpers]
         assert "OutboundCallStateMachine" in types
         assert "CallScreeningDetector" in types
@@ -66,7 +66,7 @@ class TestOutboundSessionCreation:
             enable_outbound_call_manager=True,
             outbound=OutboundCallConfig(from_number="+15551234567"),
         )
-        helpers = _create_telephony_helpers(bus, config)
+        helpers = _create_telephony_helpers(bus, config).helpers
         types = [type(h).__name__ for h in helpers]
         assert "IVRNavigator" not in types
 
@@ -76,7 +76,7 @@ class TestOutboundSessionCreation:
 
         bus = EventBus()
         config = TelephonyConfig(enable_dtmf_aggregator=True)
-        helpers = _create_telephony_helpers(bus, config)
+        helpers = _create_telephony_helpers(bus, config).helpers
         types = [type(h).__name__ for h in helpers]
         assert "OutboundCallStateMachine" not in types
         assert "DTMFAggregator" in types
@@ -90,7 +90,7 @@ class TestOutboundSessionCreation:
             enable_outbound_call_manager=True,
             outbound=OutboundCallConfig(from_number="+15551234567"),
         )
-        helpers = _create_telephony_helpers(bus, config)
+        helpers = _create_telephony_helpers(bus, config).helpers
         for h in helpers:
             h.start()
         for h in helpers:
@@ -107,7 +107,7 @@ class TestOutboundSessionCreation:
             enable_outbound_call_manager=True,
             outbound=OutboundCallConfig(from_number="+15551234567"),
         )
-        helpers = _create_telephony_helpers(bus, config)
+        helpers = _create_telephony_helpers(bus, config).helpers
         for h in helpers:
             h.start()
         for h in helpers:
@@ -124,7 +124,7 @@ class TestOutboundSessionCreation:
             enable_outbound_call_manager=True,
             outbound=OutboundCallConfig(from_number="+15551234567"),
         )
-        helpers = _create_telephony_helpers(bus, config)
+        helpers = _create_telephony_helpers(bus, config).helpers
         sm_list = [h for h in helpers if isinstance(h, OutboundCallStateMachine)]
         assert len(sm_list) == 1
 
@@ -146,7 +146,7 @@ class TestOutboundSessionPipeline:
                 enable_screening_detection=True,
             ),
         )
-        helpers = _create_telephony_helpers(bus, config)
+        helpers = _create_telephony_helpers(bus, config).helpers
         for h in helpers:
             h.start()
 
@@ -182,7 +182,7 @@ class TestOutboundSessionPipeline:
                 ivr_agent_callback=_mock_agent,
             ),
         )
-        helpers = _create_telephony_helpers(bus, config)
+        helpers = _create_telephony_helpers(bus, config).helpers
         for h in helpers:
             h.start()
 

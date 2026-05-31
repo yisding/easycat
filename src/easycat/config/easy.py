@@ -1,58 +1,46 @@
-"""Top-level configuration and session factory for EasyCat."""
+"""The lightweight EasyCat config dataclasses — the first thing to read.
+
+This is the "super easy" surface: the config dataclasses a newcomer sees
+first (:class:`EasyConfig`, :class:`TextSessionConfig`, and the telephony
+config trio) plus their validation. The session-building factories
+(:func:`create_session` / :func:`create_text_session`) live in
+:mod:`easycat.config._factory`, and the outbound/telephony runtime wiring
+lives in :mod:`easycat.config._telephony_wiring` — both imported lazily so
+touching :class:`EasyConfig` never drags in the Session class or the
+telephony stack.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import copy
-import inspect
 import logging
 import os
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-from uuid import uuid4
 
-from easycat.audio_format import PCM16_MONO_24K, AudioFormat
-from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
+from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.errors import EASYCAT_E203
-from easycat.events import CallInitiated, CallScreening, CallStateChanged, EventBus, TTSAudio
-from easycat.integrations.agents import ExternalAgentBridge
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
-from easycat.integrations.agents._factory import auto_adapt_agent
-from easycat.integrations.agents.base import NULL_RECORDER, AgentTurnInput
 from easycat.llm_output_processing import LLMOutputProcessor
-from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
-from easycat.providers import Transport, TransportLike
-from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
-from easycat.runtime.capabilities import (
-    bind_identity_sink_if_supported,
-    default_echo_cancellation_enabled,
-)
-from easycat.runtime.journal import create_journal
-from easycat.session._session import Session
-from easycat.session._types import Agent as _AgentProto
-from easycat.session._types import SessionConfig
+from easycat.noise_reduction import NoiseReducerConfig
+from easycat.providers import Transport
+from easycat.runtime.capabilities import default_echo_cancellation_enabled
 from easycat.session.actions import SessionActionExecutor, SessionActions
-from easycat.smart_turn import SmartTurnConfig, create_smart_turn
-from easycat.stt.deepgram_provider import DeepgramSTTConfig
-from easycat.stt.factory import STTConfig, create_stt_provider_from_config, parse_stt_string
+from easycat.smart_turn import SmartTurnConfig
+from easycat.stt.factory import STTConfig, parse_stt_string
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
-from easycat.stubs import NoopAgent
 
 # Lightweight, config-only dataclasses needed at *module* scope — for the
-# ``TransportConfig`` union, ``field(default_factory=...)`` defaults, and the
-# runtime ``isinstance`` checks in ``_align_tts_config_to_transport``. These
+# ``TransportConfig`` union and ``field(default_factory=...)`` defaults. These
 # submodule imports stay cheap because ``easycat.telephony`` /
 # ``easycat.transports`` load their members lazily (PEP 562), so none of them
 # drags in the rest of the telephony / transport stack. The heavier runtime
 # classes (state machines, navigators, transport implementations, the outbound
-# call manager, etc.) are imported lazily inside the factory functions that
-# actually build a session — see ``_create_transport`` /
-# ``_create_telephony_helpers`` / ``_create_outbound_helpers`` /
-# ``_create_action_executors`` — so touching ``EasyConfig`` never pulls them in.
+# call manager, etc.) are imported lazily inside ``easycat.config._factory`` /
+# ``easycat.config._telephony_wiring`` — so touching ``EasyConfig`` never pulls
+# them in.
 from easycat.telephony.dtmf import DTMFAggregatorConfig
 from easycat.telephony.voicemail import VoicemailDetectorConfig
 from easycat.timeouts import TimeoutConfig
@@ -61,47 +49,23 @@ from easycat.transports.twilio_media import TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
-from easycat.tts.cartesia_tts import CartesiaTTSConfig
-from easycat.tts.deepgram_tts import DeepgramTTSConfig
-from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
-from easycat.tts.factory import TTSConfig, create_tts_provider_from_config, parse_tts_string
+from easycat.tts.factory import TTSConfig, parse_tts_string
 from easycat.tts.openai_tts import OpenAITTSConfig
-from easycat.turn_manager import TurnManagerConfig, TurnMode
-from easycat.vad import VADConfig, create_vad
+from easycat.turn_manager import TurnManagerConfig
+from easycat.vad import VADConfig
 
 if TYPE_CHECKING:
     # Annotation-only references to telephony runtime types. Kept out of the
     # module-level import set (which would re-trigger the telephony fan-out)
     # because ``from __future__ import annotations`` makes these lazy strings.
-    from easycat.telephony.call_state import OutboundCallStateMachine
     from easycat.telephony.ivr import AgentCallback, DTMFDelivery
-    from easycat.telephony.outbound import OutboundCallManager
     from easycat.telephony.retry import RetryStrategyConfig
-    from easycat.telephony.screening import CallScreeningDetector, ScreeningResponse
     from easycat.telephony.session_actions import TwilioSessionActionConfig
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("easycat.config")
 
 
-# Lazily-resolved telephony runtime classes. Kept out of the module-level
-# import set (see the import note at the top of this module) so a
-# non-telephony session never loads the outbound stack. They are still exposed
-# as module attributes via PEP 562 ``__getattr__`` so the factory functions can
-# reference them through the module namespace and tests can ``monkeypatch`` them.
-_LAZY_RUNTIME_IMPORTS = {
-    "OutboundCallManager": "easycat.telephony.outbound",
-}
-
-
-def __getattr__(name: str) -> Any:
-    module_path = _LAZY_RUNTIME_IMPORTS.get(name)
-    if module_path is not None:
-        import importlib
-
-        value = getattr(importlib.import_module(module_path), name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+# ── OpenAI env-var / log-level helpers ───────────────────────────────
 
 
 @contextmanager
@@ -154,78 +118,17 @@ def _resolve_easycat_log_level(*, default: int) -> int:
     return _EASYCAT_LOG_LEVELS.get(raw, default)
 
 
-_ELEVENLABS_PCM_OUTPUT_RATES = (16000, 22050, 24000, 44100)
+# ── Validation helpers ───────────────────────────────────────────────
 
 
-def _transport_tts_output_format(transport: TransportConfig) -> AudioFormat | None:
-    preferred = getattr(transport, "preferred_tts_output_format", None)
-    if isinstance(preferred, AudioFormat):
-        return preferred
-
-    transport_fmt = getattr(transport, "audio_format", None)
-    if isinstance(transport_fmt, AudioFormat):
-        return transport_fmt
-    return None
+class EasyConfigError(ValueError):
+    """Raised when app config validation fails."""
 
 
-def _closest_elevenlabs_output_format(rate: int) -> str:
-    closest = min(_ELEVENLABS_PCM_OUTPUT_RATES, key=lambda candidate: abs(candidate - rate))
-    return f"pcm_{closest}"
-
-
-def _align_pcm_rate_tts_config_to_transport(
-    tts_config: DeepgramTTSConfig | CartesiaTTSConfig,
-    target_format: AudioFormat,
-) -> TTSConfig:
-    """Align a PCM-rate TTS config (Deepgram/Cartesia) to the transport.
-
-    Shared by the two providers that expose a ``sample_rate`` field and a
-    PCM ``output_format``: only re-target when the config still holds the
-    24kHz defaults, then clamp the provider sample rate to a supported
-    16k/24k value before adopting the transport's output format.
-    """
-    if tts_config.sample_rate != 24000 or tts_config.output_format != PCM16_MONO_24K:
-        return tts_config
-    provider_rate = (
-        target_format.sample_rate if target_format.sample_rate in (16000, 24000) else 24000
-    )
-    return replace(
-        tts_config,
-        sample_rate=provider_rate,
-        output_format=target_format,
-    )
-
-
-def _align_tts_config_to_transport(
-    tts_config: TTSConfig,
-    transport: TransportConfig,
-) -> TTSConfig:
-    target_format = _transport_tts_output_format(transport)
-    if target_format is None:
-        return tts_config
-
-    if isinstance(tts_config, OpenAITTSConfig):
-        if tts_config.output_format != PCM16_MONO_24K:
-            return tts_config
-        return replace(tts_config, output_format=target_format)
-
-    # Deepgram and Cartesia share an identical "clamp the provider sample_rate
-    # to 16k/24k, then adopt the transport's PCM output_format" rule, so the
-    # logic lives in one shared helper rather than two copy-paste branches that
-    # could drift apart. Both configs expose ``sample_rate``/``output_format``.
-    if isinstance(tts_config, (DeepgramTTSConfig, CartesiaTTSConfig)):
-        return _align_pcm_rate_tts_config_to_transport(tts_config, target_format)
-
-    if isinstance(tts_config, ElevenLabsTTSConfig):
-        if tts_config.output_format != "pcm_24000" or tts_config.audio_format != PCM16_MONO_24K:
-            return tts_config
-        return replace(
-            tts_config,
-            output_format=_closest_elevenlabs_output_format(target_format.sample_rate),
-            audio_format=target_format,
-        )
-
-    return tts_config
+_VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
+_VALID_DEBUG = {"off", "light", "full"}
+_VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
+_VALID_JOURNAL_RETENTION = {"archive", "delete"}
 
 
 def _require_positive(name: str, value: float) -> None:
@@ -238,6 +141,123 @@ def _require_non_negative(name: str, value: float) -> None:
     """Raise ``ValueError`` if ``value`` is negative."""
     if value < 0:
         raise ValueError(f"{name} must be non-negative")
+
+
+def _validate_common(
+    *,
+    debug: str,
+    journal_backend: str,
+    journal_retention: str,
+    mcp_servers: list[str] | None = None,
+    session_id: str | None = None,
+    agent: Any | None = None,
+    agent_model: str | None = None,
+) -> None:
+    """Validate the shared fields used by both session factories."""
+    if debug not in _VALID_DEBUG:
+        raise ValueError(f"Invalid debug={debug!r}. Must be one of {sorted(_VALID_DEBUG)}.")
+    if journal_backend not in _VALID_JOURNAL_BACKEND:
+        raise ValueError(
+            f"Invalid journal_backend={journal_backend!r}. "
+            f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
+        )
+    if journal_retention not in _VALID_JOURNAL_RETENTION:
+        raise ValueError(
+            f"Invalid journal_retention={journal_retention!r}. "
+            f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
+        )
+    if mcp_servers is not None:
+        for uri in mcp_servers:
+            if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
+                raise EasyConfigError(
+                    f"Invalid MCP server URI: {uri!r}. "
+                    f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
+                )
+    if session_id is not None and ("/" in session_id or "\\" in session_id or ".." in session_id):
+        raise EasyConfigError(
+            f"session_id must not contain path separators or '..': {session_id!r}"
+        )
+    if isinstance(agent, str):
+        from urllib.parse import urlparse
+
+        parsed = urlparse(agent)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            if agent_model is None:
+                raise EasyConfigError(
+                    "agent_model is required when agent is a URL string. "
+                    "Set agent_model to the model identifier the remote "
+                    "Responses API server should use."
+                )
+
+
+def _inject_agent_runtime(
+    agent: Any,
+    *,
+    mcp_servers: tuple[str, ...] | list[str] = (),
+    agent_model: str | None = None,
+    remote_agent_api_key: str | None = None,
+) -> None:
+    """Push session-level MCP/model/key settings into the bridge.
+
+    Unwraps an ``AgentRunner`` to reach the inner bridge.  Does not
+    return a new agent — applies settings to the bridge in place.
+
+    Prefers the declared :meth:`ExternalAgentBridge.configure_runtime`
+    surface when the bridge exposes it (every built-in bridge that
+    consumes these settings does), so the wiring targets a documented
+    contract instead of private attribute names.  Falls back to the
+    historical private-attribute mutation for bridges that predate the
+    method, keeping back-compat.
+    """
+    from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+
+    inner = agent._agent if isinstance(agent, AgentRunner) else agent
+
+    configure = getattr(inner, "configure_runtime", None)
+    if callable(configure):
+        # Always pass mcp_servers (even empty) so a bridge reused across
+        # sessions doesn't leak a previous MCP list.
+        configure(
+            mcp_servers=list(mcp_servers),
+            model=agent_model or None,
+            api_key=remote_agent_api_key or None,
+        )
+        return
+
+    # Back-compat path for bridges without configure_runtime.
+    if hasattr(inner, "_mcp_servers"):
+        # Always overwrite (even with empty tuple) so a bridge reused
+        # across sessions doesn't leak a previous MCP list.
+        inner._mcp_servers = list(mcp_servers)
+    if isinstance(inner, RemoteResponsesAPIBridge):
+        if agent_model:
+            inner._model = agent_model
+        if remote_agent_api_key:
+            inner._api_key = remote_agent_api_key
+
+
+def _provider_display_name(cfg: Any, kind: Literal["STT", "TTS"]) -> str:
+    """Human-facing label for a provider config in error messages.
+
+    Prefers the registered provider name from the STT/TTS
+    :class:`~easycat._provider_catalog.ProviderCatalog` (e.g.
+    ``"deepgram STT"``) so the missing-API-key error reads consistently
+    for every registered provider. Falls back to the config class name
+    when the config type isn't in the catalog (e.g. a custom config).
+    """
+    if kind == "STT":
+        from easycat.stt.factory import _CATALOG as catalog
+    else:
+        from easycat.tts.factory import _CATALOG as catalog
+
+    cfg_type = type(cfg)
+    for provider_name, (_provider_cls, config_cls) in catalog.providers.items():
+        if config_cls is cfg_type:
+            return f"{provider_name} {kind}"
+    return type(cfg).__name__.replace("Config", "")
+
+
+# ── Telephony config dataclasses ─────────────────────────────────────
 
 
 @dataclass
@@ -368,177 +388,7 @@ TransportConfig = (
 )
 
 
-def _transport_factories() -> dict[type[TransportConfig], Any]:
-    """Build the ``{config type -> factory}`` map, importing transport
-    implementation classes lazily so they never load at config import time.
-
-    Keyed by config type and rebuilt on each ``_create_transport`` call;
-    Python's import cache makes the second build essentially free, and
-    sessions are not built in hot loops, so the cost is irrelevant next
-    to keeping ``EasyConfig`` cold starts free of every transport SDK.
-    """
-    from easycat.transports.local import LocalTransport
-    from easycat.transports.twilio_media import TwilioTransport
-    from easycat.transports.webrtc import WebRTCTransport
-    from easycat.transports.websocket import WebSocketTransport
-    from easycat.transports.webtransport import WebTransportTransport
-
-    return {
-        LocalTransportConfig: lambda config, event_bus: LocalTransport(config),
-        WebSocketTransportConfig: lambda config, event_bus: WebSocketTransport(config),
-        TwilioTransportConfig: lambda config, event_bus: TwilioTransport(
-            config=config, event_bus=event_bus
-        ),
-        WebRTCTransportConfig: lambda config, event_bus: WebRTCTransport(config),
-        WebTransportTransportConfig: lambda config, event_bus: WebTransportTransport(config),
-    }
-
-
-class EasyConfigError(ValueError):
-    """Raised when app config validation fails."""
-
-
-_VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
-_VALID_DEBUG = {"off", "light", "full"}
-_VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
-_VALID_JOURNAL_RETENTION = {"archive", "delete"}
-
-
-def _validate_common(
-    *,
-    debug: str,
-    journal_backend: str,
-    journal_retention: str,
-    mcp_servers: list[str] | None = None,
-    session_id: str | None = None,
-    agent: Any | None = None,
-    agent_model: str | None = None,
-) -> None:
-    """Validate the shared fields used by both session factories."""
-    if debug not in _VALID_DEBUG:
-        raise ValueError(f"Invalid debug={debug!r}. Must be one of {sorted(_VALID_DEBUG)}.")
-    if journal_backend not in _VALID_JOURNAL_BACKEND:
-        raise ValueError(
-            f"Invalid journal_backend={journal_backend!r}. "
-            f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
-        )
-    if journal_retention not in _VALID_JOURNAL_RETENTION:
-        raise ValueError(
-            f"Invalid journal_retention={journal_retention!r}. "
-            f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
-        )
-    if mcp_servers is not None:
-        for uri in mcp_servers:
-            if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
-                raise EasyConfigError(
-                    f"Invalid MCP server URI: {uri!r}. "
-                    f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
-                )
-    if session_id is not None and ("/" in session_id or "\\" in session_id or ".." in session_id):
-        raise EasyConfigError(
-            f"session_id must not contain path separators or '..': {session_id!r}"
-        )
-    if isinstance(agent, str):
-        from urllib.parse import urlparse
-
-        parsed = urlparse(agent)
-        if parsed.scheme in ("http", "https") and parsed.netloc:
-            if agent_model is None:
-                raise EasyConfigError(
-                    "agent_model is required when agent is a URL string. "
-                    "Set agent_model to the model identifier the remote "
-                    "Responses API server should use."
-                )
-
-
-def _inject_agent_runtime(
-    agent: Any,
-    *,
-    mcp_servers: tuple[str, ...] | list[str] = (),
-    agent_model: str | None = None,
-    remote_agent_api_key: str | None = None,
-) -> None:
-    """Push session-level MCP/model/key settings into the bridge.
-
-    Unwraps an ``AgentRunner`` to reach the inner bridge.  Does not
-    return a new agent — applies settings to the bridge in place.
-
-    Prefers the declared :meth:`ExternalAgentBridge.configure_runtime`
-    surface when the bridge exposes it (every built-in bridge that
-    consumes these settings does), so the wiring targets a documented
-    contract instead of private attribute names.  Falls back to the
-    historical private-attribute mutation for bridges that predate the
-    method, keeping back-compat.
-    """
-    from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-    inner = agent._agent if isinstance(agent, AgentRunner) else agent
-
-    configure = getattr(inner, "configure_runtime", None)
-    if callable(configure):
-        # Always pass mcp_servers (even empty) so a bridge reused across
-        # sessions doesn't leak a previous MCP list.
-        configure(
-            mcp_servers=list(mcp_servers),
-            model=agent_model or None,
-            api_key=remote_agent_api_key or None,
-        )
-        return
-
-    # Back-compat path for bridges without configure_runtime.
-    if hasattr(inner, "_mcp_servers"):
-        # Always overwrite (even with empty tuple) so a bridge reused
-        # across sessions doesn't leak a previous MCP list.
-        inner._mcp_servers = list(mcp_servers)
-    if isinstance(inner, RemoteResponsesAPIBridge):
-        if agent_model:
-            inner._model = agent_model
-        if remote_agent_api_key:
-            inner._api_key = remote_agent_api_key
-
-
-def _validate_agent_shape(adapted: Any, *, wrap_agent: bool) -> None:
-    """Fail fast when ``agent=`` won't survive the first turn.
-
-    Called on the ``auto_adapt_agent`` output *before* the
-    :class:`AgentRunner` wrap — ``AgentRunner`` satisfies both contracts,
-    so a post-wrap check would be a no-op.  A fully-built
-    :class:`ExternalAgentBridge` is accepted as-is.  Otherwise the object
-    must satisfy the :class:`Agent` protocol *and* expose an
-    ``async run`` method: ``@runtime_checkable`` only checks method-name
-    presence, so the :func:`inspect.iscoroutinefunction` tightening is
-    what actually catches a sync / non-callable ``run``.  Skipped when
-    ``wrap_agent`` is False so deliberate custom-bridge flows pass.
-    """
-    if not wrap_agent or isinstance(adapted, ExternalAgentBridge):
-        return
-    run_attr = getattr(adapted, "run", None)
-    if not (isinstance(adapted, _AgentProto) and inspect.iscoroutinefunction(run_attr)):
-        raise EasyConfigError(
-            "agent must expose `async run(text) -> str` or be a recognized "
-            "framework agent (see auto_adapt_agent's supported list)."
-        )
-
-
-def _provider_display_name(cfg: Any, kind: Literal["STT", "TTS"]) -> str:
-    """Human-facing label for a provider config in error messages.
-
-    Prefers the registered provider name from the STT/TTS
-    :class:`~easycat._provider_catalog.ProviderCatalog` (e.g.
-    ``"deepgram STT"``) so the missing-API-key error reads consistently
-    for every registered provider. Falls back to the config class name
-    when the config type isn't in the catalog (e.g. a custom config).
-    """
-    if kind == "STT":
-        from easycat.stt.factory import _CATALOG as catalog
-    else:
-        from easycat.tts.factory import _CATALOG as catalog
-
-    cfg_type = type(cfg)
-    for provider_name, (_provider_cls, config_cls) in catalog.providers.items():
-        if config_cls is cfg_type:
-            return f"{provider_name} {kind}"
-    return type(cfg).__name__.replace("Config", "")
+# ── Session config dataclasses ───────────────────────────────────────
 
 
 @dataclass(kw_only=True)
@@ -686,7 +536,9 @@ class EasyConfig(_AgentSessionConfig):
             if self.tts is None:
                 self.tts = OpenAITTSConfig(api_key=self.openai_api_key)
         if self.tts is not None and self.auto_align_tts_output_to_transport:
-            self.tts = _align_tts_config_to_transport(self.tts, self.transport)
+            from ._tts_alignment import align_tts_config_to_transport
+
+            self.tts = align_tts_config_to_transport(self.tts, self.transport)
         if self.echo_cancellation is None:
             self.echo_cancellation = self._default_echo_cancellation_for_transport()
         if self.debug in ("light", "full"):
@@ -795,385 +647,6 @@ class EasyConfig(_AgentSessionConfig):
         return cls(**kwargs)
 
 
-def _should_auto_turn_from_stt_final(config: EasyConfig) -> bool:
-    """Whether this session should derive turn boundaries from STT finals."""
-    if not isinstance(config.stt, DeepgramSTTConfig):
-        return False
-    if config.turn_taking.mode == TurnMode.PUSH_TO_TALK:
-        return False
-    if config.smart_turn.enabled:
-        return False
-    if config.telephony and config.telephony.enable_voicemail_detector:
-        return False
-    return config.stt.is_flux
-
-
-def _create_artifact_store(
-    session_id: str, debug: str
-) -> InMemoryArtifactStore | FilesystemArtifactStore | None:
-    if debug == "off":
-        return None
-    if debug == "full":
-        return FilesystemArtifactStore(session_id)
-    return InMemoryArtifactStore()
-
-
-def _safe_config_ns(config: EasyConfig) -> object:
-    """Build a lightweight namespace snapshot of the safe config fields.
-
-    Only copies the fields that ``safe_config_snapshot`` reads so we
-    never attempt to deep-copy live client objects, agents, or other
-    non-picklable instances on the config.
-    """
-    from types import SimpleNamespace
-
-    from easycat.runtime.safe_defaults import SAFE_CONFIG_FIELDS
-
-    attrs: dict[str, Any] = {}
-    for name in SAFE_CONFIG_FIELDS:
-        val = getattr(config, name, None)
-        if val is None:
-            continue
-        # Shallow-copy dataclass values so later mutation of the original
-        # config (e.g. turn_taking.end_of_turn_silence_ms = 500) doesn't
-        # retroactively change the snapshot.
-        attrs[name] = copy.copy(val) if hasattr(val, "__dataclass_fields__") else val
-    return SimpleNamespace(**attrs)
-
-
-def _merge_twilio_identity(existing: Any, incoming: Any) -> Any:
-    """Preserve an existing call identity while adding Twilio metadata."""
-    if incoming is None:
-        return existing
-    if existing is None:
-        return incoming
-
-    updates: dict[str, Any] = {}
-    incoming_call_sid = getattr(incoming, "call_sid", None)
-    if getattr(existing, "call_sid", None) is None and incoming_call_sid:
-        updates["call_sid"] = incoming_call_sid
-
-    existing_fields = getattr(existing, "custom_fields", None)
-    incoming_fields = getattr(incoming, "custom_fields", None)
-    if isinstance(existing_fields, dict) and isinstance(incoming_fields, dict):
-        merged_fields = dict(incoming_fields)
-        merged_fields.update(existing_fields)
-        if merged_fields != existing_fields:
-            updates["custom_fields"] = merged_fields
-
-    if not updates:
-        return existing
-    if hasattr(existing, "__dataclass_fields__"):
-        return replace(existing, **updates)
-
-    merged = copy.copy(existing)
-    for key, value in updates.items():
-        setattr(merged, key, value)
-    return merged
-
-
-def create_session(config: EasyConfig) -> Session:
-    """Create a fully wired Session from EasyConfig."""
-    session_id = f"session-{uuid4().hex[:12]}"
-    artifact_store = _create_artifact_store(session_id, config.debug)
-    journal = (
-        create_journal(
-            session_id,
-            debug=config.debug,
-            backend=config.journal_backend,
-            artifact_store=(
-                artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
-            ),
-            retention_mode=config.journal_retention,
-        )
-        if config.debug != "off"
-        else None
-    )
-
-    try:
-        event_bus = EventBus()
-        stt = create_stt_provider_from_config(config.stt, event_bus)
-        tts = create_tts_provider_from_config(config.tts, event_bus)
-        auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
-        enable_vad = not auto_turn_from_stt_final
-        vad = create_vad(config.vad) if enable_vad else None
-        noise_reducer = (
-            create_noise_reducer(config.noise_reduction or NoiseReducerConfig())
-            if config.enable_noise_reduction or config.noise_reduction is not None
-            else None
-        )
-        # ``EasyConfig.__post_init__`` always resolves ``echo_cancellation``
-        # to a concrete config (honoring the tri-state ``enable_echo_cancellation``
-        # via ``_default_echo_cancellation_for_transport``), so it is never None
-        # here.
-        echo_cfg = config.echo_cancellation
-        assert echo_cfg is not None
-        echo_canceller = create_echo_canceller(echo_cfg)
-        transport = _create_transport(config.transport, event_bus)
-
-        mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
-
-        if config.agent is not None:
-            agent = auto_adapt_agent(config.agent, model=config.agent_model)
-            _inject_agent_runtime(
-                agent,
-                mcp_servers=mcp_servers,
-                agent_model=config.agent_model,
-                remote_agent_api_key=config.remote_agent_api_key,
-            )
-            _validate_agent_shape(agent, wrap_agent=config.wrap_agent)
-            if config.wrap_agent and not isinstance(agent, AgentRunner):
-                runner_cfg = config.agent_runner or AgentRunnerConfig()
-                agent = AgentRunner(agent, runner_cfg)
-        else:
-            agent = NoopAgent()
-
-        # Emit provider versions into the journal at session start.
-        if journal is not None:
-            _emit_provider_versions(
-                journal,
-                session_id,
-                stt=stt,
-                tts=tts,
-                transport=transport,
-                vad=vad,
-                noise_reducer=noise_reducer,
-                echo_canceller=echo_canceller,
-            )
-
-        turn_config = config.turn_taking
-        smart_turn = create_smart_turn(config.smart_turn)
-        if smart_turn is not None:
-            turn_config = replace(turn_config, endpoint_detector=smart_turn)
-            # There are two decision knobs for the same endpoint call:
-            # ``SmartTurnConfig.threshold`` (used by the provider to compute
-            # ``prediction``) and ``TurnManagerConfig.endpoint_threshold``
-            # (re-decides on ``probability`` at the manager and wins when set).
-            # To stop them diverging silently, when the user has not set an
-            # explicit manager threshold (default ``None``), derive it from the
-            # provider threshold so the single ``smart_turn.threshold`` knob is
-            # authoritative. An explicit ``endpoint_threshold`` still wins, but
-            # we warn when it disagrees with the provider threshold so the
-            # precedence is never a hidden footgun.
-            if turn_config.endpoint_threshold is None:
-                turn_config = replace(turn_config, endpoint_threshold=config.smart_turn.threshold)
-            elif turn_config.endpoint_threshold != config.smart_turn.threshold:
-                logger.warning(
-                    "Both turn_taking.endpoint_threshold (%.3f) and "
-                    "smart_turn.threshold (%.3f) are set to different values; "
-                    "the manager-level endpoint_threshold wins and the provider "
-                    "threshold is ignored. Set only one to avoid confusion.",
-                    turn_config.endpoint_threshold,
-                    config.smart_turn.threshold,
-                )
-
-        telephony_helpers = _create_telephony_helpers(
-            event_bus,
-            config.telephony,
-            dnc_list=config.dnc_list,
-        )
-        action_executors = [*config.action_executors, *_create_action_executors(config.telephony)]
-
-        # Extract audio gate from the outbound call state machine, if present.
-        audio_gate = None
-        _outbound_sm = _find_outbound_state_machine(telephony_helpers)
-
-        if _outbound_sm is not None:
-
-            def audio_gate() -> bool:
-                return _outbound_sm.gate.is_buffering
-
-        session = Session(
-            SessionConfig(
-                stt=stt,
-                tts=tts,
-                vad=vad,
-                noise_reducer=noise_reducer,
-                echo_canceller=echo_canceller,
-                transport=transport,
-                agent=agent,
-                event_bus=event_bus,
-                turn_manager_config=turn_config,
-                timeout_config=config.timeouts,
-                journal=journal,
-                artifact_store=artifact_store,
-                session_id=session_id,
-                telephony_helpers=telephony_helpers,
-                enable_vad=enable_vad,
-                enable_noise_reduction=config.enable_noise_reduction,
-                enable_echo_cancellation=echo_cfg.enabled,
-                auto_turn_from_stt_final=auto_turn_from_stt_final,
-                strip_markdown=config.strip_markdown,
-                output_processors=config.output_processors,
-                session_actions=config.session_actions,
-                action_executors=action_executors,
-                audio_gate=audio_gate,
-                mcp_servers=mcp_servers,
-                caller_id_exposure=config.caller_id_exposure,
-                greeting=config.greeting,
-                dnc_list=config.dnc_list,
-            )
-        )
-
-        # Bridge the Twilio start-event customParameters through to
-        # ``session.call_identity`` so the agent (or its tools) sees
-        # who's calling without every app reimplementing the plumbing.
-        def _on_twilio_identity(identity: Any) -> None:
-            session.call_identity = _merge_twilio_identity(session._call_identity, identity)
-
-        bind_identity_sink_if_supported(transport, _on_twilio_identity)
-    except Exception:
-        if journal is not None and hasattr(journal, "close"):
-            journal.close()
-        raise
-    # Stash a lightweight snapshot of user-facing config fields so debug
-    # bundle export can serialise settings (debug, journal_backend,
-    # turn_taking, etc.) without touching live provider instances.
-    # We intentionally avoid ``copy.deepcopy(config)`` because configs
-    # may carry non-picklable objects (httpx clients, agent instances).
-    session._easycat_config = _safe_config_ns(config)
-    session._agent_model = config.agent_model
-    session._remote_agent_api_key = config.remote_agent_api_key
-
-    if _outbound_sm is not None:
-        _wire_outbound_pipeline(
-            session,
-            _outbound_sm,
-            telephony_helpers,
-            event_bus,
-        )
-
-    # Outbound-call caller identity: when :class:`OutboundCallManager`
-    # emits :class:`CallInitiated`, stamp the session with a
-    # direction="outbound" identity so the agent/tools know who they're
-    # calling without having to peek into the event bus themselves.
-    from easycat.events import CallInitiated as _CallInitiatedEv
-    from easycat.session._types import CallIdentity as _CallIdentity
-
-    def _on_outbound_initiated(event: _CallInitiatedEv) -> None:
-        # Don't clobber an existing inbound identity — a session that
-        # places an outbound call while an inbound call is live is
-        # unusual but shouldn't silently lose the inbound number.
-        if session._call_identity is not None and session._call_identity.direction == "inbound":
-            return
-        session.call_identity = _CallIdentity(
-            caller_number=event.to,
-            called_number=event.from_,
-            direction="outbound",
-            call_sid=event.call_sid,
-        )
-
-    event_bus.subscribe(_CallInitiatedEv, _on_outbound_initiated)
-
-    if config.record_to is not None:
-        _install_record_to_hook(session, Path(config.record_to), debug_mode=config.debug)
-
-    if config.debug == "full":
-        _maybe_launch_debugger_ui(session)
-
-    return session
-
-
-def _install_record_to_hook(
-    session: Session,
-    record_to: Path,
-    *,
-    debug_mode: Literal["off", "light", "full"],
-) -> None:
-    """Wire session stop/shutdown to auto-export a timestamped bundle.
-
-    ``record_to`` is a no-op when ``debug="off"`` because the journal
-    isn't created in that mode — we warn once and skip rather than
-    silently export an empty bundle.  The export runs *after* the
-    normal shutdown completes (so the journal already has the final
-    records) and is wrapped in a broad try/except so a bundle-write
-    failure never masks the real shutdown outcome.
-    """
-    if debug_mode == "off":
-        logger.warning(
-            "EasyConfig(record_to=%r) requested but debug='off' — no journal will "
-            "be captured. Set debug='light' or 'full' to enable recording.",
-            str(record_to),
-        )
-        return
-
-    original_stop = session.stop
-
-    async def _export_bundle() -> None:
-        try:
-            record_to.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-            path = record_to / f"{session.session_id}-{stamp}.zip"
-            session.export_debug_bundle(str(path))
-            logger.info("Recorded debug bundle to %s", path)
-        except Exception:
-            logger.exception("Failed to record debug bundle to %s", record_to)
-
-    async def _wrapped_stop(*, force: bool = False) -> None:
-        try:
-            await original_stop(force=force)
-        finally:
-            await _export_bundle()
-
-    # ``shutdown()`` already delegates to ``stop(force=True)``, so wrapping
-    # ``stop`` alone covers every teardown path (``stop``, ``shutdown``, and
-    # the ``async with`` exit). The wrapper preserves the keyword-only
-    # ``force`` parameter so the graceful-vs-force distinction survives.
-    session.stop = _wrapped_stop  # type: ignore[method-assign]
-
-
-def _maybe_launch_debugger_ui(session: Session) -> None:
-    """Spin up the interactive debugger on localhost when debug="full".
-
-    The debugger is an optional extra (``easycat[debugger]`` → aiohttp);
-    when it isn't installed we log once and keep the session usable
-    rather than crashing.  Pytest and CI runs are detected via
-    ``PYTEST_CURRENT_TEST`` so the auto-launch never fights a test
-    harness that already has the port or the loop.  Host/port
-    overrides come from ``EASYCAT_DEBUGGER_PORT`` because the debugger
-    UI is a local-dev convenience, not a production surface.
-    """
-    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("EASYCAT_DEBUGGER_DISABLE"):
-        return
-    # aiohttp is the real gate — the debugger module imports fine
-    # without it, but the server fails the moment ``web.run_app`` is
-    # called.  Probe explicitly so we log a clean skip message instead
-    # of crashing a background thread.
-    try:
-        import aiohttp  # noqa: F401
-    except ImportError:
-        logger.info(
-            "debug='full' requested but easycat[debugger] is not installed; "
-            "skipping auto-launch. `pip install easycat[debugger]` to enable."
-        )
-        return
-
-    try:
-        from easycat.debugger import serve_session
-    except ImportError:
-        logger.info(
-            "debug='full' requested but the debugger module is unavailable; skipping auto-launch."
-        )
-        return
-
-    try:
-        port = int(os.getenv("EASYCAT_DEBUGGER_PORT", "8765"))
-    except ValueError:
-        port = 8765
-    open_browser = os.getenv("EASYCAT_DEBUGGER_OPEN_BROWSER", "1") != "0"
-    try:
-        serve_session(
-            session,
-            port=port,
-            open_browser=open_browser,
-            in_thread=True,
-        )
-    except OSError as exc:
-        logger.warning("Could not start debugger UI on port %s: %s", port, exc)
-    except Exception:
-        logger.exception("Debugger UI failed to start; continuing without it.")
-
-
 @dataclass(kw_only=True)
 class TextSessionConfig(_AgentSessionConfig):
     """Configuration for a text-only Session (no audio pipeline).
@@ -1260,520 +733,3 @@ class TextSessionConfig(_AgentSessionConfig):
             remote_agent_api_key=remote_agent_api_key,
             mcp_servers=mcp_servers,
         )
-
-
-def create_text_session(
-    config: TextSessionConfig | None = None,
-    *,
-    agent: Any = None,
-    session_id: str | None = None,
-    debug: Literal["off", "light", "full"] = "off",
-    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
-    journal_retention: Literal["archive", "delete"] = "archive",
-    wrap_agent: bool = True,
-    agent_runner: AgentRunnerConfig | None = None,
-    agent_model: str | None = None,
-    remote_agent_api_key: str | None = None,
-    mcp_servers: list[str] | None = None,
-) -> Session:
-    """Create a text-only Session (no audio pipeline).
-
-    Accepts a :class:`TextSessionConfig` (the ``create_*(config)`` shape
-    shared with :func:`create_session`) or, for back-compat, the legacy
-    loose keyword arguments. The two forms are mutually exclusive: passing
-    a ``config`` together with any non-default loose keyword raises
-    :class:`ValueError`.
-
-    The returned session supports :meth:`Session.send_text` for
-    request/response agent interaction without STT, TTS, VAD, or
-    transport.  Useful for testing agent logic and building text-based
-    UIs on the same agent adapter stack.
-
-    Raises :class:`RuntimeError` if the caller attempts to call
-    :meth:`Session.start` on a text session.
-    """
-    config = TextSessionConfig.from_kwargs(
-        config,
-        agent=agent,
-        session_id=session_id,
-        debug=debug,
-        journal_backend=journal_backend,
-        journal_retention=journal_retention,
-        wrap_agent=wrap_agent,
-        agent_runner=agent_runner,
-        agent_model=agent_model,
-        remote_agent_api_key=remote_agent_api_key,
-        mcp_servers=mcp_servers,
-    )
-
-    agent = config.agent
-    session_id = config.session_id
-    debug = config.debug
-    journal_backend = config.journal_backend
-    journal_retention = config.journal_retention
-    wrap_agent = config.wrap_agent
-    agent_runner = config.agent_runner
-    agent_model = config.agent_model
-    remote_agent_api_key = config.remote_agent_api_key
-    mcp_servers = config.mcp_servers
-
-    sid = session_id or f"session-{uuid4().hex[:12]}"
-    artifact_store = _create_artifact_store(sid, debug)
-    journal = (
-        create_journal(
-            sid,
-            debug=debug,
-            backend=journal_backend,
-            artifact_store=(
-                artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
-            ),
-            retention_mode=journal_retention,
-        )
-        if debug != "off"
-        else None
-    )
-    try:
-        event_bus = EventBus()
-
-        adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
-        _mcp = list(mcp_servers) if mcp_servers else []
-        if agent is not None:
-            _inject_agent_runtime(
-                adapted,
-                mcp_servers=_mcp,
-                agent_model=agent_model,
-                remote_agent_api_key=remote_agent_api_key,
-            )
-            _validate_agent_shape(adapted, wrap_agent=wrap_agent)
-        if wrap_agent and not isinstance(adapted, AgentRunner):
-            runner_cfg = agent_runner or AgentRunnerConfig()
-            adapted = AgentRunner(adapted, runner_cfg)
-
-        # Text sessions use noop providers — validation is skipped because
-        # runtime_mode="text_session" never enters the audio pipeline.
-        from easycat.stubs import NoopSTT, NoopTransport, NoopTTS, NoopVAD
-
-        session = Session(
-            SessionConfig(
-                stt=NoopSTT(),
-                tts=NoopTTS(),
-                vad=NoopVAD(),
-                transport=NoopTransport(),
-                agent=adapted,
-                event_bus=event_bus,
-                journal=journal,
-                artifact_store=artifact_store,
-                session_id=sid,
-                runtime_mode="text_session",
-                mcp_servers=tuple(_mcp),
-            )
-        )
-    except Exception:
-        if journal is not None and hasattr(journal, "close"):
-            journal.close()
-        raise
-    # Stash user-facing settings so debug bundle export can snapshot them
-    # instead of serializing live provider instances from SessionConfig.
-    from types import SimpleNamespace
-
-    session._easycat_config = SimpleNamespace(
-        debug=debug,
-        journal_backend=journal_backend,
-        journal_retention=journal_retention,
-    )
-    session._agent_model = agent_model
-    session._remote_agent_api_key = remote_agent_api_key
-    return session
-
-
-class _OutboundPipelineWiring:
-    """Encapsulates mutable state for the outbound pipeline callbacks.
-
-    Replaces bare closures with ``nonlocal`` to avoid unsynchronized
-    access to ``_hold_audio_task`` from concurrent async callbacks.
-    """
-
-    def __init__(self, session: Session) -> None:
-        self._session = session
-        self._lock = asyncio.Lock()
-        self._hold_audio_task: asyncio.Task[None] | None = None
-
-    async def flush_gated_audio(self, events: list[TTSAudio]) -> None:
-        async with self._lock:
-            if self._hold_audio_task is not None and not self._hold_audio_task.done():
-                self._hold_audio_task.cancel()
-                try:
-                    await self._hold_audio_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                self._hold_audio_task = None
-        await self._session.replay_gated_audio(events)
-
-    def play_hold_audio(self, text: str) -> None:
-        async def _synthesize_hold() -> None:
-            try:
-                await self._session.synthesize_bypass(text)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Hold audio synthesis failed")
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.warning("No running event loop — hold audio skipped")
-            return
-
-        # The lock is async-only; since this is a sync callback we just
-        # do a best-effort swap — the flush side holds the lock and will
-        # cancel whatever task reference it sees.
-        self._hold_audio_task = loop.create_task(_synthesize_hold())
-
-
-async def _run_agent_once(agent: Any, prompt: str) -> str:
-    """Drive the agent once and return its final text response.
-
-    Works whether ``agent`` is an :class:`AgentRunner` (has ``run()``) or
-    a raw :class:`ExternalAgentBridge` (only implements ``invoke()``), so
-    ``wrap_agent=False`` sessions still support agent-mode screening.
-    """
-    run_fn = getattr(agent, "run", None)
-    if callable(run_fn):
-        return await run_fn(prompt)
-    accumulated = ""
-    async for event in agent.invoke(AgentTurnInput.from_text(prompt), NULL_RECORDER):
-        if event.kind == "text_delta" and event.text:
-            accumulated += event.text
-        elif event.kind == "done" and event.text:
-            accumulated = event.text
-    return accumulated
-
-
-def _wire_outbound_pipeline(
-    session: Session,
-    sm: OutboundCallStateMachine,
-    helpers: list[Any],
-    event_bus: EventBus,
-) -> None:
-    """Connect the outbound call state machine to the session pipeline.
-
-    Wires the classification gate flush/hold callbacks and the screening
-    response handler so that TTS audio is buffered, replayed, and the bot
-    responds to screening prompts.
-    """
-    from easycat.telephony.screening import ScreeningResponse
-
-    wiring = _OutboundPipelineWiring(session)
-
-    sm.set_gate_flush_callback(wiring.flush_gated_audio)
-    sm.gate.set_hold_audio_callback(wiring.play_hold_audio)
-
-    _screening_detector = _find_screening_detector(helpers)
-
-    async def _on_screening_response(event: ScreeningResponse) -> None:
-        if event.mode == "agent" and _screening_detector is not None:
-            try:
-                prompt = _screening_detector.accumulated_text
-                response_text = await _run_agent_once(
-                    session.agent,
-                    f"The callee's phone is screening this call. "
-                    f'Their screening prompt says: "{prompt}". '
-                    f"Identify yourself briefly.",
-                )
-                in_time = _screening_detector.notify_agent_responded()
-                fallback_spoken = not in_time and _screening_detector.screening_response
-                if response_text and not fallback_spoken:
-                    await session.synthesize_bypass(response_text)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Agent-mode screening response failed, using static fallback")
-                if _screening_detector.screening_response:
-                    await session.synthesize_bypass(_screening_detector.screening_response)
-        elif event.text:
-            await session.synthesize_bypass(event.text)
-
-    event_bus.subscribe(ScreeningResponse, _on_screening_response)
-
-
-def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
-    # Discriminate a pre-built transport *instance* from a transport *config*
-    # using the narrow audio contract (TransportLike) rather than the full
-    # Transport protocol. The full protocol also requires version_info(), so
-    # checking it here would silently reject custom transports that satisfy the
-    # audio contract but do not implement version_info(), routing them to the
-    # config-factory path and raising a misleading "Unsupported ..." error.
-    if isinstance(config, TransportLike):
-        if hasattr(config, "_event_bus") and getattr(config, "_event_bus") is None:
-            config._event_bus = event_bus
-        return config
-    factory = _transport_factories().get(type(config))
-    if factory is None:
-        raise ValueError(
-            f"Unsupported transport configuration type: {type(config).__name__!r}. "
-            "Pass a known transport config or a transport instance implementing "
-            "the connect/disconnect/receive_audio/send_audio contract."
-        )
-    return factory(config, event_bus)
-
-
-def _find_outbound_state_machine(
-    helpers: Sequence[Any],
-) -> OutboundCallStateMachine | None:
-    """Recover the outbound state machine from a helpers bag, if present.
-
-    Single named lookup so ``create_session`` and ``_wire_outbound_pipeline``
-    stop re-deriving it via ad-hoc ``isinstance`` scans over ``list[Any]``.
-    """
-    from easycat.telephony.call_state import OutboundCallStateMachine
-
-    for helper in helpers:
-        if isinstance(helper, OutboundCallStateMachine):
-            return helper
-    return None
-
-
-def _find_screening_detector(
-    helpers: Sequence[Any],
-) -> CallScreeningDetector | None:
-    """Recover the call-screening detector from a helpers bag, if present."""
-    from easycat.telephony.screening import CallScreeningDetector
-
-    for helper in helpers:
-        if isinstance(helper, CallScreeningDetector):
-            return helper
-    return None
-
-
-def _create_telephony_helpers(
-    event_bus: EventBus,
-    config: TelephonyConfig | None,
-    *,
-    dnc_list: Any | None = None,
-) -> list[Any]:
-    helpers: list[Any] = []
-    if config is None:
-        return helpers
-
-    if config.enable_dtmf_aggregator:
-        from easycat.telephony.dtmf import DTMFAggregator
-
-        helpers.append(DTMFAggregator(event_bus, config.dtmf_aggregator))
-
-    if config.enable_voicemail_detector:
-        from easycat.telephony.voicemail import VoicemailDetector
-
-        helpers.append(VoicemailDetector(event_bus, config.voicemail_detector))
-
-    if config.enable_outbound_call_manager and config.outbound:
-        _create_outbound_helpers(event_bus, config.outbound, helpers, dnc_list=dnc_list)
-
-    return helpers
-
-
-def _create_action_executors(config: TelephonyConfig | None) -> list[SessionActionExecutor]:
-    executors: list[SessionActionExecutor] = []
-    if config is None:
-        return executors
-    if config.twilio_actions is not None:
-        from easycat.telephony.session_actions import TwilioSessionActionExecutor
-
-        executors.append(TwilioSessionActionExecutor(config.twilio_actions))
-    return executors
-
-
-def _create_outbound_helpers(
-    event_bus: EventBus,
-    oc: OutboundCallConfig,
-    helpers: list[Any],
-    *,
-    dnc_list: Any | None = None,
-) -> None:
-    """Build and wire the outbound call pipeline helpers."""
-    # Telephony runtime classes are imported here (not at module scope) so a
-    # non-telephony session never loads the outbound stack — see the import
-    # note at the top of this module.
-    from easycat import config as _config_module
-    from easycat.telephony.call_state import OutboundCallState, OutboundCallStateMachine
-    from easycat.telephony.ivr import IVRAction, IVRActionType, IVRNavigator
-    from easycat.telephony.number_health import CallDispositionTracker, NumberHealthMonitor
-    from easycat.telephony.retry import RetryStrategy
-    from easycat.telephony.screening import (
-        CallScreeningDetector,
-        screening_patterns_for_languages,
-    )
-    from easycat.telephony.voicemail import (
-        PostScreeningVoicemailDetector,
-        STTAMDFusionClassifier,
-        VoicemailPolicyHandler,
-    )
-
-    # Resolve the manager through the module namespace (PEP 562 ``__getattr__``)
-    # rather than a direct ``from ... import`` so tests can ``monkeypatch`` it.
-    OutboundCallManager = _config_module.OutboundCallManager
-
-    # STT+AMD fusion classifier — must be wired before the state machine
-    # so that raw AMD events are intercepted and re-emitted with source="fusion".
-    fusion = STTAMDFusionClassifier(event_bus)
-    helpers.append(fusion)
-
-    # Post-screening voicemail detector — re-classifies after screening.
-    post_screening_vm = PostScreeningVoicemailDetector(event_bus)
-    helpers.append(post_screening_vm)
-
-    # Disposition tracking must subscribe before the state machine: on
-    # CallFailed, the tracker records the specific failure reason before
-    # the state machine emits the terminal ENDED transition.
-    if oc.enable_disposition_tracker:
-        helpers.append(CallDispositionTracker(event_bus))
-
-    def _on_screening_for_post_vm(event: CallScreening) -> None:
-        post_screening_vm.activate()
-
-    event_bus.subscribe(CallScreening, _on_screening_for_post_vm)
-
-    # Build language-aware screening patterns once so both the state
-    # machine and the screening detector share the same set.
-    screening_langs = ["en"]
-    if oc.callee_language and oc.callee_language != "en":
-        screening_langs.append(oc.callee_language)
-    _screening_patterns = screening_patterns_for_languages(screening_langs)
-
-    # State machine — expect fused voicemail events (ignore raw AMD).
-    sm = OutboundCallStateMachine(
-        event_bus,
-        classification_timeout_s=float(oc.voicemail_detection.detection_timeout_s),
-        max_call_duration_s=oc.max_call_duration_s,
-        classification_gate=oc.classification_gate,
-        classification_gate_timeout_s=oc.classification_gate_timeout_s,
-        classification_gate_hold_audio=oc.classification_gate_hold_audio,
-        expect_fused_voicemail=True,
-        late_voicemail_window_s=oc.late_voicemail_window_s,
-        voicemail_pickup_window_s=oc.voicemail_pickup_window_s,
-        screening_patterns=_screening_patterns,
-    )
-    helpers.append(sm)
-
-    # Screening detector.
-    if oc.enable_screening_detection:
-        screening = CallScreeningDetector(
-            event_bus,
-            enabled=True,
-            screening_response=oc.screening_response,
-            screening_use_agent=oc.screening_use_agent,
-            max_screening_turns=oc.max_screening_turns,
-            patterns=_screening_patterns,
-            # Defense-in-depth: only analyze inbound (callee) transcripts so
-            # the bot's own speech (when transcription_track="both") cannot
-            # trigger a false screening match — mirroring the hard-coded
-            # inbound filter in call_state._on_stt_final.
-            track_filter="inbound",
-        )
-        helpers.append(screening)
-
-    # IVR navigator — only created when an agent callback is configured.
-    if oc.ivr_agent_callback is not None:
-        ivr_delivery = oc.ivr_dtmf_delivery
-        ivr = IVRNavigator(
-            event_bus,
-            agent_callback=oc.ivr_agent_callback,
-            dtmf_delivery=ivr_delivery,
-        )
-        helpers.append(ivr)
-
-        # Propagate the live call SID so DTMFDelivery can send digits/speech.
-        if ivr_delivery is not None:
-
-            async def _on_call_initiated_for_ivr(event: CallInitiated) -> None:
-                ivr_delivery.call_sid = event.call_sid
-
-            event_bus.subscribe(CallInitiated, _on_call_initiated_for_ivr)
-
-        def _on_state_changed_for_ivr(event: CallStateChanged) -> None:
-            if event.new == OutboundCallState.IVR:
-                ivr.activate()
-            elif event.new in {OutboundCallState.HUMAN, OutboundCallState.ENDED}:
-                ivr.deactivate()
-
-        event_bus.subscribe(CallStateChanged, _on_state_changed_for_ivr)
-
-        # React to IVR navigator actions: human pickup, speech, and hangup.
-        async def _on_ivr_action(event: IVRAction) -> None:
-            if event.type == IVRActionType.HUMAN_DETECTED:
-                if sm.state == OutboundCallState.IVR:
-                    await sm.transition(OutboundCallState.HUMAN)
-            elif event.type == IVRActionType.HANGUP:
-                if sm.state == OutboundCallState.IVR:
-                    await sm.transition(OutboundCallState.ENDED)
-            elif event.type == IVRActionType.SPEAK:
-                if ivr_delivery is not None:
-                    await ivr_delivery.send_speech(event.text)
-
-        event_bus.subscribe(IVRAction, _on_ivr_action)
-
-    # Voicemail policy handler.
-    helpers.append(VoicemailPolicyHandler(event_bus, expect_fused=True))
-
-    # Observability helpers — pure event-bus listeners, on by default.
-    if oc.enable_number_health:
-        helpers.append(NumberHealthMonitor(event_bus))
-
-    # Outbound call manager (requires Twilio credentials).
-    manager: OutboundCallManager | None = None
-    if oc.twilio_account_sid and oc.twilio_auth_token:
-        try:
-            manager = OutboundCallManager(
-                event_bus,
-                from_number=oc.from_number,
-                enable_realtime_transcription=oc.enable_realtime_transcription,
-                twilio_account_sid=oc.twilio_account_sid,
-                twilio_auth_token=oc.twilio_auth_token,
-                twiml_url=oc.twiml_url,
-                status_callback_url=oc.status_callback_url,
-                **oc.voicemail_detection.to_twilio_params(),
-            )
-            manager.dnc_list = dnc_list
-            helpers.append(manager)
-        except ImportError:
-            logger.warning("twilio package not installed — OutboundCallManager disabled")
-
-    # Retry strategy — stateless object the caller asks
-    # ``strategy.record_attempt(number, reason)`` to decide whether to
-    # re-place a failed call.  We attach it to the manager (when
-    # present) so app code can reach it via
-    # ``session.outbound_call_manager.retry_strategy``.
-    if oc.enable_retry_strategy and manager is not None:
-        manager.retry_strategy = RetryStrategy(oc.retry_strategy)
-
-
-def _emit_provider_versions(
-    journal: Any,
-    session_id: str,
-    *,
-    stt: Any,
-    tts: Any,
-    transport: Any,
-    vad: Any = None,
-    noise_reducer: Any = None,
-    echo_canceller: Any = None,
-) -> None:
-    """Write a single journal record with version info from all providers."""
-    from easycat.runtime.records import JournalRecordKind
-
-    versions: dict[str, dict[str, str]] = {}
-    for role, provider in [
-        ("stt", stt),
-        ("tts", tts),
-        ("transport", transport),
-        ("vad", vad),
-        ("noise_reducer", noise_reducer),
-        ("echo_canceller", echo_canceller),
-    ]:
-        if provider is not None and hasattr(provider, "version_info"):
-            versions[role] = provider.version_info()
-    journal.append(
-        kind=JournalRecordKind.EVENT,
-        name="provider_versions",
-        session_id=session_id,
-        data=versions,
-    )

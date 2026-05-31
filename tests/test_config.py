@@ -188,8 +188,8 @@ async def test_create_session_caller_id_off_keeps_twilio_identity_private():
 
     assert transport.call_identity is not None
     assert session.call_identity is None
-    assert session._call_identity is not None
-    assert session._call_identity.caller_number == "+15551234567"
+    assert session._caller_id.private_identity is not None
+    assert session._caller_id.private_identity.caller_number == "+15551234567"
 
 
 @pytest.mark.asyncio
@@ -467,14 +467,14 @@ async def test_telephony_helpers_are_managed_by_session_lifecycle():
     bus.subscribe(DTMFAggregated, lambda e: aggregated.append(e))
 
     # Telephony helpers must be started (normally done by session.start())
-    for helper in session._telephony_helpers:
+    for helper in session.telephony.helpers:
         helper.start()
 
     await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "1"}}, bus)
     await emit_twilio_dtmf({"event": "dtmf", "dtmf": {"digit": "#"}}, bus)
     assert aggregated
 
-    for helper in session._telephony_helpers:
+    for helper in session.telephony.helpers:
         helper.stop()
 
     aggregated.clear()
@@ -509,7 +509,7 @@ def test_create_session_adds_twilio_action_executor_when_configured():
 
 def test_create_session_disables_vad_for_deepgram_flux(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        "easycat.config.create_vad",
+        "easycat.config._factory.create_vad",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             RuntimeError("create_vad should not be called")
         ),
@@ -520,7 +520,7 @@ def test_create_session_disables_vad_for_deepgram_flux(monkeypatch: pytest.Monke
             return chunk
 
     monkeypatch.setattr(
-        "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+        "easycat.config._factory.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
     )
 
     config = EasyConfig(
@@ -557,9 +557,9 @@ def test_create_session_keeps_flux_auto_turn_disabled_for_push_to_talk(
         create_vad_called = True
         return _VAD()
 
-    monkeypatch.setattr("easycat.config.create_vad", _create_vad)
+    monkeypatch.setattr("easycat.config._factory.create_vad", _create_vad)
     monkeypatch.setattr(
-        "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+        "easycat.config._factory.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
     )
 
     config = EasyConfig(
@@ -598,9 +598,9 @@ def test_create_session_keeps_vad_enabled_for_flux_when_smart_turn_enabled(
         create_vad_called = True
         return _VAD()
 
-    monkeypatch.setattr("easycat.config.create_vad", _create_vad)
+    monkeypatch.setattr("easycat.config._factory.create_vad", _create_vad)
     monkeypatch.setattr(
-        "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+        "easycat.config._factory.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
     )
 
     config = EasyConfig(
@@ -632,8 +632,10 @@ def _stub_audio_backends(monkeypatch: pytest.MonkeyPatch) -> None:
         async def process(self, chunk):
             return chunk
 
-    monkeypatch.setattr("easycat.config.create_vad", lambda *_a, **_k: _VAD())
-    monkeypatch.setattr("easycat.config.create_noise_reducer", lambda *_a, **_k: _NoiseReducer())
+    monkeypatch.setattr("easycat.config._factory.create_vad", lambda *_a, **_k: _VAD())
+    monkeypatch.setattr(
+        "easycat.config._factory.create_noise_reducer", lambda *_a, **_k: _NoiseReducer()
+    )
 
 
 def test_create_session_derives_endpoint_threshold_from_smart_turn(
@@ -696,9 +698,9 @@ def test_create_session_keeps_vad_enabled_for_flux_when_voicemail_detector_enabl
         create_vad_called = True
         return _VAD()
 
-    monkeypatch.setattr("easycat.config.create_vad", _create_vad)
+    monkeypatch.setattr("easycat.config._factory.create_vad", _create_vad)
     monkeypatch.setattr(
-        "easycat.config.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+        "easycat.config._factory.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
     )
 
     config = EasyConfig(
@@ -831,8 +833,10 @@ def _stub_audio_backends(monkeypatch: pytest.MonkeyPatch) -> None:
         async def process(self, chunk):
             return chunk
 
-    monkeypatch.setattr("easycat.config.create_vad", lambda *_a, **_k: _VAD())
-    monkeypatch.setattr("easycat.config.create_noise_reducer", lambda *_a, **_k: _NoiseReducer())
+    monkeypatch.setattr("easycat.config._factory.create_vad", lambda *_a, **_k: _VAD())
+    monkeypatch.setattr(
+        "easycat.config._factory.create_noise_reducer", lambda *_a, **_k: _NoiseReducer()
+    )
 
 
 def test_create_session_rejects_bogus_agent(monkeypatch: pytest.MonkeyPatch):
