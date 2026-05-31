@@ -448,42 +448,45 @@ class WebRTCTransport(_AudioQueueMixin):
         if not self._connected:
             return
 
-        # Serialize against ``_handle_offer`` so an in-flight ``/offer`` cannot
-        # interleave with teardown: a new offer either finishes before we start
-        # (its PC is then torn down below) or starts after us and bails because
-        # ``_connected`` is False. Clear ``_connected`` first, under the lock, so
-        # any offer handler queued behind us observes the disconnected state.
+        # Flip the public state while serialized against ``_handle_offer`` so an
+        # in-flight offer either finishes before teardown starts, or every offer
+        # queued behind teardown immediately observes the disconnected state. Do
+        # not hold this lock across aiohttp cleanup: cleanup waits for active
+        # request handlers, and queued ``/offer`` handlers need the lock in order
+        # to return their shutdown 503 response.
         async with self._offer_lock:
+            if not self._connected:
+                return
             self._connected = False
 
-            # Cancel the inbound audio consumer task.
-            if self._consume_task is not None and not self._consume_task.done():
-                self._consume_task.cancel()
-                try:
-                    await self._consume_task
-                except asyncio.CancelledError:
-                    pass
-                self._consume_task = None
+        # Cancel the inbound audio consumer task.
+        if self._consume_task is not None and not self._consume_task.done():
+            self._consume_task.cancel()
+            try:
+                await self._consume_task
+            except asyncio.CancelledError:
+                pass
+            self._consume_task = None
 
-            # Close the peer connection.
-            if self._pc is not None:
-                await self._pc.close()
-                self._pc = None
+        # Close the peer connection.
+        if self._pc is not None:
+            await self._pc.close()
+            self._pc = None
 
-            self._outbound.stop()  # no-op by design; track is discarded with the PC
+        self._outbound.stop()  # no-op by design; track is discarded with the PC
 
-            # Shut down HTTP server.
-            if self._site is not None:
-                await self._site.stop()
-                self._site = None
-            if self._runner is not None:
-                await self._runner.cleanup()
-                self._runner = None
-            self._app = None
-            self._has_bundled_client = False
+        # Shut down HTTP server.
+        if self._site is not None:
+            await self._site.stop()
+            self._site = None
+        if self._runner is not None:
+            await self._runner.cleanup()
+            self._runner = None
+        self._app = None
+        self._has_bundled_client = False
 
-            self._enqueue_sentinel()
-            self._client_connected.clear()
+        self._enqueue_sentinel()
+        self._client_connected.clear()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Send an audio chunk to the remote WebRTC peer."""
@@ -609,10 +612,10 @@ class WebRTCTransport(_AudioQueueMixin):
         try:
             pc = RTCPeerConnection(rtc_config)
 
-            # Re-check teardown before committing the new peer. ``disconnect``
-            # holds ``_offer_lock`` across its whole teardown, so ``_connected``
-            # cannot have flipped here, but this keeps the commit guarded if that
-            # locking ever changes — discard the half-built PC rather than leak it.
+            # Re-check teardown before committing the new peer. This handler still
+            # holds ``_offer_lock``, so ``disconnect`` cannot flip ``_connected``
+            # between the initial guard and this commit point; keep the guard so a
+            # half-built PC is discarded if the locking changes in the future.
             if not self._connected:
                 await pc.close()
                 self._pc = None

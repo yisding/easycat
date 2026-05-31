@@ -282,6 +282,35 @@ class TestWebRTCIngressQueueOwnership:
         await audio_iter.aclose()
 
     @pytest.mark.asyncio
+    async def test_disconnect_does_not_hold_offer_lock_during_http_cleanup(self):
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+        offer_task: asyncio.Task[object] | None = None
+
+        class _OfferDuringStopSite:
+            async def stop(self) -> None:
+                nonlocal offer_task
+                offer_task = asyncio.create_task(transport._handle_offer(_FakeOfferRequest()))
+                await asyncio.sleep(0)
+
+        class _CleanupWaitsForHandlersRunner:
+            async def cleanup(self) -> None:
+                assert offer_task is not None
+                response = await asyncio.wait_for(offer_task, timeout=1.0)
+                assert response.status == 503
+
+        transport._site = _OfferDuringStopSite()
+        transport._runner = _CleanupWaitsForHandlersRunner()
+
+        await asyncio.wait_for(transport.disconnect(), timeout=1.0)
+
+        assert transport._site is None
+        assert transport._runner is None
+        assert offer_task is not None
+        assert offer_task.done()
+
+    @pytest.mark.asyncio
     async def test_replacing_connected_peer_clears_wait_for_client(self, monkeypatch):
         _install_fake_webrtc_modules(monkeypatch)
         transport = WebRTCTransport()
