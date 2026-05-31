@@ -12,24 +12,18 @@ except ImportError as exc:
         "openai-agents is required. Install with: uv sync --extra quickstart"
     ) from exc
 
-from easycat import PCM16_MONO_16K, EasyConfig, LocalTransportConfig, require_env, run
-from easycat.stt.cartesia_provider import CartesiaSTTConfig
-from easycat.tts.cartesia_tts import CartesiaTTSConfig
+from easycat import EasyConfig, require_env, run
 
 require_env("OPENAI_API_KEY")
-cartesia_key = require_env("CARTESIA_API_KEY")
+require_env("CARTESIA_API_KEY")  # consumed by the string shortcuts below
 
-# Pin both stages and the transport to 16 kHz; LocalTransport plays PCM verbatim.
+# One token per stage swaps the provider. The shortcut reads
+# CARTESIA_API_KEY from the environment, and auto-align matches the TTS
+# output to the transport's rate (the default mic transport is 24 kHz).
 run(
     EasyConfig.mic(
         agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
-        stt=CartesiaSTTConfig(api_key=cartesia_key, model="ink-whisper"),
-        tts=CartesiaTTSConfig(
-            api_key=cartesia_key,
-            model_id="sonic-3",
-            sample_rate=16000,
-            output_format=PCM16_MONO_16K,
-        ),
-        transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
+        stt="cartesia/ink-whisper",
+        tts="cartesia/sonic-3",
     )
 )

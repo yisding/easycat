@@ -12,27 +12,18 @@ except ImportError as exc:
         "openai-agents is required. Install with: uv sync --extra quickstart"
     ) from exc
 
-from easycat import PCM16_MONO_16K, EasyConfig, LocalTransportConfig, require_env, run
-from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
-from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
+from easycat import EasyConfig, require_env, run
 
 require_env("OPENAI_API_KEY")
-elevenlabs_key = require_env("ELEVENLABS_API_KEY")
+require_env("ELEVENLABS_API_KEY")  # consumed by the string shortcuts below
 
-# Pin both stages and the transport to 16 kHz; LocalTransport plays PCM verbatim.
+# One token per stage swaps the provider. The shortcut reads
+# ELEVENLABS_API_KEY from the environment, and auto-align matches the TTS
+# output to the transport's rate (the default mic transport is 24 kHz).
 run(
     EasyConfig.mic(
         agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
-        stt=ElevenLabsSTTConfig(
-            api_key=elevenlabs_key, mode="realtime", realtime_sample_rate=16000
-        ),
-        tts=ElevenLabsTTSConfig(
-            api_key=elevenlabs_key,
-            voice_id="EXAVITQu4vr4xnSDxMaL",  # Sarah
-            model_id="eleven_flash_v2_5",
-            output_format="pcm_16000",
-            audio_format=PCM16_MONO_16K,
-        ),
-        transport=LocalTransportConfig(audio_format=PCM16_MONO_16K),
+        stt="elevenlabs",
+        tts="elevenlabs/eleven_flash_v2_5",
     )
 )

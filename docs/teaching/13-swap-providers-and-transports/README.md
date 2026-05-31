@@ -63,7 +63,8 @@ Each run drops a bundle in `runs/ch13-<mix>-<transport>-*.bundle`.
 > (`stage.tts.execute`, `turn.gap`, `stt.final` with a `t_ms`
 > field). To run ch 12's evals on a ch 13 bundle, you will need a
 > small translator — pair each `stage_start` with its matching
-> `stage_complete` by `op_id` and synthesise the composite records
+> `stage_complete` by their span correlation id and synthesise the
+> composite records
 > ch 12 expects. Writing that translator is a productive exercise
 > and the natural first task of `peripheral-eval-and-debugger-ui.md`.
 
