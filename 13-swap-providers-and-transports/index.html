@@ -2477,7 +2477,8 @@ sidebar). Chapter 12's scripts key on the <em>teaching</em> shape
 (<code>stage.tts.execute</code>, <code>turn.gap</code>, <code>stt.final</code> with a <code>t_ms</code>
 field). To run ch 12's evals on a ch 13 bundle, you will need a
 small translator — pair each <code>stage_start</code> with its matching
-<code>stage_complete</code> by <code>op_id</code> and synthesise the composite records
+<code>stage_complete</code> by their span correlation id and synthesise the
+composite records
 ch 12 expects. Writing that translator is a productive exercise
 and the natural first task of <code>peripheral-eval-and-debugger-ui.md</code>.</p>
 </blockquote>

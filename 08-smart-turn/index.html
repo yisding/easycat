@@ -2928,7 +2928,7 @@ any VAD-gated pipeline.</p>
 </span><span id="__span-0-496"><a id="__codelineno-0-496" name="__codelineno-0-496" href="#__codelineno-0-496"></a><span class="gi">+    )</span>
 </span><span id="__span-0-497"><a id="__codelineno-0-497" name="__codelineno-0-497" href="#__codelineno-0-497"></a><span class="w"> </span>    client = AsyncOpenAI()
 </span><span id="__span-0-498"><a id="__codelineno-0-498" name="__codelineno-0-498" href="#__codelineno-0-498"></a><span class="w"> </span>    tts = create_tts_provider(
-</span><span id="__span-0-499"><a id="__codelineno-0-499" name="__codelineno-0-499" href="#__codelineno-0-499"></a><span class="w"> </span>        TTSProviderConfig(provider=&quot;openai&quot;, settings={&quot;api_key&quot;: os.environ[&quot;OPENAI_API_KEY&quot;]})
+</span><span id="__span-0-499"><a id="__codelineno-0-499" name="__codelineno-0-499" href="#__codelineno-0-499"></a><span class="w"> </span>        TTSProviderConfig(provider=&quot;openai&quot;, api_key=os.environ[&quot;OPENAI_API_KEY&quot;])
 </span><span id="__span-0-500"><a id="__codelineno-0-500" name="__codelineno-0-500" href="#__codelineno-0-500"></a><span class="gu">@@ -333,7 +299,7 @@</span>
 </span><span id="__span-0-501"><a id="__codelineno-0-501" name="__codelineno-0-501" href="#__codelineno-0-501"></a><span class="w"> </span>        )
 </span><span id="__span-0-502"><a id="__codelineno-0-502" name="__codelineno-0-502" href="#__codelineno-0-502"></a>

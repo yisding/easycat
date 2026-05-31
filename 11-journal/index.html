@@ -2573,10 +2573,10 @@ at the surface and the reader can read the bundle top-to-bottom.</p>
 records</strong>: <code>stage_start</code> at the beginning of a span, a matching
 <code>stage_complete</code> at the end, with artifact refs and error blobs
 in between. You reconstruct a span by matching start/complete on
-<code>op_id</code>. Paired records buy you partial-span visibility on
-crashes and concurrent-span overlap that single events can't
-express. Read the production records after you've internalised
-the teaching ones.</p>
+a span correlation id carried in the record <code>data</code>. Paired records
+buy you partial-span visibility on crashes and concurrent-span
+overlap that single events can't express. Read the production
+records after you've internalised the teaching ones.</p>
 <p>Also be aware: <code>turn.state_changed</code> and <code>ws.reconnect.*</code> records
 in these bundles are <strong>representative synthetic records</strong> — the
 production pipeline emits similar signals, but chapters 2-10's

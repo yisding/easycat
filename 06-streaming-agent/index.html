@@ -2698,7 +2698,7 @@ land.</p>
 </span><span id="__span-0-258"><a id="__codelineno-0-258" name="__codelineno-0-258" href="#__codelineno-0-258"></a><span class="w"> </span>    detector = MiniTurnDetector(vad)
 </span><span id="__span-0-259"><a id="__codelineno-0-259" name="__codelineno-0-259" href="#__codelineno-0-259"></a><span class="w"> </span>    client = AsyncOpenAI()
 </span><span id="__span-0-260"><a id="__codelineno-0-260" name="__codelineno-0-260" href="#__codelineno-0-260"></a><span class="gi">+    tts = create_tts_provider(</span>
-</span><span id="__span-0-261"><a id="__codelineno-0-261" name="__codelineno-0-261" href="#__codelineno-0-261"></a><span class="gi">+        TTSProviderConfig(provider=&quot;openai&quot;, settings={&quot;api_key&quot;: os.environ[&quot;OPENAI_API_KEY&quot;]})</span>
+</span><span id="__span-0-261"><a id="__codelineno-0-261" name="__codelineno-0-261" href="#__codelineno-0-261"></a><span class="gi">+        TTSProviderConfig(provider=&quot;openai&quot;, api_key=os.environ[&quot;OPENAI_API_KEY&quot;])</span>
 </span><span id="__span-0-262"><a id="__codelineno-0-262" name="__codelineno-0-262" href="#__codelineno-0-262"></a><span class="gi">+    )</span>
 </span><span id="__span-0-263"><a id="__codelineno-0-263" name="__codelineno-0-263" href="#__codelineno-0-263"></a>
 </span><span id="__span-0-264"><a id="__codelineno-0-264" name="__codelineno-0-264" href="#__codelineno-0-264"></a><span class="w"> </span>    def stt_factory():
