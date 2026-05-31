@@ -15,7 +15,7 @@ Session delegates to one ``STTCommitter`` instance per session.
 End-stream sequencing contract
 ------------------------------
 
-``_handle_end_of_speech`` calls :meth:`end_stream` between two
+``TurnRunner.handle_end_of_speech`` calls :meth:`end_stream` between two
 :meth:`await_pending` calls.  The first await blocks on segment commit;
 ``end_stream`` may generate one more segment; the second await blocks on
 that.  Callers are responsible for preserving that ordering — the
@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any
 
 from easycat.events import (
     Error,
@@ -40,7 +40,7 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.providers import STTProvider
+from easycat.providers import PendingCommitReporter, STTProvider
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.timeouts import STTTimeoutError, TimeoutConfig, resolve_provider_name
@@ -54,38 +54,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@runtime_checkable
-class PendingCommitReporter(Protocol):
-    """Optional STT-provider capability: report uncommitted audio size.
-
-    Providers that can measure how much audio is buffered but not yet
-    committed implement ``pending_commit_bytes()`` so the journal can
-    record *why* a segment commit was accepted or skipped. This is an
-    opt-in capability, not part of the core ``STTProvider`` contract;
-    providers that cannot report it are simply not instances of this
-    Protocol and the committer records ``None``.
-
-    The proper home for this Protocol is ``easycat.providers`` alongside
-    ``VersionedProvider``; it lives here until that and the provider-side
-    ``pending_commit_bytes()`` implementations can be added together.
-    """
-
-    def pending_commit_bytes(self) -> int | None:
-        """Return bytes buffered since the last successful commit, if known."""
-        ...
-
-
 def _pending_commit_bytes(provider: STTProvider) -> int | None:
     """Read a provider's uncommitted-audio byte count, if it exposes one.
 
-    Prefers the type-checkable :class:`PendingCommitReporter` surface and
-    falls back to the legacy private ``_bytes_since_last_commit`` field that
-    ``OpenAIRealtimeSTT`` currently exposes, so journal data is preserved
-    until the provider grows a public ``pending_commit_bytes()`` method.
+    Uses the type-checkable :class:`~easycat.providers.PendingCommitReporter`
+    surface; providers that do not implement it record ``None``.
     """
     if isinstance(provider, PendingCommitReporter):
         return provider.pending_commit_bytes()
-    return getattr(provider, "_bytes_since_last_commit", None)
+    return None
 
 
 class STTCommitter:
@@ -315,7 +292,7 @@ class STTCommitter:
     async def end_stream(self, turn: TurnContext | None) -> None:
         """Finish the STT stream, enqueuing a future if uncommitted audio remains.
 
-        ``_handle_end_of_speech`` calls this between two
+        ``TurnRunner.handle_end_of_speech`` calls this between two
         :meth:`await_pending` calls — the first await blocks on segment
         commit; ``end_stream`` may generate one more segment; the second
         await blocks on that.
@@ -346,15 +323,27 @@ class STTCommitter:
                             if not turn.pending_stt_segment_futures:
                                 turn.stt_has_uncommitted_audio = False
                             turn.append_stt_segment(stt_event.text, track=stt_event.track)
+                            data: dict[str, Any] = {
+                                "segment_index": len(turn.stt_segments),
+                                "text": stt_event.text,
+                                "track": stt_event.track,
+                                "transcript_text": turn.transcript_text,
+                            }
+                            # Provider-captured metadata reaches the journal —
+                            # the single source of truth for observability —
+                            # only when populated, so records stay lean for
+                            # providers that don't report it.
+                            if stt_event.confidence is not None:
+                                data["confidence"] = stt_event.confidence
+                            if stt_event.word_timestamps is not None:
+                                data["word_timestamps"] = [
+                                    {"word": w.word, "start": w.start, "end": w.end}
+                                    for w in stt_event.word_timestamps
+                                ]
                             self._journal_sink.append_record(
                                 name="stt_segment_final",
                                 turn_id=turn.id,
-                                data={
-                                    "segment_index": len(turn.stt_segments),
-                                    "text": stt_event.text,
-                                    "track": stt_event.track,
-                                    "transcript_text": turn.transcript_text,
-                                },
+                                data=data,
                             )
                         await self._emit(STTFinal(text=stt_event.text, track=stt_event.track))
                         if turn and turn is not self._no_turn and turn.pending_stt_segment_futures:

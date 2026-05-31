@@ -234,6 +234,15 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
     async def _on_commit_segment(self) -> bool:
         return await self._send_commit(wait_for_final=False)
 
+    def pending_commit_bytes(self) -> int | None:
+        """Bytes appended to the input buffer since the last commit.
+
+        Implements :class:`~easycat.providers.PendingCommitReporter` so the
+        session journal can record *why* a segment commit was accepted or
+        skipped (OpenAI Realtime refuses commits below a 100 ms floor).
+        """
+        return self._bytes_since_last_commit
+
     async def _on_end(self) -> None:
         if self._ws is not None and self._audio_pending_commit:
             await self._send_commit(wait_for_final=True)

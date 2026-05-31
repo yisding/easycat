@@ -100,6 +100,23 @@ class STTProvider(VersionedProvider, Protocol):
         ...
 
 
+@runtime_checkable
+class PendingCommitReporter(Protocol):
+    """Optional STT-provider capability: report uncommitted audio size.
+
+    Providers that can measure how much audio is buffered but not yet
+    committed implement ``pending_commit_bytes()`` so the journal can
+    record *why* a segment commit was accepted or skipped. This is an
+    opt-in capability, not part of the core :class:`STTProvider` contract;
+    providers that cannot report it are simply not instances of this
+    Protocol and the committer records ``None``.
+    """
+
+    def pending_commit_bytes(self) -> int | None:
+        """Return bytes buffered since the last successful commit, if known."""
+        ...
+
+
 # ── TTS Provider ───────────────────────────────────────────────────
 
 

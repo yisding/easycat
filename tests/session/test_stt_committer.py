@@ -17,6 +17,7 @@ from easycat.events import (
     STTEventType,
     VADStartSpeaking,
     VADStopSpeaking,
+    WordTimestamp,
 )
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.scope import RuntimeScope
@@ -348,3 +349,64 @@ async def test_end_stream_no_future_when_no_uncommitted_audio() -> None:
     await committer.end_stream(turn)
     assert stt.end_stream_calls == 1
     assert turn.pending_stt_segment_futures == []
+
+
+@pytest.mark.asyncio
+async def test_segment_final_journal_records_confidence_and_word_timestamps() -> None:
+    """Provider-captured confidence/word timings reach the journal record."""
+
+    class _MetadataSTT(_RecordingSTT):
+        async def commit_segment(self) -> bool:
+            self.commit_calls += 1
+            await self._queue.put(
+                STTEvent(
+                    type=STTEventType.FINAL,
+                    text="hi there",
+                    confidence=0.91,
+                    word_timestamps=[
+                        WordTimestamp(word="hi", start=0.0, end=0.2),
+                        WordTimestamp(word="there", start=0.2, end=0.5),
+                    ],
+                )
+            )
+            return True
+
+    journal = InMemoryRingBuffer(capacity=64)
+    committer, _stt, _emitted, _no_turn, _tm = _make_committer(stt=_MetadataSTT(), journal=journal)
+    committer.mark_active()
+    turn = _new_turn()
+    committer.start_event_loop(turn)
+
+    await committer.commit_now(turn)
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+        if any(r.name == "stt_segment_final" for r in journal.read()):
+            break
+
+    final = next(r for r in journal.read() if r.name == "stt_segment_final")
+    assert final.data["confidence"] == 0.91
+    assert final.data["word_timestamps"] == [
+        {"word": "hi", "start": 0.0, "end": 0.2},
+        {"word": "there", "start": 0.2, "end": 0.5},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_commit_requested_journal_records_pending_commit_bytes() -> None:
+    """A PendingCommitReporter STT surfaces its byte count into the journal."""
+
+    class _ReportingSTT(_RecordingSTT):
+        def pending_commit_bytes(self) -> int | None:
+            return 4800
+
+    journal = InMemoryRingBuffer(capacity=64)
+    committer, _stt, _emitted, _no_turn, _tm = _make_committer(
+        stt=_ReportingSTT(), journal=journal
+    )
+    committer.mark_active()
+    turn = _new_turn()
+
+    await committer.commit_now(turn)
+
+    requested = next(r for r in journal.read() if r.name == "stt_segment_commit_requested")
+    assert requested.data["pending_commit_bytes"] == 4800

@@ -575,6 +575,11 @@ class STTEvent:
 
     type: STTEventType
     text: str
+    # ``confidence`` and ``word_timestamps`` are provider-captured metadata:
+    # the Session pipeline drives turns off ``text``/``track`` only, but the
+    # STT committer records both into the ``stt_segment_final`` journal entry
+    # (when populated) for postmortem observability. Not every provider fills
+    # them in; they default to ``None``.
     confidence: float | None = None
     language: str | None = None
     word_timestamps: list[WordTimestamp] | None = None

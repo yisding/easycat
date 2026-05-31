@@ -345,6 +345,28 @@ async def test_openai_realtime_short_tail_then_more_audio_commits():
 
 
 @pytest.mark.asyncio
+async def test_openai_realtime_reports_pending_commit_bytes():
+    """The provider exposes a public ``pending_commit_bytes()`` so the
+    session journal can record uncommitted audio without reaching into the
+    private ``_bytes_since_last_commit`` field."""
+    from easycat.providers import PendingCommitReporter
+
+    factory = _MockWSFactory()
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    stt = OpenAIRealtimeSTT(config)
+    assert isinstance(stt, PendingCommitReporter)
+
+    await stt.start_stream()
+    assert stt.pending_commit_bytes() == 0
+
+    pcm = generate_pcm_sine(duration_ms=50)
+    for chunk in make_audio_chunks(pcm):
+        await stt.send_audio(chunk)
+    assert stt.pending_commit_bytes() == stt._bytes_since_last_commit > 0
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
 async def test_openai_realtime_emits_error_event_on_server_error_message():
     """When the server sends an ``error`` message, the provider must
     emit a journal-visible ``Error`` event on the bus with the server's
