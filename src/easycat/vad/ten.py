@@ -95,6 +95,15 @@ class TenVAD(_VADBase):
         super().reset()
         self._buffer = b""
 
+    def close(self) -> None:
+        """Release the native ``ten_vad`` handle."""
+        super().close()
+        self._ten_vad = None
+        self._buffer = b""
+
+    def __del__(self) -> None:
+        self.close()
+
     def version_info(self) -> dict[str, str]:
         try:
             sdk_ver = version("ten-vad")

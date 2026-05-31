@@ -9,9 +9,11 @@ markdown handling, and event emission.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any
 
@@ -42,6 +44,70 @@ class AgentStreamResult:
     structured_output: Any = None
     error: BaseException | None = None
     interrupted: bool = False
+
+
+async def emit_tool_event(
+    event: Any,
+    kind: str | None,
+    *,
+    emit: Callable[[Any], Awaitable[None]],
+    session_id: str | None = None,
+    turn_id: str | None = None,
+    tool_span: Callable[[], AbstractContextManager[Any]] | None = None,
+) -> bool:
+    """Translate a tool-related bridge event into an EasyCat tool event.
+
+    This is the single source of truth for the
+    ``tool_started`` / ``tool_delta`` / ``tool_result`` →
+    ``ToolCallStarted`` / ``ToolCallDelta`` / ``ToolCallResult`` mapping,
+    shared by the streaming voice path (:func:`consume_agent_stream`) and
+    the text path (``TurnRunner._execute_text_turn``) so the two cannot
+    drift.
+
+    ``session_id`` / ``turn_id`` are stamped onto the emitted event when
+    provided (the text path needs this because it runs outside the
+    TurnManager's active-turn window, where ``Session._emit`` would
+    otherwise stamp a ``None`` turn id).  ``tool_span`` is an optional
+    zero-arg factory returning a context manager wrapped around the
+    ``ToolCallStarted`` emit for per-tool observability.
+
+    Returns ``True`` when the event was a tool kind (and was emitted),
+    ``False`` otherwise.  Callers remain responsible for any pending
+    tool-call bookkeeping around the emit.
+    """
+    if kind == "tool_started":
+        span = tool_span() if tool_span is not None else contextlib.nullcontext()
+        with span:
+            await emit(
+                ToolCallStarted(
+                    tool_name=event.tool_name,
+                    call_id=event.call_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                )
+            )
+        return True
+    if kind == "tool_delta":
+        await emit(
+            ToolCallDelta(
+                call_id=event.call_id,
+                delta=event.text,
+                session_id=session_id,
+                turn_id=turn_id,
+            )
+        )
+        return True
+    if kind == "tool_result":
+        await emit(
+            ToolCallResult(
+                call_id=event.call_id,
+                result=event.result,
+                session_id=session_id,
+                turn_id=turn_id,
+            )
+        )
+        return True
+    return False
 
 
 async def consume_agent_stream(
@@ -83,6 +149,7 @@ async def consume_agent_stream(
                 await tts_queue.put(payload)
         text_buffer = ""
 
+    stream: AsyncIterator[Any] | None = None
     try:
         stream = stream_factory()
         async for event in stream:
@@ -100,16 +167,14 @@ async def consume_agent_stream(
                 if pending_tool_calls > 0:
                     if kind == "tool_result":
                         pending_tool_calls = max(0, pending_tool_calls - 1)
-                        await emit(ToolCallResult(call_id=event.call_id, result=event.result))
+                        await emit_tool_event(event, kind, emit=emit)
                         if pending_tool_calls <= 0:
                             break
                     elif kind == "tool_started":
                         pending_tool_calls += 1
-                        await emit(
-                            ToolCallStarted(tool_name=event.tool_name, call_id=event.call_id)
-                        )
+                        await emit_tool_event(event, kind, emit=emit)
                     elif kind == "tool_delta":
-                        await emit(ToolCallDelta(call_id=event.call_id, delta=event.text))
+                        await emit_tool_event(event, kind, emit=emit)
                     elif kind == "done":
                         if event.text:
                             result.text = event.text
@@ -162,12 +227,12 @@ async def consume_agent_stream(
 
             elif kind == "tool_started":
                 pending_tool_calls += 1
-                await emit(ToolCallStarted(tool_name=event.tool_name, call_id=event.call_id))
+                await emit_tool_event(event, kind, emit=emit)
             elif kind == "tool_delta":
-                await emit(ToolCallDelta(call_id=event.call_id, delta=event.text))
+                await emit_tool_event(event, kind, emit=emit)
             elif kind == "tool_result":
                 pending_tool_calls = max(0, pending_tool_calls - 1)
-                await emit(ToolCallResult(call_id=event.call_id, result=event.result))
+                await emit_tool_event(event, kind, emit=emit)
             elif kind == "done":
                 if event.text:
                     if not result.text:
@@ -177,25 +242,46 @@ async def consume_agent_stream(
                     result.structured_output = event.structured_output
                 await _flush_buffer()
                 done_received = True
-            elif kind in ("cursor_entered", "cursor_exited", "handoff", "state_snapshot"):
-                # Observability-only kinds. Bridges already write the
-                # authoritative execution-cursor / handoff / state records via
-                # the AgentRecorder (the journal is the single source of truth
-                # for these). They are surfaced on the stream so out-of-band
-                # consumers can follow framework progress, but they never drive
-                # TTS, so this translation layer intentionally ignores them.
-                pass
 
     except Exception as exc:
         result.error = exc
         logger.exception("Agent streaming error")
         await emit(Error(exception=exc, stage=ErrorStage.AGENT))
     finally:
+        # Defensively close the agent stream so a generator abandoned mid-
+        # iteration (e.g. on barge-in/cancellation) is finalized promptly
+        # rather than waiting for GC. Bridges already close their own upstream
+        # connections via async with/finally on cancel; this is hygiene that
+        # tightens the race window where the bridge frame is left suspended.
+        if stream is not None:
+            aclose = getattr(stream, "aclose", None)
+            if aclose is not None:
+                with contextlib.suppress(Exception):
+                    await aclose()
         stream_succeeded = result.error is None and (
             not cancel_token or not cancel_token.is_cancelled
         )
         if stream_succeeded:
             await _flush_buffer()
-        await tts_queue.put(None)  # sentinel to stop TTS task
+        # Sentinel to stop the TTS task.
+        #
+        # On a clean completion the consumer is still actively draining the
+        # bounded queue, so we must guarantee delivery of the sentinel: a
+        # non-blocking put could drop it while the consumer's final ``get()``
+        # blocks forever waiting for the stop signal.  Use a blocking ``put``
+        # here — backpressure resolves as the consumer drains.
+        #
+        # On cancellation / error the TTS task may have been cancelled
+        # alongside this producer (barge-in), leaving no consumer to make
+        # room.  A blocking put on a full queue would then hang in this
+        # finally block, so fall back to a non-blocking put and swallow
+        # ``QueueFull`` (the consumer is gone, so the sentinel is moot).
+        if stream_succeeded:
+            await tts_queue.put(None)
+        else:
+            try:
+                tts_queue.put_nowait(None)
+            except asyncio.QueueFull:
+                logger.debug("tts_queue full; skipping stop sentinel (consumer already stopped)")
 
     return result

@@ -122,9 +122,10 @@ class TestTurnExecutionJournal:
         async for ev in bridge.invoke(AgentTurnInput.from_text("hello"), rec):
             events.append(ev)
 
-        # Should have cursor_entered, text deltas, and done.
+        # The stream carries text deltas and done; cursor lifecycle lives in
+        # the journal, not on the stream.
         kinds = [e.kind for e in events]
-        assert "cursor_entered" in kinds
+        assert "cursor_entered" not in kinds
         assert "text_delta" in kinds
         assert "done" in kinds
 
@@ -329,7 +330,7 @@ class TestDrainCurrentUnit:
 
         # Should have some events but may not have all.
         kinds = [e.kind for e in events]
-        assert "cursor_entered" in kinds
+        assert "text_delta" in kinds
         assert "done" in kinds
 
 
@@ -572,13 +573,25 @@ class TestApplyInterruptionFourStep:
         source = textwrap.dedent(inspect.getsource(RemoteResponsesAPIBridge.apply_interruption))
         tree = ast.parse(source)
 
+        # The four-step atomic write ordering is owned by the shared
+        # ``run_interruption_journal_protocol`` helper.  ``apply_interruption``
+        # plans the mutation, then delegates to the helper, wiring its own
+        # ``_apply_planned_mutation`` in as the mutation callback.
         call_names = set()
+        attr_names = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 call_names.add(node.func.attr)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                call_names.add(node.func.id)
+            if isinstance(node, ast.Attribute):
+                attr_names.add(node.attr)
 
         assert "_plan_interruption" in call_names
-        assert "_apply_planned_mutation" in call_names
+        assert "run_interruption_journal_protocol" in call_names
+        # _apply_planned_mutation is passed to the helper as the mutation
+        # callback (an attribute reference, not a direct call here).
+        assert "_apply_planned_mutation" in attr_names
 
     def test_record_state_committed_before_apply(self):
         import textwrap

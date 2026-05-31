@@ -16,8 +16,10 @@ from easycat.integrations.agents.base import (
     ExecutionCursor,
     ExternalAgentBridge,
     FrameworkStateSnapshot,
+    InterruptionPlan,
     RecorderContext,
     UnitKind,
+    run_interruption_journal_protocol,
 )
 from easycat.runtime.records import ErrorInfo
 from tests.contracts.provider_surface_matrix import PROVIDER_SURFACE_CONTRACTS
@@ -40,6 +42,12 @@ class _RecordingAgentRecorder:
 
     def record_unit_exited(self, cursor: ExecutionCursor, reason: str | None = None) -> None:
         self.records.append(("unit_exited", (cursor,), {"reason": reason}))
+
+    def safe_exit_cursor(self, cursor: ExecutionCursor, reason: str | None = "error") -> None:
+        try:
+            self.record_unit_exited(cursor, reason=reason)
+        except Exception:
+            pass
 
     @contextmanager
     def unit(
@@ -159,11 +167,11 @@ class _ContractBridge:
         recorder.record_tool_call("start", "lookup", call_id="call-1")
         recorder.record_tool_call("result", "lookup", result_ref="result-ref", call_id="call-1")
         recorder.record_framework_handoff("agent-1", "agent-2", reason="handoff")
-        snapshot = FrameworkStateSnapshot(fields={"history_len": len(self.history)}, kind="fake")
         recorder.record_state_snapshot("snapshot-ref", payload=b'{"history_len":0}')
         self.history.append(turn_input.text)
-        yield AgentBridgeEvent(kind="cursor_entered", cursor=cursor)
-        yield AgentBridgeEvent(kind="cursor_entered", cursor=tool_cursor)
+        # Cursor / handoff / state-snapshot transitions are journaled via the
+        # recorder above; bridges never mirror them onto the stream, which
+        # carries only text / tool / done events.
         yield AgentBridgeEvent(kind="text_delta", text="hello")
         yield AgentBridgeEvent(kind="tool_started", tool_name="lookup", call_id="call-1")
         yield AgentBridgeEvent(
@@ -172,10 +180,6 @@ class _ContractBridge:
             call_id="call-1",
             result="ok",
         )
-        yield AgentBridgeEvent(kind="handoff", from_unit="agent-1", to_unit="agent-2")
-        yield AgentBridgeEvent(kind="state_snapshot", snapshot=snapshot)
-        yield AgentBridgeEvent(kind="cursor_exited", cursor=tool_cursor)
-        yield AgentBridgeEvent(kind="cursor_exited", cursor=cursor)
         yield AgentBridgeEvent(kind="done", text="hello")
         recorder.record_unit_exited(tool_cursor.with_committable(True), reason=None)
         recorder.record_unit_exited(cursor.with_committable(True), reason=None)
@@ -255,29 +259,18 @@ async def test_agent_bridge_contract_event_grammar_and_recorder_writes() -> None
     assert isinstance(bridge, ExternalAgentBridge)
     events = [event async for event in bridge.invoke(AgentTurnInput.from_text("hi"), recorder)]
 
+    # The stream carries only text / tool / done events; cursor, handoff and
+    # state-snapshot transitions live solely in the AgentRecorder journal.
     assert [event.kind for event in events] == [
-        "cursor_entered",
-        "cursor_entered",
         "text_delta",
         "tool_started",
         "tool_result",
-        "handoff",
-        "state_snapshot",
-        "cursor_exited",
-        "cursor_exited",
         "done",
     ]
-    assert events[0].cursor is not None
-    assert events[1].cursor is not None
-    assert events[3].tool_name == "lookup"
-    assert events[4].result == "ok"
-    assert events[5].from_unit == "agent-1"
-    assert events[5].to_unit == "agent-2"
-    assert events[6].snapshot is not None
-    assert events[6].snapshot.fields == {"history_len": 0}
-    _assert_cursor_events_are_paired(events)
-    assert ("unit_entered", (events[0].cursor,), {}) in recorder.records
-    assert ("unit_entered", (events[1].cursor,), {}) in recorder.records
+    assert events[1].tool_name == "lookup"
+    assert events[2].result == "ok"
+    # The authoritative cursor / handoff / state records are journaled.
+    assert any(record[0] == "unit_entered" for record in recorder.records)
     assert _recorded_tool_phases(recorder) == ["start", "result"]
     assert any(record[0] == "handoff" for record in recorder.records)
     assert any(record[0] == "state_snapshot" for record in recorder.records)
@@ -305,6 +298,85 @@ def test_agent_bridge_contract_interruption_records_boundary_and_commit() -> Non
     assert recorder.records[2][2] == {"pre_state_ref": "pre", "post_state_ref": "post"}
 
 
+def test_interruption_protocol_swallows_post_commit_journal_failure() -> None:
+    """A step-4b journal failure must not escape or undo the mutation.
+
+    Once ``record_state_committed`` has succeeded and the mutation has been
+    applied, a degraded journal raising on the post-snapshot /
+    ``record_cancellation_boundary`` write must be logged and swallowed —
+    the mutation already stands, so re-raising would surface a spurious
+    error for a barge-in that actually completed.
+    """
+
+    class _FailingBoundaryRecorder(_RecordingAgentRecorder):
+        def record_cancellation_boundary(
+            self,
+            mode: CancellationMode,
+            reason: str | None = None,
+            caused_by_signal_id: str | None = None,
+        ) -> None:
+            raise RuntimeError("journal degraded")
+
+    recorder = _FailingBoundaryRecorder()
+    applied: list[InterruptionPlan] = []
+    plan = InterruptionPlan(
+        mutation_kind="interrupt_truncate",
+        pre_state_ref="pre",
+        post_state_ref="post",
+    )
+
+    # Must not raise even though record_cancellation_boundary blows up.
+    run_interruption_journal_protocol(
+        plan,
+        CancellationMode.IMMEDIATE_STOP,
+        recorder,
+        "sig-1",
+        serialize_state=lambda: b"{}",
+        apply_mutation=applied.append,
+    )
+
+    # The mutation applied and the commit was journaled before the failure.
+    assert applied == [plan]
+    record_kinds = [record[0] for record in recorder.records]
+    assert "state_committed" in record_kinds
+    # The post-mutation snapshot write precedes the failing boundary write,
+    # so it is recorded; the boundary write raised and was swallowed.
+    assert record_kinds == ["state_snapshot", "state_committed", "state_snapshot"]
+
+
+def test_interruption_protocol_skips_mutation_when_commit_fails() -> None:
+    """A degraded journal at the commit step skips the mutation entirely."""
+
+    class _FailingCommitRecorder(_RecordingAgentRecorder):
+        def record_state_committed(
+            self,
+            mutation_kind: str,
+            pre_state_ref: str | None = None,
+            post_state_ref: str | None = None,
+        ) -> None:
+            raise RuntimeError("journal degraded")
+
+    recorder = _FailingCommitRecorder()
+    applied: list[InterruptionPlan] = []
+    plan = InterruptionPlan(
+        mutation_kind="interrupt_truncate",
+        pre_state_ref="pre",
+        post_state_ref="post",
+    )
+
+    run_interruption_journal_protocol(
+        plan,
+        CancellationMode.IMMEDIATE_STOP,
+        recorder,
+        "sig-1",
+        serialize_state=lambda: b"{}",
+        apply_mutation=applied.append,
+    )
+
+    # Commit failed → mutation must not have been applied.
+    assert applied == []
+
+
 def test_agent_bridge_contract_snapshot_and_reset_are_json_safe() -> None:
     bridge = _ContractBridge()
     bridge.history.append("hello")
@@ -319,16 +391,3 @@ def test_agent_bridge_contract_snapshot_and_reset_are_json_safe() -> None:
 
 def _recorded_tool_phases(recorder: _RecordingAgentRecorder) -> list[str]:
     return [record[1][0] for record in recorder.records if record[0] == "tool_call"]
-
-
-def _assert_cursor_events_are_paired(events: list[AgentBridgeEvent]) -> None:
-    stack: list[str] = []
-    for event in events:
-        if event.kind == "cursor_entered":
-            assert event.cursor is not None
-            stack.append(event.cursor.unit_id)
-        elif event.kind == "cursor_exited":
-            assert event.cursor is not None
-            assert stack
-            assert stack.pop() == event.cursor.unit_id
-    assert stack == []

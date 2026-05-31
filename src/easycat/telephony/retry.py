@@ -16,14 +16,6 @@ class RetryDecision(Enum):
     SMS_FALLBACK = "sms_fallback"
 
 
-@dataclass(frozen=True)
-class SMSFallbackSuggested:
-    """Emitted when SMS fallback is suggested after failed call attempts."""
-
-    number: str
-    attempts: int
-
-
 @dataclass
 class RetryState:
     """Tracks retry state for a single destination number."""

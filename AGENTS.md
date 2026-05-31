@@ -49,6 +49,6 @@
 - Keep optional provider dependencies in extras and document any new env vars in `README.md`.
 
 ## Session Lifecycle Notes
-- `await session.stop()` and `await session.shutdown()` both perform full live-backend teardown through `Session.destroy()`.
-- `Session.close()` is only the logical clean-close marker for the journal; do not treat it as full session teardown.
-- After a clean `stop()` or `shutdown()`, postmortem inspection is still valid: `session.journal.read()` and `session.export_debug_bundle(...)` should continue to work.
+- `await session.stop()` is the single public teardown verb: `force=False` (default) drains in-flight work gracefully, `force=True` cancels it first. `async with session:` is the preferred idiom (it calls `stop(force=True)` on exit); `session.shutdown()` remains a thin alias for `stop(force=True)`.
+- Backend teardown (SQLite/Litestream/libSQL/artifact stores) and the journal clean-close marker are handled internally by `stop()` via the private `Session._destroy()` / `Session._close()` primitives — these are not public entry points.
+- After a clean `stop()`, postmortem inspection is still valid: `session.journal.read()` and `session.export_debug_bundle(...)` continue to work through the preserved read-only view.

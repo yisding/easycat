@@ -237,6 +237,74 @@ async def test_openai_stt_raises_on_api_error():
         await stt.end_stream()
 
 
+@pytest.mark.asyncio
+async def test_openai_stt_max_retries_zero_still_sends_one_request():
+    """max_retries=0 means a single attempt, not zero requests."""
+    mock_client = _make_mock_client(
+        [
+            'data: {"text": "hi", "is_final": true}',
+            "data: [DONE]",
+        ]
+    )
+    config = OpenAISTTConfig(api_key="test-key", max_retries=0, http_client=mock_client)
+    stt = OpenAISTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert events[-1].type == STTEventType.FINAL
+    assert events[-1].text == "hi"
+    mock_client.stream.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_max_retries_zero_raises_underlying_error():
+    """A failing single attempt raises the real HTTP error, not a causeless one."""
+    error_response = _MockStreamingResponse(lines=["data: error"], status_code=500)
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = MagicMock(return_value=_MockStreamContext(error_response))
+    mock_client.aclose = AsyncMock()
+
+    config = OpenAISTTConfig(api_key="test-key", max_retries=0, http_client=mock_client)
+    stt = OpenAISTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    await stt.start_stream()
+    for c in make_audio_chunks(pcm):
+        await stt.send_audio(c)
+
+    # The single attempt's HTTP error must surface, never a causeless
+    # "all attempts failed" RuntimeError with no chained cause.
+    with pytest.raises(httpx.HTTPStatusError):
+        await stt.end_stream()
+    mock_client.stream.assert_called_once()
+
+
+def test_openai_stt_config_rejects_negative_max_retries():
+    with pytest.raises(ValueError, match="max_retries"):
+        OpenAISTTConfig(api_key="test-key", max_retries=-1)
+
+
+# ── Mid-stream format change ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_rejects_mid_stream_format_change():
+    from easycat.audio_format import AudioChunk, AudioFormat
+
+    mock_client = _make_mock_client()
+    config = OpenAISTTConfig(api_key="test-key", http_client=mock_client)
+    stt = OpenAISTT(config)
+
+    fmt_16k = AudioFormat(sample_rate=16000, channels=1, sample_width=2)
+    fmt_8k = AudioFormat(sample_rate=8000, channels=1, sample_width=2)
+
+    await stt.start_stream()
+    await stt.send_audio(AudioChunk(data=b"\x00\x00" * 160, format=fmt_16k))
+    with pytest.raises(ValueError, match="mid-stream audio format change"):
+        await stt.send_audio(AudioChunk(data=b"\x00\x00" * 160, format=fmt_8k))
+
+
 # ── Multiple streams ─────────────────────────────────────────────
 
 

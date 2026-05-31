@@ -186,14 +186,26 @@ def test_session_validation_rejects_custom_passthrough_provider_markers(
         Session(_config(**{field: provider}))
 
 
-def test_session_validation_rejects_custom_passthrough_noise_when_enabled() -> None:
-    with pytest.raises(ValueError, match="noise_reducer"):
-        Session(
+def test_session_validation_warns_on_custom_passthrough_noise_when_enabled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A passthrough noise reducer is legitimate graceful degradation (mirrors
+    # PassthroughAEC), so enabling noise reduction without a real backend must
+    # warn-and-continue rather than crash at construction. fail-loud is opt-in
+    # via NoiseReducerConfig(fallback_policy="error").
+    with caplog.at_level("WARNING", logger="easycat.session._session"):
+        session = Session(
             _config(
                 noise_reducer=_PassthroughNoiseReducer(),
                 enable_noise_reduction=True,
             )
         )
+
+    assert session._enable_noise_reduction is True
+    assert any(
+        "passthrough" in record.message and "Noise reduction is enabled" in record.message
+        for record in caplog.records
+    )
 
 
 def test_custom_passthrough_processors_do_not_auto_enable_features() -> None:

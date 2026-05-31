@@ -11,7 +11,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -27,24 +27,11 @@ from easycat.integrations.agents.base import (
     InterruptionPlan,
     ShallowModeInterruptionError,
     UnitKind,
+    run_interruption_journal_protocol,
 )
 from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
-
-
-@runtime_checkable
-class WorkflowProtocol(Protocol):
-    """Shallow-mode protocol: ``on_user_turn(text) -> str``."""
-
-    async def on_user_turn(self, text: str) -> Any: ...
-
-
-@runtime_checkable
-class StreamingWorkflowProtocol(Protocol):
-    """Shallow-mode streaming: ``on_user_turn_streaming(text) -> AsyncIterator[str]``."""
-
-    def on_user_turn_streaming(self, text: str) -> AsyncIterator[str]: ...
 
 
 class GenericWorkflowBridge:
@@ -170,10 +157,7 @@ class GenericWorkflowBridge:
             # Close it defensively (so a recorder error can't mask the
             # cancellation) before re-raising; no ``record_framework_error``
             # since a cancelled turn isn't a framework fault.
-            try:
-                recorder.record_unit_exited(cursor, reason="error")
-            except Exception:
-                logger.debug("Failed to close cursor during cancel cleanup", exc_info=True)
+            recorder.safe_exit_cursor(cursor)
             raise
 
         recorder.record_unit_exited(cursor.with_committable(True), reason=None)
@@ -219,51 +203,14 @@ class GenericWorkflowBridge:
 
         # Step 1: plan the mutation.
         plan = self._plan_interruption(delivered_text, mode)
-
-        # Step 1b: persist pre-mutation state snapshot.
-        actual_pre_ref = plan.pre_state_ref
-        if recorder is not None:
-            actual_pre_ref = recorder.record_state_snapshot(
-                plan.pre_state_ref,
-                payload=self._serialize_framework_state(),
-            )
-
-        # Step 2: write FrameworkStateCommitted to the journal.
-        if recorder is not None:
-            try:
-                recorder.record_state_committed(
-                    mutation_kind=plan.mutation_kind,
-                    pre_state_ref=actual_pre_ref,
-                    post_state_ref=plan.post_state_ref,
-                )
-            except Exception:
-                return
-
-        # Step 3: apply the planned mutation.
-        try:
-            self._apply_planned_mutation(plan)
-        except Exception as exc:
-            # Step 4a: mutation failed.
-            if recorder is not None:
-                recorder.record_interruption_apply_failed(
-                    mutation_kind=plan.mutation_kind,
-                    pre_state_ref=actual_pre_ref,
-                    post_state_ref=plan.post_state_ref,
-                    failure_error=ErrorInfo.from_exception(exc),
-                )
-            raise
-
-        # Step 4b: success — persist post-mutation state and write boundary.
-        if recorder is not None:
-            recorder.record_state_snapshot(
-                plan.post_state_ref,
-                payload=self._serialize_framework_state(),
-            )
-            recorder.record_cancellation_boundary(
-                mode=mode,
-                reason=plan.mutation_kind,
-                caused_by_signal_id=caused_by_signal_id,
-            )
+        run_interruption_journal_protocol(
+            plan,
+            mode,
+            recorder,
+            caused_by_signal_id,
+            serialize_state=self._serialize_framework_state,
+            apply_mutation=self._apply_planned_mutation,
+        )
 
     def _serialize_framework_state(self) -> bytes:
         """Serialize workflow state for artifact storage.

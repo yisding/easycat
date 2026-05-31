@@ -136,7 +136,7 @@ async def test_ws4_cross_workstream_round_trip(tmp_path):
     # Drive one complete streaming turn end-to-end.  That produces stage
     # records for STT, agent, and TTS, plus tts_frame records with
     # output_refs into the artifact store.
-    await session._run_streaming_agent("hello", token=None)
+    await session._turn_runner.run_streaming_agent("hello", token=None)
 
     # Export a bundle and reload it in the same process.
     bundle_path = tmp_path / "round_trip.zip"

@@ -107,6 +107,53 @@ async def test_journal_sink_records_error_code() -> None:
     assert record.error.type == "TimeoutError"
 
 
+@pytest.mark.asyncio
+async def test_journal_sink_normalizes_structured_output() -> None:
+    """``structured_output`` (Any-typed) must be normalized to a JSON-native
+    shape so SQLite (json.dumps default=str) and in-memory store the same
+    thing instead of a repr string (regression for runtime-observability-3).
+    """
+    import dataclasses
+    import json
+
+    from easycat.events import AgentFinal
+
+    @dataclasses.dataclass
+    class Weather:
+        city: str
+        temp_c: int
+
+    class PydanticLike:
+        def __init__(self, ok: bool) -> None:
+            self._ok = ok
+
+        def model_dump(self, mode: str = "python") -> dict[str, object]:
+            return {"ok": self._ok}
+
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(AgentFinal(text="done", structured_output=Weather(city="SF", temp_c=18)))
+    await bus.emit(AgentFinal(text="done", structured_output=PydanticLike(ok=True)))
+
+    records = journal.read()
+    assert records[0].data["structured_output"] == {"city": "SF", "temp_c": 18}
+    assert records[1].data["structured_output"] == {"ok": True}
+    # Both must be JSON-serializable without the default=str repr fallback.
+    assert json.loads(json.dumps(records[0].data["structured_output"])) == {
+        "city": "SF",
+        "temp_c": 18,
+    }
+
+
 def test_journal_sink_stores_artifact_refs_before_record() -> None:
     artifact_store = InMemoryArtifactStore()
     journal = InMemoryRingBuffer(artifact_store=artifact_store)

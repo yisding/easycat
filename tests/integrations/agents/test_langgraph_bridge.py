@@ -463,9 +463,9 @@ class TestLangGraphBridgeInvoke:
         assert ("b", "c") not in pairs
         assert ("a", "b") in pairs
         assert ("c", "d") in pairs
-        # The bridge-level handoff events mirror the journal records.
-        ev_pairs = [(e.from_unit, e.to_unit) for e in events if e.kind == "handoff"]
-        assert ev_pairs == pairs
+        # Handoffs live solely in the journal; the stream carries no handoff
+        # events.
+        assert not any(e.kind == "handoff" for e in events)
 
     @pytest.mark.asyncio
     async def test_cancel_token_short_circuits(self):

@@ -579,10 +579,6 @@ class CallScreeningDetector:
         self._started = False
         self._agent_timeout_task: asyncio.Task[None] | None = None
 
-        # Multi-turn tracking.
-        self._callee_texts: list[str] = []
-        self._bot_texts: list[str] = []
-
     @property
     def state(self) -> ScreeningState:
         return self._state
@@ -639,8 +635,6 @@ class CallScreeningDetector:
         self._pending_screening = None
         self._accumulated_text = ""
         self._screening_turns = 0
-        self._callee_texts = []
-        self._bot_texts = []
 
     def _cancel_agent_timeout(self) -> None:
         if self._agent_timeout_task and not self._agent_timeout_task.done():
@@ -664,17 +658,13 @@ class CallScreeningDetector:
         self._cancel_agent_timeout()
         return cancelled_in_time
 
-    def record_bot_utterance(self, text: str) -> None:
-        """Record a bot utterance for multi-turn coherence tracking."""
-        self._bot_texts.append(text)
-
     def record_screening_turn(self, callee_text: str) -> None:
         """Record a screening turn from the callee side.
 
-        Increments the turn counter and checks for max turns / coherence.
+        Increments the turn counter so the detector can enforce the
+        ``max_screening_turns`` limit.
         """
         self._screening_turns += 1
-        self._callee_texts.append(callee_text)
 
     async def _on_call_answered(self, event: CallAnswered) -> None:
         self._call_answered = True
@@ -695,10 +685,13 @@ class CallScreeningDetector:
             return
 
         # Track filtering: only analyze inbound (callee) audio.
-        # If track_filter is set, skip events that carry a different
-        # track — prevents bot-side transcripts from triggering false
-        # screening matches.
-        if self._track_filter and event.track != self._track_filter:
+        # Skip events that carry a *different* explicit track — this prevents
+        # bot-side transcripts from triggering false screening matches when
+        # transcription_track="both".  A track-less event (track is None) is
+        # accepted, mirroring call_state._on_stt_final, since most STT
+        # providers do not stamp a track and the Twilio media transport
+        # already drops outbound audio.
+        if self._track_filter and event.track is not None and event.track != self._track_filter:
             return
 
         # Always use the latest partial — STT providers may revise/correct earlier text.
@@ -760,8 +753,9 @@ class CallScreeningDetector:
         if not text:
             return
 
-        # Track filtering for multi-turn.
-        if self._track_filter and event.track != self._track_filter:
+        # Track filtering for multi-turn (track-less events accepted; see
+        # _on_stt_partial).
+        if self._track_filter and event.track is not None and event.track != self._track_filter:
             return
 
         # Check if this looks like a human answering (conversational speech)
@@ -800,7 +794,3 @@ class CallScreeningDetector:
             return
         self._state = ScreeningState.DECLINED
         self._cancel_agent_timeout()
-
-    def is_coherent(self) -> bool:
-        """Check whether the multi-turn screening conversation is coherent."""
-        return check_coherence(self._callee_texts, self._bot_texts)

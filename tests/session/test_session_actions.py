@@ -239,6 +239,6 @@ async def test_streaming_agent_path_stops_session_after_end_call_action() -> Non
     session.stop = AsyncMock()
     session._turn = TurnContext(turn_id="turn-1", cancel_token=CancelToken())
 
-    await session._run_streaming_agent("hello", CancelToken())
+    await session._turn_runner.run_streaming_agent("hello", CancelToken())
 
     session.stop.assert_awaited_once()

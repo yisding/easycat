@@ -344,6 +344,64 @@ def test_debugger_source_session_adapts_live_journal():
     assert any(r["name"] == "test" for r in source.records())
 
 
+def test_journal_view_exposes_latest_sequence():
+    """``JournalView`` re-exposes the backend's O(1) ``latest_sequence`` so
+    live-tailing callers can detect growth without re-reading the journal."""
+    from easycat.runtime.journal import JournalView
+
+    journal = InMemoryRingBuffer(capacity=8)
+    view = JournalView(journal)
+    assert view.latest_sequence == 0
+    seq = journal.append(kind=JournalRecordKind.EVENT, name="a", session_id="s")
+    assert view.latest_sequence == seq
+    journal.append(kind=JournalRecordKind.EVENT, name="b", session_id="s")
+    assert view.latest_sequence == seq + 1
+
+
+def test_session_source_progress_is_cheap_and_tracks_growth():
+    """The live source must report growth via the O(1) ``progress()`` probe
+    without re-reading and re-serializing the whole journal each tick.
+
+    Regression for the WebSocket busy-poll: it previously called
+    ``records()`` (full ``read()`` + ``_record_to_dict`` per record) every
+    500ms just to compare a count.
+    """
+    from easycat.runtime.journal import JournalView
+
+    journal = InMemoryRingBuffer(capacity=8)
+
+    class _StubSession:
+        session_id = "stub-progress"
+        is_running = True
+        turn_state = "IDLE"
+        _artifact_store = None
+
+        @property
+        def journal(self):
+            return JournalView(journal)
+
+    source = _session_source(_StubSession())
+
+    # progress() must not fall back to serializing records: spy on read().
+    calls: list[int] = []
+    real_read = journal.read
+
+    def _counting_read(*a, **k):
+        calls.append(1)
+        return real_read(*a, **k)
+
+    journal.read = _counting_read  # type: ignore[method-assign]
+
+    latest_seq, count = source.progress()
+    assert (latest_seq, count) == (0, 0)
+    journal.append(kind=JournalRecordKind.EVENT, name="a", session_id="s")
+    latest_seq, count = source.progress()
+    assert latest_seq == 1
+    assert count == 1
+    # The cheap probe must never have read/serialized the journal.
+    assert calls == []
+
+
 # ── Production-grade UI endpoints ────────────────────────────────
 
 
@@ -639,6 +697,48 @@ async def test_websocket_emits_snapshot_for_bundle(tmp_path):
             payload = msg.json()
             assert payload["type"] == "snapshot"
             assert payload["record_count"] > 0
+
+
+async def test_websocket_live_source_pushes_on_growth_without_serializing():
+    """A live source should push a fresh snapshot when the journal grows,
+    and the WS loop must drive change detection off the cheap O(1)
+    ``progress()`` probe — never re-serializing the journal per tick."""
+    from easycat.runtime.journal import JournalView
+
+    journal = InMemoryRingBuffer(capacity=32)
+
+    class _StubSession:
+        session_id = "ws-live"
+        is_running = True
+        turn_state = "IDLE"
+        _artifact_store = None
+
+        @property
+        def journal(self):
+            return JournalView(journal)
+
+    source = _session_source(_StubSession())
+
+    # The WS loop must not materialize the dict list to detect change.
+    def _boom():
+        raise AssertionError("records() must not be called on the WS hot path")
+
+    source._records_fn = _boom  # type: ignore[attr-defined]
+
+    journal.append(kind=JournalRecordKind.EVENT, name="first", session_id="s")
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        async with client.ws_connect("/ws") as ws:
+            first = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
+            assert first["type"] == "snapshot"
+            assert first["record_count"] == 1
+            # Grow the journal; the 500ms poll should surface the new count.
+            journal.append(kind=JournalRecordKind.EVENT, name="second", session_id="s")
+            second = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
+            assert second["type"] == "snapshot"
+            assert second["record_count"] == 2
 
 
 async def test_records_supports_pagination(tmp_path):

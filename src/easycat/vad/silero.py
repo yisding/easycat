@@ -20,7 +20,7 @@ from easycat.vad._base import _VADBase
 
 logger = logging.getLogger(__name__)
 
-# Silero v5 VAD accepts 8 kHz or 16 kHz mono audio via the ``sr`` input.
+# Silero v6.2.1 VAD accepts 8 kHz or 16 kHz mono audio via the ``sr`` input.
 # Telephony transports feed 8 kHz natively; WebRTC / local mic typically
 # arrives at 16 kHz (or is resampled there from higher rates).  Chunk and
 # context sizes are fixed 32 ms windows at each rate.
@@ -86,6 +86,13 @@ class _SileroOnnxModel:
         self._context = np.zeros((1, 0), dtype=np.float32)
         self._last_sr = 0
 
+    def close(self) -> None:
+        """Release the onnxruntime InferenceSession handle."""
+        self._session = None
+
+    def __del__(self) -> None:
+        self.close()
+
     def predict(self, samples: list[float], sample_rate: int) -> float:
         if sample_rate not in _SILERO_SUPPORTED_RATES:
             raise ValueError(
@@ -134,8 +141,6 @@ class SileroVAD(_VADBase):
       - min_speech_duration_ms: minimum duration of speech to trigger start
       - min_silence_duration_ms: minimum silence to trigger stop
       - sensitivity: detection threshold (0.0-1.0, lower = more sensitive)
-      - pre_roll_ms: audio to buffer before VAD trigger (informational)
-      - post_roll_ms: extra audio after silence detected (informational)
     """
 
     def __init__(self) -> None:
@@ -213,7 +218,7 @@ class SileroVAD(_VADBase):
         """
         if chunk.format.channels > 1:
             chunk = to_mono_chunk(chunk)
-        # Silero v5 handles 8 kHz and 16 kHz natively.  Anything else (24 k,
+        # Silero v6.2.1 handles 8 kHz and 16 kHz natively.  Anything else (24 k,
         # 48 k, …) resamples to 16 kHz to preserve fidelity.
         if chunk.format.sample_rate not in _SILERO_SUPPORTED_RATES:
             chunk = resample_chunk(chunk, _SILERO_DEFAULT_RATE)
@@ -257,6 +262,15 @@ class SileroVAD(_VADBase):
                 self._model.reset_states()
             except Exception:
                 pass
+
+    def close(self) -> None:
+        """Release the loaded model (onnxruntime session or torch handle)."""
+        super().close()
+        self._torch = None
+        self._buffer = b""
+
+    def __del__(self) -> None:
+        self.close()
 
     def version_info(self) -> dict[str, str]:
         sdk_package = "torch" if self._backend == "torch" else "onnxruntime"

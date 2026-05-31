@@ -159,7 +159,7 @@ def _recorder(journal: InMemoryRingBuffer | None = None) -> JournalAgentRecorder
 
 class TestLangGraphExample:
     @pytest.mark.asyncio
-    async def test_two_node_graph_yields_handoff_and_text(self):
+    async def test_two_node_graph_journals_handoff_and_yields_text(self):
         graph = _MockTwoNodeGraph()
         bridge = LangGraphBridge(graph, display_name="ResearchWriteGraph")
 
@@ -174,10 +174,14 @@ class TestLangGraphExample:
         assert "Paris" in text
         assert "Final write-up" in text
 
-        handoffs = [e for e in events if e.kind == "handoff"]
-        assert len(handoffs) == 1
-        assert handoffs[0].from_unit == "research"
-        assert handoffs[0].to_unit == "write"
+        # Handoffs live in the journal, not on the stream.
+        assert not any(e.kind == "handoff" for e in events)
+        handoffs = [
+            (r.data["from_unit"], r.data["to_unit"])
+            for r in journal.read()
+            if r.name == "framework_handoff"
+        ]
+        assert ("research", "write") in handoffs
 
         # The full per-step checkpoint trail is reconstructed from the
         # checkpointer's real history (fresh thread → all three), in

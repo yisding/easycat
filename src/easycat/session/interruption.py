@@ -26,6 +26,9 @@ def notify_bridge_interruption(
     agent: Any,
     delivered_text: str,
     mode: str,
+    *,
+    ctx: Any | None = None,
+    turn_id: str | None = None,
 ) -> bool:
     """Notify a bridge about an end-of-turn interruption.
 
@@ -34,12 +37,24 @@ def notify_bridge_interruption(
     the last assistant message to what was actually heard.  ``mode="message"``
     calls :meth:`append_interruption_note` instead.  Returns ``True`` on
     success, ``False`` if the bridge raised.
+
+    ``agent`` is normally the :class:`~easycat.stages.agent.AgentStage`, whose
+    ``apply_interruption`` / ``append_interruption_note`` accept ``ctx`` /
+    ``turn_id`` so the mutation is journaled on the recording boundary.  Plain
+    bridges (no journal kwargs) are still supported: the kwargs are only passed
+    when a ``ctx`` is supplied and otherwise omitted to keep the bare-bridge
+    call shape unchanged.
     """
+    journal_kwargs: dict[str, Any] = {}
+    if ctx is not None:
+        journal_kwargs = {"ctx": ctx, "turn_id": turn_id}
     try:
         if mode == "message":
-            agent.append_interruption_note(INTERRUPTION_NOTE)
+            agent.append_interruption_note(INTERRUPTION_NOTE, **journal_kwargs)
         else:
-            agent.apply_interruption(delivered_text, CancellationMode.IMMEDIATE_STOP)
+            agent.apply_interruption(
+                delivered_text, CancellationMode.IMMEDIATE_STOP, **journal_kwargs
+            )
         return True
     except Exception:
         logger.debug("bridge interruption notification failed", exc_info=True)
@@ -275,6 +290,7 @@ def estimate_and_notify_interruption(
     latency_compensation_ms: int,
     ack_stale_ms: int,
     ack_tail_cap_ms: int,
+    ctx: Any | None = None,
 ) -> InterruptionNotification | None:
     """Estimate what the user heard and notify the agent of the interruption.
 
@@ -312,7 +328,13 @@ def estimate_and_notify_interruption(
 
     if not _all_tts_audio_delivered(tts_chunks, heard_bytes):
         text_spoken = _cleanup_estimation_text(_estimate_text_spoken(tts_chunks, heard_bytes))
-        notified = notify_bridge_interruption(agent, text_spoken, interruption_mode)
+        notified = notify_bridge_interruption(
+            agent,
+            text_spoken,
+            interruption_mode,
+            ctx=ctx,
+            turn_id=turn.id,
+        )
         return InterruptionNotification(
             mode=interruption_mode,
             text_spoken=text_spoken,

@@ -17,6 +17,7 @@ from easycat.events import (
     STTEventType,
     VADStartSpeaking,
     VADStopSpeaking,
+    WordTimestamp,
 )
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.scope import RuntimeScope
@@ -24,6 +25,7 @@ from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._stt_committer import STTCommitter
 from easycat.timeouts import TimeoutConfig
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
+from tests.session._wiring_helpers import make_wiring
 
 
 class _RecordingSTT:
@@ -92,17 +94,19 @@ def _make_committer(
     sink.subscribe()
 
     committer = STTCommitter(
-        stt=lambda: stt,
+        wiring=make_wiring(
+            stt=lambda: stt,
+            current_turn=current_turn,
+            emit=_emit,
+            auto_turn_from_stt_final=lambda: auto_turn,
+        ),
         event_bus=bus,
         journal_sink=sink,
         runtime_scope=RuntimeScope(),
         timeout_config=timeout_config,
         segment_silence_ms=segment_silence_ms,
         no_turn=no_turn,
-        current_turn=current_turn,
         turn_manager=tm,
-        emit=_emit,
-        auto_turn_from_stt_final=lambda: auto_turn,
         on_speech_detection_reset=on_speech_detection_reset,
     )
     return committer, stt, emitted, no_turn, tm
@@ -215,17 +219,14 @@ async def test_await_pending_returns_false_on_timeout_and_emits_error() -> None:
     no_turn = TurnContext("no-turn", CancelToken())
     tm = TurnManager(bus, config=TurnManagerConfig())
     committer = STTCommitter(
-        stt=lambda: _RecordingSTT(),
+        wiring=make_wiring(stt=lambda: _RecordingSTT(), emit=_emit),
         event_bus=bus,
         journal_sink=sink,
         runtime_scope=RuntimeScope(),
         timeout_config=TimeoutConfig(stt_timeout=0.05),
         segment_silence_ms=0,
         no_turn=no_turn,
-        current_turn=lambda: None,
         turn_manager=tm,
-        emit=_emit,
-        auto_turn_from_stt_final=lambda: False,
     )
     turn = _new_turn()
     # Add a pending future that will never resolve.
@@ -233,7 +234,54 @@ async def test_await_pending_returns_false_on_timeout_and_emits_error() -> None:
 
     ok = await committer.await_pending(turn)
     assert ok is False
-    assert any(e.stage == ErrorStage.STT for e in errors)
+    stt_errors = [e for e in errors if e.stage == ErrorStage.STT]
+    assert stt_errors
+    # A provider without version_info() falls back to the generic "stt" label.
+    assert stt_errors[0].provider == "stt"
+
+
+@pytest.mark.asyncio
+async def test_await_pending_timeout_error_names_real_provider() -> None:
+    class _NamedSTT(_RecordingSTT):
+        def version_info(self) -> dict[str, str]:
+            return {"provider": "deepgram"}
+
+    bus = EventBus()
+    errors: list[Error] = []
+    bus.subscribe(Error, lambda e: errors.append(e))
+    journal = InMemoryRingBuffer(capacity=64)
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="sess",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+
+    async def _emit(event):
+        await bus.emit(event)
+
+    no_turn = TurnContext("no-turn", CancelToken())
+    tm = TurnManager(bus, config=TurnManagerConfig())
+    committer = STTCommitter(
+        wiring=make_wiring(stt=lambda: _NamedSTT(), emit=_emit),
+        event_bus=bus,
+        journal_sink=sink,
+        runtime_scope=RuntimeScope(),
+        timeout_config=TimeoutConfig(stt_timeout=0.05),
+        segment_silence_ms=0,
+        no_turn=no_turn,
+        turn_manager=tm,
+    )
+    turn = _new_turn()
+    turn.pending_stt_segment_futures.append(asyncio.get_running_loop().create_future())
+
+    ok = await committer.await_pending(turn)
+    assert ok is False
+    stt_errors = [e for e in errors if e.stage == ErrorStage.STT]
+    assert stt_errors
+    assert stt_errors[0].provider == "deepgram"
+    assert "deepgram" in str(stt_errors[0].exception)
 
 
 @pytest.mark.asyncio
@@ -301,3 +349,64 @@ async def test_end_stream_no_future_when_no_uncommitted_audio() -> None:
     await committer.end_stream(turn)
     assert stt.end_stream_calls == 1
     assert turn.pending_stt_segment_futures == []
+
+
+@pytest.mark.asyncio
+async def test_segment_final_journal_records_confidence_and_word_timestamps() -> None:
+    """Provider-captured confidence/word timings reach the journal record."""
+
+    class _MetadataSTT(_RecordingSTT):
+        async def commit_segment(self) -> bool:
+            self.commit_calls += 1
+            await self._queue.put(
+                STTEvent(
+                    type=STTEventType.FINAL,
+                    text="hi there",
+                    confidence=0.91,
+                    word_timestamps=[
+                        WordTimestamp(word="hi", start=0.0, end=0.2),
+                        WordTimestamp(word="there", start=0.2, end=0.5),
+                    ],
+                )
+            )
+            return True
+
+    journal = InMemoryRingBuffer(capacity=64)
+    committer, _stt, _emitted, _no_turn, _tm = _make_committer(stt=_MetadataSTT(), journal=journal)
+    committer.mark_active()
+    turn = _new_turn()
+    committer.start_event_loop(turn)
+
+    await committer.commit_now(turn)
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+        if any(r.name == "stt_segment_final" for r in journal.read()):
+            break
+
+    final = next(r for r in journal.read() if r.name == "stt_segment_final")
+    assert final.data["confidence"] == 0.91
+    assert final.data["word_timestamps"] == [
+        {"word": "hi", "start": 0.0, "end": 0.2},
+        {"word": "there", "start": 0.2, "end": 0.5},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_commit_requested_journal_records_pending_commit_bytes() -> None:
+    """A PendingCommitReporter STT surfaces its byte count into the journal."""
+
+    class _ReportingSTT(_RecordingSTT):
+        def pending_commit_bytes(self) -> int | None:
+            return 4800
+
+    journal = InMemoryRingBuffer(capacity=64)
+    committer, _stt, _emitted, _no_turn, _tm = _make_committer(
+        stt=_ReportingSTT(), journal=journal
+    )
+    committer.mark_active()
+    turn = _new_turn()
+
+    await committer.commit_now(turn)
+
+    requested = next(r for r in journal.read() if r.name == "stt_segment_commit_requested")
+    assert requested.data["pending_commit_bytes"] == 4800

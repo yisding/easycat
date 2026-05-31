@@ -621,6 +621,10 @@ class TestWebTransportDegradedEvents:
         session.handle_stream_data(stream_id=4, data=pcm, ended=False)
         assert rec.reasons == [_DEGRADED_INBOUND_QUEUE_FULL]
         assert rec.calls[0][2] is False  # recoverable, non-fatal
+        # Routes through the shared ``_enqueue_inbound_chunk`` path with the
+        # canonical message shape (context="WebTransport"), not the old
+        # hand-rolled "mic frame" wording.
+        assert rec.calls[0][1] == f"dropped {len(pcm)}-byte WebTransport frame; inbound queue full"
 
     def test_rejected_stream_flood_emits_fatal(self) -> None:
         rec = _DegradedRecorder()

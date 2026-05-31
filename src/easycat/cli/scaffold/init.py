@@ -13,7 +13,6 @@ from difflib import get_close_matches
 from importlib.resources import files
 from pathlib import Path
 from string import Template
-from typing import Any
 
 import typer
 from rich.prompt import Prompt
@@ -482,7 +481,3 @@ def init(
 
 
 __all__: list[str] = ["init"]
-
-
-# Silence mypy's "unused import" warning for future typing hooks.
-_ = Any

@@ -117,15 +117,11 @@ class FunASROnnxVAD(_VADBase):
         min_speech_duration_ms: int = 250,
         min_silence_duration_ms: int = 150,
         sensitivity: float = 0.5,
-        pre_roll_ms: int = 100,
-        post_roll_ms: int = 100,
     ) -> None:
         super().configure(
             min_speech_duration_ms=min_speech_duration_ms,
             min_silence_duration_ms=min_silence_duration_ms,
             sensitivity=sensitivity,
-            pre_roll_ms=pre_roll_ms,
-            post_roll_ms=post_roll_ms,
         )
         if self._model is not None and hasattr(self._model, "max_end_sil"):
             try:
@@ -187,6 +183,16 @@ class FunASROnnxVAD(_VADBase):
         self._buffer = b""
         self._funasr_active = False
         self._param_dict = {"in_cache": []}
+
+    def close(self) -> None:
+        """Release the FunASR ONNX model handle and streaming caches."""
+        super().close()
+        self._buffer = b""
+        self._funasr_active = False
+        self._param_dict = {"in_cache": []}
+
+    def __del__(self) -> None:
+        self.close()
 
     def version_info(self) -> dict[str, str]:
         try:

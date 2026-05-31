@@ -399,6 +399,20 @@ async def test_elevenlabs_realtime_keeps_late_final_when_no_partial_promoted(mon
     assert finals[0].text == "hello world"
 
 
+# ── version_info ─────────────────────────────────────────────────
+
+
+def test_elevenlabs_version_info_sdk_matches_active_transport():
+    """sdk_version reflects the transport the active mode uses."""
+    from easycat._provider_helpers import get_package_version
+
+    rt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))
+    assert rt.version_info()["sdk_version"] == get_package_version("websockets")
+
+    batch = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="batch"))
+    assert batch.version_info()["sdk_version"] == get_package_version("httpx")
+
+
 # ── Batch mode ───────────────────────────────────────────────────
 
 
@@ -453,6 +467,23 @@ async def test_elevenlabs_batch_no_event_on_empty():
 
     events = await collect_stt_events(stt, [])
     assert len(events) == 0
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_rejects_mid_stream_format_change():
+    from easycat.audio_format import AudioChunk, AudioFormat
+
+    mock_client = _make_mock_http_client("test")
+    config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client)
+    stt = ElevenLabsSTT(config)
+
+    fmt_16k = AudioFormat(sample_rate=16000, channels=1, sample_width=2)
+    fmt_8k = AudioFormat(sample_rate=8000, channels=1, sample_width=2)
+
+    await stt.start_stream()
+    await stt.send_audio(AudioChunk(data=b"\x00\x00" * 160, format=fmt_16k))
+    with pytest.raises(ValueError, match="mid-stream audio format change"):
+        await stt.send_audio(AudioChunk(data=b"\x00\x00" * 160, format=fmt_8k))
 
 
 @pytest.mark.asyncio

@@ -227,6 +227,10 @@ class TestWebRTCIngressQueueOwnership:
         _install_fake_webrtc_modules(monkeypatch)
         transport = WebRTCTransport()
         transport._web = _FakeWeb
+        # The signaling server is live (an /offer can only reach the handler
+        # once connect() has started it); offers received after teardown begins
+        # are rejected with 503 instead.
+        transport._connected = True
         original_queue = transport._in_queue
 
         audio_iter = transport.receive_audio()
@@ -254,6 +258,7 @@ class TestWebRTCIngressQueueOwnership:
         _install_fake_webrtc_modules(monkeypatch)
         transport = WebRTCTransport()
         transport._web = _FakeWeb
+        transport._connected = True  # signaling server live (see test above)
 
         first_response = await transport._handle_offer(_FakeOfferRequest())
         assert first_response.status == 200
@@ -281,6 +286,7 @@ class TestWebRTCIngressQueueOwnership:
         _install_fake_webrtc_modules(monkeypatch)
         transport = WebRTCTransport()
         transport._web = _FakeWeb
+        transport._connected = True  # signaling server live (see test above)
 
         first_response = await transport._handle_offer(_FakeOfferRequest())
         assert first_response.status == 200
@@ -747,6 +753,7 @@ class TestWebRTCDegradedEvents:
         monkeypatch.setattr(_FakeRTCPeerConnection, "createAnswer", _boom)
         transport = WebRTCTransport()
         transport._web = _FakeWeb
+        transport._connected = True  # signaling server live (see ingress tests)
         bus = EventBus()
         received: list[TransportDegraded] = []
         bus.subscribe(TransportDegraded, lambda e: received.append(e))

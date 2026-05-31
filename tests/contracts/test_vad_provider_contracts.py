@@ -29,15 +29,11 @@ class _ContractVAD:
         min_speech_duration_ms: int = 250,
         min_silence_duration_ms: int = 150,
         sensitivity: float = 0.5,
-        pre_roll_ms: int = 100,
-        post_roll_ms: int = 100,
     ) -> None:
         self.configured = {
             "min_speech_duration_ms": min_speech_duration_ms,
             "min_silence_duration_ms": min_silence_duration_ms,
             "sensitivity": sensitivity,
-            "pre_roll_ms": pre_roll_ms,
-            "post_roll_ms": post_roll_ms,
         }
 
     def version_info(self) -> dict[str, str]:

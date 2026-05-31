@@ -12,7 +12,6 @@ NONDETERMINISTIC_FIELDS: frozenset[str] = frozenset(
     {
         "timing.wall_ns",
         "timing.cpu_ns",
-        "timing.queue_ns",
         "timing.mono_ns",
         "recorded_at_monotonic_ns",
         "recorded_at_utc",

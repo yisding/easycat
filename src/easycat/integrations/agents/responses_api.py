@@ -35,6 +35,7 @@ from easycat.integrations.agents.base import (
     FrameworkStateSnapshot,
     InterruptionPlan,
     UnitKind,
+    run_interruption_journal_protocol,
 )
 from easycat.runtime.records import ErrorInfo
 
@@ -111,7 +112,6 @@ class RemoteResponsesAPIBridge:
             committable=False,
         )
         recorder.record_unit_entered(agent_cursor)
-        yield AgentBridgeEvent(kind="cursor_entered", cursor=agent_cursor)
 
         self._last_user_text = turn_input.text
 
@@ -153,22 +153,21 @@ class RemoteResponsesAPIBridge:
                     if cancel_token and cancel_token.is_cancelled:
                         if not interrupted:
                             interrupted = True
-                        if cancel_token.is_cancelled:
-                            if pending_tool_calls:
-                                # Drain: keep processing until tools complete.
-                                bridge_ev = translate_sse_event(
-                                    event_type, data, recorder, pending_tool_names
-                                )
-                                if bridge_ev is not None:
-                                    if bridge_ev.kind == "tool_result":
-                                        pending_tool_calls.discard(bridge_ev.call_id)
-                                    yield bridge_ev
-                                    if not pending_tool_calls:
-                                        break
-                                continue
-                            else:
-                                # Immediate stop.
-                                break
+                        if pending_tool_calls:
+                            # Drain: keep processing until tools complete.
+                            bridge_ev = translate_sse_event(
+                                event_type, data, recorder, pending_tool_names
+                            )
+                            if bridge_ev is not None:
+                                if bridge_ev.kind == "tool_result":
+                                    pending_tool_calls.discard(bridge_ev.call_id)
+                                yield bridge_ev
+                                if not pending_tool_calls:
+                                    break
+                            continue
+                        else:
+                            # Immediate stop.
+                            break
 
                     # Normal event processing.
                     if event_type == "response.completed":
@@ -219,10 +218,7 @@ class RemoteResponsesAPIBridge:
             # Close it defensively (so a recorder error can't mask the
             # cancellation) before re-raising; no ``record_framework_error``
             # since a cancelled turn isn't a framework fault.
-            try:
-                recorder.record_unit_exited(agent_cursor, reason="error")
-            except Exception:
-                logger.debug("Failed to close agent cursor during cancel cleanup", exc_info=True)
+            recorder.safe_exit_cursor(agent_cursor)
             raise
 
         # On successful (non-interrupted) completion, update chain state.
@@ -246,9 +242,6 @@ class RemoteResponsesAPIBridge:
         self._pending_turn_metadata = None
 
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
-        # Balance the cursor_entered emitted at stream start so stream-level
-        # cursor events are well-formed for out-of-band consumers.
-        yield AgentBridgeEvent(kind="cursor_exited", cursor=agent_cursor)
         yield AgentBridgeEvent(
             kind="done",
             text=accumulated,
@@ -275,52 +268,14 @@ class RemoteResponsesAPIBridge:
     ) -> None:
         # Step 1: plan the mutation.
         plan = self._plan_interruption(delivered_text, mode)
-
-        # Step 1b: persist pre-mutation state snapshot.
-        actual_pre_ref = plan.pre_state_ref
-        if recorder is not None:
-            actual_pre_ref = recorder.record_state_snapshot(
-                plan.pre_state_ref,
-                payload=self._serialize_framework_state(),
-            )
-
-        # Step 2: write FrameworkStateCommitted to the journal.
-        if recorder is not None:
-            try:
-                recorder.record_state_committed(
-                    mutation_kind=plan.mutation_kind,
-                    pre_state_ref=actual_pre_ref,
-                    post_state_ref=plan.post_state_ref,
-                )
-            except Exception:
-                # Journal in degraded mode -- skip mutation, runtime falls back.
-                return
-
-        # Step 3: apply the planned mutation.
-        try:
-            self._apply_planned_mutation(plan)
-        except Exception as exc:
-            # Step 4a: mutation failed -- write InterruptionApplyFailed.
-            if recorder is not None:
-                recorder.record_interruption_apply_failed(
-                    mutation_kind=plan.mutation_kind,
-                    pre_state_ref=actual_pre_ref,
-                    post_state_ref=plan.post_state_ref,
-                    failure_error=ErrorInfo.from_exception(exc),
-                )
-            raise
-
-        # Step 4b: success -- persist post-mutation state and write boundary.
-        if recorder is not None:
-            recorder.record_state_snapshot(
-                plan.post_state_ref,
-                payload=self._serialize_framework_state(),
-            )
-            recorder.record_cancellation_boundary(
-                mode=mode,
-                reason=plan.mutation_kind,
-                caused_by_signal_id=caused_by_signal_id,
-            )
+        run_interruption_journal_protocol(
+            plan,
+            mode,
+            recorder,
+            caused_by_signal_id,
+            serialize_state=self._serialize_framework_state,
+            apply_mutation=self._apply_planned_mutation,
+        )
 
         # Store per-turn metadata for the next request so a server that
         # supports the EasyCat extension can use richer interruption semantics.
@@ -441,6 +396,24 @@ class RemoteResponsesAPIBridge:
         self._last_user_text = None
         self._interrupted_response_id = None
         self._pending_turn_metadata = None
+
+    def configure_runtime(
+        self,
+        *,
+        mcp_servers: list[str] | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        """Apply session-level model / api_key overrides.
+
+        Only non-empty values overwrite the construction-time settings so
+        an unset session field never blanks a value the bridge was built
+        with.  This bridge does not consume ``mcp_servers``.
+        """
+        if model:
+            self._model = model
+        if api_key:
+            self._api_key = api_key
 
     # ── History post-processing ───────────────────────────────────
 

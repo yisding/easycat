@@ -97,7 +97,13 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from easycat._audio_utils import resample_chunk
 from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
-from easycat.transports._base import _DEGRADED_INBOUND_QUEUE_FULL, _AudioQueueMixin
+from easycat.transports._base import (
+    _DEGRADED_INBOUND_QUEUE_FULL as _DEGRADED_INBOUND_QUEUE_FULL,  # re-export
+)
+from easycat.transports._base import (
+    _AudioQueueMixin,
+    _enqueue_inbound_chunk,
+)
 from easycat.transports.websocket import _valid_config_sample_rate
 
 if TYPE_CHECKING:
@@ -188,6 +194,14 @@ _DEGRADED_CONTROL_CODEC_POISONED = "control_codec_poisoned"
 _DEGRADED_REJECTED_STREAM_FLOOD = "rejected_stream_flood"
 _DEGRADED_OUTBOUND_WRITER_CRASHED = "outbound_writer_crashed"
 _DEGRADED_BARGE_IN_RESET_FAILED = "barge_in_reset_failed"
+# Outbound backpressure relies on reading aioquic's private per-stream send
+# buffer (``_quic`` / ``_streams`` / ``sender._buffer``).  If a future aioquic
+# release renames any of these, the probe can no longer measure buffered bytes
+# and the gate silently degrades to a no-op — re-exposing the unbounded-memory
+# failure ``_OUTBOUND_SEND_BUFFER_HIGH_WATER`` exists to prevent.  Emitting this
+# (once per session) makes that regression visible in the journal instead of
+# silent.
+_DEGRADED_OUTBOUND_BACKPRESSURE_BLIND = "outbound_backpressure_blind"
 
 # Signature of the per-session degraded-event emitter injected by
 # :class:`WebTransportConnectionTransport`.  ``fatal`` marks conditions that
@@ -393,6 +407,11 @@ class _WebTransportSession:
         # ignored — not re-dispatched — until the stream FINs.
         self._rejected_stream_ids: set[int] = set()
         self._writer_task: asyncio.Task[None] | None = None
+        # Latches once the outbound backpressure probe finds aioquic's private
+        # send-buffer accessors missing/renamed, so we emit the degraded signal
+        # at most once per session instead of on every poll (see
+        # ``_await_outbound_capacity`` / ``_DEGRADED_OUTBOUND_BACKPRESSURE_BLIND``).
+        self._backpressure_blind_reported = False
 
     @property
     def session_id(self) -> int:
@@ -590,14 +609,12 @@ class _WebTransportSession:
         chunk = AudioChunk(data=data, format=self._inbound_format)
         if chunk.format.sample_rate != self._target_rate:
             chunk = resample_chunk(chunk, self._target_rate)
-        try:
-            self._in_queue.put_nowait(chunk)
-        except asyncio.QueueFull:
-            logger.warning("Inbound WebTransport audio queue full — dropping frame")
-            self._emit_degraded(
-                _DEGRADED_INBOUND_QUEUE_FULL,
-                f"dropped {len(chunk.data)}-byte mic frame; inbound queue full",
-            )
+        _enqueue_inbound_chunk(
+            self._in_queue,
+            chunk,
+            emit_degraded=self._emit_degraded,
+            context="WebTransport",
+        )
 
     def _handle_control_bytes(self, data: bytes) -> None:
         for msg in self._control_codec.feed(data):
@@ -744,24 +761,61 @@ class _WebTransportSession:
         — i.e. TTS is dropped under sustained backpressure, which is the
         documented behaviour.  ``aioquic``'s private ``_streams`` /
         ``sender._buffer`` are read defensively (``getattr``); there is no
-        public accessor for per-stream buffered bytes.
+        public accessor for per-stream buffered bytes.  If any of those private
+        accessors is missing (a future aioquic rename), the probe can't measure
+        the buffer and the gate would silently no-op, so we emit
+        ``_DEGRADED_OUTBOUND_BACKPRESSURE_BLIND`` once to make that regression
+        observable rather than a silent unbounded-memory hazard.
         """
         quic = getattr(self._quic_protocol, "_quic", None)
         if quic is None:
+            self._report_backpressure_blind("QuicConnectionProtocol._quic missing")
             return
         while not self._on_close.is_set():
             sid = self._outbound_audio_stream_id
             if sid is None:
+                # No outbound audio stream open yet — a legitimate idle state,
+                # not an aioquic rename, so don't flag the probe as blind.
                 return
             streams = getattr(quic, "_streams", None)
-            stream = streams.get(sid) if isinstance(streams, dict) else None
+            if not isinstance(streams, dict):
+                self._report_backpressure_blind("QuicConnection._streams missing")
+                return
+            stream = streams.get(sid)
             if stream is None:
+                # Stream not yet registered or already finished — legitimate.
                 return
             sender = getattr(stream, "sender", None)
-            buffered = len(getattr(sender, "_buffer", b"")) if sender is not None else 0
-            if buffered <= _OUTBOUND_SEND_BUFFER_HIGH_WATER:
+            raw_buffer = getattr(sender, "_buffer", None) if sender is not None else None
+            if raw_buffer is None:
+                self._report_backpressure_blind("QuicStream.sender._buffer missing")
+                return
+            if len(raw_buffer) <= _OUTBOUND_SEND_BUFFER_HIGH_WATER:
                 return
             await asyncio.sleep(_OUTBOUND_BACKPRESSURE_POLL_SEC)
+
+    def _report_backpressure_blind(self, reason: str) -> None:
+        """Emit the backpressure-blind degraded signal at most once per session.
+
+        Called when an aioquic private accessor the outbound backpressure gate
+        depends on is missing (most likely an upstream rename).  When that
+        happens the gate can no longer measure buffered bytes and silently
+        degrades to a no-op, re-exposing the unbounded-memory failure
+        ``_OUTBOUND_SEND_BUFFER_HIGH_WATER`` exists to prevent — so surface it.
+        """
+        if self._backpressure_blind_reported:
+            return
+        self._backpressure_blind_reported = True
+        logger.warning(
+            "WebTransport outbound backpressure probe blind (%s) — send-buffer "
+            "high-water gate is a no-op; outbound memory is no longer bounded by "
+            "this gate",
+            reason,
+        )
+        self._emit_degraded(
+            _DEGRADED_OUTBOUND_BACKPRESSURE_BLIND,
+            f"outbound backpressure probe blind: {reason}",
+        )
 
     async def _outbound_writer(self) -> None:
         try:

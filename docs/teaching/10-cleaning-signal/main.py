@@ -279,7 +279,7 @@ async def main() -> None:
     detector = MiniTurnDetector(vad)
     client = AsyncOpenAI()
     tts = create_tts_provider(
-        TTSProviderConfig(provider="openai", settings={"api_key": os.environ["OPENAI_API_KEY"]})
+        TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
     )
 
     def stt_factory():

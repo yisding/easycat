@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
+import base64
 import enum
 import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import httpx
 
@@ -16,7 +16,7 @@ from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
-from easycat.tts.base import TTSBase
+from easycat.tts._ws_base import _WSTTSBase
 from easycat.tts.input import TTSInput, coerce_tts_input
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ class ElevenLabsTTSConfig:
             )
 
 
-class ElevenLabsTTS(TTSBase):
+class ElevenLabsTTS(_WSTTSBase):
     """TTS provider using ElevenLabs API.
 
     Supports two streaming modes:
@@ -92,13 +92,15 @@ class ElevenLabsTTS(TTSBase):
     Requests PCM output format directly from ElevenLabs to avoid MP3 decoding.
     """
 
+    _provider_error_name = "elevenlabs"
+    _provider_log_label = "ElevenLabs"
+
     def __init__(self, config: ElevenLabsTTSConfig) -> None:
         super().__init__(output_format=config.audio_format)
         self._config = config
         self._source_format = _ELEVENLABS_FORMAT_MAP[config.output_format]
         self._client: httpx.AsyncClient | None = None
         self._response: httpx.Response | None = None
-        self._ws: ReconnectingWebSocket | None = None
         # Init/text/EOS frames for the in-flight utterance, replayed by the
         # on_reconnect hook so a mid-stream drop restarts the utterance from
         # the top instead of aborting it. Known tradeoff: replaying the full
@@ -106,9 +108,6 @@ class ElevenLabsTTS(TTSBase):
         # emitted before the drop is re-emitted (audible repetition), not a
         # seamless resume.
         self._pending_messages: tuple[str, ...] | None = None
-        # Strong references to fire-and-forget Error-emit tasks so the event
-        # loop does not garbage-collect them before ``bus.emit`` completes.
-        self._emit_tasks: set[asyncio.Task[Any]] = set()
 
     def _get_http_client(self) -> httpx.AsyncClient:
         """Get or create the HTTP client."""
@@ -201,24 +200,23 @@ class ElevenLabsTTS(TTSBase):
                 if self._cancelled:
                     break
 
-                if isinstance(message, str):
-                    try:
-                        data = json.loads(message)
-                        if data.get("audio"):
-                            import base64
+                if not isinstance(message, str):
+                    continue
+                try:
+                    data = json.loads(message)
+                except json.JSONDecodeError:
+                    continue
 
-                            audio_bytes = base64.b64decode(data["audio"])
-                            if audio_bytes:
-                                yield self._make_audio_event(audio_bytes, self._source_format)
-                        if data.get("alignment"):
-                            yield self._make_markers_event([data["alignment"]])
-                        if data.get("isFinal"):
-                            break
-                    except (json.JSONDecodeError, KeyError):
-                        pass
+                if data.get("audio"):
+                    audio_bytes = base64.b64decode(data["audio"])
+                    if audio_bytes:
+                        yield self._make_audio_event(audio_bytes, self._source_format)
+                if data.get("alignment"):
+                    yield self._make_markers_event([data["alignment"]])
+                if data.get("isFinal"):
+                    break
 
         except Exception as exc:
-            await self._close_ws()
             if not self._cancelled:
                 logger.error("ElevenLabs TTS WebSocket error: %s", exc)
                 # WebSocket close codes (e.g. 1008 "policy violation" for
@@ -228,11 +226,9 @@ class ElevenLabsTTS(TTSBase):
                 close_code = getattr(exc, "code", None)
                 self._emit_provider_error(exc, ws_close_code=close_code)
                 raise
-        except BaseException:
-            # CancelledError is a BaseException; close the ws since it's mid-stream
-            await self._close_ws()
-            raise
         finally:
+            # Single idempotent teardown covers every exit path, including
+            # CancelledError (BaseException) which skips the except above.
             await self._close_ws()
             self._pending_messages = None
             self._end_synthesis()
@@ -326,23 +322,24 @@ class ElevenLabsTTS(TTSBase):
         messages = self._pending_messages
         if ws is None or messages is None or self._cancelled:
             return
+        # The replayed stream restarts from the top and is sample-aligned in
+        # its own right, so drop any sub-sample byte held from before the drop
+        # to avoid shifting every replayed sample by one byte.
+        self._reset_audio_alignment()
         await self._send_ws_messages(ws, messages)
 
-    async def _close_ws(self) -> None:
-        """Close the WebSocket connection."""
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception:
-                logger.debug("Error closing ElevenLabs WebSocket", exc_info=True)
-            finally:
-                self._ws = None
-
     async def stop(self) -> None:
-        """Gracefully stop synthesis."""
+        """Gracefully stop synthesis.
+
+        Closes the synthesis WebSocket (the default ``stream_mode``) in
+        addition to the HTTP-path ``_response``, so a graceful stop between
+        turns does not leave the socket lingering until the next
+        ``cancel()``/``close()`` — matching Cartesia/Deepgram ``stop()``.
+        """
         await super().stop()
         if self._response is not None:
             await self._response.aclose()
+        await self._close_ws()
 
     async def cancel(self) -> None:
         """Immediately cancel synthesis and close connections."""
@@ -358,45 +355,18 @@ class ElevenLabsTTS(TTSBase):
         if self._client is not None:
             await self._client.aclose()
             self._client = None
-        await self._close_ws()
-
-    def _emit_provider_error(self, exc: BaseException, **context: Any) -> None:
-        """Fire a journal-visible ``Error`` event on the bus.
-
-        Without this, WS close codes, HTTP status, and response bodies
-        only land in the logger — a bundle recorded by a user can't
-        explain *why* TTS failed.  Notes are attached to the exception
-        so the existing ``Error`` event shape carries the context
-        without requiring a new event type.
-        """
-        bus = getattr(self._config, "event_bus", None)
-        if bus is None:
-            return
-        from easycat.events import Error, ErrorStage
-
-        for key, value in context.items():
-            if value is None:
-                continue
-            try:
-                exc.add_note(f"{key}={value}")  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover - pre-3.11
-                pass
-        try:
-            task = asyncio.create_task(
-                bus.emit(Error(exception=exc, stage=ErrorStage.TTS, provider="elevenlabs"))
-            )
-        except RuntimeError:  # no running loop
-            logger.debug("Could not emit provider error — no running loop", exc_info=True)
-            return
-        # Keep a strong reference until the emit completes; the event loop
-        # only holds a weak one, so an untracked task can be GC'd mid-flight.
-        self._emit_tasks.add(task)
-        task.add_done_callback(self._emit_tasks.discard)
+        # Base close() closes the WebSocket and drains the Error-emit tasks.
+        await super().close()
 
     def version_info(self) -> dict[str, str]:
+        # Report the transport library the active mode actually uses:
+        # WEBSOCKET streams over a WebSocket, HTTP issues an HTTP request.
+        transport_lib = (
+            "websockets" if self._config.stream_mode == ElevenLabsStreamMode.WEBSOCKET else "httpx"
+        )
         return {
             "provider": "elevenlabs",
             "model": self._config.model_id,
             "api_version": "v1",
-            "sdk_version": get_package_version("httpx"),
+            "sdk_version": get_package_version(transport_lib),
         }

@@ -18,21 +18,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-import websockets
-
 from easycat._audio_utils import resample_chunk
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
-from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
-from easycat.stt.base import STTBase
+from easycat.stt.websocket_base import WebSocketSTTBase
 
 # OpenAI Realtime API expects 24 kHz PCM16 mono input by default.
 _REALTIME_SAMPLE_RATE = 24000
@@ -76,7 +72,7 @@ class OpenAIRealtimeSTTConfig:
     event_bus: Any = field(default=None, repr=False)
 
 
-class OpenAIRealtimeSTT(STTBase):
+class OpenAIRealtimeSTT(WebSocketSTTBase):
     """Streaming STT using the OpenAI Realtime API WebSocket.
 
     Opens a WebSocket on ``start_stream``, forwards audio chunks in
@@ -90,10 +86,11 @@ class OpenAIRealtimeSTT(STTBase):
     """
 
     def __init__(self, config: OpenAIRealtimeSTTConfig) -> None:
-        super().__init__()
+        super().__init__(
+            provider_name="openai_realtime_stt",
+            provider_error_name="openai-realtime",
+        )
         self._config = config
-        self._ws: ReconnectingWebSocket | None = None
-        self._receive_task: asyncio.Task[None] | None = None
         self._close_task: asyncio.Task[None] | None = None
         self._partial_text: str = ""
         self._final_received: asyncio.Event | None = None
@@ -112,9 +109,6 @@ class OpenAIRealtimeSTT(STTBase):
         # ``.completed`` to be dropped instead of producing a second
         # ``STTFinal`` for the same turn.  Cleared on the next commit.
         self._dropping_pending_final: bool = False
-        # Strong references to fire-and-forget Error-emit tasks so the event
-        # loop does not garbage-collect them before ``bus.emit`` completes.
-        self._emit_tasks: set[asyncio.Task[Any]] = set()
 
     def _websocket_url(self) -> str:
         """Build the Realtime WebSocket URL with the required realtime model."""
@@ -137,52 +131,57 @@ class OpenAIRealtimeSTT(STTBase):
             "Authorization": f"Bearer {self._config.api_key}",
         }
 
-        self._ws = ReconnectingWebSocket(
-            url=url,
-            config=ReconnectConfig(extra_headers=headers),
-            event_bus=self._config.event_bus,
-            provider_name="openai_realtime_stt",
-            connect_fn=self._config.ws_connect,
-            on_reconnect=self._send_session_update,
-        )
-        await self._ws.connect()
         loop = asyncio.get_running_loop()
         self._session_ready = loop.create_future()
-        # Reset per-stream state BEFORE starting the receive loop so
-        # early messages on the new socket (including any late
-        # ``.completed`` from the previous stream that slipped through
-        # before close) can't observe stale flags from the prior run.
+        # Reset per-stream state BEFORE the receive loop starts so early
+        # messages on the new socket (including any late ``.completed``
+        # from the previous stream that slipped through before close)
+        # can't observe stale flags from the prior run.
         self._partial_text = ""
         self._audio_pending_commit = False
         self._final_received = None
         self._dropping_pending_final = False
-        self._receive_task = asyncio.create_task(self._receive_loop())
+        await self._connect_websocket(
+            url=url,
+            headers=headers,
+            event_bus=self._config.event_bus,
+            connect_fn=self._config.ws_connect,
+            on_reconnect=self._send_session_update,
+        )
         try:
             await self._send_session_update()
-        except Exception:
-            ws = self._ws
-            receive_task = self._receive_task
-            self._ws = None
-            self._receive_task = None
-            self._session_ready = None
-            if ws is not None:
-                task = asyncio.create_task(self._close_connection(ws, receive_task))
-                task.add_done_callback(self._log_close_task_exception)
-                self._close_task = task
-            raise
-        try:
             await asyncio.wait_for(self._session_ready, timeout=5.0)
         except TimeoutError as exc:
-            ws = self._ws
-            receive_task = self._receive_task
-            self._ws = None
-            self._receive_task = None
+            self._schedule_close()
             self._session_ready = None
-            if ws is not None:
-                task = asyncio.create_task(self._close_connection(ws, receive_task))
-                task.add_done_callback(self._log_close_task_exception)
-                self._close_task = task
             raise TimeoutError("timed out waiting for OpenAI Realtime session.update") from exc
+        except Exception:
+            self._schedule_close()
+            self._session_ready = None
+            raise
+
+    def _schedule_close(self) -> None:
+        """Tear down the active socket in the background after a failed start.
+
+        Detaches the current websocket/receive-loop from ``self`` and drains
+        them via the shared base close path on a fire-and-forget task, stored
+        on ``_close_task`` so the next ``_on_start`` can await it.
+        """
+        ws = self._ws
+        if ws is None:
+            return
+        task = asyncio.create_task(self._close_active_websocket())
+        task.add_done_callback(self._log_close_task_exception)
+        self._close_task = task
+
+    @staticmethod
+    def _log_close_task_exception(task: asyncio.Task[None]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug("OpenAI Realtime close task failed", exc_info=True)
 
     async def _send_session_update(self) -> None:
         """Configure a realtime session with input audio transcription enabled.
@@ -235,24 +234,33 @@ class OpenAIRealtimeSTT(STTBase):
     async def _on_commit_segment(self) -> bool:
         return await self._send_commit(wait_for_final=False)
 
+    def pending_commit_bytes(self) -> int | None:
+        """Bytes appended to the input buffer since the last commit.
+
+        Implements :class:`~easycat.providers.PendingCommitReporter` so the
+        session journal can record *why* a segment commit was accepted or
+        skipped (OpenAI Realtime refuses commits below a 100 ms floor).
+        """
+        return self._bytes_since_last_commit
+
     async def _on_end(self) -> None:
-        ws = self._ws
-        receive_task = self._receive_task
-        if ws is not None and self._audio_pending_commit:
+        if self._ws is not None and self._audio_pending_commit:
             await self._send_commit(wait_for_final=True)
 
-        self._ws = None
-        self._receive_task = None
-        self._partial_text = ""
         self._final_received = None
         self._session_ready = None
-        if ws is not None:
-            try:
-                await self._close_connection(ws, receive_task)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.debug("OpenAI Realtime close failed during end", exc_info=True)
+        try:
+            # OpenAI keeps the realtime socket open after delivering the
+            # final transcript, so draining first would block in the receive
+            # loop until the close timeout fires.  Close-before-drain wakes
+            # the receive loop, keeping turn-to-agent latency low.
+            await self._close_active_websocket(close_before_drain=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("OpenAI Realtime close failed during end", exc_info=True)
+        finally:
+            self._partial_text = ""
 
     # OpenAI Realtime requires commits to have at least 100ms of audio.
     # At 24 kHz mono 16-bit that is 4800 bytes.  Skip the commit when
@@ -317,61 +325,21 @@ class OpenAIRealtimeSTT(STTBase):
                 self._dropping_pending_final = True
         return True
 
-    async def _close_connection(
-        self,
-        ws: ReconnectingWebSocket,
-        receive_task: asyncio.Task[None] | None,
-    ) -> None:
-        await ws.close()
-        if receive_task is not None:
-            try:
-                await asyncio.wait_for(receive_task, timeout=2.0)
-            except TimeoutError:
-                receive_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await receive_task
-                logger.warning("OpenAI Realtime receive loop timed out on close")
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.debug(
-                    "OpenAI Realtime close task ignored receive-loop error",
-                    exc_info=True,
-                )
+    def _on_receive_loop_end(self) -> None:
+        """Fail-fast a pending handshake when the receive loop exits.
 
-    @staticmethod
-    def _log_close_task_exception(task: asyncio.Task[None]) -> None:
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.debug("OpenAI Realtime close task failed", exc_info=True)
+        OpenAI is the only provider with a ``session.update`` handshake
+        gated on a ``_session_ready`` future, so this base hook rejects
+        that future if the socket drops before the session is
+        acknowledged.  Without it, ``_on_start``'s wait would block for
+        the full 5s timeout instead of surfacing the close immediately.
+        """
+        if self._session_ready is not None and not self._session_ready.done():
+            self._session_ready.set_exception(
+                RuntimeError("OpenAI Realtime connection closed before session was ready")
+            )
 
-    async def _receive_loop(self) -> None:
-        assert self._ws is not None
-        queue = self._event_queue
-        try:
-            async for raw_message in self._ws.recv_iter():
-                if isinstance(raw_message, bytes):
-                    continue
-                try:
-                    msg = json.loads(raw_message)
-                except json.JSONDecodeError:
-                    continue
-                self._handle_message(msg)
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("OpenAI Realtime WebSocket closed")
-        except Exception:
-            logger.exception("Error in OpenAI Realtime receive loop")
-        finally:
-            if self._session_ready is not None and not self._session_ready.done():
-                self._session_ready.set_exception(
-                    RuntimeError("OpenAI Realtime connection closed before session was ready")
-                )
-            queue.put_nowait(None)
-
-    def _handle_message(self, msg: dict[str, Any]) -> None:
+    def _handle_json_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type", "")
 
         if msg_type == "conversation.item.input_audio_transcription.delta":
@@ -428,50 +396,6 @@ class OpenAIRealtimeSTT(STTBase):
             if msg_type in ("session.updated", "transcription_session.updated"):
                 if self._session_ready is not None and not self._session_ready.done():
                     self._session_ready.set_result(None)
-
-    def _emit_provider_error(
-        self,
-        exc: BaseException,
-        *,
-        code: str | None = None,
-        buffer_bytes: int | None = None,
-    ) -> None:
-        """Fire an ``Error`` event on the event bus when the server reports
-        an error.  Session's journal sink subscribes to ``Error`` events so
-        this lands as a journal record with the provider name, the error
-        message, and the attached buffer-state context.  Without this,
-        debugging from a recorded bundle is blind to provider-reported
-        errors — they previously went to ``logger.warning`` only.
-        """
-        bus = getattr(self._config, "event_bus", None)
-        if bus is None:
-            return
-        from easycat.events import Error, ErrorStage
-
-        # Attach diagnostic notes to the exception so the ``Error`` event
-        # keeps all the context without requiring a new Error subtype.
-        notes_parts: list[str] = []
-        if code:
-            notes_parts.append(f"code={code}")
-        if buffer_bytes is not None:
-            notes_parts.append(f"buffer_bytes={buffer_bytes}")
-        if notes_parts:
-            for note in notes_parts:
-                try:
-                    exc.add_note(note)  # type: ignore[attr-defined]
-                except Exception:  # pragma: no cover - pre-3.11
-                    pass
-        try:
-            task = asyncio.create_task(
-                bus.emit(Error(exception=exc, stage=ErrorStage.STT, provider="openai-realtime"))
-            )
-        except RuntimeError:  # no running loop
-            logger.debug("Could not emit provider error — no running loop", exc_info=True)
-            return
-        # Keep a strong reference until the emit completes; the event loop
-        # only holds a weak one, so an untracked task can be GC'd mid-flight.
-        self._emit_tasks.add(task)
-        task.add_done_callback(self._emit_tasks.discard)
 
     def version_info(self) -> dict[str, str]:
         return {

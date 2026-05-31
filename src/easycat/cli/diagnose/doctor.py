@@ -25,7 +25,7 @@ import typer
 from rich.table import Table
 
 from easycat.cli._errors import cli_command
-from easycat.cli._output import emit_json, json_envelope, stderr_console, stdout_console
+from easycat.cli._output import emit_json, json_envelope, stderr_console
 
 
 @dataclass
@@ -80,13 +80,15 @@ def check_easycat_version() -> CheckResult:
         )
     # Detect which integration extras are importable — informational,
     # not fail/ok.
+    # NOTE: the Deepgram/ElevenLabs/Cartesia providers talk to their HTTP
+    # APIs directly via ``httpx`` and never import a vendor SDK, so there
+    # is no SDK module to probe for here — their availability is gated by
+    # the API-key env-var checks (E203) instead, not an importable extra.
     integrations: list[str] = []
     for module, name in (
         ("agents", "openai-agents"),
         ("pydantic_ai", "pydantic-ai"),
         ("sounddevice", "local"),
-        ("deepgram", "deepgram"),
-        ("elevenlabs", "elevenlabs"),
         ("onnxruntime", "smart-turn"),
     ):
         try:
@@ -547,8 +549,3 @@ def doctor(
 
 
 __all__: list[str] = ["doctor"]
-
-# ``stdout_console`` is kept in the import list for parity with other
-# commands even though the current doctor implementation uses stderr for
-# the human report — future JSON path variants may swap to stdout.
-_ = stdout_console

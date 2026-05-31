@@ -153,6 +153,33 @@ class TestUnitContextManager:
         assert records[1].data["committable"] is False
 
 
+class TestSafeExitCursor:
+    """safe_exit_cursor() closes cursors defensively, swallowing failures."""
+
+    def test_closes_open_cursor(self, recorder, journal):
+        c = _cursor()
+        recorder.record_unit_entered(c)
+        recorder.safe_exit_cursor(c)
+        records = journal.read()
+        assert [r.name for r in records] == ["unit_entered", "unit_exited"]
+        assert records[1].data["exit_reason"] == "error"
+
+    def test_swallows_recorder_invariant_error(self, recorder):
+        # Exiting a cursor that was never entered violates the stack
+        # invariant; safe_exit_cursor must swallow it rather than letting it
+        # mask the original (cancellation) exception in a bridge's error arm.
+        c = _cursor()
+        recorder.safe_exit_cursor(c)  # must not raise
+
+    def test_honors_explicit_reason(self, recorder, journal):
+        c = _cursor()
+        recorder.record_unit_entered(c)
+        recorder.safe_exit_cursor(c.with_committable(True), reason=None)
+        records = journal.read()
+        assert records[1].data["exit_reason"] is None
+        assert records[1].data["committable"] is True
+
+
 class TestRecorderInvariantEnforcement:
     """AC2.13c — catches deep-mode misuse."""
 

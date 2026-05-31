@@ -44,28 +44,58 @@ class ProviderSurfaceSpec:
         return f"provider_{_safe_key(self.provider)}_{_safe_key(self.surface)}"
 
 
+def _registry_adapter(surface: Surface, provider: str) -> str:
+    """Dotted path of the registered provider class for ``(surface, provider)``.
+
+    Sourced from the central STT/TTS registries so the surface table never
+    drifts from the runtime provider classes.
+    """
+    from easycat.stt.factory import _PROVIDER_TO_CONFIG as _STT_REGISTRY
+    from easycat.tts.factory import _PROVIDER_TO_CONFIG as _TTS_REGISTRY
+
+    registry = _STT_REGISTRY if surface == "stt" else _TTS_REGISTRY
+    cls = registry[provider][0]
+    return f"{cls.__module__}.{cls.__qualname__}"
+
+
+def _registry_env_var(surface: Surface, provider: str) -> str:
+    """Credential env var for ``(surface, provider)`` from the central registries."""
+    from easycat.stt.factory import _PROVIDER_ENV_VAR as _STT_ENV
+    from easycat.tts.factory import _PROVIDER_ENV_VAR as _TTS_ENV
+
+    env_vars = _STT_ENV if surface == "stt" else _TTS_ENV
+    return env_vars[provider]
+
+
+# Validation-only provider surface metadata. The ``adapter`` and
+# ``credential_env_var`` of every STT/TTS row are derived from the central
+# STT/TTS registries (``stt/factory.py``/``tts/factory.py``) so they never
+# drift. The remaining fields (protocol/mode/model_api_version/required_extra/
+# pytest target/default voices/contract+schema status) and the entire
+# ``agent_bridge`` row have no registry source and are intentionally held
+# here as validation-only metadata.
 LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
     ProviderSurfaceSpec(
         provider="openai",
         surface="stt",
-        adapter="easycat.stt.openai_provider.OpenAISTT",
+        adapter=_registry_adapter("stt", "openai"),
         protocol="http",
         mode="batch",
         model_api_version="whisper-1",
         required_extra="openai",
-        credential_env_var="OPENAI_API_KEY",
+        credential_env_var=_registry_env_var("stt", "openai"),
         schema_status="unchanged",
         live_pytest_target="tests/stt/test_stt_openai.py::test_live_openai_stt",
     ),
     ProviderSurfaceSpec(
         provider="openai-realtime",
         surface="stt",
-        adapter="easycat.stt.openai_realtime_provider.OpenAIRealtimeSTT",
+        adapter=_registry_adapter("stt", "openai-realtime"),
         protocol="websocket",
         mode="realtime",
         model_api_version="gpt-4o-transcribe",
         required_extra="openai",
-        credential_env_var="OPENAI_API_KEY",
+        credential_env_var=_registry_env_var("stt", "openai-realtime"),
         schema_status="unchanged",
         live_pytest_target=(
             "tests/stt/test_stt_openai_realtime.py::test_live_openai_realtime_stt"
@@ -74,57 +104,57 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
     ProviderSurfaceSpec(
         provider="deepgram",
         surface="stt",
-        adapter="easycat.stt.deepgram_provider.DeepgramSTT",
+        adapter=_registry_adapter("stt", "deepgram"),
         protocol="websocket",
         mode="realtime",
         model_api_version="nova-3",
         required_extra="deepgram",
-        credential_env_var="DEEPGRAM_API_KEY",
+        credential_env_var=_registry_env_var("stt", "deepgram"),
         live_pytest_target="tests/stt/test_stt_deepgram.py::test_live_deepgram_stt",
     ),
     ProviderSurfaceSpec(
         provider="elevenlabs",
         surface="stt",
-        adapter="easycat.stt.elevenlabs_provider.ElevenLabsSTT",
+        adapter=_registry_adapter("stt", "elevenlabs"),
         protocol="http/websocket",
         mode="batch+realtime",
         model_api_version="scribe_v1",
         required_extra="elevenlabs",
-        credential_env_var="ELEVENLABS_API_KEY",
+        credential_env_var=_registry_env_var("stt", "elevenlabs"),
         live_pytest_target="tests/stt/test_stt_elevenlabs.py::test_live_elevenlabs_stt_realtime",
     ),
     ProviderSurfaceSpec(
         provider="cartesia",
         surface="stt",
-        adapter="easycat.stt.cartesia_provider.CartesiaSTT",
+        adapter=_registry_adapter("stt", "cartesia"),
         protocol="websocket",
         mode="realtime",
         model_api_version="ink-whisper",
         required_extra="cartesia",
-        credential_env_var="CARTESIA_API_KEY",
+        credential_env_var=_registry_env_var("stt", "cartesia"),
         live_pytest_target="tests/stt/test_stt_cartesia.py::test_live_cartesia_stt",
     ),
     ProviderSurfaceSpec(
         provider="openai",
         surface="tts",
-        adapter="easycat.tts.openai_tts.OpenAITTS",
+        adapter=_registry_adapter("tts", "openai"),
         protocol="http",
         mode="streaming",
         model_api_version="gpt-4o-mini-tts",
         required_extra="openai",
-        credential_env_var="OPENAI_API_KEY",
+        credential_env_var=_registry_env_var("tts", "openai"),
         live_pytest_target="tests/tts/test_tts_openai.py::TestOpenAITTS::test_live_openai_tts",
         default_voices=("alloy",),
     ),
     ProviderSurfaceSpec(
         provider="deepgram",
         surface="tts",
-        adapter="easycat.tts.deepgram_tts.DeepgramTTS",
+        adapter=_registry_adapter("tts", "deepgram"),
         protocol="websocket",
         mode="streaming",
         model_api_version="aura-2",
         required_extra="deepgram",
-        credential_env_var="DEEPGRAM_API_KEY",
+        credential_env_var=_registry_env_var("tts", "deepgram"),
         live_pytest_target=(
             "tests/tts/test_tts_deepgram.py::TestDeepgramTTS::test_live_deepgram_tts"
         ),
@@ -132,12 +162,12 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
     ProviderSurfaceSpec(
         provider="elevenlabs",
         surface="tts",
-        adapter="easycat.tts.elevenlabs_tts.ElevenLabsTTS",
+        adapter=_registry_adapter("tts", "elevenlabs"),
         protocol="http/websocket",
         mode="streaming",
         model_api_version="eleven_v3",
         required_extra="elevenlabs",
-        credential_env_var="ELEVENLABS_API_KEY",
+        credential_env_var=_registry_env_var("tts", "elevenlabs"),
         live_pytest_target=(
             "tests/tts/test_tts_elevenlabs.py::TestElevenLabsTTSGeneral::test_live_elevenlabs_tts"
         ),
@@ -146,18 +176,20 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
     ProviderSurfaceSpec(
         provider="cartesia",
         surface="tts",
-        adapter="easycat.tts.cartesia_tts.CartesiaTTS",
+        adapter=_registry_adapter("tts", "cartesia"),
         protocol="websocket",
         mode="streaming",
         model_api_version="sonic-2",
         required_extra="cartesia",
-        credential_env_var="CARTESIA_API_KEY",
+        credential_env_var=_registry_env_var("tts", "cartesia"),
         live_pytest_target="tests/tts/test_tts_cartesia.py::TestCartesiaTTS::test_live_cartesia_tts",
         default_voices=("6ccbfb76-1fc6-48f7-b71d-91ac6298247b",),
     ),
     ProviderSurfaceSpec(
         provider="openai-agents",
         surface="agent_bridge",
+        # No name-keyed registry for agent bridges (auto_adapt_agent uses
+        # framework detection), so this row stays fully hand-maintained.
         adapter="easycat.integrations.agents.openai_agents.OpenAIAgentsBridge",
         protocol="python-sdk",
         mode="streaming",
@@ -216,7 +248,9 @@ def build_provider_capability_report(
         credential_env_var=spec.credential_env_var,
         credential_env_var_present=credential_present,
         api_version=spec.model_api_version,
-        api_version_header_behavior=_api_version_header_behavior(spec),
+        # Not provider-specific today: every live surface pins its model via
+        # the model id (``api_version``) rather than a version header.
+        api_version_header_behavior="provider_default",
         capabilities=_surface_capabilities(spec),
         contract_status=spec.contract_status,
         schema_status=spec.schema_status,
@@ -292,10 +326,6 @@ def _capability_status(live_status: LiveStatus | str, failure_class: str | None)
     # unrecognized/typo'd value) collapses to the closed-Literal 'failure'
     # rather than echoing an out-of-contract string into the status field.
     return "failure"
-
-
-def _api_version_header_behavior(spec: ProviderSurfaceSpec) -> str:
-    return "provider_default"
 
 
 def _adapter_version(spec: ProviderSurfaceSpec) -> str:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import logging
@@ -15,7 +14,7 @@ from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
-from easycat.tts.base import TTSBase
+from easycat.tts._ws_base import _WSTTSBase
 from easycat.tts.input import TTSInput, coerce_tts_input
 
 logger = logging.getLogger(__name__)
@@ -74,7 +73,7 @@ class CartesiaTTSConfig:
             )
 
 
-class CartesiaTTS(TTSBase):
+class CartesiaTTS(_WSTTSBase):
     """TTS provider using Cartesia's Sonic WebSocket API.
 
     One WebSocket connection is opened per :meth:`synthesize` call. The
@@ -84,6 +83,9 @@ class CartesiaTTS(TTSBase):
     the loop.
     """
 
+    _provider_error_name = "cartesia"
+    _provider_log_label = "Cartesia"
+
     def __init__(self, config: CartesiaTTSConfig) -> None:
         super().__init__(output_format=config.output_format)
         self._config = config
@@ -92,7 +94,6 @@ class CartesiaTTS(TTSBase):
             channels=1,
             sample_width=_ENCODING_SAMPLE_WIDTH[config.encoding],
         )
-        self._ws: ReconnectingWebSocket | None = None
         self._context_id: str | None = None
         # The synthesis request frame for the in-flight utterance, replayed
         # by the on_reconnect hook so a mid-stream drop restarts the utterance
@@ -101,9 +102,6 @@ class CartesiaTTS(TTSBase):
         # is re-emitted after the restart (audible repetition), not a seamless
         # resume.
         self._pending_request: str | None = None
-        # Strong references to fire-and-forget Error-emit tasks so the event
-        # loop does not garbage-collect them before ``bus.emit`` completes.
-        self._emit_tasks: set[asyncio.Task[Any]] = set()
 
     def _create_ws(self) -> ReconnectingWebSocket:
         return ReconnectingWebSocket(
@@ -138,6 +136,10 @@ class CartesiaTTS(TTSBase):
         request = self._pending_request
         if ws is None or request is None or self._cancelled:
             return
+        # The replayed stream restarts from the top and is sample-aligned in
+        # its own right, so drop any sub-sample byte held from before the drop
+        # to avoid shifting every replayed sample by one byte.
+        self._reset_audio_alignment()
         await ws.send(request)
 
     def _build_request(self, text: str, context_id: str) -> dict[str, Any]:
@@ -224,15 +226,6 @@ class CartesiaTTS(TTSBase):
             self._pending_request = None
             self._end_synthesis()
 
-    async def _close_ws(self) -> None:
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception:
-                logger.debug("Error closing Cartesia WebSocket", exc_info=True)
-            finally:
-                self._ws = None
-
     async def stop(self) -> None:
         await super().stop()
         await self._close_ws()
@@ -259,32 +252,6 @@ class CartesiaTTS(TTSBase):
             code=msg.get("code"),
             status_code=msg.get("status_code"),
         )
-
-    def _emit_provider_error(self, exc: BaseException, **context: Any) -> None:
-        """Post a journal-visible ``Error`` event, with provider context."""
-        bus = getattr(self._config, "event_bus", None)
-        if bus is None:
-            return
-        from easycat.events import Error, ErrorStage
-
-        for key, value in context.items():
-            if value is None:
-                continue
-            try:
-                exc.add_note(f"{key}={value}")  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover - pre-3.11
-                pass
-        try:
-            task = asyncio.create_task(
-                bus.emit(Error(exception=exc, stage=ErrorStage.TTS, provider="cartesia"))
-            )
-        except RuntimeError:  # no running loop
-            logger.debug("Could not emit provider error — no running loop", exc_info=True)
-            return
-        # Keep a strong reference until the emit completes; the event loop
-        # only holds a weak one, so an untracked task can be GC'd mid-flight.
-        self._emit_tasks.add(task)
-        task.add_done_callback(self._emit_tasks.discard)
 
     def version_info(self) -> dict[str, str]:
         return {

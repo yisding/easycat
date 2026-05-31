@@ -28,6 +28,7 @@ from easycat.stages.stt import STTStage
 from easycat.stages.transport import TransportStage
 from easycat.stages.vad import VADStage
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
+from tests.session._wiring_helpers import make_wiring
 
 # ── Test doubles ─────────────────────────────────────────────
 
@@ -188,7 +189,19 @@ def _make_router(
         "bus": bus,
     }
 
+    wiring = make_wiring(
+        enable_noise_reduction=lambda: enable_noise_reduction,
+        enable_aec=lambda: enable_aec,
+        enable_vad=lambda: enable_vad,
+        auto_turn_from_stt_final=lambda: auto_turn_from_stt_final,
+        emit=_emit,
+        is_running=lambda: state["running"],
+        set_running=lambda v: state.update(running=v),
+        current_turn=lambda: state["current_turn"],
+        is_stt_active=lambda: state["stt_active"],
+    )
     router = AudioRouter(
+        wiring=wiring,
         transport=transport,
         audio_stage=audio_stage,
         vad_stage=vad_stage,
@@ -200,15 +213,6 @@ def _make_router(
         run_ctx=run_ctx,
         no_turn=no_turn,
         echo_canceller=aec,
-        enable_noise_reduction=lambda: enable_noise_reduction,
-        enable_aec=lambda: enable_aec,
-        enable_vad=lambda: enable_vad,
-        auto_turn_from_stt_final=lambda: auto_turn_from_stt_final,
-        emit=_emit,
-        is_running=lambda: state["running"],
-        set_running=lambda v: state.update(running=v),
-        current_turn=lambda: state["current_turn"],
-        is_stt_active=lambda: state["stt_active"],
         outbound_queue=queue,
     )
     return router, state
@@ -372,6 +376,52 @@ async def test_on_audio_delivered_emits_audio_out():
     audio_outs = [evt for evt in state["emitted"] if isinstance(evt, AudioOut)]
     assert len(audio_outs) == 1
     assert audio_outs[0].turn_id == "t"
+
+
+class _RaisingAEC:
+    """AEC whose feed_reference rejects a far/near sample-rate mismatch."""
+
+    def __init__(self) -> None:
+        self.feed_calls = 0
+
+    async def process(self, chunk: AudioChunk) -> AudioChunk:
+        return chunk
+
+    def feed_reference(self, chunk: AudioChunk) -> None:
+        self.feed_calls += 1
+        raise ValueError("AEC near-end and far-end sample rates must match")
+
+    def configure(self, **kwargs) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_aec_reference_failure_does_not_abort_delivery():
+    """A feed_reference rate mismatch must not be mislabeled as a transport
+    send failure, must not suppress AudioOut, and must latch off after the
+    first failure rather than re-attempt (and re-log) every chunk."""
+    transport = _FakeTransport()
+    turn = TurnContext(turn_id="t", cancel_token=CancelToken())
+    router, state = _make_router(transport=transport, current_turn=turn, enable_aec=True)
+    aec = _RaisingAEC()
+    router._echo_canceller = aec
+    state["running"] = False  # exit drain once the queue empties
+
+    await router.queue_outbound(_make_chunk(byte_value=3))
+    await router.queue_outbound(_make_chunk(byte_value=4))
+    await router._drain_outbound_audio()
+
+    # Both chunks reach the transport; neither send is treated as a failure.
+    assert len(transport.sent) == 2
+    assert router._outbound_send_failures == 0
+    # AudioOut is still emitted for delivered chunks.
+    audio_outs = [evt for evt in state["emitted"] if isinstance(evt, AudioOut)]
+    assert len(audio_outs) == 2
+    # No bus-level Error was raised about the bot's audio being dropped.
+    assert not [evt for evt in state["emitted"] if isinstance(evt, Error)]
+    # The reference feed latches off after the first failure.
+    assert router._aec_reference_failed is True
+    assert aec.feed_calls == 1
 
 
 @pytest.mark.asyncio

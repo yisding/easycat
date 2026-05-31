@@ -80,7 +80,7 @@ provider-surface matrix covering extras, credential env vars, contract status,
 cassette status, and live canaries.
 
 ## Current capabilities
-- Session runtime that wires the audio pipeline (noise reduction -> VAD -> STT -> agent -> TTS)
+- Session runtime that wires the audio pipeline (noise reduction (opt-in via `enable_noise_reduction=True`) -> VAD -> STT -> agent -> TTS)
 - Typed event system with an EventBus for streaming-first voice events
 - Passive supervisor listen-in via session audio fan-out on the EventBus
 - STT providers: OpenAI, Deepgram, ElevenLabs, Cartesia

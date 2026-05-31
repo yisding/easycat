@@ -29,6 +29,11 @@ class OpenAISTTConfig:
        construction time — it surfaces on the first live transcription
        request rather than eagerly.  The :func:`easycat.stt.factory` path
        still fail-fasts on an empty key.
+
+    ``max_retries`` is the *total* number of transcription attempts; the
+    request path always runs at least once, so ``max_retries=0`` (or any
+    value below 1) is clamped to a single attempt rather than sending zero
+    requests.
     """
 
     api_key: str = ""
@@ -41,6 +46,14 @@ class OpenAISTTConfig:
     # Optional HTTP client override for testing
     http_client: httpx.AsyncClient | None = field(default=None, repr=False)
 
+    def __post_init__(self) -> None:
+        if self.max_retries < 0:
+            raise ValueError(
+                "OpenAISTTConfig.max_retries must be >= 0 "
+                f"(got {self.max_retries}); it is the total attempt count, "
+                "where 0 is clamped to a single attempt"
+            )
+
 
 class OpenAISTT(STTBase):
     """Turn-based STT using OpenAI Audio API streaming transcriptions.
@@ -49,6 +62,13 @@ class OpenAISTT(STTBase):
     buffer as a WAV file to the transcription API when ``end_stream`` is called.
     The transcription response is streamed and emitted as partial events, with
     a final transcript emitted at the end of the stream.
+
+    The buffered PCM is wrapped into one WAV header built from the first
+    chunk's :class:`AudioFormat`, so every chunk in a single utterance must
+    share that format. ``_on_audio`` raises ``ValueError`` on a mid-stream
+    format change rather than silently mislabeling the WAV. Bundled transports
+    resample inbound audio to a fixed pipeline rate before STT, so this only
+    guards against custom transports that emit varying formats.
     """
 
     def __init__(self, config: OpenAISTTConfig) -> None:
@@ -62,8 +82,9 @@ class OpenAISTT(STTBase):
         self._audio_format = None
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
-        if self._audio_format is None:
-            self._audio_format = chunk.format
+        self._audio_format = self._latch_uniform_format(
+            self._audio_format, chunk, provider_label="OpenAI STT"
+        )
         self._buffer.extend(chunk.data)
 
     async def _on_end(self) -> None:
@@ -84,10 +105,18 @@ class OpenAISTT(STTBase):
             data["prompt"] = self._config.prompt
         data["stream"] = "true"
 
+        # ``max_retries`` is the total attempt count; clamp to at least one
+        # so a misconfigured ``max_retries=0`` still sends a single request
+        # rather than raising a causeless "no attempts" error.
+        total_attempts = max(1, self._config.max_retries)
         last_exc: Exception | None = None
-        for attempt in range(self._config.max_retries):
+        for attempt in range(total_attempts):
             full_text = ""
             emitted_final = False
+            # Buffer events for this attempt so a mid-stream retry does not
+            # replay duplicate PARTIAL/FINAL events onto the queue. Events are
+            # only flushed once the attempt completes successfully.
+            pending_events: list[STTEvent] = []
             try:
                 client = self._config.http_client or httpx.AsyncClient(
                     timeout=self._config.timeout
@@ -117,38 +146,50 @@ class OpenAISTT(STTBase):
                                 full_text += text
                             else:
                                 full_text = text
-                            self._emit_event(STTEvent(type=STTEventType.PARTIAL, text=full_text))
+                            pending_events.append(
+                                STTEvent(type=STTEventType.PARTIAL, text=full_text)
+                            )
                             if is_final:
-                                self._emit_event(STTEvent(type=STTEventType.FINAL, text=full_text))
+                                pending_events.append(
+                                    STTEvent(type=STTEventType.FINAL, text=full_text)
+                                )
                                 emitted_final = True
                                 break
                         if full_text and not emitted_final:
-                            self._emit_event(STTEvent(type=STTEventType.FINAL, text=full_text))
+                            pending_events.append(
+                                STTEvent(type=STTEventType.FINAL, text=full_text)
+                            )
                             emitted_final = True
+                        for event in pending_events:
+                            self._emit_event(event)
                         return full_text
                 finally:
                     if owns_client:
                         await client.aclose()
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
-                if exc.response.status_code == 429 and attempt < self._config.max_retries - 1:
+                if exc.response.status_code == 429 and attempt < total_attempts - 1:
                     await asyncio.sleep(2**attempt)
                     continue
                 raise
             except (httpx.TransportError, httpx.TimeoutException) as exc:
                 last_exc = exc
-                if attempt < self._config.max_retries - 1:
+                if attempt < total_attempts - 1:
                     logger.warning(
                         "OpenAI STT request failed (attempt %d/%d): %s",
                         attempt + 1,
-                        self._config.max_retries,
+                        total_attempts,
                         exc,
                     )
                     await asyncio.sleep(2**attempt)
                     continue
                 raise
 
-        raise RuntimeError("All retries exhausted") from last_exc
+        # The loop always runs at least once (total_attempts >= 1), so reaching
+        # here means every attempt failed without re-raising; last_exc is set.
+        raise RuntimeError(
+            f"OpenAI STT: all {total_attempts} transcription attempt(s) failed"
+        ) from last_exc
 
     @staticmethod
     def _extract_stream_text(payload: str) -> tuple[str | None, bool, bool]:

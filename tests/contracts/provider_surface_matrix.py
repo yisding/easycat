@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from easycat.config import _TRANSPORT_FACTORIES
+from easycat.config import _transport_factories
 from easycat.stt.factory import _PROVIDER_TO_CONFIG as _STT_REGISTRY
 from easycat.tts.factory import _PROVIDERS as _TTS_REGISTRY
 from easycat.vad._base import _VALID_VAD_BACKENDS, VADBackend
@@ -410,7 +410,7 @@ def _registered_vad_backends() -> tuple[VADBackend, ...]:
 
 def _registered_transport_names() -> tuple[str, ...]:
     names = []
-    for config_type in _TRANSPORT_FACTORIES:
+    for config_type in _transport_factories():
         raw = config_type.__name__.removesuffix("TransportConfig").lower()
         names.append(raw.removesuffix("connection"))
     return tuple(sorted(names))

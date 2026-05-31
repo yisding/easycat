@@ -81,3 +81,27 @@ async def test_emit_provider_error_noop_without_bus():
     probe._provider_event_bus = None
     probe._emit_provider_error(RuntimeError("boom"))
     assert probe._emit_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_close_active_websocket_drains_pending_emit_tasks():
+    """Teardown awaits in-flight emit tasks so none dangle past close."""
+
+    class _FakeWS:
+        async def close(self) -> None:
+            return None
+
+    probe = _Probe()
+    bus = _RecordingBus()
+    probe._provider_event_bus = bus
+    probe._ws = _FakeWS()  # type: ignore[assignment]
+    probe._receive_task = None
+
+    probe._emit_provider_error(RuntimeError("boom"), code=7)
+    assert len(probe._emit_tasks) == 1  # scheduled, not yet awaited
+
+    await probe._close_active_websocket()
+
+    # The emit task was awaited during teardown — nothing left pending.
+    assert probe._emit_tasks == set()
+    assert len(bus.events) == 1

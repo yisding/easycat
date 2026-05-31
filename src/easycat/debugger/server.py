@@ -96,10 +96,26 @@ class DebuggerSource:
     _manifest_fn: Any = field(repr=False)
     _bundle_fn: Any | None = field(default=None, repr=False)
     _replay_fn: Any | None = field(default=None, repr=False)
+    _progress_fn: Any | None = field(default=None, repr=False)
     is_live: bool = False
 
     def records(self) -> list[dict[str, Any]]:
         return list(self._records_fn())
+
+    def progress(self) -> tuple[int, int]:
+        """Cheap ``(latest_sequence, record_count)`` without serializing.
+
+        Used by the live WebSocket loop to detect journal growth in O(1)
+        instead of re-reading and re-serializing every record each tick.
+        ``latest_sequence`` is the monotonic change-detection key; the
+        count is the value shown in the UI header.  Falls back to the
+        ``records()`` length when a source has no cheap accessor (so the
+        contract holds for every source).
+        """
+        if self._progress_fn is not None:
+            return self._progress_fn()
+        n = len(self.records())
+        return (n, n)
 
     def artifact(self, ref: str) -> bytes | None:
         return self._artifact_fn(ref)
@@ -225,6 +241,10 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
     return DebuggerSource(
         label=basename,
         _records_fn=lambda: cached_records,
+        # Bundles are immutable, so the count is fixed.  Use it as both the
+        # change-detection key and the displayed count — the WS loop emits a
+        # single snapshot and stops (bundles are not live).
+        _progress_fn=lambda: (len(cached_records), len(cached_records)),
         _artifact_fn=lambda ref: bundle.artifact_blobs.get(ref),
         _manifest_fn=lambda: {
             "source": "bundle",
@@ -268,6 +288,22 @@ def _session_source(session: Any) -> DebuggerSource:
             return []
         return [_record_to_dict(r) for r in journal.read()]
 
+    def _progress() -> tuple[int, int]:
+        # O(1) growth probe: the backend keeps ``latest_sequence`` as an
+        # in-memory counter, so this never re-reads or re-serializes the
+        # journal.  Sequence is monotonic (the WS change-detection key);
+        # we surface it as the displayed count too — it equals the record
+        # count on persistent backends, which are the ones that grow
+        # unboundedly and the only ones the WS poll needs to track.
+        journal = getattr(session, "journal", None)
+        if journal is None:
+            return (0, 0)
+        seq = getattr(journal, "latest_sequence", None)
+        if seq is None:
+            n = len(list(journal.read()))
+            return (n, n)
+        return (int(seq), int(seq))
+
     def _artifact(ref: str) -> bytes | None:
         store = getattr(session, "_artifact_store", None)
         if store is None:
@@ -289,6 +325,7 @@ def _session_source(session: Any) -> DebuggerSource:
     return DebuggerSource(
         label=f"session-{getattr(session, 'session_id', 'unknown')}",
         _records_fn=_records,
+        _progress_fn=_progress,
         _artifact_fn=_artifact,
         _manifest_fn=_manifest,
         _bundle_fn=None,
@@ -318,9 +355,7 @@ def _record_to_dict(record: Any) -> dict[str, Any]:
         out[attr] = value
     timing = getattr(record, "timing", None)
     if timing is not None:
-        out["timing"] = {
-            k: getattr(timing, k, None) for k in ("wall_ns", "mono_ns", "cpu_ns", "queue_ns")
-        }
+        out["timing"] = {k: getattr(timing, k, None) for k in ("wall_ns", "mono_ns", "cpu_ns")}
     error = getattr(record, "error", None)
     if error is not None:
         out["error"] = {
@@ -1177,16 +1212,20 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         """
         ws = web.WebSocketResponse(heartbeat=15.0)
         await ws.prepare(request)
-        last_size = -1
+        last_seq = -1
         try:
             while not ws.closed:
-                snapshot = source.records()
-                if len(snapshot) != last_size:
-                    last_size = len(snapshot)
+                # Cheap O(1) growth probe — never re-reads or re-serializes
+                # the journal just to compare counts.  Only emit a snapshot
+                # when the monotonic sequence advances; the actual records
+                # are fetched separately via /api/records.
+                latest_seq, record_count = source.progress()
+                if latest_seq != last_seq:
+                    last_seq = latest_seq
                     await ws.send_json(
                         {
                             "type": "snapshot",
-                            "record_count": last_size,
+                            "record_count": record_count,
                             "manifest": source.manifest(),
                         }
                     )
@@ -1391,9 +1430,3 @@ def _ensure_aiohttp() -> None:
         import aiohttp  # noqa: F401
     except ImportError as exc:
         raise RuntimeError("aiohttp not installed; install easycat[debugger].") from exc
-
-
-# Keep ``struct`` reachable as part of the public-ish surface for tests
-# that import ``_concatenated_wav_for_turn`` and want the WAV header
-# semantics; the import is deliberately kept above for the WAV writer.
-_ = struct

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from easycat._provider_helpers import get_package_version
 from easycat.events import TTSEventType
 from easycat.tts.elevenlabs_tts import (
     ElevenLabsStreamMode,
@@ -144,6 +145,18 @@ class TestElevenLabsTTSConfig:
         assert config.model_id == "eleven_multilingual_v2"
         assert config.stability == 0.8
         assert config.output_format == "pcm_16000"
+
+    def test_version_info_sdk_matches_active_transport(self):
+        """sdk_version reflects the transport the active stream_mode uses."""
+        ws = ElevenLabsTTS(
+            ElevenLabsTTSConfig(api_key="key", stream_mode=ElevenLabsStreamMode.WEBSOCKET)
+        )
+        assert ws.version_info()["sdk_version"] == get_package_version("websockets")
+
+        http = ElevenLabsTTS(
+            ElevenLabsTTSConfig(api_key="key", stream_mode=ElevenLabsStreamMode.HTTP)
+        )
+        assert http.version_info()["sdk_version"] == get_package_version("httpx")
 
 
 class TestElevenLabsTTSValidation:
@@ -467,6 +480,25 @@ class TestElevenLabsTTSWebSocket:
 
         assert fake_ws._sent == []
 
+    async def test_replay_request_resets_sample_carry(self):
+        """A held sub-sample byte is dropped before the utterance restarts.
+
+        Without this reset, an odd-byte remainder left in ``_sample_carry``
+        when the socket dropped would be prepended to the restarted-from-top
+        stream's first chunk, shifting every replayed sample by one byte.
+        """
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS()
+        provider._ws = fake_ws
+        provider._pending_messages = provider._build_ws_messages("Test")
+        # Simulate a split 16-bit sample held across the dropped frame.
+        provider._sample_carry = b"\x01"
+
+        await provider._replay_request()
+
+        assert provider._sample_carry == b""
+        assert len(fake_ws._sent) == 3
+
     async def test_synthesize_ws_task_cancellation_closes_socket(self):
         provider = self._make_provider()
         recv_started = asyncio.Event()
@@ -511,6 +543,27 @@ class TestElevenLabsTTSGeneral:
         provider._active = True
         await provider.stop()
         assert not provider.is_active
+
+    async def test_stop_closes_websocket(self):
+        """A graceful stop closes the synthesis WS (default mode).
+
+        Matches Cartesia/Deepgram ``stop()`` so a graceful stop between turns
+        does not leave the socket lingering until the next cancel()/close().
+        """
+        config = ElevenLabsTTSConfig(
+            api_key="test-key",
+            stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+        )
+        provider = ElevenLabsTTS(config)
+        provider._active = True
+        fake_ws = FakeReconnectingWS()
+        provider._ws = fake_ws
+
+        await provider.stop()
+
+        assert not provider.is_active
+        assert fake_ws._closed
+        assert provider._ws is None
 
     @pytest.mark.integration_live
     @pytest.mark.provider_elevenlabs

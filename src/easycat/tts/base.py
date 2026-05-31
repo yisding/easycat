@@ -62,6 +62,21 @@ class TTSBase:
         self._sample_carry = b""
         self._active = False
 
+    def _reset_audio_alignment(self) -> None:
+        """Discard any held sub-sample remainder so the next chunk re-aligns.
+
+        WebSocket providers replay the request on a mid-stream reconnect,
+        restarting the utterance from the top on a fresh stream. The first
+        chunk of that restarted stream is sample-aligned in its own right, so
+        a stale ``_sample_carry`` byte left over from before the drop would
+        prepend a spurious half-sample and shift every subsequent sample by
+        one byte for the entire replayed utterance (turning the accepted
+        audible repetition into full-duration static). Providers call this at
+        the top of their ``_replay_request`` hook, mirroring the carry reset
+        ``_start_synthesis``/``_end_synthesis`` perform around a synthesis run.
+        """
+        self._sample_carry = b""
+
     def _make_audio_event(self, data: bytes, fmt: AudioFormat | None = None) -> TTSEvent:
         """Create a TTSEvent with AUDIO type.
 
@@ -90,7 +105,14 @@ class TTSBase:
         return TTSEvent(type=TTSEventType.AUDIO, audio=chunk)
 
     def _make_markers_event(self, markers: list[dict]) -> TTSEvent:
-        """Create a TTSEvent with MARKERS type."""
+        """Create a TTSEvent with MARKERS type.
+
+        ``markers`` carries the provider's *native* alignment payload as-is
+        (Cartesia word timestamps vs. ElevenLabs char alignment): this is a
+        best-effort, debug-only event with no normalized cross-provider shape,
+        so the journal records it opaquely and no pipeline code interprets it.
+        See :class:`~easycat.events.TTSMarkers` for the documented contract.
+        """
         return TTSEvent(type=TTSEventType.MARKERS, markers=markers)
 
     def _normalize_audio(self, data: bytes, source_format: AudioFormat) -> bytes:

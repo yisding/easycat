@@ -38,6 +38,7 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
+from easycat.smart_turn import SmartTurnProvider
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ class TurnManagerConfig:
     # Optional endpoint detector for smart turn-taking.
     # When set, TurnManager queries it on silence to decide whether
     # to end the turn immediately or wait the full timeout.
-    endpoint_detector: Any = None
+    endpoint_detector: SmartTurnProvider | None = None
     # Optional decision threshold applied to the detector's *probability*.
     # When set (not None), TurnManager ends the turn when
     # ``result.probability > endpoint_threshold`` instead of trusting the
@@ -92,6 +93,13 @@ class TurnManagerConfig:
     # (default), the provider's own ``prediction`` int is used, preserving
     # back-compat.  The comparison is strict-greater, matching the provider:
     # ``probability == endpoint_threshold`` stays incomplete.
+    #
+    # Precedence: this manager-level threshold *wins* over the provider's
+    # ``SmartTurnConfig.threshold`` whenever it is set.  When you build a
+    # session via ``EasyConfig``/``create_session`` and leave this ``None``,
+    # the wiring derives it from ``SmartTurnConfig.threshold`` so the single
+    # ``smart_turn.threshold`` knob is authoritative and the two cannot
+    # diverge by accident; setting both to different values logs a warning.
     endpoint_threshold: float | None = None
 
     def __post_init__(self) -> None:
@@ -158,7 +166,7 @@ class TurnManager:
         self._cancel_token: CancelToken | None = None
 
         # Optional endpoint detector (smart-turn model)
-        self._endpoint_detector = self._config.endpoint_detector
+        self._endpoint_detector: SmartTurnProvider | None = self._config.endpoint_detector
 
         # Optional TurnStage wrapper that journals each detection call.
         # When bound, ``detect`` goes through ``stage.execute()`` so the
@@ -194,8 +202,24 @@ class TurnManager:
 
     @property
     def turn_audio(self) -> list[AudioChunk]:
-        """Audio chunks captured for the current turn (including pre-roll)."""
-        return self._turn_audio
+        """Snapshot of audio chunks captured for the current turn (with pre-roll).
+
+        Returns a *copy* of the internal list so callers can safely iterate it
+        while awaiting (e.g. priming STT chunk-by-chunk) without risking
+        mutation if a future caller feeds ``on_audio_frame`` from another task.
+        The list is small (pre-roll + turn frames), so the copy is negligible.
+        """
+        return list(self._turn_audio)
+
+    @property
+    def endpoint_detector(self) -> SmartTurnProvider | None:
+        """The smart-turn endpoint detector this manager uses, if any.
+
+        Public accessor so Session can wire the ``TurnStage`` without
+        reaching into ``_config``; returns the same ``_endpoint_detector``
+        the manager consults internally (single source of truth).
+        """
+        return self._endpoint_detector
 
     def bind_session(self, session_id: str) -> None:
         """Bind a stable session identifier used for emitted events."""
@@ -229,7 +253,6 @@ class TurnManager:
         to_state: TurnManagerState,
         *,
         reason: str,
-        log_msg: str,
     ) -> None:
         """Move to ``to_state``, log the transition, and journal it.
 
@@ -237,10 +260,16 @@ class TurnManager:
         + ``logger.debug(...)`` pairs.  Every transition now gets a
         ``turn_state_changed`` record so bundles can answer "why did the
         turn end when it did" from the journal alone.
+
+        The debug log line is derived from the real ``from_state`` /
+        ``to_state`` / ``reason`` so it can never disagree with the journal
+        record (callers no longer pass a hardcoded ``log_msg`` that could
+        drift from the actual transition — e.g. a barge-in from PROCESSING
+        used to falsely log a from-state of BOT_SPEAKING).
         """
         from_state = self._state
         self._state = to_state
-        logger.debug("%s", log_msg)
+        logger.debug("Turn: %s -> %s (%s)", from_state.value, to_state.value, reason)
         hook = self._journal_state_change
         if hook is not None:
             try:
@@ -321,7 +350,6 @@ class TurnManager:
             self._transition(
                 TurnManagerState.USER_SPEAKING,
                 reason="speech_resumed",
-                log_msg="Turn: UserPaused -> UserSpeaking (speech resumed)",
             )
             return
 
@@ -339,7 +367,6 @@ class TurnManager:
             self._transition(
                 TurnManagerState.USER_SPEAKING,
                 reason="vad_speech_start",
-                log_msg="Turn: Idle -> UserSpeaking (new turn, pre-roll flushed)",
             )
             await self._event_bus.emit(
                 TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
@@ -354,7 +381,6 @@ class TurnManager:
         self._transition(
             TurnManagerState.USER_PAUSED,
             reason="vad_silence",
-            log_msg="Turn: UserSpeaking -> UserPaused (silence detected)",
         )
 
         # Start the end-of-turn silence timer
@@ -431,10 +457,6 @@ class TurnManager:
                             self._transition(
                                 TurnManagerState.PROCESSING,
                                 reason="smart_turn_complete",
-                                log_msg=(
-                                    "Turn: UserPaused -> Processing "
-                                    f"(smart-turn: complete, p={result.probability:.3f})"
-                                ),
                             )
                             await self._event_bus.emit(
                                 TurnEnded(
@@ -458,7 +480,6 @@ class TurnManager:
                 self._transition(
                     TurnManagerState.PROCESSING,
                     reason="silence_timeout",
-                    log_msg="Turn: UserPaused -> Processing (silence timeout)",
                 )
                 await self._event_bus.emit(
                     TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
@@ -508,7 +529,6 @@ class TurnManager:
         self._transition(
             TurnManagerState.USER_SPEAKING,
             reason="barge_in",
-            log_msg="Turn: BotSpeaking -> UserSpeaking (barge-in)",
         )
 
         # Flush pre-roll buffer into turn audio
@@ -540,7 +560,6 @@ class TurnManager:
         self._transition(
             TurnManagerState.USER_SPEAKING,
             reason="manual_start",
-            log_msg="Turn: Idle -> UserSpeaking (manual start)",
         )
 
         # Flush pre-roll
@@ -567,7 +586,6 @@ class TurnManager:
         self._transition(
             TurnManagerState.PROCESSING,
             reason="manual_end",
-            log_msg="Turn: -> Processing (manual end)",
         )
         await self._event_bus.emit(
             TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
@@ -590,7 +608,6 @@ class TurnManager:
         self._transition(
             TurnManagerState.BOT_SPEAKING,
             reason="bot_started",
-            log_msg="Turn: -> BotSpeaking",
         )
         await self._event_bus.emit(
             BotStartedSpeaking(session_id=self._session_id, turn_id=self._current_turn_id)
@@ -602,7 +619,6 @@ class TurnManager:
             self._transition(
                 TurnManagerState.IDLE,
                 reason="bot_done",
-                log_msg="Turn: BotSpeaking -> Idle",
             )
             await self._event_bus.emit(
                 BotStoppedSpeaking(session_id=self._session_id, turn_id=self._current_turn_id)
@@ -622,6 +638,12 @@ class TurnManager:
         self._turn_audio.clear()
         self._pre_roll_buffer.clear()
         self._pre_roll_duration_ms = 0.0
+        # Cancel the active token before dropping it, mirroring
+        # ``_handle_barge_in``.  Both teardown paths now share the same token
+        # semantics, so any work bound to the token is cooperatively stopped
+        # rather than left referencing an abandoned (uncancelled) token.
+        if self._cancel_token is not None:
+            self._cancel_token.cancel()
         self._cancel_token = None
         self._silence_start_time = None
         self._current_turn_id = None

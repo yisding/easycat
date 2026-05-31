@@ -7,6 +7,8 @@ import struct
 import time
 
 from easycat.events import (
+    CallAnswered,
+    CallInitiated,
     CallStateChanged,
     EventBus,
     VADStartSpeaking,
@@ -229,6 +231,42 @@ class TestVoicemailDetectorMonologue:
             await bus.emit(VADStartSpeaking(timestamp=now + 10.0))
             await bus.emit(VADStopSpeaking(timestamp=now + 15.0))
             assert len(detected) == 2
+        finally:
+            detector.stop()
+
+    async def test_resets_and_stamps_call_sid_across_sequential_calls(self) -> None:
+        """CallInitiated re-arms the detector per call and stamps call_sid.
+
+        Mirrors the per-call-reset convention of the peer detectors so a
+        session placing multiple sequential calls keeps detecting monologues
+        (rather than latching after the first), and so the emitted event
+        carries the active call_sid for the state machine's stale-event guard.
+        """
+        bus = EventBus()
+        detected: list[VoicemailDetected] = []
+        bus.subscribe(VoicemailDetected, lambda e: detected.append(e))
+
+        detector = VoicemailDetector(bus, VoicemailDetectorConfig(monologue_threshold_s=2.0))
+        detector.start()
+
+        try:
+            now = time.monotonic()
+
+            # First call.
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15551112222", from_="+15559998888"))
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VADStartSpeaking(timestamp=now))
+            await bus.emit(VADStopSpeaking(timestamp=now + 5.0))
+            assert len(detected) == 1
+            assert detected[0].call_sid == "CA1"
+
+            # Second sequential call — CallInitiated re-arms the detector.
+            await bus.emit(CallInitiated(call_sid="CA2", to="+15553334444", from_="+15559998888"))
+            await bus.emit(CallAnswered(call_sid="CA2"))
+            await bus.emit(VADStartSpeaking(timestamp=now + 10.0))
+            await bus.emit(VADStopSpeaking(timestamp=now + 15.0))
+            assert len(detected) == 2
+            assert detected[1].call_sid == "CA2"
         finally:
             detector.stop()
 

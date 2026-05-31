@@ -15,7 +15,7 @@ Session delegates to one ``STTCommitter`` instance per session.
 End-stream sequencing contract
 ------------------------------
 
-``_handle_end_of_speech`` calls :meth:`end_stream` between two
+``TurnRunner.handle_end_of_speech`` calls :meth:`end_stream` between two
 :meth:`await_pending` calls.  The first await blocks on segment commit;
 ``end_stream`` may generate one more segment; the second await blocks on
 that.  Callers are responsible for preserving that ordering — the
@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from easycat.events import (
@@ -40,17 +40,29 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.providers import STTProvider
+from easycat.providers import PendingCommitReporter, STTProvider
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
-from easycat.timeouts import STTTimeoutError, TimeoutConfig
+from easycat.timeouts import STTTimeoutError, TimeoutConfig, resolve_provider_name
 from easycat.turn_manager import TurnManagerState
 
 if TYPE_CHECKING:
     from easycat._turn_context import TurnContext
+    from easycat.session._wiring import SessionWiringContext
     from easycat.turn_manager import TurnManager
 
 logger = logging.getLogger(__name__)
+
+
+def _pending_commit_bytes(provider: STTProvider) -> int | None:
+    """Read a provider's uncommitted-audio byte count, if it exposes one.
+
+    Uses the type-checkable :class:`~easycat.providers.PendingCommitReporter`
+    surface; providers that do not implement it record ``None``.
+    """
+    if isinstance(provider, PendingCommitReporter):
+        return provider.pending_commit_bytes()
+    return None
 
 
 class STTCommitter:
@@ -59,30 +71,27 @@ class STTCommitter:
     def __init__(
         self,
         *,
-        stt: Callable[[], STTProvider],
+        wiring: SessionWiringContext,
         event_bus: EventBus,
         journal_sink: SessionJournalSink,
         runtime_scope: RuntimeScope,
         timeout_config: TimeoutConfig,
         segment_silence_ms: int,
         no_turn: TurnContext,
-        current_turn: Callable[[], TurnContext | None],
         turn_manager: TurnManager,
-        emit: Callable[[Any], Awaitable[None]],
-        auto_turn_from_stt_final: Callable[[], bool],
         on_speech_detection_reset: Callable[[], None] = lambda: None,
     ) -> None:
-        self._stt_getter = stt
+        self._stt_getter = wiring.stt
         self._event_bus = event_bus
         self._journal_sink = journal_sink
         self._runtime_scope = runtime_scope
         self._timeout_config = timeout_config
         self._segment_silence_ms = segment_silence_ms
         self._no_turn = no_turn
-        self._current_turn = current_turn
+        self._current_turn = wiring.current_turn
         self._turn_manager = turn_manager
-        self._emit = emit
-        self._auto_turn_from_stt_final = auto_turn_from_stt_final
+        self._emit = wiring.emit
+        self._auto_turn_from_stt_final = wiring.auto_turn_from_stt_final
         self._on_speech_detection_reset = on_speech_detection_reset
 
         self._active: bool = False
@@ -96,21 +105,22 @@ class STTCommitter:
     def is_active(self) -> bool:
         return self._active
 
+    @property
+    def stt_task(self) -> asyncio.Task[None] | None:
+        """The background STT event-consumer task, if one is running.
+
+        Read-only handle used by teardown/diagnostics to confirm the
+        consumer has been cancelled (or was never started).
+        """
+        return self._stt_task
+
     def mark_active(self) -> None:
         self._active = True
 
     def mark_inactive(self) -> None:
         self._active = False
 
-    # ── Task handles (read-only access for shutdown bookkeeping) ──
-
-    @property
-    def stt_task(self) -> asyncio.Task[None] | None:
-        return self._stt_task
-
-    @property
-    def segment_commit_task(self) -> asyncio.Task[None] | None:
-        return self._segment_commit_task
+    # ── Task handles ──────────────────────────────────────────────
 
     def clear_task_handles(self) -> None:
         """Clear cached task handles (used during shutdown drain)."""
@@ -203,9 +213,9 @@ class STTCommitter:
         # Pull the provider's pending-commit byte count (if exposed)
         # into the journal so bundles show *why* a commit was skipped
         # or accepted.  ``OpenAIRealtimeSTT`` tracks this precisely;
-        # providers without the attribute report None and the journal
+        # providers that cannot report it record None and the journal
         # reader treats it as unknown.
-        pending_bytes = getattr(self._stt_getter(), "_bytes_since_last_commit", None)
+        pending_bytes = _pending_commit_bytes(self._stt_getter())
         self._journal_sink.append_record(
             name="stt_segment_commit_requested",
             turn_id=turn.id,
@@ -257,8 +267,9 @@ class STTCommitter:
                 else:
                     await future
             except TimeoutError:
-                err = STTTimeoutError("stt", timeout)
-                await self._emit(Error(exception=err, stage=ErrorStage.STT))
+                name = resolve_provider_name(self._stt_getter(), "stt")
+                err = STTTimeoutError(name, timeout)
+                await self._emit(Error(exception=err, stage=ErrorStage.STT, provider=name))
                 return False
             except asyncio.CancelledError:
                 raise
@@ -281,7 +292,7 @@ class STTCommitter:
     async def end_stream(self, turn: TurnContext | None) -> None:
         """Finish the STT stream, enqueuing a future if uncommitted audio remains.
 
-        ``_handle_end_of_speech`` calls this between two
+        ``TurnRunner.handle_end_of_speech`` calls this between two
         :meth:`await_pending` calls — the first await blocks on segment
         commit; ``end_stream`` may generate one more segment; the second
         await blocks on that.
@@ -312,15 +323,27 @@ class STTCommitter:
                             if not turn.pending_stt_segment_futures:
                                 turn.stt_has_uncommitted_audio = False
                             turn.append_stt_segment(stt_event.text, track=stt_event.track)
+                            data: dict[str, Any] = {
+                                "segment_index": len(turn.stt_segments),
+                                "text": stt_event.text,
+                                "track": stt_event.track,
+                                "transcript_text": turn.transcript_text,
+                            }
+                            # Provider-captured metadata reaches the journal —
+                            # the single source of truth for observability —
+                            # only when populated, so records stay lean for
+                            # providers that don't report it.
+                            if stt_event.confidence is not None:
+                                data["confidence"] = stt_event.confidence
+                            if stt_event.word_timestamps is not None:
+                                data["word_timestamps"] = [
+                                    {"word": w.word, "start": w.start, "end": w.end}
+                                    for w in stt_event.word_timestamps
+                                ]
                             self._journal_sink.append_record(
                                 name="stt_segment_final",
                                 turn_id=turn.id,
-                                data={
-                                    "segment_index": len(turn.stt_segments),
-                                    "text": stt_event.text,
-                                    "track": stt_event.track,
-                                    "transcript_text": turn.transcript_text,
-                                },
+                                data=data,
                             )
                         await self._emit(STTFinal(text=stt_event.text, track=stt_event.track))
                         if turn and turn is not self._no_turn and turn.pending_stt_segment_futures:
@@ -362,4 +385,5 @@ class STTCommitter:
                 await self._stt_task
             except (asyncio.CancelledError, Exception):
                 pass
+        self._stt_task = None
         self.resolve_pending(turn, "")

@@ -250,7 +250,7 @@ def to_mono(data: bytes, channels: int) -> bytes:
     for i in range(num_frames):
         offset = i * frame_size
         frame_samples = struct.unpack(f"<{channels}h", data[offset : offset + frame_size])
-        avg = sum(frame_samples) // channels
+        avg = int(round(sum(frame_samples) / channels))
         mono_samples.append(max(-32768, min(32767, avg)))
 
     return struct.pack(f"<{len(mono_samples)}h", *mono_samples)

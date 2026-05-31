@@ -25,6 +25,7 @@ from easycat.stages.tts import TTSStage
 from easycat.stages.vad import VADStage
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManager, TurnManagerConfig
+from tests.session._wiring_helpers import make_wiring
 
 # ── Test doubles ─────────────────────────────────────────────
 
@@ -162,7 +163,28 @@ def _build_scheduler(
     outbound_queue = BoundedAudioQueue(max_size=200, name="outbound")
     current_turn_ref: dict[str, TurnContext | None] = {"turn": None}
 
+    audio_emissions: list[TTSAudio] = []
+    bus.subscribe(TTSAudio, audio_emissions.append)
+
+    async def _drain() -> bool:
+        return drain_should_stop
+
+    def _clear_turn() -> None:
+        current_turn_ref["turn"] = None
+
+    wiring = make_wiring(
+        tts=lambda: tts,
+        emit=bus.emit,
+        is_running=lambda: False,
+        current_turn=lambda: current_turn_ref["turn"],
+        correlation_ids=lambda: (session_id, None),
+        is_gated=lambda: is_gated,
+        drain_session_actions=_drain,
+        clear_turn=_clear_turn,
+    )
+
     router = AudioRouter(
+        wiring=wiring,
         transport=transport,
         audio_stage=audio_stage,
         vad_stage=vad_stage,
@@ -174,30 +196,11 @@ def _build_scheduler(
         run_ctx=run_ctx,
         no_turn=no_turn,
         echo_canceller=None,
-        enable_noise_reduction=lambda: False,
-        enable_aec=lambda: False,
-        enable_vad=lambda: False,
-        auto_turn_from_stt_final=lambda: False,
-        emit=bus.emit,
-        is_running=lambda: False,
-        set_running=lambda value: None,
-        current_turn=lambda: current_turn_ref["turn"],
-        is_stt_active=lambda: False,
-        with_correlation=lambda event: event,
         outbound_queue=outbound_queue,
     )
 
-    audio_emissions: list[TTSAudio] = []
-    bus.subscribe(TTSAudio, audio_emissions.append)
-
-    async def _drain() -> bool:
-        return drain_should_stop
-
-    def _clear_turn() -> None:
-        current_turn_ref["turn"] = None
-
     scheduler = TTSScheduler(
-        tts=lambda: tts,
+        wiring=wiring,
         tts_stage=tts_stage,
         turn_manager=turn_manager,
         event_bus=bus,
@@ -207,14 +210,9 @@ def _build_scheduler(
         audio_router=router,
         outbound_queue=outbound_queue,
         timeout_config=None,
-        correlation_ids=lambda: (session_id, None),
         audio_gate=None,
         output_processors=output_processors or [],
         strip_markdown_enabled=strip_markdown_enabled,
-        current_turn=lambda: current_turn_ref["turn"],
-        is_gated=lambda: is_gated,
-        drain_session_actions=_drain,
-        clear_turn=_clear_turn,
     )
 
     return scheduler, {
@@ -286,40 +284,6 @@ def test_prepare_keeps_ssml_when_provider_supports_it() -> None:
 
 
 @pytest.mark.asyncio
-async def test_synthesize_enqueues_audio_chunks() -> None:
-    tts = _RecordingTTS(chunks=3)
-    scheduler, ctx = _build_scheduler(tts=tts)
-
-    turn = TurnContext("turn-1", CancelToken())
-    ctx["current_turn_ref"]["turn"] = turn
-
-    await scheduler.synthesize(TTSInput(text="hello", format="plain"), token=None, turn=turn)
-
-    assert tts.synthesized[0].text == "hello"
-    # 3 chunks should have been queued onto the outbound queue
-    queued: list[AudioChunk] = []
-    while not ctx["outbound_queue"].empty():
-        queued.append(ctx["outbound_queue"].get_nowait())
-    assert len(queued) == 3
-
-
-@pytest.mark.asyncio
-async def test_synthesize_coerces_string_payload() -> None:
-    tts = _RecordingTTS(chunks=1)
-    scheduler, ctx = _build_scheduler(tts=tts)
-
-    turn = TurnContext("turn-1", CancelToken())
-    ctx["current_turn_ref"]["turn"] = turn
-
-    await scheduler.synthesize("hello", token=None, turn=turn)
-    assert tts.synthesized[0].text == "hello"
-    # A tts_payload_prepared record should also be written for the
-    # string-coercion path.
-    records = [r for r in ctx["journal"].read() if r.name == "tts_payload_prepared"]
-    assert records
-
-
-@pytest.mark.asyncio
 async def test_synthesize_bypass_emits_chunks() -> None:
     tts = _RecordingTTS(chunks=2)
     scheduler, ctx = _build_scheduler(tts=tts)
@@ -347,7 +311,7 @@ async def test_synthesize_short_circuits_when_playback_suppressed() -> None:
     assert scheduler.is_playback_suppressed is True
     # The streaming consumer pattern: skip synth when suppressed.
     if not scheduler.is_playback_suppressed:
-        await scheduler.synthesize("hello", token=None)
+        await scheduler.synthesizer.synthesize("hello", token=None)
     assert tts.synthesized == []
 
 

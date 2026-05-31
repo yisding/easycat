@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from typing import Any
 
 from easycat._provider_catalog import ProviderCatalog
@@ -58,32 +58,63 @@ _CONFIG_TO_PROVIDER: dict[STTConfigType, type[STTBase]] = _CATALOG.config_to_pro
 
 @dataclass
 class STTProviderConfig:
-    """Top-level configuration for creating an STT provider."""
+    """Top-level configuration for creating an STT provider.
+
+    Mirrors :class:`easycat.tts.factory.TTSProviderConfig`: ``api_key``
+    is a top-level field and provider-specific parameters are passed via
+    ``params``. An ``api_key`` nested inside ``params`` is also honored
+    (and a top-level ``api_key`` takes precedence when both are set).
+
+    ``settings`` is a deprecated alias for ``params``, kept so existing
+    callers (e.g. ``STTProviderConfig(provider="openai",
+    settings={"api_key": k})``) keep working; it is folded into
+    ``params`` at construction.
+    """
 
     provider: str
-    api_key: str
+    api_key: str | None = None
     params: dict[str, Any] | None = None
+    settings: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        # Fold the deprecated ``settings`` alias into ``params`` so the
+        # rest of the factory only has to read ``params``.
+        if self.settings is not None:
+            merged = dict(self.settings)
+            if self.params:
+                merged.update(self.params)
+            self.params = merged
+            self.settings = None
 
 
 def create_stt_provider(config: STTProviderConfig) -> STTBase:
     """Create an STT provider instance from configuration.
 
-    Validates the provider name and API key at construction time (fail-fast).
-    Provider-specific parameters are passed via ``config.params``.
+    Validates the provider name and params at construction time (fail-fast).
+    Provider-specific parameters are passed via ``config.params``; an
+    ``api_key`` nested in ``params`` is also honored (a top-level
+    ``api_key`` takes precedence).
 
     Raises:
         EasyCatError (EASYCAT_E104): Unknown provider name, with fuzzy-match
             suggestion (shared with the ``stt="provider/model"`` shortcut path).
-        ValueError: Missing API key.
+        ValueError: If the params are invalid or the API key is missing.
     """
     provider_name = _CATALOG.validate_name(config.provider)
 
-    if not config.api_key:
+    provider_cls, config_cls = _PROVIDER_TO_CONFIG[provider_name]
+    params = dict(config.params or {})
+    if config.api_key is not None:
+        params["api_key"] = config.api_key
+
+    try:
+        provider_config = config_cls(**params)
+    except TypeError as exc:
+        raise ValueError(f"Invalid params for {config.provider!r} STT provider: {exc}") from exc
+
+    if not provider_config.api_key:
         raise ValueError(f"API key is required for STT provider '{config.provider}'")
 
-    extra = config.params or {}
-    provider_cls, config_cls = _PROVIDER_TO_CONFIG[provider_name]
-    provider_config = config_cls(api_key=config.api_key, **extra)
     return provider_cls(provider_config)
 
 
@@ -95,11 +126,12 @@ def create_stt_provider_from_config(config: STTConfig, event_bus: EventBus) -> S
     """
     provider_cls = _provider_for_config(type(config))
     provider_config = config
-    needs_event_bus = isinstance(
-        config,
-        (DeepgramSTTConfig, ElevenLabsSTTConfig, OpenAIRealtimeSTTConfig, CartesiaSTTConfig),
-    )
-    if needs_event_bus and config.event_bus is None:
+    # Derive "needs an event bus" structurally from the dataclass itself
+    # (it declares an ``event_bus`` field) rather than from a hand-maintained
+    # isinstance tuple — so any future event-bus-aware provider is included
+    # automatically.
+    has_event_bus_field = any(f.name == "event_bus" for f in fields(config))
+    if has_event_bus_field and config.event_bus is None:
         provider_config = replace(config, event_bus=event_bus)
     return provider_cls(provider_config)
 

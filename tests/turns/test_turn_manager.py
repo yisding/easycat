@@ -1,6 +1,7 @@
 """TurnManager tests: state machine, push-to-talk, barge-in, pre-roll."""
 
 import asyncio
+import logging
 
 import pytest
 
@@ -424,6 +425,55 @@ async def test_barge_in_during_processing_cancels_inflight_token():
 
 
 @pytest.mark.asyncio
+async def test_barge_in_during_processing_logs_real_from_state(caplog):
+    """The barge-in debug log must reflect the true from-state, not a hardcode.
+
+    A barge-in out of PROCESSING used to log a hardcoded
+    ``Turn: BotSpeaking -> UserSpeaking`` even though the journal recorded the
+    real PROCESSING from-state.  The log line is now derived from the actual
+    transition, so it must read ``processing -> user_speaking`` here.
+    """
+    bus = EventBus()
+    config = TurnManagerConfig(end_of_turn_silence_ms=10)
+
+    async def mock_cancel():
+        await bus.emit(Interruption())
+
+    tm = TurnManager(bus, config=config, cancel_turn_callback=mock_cancel)
+
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+    await asyncio.sleep(0.05)
+    assert tm.state == TurnManagerState.PROCESSING
+
+    # The ``easycat`` logger flips ``propagate = False`` once console logging is
+    # enabled (see ``_logging.py``), which stops ``caplog``'s root handler from
+    # seeing these records when an earlier test leaves that state in place. Attach
+    # the capture handler directly to the emitting logger so this assertion is
+    # robust to logging state leaked by other tests in the full suite.
+    turn_logger = logging.getLogger("easycat.turn_manager")
+    prev_level = turn_logger.level
+    turn_logger.setLevel(logging.DEBUG)
+    turn_logger.addHandler(caplog.handler)
+    try:
+        await tm.on_vad_event(VADStartSpeaking())
+    finally:
+        turn_logger.removeHandler(caplog.handler)
+        turn_logger.setLevel(prev_level)
+
+    assert tm.state == TurnManagerState.USER_SPEAKING
+    barge_in_logs = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "easycat.turn_manager" and "barge_in" in r.getMessage()
+    ]
+    assert barge_in_logs, "expected a barge-in transition log line"
+    # The from-state must be the real PROCESSING state, never a hardcoded one.
+    assert "Turn: processing -> user_speaking (barge_in)" in barge_in_logs
+    assert not any("bot_speaking -> user_speaking (barge_in)" in m for m in barge_in_logs)
+
+
+@pytest.mark.asyncio
 async def test_barge_in_via_push_to_talk():
     """Manual start_turn during BotSpeaking should also trigger barge-in."""
     bus = EventBus()
@@ -459,11 +509,19 @@ async def test_reset_returns_to_idle():
     assert tm.state == TurnManagerState.USER_SPEAKING
     assert len(tm.turn_audio) > 0
 
+    # Capture the active token so we can assert reset() cancels it (matching
+    # the barge-in teardown path) rather than abandoning it uncancelled.
+    active_token = tm.cancel_token
+    assert active_token is not None
+    assert not active_token.is_cancelled
+
     tm.reset()
 
     assert tm.state == TurnManagerState.IDLE
     assert len(tm.turn_audio) == 0
     assert tm.cancel_token is None
+    # The prior token must be cancelled so any in-flight work bound to it stops.
+    assert active_token.is_cancelled
 
 
 @pytest.mark.asyncio

@@ -142,8 +142,9 @@ class ElevenLabsSTT(WebSocketSTTBase):
         if self._config.mode == "realtime":
             await self._send_realtime(chunk)
         else:
-            if self._audio_format is None:
-                self._audio_format = chunk.format
+            self._audio_format = self._latch_uniform_format(
+                self._audio_format, chunk, provider_label="ElevenLabs batch STT"
+            )
             self._buffer.extend(chunk.data)
 
     async def _on_end(self) -> None:
@@ -211,14 +212,10 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._final_received = None
         try:
             # ElevenLabs keeps the realtime socket open after delivering the
-            # committed transcript, so ``recv_iter`` would otherwise block in
-            # the receive loop until ``_close_active_websocket`` hits its close
-            # timeout.  Close the socket first to wake the receive loop, then
-            # drain it — this keeps the turn-to-agent latency low.
-            ws = self._ws
-            if ws is not None:
-                await ws.close()
-            await self._close_active_websocket()
+            # committed transcript, so draining first would block in the
+            # receive loop until the close timeout fires.  Close-before-drain
+            # wakes the receive loop, keeping turn-to-agent latency low.
+            await self._close_active_websocket(close_before_drain=True)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -379,9 +376,13 @@ class ElevenLabsSTT(WebSocketSTTBase):
                 await client.aclose()
 
     def version_info(self) -> dict[str, str]:
+        # Report the transport library the active mode actually uses:
+        # realtime mode streams over a WebSocket, batch mode issues an
+        # HTTP request. Mirror the runtime branch like ``_resolved_model``.
+        transport_lib = "websockets" if self._config.mode == "realtime" else "httpx"
         return {
             "provider": "elevenlabs",
             "model": self._resolved_model(),
             "api_version": "v1",
-            "sdk_version": get_package_version("httpx"),
+            "sdk_version": get_package_version(transport_lib),
         }

@@ -389,12 +389,13 @@ class TestOpenAIAgentsBridgeHandoff:
         assert handoff_enter_idx == handoff_idx + 1
 
     @pytest.mark.asyncio
-    async def test_handoff_emits_balanced_stream_cursor_events(self):
-        """Stream-level cursor events are balanced for both cursors on handoff.
+    async def test_handoff_records_balanced_cursor_lifecycle_in_journal(self):
+        """The journal carries a balanced cursor lifecycle for both cursors.
 
-        Out-of-band consumers see a paired cursor_entered/cursor_exited for the
-        original cursor *and* for the handoff-target cursor, so the lifecycle is
-        not asymmetric across a handoff.
+        Cursor / handoff transitions live solely in the AgentRecorder journal
+        (the stream carries only text / tool / done events), so the
+        enter/exit records for the original cursor *and* the handoff-target
+        cursor must both be present and the stream must carry no cursor events.
         """
         from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
@@ -423,25 +424,23 @@ class TestOpenAIAgentsBridgeHandoff:
         finally:
             oai_mod.Runner = original_runner
 
-        # Collect cursor lifecycle events in emission order.
-        cursor_events = [
-            (ev.kind, ev.cursor.display_name)
-            for ev in stream_events
-            if ev.kind in ("cursor_entered", "cursor_exited")
-        ]
+        # The stream never carries cursor lifecycle events.
+        assert not any(ev.kind in ("cursor_entered", "cursor_exited") for ev in stream_events)
 
-        # Original cursor enter at start, original exit, then handoff-target
-        # cursor enter + exit — both cursors are balanced.
-        assert cursor_events == [
-            ("cursor_entered", "AgentA"),
-            ("cursor_exited", "AgentA"),
-            ("cursor_entered", "AgentB"),
-            ("cursor_exited", "AgentB"),
+        # Both cursors are entered and exited in the journal.
+        records = journal.read()
+        names = [r.name for r in records]
+        assert names.count("unit_entered") == 2
+        assert names.count("unit_exited") == 2
+        display_names = [
+            r.data["display_name"] for r in records if r.name in ("unit_entered", "unit_exited")
         ]
+        assert "AgentA" in display_names
+        assert "AgentB" in display_names
 
     @pytest.mark.asyncio
-    async def test_no_handoff_emits_single_balanced_cursor_pair(self):
-        """Without a handoff only the original cursor's enter/exit is streamed."""
+    async def test_no_handoff_records_single_cursor_lifecycle_in_journal(self):
+        """Without a handoff only the original cursor's enter/exit is journaled."""
         from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 
         agent_a = _MockAgent("AgentA")
@@ -468,15 +467,11 @@ class TestOpenAIAgentsBridgeHandoff:
         finally:
             oai_mod.Runner = original_runner
 
-        cursor_events = [
-            (ev.kind, ev.cursor.display_name)
-            for ev in stream_events
-            if ev.kind in ("cursor_entered", "cursor_exited")
-        ]
-        assert cursor_events == [
-            ("cursor_entered", "AgentA"),
-            ("cursor_exited", "AgentA"),
-        ]
+        assert not any(ev.kind in ("cursor_entered", "cursor_exited") for ev in stream_events)
+        records = journal.read()
+        names = [r.name for r in records]
+        assert names.count("unit_entered") == 1
+        assert names.count("unit_exited") == 1
 
     @pytest.mark.asyncio
     async def test_no_handoff_when_same_agent(self):

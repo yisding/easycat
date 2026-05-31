@@ -586,10 +586,15 @@ def test_validate_quick_cli_writes_report_and_prints_human_summary(
         result_report = tmp_path / "run" / "report.json"
         result_report.parent.mkdir()
         result_report.write_text(run.to_json())
+        # Mirror the real runner contract: it is the authoritative writer of
+        # the requested ``--report`` path (the CLI no longer copies it).
+        requested = kwargs.get("report_path")
+        if requested is not None:
+            Path(requested).write_text(run.to_json())
         return ValidationRunResult(
             run=run,
             run_dir=result_report.parent,
-            report_path=result_report,
+            report_path=requested or result_report,
             exit_code=0,
         )
 

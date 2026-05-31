@@ -177,10 +177,10 @@ The production journal in `src/easycat/runtime/` emits **paired
 records**: `stage_start` at the beginning of a span, a matching
 `stage_complete` at the end, with artifact refs and error blobs
 in between. You reconstruct a span by matching start/complete on
-`op_id`. Paired records buy you partial-span visibility on
-crashes and concurrent-span overlap that single events can't
-express. Read the production records after you've internalised
-the teaching ones.
+a span correlation id carried in the record `data`. Paired records
+buy you partial-span visibility on crashes and concurrent-span
+overlap that single events can't express. Read the production
+records after you've internalised the teaching ones.
 
 Also be aware: `turn.state_changed` and `ws.reconnect.*` records
 in these bundles are **representative synthetic records** — the

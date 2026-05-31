@@ -24,7 +24,6 @@ Session and is passed in via the ``current_turn`` callback.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from easycat.runtime.context import RunContext
@@ -36,8 +35,7 @@ from easycat.stages.base import (
 from easycat.stages.base import journal_append_control_signal as _journal_control_signal
 
 if TYPE_CHECKING:
-    from easycat._turn_context import TurnContext
-    from easycat.session.actions import SessionActions
+    from easycat.session._wiring import SessionWiringContext
     from easycat.stages.base import Stage
 
 logger = logging.getLogger(__name__)
@@ -49,6 +47,7 @@ class CancelOrchestrator:
     def __init__(
         self,
         *,
+        wiring: SessionWiringContext,
         # All 7 stages in propagation order (late -> early)
         transport_stage: Stage,
         tts_stage: Stage,
@@ -65,11 +64,6 @@ class CancelOrchestrator:
         interruption_latency_compensation_ms: int,
         interruption_ack_stale_ms: int,
         interruption_ack_tail_cap_ms: int,
-        # Callbacks
-        current_turn: Callable[[], TurnContext | None],
-        session_actions: Callable[[], SessionActions | None],
-        telephony_helpers_present: Callable[[], bool],
-        cancel_turn_impl: Callable[..., Awaitable[None]],
     ) -> None:
         self._stages: tuple[Stage, ...] = (
             transport_stage,
@@ -88,10 +82,10 @@ class CancelOrchestrator:
         self._ack_stale_ms = max(0, interruption_ack_stale_ms)
         self._ack_tail_cap_ms = max(0, interruption_ack_tail_cap_ms)
 
-        self._current_turn = current_turn
-        self._session_actions = session_actions
-        self._telephony_helpers_present = telephony_helpers_present
-        self._cancel_turn_impl = cancel_turn_impl
+        self._current_turn = wiring.current_turn
+        self._session_actions = wiring.session_actions
+        self._telephony_helpers_present = wiring.telephony_helpers_present
+        self._cancel_turn_impl = wiring.cancel_turn
 
     # ── Read-only config accessors ─────────────────────────────
 

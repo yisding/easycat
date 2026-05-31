@@ -4,13 +4,33 @@ Combines sentence-boundary detection, markdown delimiter tracking, speech
 energy heuristics, and TTS payload text normalisation in one internal
 module.  Everything here is a pure function / dataclass — no I/O, no
 provider dependencies, safe to import from tests.
+
+Naming convention for this module:
+
+- Names in ``__all__`` (``split_at_sentence_boundaries``,
+  ``has_unclosed_markdown_delimiters``) are the supported public surface,
+  re-exported from ``easycat.session`` / consumed by ``_streaming``.
+- The leading-underscore helpers (``_truncate_partial_text_to_boundary``,
+  ``_text_for_estimation_timeline``, ``_cleanup_estimation_text``,
+  ``_chunk_has_speech_energy``) are package-internal cross-module API: they
+  are imported by sibling ``session/`` modules (``interruption``,
+  ``_turn_runner``, ``_audio_router``) but are *not* part of the supported
+  public surface, so they keep the underscore. The remaining underscore
+  helpers (``_is_word_char``, ``_has_unclosed_single_emphasis``,
+  ``_has_unclosed_markdown_link_or_image``) are file-local.
 """
 
 from __future__ import annotations
 
 import re
+import struct
 
 import sentencesplit
+
+__all__ = [
+    "split_at_sentence_boundaries",
+    "has_unclosed_markdown_delimiters",
+]
 
 from easycat.audio_format import AudioChunk
 from easycat.tts.input import TTSInput, strip_ssml_tags
@@ -91,23 +111,30 @@ def _chunk_has_speech_energy(chunk: AudioChunk, *, threshold: int = 500) -> bool
     and compares it to ``threshold``.  Filters continuous silent /
     background frames (e.g. telephony keepalive silence) so they don't
     spuriously start turns.
+
+    Runs on the audio ingress loop for every received frame while IDLE,
+    so the peak is computed with a single batch decode (numpy when
+    available, else ``struct.unpack``) rather than a per-sample Python
+    loop, matching the rest of the audio pipeline in ``_audio_utils``.
     """
     if chunk.format.sample_width != 2:
         return bool(chunk.data)
 
+    # Drop an odd trailing byte that would otherwise split a 16-bit sample.
     data = chunk.data
-    if len(data) < 2:
+    data = data[: len(data) // 2 * 2]
+    if not data:
         return False
 
-    peak = 0
-    for i in range(0, len(data) - 1, 2):
-        sample = int.from_bytes(data[i : i + 2], "little", signed=True)
-        mag = abs(sample)
-        if mag > peak:
-            peak = mag
-            if peak >= threshold:
-                return True
-    return False
+    try:
+        import numpy as np  # type: ignore[import-untyped]
+
+        # Widen to int32 before abs so abs(-32768) does not overflow int16.
+        samples = np.frombuffer(data, dtype="<i2").astype(np.int32)
+        return bool(np.abs(samples).max() >= threshold)
+    except ImportError:
+        decoded = struct.unpack(f"<{len(data) // 2}h", data)
+        return max(abs(s) for s in decoded) >= threshold
 
 
 # ── Markdown delimiter tracking ─────────────────────────────────────

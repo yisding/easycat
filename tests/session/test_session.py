@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from easycat._bounded_queue import BoundedAudioQueue
+from easycat._bounded_queue import BoundedAudioQueue, DropPolicy
 from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
@@ -321,6 +321,23 @@ def test_stt_segment_silence_ms_forwarded_to_committer():
         )
     )
     assert session._stt_committer._segment_silence_ms == 250
+
+
+def test_enable_noise_reduction_with_passthrough_does_not_raise():
+    """enable_noise_reduction=True + a passthrough reducer must not crash.
+
+    Graceful degradation when no optional backend is installed mirrors
+    PassthroughAEC: ``create_noise_reducer`` already logs an actionable
+    warning, so the Session must warn-and-continue rather than reject the
+    passthrough at construction (the former noop-guard contradiction).
+    """
+    session = Session(
+        _full_config(
+            noise_reducer=PassthroughNoiseReducer(),
+            enable_noise_reduction=True,
+        )
+    )
+    assert session is not None
 
 
 # ── CancelToken tests ──────────────────────────────────────────────
@@ -775,6 +792,16 @@ async def test_turn_state_changed_recorded_on_transition():
     assert ("user_speaking", "processing") in pairs
 
 
+def test_outbound_queue_default_policy_is_drop_newest():
+    """The played-back (TTS) queue must not use DROP_OLDEST.
+
+    Dropping the *oldest* unsent bot audio makes the listener hear the
+    utterance jump forward mid-sentence; DROP_NEWEST trims only the tail.
+    """
+    session = Session(_full_config())
+    assert session._outbound_queue.policy == DropPolicy.DROP_NEWEST
+
+
 @pytest.mark.asyncio
 async def test_audio_queue_drop_recorded_when_queue_overflows():
     """BoundedAudioQueue drops must land in the journal via the
@@ -788,13 +815,14 @@ async def test_audio_queue_drop_recorded_when_queue_overflows():
     chunk = _make_chunk(n_bytes=320)
     await q.put(chunk)
     await q.put(chunk)
-    # This one should be dropped (DROP_OLDEST policy).
+    # This one should be dropped (DROP_NEWEST policy — played-back speech
+    # trims the tail, never the beginning).
     await q.put(chunk)
 
     drops = [r for r in journal.read() if r.name == "audio_queue_drop"]
     assert len(drops) == 1
     assert drops[0].data["queue"] == "outbound_audio"
-    assert drops[0].data["kind"] == "drop_oldest"
+    assert drops[0].data["kind"] == "drop_newest"
     assert drops[0].data["total_drops"] == 1
 
 
@@ -834,9 +862,9 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     When VADStopSpeaking fires, ``STTCommitter.schedule`` creates
     a task that calls ``stt.commit_segment``.  If SmartTurn immediately
     declares the turn complete, ``TurnEnded`` fires before the commit
-    task has a chance to cancel — and previously ``_schedule_turn_ended``
+    task has a chance to cancel — and previously ``schedule_turn_ended``
     only cancelled the *scheduled* task, not the *in-flight* one.  That
-    left ``commit_segment`` racing with ``_handle_end_of_speech``'s
+    left ``commit_segment`` racing with ``handle_end_of_speech``'s
     ``end_stream`` which issues its own commit: the first commit
     cleared the STT server's buffer and the second commit failed with
     "buffer too small".
@@ -874,7 +902,7 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
 
     session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
     await asyncio.sleep(0.001)
-    session._schedule_turn_ended(TurnEnded(turn_id="race-turn"))
+    session._turn_runner.schedule_turn_ended(TurnEnded(turn_id="race-turn"))
     for _ in range(20):
         await asyncio.sleep(0.01)
 
@@ -1067,7 +1095,7 @@ async def test_handle_end_of_speech_clears_turn_id_on_stt_timeout():
     # clears the turn instead of running the agent.
     session._turn.pending_stt_segment_futures.append(asyncio.get_running_loop().create_future())
 
-    await session._handle_end_of_speech()
+    await session._turn_runner.handle_end_of_speech()
 
     assert session._turn is None
     assert session.turn_state == TurnState.IDLE
@@ -1078,7 +1106,7 @@ async def test_handle_end_of_speech_clears_turn_id_on_empty_transcript():
     session = Session(_full_config())
     session._turn = TurnContext("turn-stale", CancelToken())
 
-    await session._handle_end_of_speech()
+    await session._turn_runner.handle_end_of_speech()
 
     assert session._turn is None
     assert session.turn_state == TurnState.IDLE
@@ -1113,7 +1141,7 @@ async def test_pause_commit_keeps_turn_open_but_collects_segment_final():
 
 @pytest.mark.asyncio
 async def test_handle_end_of_speech_no_duplicate_stt_final():
-    """_handle_end_of_speech must not re-emit per-segment STTFinals."""
+    """handle_end_of_speech must not re-emit per-segment STTFinals."""
     session = Session(_full_config())
     session._turn = TurnContext("turn-stale", CancelToken())
     session._turn.append_stt_segment("hello")
@@ -1123,7 +1151,7 @@ async def test_handle_end_of_speech_no_duplicate_stt_final():
     session.event_bus.subscribe(STTFinal, lambda e: timeline.append(e))
     session.event_bus.subscribe(AgentFinal, lambda e: timeline.append(e))
 
-    await session._handle_end_of_speech()
+    await session._turn_runner.handle_end_of_speech()
 
     stt_finals = [e for e in timeline if isinstance(e, STTFinal)]
     assert len(stt_finals) == 0
@@ -1144,7 +1172,7 @@ async def test_streaming_agent_timeout_emits_error_and_leaves_state_idle():
     session.event_bus.subscribe(Error, lambda e: errors.append(e))
     session._turn = TurnContext("turn-stale", CancelToken())
 
-    await session._run_streaming_agent("call me at 415-555-2671", token=None)
+    await session._turn_runner.run_streaming_agent("call me at 415-555-2671", token=None)
 
     assert session.turn_state == TurnState.IDLE
     assert any(isinstance(e.exception, AgentTimeoutError) for e in errors)
@@ -1160,7 +1188,7 @@ async def test_streaming_agent_strip_markdown_writes_journal_record():
     session = Session(_full_config(agent=MarkdownAgent(), journal=journal, strip_markdown=True))
     session._turn = TurnContext("turn-markdown", CancelToken())
 
-    await session._run_streaming_agent("help", token=None)
+    await session._turn_runner.run_streaming_agent("help", token=None)
 
     records = [record for record in journal.read() if record.name == "markdown_stripped"]
     assert records, "expected a markdown_stripped record"
@@ -1336,7 +1364,7 @@ async def test_tts_audio_and_markers_are_journaled_with_artifact_ref():
     )
     session._turn = TurnContext("turn-tts-audio", CancelToken())
 
-    await session._tts_scheduler.synthesize("hello", token=None)
+    await session._tts_scheduler.synthesizer.synthesize("hello", token=None)
 
     audio_records = [record for record in journal.read() if record.name == "tts_audio"]
     marker_records = [record for record in journal.read() if record.name == "tts_markers"]
@@ -1584,6 +1612,37 @@ async def test_session_events_include_correlation_ids():
 
 
 @pytest.mark.asyncio
+async def test_active_turn_gated_to_non_idle_state():
+    """``_active_turn`` and the correlation/TTS scheduler share one IDLE gate.
+
+    The live ``self._turn`` pointer is deliberately kept alive past IDLE for
+    gated-TTS playback-mark bookkeeping, but it must not count as the active
+    turn (no stale turn_id stamping, no stale TTS correlation) once the turn
+    manager has returned to IDLE.
+    """
+    session = Session(_full_config())
+    session._turn = TurnContext("turn-active", CancelToken())
+
+    # The TTS scheduler stamps the same active-turn id onto synthesized audio,
+    # so it must share the exact gate via the same ``_active_turn`` helper.
+    tts_correlation = session._tts_scheduler._synth._correlation_ids
+
+    # Active while the turn manager is mid-turn.
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    assert session._active_turn() is session._turn
+    stamped = session._with_correlation(AudioIn(chunk=_make_chunk()))
+    assert stamped.turn_id == "turn-active"
+    assert tts_correlation() == (session.session_id, "turn-active")
+
+    # Once IDLE, the still-alive turn pointer must not be treated as active.
+    session._turn_manager._state = TurnManagerState.IDLE
+    assert session._active_turn() is None
+    not_stamped = session._with_correlation(AudioIn(chunk=_make_chunk()))
+    assert not_stamped.turn_id is None
+    assert tts_correlation() == (session.session_id, None)
+
+
+@pytest.mark.asyncio
 async def test_turn_state_idle_after_basic_agent_turn():
     """After a normal basic-agent turn completes, the session should be IDLE.
     The turn context may still exist (only cleared on next turn start or reset),
@@ -1627,7 +1686,7 @@ async def test_playback_mark_ack_scoped_to_current_turn():
     # ── Second turn (replaces the TurnContext) ──
     session._is_running = True
     with patch.object(session._stt_committer, "start_event_loop"):
-        await session._on_turn_started(TurnStarted())
+        await session._turn_runner.on_turn_started(TurnStarted())
     session._is_running = False
 
     await session._outbound_queue.put(_make_chunk())
@@ -1765,7 +1824,7 @@ async def test_session_applies_output_processors_before_tts() -> None:
     )
 
     session._turn = TurnContext("turn-output-proc", CancelToken())
-    await session._run_streaming_agent("call me at 415-555-2671", token=None)
+    await session._turn_runner.run_streaming_agent("call me at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].text.startswith("speak: ")
@@ -1803,7 +1862,7 @@ async def test_session_falls_back_to_plain_when_ssml_not_supported() -> None:
     )
 
     session._turn = TurnContext("turn-ssml-fallback", CancelToken())
-    await session._run_streaming_agent("call AT&T at 415-555-2671", token=None)
+    await session._turn_runner.run_streaming_agent("call AT&T at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].format == "plain"
@@ -1842,7 +1901,7 @@ async def test_session_falls_back_to_plain_unescapes_ssml_entities() -> None:
     )
 
     session._turn = TurnContext("turn-ssml-unescape", CancelToken())
-    await session._run_streaming_agent("Call AT&T at 415-555-2671", token=None)
+    await session._turn_runner.run_streaming_agent("Call AT&T at 415-555-2671", token=None)
 
     assert tts.payloads
     assert tts.payloads[0].format == "plain"
@@ -1883,7 +1942,7 @@ async def test_session_composes_phonetic_and_phone_processors() -> None:
     )
 
     session._turn = TurnContext("turn-phonetic", CancelToken())
-    await session._run_streaming_agent("call Siobhan at 415-555-2671", token=None)
+    await session._turn_runner.run_streaming_agent("call Siobhan at 415-555-2671", token=None)
 
     assert tts.payloads
     # provider doesn't support SSML, so we should receive plain text fallback.

@@ -14,27 +14,33 @@ import wave
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from easycat._provider_catalog import ProviderCatalog
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEventType, TTSEventType
+from easycat.runtime.capabilities import close_if_supported
+from easycat.stt.factory import _CATALOG as _STT_CATALOG
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
+from easycat.tts.factory import _CATALOG as _TTS_CATALOG
 from easycat.tts.factory import TTSProviderConfig, create_tts_provider
 from easycat.tts.input import TTSInput
 
 if TYPE_CHECKING:
     from easycat.providers import Transport, TTSProvider
 
-_ENV_VAR_FOR_PROVIDER: dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "openai-realtime": "OPENAI_API_KEY",
-    "deepgram": "DEEPGRAM_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-}
 
+def _resolve_api_key(provider: str, api_key: str | None, *, catalog: ProviderCatalog) -> str:
+    """Resolve an API key from the factory catalog's env-var mapping.
 
-def _resolve_api_key(provider: str, api_key: str | None) -> str:
+    Validates ``provider`` against the catalog (raising the shared
+    fuzzy-matched EASYCAT_E104 on an unknown name) and reads the key from
+    that provider's registered env var — so the provider→env-var mapping
+    has a single source of truth and never silently defaults an unknown
+    provider to ``OPENAI_API_KEY``.
+    """
+    name = catalog.validate_name(provider)
     if api_key:
         return api_key
-    env_var = _ENV_VAR_FOR_PROVIDER.get(provider, "OPENAI_API_KEY")
+    env_var = catalog.env_vars[name]
     resolved = os.getenv(env_var, "")
     if not resolved:
         raise RuntimeError(
@@ -56,7 +62,7 @@ async def transcribe_file(
     the file is not 16-bit PCM, and ``RuntimeError`` if no API key can
     be resolved.
     """
-    resolved_key = _resolve_api_key(provider, api_key)
+    resolved_key = _resolve_api_key(provider, api_key, catalog=_STT_CATALOG)
     stt = create_stt_provider(STTProviderConfig(provider=provider, api_key=resolved_key))
 
     with wave.open(str(Path(path)), "rb") as wf:
@@ -99,13 +105,23 @@ async def speak(
     If *tts* is ``None``, constructs an OpenAI TTS provider (or the
     named *provider*) via :func:`create_tts_provider`.  The transport
     must already be connected.
-    """
-    if tts is None:
-        resolved_key = _resolve_api_key(provider, api_key)
-        tts = create_tts_provider(
-            TTSProviderConfig(provider=provider, settings={"api_key": resolved_key})
-        )
 
-    async for event in tts.synthesize(TTSInput(text=text)):
-        if event.type == TTSEventType.AUDIO and event.audio is not None:
-            await transport.send_audio(event.audio)
+    Most TTS providers hold a persistent ``httpx`` client released only by
+    ``close()``.  When this helper constructs the provider itself it owns
+    that resource, so it closes it in a ``finally`` to avoid leaking the
+    connection pool.  A caller-supplied *tts* is never closed here — its
+    lifecycle belongs to the caller.
+    """
+    owned_tts: TTSProvider | None = None
+    if tts is None:
+        resolved_key = _resolve_api_key(provider, api_key, catalog=_TTS_CATALOG)
+        tts = create_tts_provider(TTSProviderConfig(provider=provider, api_key=resolved_key))
+        owned_tts = tts
+
+    try:
+        async for event in tts.synthesize(TTSInput(text=text)):
+            if event.type == TTSEventType.AUDIO and event.audio is not None:
+                await transport.send_audio(event.audio)
+    finally:
+        if owned_tts is not None:
+            await close_if_supported(owned_tts)

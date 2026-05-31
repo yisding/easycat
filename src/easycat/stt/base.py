@@ -7,7 +7,7 @@ import logging
 from collections.abc import AsyncIterator
 
 from easycat._audio_utils import pcm_to_wav  # noqa: F401 — re-exported for backward compat
-from easycat.audio_format import AudioChunk
+from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent
 
 logger = logging.getLogger(__name__)
@@ -83,6 +83,30 @@ class STTBase:
     def _emit_event(self, event: STTEvent) -> None:
         """Enqueue an STTEvent for consumers of ``events()``."""
         self._event_queue.put_nowait(event)
+
+    @staticmethod
+    def _latch_uniform_format(
+        current: AudioFormat | None, chunk: AudioChunk, *, provider_label: str
+    ) -> AudioFormat:
+        """Latch the first-seen format and reject a mid-stream change.
+
+        Batch STT providers wrap the whole buffered utterance in a single WAV
+        header built from the first-seen format, so a mid-stream rate/channel
+        change would be silently mislabeled (garbled / wrong-pitch transcript).
+        The first chunk latches the format; a later mismatch raises
+        ``ValueError`` rather than corrupting the transcript. Bundled
+        transports resample inbound audio to a fixed pipeline rate before STT,
+        so this only guards custom transports.
+        """
+        if current is None:
+            return chunk.format
+        if chunk.format != current:
+            raise ValueError(
+                f"{provider_label} received a mid-stream audio format change "
+                f"({current} -> {chunk.format}); the batch path requires a "
+                "uniform format for the whole utterance"
+            )
+        return current
 
     def _validate_audio(self, chunk: AudioChunk) -> None:
         if chunk.format.encoding != "pcm":

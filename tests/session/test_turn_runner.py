@@ -28,6 +28,9 @@ from easycat.events import (
     Event,
     STTEvent,
     STTEventType,
+    ToolCallDelta,
+    ToolCallResult,
+    ToolCallStarted,
     TTSEvent,
     TTSEventType,
     TurnStarted,
@@ -46,7 +49,7 @@ from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActions
 from easycat.timeouts import TimeoutConfig
 from easycat.tts.input import TTSInput
-from easycat.turn_manager import TurnManagerConfig
+from easycat.turn_manager import TurnManagerConfig, TurnManagerState
 from tests._bridge_helpers import _TestBridgeBase
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
@@ -97,17 +100,32 @@ class FakeVAD:
 
 
 class FakeSTT:
-    def __init__(self, transcript: str = "hello world") -> None:
+    def __init__(
+        self,
+        transcript: str = "hello world",
+        *,
+        fail_on_start: bool = False,
+        fail_on_send: bool = False,
+    ) -> None:
         self._transcript = transcript
         self._queue: asyncio.Queue[STTEvent | None] = asyncio.Queue()
+        self._fail_on_start = fail_on_start
+        self._fail_on_send = fail_on_send
+        self.end_stream_calls = 0
+        self.stream_open = False
 
     async def start_stream(self) -> None:
-        pass
+        if self._fail_on_start:
+            raise RuntimeError("STT start_stream failed")
+        self.stream_open = True
 
     async def send_audio(self, chunk: AudioChunk) -> None:
-        pass
+        if self._fail_on_send:
+            raise RuntimeError("STT send_audio failed")
 
     async def end_stream(self) -> None:
+        self.end_stream_calls += 1
+        self.stream_open = False
         if self._transcript:
             await self._queue.put(STTEvent(type=STTEventType.FINAL, text=self._transcript))
         await self._queue.put(None)
@@ -227,6 +245,60 @@ async def test_on_turn_started_does_not_leave_task_bound_to_turn() -> None:
     assert session._turn is not None
     assert session._turn.id == "t-context"
     assert _current_turn_log_context() == "-"
+
+
+@pytest.mark.asyncio
+async def test_on_turn_started_start_failure_tears_down_turn() -> None:
+    """If ``start_stream`` fails, the turn is fully torn down.
+
+    The turn pointer is reset, STT is marked inactive, no consumer task
+    is left pending, and the FSM is returned to IDLE — instead of leaking
+    a half-started turn that only the silence timeout could unstick.
+    """
+    stt = FakeSTT(transcript="hello", fail_on_start=True)
+    session = Session(_config(stt=stt))
+    session._is_running = True
+    errors: list[Error] = []
+    session.event_bus.subscribe(Error, lambda e: errors.append(e))
+
+    await session._turn_runner.on_turn_started(TurnStarted(turn_id="t-fail"))
+
+    assert session._turn is None
+    assert not session._stt_committer.is_active
+    assert session._stt_committer.stt_task is None
+    assert session._turn_manager.state == TurnManagerState.IDLE
+    assert any(e.stage == ErrorStage.STT for e in errors)
+
+
+@pytest.mark.asyncio
+async def test_on_turn_started_preroll_failure_tears_down_and_closes_stream() -> None:
+    """A failure while priming pre-roll closes the (open) stream and tears down.
+
+    ``start_stream`` succeeds and opens the stream; the failure occurs
+    while feeding pre-roll frames. The except path must close the stream
+    via ``end_stream`` and leave no orphaned consumer task — the consumer
+    loop is now started only *after* priming succeeds.
+    """
+    stt = FakeSTT(transcript="hello", fail_on_send=True)
+    session = Session(_config(stt=stt))
+
+    # Populate pre-roll while not running so the bus-driven on_turn_started
+    # short-circuits; start_turn() flushes pre-roll into turn_audio.
+    session._is_running = False
+    session._turn_manager.on_audio_frame(_chunk())
+    await session._turn_manager.start_turn()
+    assert session._turn_manager.turn_audio  # pre-roll captured
+
+    session._is_running = True
+    await session._turn_runner.on_turn_started(TurnStarted(turn_id="t-preroll"))
+
+    assert session._turn is None
+    assert not session._stt_committer.is_active
+    assert session._stt_committer.stt_task is None
+    # The stream that start_stream() opened must be closed on teardown.
+    assert stt.end_stream_calls >= 1
+    assert stt.stream_open is False
+    assert session._turn_manager.state == TurnManagerState.IDLE
 
 
 @pytest.mark.asyncio
@@ -421,6 +493,70 @@ async def test_send_text_runs_agent_without_audio() -> None:
     )
     response = await session.send_text("hello")
     assert response == "Reply."
+
+
+@pytest.mark.asyncio
+async def test_send_text_dispatches_tool_events_with_correlation() -> None:
+    """The text path translates tool events via the shared dispatch.
+
+    Regression guard for the de-duplication of the bridge-event switch:
+    ``_execute_text_turn`` now routes tool_started/tool_delta/tool_result
+    through ``emit_tool_event`` (the same translation the voice path uses),
+    so the text path must still surface ``ToolCallStarted`` /
+    ``ToolCallDelta`` / ``ToolCallResult`` stamped with the text turn's
+    session_id and turn_id.
+    """
+
+    class _ToolStreamingAgent(_TestBridgeBase):
+        async def run(self, text: str) -> str:
+            return "Done."
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            yield AgentBridgeEvent(kind="tool_started", tool_name="lookup", call_id="c1")
+            yield AgentBridgeEvent(kind="tool_delta", text="partial", call_id="c1")
+            yield AgentBridgeEvent(kind="tool_result", result="42", call_id="c1")
+            yield AgentBridgeEvent(kind="text_delta", text="Done.")
+            yield AgentBridgeEvent(kind="done", text="Done.")
+
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            agent=_ToolStreamingAgent(),
+        )
+    )
+    started: list[ToolCallStarted] = []
+    deltas: list[ToolCallDelta] = []
+    results: list[ToolCallResult] = []
+    session.event_bus.subscribe(ToolCallStarted, lambda e: started.append(e))
+    session.event_bus.subscribe(ToolCallDelta, lambda e: deltas.append(e))
+    session.event_bus.subscribe(ToolCallResult, lambda e: results.append(e))
+
+    response = await session.send_text("hello")
+    assert response == "Done."
+
+    assert len(started) == 1
+    assert started[0].tool_name == "lookup"
+    assert started[0].call_id == "c1"
+    assert len(deltas) == 1
+    assert deltas[0].call_id == "c1"
+    assert deltas[0].delta == "partial"
+    assert len(results) == 1
+    assert results[0].call_id == "c1"
+    assert results[0].result == "42"
+
+    # Every tool event must carry the text turn's correlation ids — the
+    # text path runs outside the TurnManager's active-turn window, so the
+    # ids are stamped by the dispatch rather than by Session._with_correlation.
+    for event in (started[0], deltas[0], results[0]):
+        assert event.session_id == session.session_id
+        assert event.turn_id is not None
+        assert event.turn_id.startswith("turn-")
 
 
 @pytest.mark.asyncio

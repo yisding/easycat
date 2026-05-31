@@ -8,6 +8,7 @@ and event-bus subscription handlers.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -52,6 +53,44 @@ _JOURNAL_ATTRS = (
     "delta",
     "structured_output",
 )
+
+# ``Any``-typed event fields that may carry Pydantic models / dataclasses /
+# other non-JSON-native objects.  Persistent backends serialize ``data`` with
+# ``json.dumps(..., default=str)``, which would silently repr-stringify these
+# (discarding the model's fields), while the in-memory backend keeps them live
+# — the same record would round-trip to a different shape per backend.  We
+# normalize them once here so all backends store identical JSON-native shapes.
+_JSONABLE_ATTRS = frozenset({"structured_output", "result"})
+
+
+def _to_jsonable(value: Any) -> Any:
+    """Best-effort conversion of *value* to a JSON-native structure.
+
+    Pydantic models -> ``model_dump()``; dataclasses -> ``asdict``; everything
+    else is returned unchanged (the journal's ``json.dumps`` default-handler
+    still catches anything left non-serializable).
+    """
+    # Common case (a plain string/number/bool result) is already JSON-native;
+    # skip the model_dump/dataclass probing entirely.
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(mode="json")
+        except TypeError:
+            try:
+                return dump()
+            except Exception:
+                return value
+        except Exception:
+            return value
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        try:
+            return dataclasses.asdict(value)
+        except Exception:
+            return value
+    return value
 
 
 @dataclass(slots=True)
@@ -180,7 +219,7 @@ class SessionJournalSink:
             for attr in _JOURNAL_ATTRS:
                 val = getattr(event, attr, None)
                 if val is not None:
-                    data[attr] = val
+                    data[attr] = _to_jsonable(val) if attr in _JSONABLE_ATTRS else val
             error = None
             exc = getattr(event, "exception", None)
             if exc is not None:

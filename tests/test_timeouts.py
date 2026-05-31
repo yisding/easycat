@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 
@@ -11,6 +12,7 @@ from easycat.timeouts import (
     AgentTimeoutError,
     TimeoutConfig,
     TTSTimeoutError,
+    resolve_provider_name,
     with_agent_timeout,
     with_tts_timeout,
 )
@@ -162,3 +164,82 @@ class TestTTSTimeout:
 
         assert len(errors) == 1
         assert errors[0].stage == ErrorStage.TTS
+
+    async def test_breaking_out_closes_source_iterator(self):
+        """Breaking out of the wrapper deterministically aclose()s the source."""
+        finalized = asyncio.Event()
+
+        async def source():
+            try:
+                yield b"chunk1"
+                yield b"chunk2"
+            finally:
+                finalized.set()
+
+        wrapper = with_tts_timeout(source(), timeout=1.0)
+        # Consume under aclosing() — the deterministic contract production uses
+        # (_tts_synthesizer.synthesize). Breaking the loop then closes the
+        # wrapper, whose finally aclose()s the source rather than leaving it to
+        # GC.
+        async with contextlib.aclosing(wrapper):
+            async for _ in wrapper:
+                break
+
+        assert finalized.is_set()
+
+    async def test_error_event_carries_provider_name(self):
+        event_bus = EventBus()
+        errors: list[Error] = []
+        event_bus.subscribe(Error, lambda e: errors.append(e))
+
+        async def stalling():
+            await asyncio.sleep(10)
+            yield b"never"
+
+        with pytest.raises(TTSTimeoutError):
+            await _collect(
+                with_tts_timeout(
+                    stalling(),
+                    timeout=0.05,
+                    provider_name="elevenlabs",
+                    event_bus=event_bus,
+                )
+            )
+
+        assert errors[0].provider == "elevenlabs"
+
+
+# ── resolve_provider_name ─────────────────────────────────────────
+
+
+class TestResolveProviderName:
+    def test_uses_version_info_provider_key(self):
+        class Provider:
+            def version_info(self):
+                return {"provider": "deepgram"}
+
+        assert resolve_provider_name(Provider(), "tts") == "deepgram"
+
+    def test_falls_back_on_unknown(self):
+        class Provider:
+            def version_info(self):
+                return {"provider": "unknown"}
+
+        assert resolve_provider_name(Provider(), "tts") == "tts"
+
+    def test_falls_back_on_missing_key(self):
+        class Provider:
+            def version_info(self):
+                return {}
+
+        assert resolve_provider_name(Provider(), "stt") == "stt"
+
+    def test_falls_back_when_no_version_info(self):
+        assert resolve_provider_name(object(), "tts") == "tts"
+
+    def test_falls_back_when_version_info_raises(self):
+        class Provider:
+            def version_info(self):
+                raise RuntimeError("boom")
+
+        assert resolve_provider_name(Provider(), "stt") == "stt"

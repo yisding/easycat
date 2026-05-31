@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from easycat import _observability as observability
@@ -54,6 +53,7 @@ from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
     from easycat._turn_context import TurnContext
+    from easycat.session._wiring import SessionWiringContext
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,7 @@ class AudioRouter:
     def __init__(
         self,
         *,
+        wiring: SessionWiringContext,
         transport: Transport,
         audio_stage: AudioStage,
         vad_stage: VADStage,
@@ -118,20 +119,7 @@ class AudioRouter:
         run_ctx: RunContext,
         no_turn: TurnContext,
         echo_canceller: Any,
-        # Capability flags as callables so the loop body reads live
-        # values even when Session mutates them after construction.
-        enable_noise_reduction: Callable[[], bool],
-        enable_aec: Callable[[], bool],
-        enable_vad: Callable[[], bool],
-        auto_turn_from_stt_final: Callable[[], bool],
-        # Callbacks
-        emit: Callable[[Any], Awaitable[None]],
-        is_running: Callable[[], bool],
-        set_running: Callable[[bool], None],
-        current_turn: Callable[[], TurnContext | None],
-        is_stt_active: Callable[[], bool],
-        with_correlation: Callable[[Any], Any] | None = None,
-        # Outbound queue is constructed by Session; the router receives
+        # Outbound queue is constructed by the builder; the router receives
         # the same instance so external supplies and the TTSSynthesizer
         # keep their references valid.
         outbound_queue: BoundedAudioQueue,
@@ -147,24 +135,40 @@ class AudioRouter:
         self._run_ctx = run_ctx
         self._no_turn = no_turn
         self._echo_canceller = echo_canceller
+        # Latches once the AEC reference feed has raised (e.g. a near/far
+        # sample-rate mismatch) so we log the actionable cause exactly once
+        # and stop re-attempting a feed that will keep failing for the rest
+        # of the session, rather than spamming the log per outbound chunk.
+        self._aec_reference_failed: bool = False
 
-        self._enable_noise_reduction = enable_noise_reduction
-        self._enable_aec = enable_aec
-        self._enable_vad = enable_vad
-        self._auto_turn_from_stt_final = auto_turn_from_stt_final
+        # Session-derived late-bound accessors.  The loop body reads live
+        # values even when Session mutates the enable_* knobs / turn
+        # pointer after construction.
+        self._enable_noise_reduction = wiring.enable_noise_reduction
+        self._enable_aec = wiring.enable_aec
+        self._enable_vad = wiring.enable_vad
+        self._auto_turn_from_stt_final = wiring.auto_turn_from_stt_final
 
-        self._emit = emit
-        self._is_running = is_running
-        self._set_running = set_running
-        self._current_turn = current_turn
-        self._is_stt_active = is_stt_active
-        self._with_correlation = with_correlation or (lambda evt: evt)
+        self._emit = wiring.emit
+        self._is_running = wiring.is_running
+        self._set_running = wiring.set_running
+        self._current_turn = wiring.current_turn
+        self._is_stt_active = wiring.is_stt_active
+        self._with_correlation = wiring.with_correlation
 
         # Auto-turn speech-energy detector state
         self._auto_turn_speech_frames: int = 0
 
         # Gated replay
         self._replay_chunks_pending: int = 0
+
+        # Outbound send-failure streak.  A transient ``send_audio`` failure
+        # is expected to be swallowed (a turn must still complete after one
+        # bad send — see test_failure_paths), so we surface a single
+        # bus-level ``Error`` at the *start* of a failure streak rather than
+        # one per dropped chunk.  Reset to 0 after any successful send so a
+        # later failure surfaces a fresh ``Error``.
+        self._outbound_send_failures: int = 0
 
         # Playback mark accounting
         self._playback_mark_bytes_interval: int = 4_000  # ~125ms at 16kHz/16-bit
@@ -312,6 +316,17 @@ class AudioRouter:
             if not already_replaying:
                 await self._turn_manager.bot_started_speaking()
             for chunk in chunks:
+                # Tag each replay chunk so the drain loop only decrements
+                # ``_replay_chunks_pending`` (and only fires
+                # ``bot_stopped_speaking``) when an actual replay chunk
+                # drains.  Without the tag the bare counter would be
+                # decremented by *any* chunk sharing the outbound queue
+                # (e.g. interleaved synthesis or hold audio), which could
+                # leave BOT_SPEAKING early and truncate the replayed tail.
+                try:
+                    setattr(chunk, "_easycat_replay_chunk", True)
+                except Exception:
+                    logger.debug("Failed to tag replay chunk", exc_info=True)
                 await self._outbound_queue.put(chunk)
 
     def on_playback_ack(self, event: PlaybackMarkAck) -> None:
@@ -495,7 +510,15 @@ class AudioRouter:
                 chunk = await self._outbound_queue.get()
             except asyncio.QueueEmpty:
                 break
-            replayed_chunk = self._replay_chunks_pending > 0
+            # A chunk only counts against the replay tally if it was
+            # actually tagged as a replay chunk in ``gated_replay`` — not
+            # merely because replay chunks are pending.  This keeps the
+            # tally correct even if a non-replay chunk shares the outbound
+            # queue while replay audio is still draining.
+            replayed_chunk = (
+                self._replay_chunks_pending > 0
+                and getattr(chunk, "_easycat_replay_chunk", False) is True
+            )
             turn = self._current_turn()
             # Long-lived drain task: keep its log records correlated with the
             # turn whose audio is being sent (cleared to "-" between turns).
@@ -510,6 +533,9 @@ class AudioRouter:
                 delivered = await self._transport_stage.execute(
                     chunk, self._run_ctx, turn or self._no_turn
                 )
+                # The send returned without raising: any prior failure
+                # streak is over, so a later failure surfaces a fresh Error.
+                self._outbound_send_failures = 0
                 if delivered and not self._transport_reports_audio_delivery:
                     # Stamp turn_id from current_turn() at dequeue time
                     # (captured before send_audio awaits) so a slow send
@@ -518,8 +544,22 @@ class AudioRouter:
                     await self._emit(
                         AudioOut(chunk=chunk, turn_id=turn.id if turn is not None else None)
                     )
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed to send audio to transport")
+                self._outbound_send_failures += 1
+                # Surface a single bus-level Error at the start of a failure
+                # streak so user Error handlers and the journal error
+                # timeline learn the bot's audio is being dropped, without
+                # spamming one Error per chunk when a transport is dead.
+                # The drain keeps consuming the queue (no forced teardown):
+                # a transient send failure must not drop a live call.
+                if self._outbound_send_failures == 1:
+                    try:
+                        await self._emit(Error(exception=exc, stage=ErrorStage.TTS))
+                    except Exception:
+                        # A misbehaving Error handler must not kill the
+                        # long-lived drain task.
+                        logger.debug("Failed to emit outbound send Error", exc_info=True)
             finally:
                 self._outbound_in_flight = max(0, self._outbound_in_flight - 1)
                 self._update_outbound_idle()
@@ -550,8 +590,25 @@ class AudioRouter:
         chunk: AudioChunk,
         turn: TurnContext | None,
     ) -> None:
-        if self._enable_aec():
-            self._echo_canceller.feed_reference(chunk)
+        # Feeding the far-end reference into AEC is a *side effect* of audio
+        # delivery, not part of it.  A reference-feed failure (most commonly a
+        # near/far sample-rate mismatch, which LiveKitAEC rejects with a
+        # ValueError) must never be attributed to "Failed to send audio to
+        # transport" nor suppress the downstream AudioOut emit / playback-mark
+        # accounting.  Isolate it here: log the real cause once and continue
+        # with the bot's audio still being delivered and tracked.
+        if self._enable_aec() and not self._aec_reference_failed:
+            try:
+                self._echo_canceller.feed_reference(chunk)
+            except Exception:
+                self._aec_reference_failed = True
+                logger.warning(
+                    "AEC reference disabled for this session: feed_reference failed "
+                    "(commonly a near/far sample-rate mismatch). Echo cancellation will "
+                    "not subtract bot playback. Align the TTS/transport output rate with "
+                    "the mic rate or resample before AEC.",
+                    exc_info=True,
+                )
 
         sent_size = len(chunk.data)
         # Never accrue byte counters on the long-lived _no_turn singleton

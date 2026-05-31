@@ -294,6 +294,14 @@ class TwilioTransport(_ServerTransportBase):
             return True
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot send audio: Twilio disconnected")
+            # Mirror the connection-variant / WebSocket transports: clear
+            # the live-client state so ``has_client``/``is_connected``/
+            # ``wait_for_client`` stop reporting a peer once the socket drops.
+            # The ``_handle_connection`` finally also performs this cleanup, so
+            # this is belt-and-suspenders for symmetry across socket transports.
+            self._ws = None
+            self._stream_sid = None
+            self._client_connected.clear()
             return False
 
     # ── Mark support ──────────────────────────────────────────────
@@ -305,7 +313,8 @@ class TwilioTransport(_ServerTransportBase):
         """
         ws = self._ws
         if ws is None or self._stream_sid is None:
-            raise RuntimeError("No active Twilio stream")
+            logger.debug("Cannot send mark: no active Twilio stream")
+            return name or ""
 
         if name is None:
             self._mark_counter += 1
@@ -318,7 +327,10 @@ class TwilioTransport(_ServerTransportBase):
                 "mark": {"name": name},
             }
         )
-        await ws.send(message)
+        try:
+            await ws.send(message)
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot send mark: Twilio disconnected")
         return name
 
     async def send_playback_mark(self, name: str | None = None) -> str:
@@ -690,6 +702,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         except Exception:
             logger.debug("Error closing Twilio WebSocket", exc_info=True)
         self._enqueue_sentinel()
+        await self._drain_emit_tasks()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         if self._stream_sid is None:

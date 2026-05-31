@@ -20,69 +20,12 @@ class PlaybackAcknowledgements(Protocol):
 
 
 @runtime_checkable
-class ClearAudioSupport(Protocol):
-    """Transport capability for clearing buffered outbound audio."""
-
-    async def clear_audio(self) -> None:
-        """Discard queued outbound audio."""
-        ...
-
-
-@runtime_checkable
-class TransportDeliveryReporting(Protocol):
-    """Transport capability for deferred delivery accounting."""
-
-    reports_audio_delivery: bool
-
-
-@runtime_checkable
-class IdentitySinkBinding(Protocol):
-    """Transport capability for publishing caller identity updates."""
-
-    def bind_identity_sink(self, sink: Any) -> None:
-        """Register a callback that receives identity updates."""
-        ...
-
-
-@runtime_checkable
-class PassthroughProvider(Protocol):
-    """Marker for no-op or passthrough providers."""
-
-    is_passthrough_provider: bool
-
-
-@runtime_checkable
 class HealthCheckable(Protocol):
     """Provider capability for active health checks."""
 
     async def health_check(self) -> bool:
         """Return True when the provider is healthy."""
         ...
-
-
-@runtime_checkable
-class AsyncCloseable(Protocol):
-    """Provider capability for async close/teardown."""
-
-    async def aclose(self) -> None:
-        """Release async resources."""
-        ...
-
-
-@runtime_checkable
-class Closeable(Protocol):
-    """Provider capability for synchronous close/teardown."""
-
-    def close(self) -> None:
-        """Release resources."""
-        ...
-
-
-@runtime_checkable
-class DefaultEchoCancellationPreference(Protocol):
-    """Config/provider preference for transport-default echo cancellation."""
-
-    default_echo_cancellation_enabled: bool
 
 
 def is_passthrough_provider(provider: Any) -> bool:

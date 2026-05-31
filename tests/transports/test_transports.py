@@ -842,6 +842,82 @@ class TestTwilioTransport:
         await transport.disconnect()
 
 
+class TestTwilioSendAudioConnectionClosed:
+    """Twilio transports clear live-client state when send_audio hits a drop.
+
+    No real socket needed: a fake ws whose ``send`` raises
+    ``ConnectionClosed`` drives the error path directly.
+    """
+
+    class _ClosedWS:
+        async def send(self, _message):
+            raise websockets.exceptions.ConnectionClosed(None, None)
+
+        async def close(self):
+            return None
+
+    @pytest.mark.asyncio
+    async def test_server_variant_clears_state_on_connection_closed(self):
+        config = TwilioTransportConfig(host="127.0.0.1", port=_find_free_port())
+        transport = TwilioTransport(config)
+        transport._ws = self._ClosedWS()
+        transport._stream_sid = "STREAM1"
+        transport._client_connected.set()
+
+        delivered = await transport.send_audio(_make_chunk(640, sample_rate=16000))
+
+        assert delivered is False
+        # Stale live-client state is cleared so has_client/is_connected stop
+        # reporting a live peer after the socket drops.
+        assert transport._ws is None
+        assert transport.stream_sid is None
+        assert not transport.has_client
+        assert not transport._client_connected.is_set()
+
+    @pytest.mark.asyncio
+    async def test_connection_variant_clears_state_on_connection_closed(self):
+        transport = TwilioConnectionTransport(self._ClosedWS())
+        transport._stream_sid = "STREAM1"
+        transport._connected = True
+        transport._client_connected.set()
+
+        delivered = await transport.send_audio(_make_chunk(640, sample_rate=16000))
+
+        assert delivered is False
+        assert transport.stream_sid is None
+        assert not transport.is_connected
+        assert not transport._client_connected.is_set()
+
+
+class TestEmitTaskDrain:
+    """Fire-and-forget _emit_degraded tasks are drained on disconnect."""
+
+    @pytest.mark.asyncio
+    async def test_disconnect_drains_pending_emit_tasks(self):
+        from easycat.events import TransportDegraded
+
+        transport = WebSocketTransport()
+        bus = EventBus()
+        seen: list[TransportDegraded] = []
+
+        async def slow_handler(event):
+            await asyncio.sleep(0)
+            seen.append(event)
+
+        bus.subscribe(TransportDegraded, slow_handler)
+        transport._event_bus = bus
+        transport._connected = True  # let disconnect() run its teardown
+
+        transport._emit_degraded("inbound_queue_full", "dropped a frame")
+        assert transport._emit_tasks  # task is scheduled but not yet awaited
+
+        await transport.disconnect()
+
+        # disconnect() awaited the pending emit, so nothing dangles.
+        assert transport._emit_tasks == set()
+        assert len(seen) == 1
+
+
 # ── Audio conversion tests ────────────────────────────────────────
 
 

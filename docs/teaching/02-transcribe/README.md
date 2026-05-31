@@ -281,7 +281,8 @@ has a sequence number, a monotonic-clock timestamp, and a name
 > journal events of the form `stage.<name>.execute` with a single
 > `elapsed_ms` field. The production journal in
 > `src/easycat/runtime/` instead emits **paired** records
-> (`stage_start` + `stage_complete`) that you match on `op_id`.
+> (`stage_start` + `stage_complete`) that you match on a span
+> correlation id in the record `data`.
 > The teaching shape keeps the query layer at the surface; the
 > paired shape buys you partial-span visibility on crashes.
 > Chapter 11 surfaces this difference explicitly — don't be
