@@ -27,8 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from easycat import _observability as observability
@@ -70,12 +69,11 @@ from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
-    from easycat.integrations.agents.base import ExternalAgentBridge
-    from easycat.providers import STTProvider
     from easycat.session._audio_router import AudioRouter
     from easycat.session._cancel_orchestrator import CancelOrchestrator
     from easycat.session._stt_committer import STTCommitter
     from easycat.session._tts_scheduler import TTSScheduler
+    from easycat.session._wiring import SessionWiringContext
     from easycat.stages.stt import STTStage
 
 logger = logging.getLogger(__name__)
@@ -87,6 +85,7 @@ class TurnRunner:
     def __init__(
         self,
         *,
+        wiring: SessionWiringContext,
         stt_committer: STTCommitter,
         tts_scheduler: TTSScheduler,
         audio_router: AudioRouter,
@@ -100,15 +99,6 @@ class TurnRunner:
         timeout_config: TimeoutConfig,
         turn_handle: TurnHandle,
         stt_stage: STTStage,
-        stt_provider: Callable[[], STTProvider],
-        is_running: Callable[[], bool],
-        is_gated: Callable[[], bool],
-        agent: Callable[[], ExternalAgentBridge],
-        drain_session_actions: Callable[[], Awaitable[bool]],
-        caller_id_system_message: Callable[[], str | None],
-        stop: Callable[[], Awaitable[None]],
-        reset_turn_state: Callable[[], None],
-        emit: Callable[[Any], Awaitable[None]],
         session_id: str,
         journal_enabled: bool,
     ) -> None:
@@ -125,15 +115,15 @@ class TurnRunner:
         self._timeout_config = timeout_config
         self._turn = turn_handle
         self._stt_stage = stt_stage
-        self._stt_provider = stt_provider
-        self._is_running = is_running
-        self._is_gated = is_gated
-        self._agent = agent
-        self._drain_session_actions = drain_session_actions
-        self._caller_id_system_message = caller_id_system_message
-        self._stop = stop
-        self._reset_turn_state = reset_turn_state
-        self._emit = emit
+        self._stt_provider = wiring.stt
+        self._is_running = wiring.is_running
+        self._is_gated = wiring.is_gated
+        self._agent = wiring.agent
+        self._drain_session_actions = wiring.drain_session_actions
+        self._caller_id_system_message = wiring.caller_id_system_message
+        self._stop = wiring.stop
+        self._reset_turn_state = wiring.reset_turn_state
+        self._emit = wiring.emit
         self._session_id = session_id
         self._journal_enabled = journal_enabled
 

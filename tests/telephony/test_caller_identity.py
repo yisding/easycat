@@ -7,7 +7,7 @@ Covers:
 - ``OutboundCallManager.place_call`` flows through ``CallInitiated`` so
   ``create_session`` stamps ``session.call_identity`` with
   direction="outbound".
-- ``Session._caller_id_system_message`` respects the exposure policy.
+- ``CallerIdState.system_message`` respects the exposure policy.
 - ``AgentStage.execute_streaming`` prepends the system prefix to the
   bridge's ``turn_input.context``.
 """
@@ -298,10 +298,10 @@ def test_session_caller_id_message_off_returns_none() -> None:
             caller_id_exposure="off",
         )
     )
-    assert session._caller_id_system_message() is None
+    assert session._caller_id.system_message() is None
     assert session.call_identity is None
-    assert session._call_identity is not None
-    assert session._call_identity.caller_number == "+15550000000"
+    assert session._caller_id.private_identity is not None
+    assert session._caller_id.private_identity.caller_number == "+15550000000"
 
 
 @pytest.mark.asyncio
@@ -337,7 +337,7 @@ def test_session_caller_id_message_tools_only_hides_from_llm() -> None:
             caller_id_exposure="tools_only",
         )
     )
-    assert session._caller_id_system_message() is None
+    assert session._caller_id.system_message() is None
     # …but tool code can still read it directly.
     assert session.call_identity is not None
     assert session.call_identity.caller_number == "+15550000000"
@@ -359,7 +359,7 @@ def test_session_caller_id_message_renders_outbound() -> None:
             caller_id_exposure="system_message",
         )
     )
-    message = session._caller_id_system_message()
+    message = session._caller_id.system_message()
     assert message is not None
     assert "+15551112222" in message
     assert "outbound" in message.lower()
@@ -380,7 +380,7 @@ def test_session_caller_id_message_handles_empty_identity() -> None:
         )
     )
     # No numbers + no display name ⇒ nothing to say.
-    assert session._caller_id_system_message() is None
+    assert session._caller_id.system_message() is None
 
 
 # ── Bridge wrapping keeps system prefix even when no shadow history ─

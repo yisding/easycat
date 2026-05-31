@@ -24,7 +24,13 @@ uv run python examples/ws_server.py  # Run an example
 
 **Key modules:**
 - `session/` — Package containing the core orchestrator. Key files:
-  - `_session.py` — `Session` class. Wires pipeline stages, manages turn lifecycle, coordinates agent/TTS.
+  - `_session.py` — `Session` class. Owns the public lifecycle API (start/stop/cancel_turn/reset_state/send_text/etc.) and turn-pointer state. `Session.__init__` is now a short field-assignment shell that ends with a single `build_session(self, cfg)` call — a newcomer can scan the constructor in under a minute.
+  - `_builder.py` — `build_session(session, cfg) -> SessionComponents`. Owns ALL collaborator construction that used to be inlined in `__init__`: the 7 stages, the shared `RunContext`, the `no-turn` `TurnContext`, the journal sink, the outbound audio queue, and every collaborator (AudioRouter/STTCommitter/TTSScheduler/CancelOrchestrator/TurnRunner/GreetingController/OptOutPolicy), plus their deferred event-bus subscriptions and TurnManager bindings. Returns a frozen `SessionComponents` bundle the constructor unpacks onto private fields.
+  - `_wiring.py` — `SessionWiringContext`, a typed frozen dataclass of late-binding getters/setters (current_turn, is_running, enable_* flags, provider/agent getters, emit, drain_session_actions, caller_id_system_message, stop, …) built once from the live Session and passed to every collaborator constructor in place of ~40 inline lambdas. Also holds `_SessionTurnHandle` (the `TurnHandle` adapter). Imports `Session` only under `TYPE_CHECKING`.
+  - `_greeting.py` — `GreetingController`. Subscribes itself to `CallAnswered` and speaks the configured greeting once (warm-transfer re-answer ignored) via the bypass synth path.
+  - `_opt_out.py` — `OptOutPolicy`. Subscribes to `STTFinal`; on a TCPA opt-out phrase it adds the caller to the DNC list, emits `OptOutDetected`, and enqueues `EndCallAction` (or falls back to scheduling `Session.stop()`). `Session.dnc_list` delegates here.
+  - `_caller_id.py` — `CallerIdState`. Holds the caller/callee identity + exposure policy and renders the caller-ID system message. `Session.call_identity` / `caller_id_exposure` delegate here; `private_identity` is the raw value used by `config.py` and opt-out.
+  - `_telephony_facade.py` — `TelephonyFacade` exposed as `session.telephony`. Wraps the helper list with `.get(type)` plus typed accessors (`outbound_call_manager`, `outbound_call_state_machine`, `number_health_monitor`, `call_disposition_tracker`). `session.get_helper` delegates to it.
   - `_streaming.py` — `consume_agent_stream()` translates agent stream events into TTS payloads on sentence boundaries.
   - `_turn_runner.py` — Drives a single turn end-to-end (agent run → streaming → TTS scheduling), holding the logic that used to be inlined in `_session.py`.
   - `_audio_router.py` — Routes captured audio through noise reduction / echo cancellation and feeds TTS output back as AEC reference audio.

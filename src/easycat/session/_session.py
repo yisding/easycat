@@ -16,7 +16,7 @@ from typing import Any, TypeVar
 from uuid import uuid4
 
 from easycat import _observability as observability
-from easycat._bounded_queue import BoundedAudioQueue, DropPolicy
+from easycat._bounded_queue import BoundedAudioQueue
 from easycat._health_check import PeriodicHealthChecker
 from easycat._log_context import bind_session, bind_turn
 from easycat._turn_context import TurnContext
@@ -31,7 +31,6 @@ from easycat.events import (
     EventBus,
     EventHandler,
     Interruption,
-    PlaybackMarkAck,
     SessionActionCompleted,
     SessionActionFailed,
     SessionActionRequested,
@@ -40,7 +39,6 @@ from easycat.events import (
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
-    TransportAudioDelivered,
     TurnEnded,
     TurnStarted,
     VADStartSpeaking,
@@ -59,7 +57,6 @@ from easycat.runtime.capabilities import (
     is_active_provider,
     is_passthrough_provider,
 )
-from easycat.runtime.context import RunContext
 from easycat.runtime.journal import (
     ExecutionJournal,
     InMemoryRingBuffer,
@@ -67,19 +64,21 @@ from easycat.runtime.journal import (
     ReadonlySqliteJournal,
 )
 from easycat.runtime.scope import RuntimeScope
-from easycat.session._audio_router import AudioRouter
-from easycat.session._cancel_orchestrator import CancelOrchestrator
-from easycat.session._journal_sink import SessionJournalSink
-from easycat.session._stt_committer import STTCommitter
-from easycat.session._tts_scheduler import TTSScheduler
-from easycat.session._turn_runner import TurnRunner
+from easycat.session._builder import (
+    _OUTBOUND_QUEUE_MAX_SIZE,
+    _OUTBOUND_QUEUE_NAME,
+    _OUTBOUND_QUEUE_POLICY,
+    SessionComponents,
+    build_session,
+)
+from easycat.session._caller_id import CallerIdState
+from easycat.session._telephony_facade import TelephonyFacade
 from easycat.session._types import (
     _TM_TO_TURN_STATE,
     Agent,
     CallerIdExposure,
     CallIdentity,
     SessionConfig,
-    SessionHelper,
     TurnState,
 )
 from easycat.session.actions import (
@@ -87,16 +86,9 @@ from easycat.session.actions import (
     SessionAction,
     SessionActionExecutor,
 )
-from easycat.stages.agent import AgentStage
-from easycat.stages.audio import AudioStage
 from easycat.stages.base import (
     InterruptSignal as _InterruptSignal,
 )
-from easycat.stages.stt import STTStage
-from easycat.stages.transport import TransportStage
-from easycat.stages.tts import TTSStage
-from easycat.stages.turn import TurnStage
-from easycat.stages.vad import VADStage
 from easycat.stubs import (
     NoopAgent,
     NoopSTT,
@@ -109,38 +101,6 @@ from easycat.turn_manager import TurnManager, TurnManagerState
 logger = logging.getLogger(__name__)
 
 _HelperT = TypeVar("_HelperT")
-
-
-class _SessionTurnHandle:
-    """Tiny adapter exposing :class:`TurnHandle` on a Session.
-
-    Session is the single authority on the active turn pointer and turn
-    generation; this adapter forwards :class:`TurnHandle` reads/writes
-    onto the Session attributes so TurnRunner can use the protocol
-    without holding a Session reference directly.
-    """
-
-    __slots__ = ("_session",)
-
-    def __init__(self, session: Session) -> None:
-        self._session = session
-
-    @property
-    def current(self) -> TurnContext | None:
-        return self._session._turn
-
-    @property
-    def generation(self) -> int:
-        return self._session._turn_generation
-
-    @property
-    def no_turn(self) -> TurnContext:
-        return self._session._no_turn
-
-    def set(self, turn: TurnContext | None) -> None:
-        self._session._turn = turn
-        if turn is not None:
-            self._session._turn_generation = turn.generation
 
 
 def _ensure_bridge(agent: Any) -> ExternalAgentBridge:
@@ -172,21 +132,21 @@ class Session:
         cfg = config or SessionConfig()
         self._config = cfg
 
-        # Providers (fall back to no-op stubs)
+        # ── Providers (fall back to no-op stubs) ─────────────────
         self.stt = cfg.stt or NoopSTT()
         self.tts = cfg.tts or NoopTTS()
         self.vad = cfg.vad or NoopVAD()
         self.noise_reducer = cfg.noise_reducer or PassthroughNoiseReducer()
         self.echo_canceller = cfg.echo_canceller or PassthroughAEC()
         self.transport = cfg.transport or NoopTransport()
+
+        # ── Agent ────────────────────────────────────────────────
         # Back-store for the ``agent`` property so late assignments
         # (``session.agent = X``) keep the AgentStage wrapper in sync.
         # ``auto_adapt_agent`` returns plain ``async run(text)`` agents
-        # unchanged so factories can apply ``config.agent_runner`` /
-        # ``wrap_agent`` explicitly.  For direct ``Session(...)`` callers
-        # and ``wrap_agent=False`` with a plain agent, wrap here as a
-        # safety net so the bridge interface Session relies on
-        # (``reset``, ``replace_last_assistant_text``) is always present.
+        # unchanged; we wrap here as a safety net so the bridge interface
+        # Session relies on (``reset``, ``replace_last_assistant_text``) is
+        # always present.
         self._agent: Agent = (
             _ensure_bridge(auto_adapt_agent(cfg.agent)) if cfg.agent else NoopAgent()
         )
@@ -197,61 +157,20 @@ class Session:
         # Session-wide MCP server list — re-applied to any agent swapped
         # in via ``session.agent = ...`` so tool access survives the swap.
         self._mcp_servers: tuple[str, ...] = tuple(cfg.mcp_servers)
-        # Inject MCP servers into the bridge so direct
-        # ``Session(SessionConfig(agent=..., mcp_servers=...))`` callers
-        # (not going through ``create_session``) also get tool access.
         self._inject_agent_runtime_config(self._agent)
 
-        # Telephony caller / callee identity.  Populated by the
-        # transport (inbound: Twilio customParameters) or by the
-        # outbound call manager (outbound: the dialed number).
-        # ``caller_id_exposure`` governs whether the agent's LLM sees
-        # the number or only tool code does.
-        self._call_identity: CallIdentity | None = cfg.call_identity
-        self._caller_id_exposure: CallerIdExposure = cfg.caller_id_exposure
-
-        # Skip noop validation in text_session mode — audio providers
-        # are intentionally noop.
-        if cfg.runtime_mode != "text_session":
-            noops = []
-            if is_passthrough_provider(self.stt):
-                noops.append("stt")
-            if is_passthrough_provider(self.tts):
-                noops.append("tts")
-            if cfg.enable_vad and is_passthrough_provider(self.vad):
-                noops.append("vad")
-            # A passthrough noise reducer is a legitimate graceful-degradation
-            # outcome (no optional backend installed), mirroring PassthroughAEC.
-            # ``create_noise_reducer`` already logs an actionable warning — and
-            # ``NoiseReducerConfig(fallback_policy="error")`` is the opt-in for
-            # fail-loud — so enabling noise reduction without a backend must
-            # warn-and-continue rather than crash at Session construction.
-            if cfg.enable_noise_reduction and is_passthrough_provider(self.noise_reducer):
-                logger.warning(
-                    "Noise reduction is enabled but the configured noise_reducer is a "
-                    "passthrough (no real backend); audio will pass through unchanged. "
-                    "Install easycat[rnnoise] or configure Krisp, or set "
-                    "NoiseReducerConfig(fallback_policy='error') to fail loudly instead."
-                )
-            if is_passthrough_provider(self.transport):
-                noops.append("transport")
-            if cfg.agent is None and is_passthrough_provider(self.agent):
-                noops.append("agent")
-            if noops:
-                raise ValueError(
-                    "SessionConfig must provide non-noop implementations for: " + ", ".join(noops)
-                )
-
-        # Event system
+        # ── Event bus + provider event-bus attach ────────────────
         self.event_bus = cfg.event_bus or EventBus()
-
-        # Attach event bus to providers that accept it
         self._maybe_attach_event_bus(self.stt)
         self._maybe_attach_event_bus(self.tts)
         self._maybe_attach_event_bus(self.transport)
 
-        # Pipeline flags — auto-enable when a real provider is supplied so
-        # that direct SessionConfig users don't silently lose processing.
+        # ── Noop validation (audio sessions must have real providers) ─
+        self._validate_providers(cfg)
+
+        # ── Pipeline flags ───────────────────────────────────────
+        # Auto-enable when a real provider is supplied so that direct
+        # SessionConfig users don't silently lose processing.
         self._enable_noise_reduction = cfg.enable_noise_reduction or is_active_provider(
             self.noise_reducer
         )
@@ -260,57 +179,16 @@ class Session:
         ) and is_active_provider(self.echo_canceller)
         self._enable_vad = cfg.enable_vad
         self._auto_turn_from_stt_final = cfg.auto_turn_from_stt_final
-        # Interruption-config knobs are owned by the CancelOrchestrator
-        # (see ``self._cancel`` below).  Session exposes read-only
-        # property delegates so external readers keep working.
+        self._audio_gate = cfg.audio_gate
 
-        # Turn manager — single source of truth for turn state.  The
-        # barge-in cancel callback is installed later via
-        # :meth:`TurnManager.set_cancel_callback` because it is wired
-        # through ``CancelOrchestrator``, constructed below.
+        # ── Turn manager (single source of truth for turn state) ──
         self._turn_manager = cfg.turn_manager or TurnManager(
             self.event_bus,
             config=cfg.turn_manager_config,
         )
-        # TurnManager emits a ``turn_state_changed`` journal record on
-        # every state transition so bundle readers can answer "why did
-        # it go to PROCESSING" from the journal alone.
         self._turn_manager.bind_journal_hook(self._on_turn_state_changed)
-        # TurnStarted/TurnEnded subscriptions are deferred until after
-        # ``self._turn_runner`` is constructed below, because the
-        # handlers live on the runner.  PlaybackMarkAck and
-        # TransportAudioDelivered are wired to AudioRouter below — see
-        # the audio_router construction site.
 
-        # Opt-out auto-wiring.  Runs on every STT final; on a match it
-        # emits ``OptOutDetected``, adds the caller to an attached DNC
-        # list, and queues ``EndCallAction(reason="opt_out")`` so the
-        # call hangs up after the current agent utterance.  Disable
-        # via ``SessionConfig.opt_out_detection=False``.
-        self._opt_out_detection = cfg.opt_out_detection
-        self._opt_out_phrases: list[str] | None = (
-            list(cfg.opt_out_phrases) if cfg.opt_out_phrases is not None else None
-        )
-        self._dnc_list: Any | None = cfg.dnc_list
-        if self._opt_out_detection:
-            self.event_bus.subscribe(STTFinal, self._on_stt_final_opt_out)
-
-        # Optional "bot speaks first" greeting synthesized on the first
-        # CallAnswered event — works for both inbound (stream start)
-        # and outbound (callee picks up).  Only the first occurrence
-        # is honored so a warm-transfer style flow with a second
-        # CallAnswered doesn't re-greet.
-        self._greeting: str | None = cfg.greeting
-        self._greeting_spoken: bool = False
-        self._greeting_task: asyncio.Task[Any] | None = None
-        if self._greeting:
-            from easycat.events import CallAnswered as _CallAnsweredEv
-
-            self.event_bus.subscribe(_CallAnsweredEv, self._on_call_answered_greet)
-        tm_config = getattr(self._turn_manager, "_config", None)
-        stt_segment_silence_ms = max(0, getattr(tm_config, "stt_segment_silence_ms", 0))
-
-        # Reliability/observability config
+        # ── Reliability / observability config ───────────────────
         self._timeout_config = cfg.timeout_config or self._default_timeout_config()
         self._journal = cfg.journal
         self._journal_view: JournalView | None = (
@@ -318,43 +196,31 @@ class Session:
         )
         self._artifact_store = cfg.artifact_store
 
-        # Backpressure (outbound audio queue).  The queue is shared
-        # between TTSSynthesizer (producer) and AudioRouter (drain
-        # consumer); Session constructs it once and hands the same
-        # instance to both.  Router takes ownership for drain semantics
-        # after construction.
-        # Outbound (played-back) speech must NOT use DROP_OLDEST: dropping
-        # the *earliest* still-unsent bot audio makes the listener hear the
-        # utterance jump forward mid-sentence. DROP_NEWEST instead trims only
-        # the tail when the transport falls behind — a clean cut that the
-        # interruption estimator already models. (Callers wanting real
-        # backpressure can inject a BLOCK-policy queue via
-        # ``SessionConfig.outbound_queue``.)
+        # ── Outbound audio queue config (queue built by the builder) ─
         self._outbound_queue_external = cfg.outbound_queue is not None
-        self._outbound_queue_max_size = 200
-        self._outbound_queue_policy = DropPolicy.DROP_NEWEST
-        self._outbound_queue_name = "outbound_audio"
-        self._outbound_queue = cfg.outbound_queue or BoundedAudioQueue(
-            max_size=self._outbound_queue_max_size,
-            policy=self._outbound_queue_policy,
-            name=self._outbound_queue_name,
-            on_drop=self._on_queue_drop,
-        )
-        # TTSSynthesizer is now owned by ``TTSScheduler``, constructed
-        # later in __init__ after the AudioRouter is available.
-        self._audio_gate = cfg.audio_gate
-        self._health_checkers: list[PeriodicHealthChecker] = []
-        self._telephony_helpers: list[SessionHelper] = list(cfg.telephony_helpers)
-        self._runtime_scope = RuntimeScope()
+        self._outbound_queue_max_size = _OUTBOUND_QUEUE_MAX_SIZE
+        self._outbound_queue_policy = _OUTBOUND_QUEUE_POLICY
+        self._outbound_queue_name = _OUTBOUND_QUEUE_NAME
 
-        # Agent-initiated session actions
+        # ── Session-owned services ───────────────────────────────
+        self._health_checkers: list[PeriodicHealthChecker] = []
+        self._runtime_scope = RuntimeScope()
         self._session_actions = cfg.session_actions
         self._action_executors: list[SessionActionExecutor] = [
             *cfg.action_executors,
             CoreSessionActionExecutor(),
         ]
+        # Caller / callee identity + exposure policy.  Owned by a small
+        # collaborator so Session just delegates its call_identity /
+        # caller_id_exposure properties.
+        self._caller_id = CallerIdState(
+            identity=cfg.call_identity,
+            exposure=cfg.caller_id_exposure,
+        )
+        # Telephony helpers behind a single ``session.telephony`` facade.
+        self.telephony = TelephonyFacade(list(cfg.telephony_helpers))
 
-        # State
+        # ── Lifecycle / turn-pointer state ───────────────────────
         self._is_running = False
         self._closed = False
         self._stopping = False
@@ -362,208 +228,86 @@ class Session:
         self._observability_active = False
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
-        # STT futures live on TurnContext (per-turn so a stale callback
-        # from the previous turn cannot resolve a future on the next turn).
-
         # Per-turn state — created fresh at each turn start.
-        # _turn_generation is a monotonic counter that increases each time a
-        # new turn starts, used to detect stale callbacks from previous turns.
-        # Auto-turn speech-frame counter, gated-replay pending count,
-        # playback-mark accounting, and the outbound queue all live on
-        # AudioRouter (constructed below).
+        # _turn_generation is a monotonic counter incremented at turn start
+        # so stale callbacks from previous turns are detectable.
         self._turn: TurnContext | None = None
         self._turn_generation: int = 0
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
         self._turn_manager.bind_session(self.session_id)
-        self._journal_sink = SessionJournalSink(
-            event_bus=self.event_bus,
-            journal=self._journal,
-            artifact_store=self._artifact_store,
-            session_id=self.session_id,
-            current_turn_id=self._journal_turn_id,
-        )
-        self._journal_sink.subscribe()
 
-        # WS3 T3.10 integration: instantiate every stage wrapper and a
-        # shared RunContext so Session can route provider calls through
-        # stages for journal + artifact capture.  Stages are the debug /
-        # replay surface; Session keeps pipeline orchestration (T3.10).
-        self._run_ctx = RunContext(
-            run_id=self.session_id,
-            session_id=self.session_id,
-            runtime_mode=cfg.runtime_mode,
-            journal=self._journal,
-            artifact_store=self._artifact_store,
-        )
-        self._no_turn = TurnContext(turn_id="no-turn", cancel_token=CancelToken())
-        self._stt_stage = STTStage(self.stt, journal=self._journal)
-        self._tts_stage = TTSStage(self.tts, journal=self._journal)
-        self._vad_stage = VADStage(self.vad, journal=self._journal)
-        self._audio_stage = AudioStage(
-            self.noise_reducer,
-            echo_canceller=self.echo_canceller if self._enable_aec else None,
-            journal=self._journal,
-        )
-        self._transport_stage = TransportStage(self.transport, journal=self._journal)
-        self._agent_stage = AgentStage(
-            self.agent,
-            journal=self._journal,
-            artifact_store=self._artifact_store,
-            session_id=self.session_id,
-            mcp_servers=tuple(cfg.mcp_servers),
-        )
-        self._turn_stage = TurnStage(
-            self._turn_manager.endpoint_detector,
-            journal=self._journal,
-        )
+        # ── Assemble collaborators ───────────────────────────────
+        # The builder constructs the 7 stages, the shared RunContext, the
+        # journal sink, the outbound queue, and every collaborator
+        # (AudioRouter, STTCommitter, TTSScheduler, CancelOrchestrator,
+        # TurnRunner, GreetingController, OptOutPolicy), wires their
+        # event-bus subscriptions and TurnManager bindings, and returns the
+        # assembled bundle for us to unpack onto private fields.
+        self._unpack(build_session(self, cfg))
 
-        def _set_running(value: bool) -> None:
-            self._is_running = value
+    def _unpack(self, components: SessionComponents) -> None:
+        """Assign the assembled collaborator bundle onto private fields.
 
-        self._audio_router = AudioRouter(
-            transport=self.transport,
-            audio_stage=self._audio_stage,
-            vad_stage=self._vad_stage,
-            stt_stage=self._stt_stage,
-            transport_stage=self._transport_stage,
-            turn_manager=self._turn_manager,
-            event_bus=self.event_bus,
-            journal_sink=self._journal_sink,
-            run_ctx=self._run_ctx,
-            no_turn=self._no_turn,
-            echo_canceller=self.echo_canceller,
-            enable_noise_reduction=lambda: self._enable_noise_reduction,
-            enable_aec=lambda: self._enable_aec,
-            enable_vad=lambda: self._enable_vad,
-            auto_turn_from_stt_final=lambda: self._auto_turn_from_stt_final,
-            emit=self._emit,
-            is_running=lambda: self._is_running,
-            set_running=_set_running,
-            current_turn=lambda: self._turn,
-            is_stt_active=lambda: self._stt_committer.is_active,
-            with_correlation=self._with_correlation,
-            outbound_queue=self._outbound_queue,
-        )
-        self.event_bus.subscribe(PlaybackMarkAck, self._audio_router.on_playback_ack)
-        self.event_bus.subscribe(TransportAudioDelivered, self._audio_router.on_audio_delivered)
+        Field names are preserved (``_audio_router``, ``_stt_committer``,
+        …) so the orchestration in this class — and the tests that poke
+        these internals — keep working.
+        """
+        self._run_ctx = components.run_ctx
+        self._no_turn = components.no_turn
+        self._journal_sink = components.journal_sink
+        self._outbound_queue = components.outbound_queue
+        self._stt_stage = components.stt_stage
+        self._tts_stage = components.tts_stage
+        self._vad_stage = components.vad_stage
+        self._audio_stage = components.audio_stage
+        self._transport_stage = components.transport_stage
+        self._agent_stage = components.agent_stage
+        self._turn_stage = components.turn_stage
+        self._audio_router = components.audio_router
+        self._stt_committer = components.stt_committer
+        self._tts_scheduler = components.tts_scheduler
+        self._cancel = components.cancel_orchestrator
+        self._turn_runner = components.turn_runner
+        self._greeting = components.greeting
+        self._opt_out = components.opt_out
 
-        self._stt_committer = STTCommitter(
-            stt=lambda: self.stt,
-            event_bus=self.event_bus,
-            journal_sink=self._journal_sink,
-            runtime_scope=self._runtime_scope,
-            timeout_config=self._timeout_config,
-            segment_silence_ms=stt_segment_silence_ms,
-            no_turn=self._no_turn,
-            current_turn=lambda: self._turn,
-            turn_manager=self._turn_manager,
-            emit=self._emit,
-            auto_turn_from_stt_final=lambda: self._auto_turn_from_stt_final,
-            on_speech_detection_reset=self._audio_router.reset_speech_detection,
-        )
-        self.event_bus.subscribe(VADStopSpeaking, self._stt_committer.schedule)
-        self.event_bus.subscribe(VADStartSpeaking, self._stt_committer.cancel_scheduled)
+    def _validate_providers(self, cfg: SessionConfig) -> None:
+        """Reject noop providers for audio sessions; warn on missing NR backend.
 
-        def _clear_turn() -> None:
-            self._turn = None
-
-        self._tts_scheduler = TTSScheduler(
-            tts=lambda: self.tts,
-            tts_stage=self._tts_stage,
-            turn_manager=self._turn_manager,
-            event_bus=self.event_bus,
-            journal_sink=self._journal_sink,
-            run_ctx=self._run_ctx,
-            no_turn=self._no_turn,
-            audio_router=self._audio_router,
-            outbound_queue=self._outbound_queue,
-            timeout_config=self._timeout_config,
-            correlation_ids=lambda: (
-                self.session_id,
-                active.id if (active := self._active_turn()) else None,
-            ),
-            audio_gate=cfg.audio_gate,
-            output_processors=list(cfg.output_processors),
-            strip_markdown_enabled=cfg.strip_markdown,
-            current_turn=lambda: self._turn,
-            is_gated=lambda: self._is_gated,
-            drain_session_actions=self._drain_session_actions,
-            clear_turn=_clear_turn,
-        )
-
-        # Cancel orchestrator — owns control-signal propagation, barge-in
-        # suppression policy, and the interruption-config knobs.  Must be
-        # constructed after all 7 stages and the STTCommitter/TTSScheduler
-        # exist; it is wired into the TurnManager below.
-        self._cancel = CancelOrchestrator(
-            transport_stage=self._transport_stage,
-            tts_stage=self._tts_stage,
-            agent_stage=self._agent_stage,
-            turn_stage=self._turn_stage,
-            stt_stage=self._stt_stage,
-            vad_stage=self._vad_stage,
-            audio_stage=self._audio_stage,
-            run_ctx=self._run_ctx,
-            journal_sink=self._journal_sink,
-            interruption_mode=cfg.interruption_mode,
-            interruption_latency_compensation_ms=cfg.interruption_latency_compensation_ms,
-            interruption_ack_stale_ms=cfg.interruption_ack_stale_ms,
-            interruption_ack_tail_cap_ms=cfg.interruption_ack_tail_cap_ms,
-            current_turn=lambda: self._turn,
-            session_actions=lambda: self._session_actions,
-            telephony_helpers_present=lambda: bool(self._telephony_helpers),
-            cancel_turn_impl=self.cancel_turn,
-        )
-        # Install the orchestrator's barge-in callback now that it exists.
-        self._turn_manager.set_cancel_callback(self._cancel.for_barge_in)
-
-        # Turn runner — owns the per-turn agent loop.  Depends on every
-        # collaborator above (STTCommitter, TTSScheduler, AudioRouter,
-        # CancelOrchestrator, AgentStage), so its event subscriptions are
-        # deferred until after it is constructed.
-        self._turn_runner = TurnRunner(
-            stt_committer=self._stt_committer,
-            tts_scheduler=self._tts_scheduler,
-            audio_router=self._audio_router,
-            cancel_orchestrator=self._cancel,
-            turn_manager=self._turn_manager,
-            agent_stage=self._agent_stage,
-            run_ctx=self._run_ctx,
-            event_bus=self.event_bus,
-            journal_sink=self._journal_sink,
-            runtime_scope=self._runtime_scope,
-            timeout_config=self._timeout_config,
-            turn_handle=_SessionTurnHandle(self),
-            stt_stage=self._stt_stage,
-            stt_provider=lambda: self.stt,
-            is_running=lambda: self._is_running,
-            is_gated=lambda: self._is_gated,
-            agent=lambda: self.agent,
-            drain_session_actions=self._drain_session_actions,
-            caller_id_system_message=self._caller_id_system_message,
-            # ``stop`` is re-read each call so test patches via
-            # ``session.stop = AsyncMock(...)`` are observable to the runner.
-            stop=lambda: self.stop(),
-            reset_turn_state=self._reset_turn_state,
-            emit=self._emit,
-            session_id=self.session_id,
-            journal_enabled=self._journal is not None,
-        )
-        # Wire TurnStarted / TurnEnded subscriptions now that the runner
-        # exists (its handlers are the subscribers).
-        self.event_bus.subscribe(TurnStarted, self._turn_runner.on_turn_started)
-        self.event_bus.subscribe(TurnEnded, self._turn_runner.schedule_turn_ended)
-
-        # Plug the TurnStage into the TurnManager's endpoint-detector call
-        # so smart-turn decisions go through stage.execute() and produce
-        # journal records.
-        if self._turn_manager.endpoint_detector is not None:
-            self._turn_manager.bind_endpoint_stage(
-                self._turn_stage,
-                run_ctx_getter=lambda: self._run_ctx,
-                turn_getter=lambda: self._turn or self._no_turn,
+        Text sessions intentionally use noop audio providers, so the check
+        is skipped there.
+        """
+        if cfg.runtime_mode == "text_session":
+            return
+        noops = []
+        if is_passthrough_provider(self.stt):
+            noops.append("stt")
+        if is_passthrough_provider(self.tts):
+            noops.append("tts")
+        if cfg.enable_vad and is_passthrough_provider(self.vad):
+            noops.append("vad")
+        # A passthrough noise reducer is a legitimate graceful-degradation
+        # outcome (no optional backend installed), mirroring PassthroughAEC.
+        # ``create_noise_reducer`` already logs an actionable warning — and
+        # ``NoiseReducerConfig(fallback_policy="error")`` is the opt-in for
+        # fail-loud — so enabling noise reduction without a backend must
+        # warn-and-continue rather than crash at Session construction.
+        if cfg.enable_noise_reduction and is_passthrough_provider(self.noise_reducer):
+            logger.warning(
+                "Noise reduction is enabled but the configured noise_reducer is a "
+                "passthrough (no real backend); audio will pass through unchanged. "
+                "Install easycat[rnnoise] or configure Krisp, or set "
+                "NoiseReducerConfig(fallback_policy='error') to fail loudly instead."
+            )
+        if is_passthrough_provider(self.transport):
+            noops.append("transport")
+        if cfg.agent is None and is_passthrough_provider(self.agent):
+            noops.append("agent")
+        if noops:
+            raise ValueError(
+                "SessionConfig must provide non-noop implementations for: " + ", ".join(noops)
             )
 
     @staticmethod
@@ -827,16 +571,14 @@ class Session:
             self.event_bus.unsubscribe(event_type, handler)
 
     def get_helper(self, helper_type: type[_HelperT]) -> _HelperT | None:
-        """Return the first attached session helper matching *helper_type*.
+        """Return the first attached telephony helper matching *helper_type*.
 
-        Telephony features are lifecycle-managed helpers under the hood.  This
-        accessor keeps advanced applications off ``_telephony_helpers`` while
-        preserving the lightweight helper model.
+        Thin delegate to :attr:`telephony`; equivalent to
+        ``session.telephony.get(helper_type)``.  The named accessors
+        (``session.telephony.outbound_call_manager`` etc.) are usually
+        more convenient.
         """
-        for helper in self._telephony_helpers:
-            if isinstance(helper, helper_type):
-                return helper
-        return None
+        return self.telephony.get(helper_type)
 
     def export_debug_bundle(
         self,
@@ -945,46 +687,19 @@ class Session:
         return "custom"
 
     @property
-    def outbound_call_manager(self) -> Any | None:
-        """Outbound call manager attached to this session, when configured."""
-        from easycat.telephony.outbound import OutboundCallManager
-
-        return self.get_helper(OutboundCallManager)
-
-    @property
-    def outbound_call_state_machine(self) -> Any | None:
-        """Outbound call state machine attached to this session, when configured."""
-        from easycat.telephony.call_state import OutboundCallStateMachine
-
-        return self.get_helper(OutboundCallStateMachine)
-
-    @property
-    def number_health_monitor(self) -> Any | None:
-        """Per-number health monitor attached to this session, when configured."""
-        from easycat.telephony.number_health import NumberHealthMonitor
-
-        return self.get_helper(NumberHealthMonitor)
-
-    @property
-    def call_disposition_tracker(self) -> Any | None:
-        """Call disposition tracker attached to this session, when configured."""
-        from easycat.telephony.number_health import CallDispositionTracker
-
-        return self.get_helper(CallDispositionTracker)
-
-    @property
     def dnc_list(self) -> Any | None:
         """Do-Not-Call list consulted by opt-out auto-detection.
 
         Apps that want opt-out flows to persist across sessions
         assign the same ``DNCList`` instance to every session
         (or wire a shared store behind a DNC-list-compatible object).
+        Delegates to the :class:`OptOutPolicy` collaborator that owns it.
         """
-        return self._dnc_list
+        return self._opt_out.dnc_list
 
     @dnc_list.setter
     def dnc_list(self, value: Any | None) -> None:
-        self._dnc_list = value
+        self._opt_out.dnc_list = value
 
     @property
     def call_identity(self) -> CallIdentity | None:
@@ -996,51 +711,23 @@ class Session:
         Tool code (including agent function tools) reads this directly
         unless :attr:`caller_id_exposure` is ``"off"``.  Internal
         telephony policy hooks retain the private value so opt-out
-        detection can still update DNC state.
+        detection can still update DNC state.  Delegates to the
+        :class:`CallerIdState` collaborator.
         """
-        if self._caller_id_exposure == "off":
-            return None
-        return self._call_identity
+        return self._caller_id.identity
 
     @call_identity.setter
     def call_identity(self, value: CallIdentity | None) -> None:
-        self._call_identity = value
+        self._caller_id.identity = value
 
     @property
     def caller_id_exposure(self) -> CallerIdExposure:
         """Exposure policy for :attr:`call_identity`."""
-        return self._caller_id_exposure
+        return self._caller_id.exposure
 
     @caller_id_exposure.setter
     def caller_id_exposure(self, value: CallerIdExposure) -> None:
-        self._caller_id_exposure = value
-
-    def _caller_id_system_message(self) -> str | None:
-        """Render the caller-ID system message for the agent, or None.
-
-        Returns ``None`` when the exposure policy hides the caller ID
-        from the LLM (``"tools_only"`` / ``"off"``) or when we have no
-        identity to share yet.
-        """
-        if self._caller_id_exposure != "system_message":
-            return None
-        identity = self._call_identity
-        if identity is None:
-            return None
-        parts: list[str] = []
-        if identity.caller_number:
-            prefix = "The caller's phone number is"
-            if identity.direction == "outbound":
-                prefix = "This outbound call is to"
-            parts.append(f"{prefix} {identity.caller_number}.")
-        if identity.called_number:
-            if identity.direction == "outbound":
-                parts.append(f"It was placed from {identity.called_number}.")
-            else:
-                parts.append(f"They dialed {identity.called_number}.")
-        if identity.display_name:
-            parts.append(f"Caller ID name: {identity.display_name}.")
-        return " ".join(parts) if parts else None
+        self._caller_id.exposure = value
 
     @property
     def turn_state(self) -> TurnState:
@@ -1219,7 +906,7 @@ class Session:
                     checker.start()
                     self._health_checkers.append(checker)
 
-            for helper in self._telephony_helpers:
+            for helper in self.telephony.helpers:
                 helper.start()
 
             self._is_running = True
@@ -1329,7 +1016,7 @@ class Session:
                 # force path drains the scope before provider teardown.
                 await self._runtime_scope.cancel_and_drain()
                 self._stt_committer.clear_task_handles()
-                self._greeting_task = None
+                self._greeting.clear_task()
                 self._heartbeat_task = None
             else:
                 # Graceful path: always perform cleanup — even when the
@@ -1352,7 +1039,7 @@ class Session:
                             " BotStoppedSpeaking is emitted if needed."
                         )
 
-                await self._cancel_greeting_task()
+                await self._greeting.cancel()
                 await self._stt_committer.cancel(turn)
                 await self._tts_scheduler.cancel()
 
@@ -1603,98 +1290,9 @@ class Session:
         """Manually end the current user turn (push-to-talk mode)."""
         await self._turn_manager.end_turn()
 
-    # ── TurnManager callbacks ──────────────────────────────────
-
-    def _on_call_answered_greet(self, event: Any) -> None:
-        """Schedule the configured greeting once per call.
-
-        Wires :attr:`_greeting` into the first
-        :class:`~easycat.events.CallAnswered`.  The actual TTS work is
-        detached from event dispatch so outbound status callbacks can
-        complete lifecycle/AMD processing without waiting on synthesis.
-        Uses the
-        ``synthesize_bypass`` path so the greeting plays even when a
-        classification gate is still buffering (outbound answering
-        machine window).  Subsequent ``CallAnswered`` events — e.g. a
-        warm-transfer re-answer — are ignored.
-        """
-        if self._greeting_spoken or not self._greeting:
-            return
-        if self._greeting_task is not None and not self._greeting_task.done():
-            return
-        task = self._runtime_scope.create_journaled_task(
-            self._deliver_call_answered_greeting(self._greeting),
-            name="call_answered_greeting",
-            journal_sink=self._journal_sink,
-        )
-        self._greeting_task = task
-        task.add_done_callback(self._clear_greeting_task)
-
-    def _clear_greeting_task(self, task: asyncio.Task[Any]) -> None:
-        if self._greeting_task is task:
-            self._greeting_task = None
-
-    async def _deliver_call_answered_greeting(self, greeting: str) -> None:
-        await asyncio.sleep(0)
-        try:
-            await self.synthesize_bypass(greeting)
-            self._greeting_spoken = True
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.debug("Failed to synthesize greeting", exc_info=True)
-
-    async def _cancel_greeting_task(self) -> None:
-        task = self._greeting_task
-        if task is not None and not task.done():
-            await self._runtime_scope.cancel_and_drain("call_answered_greeting")
-        self._greeting_task = None
-
-    async def _on_stt_final_opt_out(self, event: STTFinal) -> None:
-        """Detect TCPA opt-out phrases in every STT final and react.
-
-        Skipped when the caller disabled ``opt_out_detection`` or when
-        the text is empty.  On match: emits
-        :class:`~easycat.events.OptOutDetected`, adds the caller to
-        ``session.dnc_list`` if set, and enqueues a
-        :class:`EndCallAction` so the call terminates after the
-        current agent utterance.
-        """
-        from easycat.events import OptOutDetected
-        from easycat.telephony.compliance import match_opt_out_phrase
-
-        if not event.text:
-            return
-        phrase = match_opt_out_phrase(event.text, self._opt_out_phrases)
-        if phrase is None:
-            return
-
-        number = self._call_identity.caller_number if self._call_identity else ""
-        if self._dnc_list is not None and number:
-            try:
-                self._dnc_list.add(number)
-            except Exception:
-                logger.debug("dnc_list.add raised for opt-out", exc_info=True)
-
-        await self._emit(OptOutDetected(number=number, phrase=phrase, text=event.text))
-
-        # Queue a hangup after the current agent utterance so the
-        # session drains cleanly (saying "understood, goodbye" first
-        # is the agent's job; we just schedule the end).  When no
-        # action queue is present we fall back to firing
-        # ``Session.stop`` — opt-out must terminate the call.
-        if self._session_actions is not None:
-            self._session_actions.end_call(reason="opt_out")
-        else:
-            self._runtime_scope.create_journaled_task(
-                self.stop(),
-                name="opt_out_stop",
-                journal_sink=self._journal_sink,
-            )
-
     def _stop_helpers(self) -> None:
         """Stop attached helper components that own event subscriptions/state."""
-        for helper in self._telephony_helpers:
+        for helper in self.telephony.helpers:
             try:
                 helper.stop()
             except Exception:

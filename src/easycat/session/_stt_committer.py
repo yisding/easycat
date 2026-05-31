@@ -27,8 +27,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from easycat.events import (
     Error,
@@ -48,6 +48,7 @@ from easycat.turn_manager import TurnManagerState
 
 if TYPE_CHECKING:
     from easycat._turn_context import TurnContext
+    from easycat.session._wiring import SessionWiringContext
     from easycat.turn_manager import TurnManager
 
 logger = logging.getLogger(__name__)
@@ -93,30 +94,27 @@ class STTCommitter:
     def __init__(
         self,
         *,
-        stt: Callable[[], STTProvider],
+        wiring: SessionWiringContext,
         event_bus: EventBus,
         journal_sink: SessionJournalSink,
         runtime_scope: RuntimeScope,
         timeout_config: TimeoutConfig,
         segment_silence_ms: int,
         no_turn: TurnContext,
-        current_turn: Callable[[], TurnContext | None],
         turn_manager: TurnManager,
-        emit: Callable[[Any], Awaitable[None]],
-        auto_turn_from_stt_final: Callable[[], bool],
         on_speech_detection_reset: Callable[[], None] = lambda: None,
     ) -> None:
-        self._stt_getter = stt
+        self._stt_getter = wiring.stt
         self._event_bus = event_bus
         self._journal_sink = journal_sink
         self._runtime_scope = runtime_scope
         self._timeout_config = timeout_config
         self._segment_silence_ms = segment_silence_ms
         self._no_turn = no_turn
-        self._current_turn = current_turn
+        self._current_turn = wiring.current_turn
         self._turn_manager = turn_manager
-        self._emit = emit
-        self._auto_turn_from_stt_final = auto_turn_from_stt_final
+        self._emit = wiring.emit
+        self._auto_turn_from_stt_final = wiring.auto_turn_from_stt_final
         self._on_speech_detection_reset = on_speech_detection_reset
 
         self._active: bool = False

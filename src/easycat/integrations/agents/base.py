@@ -467,7 +467,7 @@ class ExternalAgentBridge(Protocol):
     # ExternalAgentBridge)`` return ``False`` for every bridge / ``AgentRunner``
     # that legitimately no-ops it.  The session factory probes for it with
     # ``getattr(bridge, "configure_runtime", None)`` (see
-    # ``easycat.config._apply_runtime_settings``) and falls back to the
+    # ``easycat.config._inject_agent_runtime``) and falls back to the
     # historical private-attribute path when absent.  Bridges that consume
     # session-level ``mcp_servers`` / ``model`` / ``api_key`` settings
     # implement the following signature::

@@ -25,6 +25,7 @@ from easycat.stages.tts import TTSStage
 from easycat.stages.vad import VADStage
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManager, TurnManagerConfig
+from tests.session._wiring_helpers import make_wiring
 
 # ── Test doubles ─────────────────────────────────────────────
 
@@ -162,7 +163,28 @@ def _build_scheduler(
     outbound_queue = BoundedAudioQueue(max_size=200, name="outbound")
     current_turn_ref: dict[str, TurnContext | None] = {"turn": None}
 
+    audio_emissions: list[TTSAudio] = []
+    bus.subscribe(TTSAudio, audio_emissions.append)
+
+    async def _drain() -> bool:
+        return drain_should_stop
+
+    def _clear_turn() -> None:
+        current_turn_ref["turn"] = None
+
+    wiring = make_wiring(
+        tts=lambda: tts,
+        emit=bus.emit,
+        is_running=lambda: False,
+        current_turn=lambda: current_turn_ref["turn"],
+        correlation_ids=lambda: (session_id, None),
+        is_gated=lambda: is_gated,
+        drain_session_actions=_drain,
+        clear_turn=_clear_turn,
+    )
+
     router = AudioRouter(
+        wiring=wiring,
         transport=transport,
         audio_stage=audio_stage,
         vad_stage=vad_stage,
@@ -174,30 +196,11 @@ def _build_scheduler(
         run_ctx=run_ctx,
         no_turn=no_turn,
         echo_canceller=None,
-        enable_noise_reduction=lambda: False,
-        enable_aec=lambda: False,
-        enable_vad=lambda: False,
-        auto_turn_from_stt_final=lambda: False,
-        emit=bus.emit,
-        is_running=lambda: False,
-        set_running=lambda value: None,
-        current_turn=lambda: current_turn_ref["turn"],
-        is_stt_active=lambda: False,
-        with_correlation=lambda event: event,
         outbound_queue=outbound_queue,
     )
 
-    audio_emissions: list[TTSAudio] = []
-    bus.subscribe(TTSAudio, audio_emissions.append)
-
-    async def _drain() -> bool:
-        return drain_should_stop
-
-    def _clear_turn() -> None:
-        current_turn_ref["turn"] = None
-
     scheduler = TTSScheduler(
-        tts=lambda: tts,
+        wiring=wiring,
         tts_stage=tts_stage,
         turn_manager=turn_manager,
         event_bus=bus,
@@ -207,14 +210,9 @@ def _build_scheduler(
         audio_router=router,
         outbound_queue=outbound_queue,
         timeout_config=None,
-        correlation_ids=lambda: (session_id, None),
         audio_gate=None,
         output_processors=output_processors or [],
         strip_markdown_enabled=strip_markdown_enabled,
-        current_turn=lambda: current_turn_ref["turn"],
-        is_gated=lambda: is_gated,
-        drain_session_actions=_drain,
-        clear_turn=_clear_turn,
     )
 
     return scheduler, {

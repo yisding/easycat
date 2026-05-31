@@ -28,6 +28,7 @@ from easycat.stages.stt import STTStage
 from easycat.stages.transport import TransportStage
 from easycat.stages.vad import VADStage
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
+from tests.session._wiring_helpers import make_wiring
 
 # ── Test doubles ─────────────────────────────────────────────
 
@@ -188,7 +189,19 @@ def _make_router(
         "bus": bus,
     }
 
+    wiring = make_wiring(
+        enable_noise_reduction=lambda: enable_noise_reduction,
+        enable_aec=lambda: enable_aec,
+        enable_vad=lambda: enable_vad,
+        auto_turn_from_stt_final=lambda: auto_turn_from_stt_final,
+        emit=_emit,
+        is_running=lambda: state["running"],
+        set_running=lambda v: state.update(running=v),
+        current_turn=lambda: state["current_turn"],
+        is_stt_active=lambda: state["stt_active"],
+    )
     router = AudioRouter(
+        wiring=wiring,
         transport=transport,
         audio_stage=audio_stage,
         vad_stage=vad_stage,
@@ -200,15 +213,6 @@ def _make_router(
         run_ctx=run_ctx,
         no_turn=no_turn,
         echo_canceller=aec,
-        enable_noise_reduction=lambda: enable_noise_reduction,
-        enable_aec=lambda: enable_aec,
-        enable_vad=lambda: enable_vad,
-        auto_turn_from_stt_final=lambda: auto_turn_from_stt_final,
-        emit=_emit,
-        is_running=lambda: state["running"],
-        set_running=lambda v: state.update(running=v),
-        current_turn=lambda: state["current_turn"],
-        is_stt_active=lambda: state["stt_active"],
         outbound_queue=queue,
     )
     return router, state

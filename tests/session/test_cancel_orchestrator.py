@@ -22,6 +22,7 @@ from easycat.session._cancel_orchestrator import CancelOrchestrator
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session.actions import SessionActions
 from easycat.stages.base import ControlSignal, InterruptSignal
+from tests.session._wiring_helpers import make_wiring
 
 # ── Test doubles ─────────────────────────────────────────────
 
@@ -78,6 +79,12 @@ def _make_orchestrator(
         return None
 
     orch = CancelOrchestrator(
+        wiring=make_wiring(
+            current_turn=lambda: current_turn,
+            session_actions=lambda: session_actions,
+            telephony_helpers_present=lambda: telephony_present,
+            cancel_turn=cancel_turn_impl or _default_cancel,
+        ),
         transport_stage=stages["transport"],
         tts_stage=stages["tts"],
         agent_stage=stages["agent"],
@@ -91,10 +98,6 @@ def _make_orchestrator(
         interruption_latency_compensation_ms=120,
         interruption_ack_stale_ms=200,
         interruption_ack_tail_cap_ms=80,
-        current_turn=lambda: current_turn,
-        session_actions=lambda: session_actions,
-        telephony_helpers_present=lambda: telephony_present,
-        cancel_turn_impl=cancel_turn_impl or _default_cancel,
     )
     return orch, stages, journal
 
@@ -238,6 +241,7 @@ def test_negative_interruption_knobs_are_clamped(field_name: str, init_kwarg: st
     sink, _ = _make_journal_sink()
 
     base_kwargs: dict[str, Any] = dict(
+        wiring=make_wiring(),
         transport_stage=stages["transport"],
         tts_stage=stages["tts"],
         agent_stage=stages["agent"],
@@ -251,10 +255,6 @@ def test_negative_interruption_knobs_are_clamped(field_name: str, init_kwarg: st
         interruption_latency_compensation_ms=0,
         interruption_ack_stale_ms=0,
         interruption_ack_tail_cap_ms=0,
-        current_turn=lambda: None,
-        session_actions=lambda: None,
-        telephony_helpers_present=lambda: False,
-        cancel_turn_impl=lambda **_: None,
     )
     base_kwargs[init_kwarg] = -500
     orch = CancelOrchestrator(**base_kwargs)

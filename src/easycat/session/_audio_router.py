@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from easycat import _observability as observability
@@ -54,6 +53,7 @@ from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
     from easycat._turn_context import TurnContext
+    from easycat.session._wiring import SessionWiringContext
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,7 @@ class AudioRouter:
     def __init__(
         self,
         *,
+        wiring: SessionWiringContext,
         transport: Transport,
         audio_stage: AudioStage,
         vad_stage: VADStage,
@@ -118,20 +119,7 @@ class AudioRouter:
         run_ctx: RunContext,
         no_turn: TurnContext,
         echo_canceller: Any,
-        # Capability flags as callables so the loop body reads live
-        # values even when Session mutates them after construction.
-        enable_noise_reduction: Callable[[], bool],
-        enable_aec: Callable[[], bool],
-        enable_vad: Callable[[], bool],
-        auto_turn_from_stt_final: Callable[[], bool],
-        # Callbacks
-        emit: Callable[[Any], Awaitable[None]],
-        is_running: Callable[[], bool],
-        set_running: Callable[[bool], None],
-        current_turn: Callable[[], TurnContext | None],
-        is_stt_active: Callable[[], bool],
-        with_correlation: Callable[[Any], Any] | None = None,
-        # Outbound queue is constructed by Session; the router receives
+        # Outbound queue is constructed by the builder; the router receives
         # the same instance so external supplies and the TTSSynthesizer
         # keep their references valid.
         outbound_queue: BoundedAudioQueue,
@@ -153,17 +141,20 @@ class AudioRouter:
         # of the session, rather than spamming the log per outbound chunk.
         self._aec_reference_failed: bool = False
 
-        self._enable_noise_reduction = enable_noise_reduction
-        self._enable_aec = enable_aec
-        self._enable_vad = enable_vad
-        self._auto_turn_from_stt_final = auto_turn_from_stt_final
+        # Session-derived late-bound accessors.  The loop body reads live
+        # values even when Session mutates the enable_* knobs / turn
+        # pointer after construction.
+        self._enable_noise_reduction = wiring.enable_noise_reduction
+        self._enable_aec = wiring.enable_aec
+        self._enable_vad = wiring.enable_vad
+        self._auto_turn_from_stt_final = wiring.auto_turn_from_stt_final
 
-        self._emit = emit
-        self._is_running = is_running
-        self._set_running = set_running
-        self._current_turn = current_turn
-        self._is_stt_active = is_stt_active
-        self._with_correlation = with_correlation or (lambda evt: evt)
+        self._emit = wiring.emit
+        self._is_running = wiring.is_running
+        self._set_running = wiring.set_running
+        self._current_turn = wiring.current_turn
+        self._is_stt_active = wiring.is_stt_active
+        self._with_correlation = wiring.with_correlation
 
         # Auto-turn speech-energy detector state
         self._auto_turn_speech_frames: int = 0

@@ -24,6 +24,7 @@ from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._stt_committer import STTCommitter
 from easycat.timeouts import TimeoutConfig
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
+from tests.session._wiring_helpers import make_wiring
 
 
 class _RecordingSTT:
@@ -92,17 +93,19 @@ def _make_committer(
     sink.subscribe()
 
     committer = STTCommitter(
-        stt=lambda: stt,
+        wiring=make_wiring(
+            stt=lambda: stt,
+            current_turn=current_turn,
+            emit=_emit,
+            auto_turn_from_stt_final=lambda: auto_turn,
+        ),
         event_bus=bus,
         journal_sink=sink,
         runtime_scope=RuntimeScope(),
         timeout_config=timeout_config,
         segment_silence_ms=segment_silence_ms,
         no_turn=no_turn,
-        current_turn=current_turn,
         turn_manager=tm,
-        emit=_emit,
-        auto_turn_from_stt_final=lambda: auto_turn,
         on_speech_detection_reset=on_speech_detection_reset,
     )
     return committer, stt, emitted, no_turn, tm
@@ -215,17 +218,14 @@ async def test_await_pending_returns_false_on_timeout_and_emits_error() -> None:
     no_turn = TurnContext("no-turn", CancelToken())
     tm = TurnManager(bus, config=TurnManagerConfig())
     committer = STTCommitter(
-        stt=lambda: _RecordingSTT(),
+        wiring=make_wiring(stt=lambda: _RecordingSTT(), emit=_emit),
         event_bus=bus,
         journal_sink=sink,
         runtime_scope=RuntimeScope(),
         timeout_config=TimeoutConfig(stt_timeout=0.05),
         segment_silence_ms=0,
         no_turn=no_turn,
-        current_turn=lambda: None,
         turn_manager=tm,
-        emit=_emit,
-        auto_turn_from_stt_final=lambda: False,
     )
     turn = _new_turn()
     # Add a pending future that will never resolve.
@@ -263,17 +263,14 @@ async def test_await_pending_timeout_error_names_real_provider() -> None:
     no_turn = TurnContext("no-turn", CancelToken())
     tm = TurnManager(bus, config=TurnManagerConfig())
     committer = STTCommitter(
-        stt=lambda: _NamedSTT(),
+        wiring=make_wiring(stt=lambda: _NamedSTT(), emit=_emit),
         event_bus=bus,
         journal_sink=sink,
         runtime_scope=RuntimeScope(),
         timeout_config=TimeoutConfig(stt_timeout=0.05),
         segment_silence_ms=0,
         no_turn=no_turn,
-        current_turn=lambda: None,
         turn_manager=tm,
-        emit=_emit,
-        auto_turn_from_stt_final=lambda: False,
     )
     turn = _new_turn()
     turn.pending_stt_segment_futures.append(asyncio.get_running_loop().create_future())

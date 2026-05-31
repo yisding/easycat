@@ -303,26 +303,28 @@ def patch_provider_factories(
     noise_reducer: Any | None = None,
     echo_canceller: Any | None = None,
 ) -> None:
-    import easycat.config as config_module
+    # ``create_session`` resolves these provider factories from its own module
+    # globals (``easycat.config._factory``), so the patch must land there.
+    import easycat.config._factory as factory_module
 
     monkeypatch.setattr(
-        config_module,
+        factory_module,
         "create_stt_provider_from_config",
         lambda config, event_bus: stt,
     )
     monkeypatch.setattr(
-        config_module,
+        factory_module,
         "create_tts_provider_from_config",
         lambda config, event_bus: tts,
     )
-    monkeypatch.setattr(config_module, "create_vad", lambda config: vad)
+    monkeypatch.setattr(factory_module, "create_vad", lambda config: vad)
     monkeypatch.setattr(
-        config_module,
+        factory_module,
         "create_noise_reducer",
         lambda config: noise_reducer or IdentityNoiseReducer(),
     )
     monkeypatch.setattr(
-        config_module,
+        factory_module,
         "create_echo_canceller",
         lambda config: echo_canceller or PassthroughAEC(),
     )

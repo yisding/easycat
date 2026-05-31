@@ -49,11 +49,14 @@ def test_create_session_exposes_outbound_helpers(monkeypatch: pytest.MonkeyPatch
         )
     )
 
-    assert isinstance(session.outbound_call_state_machine, OutboundCallStateMachine)
-    assert session.get_helper(OutboundCallStateMachine) is session.outbound_call_state_machine
-    assert isinstance(session.number_health_monitor, NumberHealthMonitor)
-    assert isinstance(session.call_disposition_tracker, CallDispositionTracker)
-    assert session.outbound_call_manager is None
+    assert isinstance(session.telephony.outbound_call_state_machine, OutboundCallStateMachine)
+    assert (
+        session.get_helper(OutboundCallStateMachine)
+        is session.telephony.outbound_call_state_machine
+    )
+    assert isinstance(session.telephony.number_health_monitor, NumberHealthMonitor)
+    assert isinstance(session.telephony.call_disposition_tracker, CallDispositionTracker)
+    assert session.telephony.outbound_call_manager is None
 
 
 @pytest.mark.asyncio
@@ -86,7 +89,7 @@ async def test_create_session_replays_gated_audio_after_human_classification(
 
     await session.start()
     try:
-        outbound_sm = session.outbound_call_state_machine
+        outbound_sm = session.telephony.outbound_call_state_machine
         assert isinstance(outbound_sm, OutboundCallStateMachine)
 
         outbound_sm.gate.close()

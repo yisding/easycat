@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from easycat._bounded_queue import BoundedAudioQueue
@@ -35,7 +35,6 @@ from easycat.llm_output_processing import (
     LLMOutputProcessor,
     apply_output_processors,
 )
-from easycat.providers import TTSProvider
 from easycat.runtime.context import RunContext
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.stages.tts import TTSStage
@@ -46,6 +45,7 @@ from easycat.turn_manager import TurnManager
 if TYPE_CHECKING:
     from easycat._turn_context import TurnContext
     from easycat.session._audio_router import AudioRouter
+    from easycat.session._wiring import SessionWiringContext
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class TTSScheduler:
     def __init__(
         self,
         *,
-        tts: Callable[[], TTSProvider],
+        wiring: SessionWiringContext,
         tts_stage: TTSStage,
         turn_manager: TurnManager,
         event_bus: EventBus,
@@ -66,18 +66,12 @@ class TTSScheduler:
         audio_router: AudioRouter,
         outbound_queue: BoundedAudioQueue,
         timeout_config: TimeoutConfig | None,
-        correlation_ids: Callable[[], tuple[str | None, str | None]],
         audio_gate: Callable[[], bool] | None,
         # Config
         output_processors: list[LLMOutputProcessor],
         strip_markdown_enabled: bool,
-        # Callbacks
-        current_turn: Callable[[], TurnContext | None],
-        is_gated: Callable[[], bool],
-        drain_session_actions: Callable[[], Awaitable[bool]],
-        clear_turn: Callable[[], None],
     ) -> None:
-        self._tts_getter = tts
+        self._tts_getter = wiring.tts
         self._tts_stage = tts_stage
         self._turn_manager = turn_manager
         self._event_bus = event_bus
@@ -89,17 +83,17 @@ class TTSScheduler:
         self._output_processors = output_processors
         self._strip_markdown = strip_markdown_enabled
 
-        self._current_turn = current_turn
-        self._is_gated = is_gated
-        self._drain_session_actions = drain_session_actions
-        self._clear_turn = clear_turn
+        self._current_turn = wiring.current_turn
+        self._is_gated = wiring.is_gated
+        self._drain_session_actions = wiring.drain_session_actions
+        self._clear_turn = wiring.clear_turn
 
         self._synth = TTSSynthesizer(
-            tts=tts(),
+            tts=wiring.tts(),
             event_bus=event_bus,
             outbound_queue=outbound_queue,
             timeout_config=timeout_config,
-            correlation_ids=correlation_ids,
+            correlation_ids=wiring.correlation_ids,
             audio_gate=audio_gate,
         )
         self._synth.bind_stage(
