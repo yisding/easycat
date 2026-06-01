@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from websockets.datastructures import Headers
 
 from easycat import EasyConfig, WebSocketTransportConfig, create_session
 
@@ -149,6 +150,42 @@ def test_ws_server_example_imports():
     import examples.ws_server as ws_server
 
     assert callable(ws_server.main)
+
+
+def test_ws_server_settings_default_to_loopback(monkeypatch: pytest.MonkeyPatch):
+    import examples.ws_server as ws_server
+
+    monkeypatch.delenv("EASYCAT_WS_HOST", raising=False)
+    monkeypatch.delenv("EASYCAT_WS_TOKEN", raising=False)
+    monkeypatch.delenv("EASYCAT_WS_MAX_SESSIONS", raising=False)
+
+    settings = ws_server._load_settings()
+
+    assert settings.host == "127.0.0.1"
+    assert settings.port == 8765
+    assert settings.auth_token is None
+    assert settings.max_sessions == 10
+
+
+def test_ws_server_authorizes_bearer_or_query_token():
+    import examples.ws_server as ws_server
+
+    headers = Headers([("Authorization", "Bearer expected-token")])
+
+    assert ws_server._authorized(headers, "/", "expected-token")
+    assert ws_server._authorized(Headers(), "/?token=expected-token", "expected-token")
+    assert not ws_server._authorized(Headers(), "/", "expected-token")
+    assert not ws_server._authorized(
+        Headers([("Authorization", "Bearer wrong")]), "/", "expected-token"
+    )
+
+
+def test_docker_compose_binds_ws_port_to_loopback_and_requires_token():
+    compose = (REPO_ROOT / "docker" / "compose.yaml").read_text()
+
+    assert "EASYCAT_WS_TOKEN: ${EASYCAT_WS_TOKEN:?set EASYCAT_WS_TOKEN" in compose
+    assert '"127.0.0.1:8765:8765"' in compose
+    assert '- "8765:8765"' not in compose
 
 
 def test_ws_supervisor_server_example_imports():
