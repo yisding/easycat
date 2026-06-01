@@ -296,9 +296,8 @@ class LangChainBridge:
         ended_runs: set[str] = set()
         # Shared state for translator-side bookkeeping: tool-call dedup
         # across the chat_model ``tool_call_chunks`` path and the
-        # ``on_tool_start`` / ``on_tool_end`` path, plus the set of chain
-        # run-ids that have a model descendant (used to suppress chain
-        # streams that would otherwise duplicate model tokens).
+        # ``on_tool_start`` / ``on_tool_end`` path, plus model/chain
+        # stream deduplication and parented non-chat LLM redaction guards.
         tool_state: dict[str, Any] = {}
 
         input_payload = self._build_input(turn_input.text, turn_input.context)

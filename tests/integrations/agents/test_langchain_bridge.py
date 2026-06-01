@@ -1066,12 +1066,10 @@ class TestLangChainBridgeInvoke:
     @pytest.mark.asyncio
     async def test_chain_wrapping_text_llm_streams_text(self):
         """Chains like ``PromptTemplate | FakeStreamingListLLM`` use a
-        non-chat ``BaseLLM`` whose tokens surface via ``on_llm_stream``
-        rather than ``on_chat_model_stream``.  The bridge marks the
-        parent chain as having a model descendant — so its forwarded
-        ``on_chain_stream`` chunks are suppressed — meaning the LLM's
-        own stream events must be translated or the ``done`` event ends
-        up empty."""
+        non-chat ``BaseLLM`` whose raw tokens surface via
+        ``on_llm_stream``.  The bridge should prefer the parent chain's
+        composed stream so downstream transforms/redactors remain
+        authoritative."""
 
         class _GenerationChunk:
             def __init__(self, text: str) -> None:
@@ -1145,9 +1143,8 @@ class TestLangChainBridgeInvoke:
         subclasses don't override ``_stream`` — LangChain emits only
         ``on_llm_end`` (with the full ``LLMResult``) and the chain's
         per-character ``on_chain_stream`` chunks fire afterwards.  The
-        bridge suppresses chain chunks once an LLM descendant is
-        observed (to dedupe real streaming), so without translating
-        ``on_llm_end`` the LLM's text would be silently dropped."""
+        bridge should emit the composed chain stream, not the raw LLM
+        result, when the LLM is parented by a chain."""
         runnable = _MockRunnable(
             [
                 {
@@ -1206,9 +1203,154 @@ class TestLangChainBridgeInvoke:
             events.append(ev)
         text = "".join(e.text for e in events if e.kind == "text_delta")
         done = [e for e in events if e.kind == "done"]
-        # Exactly one emission from on_llm_end — chain chunks suppressed.
+        # Exactly one emission from the composed chain stream.
         assert text == "hello world"
         assert done and done[0].text == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_parented_text_llm_uses_redacted_chain_stream(self):
+        """Raw ``on_llm_stream`` text from a BaseLLM inside a chain must
+        not bypass a downstream redactor.  The public text stream should
+        come from the root chain's composed output instead."""
+
+        class _GenerationChunk:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_llm_start",
+                    "name": "FakeStreamingListLLM",
+                    "run_id": "l",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                {
+                    "event": "on_llm_stream",
+                    "name": "FakeStreamingListLLM",
+                    "run_id": "l",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": _GenerationChunk("SECRET_TOKEN=abc123")},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableLambda",
+                    "run_id": "redactor",
+                    "parent_ids": ["seq"],
+                    "data": {"chunk": "[REDACTED]"},
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"chunk": "[REDACTED]"},
+                },
+                {
+                    "event": "on_llm_end",
+                    "name": "FakeStreamingListLLM",
+                    "run_id": "l",
+                    "parent_ids": ["seq"],
+                    "data": {"output": "SECRET_TOKEN=abc123"},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"output": "[REDACTED]"},
+                },
+            ]
+        )
+
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("bob"), _recorder()):
+            events.append(ev)
+
+        streamed = "".join(e.text for e in events if e.kind == "text_delta")
+        done = [e for e in events if e.kind == "done"]
+        assert streamed == "[REDACTED]"
+        assert done and done[0].text == "[REDACTED]"
+        ai_msgs = [
+            m
+            for m in bridge._message_history
+            if getattr(m, "type", None) == "ai"
+            or (isinstance(m, dict) and m.get("role") == "assistant")
+        ]
+        assert ai_msgs and _content_of_history_item(ai_msgs[-1]) == "[REDACTED]"
+
+    @pytest.mark.asyncio
+    async def test_parented_non_streaming_text_llm_uses_selected_chain_output(self):
+        """Parented ``on_llm_end`` should not concatenate raw generation
+        candidates when the root chain selected a sanitized final output."""
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chain_start",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {},
+                },
+                {
+                    "event": "on_llm_start",
+                    "name": "FakeStreamingListLLM",
+                    "run_id": "l",
+                    "parent_ids": ["seq"],
+                    "data": {},
+                },
+                {
+                    "event": "on_llm_end",
+                    "name": "FakeStreamingListLLM",
+                    "run_id": "l",
+                    "parent_ids": ["seq"],
+                    "data": {
+                        "output": {
+                            "generations": [
+                                [
+                                    {"text": "SECRET_TOKEN=abc123", "type": "Generation"},
+                                    {"text": "ALT_SECRET=def456", "type": "Generation"},
+                                ]
+                            ],
+                            "llm_output": None,
+                        }
+                    },
+                },
+                {
+                    "event": "on_chain_stream",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"chunk": "[REDACTED]"},
+                },
+                {
+                    "event": "on_chain_end",
+                    "name": "RunnableSequence",
+                    "run_id": "seq",
+                    "parent_ids": [],
+                    "data": {"output": "[REDACTED]"},
+                },
+            ]
+        )
+
+        bridge = LangChainBridge(runnable)
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("bob"), _recorder()):
+            events.append(ev)
+
+        streamed = "".join(e.text for e in events if e.kind == "text_delta")
+        done = [e for e in events if e.kind == "done"]
+        assert streamed == "[REDACTED]"
+        assert done and done[0].text == "[REDACTED]"
 
     @pytest.mark.asyncio
     async def test_chain_wrapping_chat_model_does_not_double_emit(self):
