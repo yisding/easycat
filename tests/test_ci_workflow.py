@@ -143,8 +143,9 @@ def test_nightly_validation_has_real_latency_job() -> None:
                 "smoke run fails loudly instead of going green silently"
             )
 
-    # Live-credential gating mirrors live-canaries: protected branches only,
-    # OPENAI_API_KEY plumbed through the live-validation environment.
+    # Live-credential gating mirrors live-canaries: protected branches only and
+    # the live-validation environment. Scope OPENAI_API_KEY only to the step
+    # that needs it so checkout/setup/install/upload steps cannot read it.
     assert (
         latency.get("if") == "github.event_name != 'pull_request' && github.ref_protected == true"
     ), "latency job must be gated to protected, non-PR runs (same as live-canaries)"
@@ -161,15 +162,38 @@ def test_nightly_validation_has_real_latency_job() -> None:
     assert env["VALIDATION_ARTIFACTS_DIR"] == expected_env, (
         "VALIDATION_ARTIFACTS_DIR must mirror the shape used by quick/socket/stress jobs"
     )
-    assert env.get("OPENAI_API_KEY") == "${{ secrets.OPENAI_API_KEY }}", (
-        "latency job must export OPENAI_API_KEY from secrets; otherwise the "
-        "smoke probe skips and the job is a silent no-op"
+    assert "OPENAI_API_KEY" not in env, (
+        "latency job must not expose OPENAI_API_KEY at job scope; only the "
+        "validation step should receive the live provider secret"
     )
 
-    mask_steps = [
-        step for step in steps if isinstance(step, dict) and "add-mask" in str(step.get("run", ""))
+    validation_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and "easycat validate latency" in str(step.get("run", ""))
     ]
-    assert mask_steps, "latency job must mask OPENAI_API_KEY in logs"
+    assert len(validation_steps) == 1, "latency job must have one validation command step"
+    validation_step = validation_steps[0]
+    assert (
+        validation_step.get("env", {}).get("OPENAI_API_KEY") == "${{ secrets.OPENAI_API_KEY }}"
+    ), (
+        "latency validation step must receive OPENAI_API_KEY from secrets; otherwise "
+        "the smoke probe skips and the job is a silent no-op"
+    )
+    assert "add-mask" in str(validation_step.get("run", "")), (
+        "latency validation step must mask OPENAI_API_KEY before invoking the live probe"
+    )
+
+    non_validation_steps_with_openai_key = [
+        step
+        for step in steps
+        if isinstance(step, dict)
+        and step is not validation_step
+        and "OPENAI_API_KEY" in step.get("env", {})
+    ]
+    assert not non_validation_steps_with_openai_key, (
+        "OPENAI_API_KEY must not be available to checkout/setup/install/upload steps"
+    )
 
     assert isinstance(latency.get("timeout-minutes"), int), (
         "latency job must declare a timeout-minutes so a hung live probe "
