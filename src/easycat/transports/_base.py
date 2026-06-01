@@ -23,6 +23,17 @@ logger = logging.getLogger(__name__)
 # WebRTC / WebTransport), so it lives here rather than in any one transport.
 # Transport-specific codes stay in their own modules.
 _DEGRADED_INBOUND_QUEUE_FULL = "inbound_queue_full"
+_DEGRADED_EMIT_MIN_INTERVAL_SECONDS = 1.0
+_DEGRADED_MAX_PENDING_TASKS = 64
+_DEGRADED_MAX_DETAIL_CHARS = 256
+
+
+def _truncate_degraded_detail(detail: str) -> str:
+    """Bound attacker-controlled diagnostic detail before task/journal emission."""
+    if len(detail) <= _DEGRADED_MAX_DETAIL_CHARS:
+        return detail
+    omitted = len(detail) - _DEGRADED_MAX_DETAIL_CHARS
+    return f"{detail[:_DEGRADED_MAX_DETAIL_CHARS]}… (truncated {omitted} chars)"
 
 
 def _enqueue_inbound_chunk(
@@ -87,6 +98,8 @@ class _AudioQueueMixin:
     _client_connected: asyncio.Event
     _event_bus: EventBus | None
     _emit_tasks: set[asyncio.Task[None]]
+    _degraded_last_emit: dict[tuple[str, bool], float]
+    _degraded_suppressed: dict[tuple[str, bool], int]
 
     def _init_audio_queue(self, max_pending_chunks: int) -> None:
         self._max_pending_chunks = max_pending_chunks
@@ -106,6 +119,9 @@ class _AudioQueueMixin:
         # mid-flight.  Observability must never block a transport hot path,
         # so emission is scheduled, not awaited.
         self._emit_tasks = getattr(self, "_emit_tasks", set())
+        # Per-reason coalescing for attacker-triggerable drop/control paths.
+        self._degraded_last_emit = getattr(self, "_degraded_last_emit", {})
+        self._degraded_suppressed = getattr(self, "_degraded_suppressed", {})
 
     def _emit_degraded(self, reason: str, detail: str = "", *, fatal: bool = False) -> None:
         """Publish a :class:`TransportDegraded` on the session event bus.
@@ -124,6 +140,25 @@ class _AudioQueueMixin:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
+        key = (reason, fatal)
+        now = loop.time()
+        last = self._degraded_last_emit.get(key)
+        if not fatal and last is not None and now - last < _DEGRADED_EMIT_MIN_INTERVAL_SECONDS:
+            self._degraded_suppressed[key] = self._degraded_suppressed.get(key, 0) + 1
+            return
+        if not fatal and len(self._emit_tasks) >= _DEGRADED_MAX_PENDING_TASKS:
+            self._degraded_suppressed[key] = self._degraded_suppressed.get(key, 0) + 1
+            return
+
+        suppressed = self._degraded_suppressed.pop(key, 0)
+        if suppressed:
+            detail = (
+                f"{detail}; suppressed {suppressed} similar events"
+                if detail
+                else (f"suppressed {suppressed} similar events")
+            )
+        detail = _truncate_degraded_detail(detail)
+        self._degraded_last_emit[key] = now
         event = TransportDegraded(
             provider=getattr(self, "transport_kind", "unknown"),
             reason=reason,

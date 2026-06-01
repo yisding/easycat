@@ -15,7 +15,12 @@ import json
 import pytest
 
 from easycat.events import EventBus, TransportDegraded
-from easycat.transports._base import _DEGRADED_INBOUND_QUEUE_FULL, _AudioQueueMixin
+from easycat.transports._base import (
+    _DEGRADED_EMIT_MIN_INTERVAL_SECONDS,
+    _DEGRADED_INBOUND_QUEUE_FULL,
+    _DEGRADED_MAX_DETAIL_CHARS,
+    _AudioQueueMixin,
+)
 from easycat.transports.websocket import (
     _DEGRADED_CONTROL_DECODE_FAILED,
     _DEGRADED_EXTRA_CLIENT_REJECTED,
@@ -81,6 +86,44 @@ class TestSharedEmitSeam:
         h._emit_degraded("anything", "no loop here")
         assert received == []
         assert not h._emit_tasks
+
+    @pytest.mark.asyncio
+    async def test_degraded_events_are_coalesced_per_reason(self) -> None:
+        h = _MixinHarness(max_pending=1)
+        bus, received = _bus_with_collector()
+        h._event_bus = bus
+
+        h._emit_degraded("inbound_queue_full", "first drop")
+        h._emit_degraded("inbound_queue_full", "second drop")
+        h._emit_degraded("control_decode_failed", "bad json")
+        await _drain_scheduled_emits()
+        assert [e.reason for e in received] == ["inbound_queue_full", "control_decode_failed"]
+        assert h._degraded_suppressed[("inbound_queue_full", False)] == 1
+
+        h._degraded_last_emit[("inbound_queue_full", False)] -= (
+            _DEGRADED_EMIT_MIN_INTERVAL_SECONDS + 0.1
+        )
+        h._emit_degraded("inbound_queue_full", "later drop")
+        await _drain_scheduled_emits()
+        assert [e.reason for e in received] == [
+            "inbound_queue_full",
+            "control_decode_failed",
+            "inbound_queue_full",
+        ]
+        assert "suppressed 1 similar events" in received[-1].detail
+
+    @pytest.mark.asyncio
+    async def test_degraded_detail_is_truncated_before_emit(self) -> None:
+        h = _MixinHarness(max_pending=1)
+        bus, received = _bus_with_collector()
+        h._event_bus = bus
+
+        h._emit_degraded("invalid_sample_rate", "x" * (_DEGRADED_MAX_DETAIL_CHARS + 25))
+        await _drain_scheduled_emits()
+
+        assert len(received) == 1
+        assert len(received[0].detail) < _DEGRADED_MAX_DETAIL_CHARS + 50
+        assert "truncated 25 chars" in received[0].detail
 
 
 # ── WebSocket-specific paths ──────────────────────────────────────
