@@ -118,8 +118,20 @@ def extract_symbol(source: str, symbol: str) -> tuple[str, int, int]:
     raise KeyError(f"symbol {symbol!r} not found")
 
 
+def _resolve_child_path(base: Path, raw_path: str, attr_name: str) -> Path:
+    """Resolve a marker-supplied path while keeping it under ``base``."""
+    base = base.resolve()
+    candidate = (base / raw_path).resolve(strict=False)
+    try:
+        candidate.relative_to(base)
+    except ValueError as exc:
+        rel_base = base.relative_to(ROOT).as_posix()
+        raise ValueError(f"{attr_name}={raw_path!r} escapes {rel_base}") from exc
+    return candidate
+
+
 def render_snippet(chapter: Chapter, attrs: dict[str, str]) -> str:
-    src_path = chapter.path / attrs["src"]
+    src_path = _resolve_child_path(chapter.path, attrs["src"], "src")
     symbol = attrs["symbol"]
     lang = attrs.get("lang", "python")
     body, _, _ = extract_symbol(src_path.read_text(), symbol)
@@ -130,8 +142,9 @@ def render_diff(chapter: Chapter, attrs: dict[str, str]) -> str:
     prev_slug = attrs["prev"]
     src_name = attrs.get("src", "main.py")
     prev_src = attrs.get("prev_src", src_name)
-    prev_path = TEACHING / prev_slug / prev_src
-    cur_path = chapter.path / src_name
+    prev_chapter = _resolve_child_path(TEACHING, prev_slug, "prev")
+    prev_path = _resolve_child_path(prev_chapter, prev_src, "prev_src")
+    cur_path = _resolve_child_path(chapter.path, src_name, "src")
     prev_lines = prev_path.read_text().splitlines(keepends=True)
     cur_lines = cur_path.read_text().splitlines(keepends=True)
     rel_prev = prev_path.relative_to(ROOT).as_posix()
@@ -143,13 +156,13 @@ def render_diff(chapter: Chapter, attrs: dict[str, str]) -> str:
 
 
 def render_linerange(chapter: Chapter, attrs: dict[str, str]) -> str:
-    src_path = chapter.path / attrs["src"]
+    src_path = _resolve_child_path(chapter.path, attrs["src"], "src")
     _, start, end = extract_symbol(src_path.read_text(), attrs["symbol"])
     return f"`L{start}-L{end}`" if end != start else f"`L{start}`"
 
 
 def render_linkhash(chapter: Chapter, attrs: dict[str, str], prefix: str) -> str:
-    src_path = chapter.path / attrs["src"]
+    src_path = _resolve_child_path(chapter.path, attrs["src"], "src")
     _, start, end = extract_symbol(src_path.read_text(), attrs["symbol"])
     anchor = f"#L{start}-L{end}" if end != start else f"#L{start}"
     return prefix + anchor
