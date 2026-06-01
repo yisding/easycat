@@ -1,10 +1,9 @@
-"""Silero VAD backend (open-source, supports PyTorch or ONNX runtime)."""
+"""Silero VAD backend using the bundled ONNX runtime model."""
 
 from __future__ import annotations
 
 import logging
 import os
-import platform
 import struct
 import time
 from collections.abc import AsyncIterator
@@ -28,7 +27,6 @@ _SILERO_SUPPORTED_RATES: tuple[int, ...] = (8000, 16000)
 _SILERO_DEFAULT_RATE = 16000
 _SILERO_FRAME_SAMPLES_AT: dict[int, int] = {8000: 256, 16000: 512}
 _SILERO_CONTEXT_SAMPLES_AT: dict[int, int] = {8000: 32, 16000: 64}
-_SILERO_RISKY_TORCH_ARCHES = {"aarch64", "arm64"}
 _SILERO_ONNX_MODEL = Path(__file__).parent.parent / "models" / "silero_vad.onnx"
 
 
@@ -43,10 +41,7 @@ def _silero_backend_candidates() -> tuple[str, ...]:
     override = _silero_backend_override()
     if override is not None:
         return (override,)
-    machine = platform.machine().strip().lower()
-    if machine in _SILERO_RISKY_TORCH_ARCHES:
-        return ("onnx",)
-    return ("torch", "onnx")
+    return ("onnx",)
 
 
 def _silero_onnx_model_path() -> str:
@@ -133,7 +128,7 @@ class _SileroOnnxModel:
 class SileroVAD(_VADBase):
     """Voice activity detection using the Silero VAD model.
 
-    Loads the Silero VAD model (PyTorch or ONNX) and processes audio
+    Loads the bundled Silero VAD ONNX model and processes audio
     chunks to detect speech start/stop. Emits VADStartSpeaking and
     VADStopSpeaking events.
 
@@ -167,36 +162,20 @@ class SileroVAD(_VADBase):
                 return
             except (ImportError, RuntimeError) as exc:
                 errors.append(f"{backend}: {exc}")
-                # A single backend being unavailable is an expected fallback
-                # (e.g. torch missing -> ONNX), so log at debug; the aggregate
-                # RuntimeError below surfaces if *every* backend fails.
+                # A single backend being unavailable is an expected fallback,
+                # so log at debug; the aggregate RuntimeError below surfaces if
+                # every backend candidate fails.
                 logger.debug("Silero VAD %s backend unavailable: %s", backend, exc)
 
         joined = "; ".join(errors) or "no backend candidates"
         raise RuntimeError(f"Failed to load Silero VAD model: {joined}")
 
     def _load_torch_model(self) -> None:
-        # The torch path is an optional speed-up that falls back to the bundled
-        # ONNX model when torch is missing, so we don't point users at the
-        # heavyweight ``easycat[all]`` extra (the ``silero-vad`` extra ships the
-        # working ONNX backend without torch). A missing torch here is expected
-        # and surfaces as a debug-level fallback in ``_load_model``.
-        try:
-            torch = require_module("torch", purpose="Silero VAD (optional torch backend)")
-        except ImportError as exc:
-            raise RuntimeError(str(exc)) from exc
-        try:
-            model, _ = torch.hub.load(
-                repo_or_dir="snakers4/silero-vad",
-                model="silero_vad",
-                force_reload=False,
-                trust_repo=True,
-            )
-        except Exception as exc:
-            raise RuntimeError(f"torch loader failed: {exc}") from exc
-        self._model = model
-        self._torch = torch
-        self._backend = "torch"
+        raise RuntimeError(
+            "Silero VAD torch backend is disabled because torch.hub loads remote "
+            "Python code without repository pinning or hash verification. Install "
+            "easycat[silero-vad] to use the bundled ONNX model instead."
+        )
 
     def _load_onnx_model(self) -> None:
         try:
