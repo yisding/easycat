@@ -164,6 +164,16 @@ def test_webrtc_observability_example_imports():
     assert callable(webrtc_observability.main)
 
 
+def test_webrtc_observability_debugger_url_is_validated():
+    html = (REPO_ROOT / "examples/webrtc_static/webrtc_observability.html").read_text()
+
+    assert "function safeDebuggerUrl(value)" in html
+    assert 'parsed.protocol === "http:" || parsed.protocol === "https:"' in html
+    assert "sameHost || loopbackPair" in html
+    assert 'document.getElementById("debugger-frame").src = debuggerUrl' in html
+    assert "const url = override ||" not in html
+
+
 def test_push_to_talk_example_imports():
     import examples.push_to_talk as push_to_talk
 
