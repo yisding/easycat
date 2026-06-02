@@ -167,6 +167,61 @@ class TestEmitCallStatus:
         assert received[0].result == "machine"
         assert received[0].call_sid == "CA1"
 
+    @pytest.mark.asyncio
+    async def test_terminal_callback_for_sid_evicted_call_does_not_double_release(self) -> None:
+        """An outbound terminal callback for an SID-evicted call must not double-release.
+
+        The ``completed``/``busy`` callbacks now parse ``number=From``. When a
+        :class:`NumberHealthMonitor` has already evicted (and decremented) an SID
+        because tracking exceeded its cap, replaying a late terminal callback for
+        that SID through ``emit_call_status`` must not decrement the caller bucket
+        below the true live count — the eviction tombstone short-circuits it.
+        """
+        from easycat.telephony.number_health import NumberHealthMonitor
+
+        bus = EventBus()
+        monitor = NumberHealthMonitor(
+            bus,
+            max_concurrent_per_number=100,
+            max_calls_per_minute=100,
+            min_inter_call_delay_s=0.0,
+        )
+        monitor._max_sid_tracking = 4
+        from_number = "+1999"
+        to_number = "+1555"
+        monitor.start()
+        try:
+            # Five initiated callbacks on the same caller ID drive SID tracking
+            # over the cap (5 > 4); the 2 oldest SIDs are evicted, leaving the
+            # bucket at the true live count of 3 (CA2, CA3, CA4).
+            for i in range(5):
+                await emit_call_status(
+                    {
+                        "CallStatus": "initiated",
+                        "CallSid": f"CA{i}",
+                        "To": to_number,
+                        "From": from_number,
+                    },
+                    bus,
+                )
+            assert monitor._concurrent[from_number] == 3
+
+            # Late completed callback (carrying number=From) for evicted CA0 must
+            # not drop the bucket below the live count.
+            await emit_call_status(
+                {
+                    "CallStatus": "completed",
+                    "CallSid": "CA0",
+                    "Duration": "5",
+                    "To": to_number,
+                    "From": from_number,
+                },
+                bus,
+            )
+            assert monitor._concurrent[from_number] == 3
+        finally:
+            monitor.stop()
+
 
 class TestOutboundCallManager:
     def test_twilio_sdk_import_error(self) -> None:

@@ -259,6 +259,67 @@ class TestNumberHealthMonitor:
         finally:
             monitor.stop()
 
+    @pytest.mark.asyncio
+    async def test_evicted_sid_late_terminal_callback_does_not_double_decrement(self) -> None:
+        """A late terminal callback for an SID-evicted call must not double-release.
+
+        When SID tracking exceeds ``_max_sid_tracking``, ``_on_call_initiated``
+        already decrements the caller bucket for the evicted SIDs. With terminal
+        callbacks now carrying ``number=From``, a late ``completed``/``busy``
+        callback for one of those evicted SIDs would otherwise be treated as an
+        untracked caller-ID event and decrement the same bucket a second time —
+        undercounting live calls and letting ``can_place_call`` exceed the limit.
+        Tombstoning the evicted SIDs makes those late callbacks short-circuit.
+        """
+        bus = EventBus()
+        monitor = NumberHealthMonitor(
+            bus,
+            max_concurrent_per_number=100,
+            max_calls_per_minute=100,
+            min_inter_call_delay_s=0.0,
+        )
+        monitor._max_sid_tracking = 4
+        from_number = "+15557654321"
+        to_number = "+15551234567"
+        monitor.start()
+        try:
+            # Five inits on the SAME caller ID. The fifth pushes SID tracking over
+            # the cap (5 > 4) and evicts the 2 oldest SIDs (CA0, CA1), decrementing
+            # the bucket from 5 to 3 — the true live count (CA2, CA3, CA4).
+            for i in range(5):
+                await bus.emit(CallInitiated(call_sid=f"CA{i}", to=to_number, from_=from_number))
+            assert monitor._concurrent[from_number] == 3
+            assert "CA0" not in monitor._call_sid_to_number
+            assert "CA1" not in monitor._call_sid_to_number
+
+            # Late terminal callback for an evicted SID, carrying number=From.
+            # Tombstoned, so it must early-return without touching the bucket.
+            await emit_call_status(
+                {
+                    "CallStatus": "completed",
+                    "CallSid": "CA0",
+                    "Duration": "5",
+                    "To": to_number,
+                    "From": from_number,
+                },
+                bus,
+            )
+            assert monitor._concurrent[from_number] == 3
+
+            # A still-live SID's terminal callback decrements correctly.
+            await emit_call_status(
+                {
+                    "CallStatus": "busy",
+                    "CallSid": "CA2",
+                    "To": to_number,
+                    "From": from_number,
+                },
+                bus,
+            )
+            assert monitor._concurrent[from_number] == 2
+        finally:
+            monitor.stop()
+
 
 class TestCallDispositionTracker:
     def test_records_disposition(self) -> None:

@@ -241,6 +241,12 @@ class NumberHealthMonitor:
                 evicted_number = self._call_sid_to_number.pop(sid, None)
                 if evicted_number:
                     self._decrement_concurrent(evicted_number)
+                # Tombstone the evicted SID so a late terminal callback (now
+                # carrying ``number=From``) cannot be treated as an untracked
+                # caller-ID event and double-decrement the same bucket via
+                # ``_on_call_ended`` / ``_on_call_failed``. ``_mark_terminal``
+                # bounds ``_terminal_call_sids`` so memory stays bounded.
+                self._mark_terminal(sid)
 
     def _decrement_concurrent(self, number: str) -> None:
         prev = self._concurrent.get(number, 0)
