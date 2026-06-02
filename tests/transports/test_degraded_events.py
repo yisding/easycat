@@ -196,6 +196,48 @@ class TestWebSocketDegradedEvents:
         await asyncio.wait_for(new_task, timeout=1.0)
 
     @pytest.mark.asyncio
+    async def test_replacement_client_resets_negotiated_format(self) -> None:
+        # Same disconnect race as above, but the old client first negotiates a
+        # non-default sample rate. When ``send_audio`` wins the race and clears
+        # ``_ws``, the old handler's ``finally`` no longer owns the slot (the new
+        # client has claimed it) so it cannot reset ``_audio_format``. The accept
+        # path must reset it instead, otherwise the new client inherits the old
+        # client's stale negotiated format.
+        old_ws = _RaceServerWS()
+        new_ws = _RaceServerWS()
+        transport = _RaceWebSocketTransport(old_ws, new_ws)
+        configured_format = transport._config.audio_format
+
+        old_task = asyncio.create_task(transport._handle_connection(old_ws))  # type: ignore[arg-type]
+        await asyncio.wait_for(transport.old_receive_entered.wait(), timeout=1.0)
+
+        # Old client negotiates a non-default rate.
+        transport._handle_control_message(json.dumps({"type": "config", "sample_rate": 48000}))
+        assert transport._audio_format.sample_rate == 48000
+        assert transport._audio_format != configured_format
+
+        old_ws.fail_sends = True
+        assert await transport.send_audio(make_chunk()) is False
+        assert transport._ws is None
+
+        new_task = asyncio.create_task(transport._handle_connection(new_ws))  # type: ignore[arg-type]
+        await asyncio.wait_for(transport.new_receive_entered.wait(), timeout=1.0)
+        assert transport._ws is new_ws
+        # The replacement client must start from the configured default, not the
+        # rate the orphaned old client negotiated.
+        assert transport._audio_format == configured_format
+
+        transport.release_old_receive.set()
+        await asyncio.wait_for(old_task, timeout=1.0)
+
+        # The stale old-handler teardown must not have clobbered the new client.
+        assert transport._ws is new_ws
+        assert transport._audio_format == configured_format
+
+        transport.release_new_receive.set()
+        await asyncio.wait_for(new_task, timeout=1.0)
+
+    @pytest.mark.asyncio
     async def test_connection_transport_inbound_queue_full_emits(self) -> None:
         # The server-owns-accept-loop variant inherits the same seam.
         transport = WebSocketConnectionTransport(
