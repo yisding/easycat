@@ -34,21 +34,13 @@ def _make_chunk(value: int = 0, n_samples: int = 512) -> AudioChunk:
 # ── SileroVAD tests ─────────────────────────────────────────────────
 
 
-def test_silero_backend_candidates_prefer_onnx_on_arm64(monkeypatch: pytest.MonkeyPatch):
+def test_silero_backend_candidates_prefer_onnx_by_default(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("EASYCAT_SILERO_BACKEND", raising=False)
-    monkeypatch.setattr(vad_silero_module.platform, "machine", lambda: "aarch64")
     assert vad_silero_module._silero_backend_candidates() == ("onnx",)
-
-
-def test_silero_backend_candidates_prefer_torch_elsewhere(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("EASYCAT_SILERO_BACKEND", raising=False)
-    monkeypatch.setattr(vad_silero_module.platform, "machine", lambda: "x86_64")
-    assert vad_silero_module._silero_backend_candidates() == ("torch", "onnx")
 
 
 def test_silero_backend_candidates_respect_override(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("EASYCAT_SILERO_BACKEND", "torch")
-    monkeypatch.setattr(vad_silero_module.platform, "machine", lambda: "aarch64")
     assert vad_silero_module._silero_backend_candidates() == ("torch",)
 
 
@@ -58,64 +50,28 @@ def test_silero_onnx_model_path_uses_bundled_asset():
 
 
 def test_silero_fails_when_only_torch_backend_is_allowed(monkeypatch: pytest.MonkeyPatch):
-    """SileroVAD should raise RuntimeError if torch is unavailable and ONNX is disabled."""
+    """SileroVAD should reject the remote-code-executing torch backend."""
     monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("torch",))
 
-    def _require_module(module_name: str, **_: object) -> object:
-        if module_name == "torch":
-            raise ImportError("Silero VAD requires the torch package.")
-        raise AssertionError(f"unexpected module load: {module_name}")
-
-    monkeypatch.setattr(vad_silero_module, "require_module", _require_module)
-
-    with pytest.raises(RuntimeError, match="torch|PyTorch|Silero"):
+    with pytest.raises(RuntimeError, match="torch backend is disabled"):
         SileroVAD()
 
 
-@pytest.mark.asyncio
-async def test_silero_process_mocked_torch(monkeypatch: pytest.MonkeyPatch):
-    """SileroVAD should still work with the torch backend when it loads."""
-    # Create a mock model that returns configurable probabilities
-    mock_model = MagicMock()
-    call_count = [0]
-
-    def model_call(tensor, sr):
-        call_count[0] += 1
-        result = MagicMock()
-        # First 3 calls return speech, then silence
-        if call_count[0] <= 3:
-            result.item.return_value = 0.9
-        else:
-            result.item.return_value = 0.1
-        return result
-
-    mock_model.side_effect = model_call
-    mock_model.reset_states = MagicMock()
-
+def test_silero_torch_backend_does_not_call_torch_hub(monkeypatch: pytest.MonkeyPatch):
+    """The disabled torch path must not reach torch.hub.load."""
     mock_torch = MagicMock()
-    mock_torch.hub.load.return_value = (mock_model, None)
-    mock_torch.FloatTensor = lambda x: MagicMock()
 
     def _require_module(module_name: str, **_: object) -> object:
         if module_name == "torch":
             return mock_torch
         raise AssertionError(f"unexpected module load: {module_name}")
 
-    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("torch",))
     monkeypatch.setattr(vad_silero_module, "require_module", _require_module)
 
-    vad = SileroVAD()
-    vad._min_speech_duration_ms = 0
-    vad._min_silence_duration_ms = 0
-    vad._threshold = 0.5
+    with pytest.raises(RuntimeError, match="torch backend is disabled"):
+        SileroVAD._load_torch_model(MagicMock())
 
-    speech_chunk = _make_chunk(1000)
-    events = []
-    async for event in vad.process(speech_chunk):
-        events.append(event)
-
-    assert any(isinstance(e, VADStartSpeaking) for e in events)
-    assert vad._backend == "torch"
+    mock_torch.hub.load.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -157,7 +113,7 @@ async def test_silero_process_mocked_onnx(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_silero_falls_back_to_onnx_after_torch_failure(monkeypatch: pytest.MonkeyPatch):
-    """SileroVAD should use ONNX if the torch loader fails on safe architectures."""
+    """SileroVAD should use ONNX if an overridden torch loader fails."""
     monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("torch", "onnx"))
 
     def _load_torch_model(self: SileroVAD) -> None:
@@ -652,7 +608,7 @@ def test_vad_factory_no_backends(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_vad_factory_explicit_silero_fails(monkeypatch: pytest.MonkeyPatch):
-    """Explicitly requesting silero without torch should raise."""
+    """Explicitly requesting silero with no backend available should raise."""
 
     class _BrokenSilero:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
