@@ -181,6 +181,13 @@ class WebSocketTransport(_ServerTransportBase):
             logger.warning("Ignoring invalid JSON control message")
             self._emit_degraded(_DEGRADED_CONTROL_DECODE_FAILED, "control frame is not valid JSON")
             return
+        if not isinstance(msg, dict):
+            logger.warning("Ignoring non-object JSON control message")
+            self._emit_degraded(
+                _DEGRADED_CONTROL_DECODE_FAILED,
+                "control frame is not a JSON object",
+            )
+            return
 
         msg_type = msg.get("type")
         if msg_type == "config":
@@ -326,6 +333,13 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
         except json.JSONDecodeError:
             logger.warning("Ignoring invalid JSON control message")
             self._emit_degraded(_DEGRADED_CONTROL_DECODE_FAILED, "control frame is not valid JSON")
+            return
+        if not isinstance(msg, dict):
+            logger.warning("Ignoring non-object JSON control message")
+            self._emit_degraded(
+                _DEGRADED_CONTROL_DECODE_FAILED,
+                "control frame is not a JSON object",
+            )
             return
 
         if msg.get("type") == "config":
