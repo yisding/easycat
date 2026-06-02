@@ -58,24 +58,7 @@ class AgentStage:
         session_id: str = "",
         mcp_servers: tuple[str, ...] = (),
     ) -> None:
-        adapted = auto_adapt_agent(provider)
-        if not isinstance(adapted, ExternalAgentBridge):
-            # Safety net: plain objects with ``async run(text) -> str`` are
-            # wrapped in a default-config AgentRunner so direct Session or
-            # AgentStage construction keeps working.  ``create_session`` /
-            # ``create_text_session`` wrap earlier with the user's
-            # ``agent_runner`` config, so this fallback only applies to
-            # ``wrap_agent=False`` paths and direct AgentStage users.
-            run_fn = getattr(adapted, "run", None)
-            if callable(run_fn) and not isinstance(adapted, type):
-                adapted = AgentRunner(adapted)
-            else:
-                raise TypeError(
-                    "AgentStage.provider must implement ExternalAgentBridge "
-                    f"after auto_adapt_agent() (got {type(provider).__name__}). "
-                    "Wrap it in AgentRunner or implement the bridge protocol."
-                )
-        self._provider: ExternalAgentBridge = adapted
+        self._provider: ExternalAgentBridge = self._adapt_provider(provider)
         self._journal = journal
         self._artifact_store = artifact_store
         self._session_id = session_id
@@ -86,8 +69,46 @@ class AgentStage:
         # we avoid double-tracking when wrap_agent=True.  With
         # wrap_agent=False, the bridge would otherwise see ``context=[]``
         # on every turn.
-        self._tracks_history = not isinstance(self._provider, AgentRunner)
+        self._tracks_history = self._should_track_history(self._provider)
         self._history: list[dict[str, str]] = []
+        self._history_epoch = 0
+
+    @staticmethod
+    def _adapt_provider(provider: Any) -> ExternalAgentBridge:
+        adapted = auto_adapt_agent(provider)
+        if isinstance(adapted, ExternalAgentBridge):
+            return adapted
+
+        # Safety net: plain objects with ``async run(text) -> str`` are
+        # wrapped in a default-config AgentRunner so direct Session or
+        # AgentStage construction keeps working.  ``create_session`` /
+        # ``create_text_session`` wrap earlier with the user's
+        # ``agent_runner`` config, so this fallback only applies to
+        # ``wrap_agent=False`` paths and direct AgentStage users.
+        run_fn = getattr(adapted, "run", None)
+        if callable(run_fn) and not isinstance(adapted, type):
+            return AgentRunner(adapted)
+
+        raise TypeError(
+            "AgentStage.provider must implement ExternalAgentBridge "
+            f"after auto_adapt_agent() (got {type(provider).__name__}). "
+            "Wrap it in AgentRunner or implement the bridge protocol."
+        )
+
+    @staticmethod
+    def _should_track_history(provider: ExternalAgentBridge) -> bool:
+        return not isinstance(provider, AgentRunner)
+
+    def reset_history(self) -> None:
+        """Clear the stage-owned shadow history for raw bridge providers."""
+        self._history.clear()
+        self._history_epoch += 1
+
+    def set_provider(self, provider: Any) -> None:
+        """Replace the bridge and discard shadow history from the old provider."""
+        self._provider = self._adapt_provider(provider)
+        self._tracks_history = self._should_track_history(self._provider)
+        self.reset_history()
 
     # ── Recorder construction ───────────────────────────────────
 
@@ -150,6 +171,7 @@ class AgentStage:
         """
         ctx = self._journal_ctx(ctx)
         bridge = self._provider
+        history_epoch = self._history_epoch
         state_before = self.snapshot_state()
         journal_append_event(
             ctx,
@@ -273,7 +295,12 @@ class AgentStage:
             # ``GeneratorExit`` at the yield above).
             if not errored:
                 final_text = "".join(accumulated)
-                if self._tracks_history and final_text:
+                if (
+                    self._tracks_history
+                    and self._provider is bridge
+                    and self._history_epoch == history_epoch
+                    and final_text
+                ):
                     # Record the turn in shadow history so the next
                     # ``invoke()`` forwards it as ``turn_input.context``
                     # for raw bridges that rely on explicit conversation

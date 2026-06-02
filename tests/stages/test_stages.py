@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import pytest
 
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
+from easycat.integrations.agents.base import AgentBridgeEvent, AgentTurnInput
 from easycat.runtime.context import RunContext
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.stages import (
@@ -49,6 +52,40 @@ def _make_turn() -> TurnContext:
 
 
 # ── Stub providers ───────────────────────────────────────────────
+
+
+class _ContextRecordingBridge:
+    COMMITTABLE_BOUNDARIES = {}
+
+    def __init__(self, response: str = "ok") -> None:
+        self.response = response
+        self.contexts: list[list[dict[str, str]]] = []
+        self.reset_count = 0
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = recorder, cancel_token
+        self.contexts.append(list(turn_input.context))
+        yield AgentBridgeEvent(kind="done", text=f"{self.response}:{turn_input.text}")
+
+    def snapshot_state(self):
+        return {}
+
+    def apply_interruption(self, *args, **kwargs) -> None:
+        pass
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        pass
+
+    def append_interruption_note(self, note: str) -> None:
+        pass
+
+    def reset(self) -> None:
+        self.reset_count += 1
 
 
 class _StubSTT:
@@ -510,6 +547,40 @@ class TestStageExecuteRecording:
         assert "stage_start" in names
         assert "stage_complete" in names
 
+    async def test_agent_stage_reset_history_clears_raw_bridge_context(self):
+        ctx = _make_ctx()
+        stage = AgentStage(_ContextRecordingBridge())
+
+        await stage.execute("secret", ctx, _make_turn())
+        assert stage._history == [
+            {"role": "user", "content": "secret"},
+            {"role": "assistant", "content": "ok:secret"},
+        ]
+
+        stage.reset_history()
+        bridge = stage._provider
+        await stage.execute("after reset", ctx, _make_turn())
+
+        assert bridge.contexts[-1] == []
+
+    async def test_agent_stage_set_provider_clears_history_and_recomputes_tracking(self):
+        ctx = _make_ctx()
+        stage = AgentStage(_ContextRecordingBridge("first"))
+
+        await stage.execute("secret", ctx, _make_turn())
+        assert stage._history
+
+        replacement = _ContextRecordingBridge("second")
+        stage.set_provider(replacement)
+        await stage.execute("fresh", ctx, _make_turn())
+
+        assert stage._tracks_history is True
+        assert replacement.contexts[-1] == []
+        assert stage._history == [
+            {"role": "user", "content": "fresh"},
+            {"role": "assistant", "content": "second:fresh"},
+        ]
+
     async def test_agent_stage_replace_last_assistant_text_journals(self):
         """Routing the post-turn rewrite through the stage records the
         framework-state mutation on the journal recording boundary."""
@@ -526,8 +597,6 @@ class TestStageExecuteRecording:
     async def test_agent_stage_apply_interruption_threads_recorder(self):
         """The stage's apply_interruption passes a journal-backed recorder to
         the bridge so four-step interruption records flow to the journal."""
-        from collections.abc import AsyncIterator
-
         from easycat.integrations.agents.base import (
             AgentBridgeEvent,
             CancellationMode,
