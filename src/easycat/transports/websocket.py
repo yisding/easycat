@@ -22,6 +22,7 @@ from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
 
 logger = logging.getLogger(__name__)
+_MIN_NEGOTIATED_SAMPLE_RATE = 8000
 _MAX_NEGOTIATED_SAMPLE_RATE = 384000
 
 # WebSocket-specific ``TransportDegraded.reason`` codes emitted on the session
@@ -39,7 +40,7 @@ def _valid_config_sample_rate(value: object) -> int | None:
     """Return a negotiated sample rate only for sane integer values."""
     if isinstance(value, bool) or not isinstance(value, int):
         return None
-    if value <= 0 or value > _MAX_NEGOTIATED_SAMPLE_RATE:
+    if value < _MIN_NEGOTIATED_SAMPLE_RATE or value > _MAX_NEGOTIATED_SAMPLE_RATE:
         return None
     return value
 
@@ -110,8 +111,9 @@ class WebSocketTransport(_ServerTransportBase):
             return True
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot send audio: client disconnected")
-            self._ws = None
-            self._client_connected.clear()
+            if self._ws is ws:
+                self._ws = None
+                self._client_connected.clear()
             return False
 
     async def clear_audio(self) -> None:
@@ -133,6 +135,13 @@ class WebSocketTransport(_ServerTransportBase):
         self._ws = ws
         self._client_connected.set()
         self._outbound_rate = None
+        # Reset negotiated format so every accepted client starts from the
+        # configured default. The prior connection's ``finally`` cleanup may not
+        # have run (e.g. when ``send_audio`` won the disconnect race and cleared
+        # ``_ws`` first), so reset here rather than relying on teardown. A client
+        # that negotiates its own rate still overrides this via
+        # ``_handle_control_message`` before any of its audio is processed.
+        self._audio_format = self._config.audio_format
         logger.info("WebSocket client connected")
 
         try:
@@ -141,12 +150,20 @@ class WebSocketTransport(_ServerTransportBase):
         except websockets.exceptions.ConnectionClosed:
             logger.info("WebSocket client disconnected")
         finally:
-            self._ws = None
-            self._client_connected.clear()
-            # Reset negotiated format so the next client starts fresh.
-            self._audio_format = self._config.audio_format
-            self._outbound_rate = None
-            self._enqueue_sentinel()
+            if self._ws is ws:
+                self._ws = None
+                self._client_connected.clear()
+                # Reset negotiated format so the next client starts fresh.
+                self._audio_format = self._config.audio_format
+                self._outbound_rate = None
+                self._enqueue_sentinel()
+            elif self._ws is None:
+                # ``send_audio`` may already have noticed this connection is
+                # closed and cleared the slot. Finish cleanup only if no newer
+                # client has claimed it in the meantime.
+                self._audio_format = self._config.audio_format
+                self._outbound_rate = None
+                self._enqueue_sentinel()
 
     async def _receive_loop(self, ws: ServerConnection) -> None:
         """Read messages from the client connection.

@@ -171,20 +171,21 @@ jobs:
     environment: live-validation
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/nightly/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
-      - name: Mask live provider secrets
+      - run: uv sync --group dev --python 3.12
+      - name: Run latency validation
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
           if [ -n "${OPENAI_API_KEY:-}" ]; then
             echo "::add-mask::$OPENAI_API_KEY"
           fi
-      - run: uv sync --group dev --python 3.12
-      - run: uv run --python 3.12 easycat validate latency --require-samples --artifacts-dir "$VALIDATION_ARTIFACTS_DIR"
+          uv run --python 3.12 easycat validate latency --require-samples --artifacts-dir "$VALIDATION_ARTIFACTS_DIR"
       - name: Upload latency validation artifacts
         if: always()
         uses: actions/upload-artifact@v4

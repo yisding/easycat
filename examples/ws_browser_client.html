@@ -88,7 +88,9 @@ var DESIRED_RATE = 16000;
 // (e.g. 24 kHz) before the first audio chunk.  Default to 16 kHz
 // until we hear otherwise.
 var serverPlaybackRate = 16000;
-var WS_URL = "ws://" + location.hostname + ":8765";
+var token = new URLSearchParams(location.search).get("token");
+var WS_URL = "ws://" + location.hostname + ":8765" +
+  (token ? "?token=" + encodeURIComponent(token) : "");
 
 // ── State ────────────────────────────────────────────────────────
 var ws = null;

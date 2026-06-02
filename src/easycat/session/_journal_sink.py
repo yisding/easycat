@@ -61,6 +61,15 @@ _JOURNAL_ATTRS = (
 # — the same record would round-trip to a different shape per backend.  We
 # normalize them once here so all backends store identical JSON-native shapes.
 _JSONABLE_ATTRS = frozenset({"structured_output", "result"})
+_MAX_TRANSPORT_DEGRADED_DETAIL_CHARS = 512
+
+
+def _truncate_transport_degraded_detail(detail: str) -> str:
+    """Bound persisted transport diagnostic strings from untrusted transports."""
+    if len(detail) <= _MAX_TRANSPORT_DEGRADED_DETAIL_CHARS:
+        return detail
+    omitted = len(detail) - _MAX_TRANSPORT_DEGRADED_DETAIL_CHARS
+    return f"{detail[:_MAX_TRANSPORT_DEGRADED_DETAIL_CHARS]}… (truncated {omitted} chars)"
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -282,7 +291,7 @@ class SessionJournalSink:
             data={
                 "provider": event.provider,
                 "reason": event.reason,
-                "detail": event.detail,
+                "detail": _truncate_transport_degraded_detail(event.detail),
                 "fatal": event.fatal,
             },
         )
