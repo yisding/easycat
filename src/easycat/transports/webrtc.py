@@ -312,9 +312,9 @@ class WebRTCTransport(_AudioQueueMixin):
     ``{"sdp": "...", "type": "answer"}``.  ICE candidates are gathered
     in-band (full ICE) before the answer is returned.
 
-    **GET /config** — Returns the ICE server configuration as JSON so
-    browser clients can configure their ``RTCPeerConnection`` with the
-    same STUN/TURN servers.
+    **GET /config** — Returns public ICE server URLs as JSON so browser
+    clients can configure their ``RTCPeerConnection``. Credentials are
+    intentionally omitted because this endpoint is public.
 
     **GET /health** — Returns ``{"status": "ok"}``.
     """
@@ -359,19 +359,22 @@ class WebRTCTransport(_AudioQueueMixin):
 
     # ── Helpers ─────────────────────────────────────────────────
 
-    def _ice_servers_as_dicts(self) -> list[dict[str, Any]]:
+    def _ice_servers_as_dicts(self, *, include_credentials: bool = True) -> list[dict[str, Any]]:
         """Serialize configured ICE servers to plain dicts.
 
-        Used by both the ``/offer`` handler (to build ``RTCIceServer``
-        objects) and ``/config`` (to return JSON to the browser).
+        The ``/offer`` handler needs the complete configuration to build
+        server-side ``RTCIceServer`` objects.  The public ``/config`` endpoint
+        must not expose TURN credentials, so callers can request URL-only
+        entries for browser-facing responses.
         """
         result: list[dict[str, Any]] = []
         for srv in self._config.ice_servers:
             entry: dict[str, Any] = {"urls": srv.urls}
-            if srv.username:
-                entry["username"] = srv.username
-            if srv.credential:
-                entry["credential"] = srv.credential
+            if include_credentials:
+                if srv.username:
+                    entry["username"] = srv.username
+                if srv.credential:
+                    entry["credential"] = srv.credential
             result.append(entry)
         return result
 
@@ -697,11 +700,18 @@ class WebRTCTransport(_AudioQueueMixin):
         )
 
     async def _handle_config(self, request: Any) -> Any:
-        """Return ICE server configuration for browser clients."""
+        """Return public ICE server URLs for browser clients.
+
+        This endpoint is intentionally unauthenticated so the bundled demo
+        client can bootstrap easily.  Do not include TURN usernames or
+        credentials here; deployments often configure long-lived TURN secrets,
+        and returning them from a public CORS-enabled endpoint would allow
+        arbitrary clients to reuse the relay.
+        """
         web = self._web
         return web.Response(
             content_type="application/json",
-            text=json.dumps({"iceServers": self._ice_servers_as_dicts()}),
+            text=json.dumps({"iceServers": self._ice_servers_as_dicts(include_credentials=False)}),
             headers=_CORS_HEADERS,
         )
 

@@ -507,7 +507,7 @@ class TestWebRTCTransportLifecycle:
         await transport.disconnect()
 
     @pytest.mark.asyncio
-    async def test_config_endpoint(self):
+    async def test_config_endpoint_omits_turn_credentials(self):
         import aiohttp
 
         port = find_free_port()
@@ -529,12 +529,37 @@ class TestWebRTCTransportLifecycle:
                 data = await resp.json()
                 assert "iceServers" in data
                 assert len(data["iceServers"]) == 2
-                # TURN server should include credentials.
+                # Public config should include URLs but must not leak TURN credentials.
                 turn = data["iceServers"][1]
-                assert turn["username"] == "user"
-                assert turn["credential"] == "pass"
+                assert turn["urls"] == ["turn:turn.example.com:3478"]
+                assert "username" not in turn
+                assert "credential" not in turn
 
         await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_offer_uses_full_ice_credentials_for_server_peer(self, monkeypatch):
+        _install_fake_webrtc_modules(monkeypatch)
+        servers = [
+            ICEServer(
+                urls=["turn:turn.example.com:3478"],
+                username="user",
+                credential="pass",
+            )
+        ]
+        transport = WebRTCTransport(WebRTCTransportConfig(ice_servers=servers))
+        transport._web = _FakeWeb
+        transport._connected = True
+
+        response = await transport._handle_offer(_FakeOfferRequest())
+
+        assert response.status == 200
+        pc = _FakeRTCPeerConnection.instances[0]
+        assert pc.config.iceServers[0].kwargs == {
+            "urls": ["turn:turn.example.com:3478"],
+            "username": "user",
+            "credential": "pass",
+        }
 
     @pytest.mark.asyncio
     async def test_cors_preflight(self):
