@@ -1148,9 +1148,7 @@ class SqliteJournal(_SqlJournalBase):
                 self._conn.execute("DELETE FROM journal")
 
         # Clear prior-session state markers (we're starting a new session).
-        self._conn.execute(
-            "DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')"
-        )
+        self._conn.execute("DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')")
 
         # Recover sequence counter from any existing records.  Both the
         # crash-recovery and clean-reuse paths truncate the journal table
@@ -1607,12 +1605,21 @@ class LibsqlJournal(_SqlJournalBase):
         prior_count_row = self._conn.execute("SELECT COUNT(*) FROM journal").fetchone()
         prior_count = prior_count_row[0] if prior_count_row else 0
 
-        if row is not None and prior_count > 0:
+        truncated = row is not None and prior_count > 0
+        if truncated:
+            # Clean reuse — the prior (cleanly closed) journal is discarded, so
+            # its persisted ``degraded`` marker would be stale.  Clear both the
+            # ``clean_close`` and ``degraded`` keys alongside the truncation.
             self._conn.execute("DELETE FROM journal")
-
-        self._conn.execute(
-            "DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')"
-        )
+            self._conn.execute(
+                "DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')"
+            )
+        else:
+            # Unclean reuse — prior rows are retained (libSQL has no crash
+            # recovery), including any ``JournalDegraded`` row.  Only clear the
+            # ``clean_close`` marker; preserve ``degraded`` so file/bundle
+            # inspection stays consistent with the retained history.
+            self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
 
         # Recover sequence counter from any remaining records.
         row = self._conn.execute("SELECT MAX(sequence) FROM journal").fetchone()
