@@ -957,13 +957,10 @@ class TestLangGraphBridgeState:
         assert done[0].structured_output is ai_msg
 
     @pytest.mark.asyncio
-    async def test_plain_runnable_node_chain_stream_reaches_translator(self):
-        """A LangGraph node that is a plain ``RunnableLambda`` (no chat
-        model) surfaces its text only through node-level
-        ``on_chain_stream``.  Under LangGraph the outermost
-        ``on_chain_start`` is the graph itself, so the translator's
-        LangChain root-chain dedup must NOT drop the node stream just
-        because its run id differs from the graph's."""
+    async def test_plain_runnable_node_chain_stream_is_suppressed(self):
+        """LangGraph node-level ``on_chain_stream`` payloads are generic
+        chain outputs, not guaranteed final assistant text, so the bridge
+        must not surface them to the caller/TTS path by default."""
         scripted = [
             # The graph's outermost chain start (no parent) — without the
             # LangGraph opt-out this becomes the dedup's root run id.
@@ -1008,17 +1005,14 @@ class TestLangGraphBridgeState:
             events.append(ev)
 
         text_deltas = [e.text for e in events if e.kind == "text_delta"]
-        assert text_deltas == ["hello from node"]
+        assert text_deltas == []
 
     @pytest.mark.asyncio
-    async def test_nested_lcel_node_intermediate_not_spoken(self):
-        """A node that is itself an LCEL sequence
-        (``RunnableLambda(f) | RunnableLambda(g)``) emits a child
-        ``on_chain_stream`` for ``f``'s intermediate value and a
-        node-entry ``on_chain_stream`` for the composed result.  Only
-        the node entry is root-equivalent, so the intermediate must be
-        deduped — otherwise the caller hears the intermediate rather
-        than the final node response."""
+    async def test_nested_lcel_node_chain_streams_are_suppressed(self):
+        """Nested LCEL node ``on_chain_stream`` payloads can include both
+        intermediate and final-looking strings.  LangGraph suppresses the
+        generic chain stream either way unless the text arrives through an
+        explicit model/LLM/custom-event channel."""
         scripted = [
             {  # graph root (no parent) → LCEL root run id
                 "event": "on_chain_start",
@@ -1077,8 +1071,41 @@ class TestLangGraphBridgeState:
             events.append(ev)
 
         text_deltas = [e.text for e in events if e.kind == "text_delta"]
-        assert text_deltas == ["the real answer"]
+        assert text_deltas == []
         assert "INTERMEDIATE" not in "".join(text_deltas)
+        assert "the real answer" not in "".join(text_deltas)
+
+    @pytest.mark.asyncio
+    async def test_chain_stream_content_object_is_suppressed(self):
+        """Objects with ``content`` on generic LangGraph chain streams may
+        be internal messages/state, so they must not become text deltas."""
+        scripted = [
+            {
+                "event": "on_chain_start",
+                "name": "LangGraph",
+                "run_id": "graph",
+                "parent_ids": [],
+                "data": {},
+                "metadata": {},
+            },
+            {
+                "event": "on_chain_stream",
+                "name": "LangGraph",
+                "run_id": "graph",
+                "parent_ids": [],
+                "data": {"chunk": _MockAIMessageChunk(content="INTERNAL_MESSAGE_CONTENT")},
+                "metadata": {},
+            },
+        ]
+        graph = _MockCompiledGraph(scripted)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("x"), _recorder()):
+            events.append(ev)
+
+        text_deltas = [e.text for e in events if e.kind == "text_delta"]
+        assert text_deltas == []
 
     @pytest.mark.asyncio
     async def test_transformed_final_message_overrides_streamed_model_text(self):

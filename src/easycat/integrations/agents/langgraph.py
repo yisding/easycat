@@ -492,17 +492,14 @@ class LangGraphBridge:
         # obstructing sibling(s) also end so the recorder's strict stack
         # invariant holds.
         ended_runs: set[str] = set()
-        # Shared state for tool-call deduplication and LCEL root-chain
-        # dedup — see :func:`translate_stream_event` for details.  Under
-        # LangGraph the outermost ``on_chain_start`` is the graph (not an
-        # LCEL root), so the translator instead treats each LangGraph
-        # *node entry* as root-equivalent: a plain ``RunnableLambda`` /
-        # LCEL node's own composed stream reaches the translator while
-        # the node's deeper LCEL children stay deduped (so a node that is
-        # ``RunnableLambda(f) | RunnableLambda(g)`` doesn't narrate its
-        # intermediate value).  Model double-speak is still handled by
-        # ``chains_with_model_descendants``.
-        tool_state: dict[str, Any] = {}
+        # Shared state for the LangChain/LangGraph translator.  Besides
+        # tool-call de-duplication, this suppresses generic
+        # ``on_chain_stream`` text chunks for LangGraph.  LangGraph uses
+        # chain events for graph/node lifecycle and may stream arbitrary
+        # internal node outputs or state through them; only explicit graph
+        # stream-mode chunks (handled above) and model/LLM events are
+        # safe to surface to the caller/TTS path by default.
+        tool_state: dict[str, Any] = {"suppress_plain_chain_stream_text": True}
 
         input_payload = self._build_input(turn_input.text, turn_input.context)
         # Honour a caller-pinned resume/time-travel checkpoint for *this*

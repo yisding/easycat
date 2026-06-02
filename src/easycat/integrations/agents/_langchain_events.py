@@ -338,6 +338,9 @@ def translate_stream_event(
                 )
 
     elif event_type == "on_chain_stream":
+        if state is not None and state.get("suppress_plain_chain_stream_text"):
+            return
+
         # Non-chat Runnables (``RunnableLambda``, LCEL stages that stream
         # plain text, etc.) surface their output via ``on_chain_stream``
         # rather than ``on_chat_model_stream``.  Extract a string chunk
@@ -353,18 +356,12 @@ def translate_stream_event(
         #
         # The root-chain dedup is a LangChain-LCEL heuristic: in a plain
         # chain only the outermost run forwards the final composed
-        # output, so non-root child streams are redundant.  Under
-        # ``LangGraphBridge`` the outermost ``on_chain_start`` is the
-        # graph itself and every node runs as a non-root child, so the
-        # bare heuristic would silently drop all node-level text streams.
-        # Each LangGraph node entry is therefore registered as a *node
-        # root* above and treated as root-equivalent here: the node's
-        # own composed stream is forwarded while the node's deeper LCEL
-        # children remain deduped (so an ``RunnableLambda(f) |
-        # RunnableLambda(g)`` node doesn't narrate its intermediate
-        # value).  Model-token double-speak is still prevented by the
-        # ``chains_with_model_descendants`` suppression above, which
-        # applies to both bridges.
+        # output, so non-root child streams are redundant.  Callers that
+        # do trust a LangGraph node's generic chain stream can register
+        # node entries as root-equivalent in ``state``; by default
+        # ``LangGraphBridge`` sets ``suppress_plain_chain_stream_text``
+        # above because those chunks may carry internal node output or
+        # graph state rather than final assistant text.
         if state is not None:
             root = state.get("root_chain_run_id")
             node_roots = state.get("langgraph_node_run_ids")
