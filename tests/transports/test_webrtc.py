@@ -86,8 +86,52 @@ class _FakeMediaStreamError(Exception):
     pass
 
 
+class _FakeInboundTrack:
+    """Fake remote audio track delivered via the synchronous ``track`` event.
+
+    ``recv()`` yields each queued frame once, then blocks forever so the
+    consumer task stays alive (mirroring a live RTP stream that has not yet
+    ended).
+    """
+
+    kind = "audio"
+
+    def __init__(self, frames: list[object] | None = None) -> None:
+        self._frames: list[object] = list(frames or [])
+        self._handlers: dict[str, object] = {}
+
+    def on(self, event: str):
+        def decorator(callback):
+            self._handlers[event] = callback
+            return callback
+
+        return decorator
+
+    async def recv(self) -> object:
+        if self._frames:
+            return self._frames.pop(0)
+        # No more frames: block forever so the consume task does not exit and
+        # enqueue a sentinel that would prematurely end receive_audio().
+        await asyncio.Event().wait()
+
+
+class _FakeAudioFrame:
+    """Minimal av.AudioFrame stand-in for the inbound decode path."""
+
+    def __init__(self, pcm: bytes, *, sample_rate: int = 48000) -> None:
+        self.planes = [pcm]
+        self.sample_rate = sample_rate
+        self.layout = None
+
+
 class _FakeRTCPeerConnection:
     instances: list[_FakeRTCPeerConnection] = []
+
+    # When set on the class before an offer, the next constructed peer fires
+    # its registered ``track`` handler synchronously during
+    # ``setRemoteDescription`` with this track — mirroring aiortc, which emits
+    # ``track`` before the offer handler commits the new generation.
+    next_inbound_track: object | None = None
 
     def __init__(self, config: _FakeRTCConfiguration) -> None:
         self.config = config
@@ -98,6 +142,8 @@ class _FakeRTCPeerConnection:
         self.closed = False
         self.tracks: list[object] = []
         self._handlers: dict[str, object] = {}
+        self._inbound_track = type(self).next_inbound_track
+        type(self).next_inbound_track = None
         self.instances.append(self)
 
     def addTrack(self, track: object) -> None:  # noqa: N802
@@ -112,6 +158,14 @@ class _FakeRTCPeerConnection:
 
     async def setRemoteDescription(self, offer: _FakeSessionDescription) -> None:  # noqa: N802
         self.remoteDescription = offer
+        # aiortc fires the synchronous ``track`` event during
+        # setRemoteDescription — before the offer handler commits the new
+        # generation. Replicate that ordering so regressions in the deferred
+        # consume-task start are caught.
+        if self._inbound_track is not None:
+            callback = self._handlers.get("track")
+            if callback is not None:
+                callback(self._inbound_track)
 
     async def createAnswer(self) -> _FakeSessionDescription:  # noqa: N802
         return _FakeSessionDescription(sdp="fake-answer", type="answer")
@@ -141,6 +195,7 @@ class _FakeAiortc:
 
 def _install_fake_webrtc_modules(monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeRTCPeerConnection.instances.clear()
+    _FakeRTCPeerConnection.next_inbound_track = None
 
     def fake_require_module(name: str, **_: object) -> object:
         if name == "aiortc":
@@ -309,6 +364,84 @@ class TestWebRTCIngressQueueOwnership:
         assert transport._runner is None
         assert offer_task is not None
         assert offer_task.done()
+
+    @pytest.mark.asyncio
+    async def test_failed_replacement_offer_keeps_existing_peer_and_receiver(self, monkeypatch):
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True  # signaling server live (see tests above)
+
+        first_response = await transport._handle_offer(_FakeOfferRequest())
+        assert first_response.status == 200
+        first_pc = _FakeRTCPeerConnection.instances[0]
+        first_generation = transport._peer_generation
+
+        audio_iter = transport.receive_audio()
+        pending = asyncio.create_task(anext(audio_iter))
+        await asyncio.sleep(0)
+        assert not pending.done()
+
+        async def _boom(self) -> _FakeSessionDescription:  # noqa: ANN001
+            raise RuntimeError("sdp boom")
+
+        monkeypatch.setattr(_FakeRTCPeerConnection, "createAnswer", _boom)
+
+        failed_response = await transport._handle_offer(_FakeOfferRequest())
+
+        assert failed_response.status == 400
+        assert transport._peer_generation == first_generation
+        assert transport._pc is first_pc
+        assert not first_pc.closed
+        assert _FakeRTCPeerConnection.instances[1].closed
+        await asyncio.sleep(0)
+        assert not pending.done()
+
+        new_chunk = make_chunk(12)
+        transport._enqueue_chunk(new_chunk, context="test")
+        received = await asyncio.wait_for(pending, timeout=1.0)
+        assert received is new_chunk
+        await audio_iter.aclose()
+
+    @pytest.mark.asyncio
+    async def test_track_event_during_set_remote_description_starts_consumer(self, monkeypatch):
+        # aiortc fires the synchronous ``track`` event during
+        # setRemoteDescription, before the offer handler commits the new peer
+        # generation. A successful offer must still start ``_consume_task`` and
+        # forward the captured track's frames to receive_audio().
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True  # signaling server live (see tests above)
+
+        # Frame already at the pipeline target rate (16 kHz mono) so the consume
+        # path forwards the raw PCM without resampling/downmixing.
+        target_rate = transport._config.audio_format.sample_rate
+        frame_pcm = bytes(range(40))
+        inbound = _FakeInboundTrack(frames=[_FakeAudioFrame(frame_pcm, sample_rate=target_rate)])
+        _FakeRTCPeerConnection.next_inbound_track = inbound
+
+        audio_iter = transport.receive_audio()
+        pending = asyncio.create_task(anext(audio_iter))
+        await asyncio.sleep(0)
+        assert not pending.done()
+
+        response = await transport._handle_offer(_FakeOfferRequest())
+        assert response.status == 200
+
+        # The deferred consumer must be created and running post-commit.
+        assert transport._consume_task is not None
+        assert not transport._consume_task.done()
+        # The ``ended`` handler must be registered on the captured track.
+        assert "ended" in inbound._handlers
+
+        # The frame the track delivered must reach receive_audio().
+        received = await asyncio.wait_for(pending, timeout=1.0)
+        assert received.data == frame_pcm
+        assert received.format == transport._config.audio_format
+
+        await audio_iter.aclose()
+        await transport.disconnect()
 
     @pytest.mark.asyncio
     async def test_replacing_connected_peer_clears_wait_for_client(self, monkeypatch):
