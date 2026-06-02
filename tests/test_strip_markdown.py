@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from time import perf_counter
+
 from easycat.strip_markdown import has_markdown, strip_markdown
 
 # ── has_markdown detection ─────────────────────────────────────────
@@ -119,6 +121,16 @@ class TestStripMarkdown:
             strip_markdown(text, normalize_code_spans=True)
             == "Use very_long_identifier_name_for_internal_config."
         )
+
+    def test_many_inline_code_spans_are_restored_quickly(self) -> None:
+        text = " ".join("`x`" for _ in range(20_000))
+
+        start = perf_counter()
+        result = strip_markdown(text, normalize_code_spans=True)
+        elapsed = perf_counter() - start
+
+        assert result == " ".join("x" for _ in range(20_000))
+        assert elapsed < 2.0
 
     def test_link(self) -> None:
         assert (

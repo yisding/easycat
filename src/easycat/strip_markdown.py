@@ -74,6 +74,7 @@ _HR_UNDERSCORE_RE = re.compile(r"^_{3,}\s*$", re.MULTILINE)
 _EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
 _WS_RE = re.compile(r"\s+")
 _DUNDER_NAME_RE = re.compile(r"^__([A-Za-z][A-Za-z0-9_]*)__$")
+_CODE_TOKEN_RE = re.compile(r"EASYCATCODETOKEN(\d+)X")
 
 _SHORT_CODE_MAX_CHARS = 24
 
@@ -129,6 +130,20 @@ def _stash_code_span(
 
 def _extract_inline_code(match: re.Match[str]) -> str:
     return match.group(1)
+
+
+def _restore_code_spans(text: str, code_spans: list[str]) -> str:
+    """Restore stashed code spans in a single pass over *text*."""
+    if not code_spans:
+        return text
+
+    def _replace(match: re.Match[str]) -> str:
+        idx = int(match.group(1))
+        if idx >= len(code_spans):
+            return match.group(0)
+        return code_spans[idx]
+
+    return _CODE_TOKEN_RE.sub(_replace, text)
 
 
 def _normalize_short_code_for_tts(code: str) -> str:
@@ -375,9 +390,8 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     result = _HR_ASTERISK_RE.sub("", result)
     result = _HR_UNDERSCORE_RE.sub("", result)
 
-    # 13. Restore protected code spans.
-    for idx, code in enumerate(code_spans):
-        result = result.replace(f"EASYCATCODETOKEN{idx}X", code)
+    # 13. Restore protected code spans in one substitution pass.
+    result = _restore_code_spans(result, code_spans)
 
     # 14. Collapse runs of blank lines
     result = _EXCESS_BLANK_LINES_RE.sub("\n\n", result)
