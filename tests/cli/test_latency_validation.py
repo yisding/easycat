@@ -375,6 +375,47 @@ def test_latency_runner_writes_failure_sample_when_pytest_fails_before_sample(
     assert report["failures"][0]["failure_class"] == "provider_auth"
 
 
+def test_latency_runner_redacts_exact_runtime_secret_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "plain-runtime-token-value"
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
+
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        sample = LatencySample(
+            sample_id="sample-1",
+            condition_id="baseline",
+            warmup=False,
+            timestamp_source="event_monotonic",
+            stages=LatencyStageDurations(),
+            debug={"exception": f"provider returned {secret}"},
+            missing_stage_reason=f"provider returned {secret}",
+        )
+        Path(env["EASYCAT_LATENCY_SAMPLES_PATH"]).write_text(json.dumps([sample.to_dict()]))
+        return CommandResult(exit_code=1, stdout=f"stdout {secret}", stderr=f"stderr {secret}")
+
+    result = run_latency_validation(
+        LatencyMode.SMOKE,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    serialized_report = result.report_path.read_text()
+    serialized_latency = (result.run_dir / "latency" / "smoke.json").read_text()
+    serialized_latest_latency = (tmp_path / "latency" / "smoke-latest.json").read_text()
+
+    assert result.exit_code == 1
+    assert secret not in serialized_report
+    assert secret not in serialized_latency
+    assert secret not in serialized_latest_latency
+    assert secret not in (result.run_dir / "stdout.log").read_text()
+    assert secret not in (result.run_dir / "stderr.log").read_text()
+    assert "[REDACTED_SECRET]" in serialized_report
+    assert "[REDACTED_SECRET]" in serialized_latency
+
+
 def test_latency_runner_reports_malformed_samples_without_crashing(tmp_path: Path) -> None:
     def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         samples_path = Path(env["EASYCAT_LATENCY_SAMPLES_PATH"])
