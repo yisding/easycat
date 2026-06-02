@@ -15,7 +15,13 @@ from easycat._audio_utils import resample
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType
-from easycat.stt.base import pcm_to_wav
+from easycat.stt.base import (
+    DEFAULT_MAX_AUDIO_BUFFER_BYTES,
+    DEFAULT_MAX_AUDIO_CHUNK_BYTES,
+    DEFAULT_MAX_AUDIO_DURATION_MS,
+    STTBase,
+    pcm_to_wav,
+)
 from easycat.stt.websocket_base import WebSocketSTTBase
 
 logger = logging.getLogger(__name__)
@@ -51,10 +57,24 @@ class ElevenLabsSTTConfig:
     realtime_sample_rate: int = 16000
     realtime_commit_strategy: str = "manual"  # "manual" or "vad"
     realtime_include_timestamps: bool = False
+    max_audio_chunk_bytes: int | None = DEFAULT_MAX_AUDIO_CHUNK_BYTES
+    max_audio_buffer_bytes: int | None = DEFAULT_MAX_AUDIO_BUFFER_BYTES
+    max_audio_duration_ms: float | None = DEFAULT_MAX_AUDIO_DURATION_MS
     # Optional overrides for testing
     http_client: httpx.AsyncClient | None = field(default=None, repr=False)
     ws_connect: Any = field(default=None, repr=False)
     event_bus: Any = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        STTBase._validate_positive_limit(
+            "ElevenLabsSTTConfig.max_audio_chunk_bytes", self.max_audio_chunk_bytes
+        )
+        STTBase._validate_positive_limit(
+            "ElevenLabsSTTConfig.max_audio_buffer_bytes", self.max_audio_buffer_bytes
+        )
+        STTBase._validate_positive_limit(
+            "ElevenLabsSTTConfig.max_audio_duration_ms", self.max_audio_duration_ms
+        )
 
 
 class ElevenLabsSTT(WebSocketSTTBase):
@@ -145,7 +165,15 @@ class ElevenLabsSTT(WebSocketSTTBase):
             self._audio_format = self._latch_uniform_format(
                 self._audio_format, chunk, provider_label="ElevenLabs batch STT"
             )
-            self._buffer.extend(chunk.data)
+            await self._buffer_batch_audio_or_finalize(
+                self._buffer,
+                chunk,
+                max_chunk_bytes=self._config.max_audio_chunk_bytes,
+                max_buffer_bytes=self._config.max_audio_buffer_bytes,
+                max_duration_ms=self._config.max_audio_duration_ms,
+                provider_label="ElevenLabs batch STT",
+                finalize=self._flush_batch_buffer,
+            )
 
     async def _on_end(self) -> None:
         if self._config.mode == "realtime":
@@ -336,10 +364,24 @@ class ElevenLabsSTT(WebSocketSTTBase):
     # -- Batch (HTTP) mode -------------------------------------------------
 
     async def _end_batch(self) -> None:
+        await self._flush_batch_buffer()
+
+    async def _flush_batch_buffer(self) -> None:
+        """Transcribe and emit whatever is buffered, then reset for a fresh stream.
+
+        Used both when the stream ends normally and when a cumulative buffer
+        cap forces an early finalize mid-stream (long-talking caller). The
+        latched format is preserved so the next utterance keeps the same
+        first-seen format contract.
+        """
         if not self._buffer or self._audio_format is None:
             return
 
         wav_data = pcm_to_wav(bytes(self._buffer), self._audio_format)
+        # Clear in place (not a rebind) so the buffer reference held by the
+        # in-progress ``_buffer_batch_audio_or_finalize`` call stays the same
+        # object, letting the chunk that tripped the cap restart a fresh stream.
+        self._buffer.clear()
         result = await self._transcribe_batch(wav_data)
         if result:
             self._emit_event(
