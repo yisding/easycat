@@ -393,6 +393,14 @@ def test_latency_runner_redacts_exact_runtime_secret_values(
             missing_stage_reason=f"provider returned {secret}",
         )
         Path(env["EASYCAT_LATENCY_SAMPLES_PATH"]).write_text(json.dumps([sample.to_dict()]))
+        junit_arg = next(arg for arg in command if arg.startswith("--junitxml="))
+        junit_target = Path(junit_arg.removeprefix("--junitxml="))
+        junit_target.parent.mkdir(parents=True, exist_ok=True)
+        junit_target.write_text(
+            '<?xml version="1.0" encoding="utf-8"?>'
+            f'<testsuites><testsuite><testcase><failure message="provider returned {secret}">'
+            f"{secret}</failure></testcase></testsuite></testsuites>"
+        )
         return CommandResult(exit_code=1, stdout=f"stdout {secret}", stderr=f"stderr {secret}")
 
     result = run_latency_validation(
@@ -412,6 +420,7 @@ def test_latency_runner_redacts_exact_runtime_secret_values(
     assert secret not in serialized_latest_latency
     assert secret not in (result.run_dir / "stdout.log").read_text()
     assert secret not in (result.run_dir / "stderr.log").read_text()
+    assert secret not in (result.run_dir / "junit.xml").read_text()
     assert "[REDACTED_SECRET]" in serialized_report
     assert "[REDACTED_SECRET]" in serialized_latency
 

@@ -139,6 +139,7 @@ def run_validation_slice(
         **os.environ,
         "EASYCAT_RELIABILITY_SAMPLES_PATH": str(reliability_samples_path),
     }
+    runtime_secret_values = _runtime_secret_values()
     started_monotonic = time.perf_counter()
     result = command_runner(command, env=command_env)
     duration_s = time.perf_counter() - started_monotonic
@@ -146,6 +147,10 @@ def run_validation_slice(
 
     stdout_path.write_text(redact_text(result.stdout))
     stderr_path.write_text(redact_text(result.stderr))
+    if junit_path.exists():
+        junit_path.write_text(
+            redact_runtime_secrets(junit_path.read_text(), runtime_secret_values)
+        )
 
     exit_code = validation_exit_code_from_pytest(result.exit_code)
     reliability_failure = _load_reliability_failure(reliability_samples_path)
@@ -295,6 +300,10 @@ def run_latency_validation(
 
     stdout_path.write_text(redact_runtime_secrets(result.stdout, runtime_secret_values))
     stderr_path.write_text(redact_runtime_secrets(result.stderr, runtime_secret_values))
+    if junit_path.exists():
+        junit_path.write_text(
+            redact_runtime_secrets(junit_path.read_text(), runtime_secret_values)
+        )
     exit_code = validation_exit_code_from_pytest(result.exit_code)
     sample_load_failure: ValidationFailure | None = None
     try:
