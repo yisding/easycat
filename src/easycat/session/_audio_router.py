@@ -153,6 +153,7 @@ class AudioRouter:
         self._is_running = wiring.is_running
         self._set_running = wiring.set_running
         self._current_turn = wiring.current_turn
+        self._correlation_ids = wiring.correlation_ids
         self._is_stt_active = wiring.is_stt_active
         self._with_correlation = wiring.with_correlation
 
@@ -345,11 +346,45 @@ class AudioRouter:
         """Finalize accounting for buffered transports at their no-clear point."""
         from easycat._turn_context import TurnContext as _TurnCtx
 
-        turn = event.turn_ref if isinstance(event.turn_ref, _TurnCtx) else None
-        if turn is None:
-            active = self._current_turn()
+        session_id, _ = self._correlation_ids()
+        if (
+            event.session_id is not None
+            and session_id is not None
+            and event.session_id != session_id
+        ):
+            return
+
+        active = self._current_turn()
+        turn = None
+        if isinstance(event.turn_ref, _TurnCtx):
+            # A turn reference proves ownership only when the transport callback
+            # is scoped to this session, or when it is literally this router's
+            # current turn.  Shared EventBus deployments otherwise expose every
+            # session to every buffered transport callback, and trusting an
+            # unscoped foreign TurnContext can leak/re-label another session's
+            # audio.
+            if event.session_id == session_id or event.turn_ref is active:
+                turn = event.turn_ref
+            else:
+                return
+        elif event.session_id == session_id:
             if active is not None and (event.turn_id is None or active.id == event.turn_id):
                 turn = active
+        elif active is not None and event.turn_id is not None and active.id == event.turn_id:
+            turn = active
+        elif event.session_id is None and event.turn_id is None and event.turn_ref is None:
+            # Fully-unscoped callback: a custom reporting transport that
+            # declares ``reports_audio_delivery = True`` and emits a bare
+            # ``TransportAudioDelivered(chunk=...)`` with no ownership
+            # metadata.  Fall back to the active turn so single-session /
+            # private-bus apps keep counting bytes and emitting AudioOut.
+            # The shared-bus protections above still hold: a stamped foreign
+            # ``session_id`` returns via the foreign-session guard, and an
+            # unscoped foreign ``TurnContext`` returns because its ``turn_ref``
+            # would be set.
+            turn = active
+        else:
+            return
 
         turn_id = event.turn_id or (turn.id if turn is not None else None)
         await self._handle_audio_delivery(event.chunk, turn)
@@ -578,8 +613,10 @@ class AudioRouter:
             await self._send_playback_mark(turn)
 
     def _stamp_outbound_chunk(self, chunk: AudioChunk, turn: TurnContext | None) -> None:
-        """Attach turn ownership so buffered transports can report later delivery."""
+        """Attach session/turn ownership so buffered transports can report later delivery."""
         try:
+            session_id, _ = self._correlation_ids()
+            setattr(chunk, "_easycat_session_id", session_id)
             setattr(chunk, "_easycat_turn_id", turn.id if turn is not None else None)
             setattr(chunk, "_easycat_turn_ref", turn)
         except Exception:
