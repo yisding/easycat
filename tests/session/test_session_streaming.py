@@ -487,15 +487,15 @@ async def test_consume_agent_stream_strip_markdown_defers_work_until_flush(monke
         strip_calls.append(text)
         return text.strip() if trim else text
 
-    def _counting_has_unclosed_markdown_delimiters(text: str) -> bool:
+    def _counting_markdown_open_state(text: str) -> tuple[bool, bool]:
         delimiter_calls.append(text)
-        return False
+        return False, False
 
     monkeypatch.setattr(_streaming, "strip_markdown", _counting_strip_markdown)
     monkeypatch.setattr(
         _streaming,
-        "has_unclosed_markdown_delimiters",
-        _counting_has_unclosed_markdown_delimiters,
+        "markdown_open_state",
+        _counting_markdown_open_state,
     )
 
     async def _stream() -> AsyncIterator[AgentBridgeEvent]:
@@ -521,6 +521,90 @@ async def test_consume_agent_stream_strip_markdown_defers_work_until_flush(monke
     assert strip_calls == ["a" * 128]
     assert (await tts_queue.get()).text == "a" * 128
     assert await tts_queue.get() is None
+
+
+def test_streaming_trigger_chars_superset_of_segmenter_terminators():
+    """Every sentence-segmenter terminal punctuation char must be a trigger.
+
+    If the segmenter would close a sentence on a character the streaming
+    throttle does not treat as a trigger, that sentence stalls until the
+    final flush.  Keep ``_STREAMING_SENTENCE_TRIGGER_CHARS`` a strict
+    superset of the segmenter's terminal punctuation (it additionally
+    carries ``\\n``/``\\r``)."""
+    from easycat.session._streaming import _STREAMING_SENTENCE_TRIGGER_CHARS
+    from easycat.session.text import _SENTENCE_SEGMENTER
+
+    # The attribute name below is defined by the sentencesplit library.
+    terminators = set(_SENTENCE_SEGMENTER.language_module.Punctuations)  # codespell:ignore
+    assert terminators  # guard against an empty/renamed segmenter attribute
+    missing = terminators - _STREAMING_SENTENCE_TRIGGER_CHARS
+    assert not missing, f"trigger set missing segmenter terminators: {sorted(missing)}"
+    # The fullwidth full stop U+FF0E is one of those terminators specifically.
+    assert "．" in _STREAMING_SENTENCE_TRIGGER_CHARS
+
+
+async def test_consume_agent_stream_strip_markdown_disambiguates_open_link_mid_stream():
+    """A bracket awaiting a destination must not stall streaming.
+
+    After ``"First sentence. See [note]"`` the buffer is open only because
+    ``[note]`` might be a markdown link; an ordinary-prose continuation
+    (no markdown-closer char) disambiguates it, so the first sentence must
+    be queued to TTS *during* streaming, not deferred to the final flush.
+    """
+    from easycat.session._streaming import consume_agent_stream
+
+    deltas = [
+        "First sentence. See [note]",
+        " in the docs and more plain prose",
+    ]
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        for delta in deltas:
+            yield AgentBridgeEvent(kind="text_delta", text=delta)
+        yield AgentBridgeEvent(kind="done", text="")
+
+    turn = TurnContext(turn_id="t1", cancel_token=CancelToken())
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+
+    # Record the (text, is_final) of every payload built so we can prove the
+    # first sentence was queued as a mid-stream (is_final=False) payload
+    # rather than only at the final flush (is_final=True).
+    built: list[tuple[str, bool]] = []
+
+    def _prepare(text: str, *, is_streaming: bool = True, is_final: bool = False) -> TTSInput:
+        _ = is_streaming
+        built.append((text, is_final))
+        return TTSInput(text=text)
+
+    result = await consume_agent_stream(
+        _stream,
+        cancel_token=turn.cancel_token,
+        tts_queue=tts_queue,
+        emit=AsyncMock(),
+        prepare_tts_payload=_prepare,
+        strip_md=True,
+        turn=turn,
+    )
+    assert result.error is None
+
+    # Drain the queue.
+    payloads: list[TTSInput] = []
+    while True:
+        item = await tts_queue.get()
+        if item is None:
+            break
+        payloads.append(item)
+
+    # The disambiguated first sentence must be queued during streaming
+    # (is_final=False); if the open link bracket had stalled streaming, the
+    # only payload would be the single final-flush (is_final=True) chunk.
+    streaming_texts = [text for text, is_final in built if not is_final]
+    assert streaming_texts, "first sentence should be queued before the final flush"
+    assert streaming_texts[0].strip().startswith("First sentence.")
+    # The bracketed label survives stripping (no destination -> plain text).
+    joined = " ".join(p.text for p in payloads)
+    assert "note" in joined
+    assert "more plain prose" in joined
 
 
 async def test_consume_agent_stream_sentinel_skipped_when_consumer_stopped():
