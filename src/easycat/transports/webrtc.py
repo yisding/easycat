@@ -591,6 +591,13 @@ class WebRTCTransport(_AudioQueueMixin):
         rtc_config = RTCConfiguration(iceServers=ice_servers)
 
         pc = None
+        # aiortc fires the synchronous ``track`` event *during*
+        # ``setRemoteDescription`` — before this generation is committed below.
+        # Capture the remote audio track here and only start ``_consume_audio``
+        # against it after the commit/teardown/swap, so a successfully
+        # negotiated peer always gets an inbound reader instead of being
+        # rejected as a not-yet-current generation.
+        captured_track: Any | None = None
         try:
             pc = RTCPeerConnection(rtc_config)
 
@@ -608,23 +615,15 @@ class WebRTCTransport(_AudioQueueMixin):
             outbound_track = outbound.create_track()
             pc.addTrack(outbound_track)
 
-            # Listen for the remote audio track.
+            # Listen for the remote audio track. The event fires during
+            # ``setRemoteDescription`` (before commit), so just capture the
+            # track; ``_consume_audio`` is started after the swap below.
             @pc.on("track")
             def on_track(track: Any) -> None:
-                if not self._is_current_peer_generation(peer_generation):
-                    return
+                nonlocal captured_track
                 if track.kind == "audio":
                     logger.info("WebRTC remote audio track received")
-                    self._consume_task = asyncio.ensure_future(
-                        self._consume_audio(track, peer_generation=peer_generation)
-                    )
-
-                    @track.on("ended")
-                    async def on_ended() -> None:
-                        if not self._is_current_peer_generation(peer_generation):
-                            return
-                        logger.info("WebRTC remote audio track ended")
-                        self._enqueue_sentinel_for_peer(peer_generation)
+                    captured_track = track
 
             @pc.on("connectionstatechange")
             async def on_connectionstatechange() -> None:
@@ -677,7 +676,9 @@ class WebRTCTransport(_AudioQueueMixin):
         # Close any existing peer connection only after the replacement SDP is
         # proven valid. Advancing the generation before teardown keeps late
         # callbacks from the previous peer from ending the receive_audio()
-        # iterator for the replacement peer.
+        # iterator for the replacement peer. Cancel the *old* peer's consume
+        # task here; the new task is created only at swap time below so this
+        # block can never cancel it.
         if self._consume_task is not None and not self._consume_task.done():
             self._consume_task.cancel()
             try:
@@ -697,6 +698,23 @@ class WebRTCTransport(_AudioQueueMixin):
         self._pc = pc
         self._outbound = outbound
         self._outbound_track = outbound_track
+
+        # Now that the new generation is current, start the inbound reader for
+        # the track captured during ``setRemoteDescription`` and register its
+        # ``ended`` handler. ``_consume_audio`` is generation-guarded internally,
+        # so starting it post-commit is safe.
+        if captured_track is not None:
+
+            @captured_track.on("ended")
+            async def on_ended() -> None:
+                if not self._is_current_peer_generation(peer_generation):
+                    return
+                logger.info("WebRTC remote audio track ended")
+                self._enqueue_sentinel_for_peer(peer_generation)
+
+            self._consume_task = asyncio.ensure_future(
+                self._consume_audio(captured_track, peer_generation=peer_generation)
+            )
 
         return web.Response(
             content_type="application/json",
