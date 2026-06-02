@@ -334,12 +334,9 @@ class TurnManager:
     def _trim_pre_roll_buffer(self) -> None:
         """Keep the pre-roll window bounded by duration and chunk count."""
         while (
-            (
-                self._pre_roll_duration_ms > self._config.pre_roll_ms
-                or len(self._pre_roll_buffer) > self._config.max_pre_roll_chunks
-            )
-            and self._pre_roll_buffer
-        ):
+            self._pre_roll_duration_ms > self._config.pre_roll_ms
+            or len(self._pre_roll_buffer) > self._config.max_pre_roll_chunks
+        ) and self._pre_roll_buffer:
             removed = self._pre_roll_buffer.popleft()
             self._pre_roll_duration_ms -= removed.duration_ms
         if self._pre_roll_duration_ms < 0:
@@ -354,12 +351,9 @@ class TurnManager:
     def _trim_turn_audio(self) -> None:
         """Keep retained active-turn audio bounded by duration and chunk count."""
         while (
-            (
-                self._turn_audio_duration_ms > self._config.max_turn_audio_ms
-                or len(self._turn_audio) > self._config.max_turn_audio_chunks
-            )
-            and self._turn_audio
-        ):
+            self._turn_audio_duration_ms > self._config.max_turn_audio_ms
+            or len(self._turn_audio) > self._config.max_turn_audio_chunks
+        ) and self._turn_audio:
             removed = self._turn_audio.popleft()
             self._turn_audio_duration_ms -= removed.duration_ms
         if self._turn_audio_duration_ms < 0:
