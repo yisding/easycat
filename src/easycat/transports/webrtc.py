@@ -119,6 +119,7 @@ class WebRTCTransportConfig:
 class _QueuedOutboundChunk:
     transport_data: bytes
     original_chunk: AudioChunk
+    session_id: str | None = None
     turn_id: str | None = None
     turn_ref: object | None = None
     transport_offset: int = 0
@@ -162,6 +163,7 @@ class _OutboundAudioSource:
         pcm_s16_48k: bytes,
         *,
         original_chunk: AudioChunk,
+        session_id: str | None = None,
         turn_id: str | None = None,
         turn_ref: object | None = None,
     ) -> bool:
@@ -177,6 +179,7 @@ class _OutboundAudioSource:
                 _QueuedOutboundChunk(
                     transport_data=pcm_s16_48k,
                     original_chunk=original_chunk,
+                    session_id=session_id,
                     turn_id=turn_id,
                     turn_ref=turn_ref,
                 )
@@ -243,6 +246,7 @@ class _OutboundAudioSource:
                             format=queued.original_chunk.format,
                             timestamp=queued.original_chunk.timestamp,
                         ),
+                        queued.session_id,
                         queued.turn_id,
                         queued.turn_ref,
                     )
@@ -266,11 +270,12 @@ class _OutboundAudioSource:
 
         self._pts += _FRAME_SAMPLES
         if self._event_bus is not None:
-            for delivered_chunk, turn_id, turn_ref in delivered_chunks:
+            for delivered_chunk, session_id, turn_id, turn_ref in delivered_chunks:
                 if delivered_chunk.data:
                     await self._event_bus.emit(
                         TransportAudioDelivered(
                             chunk=delivered_chunk,
+                            session_id=session_id,
                             turn_id=turn_id,
                             turn_ref=turn_ref,
                         )
@@ -312,9 +317,9 @@ class WebRTCTransport(_AudioQueueMixin):
     ``{"sdp": "...", "type": "answer"}``.  ICE candidates are gathered
     in-band (full ICE) before the answer is returned.
 
-    **GET /config** — Returns the ICE server configuration as JSON so
-    browser clients can configure their ``RTCPeerConnection`` with the
-    same STUN/TURN servers.
+    **GET /config** — Returns public ICE server URLs as JSON so browser
+    clients can configure their ``RTCPeerConnection``. Credentials are
+    intentionally omitted because this endpoint is public.
 
     **GET /health** — Returns ``{"status": "ok"}``.
     """
@@ -359,19 +364,22 @@ class WebRTCTransport(_AudioQueueMixin):
 
     # ── Helpers ─────────────────────────────────────────────────
 
-    def _ice_servers_as_dicts(self) -> list[dict[str, Any]]:
+    def _ice_servers_as_dicts(self, *, include_credentials: bool = True) -> list[dict[str, Any]]:
         """Serialize configured ICE servers to plain dicts.
 
-        Used by both the ``/offer`` handler (to build ``RTCIceServer``
-        objects) and ``/config`` (to return JSON to the browser).
+        The ``/offer`` handler needs the complete configuration to build
+        server-side ``RTCIceServer`` objects.  The public ``/config`` endpoint
+        must not expose TURN credentials, so callers can request URL-only
+        entries for browser-facing responses.
         """
         result: list[dict[str, Any]] = []
         for srv in self._config.ice_servers:
             entry: dict[str, Any] = {"urls": srv.urls}
-            if srv.username:
-                entry["username"] = srv.username
-            if srv.credential:
-                entry["credential"] = srv.credential
+            if include_credentials:
+                if srv.username:
+                    entry["username"] = srv.username
+                if srv.credential:
+                    entry["credential"] = srv.credential
             result.append(entry)
         return result
 
@@ -505,6 +513,7 @@ class WebRTCTransport(_AudioQueueMixin):
         accepted = self._outbound.enqueue(
             pcm_data,
             original_chunk=chunk,
+            session_id=getattr(chunk, "_easycat_session_id", None),
             turn_id=getattr(chunk, "_easycat_turn_id", None),
             turn_ref=getattr(chunk, "_easycat_turn_ref", None),
         )
@@ -579,36 +588,25 @@ class WebRTCTransport(_AudioQueueMixin):
                 headers=_CORS_HEADERS,
             )
 
+        # Negotiate the replacement peer against a pending generation first. Do
+        # not make it current or tear down the existing peer until the incoming
+        # SDP has been accepted; otherwise a malformed replacement offer can
+        # strand receive_audio() after the old peer's shutdown sentinel is
+        # intentionally suppressed as stale.
         peer_generation = self._peer_generation + 1
-        self._peer_generation = peer_generation
-        self._client_connected.clear()
-        self._outbound_track = None
-
-        # Close any existing peer connection. Advancing the generation before
-        # teardown keeps late callbacks from the previous peer from ending the
-        # receive_audio() iterator for the replacement peer.
-        if self._consume_task is not None and not self._consume_task.done():
-            self._consume_task.cancel()
-            try:
-                await self._consume_task
-            except asyncio.CancelledError:
-                pass
-        self._consume_task = None
-
-        if self._pc is not None:
-            await self._pc.close()
-            self._pc = None
-
-        # Clear stale audio from the previous peer so it doesn't leak into
-        # the new session's receive_audio() iterator. Do not replace the queue:
-        # Session.receive_audio() may already be blocked on this object.
-        self._drain_audio_queue()
 
         # Build ICE configuration from the shared serializer.
         ice_servers = [RTCIceServer(**entry) for entry in self._ice_servers_as_dicts()]
         rtc_config = RTCConfiguration(iceServers=ice_servers)
 
         pc = None
+        # aiortc fires the synchronous ``track`` event *during*
+        # ``setRemoteDescription`` — before this generation is committed below.
+        # Capture the remote audio track here and only start ``_consume_audio``
+        # against it after the commit/teardown/swap, so a successfully
+        # negotiated peer always gets an inbound reader instead of being
+        # rejected as a not-yet-current generation.
+        captured_track: Any | None = None
         try:
             pc = RTCPeerConnection(rtc_config)
 
@@ -618,32 +616,23 @@ class WebRTCTransport(_AudioQueueMixin):
             # half-built PC is discarded if the locking changes in the future.
             if not self._connected:
                 await pc.close()
-                self._pc = None
                 return self._unavailable_response()
-            self._pc = pc
 
-            # Reset outbound track for the new connection.
-            self._outbound = _OutboundAudioSource()
-            self._outbound_track = self._outbound.create_track()
-            pc.addTrack(self._outbound_track)
+            # Prepare an outbound track for the new connection, but keep the
+            # existing peer's source active until negotiation succeeds.
+            outbound = _OutboundAudioSource()
+            outbound_track = outbound.create_track()
+            pc.addTrack(outbound_track)
 
-            # Listen for the remote audio track.
+            # Listen for the remote audio track. The event fires during
+            # ``setRemoteDescription`` (before commit), so just capture the
+            # track; ``_consume_audio`` is started after the swap below.
             @pc.on("track")
             def on_track(track: Any) -> None:
-                if not self._is_current_peer_generation(peer_generation):
-                    return
+                nonlocal captured_track
                 if track.kind == "audio":
                     logger.info("WebRTC remote audio track received")
-                    self._consume_task = asyncio.ensure_future(
-                        self._consume_audio(track, peer_generation=peer_generation)
-                    )
-
-                    @track.on("ended")
-                    async def on_ended() -> None:
-                        if not self._is_current_peer_generation(peer_generation):
-                            return
-                        logger.info("WebRTC remote audio track ended")
-                        self._enqueue_sentinel_for_peer(peer_generation)
+                    captured_track = track
 
             @pc.on("connectionstatechange")
             async def on_connectionstatechange() -> None:
@@ -682,12 +671,58 @@ class WebRTCTransport(_AudioQueueMixin):
             )
             if pc is not None:
                 await pc.close()
-            self._pc = None
             return web.Response(
                 status=400,
                 text=json.dumps({"error": f"SDP negotiation failed: {exc}"}),
                 content_type="application/json",
                 headers=_CORS_HEADERS,
+            )
+
+        self._peer_generation = peer_generation
+        self._client_connected.clear()
+        self._outbound_track = None
+
+        # Close any existing peer connection only after the replacement SDP is
+        # proven valid. Advancing the generation before teardown keeps late
+        # callbacks from the previous peer from ending the receive_audio()
+        # iterator for the replacement peer. Cancel the *old* peer's consume
+        # task here; the new task is created only at swap time below so this
+        # block can never cancel it.
+        if self._consume_task is not None and not self._consume_task.done():
+            self._consume_task.cancel()
+            try:
+                await self._consume_task
+            except asyncio.CancelledError:
+                pass
+        self._consume_task = None
+
+        if self._pc is not None:
+            await self._pc.close()
+
+        # Clear stale audio from the previous peer so it doesn't leak into
+        # the new session's receive_audio() iterator. Do not replace the queue:
+        # Session.receive_audio() may already be blocked on this object.
+        self._drain_audio_queue()
+
+        self._pc = pc
+        self._outbound = outbound
+        self._outbound_track = outbound_track
+
+        # Now that the new generation is current, start the inbound reader for
+        # the track captured during ``setRemoteDescription`` and register its
+        # ``ended`` handler. ``_consume_audio`` is generation-guarded internally,
+        # so starting it post-commit is safe.
+        if captured_track is not None:
+
+            @captured_track.on("ended")
+            async def on_ended() -> None:
+                if not self._is_current_peer_generation(peer_generation):
+                    return
+                logger.info("WebRTC remote audio track ended")
+                self._enqueue_sentinel_for_peer(peer_generation)
+
+            self._consume_task = asyncio.ensure_future(
+                self._consume_audio(captured_track, peer_generation=peer_generation)
             )
 
         return web.Response(
@@ -697,11 +732,18 @@ class WebRTCTransport(_AudioQueueMixin):
         )
 
     async def _handle_config(self, request: Any) -> Any:
-        """Return ICE server configuration for browser clients."""
+        """Return public ICE server URLs for browser clients.
+
+        This endpoint is intentionally unauthenticated so the bundled demo
+        client can bootstrap easily.  Do not include TURN usernames or
+        credentials here; deployments often configure long-lived TURN secrets,
+        and returning them from a public CORS-enabled endpoint would allow
+        arbitrary clients to reuse the relay.
+        """
         web = self._web
         return web.Response(
             content_type="application/json",
-            text=json.dumps({"iceServers": self._ice_servers_as_dicts()}),
+            text=json.dumps({"iceServers": self._ice_servers_as_dicts(include_credentials=False)}),
             headers=_CORS_HEADERS,
         )
 

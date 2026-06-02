@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from easycat import _observability as observability
-from easycat._log_context import bind_turn
+from easycat._log_context import bind_turn, reset_turn
 from easycat._turn_context import TurnContext, TurnHandle
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -165,7 +165,7 @@ class TurnRunner:
         self._turn.set(turn)
         # Tag startup records for this turn without leaving the EventBus task
         # pinned to the turn after this handler returns.
-        bind_turn(turn.id)
+        turn_token = bind_turn(turn.id)
         try:
             self._audio.reset_speech_detection()
             self._tts.set_playback_suppressed(False)
@@ -201,7 +201,7 @@ class TurnRunner:
                 self._reset_turn_state()
             return
         finally:
-            bind_turn(None)
+            reset_turn(turn_token)
 
     def schedule_turn_ended(self, event: TurnEnded) -> None:
         """Schedule end-of-turn processing without blocking other handlers.
@@ -218,7 +218,7 @@ class TurnRunner:
             current_tts_task.cancel()
         gen = self._turn.generation
         turn = self._turn.current
-        bind_turn(event.turn_id)
+        turn_token = bind_turn(event.turn_id)
         try:
             new_task = self._runtime_scope.create_journaled_task(
                 self.on_turn_ended(event, gen, turn=turn),
@@ -227,7 +227,7 @@ class TurnRunner:
                 turn_id=event.turn_id,
             )
         finally:
-            bind_turn(None)
+            reset_turn(turn_token)
         self._tts.current_task = new_task
         new_task.add_done_callback(self._runtime_scope.log_task_exception)
 
@@ -238,6 +238,7 @@ class TurnRunner:
         turn: TurnContext | None = None,
     ) -> None:
         """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
+        turn_token = bind_turn(event.turn_id)
         try:
             if self._turn.generation != generation:
                 return
@@ -249,7 +250,7 @@ class TurnRunner:
                 turn.end_time = event.timestamp
             await self.handle_end_of_speech(turn=turn)
         finally:
-            bind_turn(None)
+            reset_turn(turn_token)
 
     # ── Pipeline ───────────────────────────────────────────────────
 
@@ -613,7 +614,7 @@ class TurnRunner:
         response = ""
         t0 = time.monotonic()
         result_attr = "fail"
-        bind_turn(turn_id)
+        turn_token = bind_turn(turn_id)
         try:
             await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn_id))
             await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn_id))
@@ -624,51 +625,55 @@ class TurnRunner:
             text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
             accumulated = ""
             system_prefix = self._caller_id_system_message()
-            async for event in self._agent_stage.execute_streaming(
+            stream = self._agent_stage.execute_streaming(
                 text,
                 self._run_ctx,
                 text_turn,
                 cancel_token=cancel_token,
                 system_prefix=system_prefix,
-            ):
-                kind = getattr(event, "kind", None)
-                if kind is None:
-                    continue
-                if kind == "done":
-                    if event.text:
-                        accumulated = event.text
-                    if getattr(event, "structured_output", None) is not None:
-                        structured_output = event.structured_output
-                    break
-                if kind == "text_delta" and event.text:
-                    accumulated += event.text
-                    self._text_turn_accumulated = accumulated
-                    await self._emit(
-                        AgentDelta(
-                            text=event.text,
+            )
+            try:
+                async for event in stream:
+                    kind = getattr(event, "kind", None)
+                    if kind is None:
+                        continue
+                    if kind == "done":
+                        if event.text:
+                            accumulated = event.text
+                        if getattr(event, "structured_output", None) is not None:
+                            structured_output = event.structured_output
+                        break
+                    if kind == "text_delta" and event.text:
+                        accumulated += event.text
+                        self._text_turn_accumulated = accumulated
+                        await self._emit(
+                            AgentDelta(
+                                text=event.text,
+                                session_id=self._session_id,
+                                turn_id=turn_id,
+                            )
+                        )
+                    else:
+                        # tool_started / tool_delta / tool_result share the same
+                        # event-translation as the voice path via emit_tool_event,
+                        # so the two cannot drift.  The per-tool observability span
+                        # is text-path specific and threaded in via tool_span.
+                        await emit_tool_event(
+                            event,
+                            kind,
+                            emit=self._emit,
                             session_id=self._session_id,
                             turn_id=turn_id,
+                            tool_span=lambda: observability.span(
+                                "easycat.agent.tool",
+                                {
+                                    "easycat.stage": "agent",
+                                    "easycat.surface": "agent_bridge",
+                                },
+                            ),
                         )
-                    )
-                else:
-                    # tool_started / tool_delta / tool_result share the same
-                    # event-translation as the voice path via emit_tool_event,
-                    # so the two cannot drift.  The per-tool observability span
-                    # is text-path specific and threaded in via tool_span.
-                    await emit_tool_event(
-                        event,
-                        kind,
-                        emit=self._emit,
-                        session_id=self._session_id,
-                        turn_id=turn_id,
-                        tool_span=lambda: observability.span(
-                            "easycat.agent.tool",
-                            {
-                                "easycat.stage": "agent",
-                                "easycat.surface": "agent_bridge",
-                            },
-                        ),
-                    )
+            finally:
+                await stream.aclose()
             response = accumulated
             elapsed_ms = (time.monotonic() - t0) * 1000
             await self._emit(
@@ -728,5 +733,5 @@ class TurnRunner:
                     )
                     await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn_id))
             finally:
-                bind_turn(None)
+                reset_turn(turn_token)
         return response

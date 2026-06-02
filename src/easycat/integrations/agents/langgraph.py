@@ -115,6 +115,17 @@ class _LangGraphTurnAccumulator:
     # final-message fallback would be skipped and the caller would only
     # hear the progress narration.
     model_text_streamed: bool = False
+    # Result text of any parented ``BaseLLM`` run whose raw tokens were
+    # suppressed by ``translate_stream_event`` (immediate parent was not
+    # a tracked node root — e.g. an inert ``.with_retry()`` span sits
+    # between the node and the LLM).  Used as a *fail-audible* fallback in
+    # :meth:`LangGraphBridge._finalize_done` when neither the model/chain
+    # path nor a final ``AIMessage`` produced any public-safe text, so a
+    # node-direct LLM that wrote to a non-conventional state field through
+    # a wrapper isn't left silent.  Whenever the node/chain *did* compose
+    # public text the secure path wins and this stays unused, so raw
+    # tokens are never re-leaked once redaction ran.
+    suppressed_parented_llm_text: str = ""
 
 
 class LangGraphBridge:
@@ -575,6 +586,13 @@ class LangGraphBridge:
                         acc.accumulated += bridge_event.text
                         acc.model_text_streamed = True
                     yield bridge_event
+            # Carry any suppressed node-direct (wrapper-parented) LLM text
+            # off the per-turn ``tool_state`` onto ``acc`` so the
+            # post-stream finalize step can use it as a fail-audible
+            # fallback (see ``_finalize_done``).  ``tool_state``'s locals
+            # don't survive this generator's return, so the value has to
+            # live on the shared accumulator instead.
+            acc.suppressed_parented_llm_text = _first_suppressed_llm_text(tool_state)
         except Exception as exc:
             for cursor in reversed(list(open_cursors.values())):
                 recorder.safe_exit_cursor(cursor)
@@ -645,6 +663,13 @@ class LangGraphBridge:
           would surface the user's own utterance and TTS would repeat
           the caller's voice back.
         * Otherwise speak whatever streamed (custom chunks, or nothing).
+          As a fail-audible last resort, when nothing streamed *and* the
+          tail isn't an AI message, fall back to a node-direct
+          ``BaseLLM``'s suppressed result text (a wrapper such as
+          ``.with_retry()`` sat between the node and the LLM and wrote to
+          a non-conventional state key).  This never overrides composed
+          node/chain text, so redaction on the secure common path is
+          preserved.
         """
         accumulated = acc.accumulated
         if acc.model_text_streamed:
@@ -669,6 +694,19 @@ class LangGraphBridge:
                 spoken_text = final_text
         else:
             spoken_text = accumulated
+            if not spoken_text and acc.suppressed_parented_llm_text:
+                # Fail-audible fallback: the node/chain produced no
+                # public-safe text and the messages tail isn't an AI
+                # message, but a node-direct ``BaseLLM`` reached through an
+                # inert ``.with_retry()`` span had its raw tokens
+                # suppressed and wrote to a non-conventional state key.
+                # Speak its result so the turn isn't silent.  This only
+                # fires when *nothing* else surfaced; whenever the
+                # node/chain composed public text (the secure common path)
+                # ``accumulated`` is non-empty and wins above, so redaction
+                # is never bypassed.
+                spoken_text = acc.suppressed_parented_llm_text
+                yield AgentBridgeEvent(kind="text_delta", text=spoken_text)
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(
             kind="done",
@@ -1463,6 +1501,25 @@ def _get_checkpoint_id(state: Any) -> str | None:
         return None
     cp = configurable.get("checkpoint_id")
     return str(cp) if cp else None
+
+
+def _first_suppressed_llm_text(tool_state: dict[str, Any]) -> str:
+    """First non-empty suppressed parented-LLM result text from ``tool_state``.
+
+    ``translate_stream_event`` stashes a node-direct ``BaseLLM``'s result
+    text under ``suppressed_parented_llm_text`` (keyed by run id) when its
+    raw tokens were suppressed because an inert wrapper such as
+    ``.with_retry()`` sits between the node root and the LLM.  Used by
+    :meth:`LangGraphBridge._finalize_done` as a fail-audible fallback;
+    returns ``""`` when nothing was suppressed.
+    """
+    suppressed = tool_state.get("suppressed_parented_llm_text")
+    if not isinstance(suppressed, dict):
+        return ""
+    for text in suppressed.values():
+        if isinstance(text, str) and text:
+            return text
+    return ""
 
 
 def _messages_tail(state: Any, key: str = "messages") -> Any:

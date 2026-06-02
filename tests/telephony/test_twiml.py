@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+
 from easycat.events import DTMF, EventBus
 from easycat.telephony import (
     compute_twilio_webhook_signature,
@@ -190,6 +192,22 @@ class TestTwimlGather:
     def test_custom_finish_key(self) -> None:
         result = twiml_gather(action_url="/x", finish_on_key="*")
         assert 'finishOnKey="*"' in result
+
+    def test_numeric_attrs_escape_quotes(self) -> None:
+        result = twiml_gather(
+            action_url="/x",
+            timeout='5" method="GET',  # type: ignore[arg-type]
+            num_digits='4" actionOnEmptyResult="true',  # type: ignore[arg-type]
+        )
+        gather = ET.fromstring(result).find("Gather")
+        assert gather is not None
+        assert gather.attrib == {
+            "action": "/x",
+            "timeout": '5" method="GET',
+            "finishOnKey": "#",
+            "input": "dtmf",
+            "numDigits": '4" actionOnEmptyResult="true',
+        }
 
 
 class TestTwimlHangup:

@@ -127,7 +127,7 @@ def parse_call_status_callback(
             call_sid=call_sid,
             duration_s=duration_s,
             disposition="completed",
-            number=params.get("To", ""),
+            number=params.get("From", ""),
         )
 
     if status in {"busy", "no-answer", "failed", "canceled"}:
@@ -137,7 +137,7 @@ def parse_call_status_callback(
             call_sid=call_sid,
             reason=reason,
             sip_code=sip_code,
-            number=params.get("To", ""),
+            number=params.get("From", ""),
         )
 
     return None
