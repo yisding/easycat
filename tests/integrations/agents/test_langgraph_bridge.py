@@ -1376,6 +1376,81 @@ class TestLangGraphBridgeState:
         assert done and done[0].text == "[REDACTED]"
 
     @pytest.mark.asyncio
+    async def test_node_direct_with_retry_llm_to_plain_state_field_is_audible(self):
+        """Fail-audible: a node directly invokes a non-chat ``BaseLLM`` via
+        ``.with_retry()``.  The sync ``invoke`` path inserts an intervening
+        ``RunnableRetry`` span, so the LLM's ``parent_ids`` are
+        ``[node, retry]`` and the immediate-parent check marks the run as
+        parented — its raw ``on_llm_*`` tokens are suppressed.  The node
+        writes the result to a plain (non-``messages``) state field, so the
+        node's own ``on_chain_stream`` dict is filtered out and the
+        messages tail stays the user turn (not an AI message).  Without a
+        fallback the turn would go silent; the suppressed ``on_llm_end``
+        text is stashed and surfaced as a fail-audible fallback, so
+        ``done.text`` is non-empty end to end."""
+
+        user_msg = _MockMessage("user", "hi")
+        # Output landed in a plain "draft" field, not "messages" — the
+        # messages tail stays the user turn so ``_last_output`` is not an
+        # AI message and the fail-audible fallback must supply the text.
+        state = _MockState(
+            values={"messages": [user_msg], "draft": "completion text"},
+            checkpoint_id="cp-final",
+        )
+        scripted = [
+            _node_start("answer", "n1"),
+            # ``.with_retry()`` inserts a ``RunnableRetry`` span between the
+            # node root and the BaseLLM, so the LLM's immediate parent is
+            # the retry span (not the node root).
+            {
+                "event": "on_chain_start",
+                "name": "RunnableRetry",
+                "run_id": "retry",
+                "parent_ids": ["n1"],
+                "data": {},
+                "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
+            },
+            {
+                "event": "on_llm_start",
+                "name": "OpenAI",
+                "run_id": "l1",
+                "parent_ids": ["n1", "retry"],
+                "data": {},
+                "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
+            },
+            {
+                "event": "on_llm_end",
+                "name": "OpenAI",
+                "run_id": "l1",
+                "parent_ids": ["n1", "retry"],
+                "data": {"output": {"generations": [[{"text": "completion text"}]]}},
+                "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
+            },
+            # The node's composed state output — a dict that
+            # ``_dict_output_text`` filters out (no conventional key).
+            {
+                "event": "on_chain_stream",
+                "name": "answer",
+                "run_id": "n1",
+                "parent_ids": [],
+                "data": {"chunk": {"draft": "completion text"}},
+                "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
+            },
+            _node_end("answer", "n1"),
+        ]
+        graph = _MockCompiledGraph(scripted, state=state)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        done = [e for e in events if e.kind == "done"]
+        assert text == "completion text"
+        assert done and done[0].text == "completion text"
+
+    @pytest.mark.asyncio
     async def test_dispatch_custom_event_drives_text_delta_by_default(self):
         """A graph node using LangChain's ``dispatch_custom_event`` emits
         ``on_custom_event`` through ``astream_events``.  LangChain keys
