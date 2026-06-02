@@ -1147,8 +1147,10 @@ class SqliteJournal(_SqlJournalBase):
                 # records so the new session starts with an empty journal.
                 self._conn.execute("DELETE FROM journal")
 
-        # Clear the clean_close marker (we're starting a new session).
-        self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
+        # Clear prior-session state markers (we're starting a new session).
+        self._conn.execute(
+            "DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')"
+        )
 
         # Recover sequence counter from any existing records.  Both the
         # crash-recovery and clean-reuse paths truncate the journal table
@@ -1608,7 +1610,9 @@ class LibsqlJournal(_SqlJournalBase):
         if row is not None and prior_count > 0:
             self._conn.execute("DELETE FROM journal")
 
-        self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
+        self._conn.execute(
+            "DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')"
+        )
 
         # Recover sequence counter from any remaining records.
         row = self._conn.execute("SELECT MAX(sequence) FROM journal").fetchone()

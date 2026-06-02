@@ -254,6 +254,35 @@ class TestSqliteJournalLifecycle:
         ro = ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite")
         assert ro.degraded is True
 
+    def test_reused_session_clears_persisted_degraded_marker(self, tmp_path):
+        from easycat.runtime.journal import ReadonlySqliteJournal
+
+        j1 = SqliteJournal("sess", data_dir=tmp_path)
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        assert (
+            j1.append(
+                kind=JournalRecordKind.EVENT,
+                name="fail",
+                session_id="sess",
+                data=circular,
+            )
+            == -1
+        )
+        assert j1.degraded is True
+        j1.close()
+
+        j2 = SqliteJournal("sess", data_dir=tmp_path)
+        assert j2.degraded is False
+        assert j2.read(start=0) == []
+        j2.append(kind=JournalRecordKind.EVENT, name="fresh", session_id="sess")
+        j2.close()
+
+        ro = ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite")
+        assert ro.degraded is False
+        records = ro.read(start=0)
+        assert [record.name for record in records] == ["fresh"]
+
     def test_double_close_is_safe(self, tmp_path):
         j = SqliteJournal("sess", data_dir=tmp_path)
         j.close()
