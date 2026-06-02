@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import STTEventType
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
@@ -106,37 +106,71 @@ async def test_openai_stt_rejects_oversized_audio_chunk_before_buffering():
 
 
 @pytest.mark.asyncio
-async def test_openai_stt_rejects_audio_buffer_limit_before_growing():
+async def test_openai_stt_finalizes_utterance_when_buffer_cap_hit():
+    """A cumulative byte cap finalizes the current utterance, not an error.
+
+    A long-talking caller hitting the buffer cap should have their speech so
+    far transcribed (FINAL emitted) and a fresh buffer started with the chunk
+    that tripped the cap — never an exception that the pipeline would treat as
+    a fatal per-chunk error.
+    """
+    mock_client = _make_mock_client()
     config = OpenAISTTConfig(
         api_key="test-key",
         max_audio_chunk_bytes=10,
         max_audio_buffer_bytes=8,
-        http_client=_make_mock_client(),
+        http_client=mock_client,
     )
     stt = OpenAISTT(config)
 
     await stt.start_stream()
     await stt.send_audio(AudioChunk(data=b"\x00" * 4, format=PCM16_MONO_16K))
-    with pytest.raises(ValueError, match="buffered audio exceeds"):
-        await stt.send_audio(AudioChunk(data=b"\x00" * 6, format=PCM16_MONO_16K))
+    # Total would be 4 + 6 = 10 > cap of 8: finalize the buffered 4 bytes and
+    # restart with the 6-byte chunk. No exception is raised.
+    await stt.send_audio(AudioChunk(data=b"\x00" * 6, format=PCM16_MONO_16K))
 
-    assert len(stt._buffer) == 4
+    # The buffered audio so far was transcribed (one request) and the new
+    # chunk now occupies a fresh buffer.
+    mock_client.stream.assert_called_once()
+    assert len(stt._buffer) == 6
 
 
 @pytest.mark.asyncio
-async def test_openai_stt_rejects_audio_duration_limit():
+async def test_openai_stt_finalizes_utterance_when_duration_cap_hit():
+    mock_client = _make_mock_client()
     config = OpenAISTTConfig(
         api_key="test-key",
         max_audio_chunk_bytes=10_000,
         max_audio_buffer_bytes=10_000,
-        max_audio_duration_ms=1,
-        http_client=_make_mock_client(),
+        max_audio_duration_ms=10,
+        http_client=mock_client,
     )
     stt = OpenAISTT(config)
 
     await stt.start_stream()
-    with pytest.raises(ValueError, match="duration exceeds"):
-        await stt.send_audio(AudioChunk(data=b"\x00" * 64, format=PCM16_MONO_16K))
+    # 320 bytes at 16kHz/16-bit mono == 10ms, right at the cap.
+    await stt.send_audio(AudioChunk(data=b"\x00" * 320, format=PCM16_MONO_16K))
+    # The next chunk pushes total duration past 10ms: finalize + restart.
+    await stt.send_audio(AudioChunk(data=b"\x00" * 320, format=PCM16_MONO_16K))
+
+    mock_client.stream.assert_called_once()
+    assert len(stt._buffer) == 320
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_rejects_nonpositive_byte_rate_for_duration_cap():
+    """A non-positive byte rate must raise a clear error, not divide by zero."""
+    config = OpenAISTTConfig(
+        api_key="test-key",
+        max_audio_duration_ms=1000,
+        http_client=_make_mock_client(),
+    )
+    stt = OpenAISTT(config)
+    bad_format = AudioFormat(sample_rate=0, channels=1, sample_width=2)
+
+    await stt.start_stream()
+    with pytest.raises(ValueError, match="non-positive byte rate"):
+        await stt.send_audio(AudioChunk(data=b"\x00" * 4, format=bad_format))
 
     assert len(stt._buffer) == 0
 

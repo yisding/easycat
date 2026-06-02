@@ -103,21 +103,36 @@ class OpenAISTT(STTBase):
         self._audio_format = self._latch_uniform_format(
             self._audio_format, chunk, provider_label="OpenAI STT"
         )
-        self._extend_limited_audio_buffer(
+        await self._buffer_batch_audio_or_finalize(
             self._buffer,
             chunk,
             max_chunk_bytes=self._config.max_audio_chunk_bytes,
             max_buffer_bytes=self._config.max_audio_buffer_bytes,
             max_duration_ms=self._config.max_audio_duration_ms,
             provider_label="OpenAI STT",
+            finalize=self._flush_buffer,
         )
 
-    async def _on_end(self) -> None:
+    async def _flush_buffer(self) -> None:
+        """Transcribe and emit whatever is buffered, then reset for a fresh stream.
+
+        Used both when the stream ends normally and when a cumulative buffer
+        cap forces an early finalize mid-stream (long-talking caller). The
+        latched format is preserved so the next utterance keeps the same
+        first-seen format contract.
+        """
         if not self._buffer or self._audio_format is None:
             return
 
         wav_data = pcm_to_wav(bytes(self._buffer), self._audio_format)
+        # Clear in place (not a rebind) so the buffer reference held by the
+        # in-progress ``_buffer_batch_audio_or_finalize`` call stays the same
+        # object, letting the chunk that tripped the cap restart a fresh stream.
+        self._buffer.clear()
         await self._transcribe_streaming(wav_data)
+
+    async def _on_end(self) -> None:
+        await self._flush_buffer()
 
     async def _transcribe_streaming(self, wav_data: bytes) -> str:
         url = f"{self._config.base_url}/audio/transcriptions"

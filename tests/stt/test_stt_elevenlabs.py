@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import STTEventType
 from easycat.stt import elevenlabs_provider
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
@@ -506,22 +506,47 @@ async def test_elevenlabs_batch_rejects_oversized_audio_chunk_before_buffering()
 
 
 @pytest.mark.asyncio
-async def test_elevenlabs_batch_rejects_audio_buffer_limit_before_growing():
+async def test_elevenlabs_batch_finalizes_utterance_when_buffer_cap_hit():
+    """A cumulative byte cap finalizes the current utterance, not an error."""
+    mock_client = _make_mock_http_client("partial utterance")
     config = ElevenLabsSTTConfig(
         api_key="k",
         mode="batch",
         max_audio_chunk_bytes=10,
         max_audio_buffer_bytes=8,
-        http_client=_make_mock_http_client("test"),
+        http_client=mock_client,
     )
     stt = ElevenLabsSTT(config)
 
     await stt.start_stream()
     await stt.send_audio(AudioChunk(data=b"\x00" * 4, format=PCM16_MONO_16K))
-    with pytest.raises(ValueError, match="buffered audio exceeds"):
-        await stt.send_audio(AudioChunk(data=b"\x00" * 6, format=PCM16_MONO_16K))
+    # Total would be 4 + 6 = 10 > cap of 8: finalize the buffered 4 bytes and
+    # restart with the 6-byte chunk. No exception is raised.
+    await stt.send_audio(AudioChunk(data=b"\x00" * 6, format=PCM16_MONO_16K))
 
-    assert len(stt._buffer) == 4
+    # The buffered audio so far was transcribed (one request) and the new
+    # chunk now occupies a fresh buffer.
+    mock_client.post.assert_called_once()
+    assert len(stt._buffer) == 6
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_rejects_nonpositive_byte_rate_for_duration_cap():
+    """A non-positive byte rate must raise a clear error, not divide by zero."""
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="batch",
+        max_audio_duration_ms=1000,
+        http_client=_make_mock_http_client("test"),
+    )
+    stt = ElevenLabsSTT(config)
+    bad_format = AudioFormat(sample_rate=0, channels=1, sample_width=2)
+
+    await stt.start_stream()
+    with pytest.raises(ValueError, match="non-positive byte rate"):
+        await stt.send_audio(AudioChunk(data=b"\x00" * 4, format=bad_format))
+
+    assert len(stt._buffer) == 0
 
 
 @pytest.mark.asyncio

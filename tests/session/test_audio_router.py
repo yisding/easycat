@@ -142,6 +142,7 @@ def _make_router(
     current_turn: TurnContext | None = None,
     outbound_queue: BoundedAudioQueue | None = None,
     turn_manager: TurnManager | None = None,
+    stt: object | None = None,
 ) -> tuple[AudioRouter, dict]:
     transport = transport or _FakeTransport()
     bus = EventBus()
@@ -154,7 +155,7 @@ def _make_router(
     nr = _PassthroughNR()
     aec = _PassthroughAEC()
     vad = _RecordingVAD()
-    stt = _RecordingSTT()
+    stt = stt or _RecordingSTT()
 
     audio_stage = AudioStage(nr, echo_canceller=aec if enable_aec else None)
     vad_stage = VADStage(vad)
@@ -516,6 +517,82 @@ async def test_sustained_chunk_errors_tear_down_session():
     assert len(errors) == threshold
     # The session is torn down once the threshold is hit.
     assert state["running"] is False
+
+
+@pytest.mark.asyncio
+async def test_batch_stt_buffer_cap_does_not_tear_down_session():
+    """A long-talking caller hitting the batch buffer cap keeps the call alive.
+
+    Regression for PR #167: the batch buffer cap used to raise a per-chunk
+    ``ValueError`` for every frame past the cap. Driving STT continuously
+    (as a long-talking caller does) then accumulated consecutive per-chunk
+    errors and tripped ``_MAX_CONSECUTIVE_CHUNK_ERRORS``, tearing down the
+    whole live call. The cap now finalizes the current utterance gracefully
+    instead, so no Error is surfaced and the pipeline survives.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+
+    from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
+
+    # Mock OpenAI streaming transcription so the early finalize stays offline.
+    class _MockStreamResponse:
+        request = httpx.Request("POST", "https://api.openai.com/v1/audio/transcriptions")
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def aiter_lines(self):
+            yield 'data: {"text": "partial", "is_final": true}'
+            yield "data: [DONE]"
+
+    class _MockStreamCtx:
+        async def __aenter__(self):
+            return _MockStreamResponse()
+
+        async def __aexit__(self, *exc):
+            return None
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = MagicMock(return_value=_MockStreamCtx())
+    mock_client.aclose = AsyncMock()
+
+    # Tiny caps so a handful of normal frames trips the buffer cap repeatedly.
+    provider = OpenAISTT(
+        OpenAISTTConfig(
+            api_key="test-key",
+            max_audio_chunk_bytes=10_000,
+            max_audio_buffer_bytes=512,
+            http_client=mock_client,
+        )
+    )
+    await provider.start_stream()
+
+    threshold = AudioRouter._MAX_CONSECUTIVE_CHUNK_ERRORS
+    # Each chunk is 320 bytes, so two chunks already exceed the 512-byte cap;
+    # send well past the consecutive-error threshold to prove no streak forms.
+    chunks = [_make_chunk(n_samples=160) for _ in range(threshold + 10)]
+    transport = _FakeTransport(chunks=chunks)
+    turn = TurnContext(turn_id="t1", cancel_token=CancelToken())
+    router, state = _make_router(
+        transport=transport,
+        is_stt_active=True,
+        current_turn=turn,
+        stt=provider,
+    )
+
+    await router._run_pipeline()
+
+    # The cap was hit many times but never surfaced as a pipeline Error, so
+    # the consecutive-error counter never tripped the teardown sentinel.
+    errors = [evt for evt in state["emitted"] if isinstance(evt, Error)]
+    assert errors == []
+    # The pipeline ran to natural transport exhaustion (running flips to False
+    # only in the finally block on normal exit), not a forced teardown — and
+    # the buffered utterances were finalized via the transcription path.
+    assert mock_client.stream.call_count >= 1
 
 
 @pytest.mark.asyncio
