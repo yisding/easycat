@@ -191,6 +191,32 @@ class TestWebSocketConnectionTransport:
         assert transport._audio_format.sample_rate == 48000
 
     @pytest.mark.asyncio
+    async def test_non_object_control_frame_does_not_end_receive_loop(self):
+        port = find_free_port()
+        transport_holder: list[WebSocketConnectionTransport] = []
+
+        async def handler(ws):
+            t = WebSocketConnectionTransport(ws)
+            transport_holder.append(t)
+            await t.connect()
+            await ws.wait_closed()
+            await t.disconnect()
+
+        server = await websockets.serve(handler, "127.0.0.1", port)
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.recv()  # ready
+            await ws.send("[]")
+            await asyncio.sleep(0.1)
+            transport = transport_holder[0]
+            assert transport._receive_task is not None
+            assert not transport._receive_task.done()
+            assert transport.is_connected
+
+        server.close()
+        await server.wait_closed()
+
+    @pytest.mark.asyncio
     async def test_client_disconnect_ends_receive(self):
         port = find_free_port()
         received: list[AudioChunk] = []
@@ -510,6 +536,34 @@ class TestTwilioConnectionTransport:
         assert marks == ["mark_2"]
         assert transport.stream_sid is None
         assert transport.call_sid is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_frames_do_not_end_receive_loop(self):
+        port = find_free_port()
+        transport_holder: list[TwilioConnectionTransport] = []
+
+        async def handler(ws):
+            t = TwilioConnectionTransport(ws)
+            transport_holder.append(t)
+            await t.connect()
+            await ws.wait_closed()
+            await t.disconnect()
+
+        server = await websockets.serve(handler, "127.0.0.1", port)
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.send(b"\xff")
+            await ws.send("[]")
+            await ws.send(json.dumps({"event": "start", "start": []}))
+            await asyncio.sleep(0.1)
+            transport = transport_holder[0]
+            assert transport._receive_task is not None
+            assert not transport._receive_task.done()
+            assert transport.is_connected
+            assert transport.stream_sid is None
+
+        server.close()
+        await server.wait_closed()
 
     @pytest.mark.asyncio
     async def test_stop_message_ends_receive(self):
