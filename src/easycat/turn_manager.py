@@ -85,6 +85,14 @@ class TurnManagerConfig:
     # When set, TurnManager queries it on silence to decide whether
     # to end the turn immediately or wait the full timeout.
     endpoint_detector: SmartTurnProvider | None = None
+    # Maximum captured turn-audio window in milliseconds.  Turn audio is retained
+    # for pre-roll priming and smart-turn endpoint detection, so it must stay
+    # bounded even if a client keeps a speech/noise turn active indefinitely.
+    max_turn_audio_ms: int = 8000
+    # Maximum number of retained chunks for the pre-roll and active-turn windows.
+    # These count caps bound memory even for very small positive-duration frames.
+    max_pre_roll_chunks: int = 512
+    max_turn_audio_chunks: int = 4096
     # Optional decision threshold applied to the detector's *probability*.
     # When set (not None), TurnManager ends the turn when
     # ``result.probability > endpoint_threshold`` instead of trusting the
@@ -109,6 +117,12 @@ class TurnManagerConfig:
             raise ValueError("stt_segment_silence_ms must be non-negative")
         if self.pre_roll_ms < 0:
             raise ValueError("pre_roll_ms must be non-negative")
+        if self.max_turn_audio_ms < 0:
+            raise ValueError("max_turn_audio_ms must be non-negative")
+        if self.max_pre_roll_chunks < 1:
+            raise ValueError("max_pre_roll_chunks must be positive")
+        if self.max_turn_audio_chunks < 1:
+            raise ValueError("max_turn_audio_chunks must be positive")
 
 
 class TurnManager:
@@ -156,7 +170,8 @@ class TurnManager:
         self._pre_roll_duration_ms: float = 0.0
 
         # Captured audio for the current turn (pre-roll + speech audio)
-        self._turn_audio: list[AudioChunk] = []
+        self._turn_audio: deque[AudioChunk] = deque()
+        self._turn_audio_duration_ms: float = 0.0
 
         # Silence timeout tracking
         self._silence_start_time: float | None = None
@@ -303,18 +318,46 @@ class TurnManager:
           - Maintain the rolling pre-roll buffer
           - Capture audio during active speech
         """
+        duration_ms = chunk.duration_ms
+        if not chunk.data or duration_ms <= 0:
+            return
+
         # Always maintain the pre-roll buffer
         self._pre_roll_buffer.append(chunk)
-        self._pre_roll_duration_ms += chunk.duration_ms
-
-        # Trim pre-roll to configured duration
-        while self._pre_roll_duration_ms > self._config.pre_roll_ms and self._pre_roll_buffer:
-            removed = self._pre_roll_buffer.popleft()
-            self._pre_roll_duration_ms -= removed.duration_ms
+        self._pre_roll_duration_ms += duration_ms
+        self._trim_pre_roll_buffer()
 
         # If user is speaking, capture the audio
         if self._state in (TurnManagerState.USER_SPEAKING, TurnManagerState.USER_PAUSED):
-            self._turn_audio.append(chunk)
+            self._append_turn_audio(chunk, duration_ms)
+
+    def _trim_pre_roll_buffer(self) -> None:
+        """Keep the pre-roll window bounded by duration and chunk count."""
+        while (
+            self._pre_roll_duration_ms > self._config.pre_roll_ms
+            or len(self._pre_roll_buffer) > self._config.max_pre_roll_chunks
+        ) and self._pre_roll_buffer:
+            removed = self._pre_roll_buffer.popleft()
+            self._pre_roll_duration_ms -= removed.duration_ms
+        if self._pre_roll_duration_ms < 0:
+            self._pre_roll_duration_ms = 0.0
+
+    def _append_turn_audio(self, chunk: AudioChunk, duration_ms: float) -> None:
+        """Append active-turn audio while bounding retained memory."""
+        self._turn_audio.append(chunk)
+        self._turn_audio_duration_ms += duration_ms
+        self._trim_turn_audio()
+
+    def _trim_turn_audio(self) -> None:
+        """Keep retained active-turn audio bounded by duration and chunk count."""
+        while (
+            self._turn_audio_duration_ms > self._config.max_turn_audio_ms
+            or len(self._turn_audio) > self._config.max_turn_audio_chunks
+        ) and self._turn_audio:
+            removed = self._turn_audio.popleft()
+            self._turn_audio_duration_ms -= removed.duration_ms
+        if self._turn_audio_duration_ms < 0:
+            self._turn_audio_duration_ms = 0.0
 
     # ── VAD event handling ──────────────────────────────────────
 
@@ -358,7 +401,9 @@ class TurnManager:
             self._cancel_token = CancelToken()
 
             # Flush pre-roll buffer into turn audio
-            self._turn_audio = list(self._pre_roll_buffer)
+            self._turn_audio = deque(self._pre_roll_buffer)
+            self._turn_audio_duration_ms = self._pre_roll_duration_ms
+            self._trim_turn_audio()
             self._pre_roll_buffer.clear()
             self._pre_roll_duration_ms = 0.0
 
@@ -532,7 +577,9 @@ class TurnManager:
         )
 
         # Flush pre-roll buffer into turn audio
-        self._turn_audio = list(self._pre_roll_buffer)
+        self._turn_audio = deque(self._pre_roll_buffer)
+        self._turn_audio_duration_ms = self._pre_roll_duration_ms
+        self._trim_turn_audio()
         self._pre_roll_buffer.clear()
         self._pre_roll_duration_ms = 0.0
 
@@ -563,7 +610,9 @@ class TurnManager:
         )
 
         # Flush pre-roll
-        self._turn_audio = list(self._pre_roll_buffer)
+        self._turn_audio = deque(self._pre_roll_buffer)
+        self._turn_audio_duration_ms = self._pre_roll_duration_ms
+        self._trim_turn_audio()
         self._pre_roll_buffer.clear()
         self._pre_roll_duration_ms = 0.0
 
@@ -636,6 +685,7 @@ class TurnManager:
         self._cancel_silence_timer()
         self._state = TurnManagerState.IDLE
         self._turn_audio.clear()
+        self._turn_audio_duration_ms = 0.0
         self._pre_roll_buffer.clear()
         self._pre_roll_duration_ms = 0.0
         # Cancel the active token before dropping it, mirroring
