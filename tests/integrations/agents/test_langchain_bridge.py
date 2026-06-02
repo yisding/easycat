@@ -609,7 +609,9 @@ class TestStreamEventTranslator:
         assert out[0].kind == "text_delta"
         assert out[0].text == "looking that up..."
 
-    def test_on_custom_event_string_payload_yields_text_delta(self):
+    def test_on_custom_event_string_payload_is_silent(self):
+        """Bare strings are common for debug/progress telemetry and
+        must not be spoken unless wrapped in an explicit speech field."""
         event = {
             "event": "on_custom_event",
             "name": "status",
@@ -617,8 +619,7 @@ class TestStreamEventTranslator:
             "data": "plain progress string",
         }
         out = list(translate_stream_event(event))
-        assert out and out[0].kind == "text_delta"
-        assert out[0].text == "plain progress string"
+        assert out == []
 
     def test_on_custom_event_telemetry_payload_is_silent(self):
         """Custom events that carry only opaque telemetry (no

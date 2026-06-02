@@ -254,6 +254,35 @@ class TestSqliteJournalLifecycle:
         ro = ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite")
         assert ro.degraded is True
 
+    def test_reused_session_clears_persisted_degraded_marker(self, tmp_path):
+        from easycat.runtime.journal import ReadonlySqliteJournal
+
+        j1 = SqliteJournal("sess", data_dir=tmp_path)
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        assert (
+            j1.append(
+                kind=JournalRecordKind.EVENT,
+                name="fail",
+                session_id="sess",
+                data=circular,
+            )
+            == -1
+        )
+        assert j1.degraded is True
+        j1.close()
+
+        j2 = SqliteJournal("sess", data_dir=tmp_path)
+        assert j2.degraded is False
+        assert j2.read(start=0) == []
+        j2.append(kind=JournalRecordKind.EVENT, name="fresh", session_id="sess")
+        j2.close()
+
+        ro = ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite")
+        assert ro.degraded is False
+        records = ro.read(start=0)
+        assert [record.name for record in records] == ["fresh"]
+
     def test_double_close_is_safe(self, tmp_path):
         j = SqliteJournal("sess", data_dir=tmp_path)
         j.close()
@@ -895,6 +924,87 @@ class TestLibsqlJournal:
         assert records[0].name == "event_0"
         assert records[4].data == {"i": 4}
         j.close()
+
+    @pytest.mark.skipif(
+        not _libsql_available(),
+        reason="libsql_experimental SDK not installed",
+    )
+    def test_libsql_unclean_reuse_preserves_degraded_marker(self, tmp_path):
+        """Unclean libSQL reuse retains prior rows, so the persisted ``degraded``
+        marker must be preserved for file/bundle inspection.
+
+        libSQL has no crash recovery: when a session id is reused without a
+        ``clean_close`` marker the prior journal (including the
+        ``journal_degraded`` row) is kept and appended to.  Clearing the
+        ``degraded`` key there would desync the persisted state from the
+        retained history, so it must survive.
+        """
+        from easycat.runtime.journal import LibsqlJournal, ReadonlySqliteJournal
+
+        j1 = LibsqlJournal("sess-unclean", data_dir=tmp_path)
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        assert (
+            j1.append(
+                kind=JournalRecordKind.EVENT,
+                name="fail",
+                session_id="sess-unclean",
+                data=circular,
+            )
+            == -1
+        )
+        assert j1.degraded is True
+        # close() does NOT write clean_close for libSQL — simulates unclean reuse.
+        j1.close()
+
+        # Reopen the same session id without a clean_close marker.
+        j2 = LibsqlJournal("sess-unclean", data_dir=tmp_path)
+        j2.close()
+
+        ro = ReadonlySqliteJournal(tmp_path / "journals" / "sess-unclean.sqlite")
+        assert ro.degraded is True
+        # The persisted journal_degraded marker row is retained, not truncated.
+        degraded_records = ro.slice(kind=JournalRecordKind.DEGRADED)
+        assert [r.name for r in degraded_records] == ["journal_degraded"]
+
+    @pytest.mark.skipif(
+        not _libsql_available(),
+        reason="libsql_experimental SDK not installed",
+    )
+    def test_libsql_clean_reuse_clears_degraded_marker(self, tmp_path):
+        """Clean libSQL reuse truncates the prior journal, so its stale
+        ``degraded`` marker must be cleared."""
+        from easycat.runtime.journal import LibsqlJournal, ReadonlySqliteJournal
+
+        j1 = LibsqlJournal("sess-clean", data_dir=tmp_path)
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        assert (
+            j1.append(
+                kind=JournalRecordKind.EVENT,
+                name="fail",
+                session_id="sess-clean",
+                data=circular,
+            )
+            == -1
+        )
+        assert j1.degraded is True
+        # finalize() writes the clean_close marker — simulates a clean close.
+        j1.finalize()
+        j1.close()
+
+        # Reopen the same session id after a clean close.
+        j2 = LibsqlJournal("sess-clean", data_dir=tmp_path)
+        assert j2.degraded is False
+        assert j2.read(start=-1) == []
+        j2.append(kind=JournalRecordKind.EVENT, name="fresh", session_id="sess-clean")
+        j2.finalize()
+        j2.close()
+
+        ro = ReadonlySqliteJournal(tmp_path / "journals" / "sess-clean.sqlite")
+        assert ro.degraded is False
+        records = ro.read(start=0)
+        assert [record.name for record in records] == ["fresh"]
 
 
 # ── AC1.18: Credential redaction tests ──────────────────────────

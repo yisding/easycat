@@ -139,6 +139,7 @@ def run_validation_slice(
         **os.environ,
         "EASYCAT_RELIABILITY_SAMPLES_PATH": str(reliability_samples_path),
     }
+    runtime_secret_values = _runtime_secret_values()
     started_monotonic = time.perf_counter()
     result = command_runner(command, env=command_env)
     duration_s = time.perf_counter() - started_monotonic
@@ -146,6 +147,10 @@ def run_validation_slice(
 
     stdout_path.write_text(redact_text(result.stdout))
     stderr_path.write_text(redact_text(result.stderr))
+    if junit_path.exists():
+        junit_path.write_text(
+            redact_runtime_secrets(junit_path.read_text(), runtime_secret_values)
+        )
 
     exit_code = validation_exit_code_from_pytest(result.exit_code)
     reliability_failure = _load_reliability_failure(reliability_samples_path)
@@ -287,13 +292,18 @@ def run_latency_validation(
         "EASYCAT_LATENCY_SAMPLES_PATH": str(samples_path),
         "EASYCAT_RELIABILITY_SAMPLES_PATH": str(reliability_samples_path),
     }
+    runtime_secret_values = _runtime_secret_values()
     started_monotonic = time.perf_counter()
     result = command_runner(command, env=command_env)
     duration_s = time.perf_counter() - started_monotonic
     finished_at = datetime.now(UTC)
 
-    stdout_path.write_text(redact_text(result.stdout))
-    stderr_path.write_text(redact_text(result.stderr))
+    stdout_path.write_text(redact_runtime_secrets(result.stdout, runtime_secret_values))
+    stderr_path.write_text(redact_runtime_secrets(result.stderr, runtime_secret_values))
+    if junit_path.exists():
+        junit_path.write_text(
+            redact_runtime_secrets(junit_path.read_text(), runtime_secret_values)
+        )
     exit_code = validation_exit_code_from_pytest(result.exit_code)
     sample_load_failure: ValidationFailure | None = None
     try:
@@ -302,10 +312,16 @@ def run_latency_validation(
         samples = []
         sample_load_failure = ValidationFailure(
             name="latency.samples",
-            message=f"could not load latency samples: {exc}",
+            message=redact_runtime_secrets(
+                f"could not load latency samples: {exc}",
+                runtime_secret_values,
+            ),
             failure_class="latency_artifact_error",
         )
-    reliability_failure = _load_reliability_failure(reliability_samples_path)
+    reliability_failure = _redact_validation_failure(
+        _load_reliability_failure(reliability_samples_path),
+        runtime_secret_values,
+    )
     reliability_samples: list[ReliabilitySample] = []
     reliability_budget_failure: ValidationFailure | None = None
     if reliability_samples_path.exists() and reliability_failure is None:
@@ -321,6 +337,7 @@ def run_latency_validation(
         )
 
     failure_message = result.stderr or result.stdout or f"pytest exited {result.exit_code}"
+    failure_message = redact_runtime_secrets(failure_message, runtime_secret_values)
     if exit_code != 0 and not samples:
         samples.append(_latency_failure_sample(mode, failure_message))
 
@@ -339,7 +356,17 @@ def run_latency_validation(
             baseline_path=Path(baseline_path),
         )
         if baseline_comparison is not None:
+            baseline_comparison = _redact_runtime_json(
+                baseline_comparison,
+                runtime_secret_values,
+            )
             latency_payload["baseline"] = baseline_comparison
+        baseline_load_failure = _redact_validation_failure(
+            baseline_load_failure,
+            runtime_secret_values,
+        )
+
+    latency_payload = _redact_runtime_json(latency_payload, runtime_secret_values)
 
     _write_atomic(latency_path, json.dumps(latency_payload, indent=2, sort_keys=True) + "\n")
     _write_atomic(
@@ -800,6 +827,36 @@ def _live_selector_errors(
                 )
             )
     return failures
+
+
+def _redact_runtime_json(value: Any, secrets: Sequence[str]) -> Any:
+    """Apply exact runtime-secret redaction to a JSON-compatible payload."""
+
+    if isinstance(value, str):
+        return redact_runtime_secrets(value, secrets)
+    if isinstance(value, Mapping):
+        return {
+            str(item_key): _redact_runtime_json(item_value, secrets)
+            for item_key, item_value in value.items()
+        }
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [_redact_runtime_json(item, secrets) for item in value]
+    return value
+
+
+def _redact_validation_failure(
+    failure: ValidationFailure | None,
+    secrets: Sequence[str],
+) -> ValidationFailure | None:
+    if failure is None:
+        return None
+    details = _redact_runtime_json(dict(failure.details), secrets) if failure.details else {}
+    return ValidationFailure(
+        name=failure.name,
+        message=redact_runtime_secrets(failure.message, secrets),
+        failure_class=failure.failure_class,
+        details=details,
+    )
 
 
 def _runtime_secret_values() -> tuple[str, ...]:
