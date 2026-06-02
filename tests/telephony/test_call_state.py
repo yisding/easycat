@@ -1038,7 +1038,7 @@ class TestVoicemailPickupDetection:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="machine"))
             assert sm.state == OutboundCallState.VOICEMAIL
-            await bus.emit(STTFinal(text="Hello?"))
+            await bus.emit(STTFinal(text="Hello?", track="inbound"))
             assert sm.state == OutboundCallState.HUMAN
         finally:
             sm.stop()
@@ -1088,7 +1088,24 @@ class TestVoicemailPickupDetection:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="machine"))
             assert sm.state == OutboundCallState.VOICEMAIL
-            await bus.emit(STTFinal(text="Please leave a message after the beep"))
+            await bus.emit(STTFinal(text="Please leave a message after the beep", track="inbound"))
+            assert sm.state == OutboundCallState.VOICEMAIL
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_missing_track_stt_ignored_during_voicemail(self) -> None:
+        """Untracked STTFinal events do not trigger VOICEMAIL → HUMAN."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(
+            bus, classification_timeout_s=60, voicemail_pickup_window_s=5.0
+        )
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert sm.state == OutboundCallState.VOICEMAIL
+            await bus.emit(STTFinal(text="Hello?"))
             assert sm.state == OutboundCallState.VOICEMAIL
         finally:
             sm.stop()
@@ -1127,7 +1144,7 @@ class TestVoicemailPickupDetection:
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="machine"))
-            await bus.emit(STTFinal(text="Hello?"))
+            await bus.emit(STTFinal(text="Hello?", track="inbound"))
             assert sm.state == OutboundCallState.HUMAN
             pickup = [c for c in changes if c.old == OutboundCallState.VOICEMAIL]
             assert len(pickup) == 1
@@ -1155,7 +1172,7 @@ class TestVoicemailPickupDetection:
             # TTS (e.g. a leave-message drop, or agent speech on pickup) must
             # reach the transport rather than buffer with no timeout to flush.
             assert not sm.gate.is_buffering
-            await bus.emit(STTFinal(text="Hello?"))
+            await bus.emit(STTFinal(text="Hello?", track="inbound"))
             assert sm.state == OutboundCallState.HUMAN
             assert not sm.gate.is_buffering
         finally:
@@ -1237,7 +1254,7 @@ class TestVoicemailPickupDetection:
             await bus.emit(VoicemailDetected(result="machine"))
             assert sm.state == OutboundCallState.VOICEMAIL
             # Human picks up during voicemail.
-            await bus.emit(STTFinal(text="Yeah?"))
+            await bus.emit(STTFinal(text="Yeah?", track="inbound"))
             assert sm.state == OutboundCallState.HUMAN
         finally:
             sm.stop()
