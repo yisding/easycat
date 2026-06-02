@@ -29,8 +29,6 @@ _MD_DETECT_PATTERNS: list[re.Pattern[str]] = [
     # Ordered lists: intentionally cap to 1–3 digits to avoid stripping
     # leading year-like numeric sentences (e.g. "2026. We launched").
     re.compile(r"^\s*\d{1,3}\.\s+", re.MULTILINE),
-    re.compile(r"\[.+?\]\(.+?\)"),  # links
-    re.compile(r"!\[.*?\]\(.+?\)"),  # images
     re.compile(r"^>\s+", re.MULTILINE),  # blockquotes
     re.compile(r"^---{1,}\s*$", re.MULTILINE),  # horizontal rules (dashes)
     re.compile(r"^```", re.MULTILINE),  # fenced code blocks
@@ -39,7 +37,7 @@ _MD_DETECT_PATTERNS: list[re.Pattern[str]] = [
 
 def has_markdown(text: str) -> bool:
     """Return ``True`` if *text* contains recognisable Markdown formatting."""
-    return any(p.search(text) for p in _MD_DETECT_PATTERNS)
+    return _has_markdown_link_or_image(text) or any(p.search(text) for p in _MD_DETECT_PATTERNS)
 
 
 # ── Stripping ──────────────────────────────────────────────────────
@@ -255,8 +253,12 @@ def _replace_markdown_links_and_images(text: str) -> str:
 
             destination_end = _find_balanced_close(text, j, "(", ")")
             if destination_end is None:
-                out.append(ch)
-                i += 1
+                next_close = text.find(")", j + 1)
+                if next_close == -1:
+                    out.append(text[i:])
+                    break
+                out.append(text[i : next_close + 1])
+                i = next_close + 1
                 continue
 
             alt_text = text[label_start + 1 : label_end].strip()
@@ -282,8 +284,12 @@ def _replace_markdown_links_and_images(text: str) -> str:
 
             destination_end = _find_balanced_close(text, j, "(", ")")
             if destination_end is None:
-                out.append(ch)
-                i += 1
+                next_close = text.find(")", j + 1)
+                if next_close == -1:
+                    out.append(text[i:])
+                    break
+                out.append(text[i : next_close + 1])
+                i = next_close + 1
                 continue
 
             label = text[i + 1 : label_end].strip()
@@ -302,6 +308,50 @@ def _replace_markdown_links_and_images(text: str) -> str:
         i += 1
 
     return "".join(out)
+
+
+def _has_markdown_link_or_image(text: str) -> bool:
+    """Return True when *text* contains a balanced markdown link or image.
+
+    This avoids the formerly regex-based ``[label](destination)`` detection,
+    which could repeatedly rescan malformed fragments such as ``[x](``.
+    """
+    i = 0
+    length = len(text)
+
+    while i < length:
+        if text[i] == "!" and (i + 1) < length and text[i + 1] == "[" and not _is_escaped(text, i):
+            label_start = i + 1
+        elif text[i] == "[" and not _is_escaped(text, i):
+            label_start = i
+        else:
+            i += 1
+            continue
+
+        if text.find(")", label_start + 1) == -1:
+            return False
+
+        label_end = _find_balanced_close(text, label_start, "[", "]")
+        if label_end is None:
+            i += 1
+            continue
+
+        j = label_end + 1
+        while j < length and text[j].isspace():
+            j += 1
+        if j >= length or text[j] != "(":
+            i += 1
+            continue
+
+        destination_end = _find_balanced_close(text, j, "(", ")")
+        if destination_end is not None:
+            return True
+        next_close = text.find(")", j + 1)
+        if next_close == -1:
+            return False
+        i = next_close + 1
+
+    return False
 
 
 def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool = False) -> str:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from easycat.strip_markdown import has_markdown, strip_markdown
 
 # ── has_markdown detection ─────────────────────────────────────────
@@ -68,6 +70,16 @@ class TestHasMarkdown:
 
     def test_empty_string(self) -> None:
         assert not has_markdown("")
+
+    def test_malformed_link_fragments_do_not_rescan_repeatedly(self) -> None:
+        payload = ("[x](" * 1000) + ")"
+
+        start = time.perf_counter()
+        result = has_markdown(payload)
+        elapsed = time.perf_counter() - start
+
+        assert result is False
+        assert elapsed < 0.5
 
 
 # ── strip_markdown ─────────────────────────────────────────────────
@@ -139,6 +151,16 @@ class TestStripMarkdown:
     def test_image_with_parenthesized_url(self) -> None:
         text = "Diagram: ![plot](https://example.com/a(b))."
         assert strip_markdown(text) == "Diagram: plot."
+
+    def test_malformed_link_fragments_do_not_rescan_repeatedly(self) -> None:
+        payload = ("[x](" * 1000) + ")"
+
+        start = time.perf_counter()
+        result = strip_markdown(payload)
+        elapsed = time.perf_counter() - start
+
+        assert result == payload
+        assert elapsed < 0.5
 
     def test_heading_h1(self) -> None:
         assert strip_markdown("# Main Title") == "Main Title"
