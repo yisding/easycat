@@ -15,6 +15,8 @@ from easycat.events import (
     EventBus,
     STTEvent,
     STTEventType,
+    STTFinal,
+    STTPartial,
     VADStartSpeaking,
     VADStopSpeaking,
     WordTimestamp,
@@ -71,6 +73,7 @@ def _make_committer(
     auto_turn: bool = False,
     current_turn=lambda: None,
     on_speech_detection_reset=lambda: None,
+    stt_track_label=lambda: None,
 ) -> tuple[STTCommitter, _RecordingSTT, list, TurnContext, TurnManager]:
     stt = stt or _RecordingSTT()
     journal = journal if journal is not None else InMemoryRingBuffer(capacity=64)
@@ -99,6 +102,7 @@ def _make_committer(
             current_turn=current_turn,
             emit=_emit,
             auto_turn_from_stt_final=lambda: auto_turn,
+            stt_track_label=stt_track_label,
         ),
         event_bus=bus,
         journal_sink=sink,
@@ -410,3 +414,76 @@ async def test_commit_requested_journal_records_pending_commit_bytes() -> None:
 
     requested = next(r for r in journal.read() if r.name == "stt_segment_commit_requested")
     assert requested.data["pending_commit_bytes"] == 4800
+
+
+@pytest.mark.asyncio
+async def test_transport_track_label_stamped_on_unlabeled_final() -> None:
+    """An unlabeled provider FINAL gets the transport's inbound track stamped.
+
+    Most STT providers leave ``STTEvent.track`` ``None``; for telephony the
+    transport (Twilio) declares an inbound-only capture via ``stt_track_label``
+    so the emitted ``STTFinal``/``STTPartial`` carry ``track="inbound"`` and
+    downstream telephony classifiers (the voicemail-pickup guard) can trust it.
+    """
+    stt = _RecordingSTT()
+    committer, _stt, emitted, _no_turn, _tm = _make_committer(
+        stt=stt, stt_track_label=lambda: "inbound"
+    )
+    committer.mark_active()
+    turn = _new_turn()
+    committer.start_event_loop(turn)
+
+    await stt._queue.put(STTEvent(type=STTEventType.PARTIAL, text="Hel"))
+    await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?"))
+    for _ in range(50):
+        await asyncio.sleep(0.005)
+        if any(isinstance(e, STTFinal) for e in emitted):
+            break
+
+    finals = [e for e in emitted if isinstance(e, STTFinal)]
+    partials = [e for e in emitted if isinstance(e, STTPartial)]
+    assert finals and finals[0].track == "inbound"
+    assert partials and partials[0].track == "inbound"
+    # The transcript segment recorded on the turn is labelled too.
+    assert turn.stt_segments == ["Hello?"]
+    assert turn.stt_track == "inbound"
+
+
+@pytest.mark.asyncio
+async def test_provider_track_overrides_transport_label() -> None:
+    """A provider that stamps its own track is not overwritten by the fallback."""
+    stt = _RecordingSTT()
+    committer, _stt, emitted, _no_turn, _tm = _make_committer(
+        stt=stt, stt_track_label=lambda: "inbound"
+    )
+    committer.mark_active()
+    turn = _new_turn()
+    committer.start_event_loop(turn)
+
+    await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?", track="caller"))
+    for _ in range(50):
+        await asyncio.sleep(0.005)
+        if any(isinstance(e, STTFinal) for e in emitted):
+            break
+
+    finals = [e for e in emitted if isinstance(e, STTFinal)]
+    assert finals and finals[0].track == "caller"
+
+
+@pytest.mark.asyncio
+async def test_no_transport_label_leaves_track_none() -> None:
+    """With no transport label, unlabeled provider events stay ``track=None``."""
+    stt = _RecordingSTT()
+    committer, _stt, emitted, _no_turn, _tm = _make_committer(stt=stt)
+    committer.mark_active()
+    turn = _new_turn()
+    committer.start_event_loop(turn)
+
+    await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?"))
+    for _ in range(50):
+        await asyncio.sleep(0.005)
+        if any(isinstance(e, STTFinal) for e in emitted):
+            break
+
+    finals = [e for e in emitted if isinstance(e, STTFinal)]
+    assert finals and finals[0].track is None

@@ -92,12 +92,27 @@ class STTCommitter:
         self._turn_manager = turn_manager
         self._emit = wiring.emit
         self._auto_turn_from_stt_final = wiring.auto_turn_from_stt_final
+        self._stt_track_label = wiring.stt_track_label
         self._on_speech_detection_reset = on_speech_detection_reset
 
         self._active: bool = False
         self._stt_task: asyncio.Task[None] | None = None
         self._pause_commit_task: asyncio.Task[None] | None = None
         self._segment_commit_task: asyncio.Task[None] | None = None
+
+    # ── Track labelling ───────────────────────────────────────────
+
+    def _resolve_track(self, event_track: str | None) -> str | None:
+        """Pick the track label to publish on STT events.
+
+        A provider-supplied track always wins.  When the provider leaves it
+        unset (the common case — most STT providers do not stamp a track), fall
+        back to the transport's declared inbound label (e.g. Twilio's
+        ``"inbound"``) so telephony classifiers receive the track they need.
+        """
+        if event_track is not None:
+            return event_track
+        return self._stt_track_label()
 
     # ── Active-flag accessors ─────────────────────────────────────
 
@@ -316,17 +331,18 @@ class STTCommitter:
                 async for stt_event in self._stt_getter().events():
                     if turn and turn.cancel_token.is_cancelled:
                         break
+                    track = self._resolve_track(stt_event.track)
                     if stt_event.type == STTEventType.PARTIAL:
-                        await self._emit(STTPartial(text=stt_event.text, track=stt_event.track))
+                        await self._emit(STTPartial(text=stt_event.text, track=track))
                     elif stt_event.type == STTEventType.FINAL:
                         if turn and turn is not self._no_turn:
                             if not turn.pending_stt_segment_futures:
                                 turn.stt_has_uncommitted_audio = False
-                            turn.append_stt_segment(stt_event.text, track=stt_event.track)
+                            turn.append_stt_segment(stt_event.text, track=track)
                             data: dict[str, Any] = {
                                 "segment_index": len(turn.stt_segments),
                                 "text": stt_event.text,
-                                "track": stt_event.track,
+                                "track": track,
                                 "transcript_text": turn.transcript_text,
                             }
                             # Provider-captured metadata reaches the journal —
@@ -345,7 +361,7 @@ class STTCommitter:
                                 turn_id=turn.id,
                                 data=data,
                             )
-                        await self._emit(STTFinal(text=stt_event.text, track=stt_event.track))
+                        await self._emit(STTFinal(text=stt_event.text, track=track))
                         if turn and turn is not self._no_turn and turn.pending_stt_segment_futures:
                             future = turn.pending_stt_segment_futures.pop(0)
                             if not future.done():

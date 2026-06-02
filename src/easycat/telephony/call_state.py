@@ -641,7 +641,13 @@ class OutboundCallStateMachine:
 
         # Skip non-inbound transcripts (bot's own speech fed back when
         # transcription_track="both").  Applies to all classification states.
-        if event.track is not None and event.track != "inbound":
+        # A track-less event (track is None) is accepted because the Twilio
+        # media transport already drops outbound frames at ingest; an explicit
+        # track must be one of the trusted inbound labels.  Sharing the
+        # ``_INBOUND_STT_TRACKS`` whitelist keeps this filter consistent with
+        # the voicemail-pickup guard below so "inbound_track"/"caller" reach
+        # every classification state rather than only "inbound".
+        if event.track is not None and event.track.lower() not in _INBOUND_STT_TRACKS:
             return
 
         if self._state == OutboundCallState.CLASSIFYING:

@@ -1128,6 +1128,29 @@ class TestVoicemailPickupDetection:
         finally:
             sm.stop()
 
+    @pytest.mark.parametrize("track", ["inbound", "inbound_track", "caller", "INBOUND"])
+    @pytest.mark.asyncio
+    async def test_whitelisted_inbound_tracks_trigger_pickup(self, track: str) -> None:
+        """Every trusted inbound-track label (case-insensitive) reaches pickup.
+
+        Regression: the early-return filter once hard-coded ``"inbound"`` so
+        ``"inbound_track"``/``"caller"`` were dropped before reaching the
+        voicemail-pickup block even though the trusted whitelist accepts them.
+        """
+        bus = EventBus()
+        sm = OutboundCallStateMachine(
+            bus, classification_timeout_s=60, voicemail_pickup_window_s=5.0
+        )
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert sm.state == OutboundCallState.VOICEMAIL
+            await bus.emit(STTFinal(text="Hello?", track=track))
+            assert sm.state == OutboundCallState.HUMAN
+        finally:
+            sm.stop()
+
     @pytest.mark.asyncio
     async def test_voicemail_pickup_emits_state_change(self) -> None:
         """VOICEMAIL → HUMAN transition emits CallStateChanged."""
