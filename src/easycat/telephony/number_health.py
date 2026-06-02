@@ -41,6 +41,7 @@ class NumberHealthMonitor:
     """
 
     _MAX_RECORDS_PER_NUMBER = 500
+    _MAX_TRACKED_NUMBERS = 10_000
 
     def __init__(
         self,
@@ -97,6 +98,7 @@ class NumberHealthMonitor:
             # Defense-in-depth: never file analytics under an empty key.
             return
         now = time.monotonic()
+        self._ensure_number_capacity(number)
         records = self._records[number]
         records.append(
             _CallRecord(
@@ -111,6 +113,39 @@ class NumberHealthMonitor:
         if len(records) > self._MAX_RECORDS_PER_NUMBER:
             self._records[number] = records[-self._MAX_RECORDS_PER_NUMBER :]
         self._last_call_time[number] = now
+
+    def _ensure_number_capacity(self, number: str) -> None:
+        """Keep per-number analytics bounded by evicting oldest inactive numbers."""
+        # Common path: already tracked, or still under cap. Both are O(1) — no
+        # set-union of every tracking map on each call.
+        if number in self._last_call_time or len(self._last_call_time) < self._MAX_TRACKED_NUMBERS:
+            return
+
+        # At cap. ``_last_call_time`` sees every initiated and completed call, so
+        # its insertion order approximates oldest-first. Prefer evicting a
+        # completed/inactive number (no in-flight concurrency).
+        for candidate in self._last_call_time:
+            if candidate == number or self._concurrent.get(candidate, 0) > 0:
+                continue
+            self._drop_number(candidate)
+            return
+
+        # All tracked numbers appear active. Drop the oldest bucket anyway rather
+        # than let untrusted status-callback values grow memory without bound.
+        candidate = next(iter(self._last_call_time))
+        if candidate != number:
+            self._drop_number(candidate)
+
+    def _drop_number(self, number: str) -> None:
+        self._records.pop(number, None)
+        self._last_call_time.pop(number, None)
+        self._concurrent.pop(number, None)
+        # Purge any lingering SID→number mappings so a later terminal event for a
+        # force-dropped number short-circuits via ``_resolve_number() is None``
+        # instead of decrementing a phantom concurrency bucket.
+        stale = [sid for sid, n in self._call_sid_to_number.items() if n == number]
+        for sid in stale:
+            self._call_sid_to_number.pop(sid, None)
 
     def answer_rate(self, number: str) -> float:
         """Return the answer rate for a number (0.0-1.0)."""
@@ -187,6 +222,7 @@ class NumberHealthMonitor:
             return
         number = event.from_
         self._call_sid_to_number[event.call_sid] = number
+        self._ensure_number_capacity(number)
         self._concurrent[number] = self._concurrent.get(number, 0) + 1
         self._last_call_time[number] = time.monotonic()
 
@@ -204,9 +240,7 @@ class NumberHealthMonitor:
                 # Decrement concurrent count for evicted calls.
                 evicted_number = self._call_sid_to_number.pop(sid, None)
                 if evicted_number:
-                    self._concurrent[evicted_number] = max(
-                        0, self._concurrent.get(evicted_number, 0) - 1
-                    )
+                    self._decrement_concurrent(evicted_number)
 
     def _decrement_concurrent(self, number: str) -> None:
         prev = self._concurrent.get(number, 0)
@@ -215,7 +249,12 @@ class NumberHealthMonitor:
                 "Concurrent count already 0 for %s — possible unbalanced init/end events",
                 number,
             )
-        self._concurrent[number] = max(0, prev - 1)
+            self._concurrent.pop(number, None)
+            return
+        if prev == 1:
+            self._concurrent.pop(number, None)
+            return
+        self._concurrent[number] = prev - 1
 
     def _mark_terminal(self, call_sid: str) -> bool:
         """Return False when this call SID was already recorded as terminal."""
@@ -329,10 +368,31 @@ class CallDispositionTracker:
             by_hour[hour][disp] += 1
         return dict(by_hour)
 
+    def _evict_call_tracking(self) -> None:
+        """Keep per-call tracking dictionaries bounded independently of event order.
+
+        Each dict is trimmed only when *it* exceeds the cap, so a flood of
+        failure-only callbacks does not evict under-cap completed-call SIDs (the
+        dedupe/reclassification guard relied on by ``_on_state_changed``).
+        """
+        from itertools import islice
+
+        if len(self._call_dispositions) > self._MAX_CALL_TRACKING:
+            disposition_evict_count = len(self._call_dispositions) - self._MAX_CALL_TRACKING // 2
+            for sid in list(islice(self._call_dispositions, disposition_evict_count)):
+                self._call_dispositions.pop(sid, None)
+                self._failure_reasons.pop(sid, None)
+
+        if len(self._failure_reasons) > self._MAX_CALL_TRACKING:
+            failure_evict_count = len(self._failure_reasons) - self._MAX_CALL_TRACKING // 2
+            for sid in list(islice(self._failure_reasons, failure_evict_count)):
+                self._failure_reasons.pop(sid, None)
+
     async def _on_call_failed(self, event: CallFailed) -> None:
         """Stash failure reason so ENDED disposition preserves it."""
         if event.call_sid:
             self._failure_reasons[event.call_sid] = event.reason
+            self._evict_call_tracking()
 
     async def _on_state_changed(self, event: CallStateChanged) -> None:
         """Auto-record disposition when call reaches terminal state.
@@ -358,11 +418,4 @@ class CallDispositionTracker:
             self._call_dispositions[call_sid] = disposition
             self.record_disposition(disposition, call_sid=call_sid)
 
-            # Evict oldest entries when tracking dicts grow too large.
-            if len(self._call_dispositions) > self._MAX_CALL_TRACKING:
-                from itertools import islice
-
-                oldest_sids = list(islice(self._call_dispositions, self._MAX_CALL_TRACKING // 2))
-                for sid in oldest_sids:
-                    self._call_dispositions.pop(sid, None)
-                    self._failure_reasons.pop(sid, None)
+            self._evict_call_tracking()

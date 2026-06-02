@@ -44,7 +44,7 @@ def _build_full_stack_session(*, transport, instructions, debug="full"):
     insists on the full stack. Requires:
 
     - OPENAI_API_KEY for STT/TTS/agent
-    - torch (for Silero VAD)
+    - numpy and onnxruntime (for bundled Silero VAD ONNX)
     - pyrnnoise (for RNNoise)
     - livekit (for AEC)
     """
@@ -76,7 +76,8 @@ async def test_full_stack_nr_and_aec_voice_roundtrip(
     pytest.importorskip("agents")
     pytest.importorskip("pyrnnoise")
     pytest.importorskip("livekit")
-    pytest.importorskip("torch")
+    pytest.importorskip("numpy")
+    pytest.importorskip("onnxruntime")
 
     from easycat.transports.websocket import (
         WebSocketConnectionTransport,
@@ -169,7 +170,8 @@ async def test_full_stack_provider_versions_reflect_real_backends(
     pytest.importorskip("agents")
     pytest.importorskip("pyrnnoise")
     pytest.importorskip("livekit")
-    pytest.importorskip("torch")
+    pytest.importorskip("numpy")
+    pytest.importorskip("onnxruntime")
 
     from easycat.transports.websocket import (
         WebSocketConnectionTransport,
@@ -207,7 +209,7 @@ async def test_full_stack_provider_versions_reflect_real_backends(
     aec_info = session.echo_canceller.version_info()
     assert aec_info["provider"] == "livekit", f"expected LiveKit AEC, got {aec_info}"
 
-    # VAD is Silero (torch-backed)
+    # VAD is a real backend (Silero uses the bundled ONNX model by default)
     vad_info = session.vad.version_info()
     assert vad_info["provider"] in ("silero", "ten", "krisp"), f"expected real VAD, got {vad_info}"
 

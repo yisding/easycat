@@ -174,6 +174,91 @@ class TestNumberHealthMonitor:
         finally:
             monitor.stop()
 
+    @pytest.mark.asyncio
+    async def test_failed_callbacks_are_bounded_by_number_cardinality(self, monkeypatch) -> None:
+        bus = EventBus()
+        monkeypatch.setattr(NumberHealthMonitor, "_MAX_TRACKED_NUMBERS", 3)
+        monitor = NumberHealthMonitor(bus)
+        monitor.start()
+        try:
+            for i in range(8):
+                await bus.emit(
+                    CallFailed(
+                        call_sid=f"CA{i}",
+                        reason="busy",
+                        number=f"+1555000{i}",
+                    )
+                )
+
+            assert len(monitor._records) <= 3
+            assert len(monitor._last_call_time) <= 3
+            assert monitor._concurrent == {}
+        finally:
+            monitor.stop()
+
+    @pytest.mark.asyncio
+    async def test_all_active_capacity_fallback_drops_oldest(self, monkeypatch) -> None:
+        """When every tracked number is in-flight, the oldest bucket is dropped anyway."""
+        bus = EventBus()
+        monkeypatch.setattr(NumberHealthMonitor, "_MAX_TRACKED_NUMBERS", 3)
+        monitor = NumberHealthMonitor(bus)
+        monitor.start()
+        try:
+            # Fill to cap with in-flight (concurrent > 0) numbers; none are inactive.
+            for i in range(3):
+                await bus.emit(
+                    CallInitiated(
+                        call_sid=f"CA{i}",
+                        to=f"+1555100{i}",
+                        from_=f"+1555000{i}",
+                    )
+                )
+            assert len(monitor._last_call_time) == 3
+            assert all(monitor._concurrent[f"+1555000{i}"] == 1 for i in range(3))
+
+            # One more in-flight number forces the all-active fallback branch:
+            # the oldest tracked number (+15550000) is evicted despite being active.
+            await bus.emit(CallInitiated(call_sid="CA3", to="+15551003", from_="+15550003"))
+
+            assert len(monitor._last_call_time) <= 3
+            assert "+15550003" in monitor._last_call_time
+            # The force-dropped oldest number's SID mapping is purged too, so a
+            # later terminal event short-circuits instead of touching concurrency.
+            assert "+15550000" not in monitor._last_call_time
+            assert "CA0" not in monitor._call_sid_to_number
+        finally:
+            monitor.stop()
+
+    @pytest.mark.asyncio
+    async def test_force_dropped_number_terminal_event_does_not_decrement_phantom(
+        self, monkeypatch
+    ) -> None:
+        """A terminal event for a force-dropped number resolves to None, no phantom decrement."""
+        bus = EventBus()
+        monkeypatch.setattr(NumberHealthMonitor, "_MAX_TRACKED_NUMBERS", 2)
+        monitor = NumberHealthMonitor(bus)
+        monitor.start()
+        try:
+            for i in range(2):
+                await bus.emit(
+                    CallInitiated(
+                        call_sid=f"CA{i}",
+                        to=f"+1555100{i}",
+                        from_=f"+1555000{i}",
+                    )
+                )
+            # Force-drop the oldest active number (+15550000) by initiating a third.
+            await bus.emit(CallInitiated(call_sid="CA2", to="+15551002", from_="+15550002"))
+            assert "+15550000" not in monitor._last_call_time
+            assert "CA0" not in monitor._call_sid_to_number
+
+            # Terminal event for the dropped call: number unresolvable -> skipped.
+            await bus.emit(CallEnded(call_sid="CA0", duration_s=5.0))
+            assert "+15550000" not in monitor._concurrent
+            assert "+15550000" not in monitor._records
+        finally:
+            monitor.stop()
+
 
 class TestCallDispositionTracker:
     def test_records_disposition(self) -> None:
@@ -247,5 +332,74 @@ class TestCallDispositionTracker:
             ca1_entries = [d for d in tracker._dispositions if d[2] == "CA1"]
             assert len(ca1_entries) == 1
             assert ca1_entries[0][1] == "human"
+        finally:
+            tracker.stop()
+
+    @pytest.mark.asyncio
+    async def test_failed_call_reasons_are_bounded_without_state_changes(
+        self, monkeypatch
+    ) -> None:
+        bus = EventBus()
+        monkeypatch.setattr(CallDispositionTracker, "_MAX_CALL_TRACKING", 4)
+        tracker = CallDispositionTracker(bus)
+        tracker.start()
+        try:
+            for i in range(9):
+                await bus.emit(CallFailed(call_sid=f"CA{i}", reason="busy"))
+
+            assert len(tracker._failure_reasons) <= 4
+            assert len(tracker._call_dispositions) == 0
+        finally:
+            tracker.stop()
+
+    @pytest.mark.asyncio
+    async def test_failure_overflow_does_not_drop_under_cap_dispositions(
+        self, monkeypatch
+    ) -> None:
+        """A failure-only flood must not evict completed-call dispositions under their own cap."""
+        bus = EventBus()
+        monkeypatch.setattr(CallDispositionTracker, "_MAX_CALL_TRACKING", 4)
+        tracker = CallDispositionTracker(bus)
+        tracker.start()
+        try:
+            # Two completed-call dispositions, well under the cap of 4. These SIDs
+            # are the dedupe/reclassification guard used by _on_state_changed.
+            for i in range(2):
+                await bus.emit(
+                    CallStateChanged(
+                        old=OutboundCallState.CLASSIFYING,
+                        new=OutboundCallState.HUMAN,
+                        call_sid=f"DISP{i}",
+                    )
+                )
+            assert len(tracker._call_dispositions) == 2
+
+            # Flood failure-only callbacks (distinct SIDs) to overflow
+            # _failure_reasons past the cap without involving the dispositions.
+            for i in range(9):
+                await bus.emit(CallFailed(call_sid=f"FAIL{i}", reason="busy"))
+
+            # _failure_reasons was trimmed, but the under-cap dispositions survive.
+            assert len(tracker._failure_reasons) <= 4
+            assert tracker._call_dispositions == {"DISP0": "human", "DISP1": "human"}
+        finally:
+            tracker.stop()
+
+    @pytest.mark.asyncio
+    async def test_recent_failure_reason_is_preserved_for_terminal_state(self) -> None:
+        bus = EventBus()
+        tracker = CallDispositionTracker(bus)
+        tracker.start()
+        try:
+            await bus.emit(CallFailed(call_sid="CA-recent", reason="no-answer"))
+            await bus.emit(
+                CallStateChanged(
+                    old=OutboundCallState.CLASSIFYING,
+                    new=OutboundCallState.ENDED,
+                    call_sid="CA-recent",
+                )
+            )
+
+            assert tracker._call_dispositions["CA-recent"] == "no-answer"
         finally:
             tracker.stop()
