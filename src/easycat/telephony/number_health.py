@@ -41,6 +41,7 @@ class NumberHealthMonitor:
     """
 
     _MAX_RECORDS_PER_NUMBER = 500
+    _MAX_TRACKED_NUMBERS = 10_000
 
     def __init__(
         self,
@@ -97,6 +98,7 @@ class NumberHealthMonitor:
             # Defense-in-depth: never file analytics under an empty key.
             return
         now = time.monotonic()
+        self._ensure_number_capacity(number)
         records = self._records[number]
         records.append(
             _CallRecord(
@@ -111,6 +113,32 @@ class NumberHealthMonitor:
         if len(records) > self._MAX_RECORDS_PER_NUMBER:
             self._records[number] = records[-self._MAX_RECORDS_PER_NUMBER :]
         self._last_call_time[number] = now
+
+    def _ensure_number_capacity(self, number: str) -> None:
+        """Keep per-number analytics bounded by evicting oldest inactive numbers."""
+        known_numbers = set(self._records) | set(self._last_call_time) | set(self._concurrent)
+        if number in known_numbers or len(known_numbers) < self._MAX_TRACKED_NUMBERS:
+            return
+
+        # Prefer evicting a completed/inactive number. ``_last_call_time`` sees
+        # every initiated and completed call, so its insertion order is a useful
+        # approximation of the oldest retained number across all tracking maps.
+        for candidate in list(self._last_call_time) + list(self._records) + list(self._concurrent):
+            if candidate == number or self._concurrent.get(candidate, 0) > 0:
+                continue
+            self._drop_number(candidate)
+            return
+
+        # All tracked numbers appear active. Drop the oldest bucket anyway rather
+        # than let untrusted status-callback values grow memory without bound.
+        candidate = next(iter(known_numbers), None)
+        if candidate is not None and candidate != number:
+            self._drop_number(candidate)
+
+    def _drop_number(self, number: str) -> None:
+        self._records.pop(number, None)
+        self._last_call_time.pop(number, None)
+        self._concurrent.pop(number, None)
 
     def answer_rate(self, number: str) -> float:
         """Return the answer rate for a number (0.0-1.0)."""
@@ -181,6 +209,7 @@ class NumberHealthMonitor:
             return
         number = event.from_
         self._call_sid_to_number[event.call_sid] = number
+        self._ensure_number_capacity(number)
         self._concurrent[number] = self._concurrent.get(number, 0) + 1
         self._last_call_time[number] = time.monotonic()
 
@@ -198,9 +227,7 @@ class NumberHealthMonitor:
                 # Decrement concurrent count for evicted calls.
                 evicted_number = self._call_sid_to_number.pop(sid, None)
                 if evicted_number:
-                    self._concurrent[evicted_number] = max(
-                        0, self._concurrent.get(evicted_number, 0) - 1
-                    )
+                    self._decrement_concurrent(evicted_number)
 
     def _decrement_concurrent(self, number: str) -> None:
         prev = self._concurrent.get(number, 0)
@@ -209,7 +236,12 @@ class NumberHealthMonitor:
                 "Concurrent count already 0 for %s — possible unbalanced init/end events",
                 number,
             )
-        self._concurrent[number] = max(0, prev - 1)
+            self._concurrent.pop(number, None)
+            return
+        if prev == 1:
+            self._concurrent.pop(number, None)
+            return
+        self._concurrent[number] = prev - 1
 
     def _mark_terminal(self, call_sid: str) -> bool:
         """Return False when this call SID was already recorded as terminal."""
@@ -323,10 +355,32 @@ class CallDispositionTracker:
             by_hour[hour][disp] += 1
         return dict(by_hour)
 
+    def _evict_call_tracking(self) -> None:
+        """Keep per-call tracking dictionaries bounded independently of event order."""
+        if (
+            len(self._call_dispositions) <= self._MAX_CALL_TRACKING
+            and len(self._failure_reasons) <= self._MAX_CALL_TRACKING
+        ):
+            return
+
+        from itertools import islice
+
+        disposition_evict_count = max(
+            0, len(self._call_dispositions) - self._MAX_CALL_TRACKING // 2
+        )
+        for sid in list(islice(self._call_dispositions, disposition_evict_count)):
+            self._call_dispositions.pop(sid, None)
+            self._failure_reasons.pop(sid, None)
+
+        failure_evict_count = max(0, len(self._failure_reasons) - self._MAX_CALL_TRACKING // 2)
+        for sid in list(islice(self._failure_reasons, failure_evict_count)):
+            self._failure_reasons.pop(sid, None)
+
     async def _on_call_failed(self, event: CallFailed) -> None:
         """Stash failure reason so ENDED disposition preserves it."""
         if event.call_sid:
             self._failure_reasons[event.call_sid] = event.reason
+            self._evict_call_tracking()
 
     async def _on_state_changed(self, event: CallStateChanged) -> None:
         """Auto-record disposition when call reaches terminal state.
@@ -352,11 +406,4 @@ class CallDispositionTracker:
             self._call_dispositions[call_sid] = disposition
             self.record_disposition(disposition, call_sid=call_sid)
 
-            # Evict oldest entries when tracking dicts grow too large.
-            if len(self._call_dispositions) > self._MAX_CALL_TRACKING:
-                from itertools import islice
-
-                oldest_sids = list(islice(self._call_dispositions, self._MAX_CALL_TRACKING // 2))
-                for sid in oldest_sids:
-                    self._call_dispositions.pop(sid, None)
-                    self._failure_reasons.pop(sid, None)
+            self._evict_call_tracking()

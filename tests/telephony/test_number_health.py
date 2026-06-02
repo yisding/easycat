@@ -130,6 +130,28 @@ class TestNumberHealthMonitor:
         finally:
             monitor.stop()
 
+    @pytest.mark.asyncio
+    async def test_failed_callbacks_are_bounded_by_number_cardinality(self, monkeypatch) -> None:
+        bus = EventBus()
+        monkeypatch.setattr(NumberHealthMonitor, "_MAX_TRACKED_NUMBERS", 3)
+        monitor = NumberHealthMonitor(bus)
+        monitor.start()
+        try:
+            for i in range(8):
+                await bus.emit(
+                    CallFailed(
+                        call_sid=f"CA{i}",
+                        reason="busy",
+                        number=f"+1555000{i}",
+                    )
+                )
+
+            assert len(monitor._records) <= 3
+            assert len(monitor._last_call_time) <= 3
+            assert monitor._concurrent == {}
+        finally:
+            monitor.stop()
+
 
 class TestCallDispositionTracker:
     def test_records_disposition(self) -> None:
@@ -203,5 +225,41 @@ class TestCallDispositionTracker:
             ca1_entries = [d for d in tracker._dispositions if d[2] == "CA1"]
             assert len(ca1_entries) == 1
             assert ca1_entries[0][1] == "human"
+        finally:
+            tracker.stop()
+
+    @pytest.mark.asyncio
+    async def test_failed_call_reasons_are_bounded_without_state_changes(
+        self, monkeypatch
+    ) -> None:
+        bus = EventBus()
+        monkeypatch.setattr(CallDispositionTracker, "_MAX_CALL_TRACKING", 4)
+        tracker = CallDispositionTracker(bus)
+        tracker.start()
+        try:
+            for i in range(9):
+                await bus.emit(CallFailed(call_sid=f"CA{i}", reason="busy"))
+
+            assert len(tracker._failure_reasons) <= 4
+            assert len(tracker._call_dispositions) == 0
+        finally:
+            tracker.stop()
+
+    @pytest.mark.asyncio
+    async def test_recent_failure_reason_is_preserved_for_terminal_state(self) -> None:
+        bus = EventBus()
+        tracker = CallDispositionTracker(bus)
+        tracker.start()
+        try:
+            await bus.emit(CallFailed(call_sid="CA-recent", reason="no-answer"))
+            await bus.emit(
+                CallStateChanged(
+                    old=OutboundCallState.CLASSIFYING,
+                    new=OutboundCallState.ENDED,
+                    call_sid="CA-recent",
+                )
+            )
+
+            assert tracker._call_dispositions["CA-recent"] == "no-answer"
         finally:
             tracker.stop()
