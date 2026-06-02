@@ -381,7 +381,17 @@ class SmartTurnONNX:
 
         return self._predict_sync(audio_array)
 
-    def _release_detect_semaphore(self, _future: asyncio.Future[Any]) -> None:
+    def _release_detect_semaphore(self, future: asyncio.Future[Any]) -> None:
+        # Consume any exception the worker raised after the coroutine had already
+        # returned its timeout/cancel fallback.  Retrieving ``future.exception()``
+        # clears asyncio's ``_log_traceback`` flag, so a late failure no longer
+        # surfaces as a "Future exception was never retrieved" message at GC.
+        # Guard ``cancelled()`` because ``exception()`` raises ``CancelledError``
+        # on a cancelled future.
+        if not future.cancelled():
+            exc = future.exception()
+            if exc is not None:
+                logger.debug("Smart-turn worker failed after timeout/cancel: %r", exc)
         self._detect_semaphore.release()
 
     async def detect(self, audio_chunks: list[AudioChunk]) -> SmartTurnResult:

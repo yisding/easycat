@@ -181,3 +181,58 @@ async def test_cancelled_detection_keeps_executor_slot_until_worker_finishes() -
     finally:
         provider.finish.set()
         await asyncio.sleep(0.05)
+
+
+@pytest.mark.asyncio
+async def test_timed_out_worker_that_raises_is_not_logged_as_unretrieved(caplog) -> None:
+    """A worker that raises after the timeout fallback must not leak a future error.
+
+    When detection times out, ``detect`` keeps the executor future alive and
+    attaches ``_release_detect_semaphore`` as its done-callback.  If that worker
+    later raises, the callback must consume the exception so asyncio does not
+    emit "Future exception was never retrieved" when the future is garbage
+    collected.
+    """
+
+    import gc
+    import logging
+    import threading
+
+    class FailingSmartTurn(SmartTurnONNX):
+        def __init__(self) -> None:
+            super().__init__(model_path="unused.onnx", timeout_s=0.05)
+            self.started = threading.Event()
+            self.may_raise = threading.Event()
+
+        def _detect_sync(self, audio_chunks: list[AudioChunk]) -> SmartTurnResult:
+            self.started.set()
+            # Block past the timeout, then raise so the exception lands on the
+            # future only after detect() has returned its fallback result.
+            self.may_raise.wait(timeout=1)
+            raise RuntimeError("smart-turn worker boom")
+
+    provider = FailingSmartTurn()
+    chunk = AudioChunk(data=b"\0" * 640, format=PCM16_MONO_16K)
+
+    # Capture all log records (asyncio logs the unretrieved-future error).
+    with caplog.at_level(logging.DEBUG):
+        result = await provider.detect([chunk])
+        # Times out -> fallback to the silence timer (incomplete).
+        assert result == SmartTurnResult(prediction=0, probability=0.0)
+
+        # Let the still-running worker raise, then force the future through GC.
+        provider.may_raise.set()
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if provider._detect_semaphore._value == 1:
+                break
+        # Drop references and collect so any unretrieved-future log would fire.
+        gc.collect()
+        await asyncio.sleep(0.01)
+
+    unretrieved = [
+        record
+        for record in caplog.records
+        if "Future exception was never retrieved" in record.getMessage()
+    ]
+    assert unretrieved == [], f"unexpected unretrieved-future log: {unretrieved}"
