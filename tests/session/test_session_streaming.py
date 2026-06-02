@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from easycat import create_text_session
 from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
@@ -154,6 +155,23 @@ class FakeNoiseReducer:
 
 
 # ── Streaming test agents ──────────────────────────────────────────
+
+
+class ContextCapturingBridge(_TestBridgeBase):
+    def __init__(self, response_prefix: str = "reply") -> None:
+        super().__init__()
+        self.response_prefix = response_prefix
+        self.contexts: list[list[dict[str, str]]] = []
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = recorder, cancel_token
+        self.contexts.append(list(turn_input.context))
+        yield AgentBridgeEvent(kind="done", text=f"{self.response_prefix}:{turn_input.text}")
 
 
 class StreamingUpperAgent(_TestBridgeBase):
@@ -1297,6 +1315,38 @@ async def test_session_reset_clears_agent_history():
     await session.reset_state()
 
     assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_text_session_reset_clears_raw_bridge_shadow_history():
+    bridge = ContextCapturingBridge()
+    session = create_text_session(agent=bridge, wrap_agent=False)
+    try:
+        assert await session.send_text("SECRET-PII") == "reply:SECRET-PII"
+        assert bridge.contexts[-1] == []
+
+        await session.reset_state()
+
+        assert await session.send_text("fresh") == "reply:fresh"
+        assert bridge.contexts[-1] == []
+    finally:
+        await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_text_session_agent_swap_clears_raw_bridge_shadow_history():
+    first = ContextCapturingBridge("first")
+    session = create_text_session(agent=first, wrap_agent=False)
+    try:
+        assert await session.send_text("SECRET-PII") == "first:SECRET-PII"
+
+        second = ContextCapturingBridge("second")
+        session.agent = second
+
+        assert await session.send_text("fresh") == "second:fresh"
+        assert second.contexts[-1] == []
+    finally:
+        await session.stop(force=True)
 
 
 # ── Session with AgentRunner (full integration) ───────────────────

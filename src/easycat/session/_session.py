@@ -637,7 +637,7 @@ class Session:
 
         stage = getattr(self, "_agent_stage", None)
         if stage is not None:
-            stage._provider = self._agent  # keep the wrapper in sync
+            stage.set_provider(self._agent)  # keep the wrapper in sync and reset shadow history
 
     def _inject_agent_runtime_config(self, agent: Any) -> None:
         """Apply session MCP servers, remote model, and API key to ``agent``.
@@ -1216,6 +1216,7 @@ class Session:
         self._audio_router.reset_replay_chunks()
 
         self.agent.reset()
+        self._agent_stage.reset_history()
 
         self._reset_turn_state()
 
