@@ -236,6 +236,48 @@ async def test_session_stop_restores_session_log_context() -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_stop_in_different_task_does_not_raise() -> None:
+    """Cross-task ``stop()`` must not break teardown.
+
+    Mirrors ``SessionManager.stop_all()``, which gathers each ``stop()`` as a
+    fresh task: ``start()`` binds the session-log token in one context, and the
+    gathered ``stop()`` runs in another, so ``ContextVar.reset(token)`` would
+    raise ``ValueError`` ("Token was created in a different Context"). The
+    guarded reset must swallow that so ``stop()`` completes and ``_stopping`` is
+    cleared.
+    """
+    session = Session(
+        SessionConfig(
+            session_id="session-cross-task",
+            stt=_ActiveSTT(),
+            tts=_ActiveTTS(),
+            vad=_ActiveVAD(),
+            transport=_ActiveTransport(),
+            agent=NoopAgent(),
+        )
+    )
+
+    async def _start() -> None:
+        await session.start()
+
+    async def _stop() -> None:
+        await session.stop(force=True)
+
+    try:
+        # start() binds the token in its own task context.
+        await asyncio.gather(_start())
+        # stop() runs in a separate, fresh task context (as stop_all does), so
+        # reset(token) sees a token created in a different context.
+        results = await asyncio.gather(_stop(), return_exceptions=True)
+        assert results == [None], f"stop() raised: {results!r}"
+        assert session._stopping is False
+        assert session._closed is True
+    finally:
+        if not session._closed:
+            await session.stop(force=True)
+
+
+@pytest.mark.asyncio
 async def test_text_turn_restores_turn_log_context() -> None:
     import easycat._log_context as ctx
 

@@ -1069,9 +1069,11 @@ class Session:
             self._destroy()
             self._mark_closed()
         finally:
+            # Clear the stopping flag FIRST so it is always reset even if a
+            # later teardown step (observability / log-context reset) raises.
+            self._stopping = False
             self._mark_observability_inactive()
             self._reset_session_log_context()
-            self._stopping = False
 
     def _reset_session_log_context(self) -> None:
         """Restore this task's pre-session logging correlation binding."""
