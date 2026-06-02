@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from time import perf_counter
 
 import pytest
 
@@ -184,6 +185,28 @@ class TestStripMarkdown:
             strip_markdown(text, normalize_code_spans=True)
             == "Use very_long_identifier_name_for_internal_config."
         )
+
+    def test_many_inline_code_spans_are_restored_quickly(self) -> None:
+        text = " ".join("`x`" for _ in range(20_000))
+
+        start = perf_counter()
+        result = strip_markdown(text, normalize_code_spans=True)
+        elapsed = perf_counter() - start
+
+        assert result == " ".join("x" for _ in range(20_000))
+        assert elapsed < 2.0
+
+    def test_oversized_token_shaped_digits_left_unchanged(self) -> None:
+        # A real code span stashes one placeholder (index 0), then the input
+        # carries a token-shaped substring with a 5000-digit run. The digit run
+        # exceeds the largest stashed index width, so restoration must leave it
+        # untouched without raising (int() caps very long digit strings).
+        oversized_token = "EASYCATCODETOKEN" + ("1" * 5000) + "X"
+        text = f"`code` {oversized_token}"
+
+        result = strip_markdown(text)
+
+        assert result == f"code {oversized_token}"
 
     def test_link(self) -> None:
         assert (

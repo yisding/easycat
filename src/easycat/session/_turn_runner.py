@@ -625,51 +625,55 @@ class TurnRunner:
             text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
             accumulated = ""
             system_prefix = self._caller_id_system_message()
-            async for event in self._agent_stage.execute_streaming(
+            stream = self._agent_stage.execute_streaming(
                 text,
                 self._run_ctx,
                 text_turn,
                 cancel_token=cancel_token,
                 system_prefix=system_prefix,
-            ):
-                kind = getattr(event, "kind", None)
-                if kind is None:
-                    continue
-                if kind == "done":
-                    if event.text:
-                        accumulated = event.text
-                    if getattr(event, "structured_output", None) is not None:
-                        structured_output = event.structured_output
-                    break
-                if kind == "text_delta" and event.text:
-                    accumulated += event.text
-                    self._text_turn_accumulated = accumulated
-                    await self._emit(
-                        AgentDelta(
-                            text=event.text,
+            )
+            try:
+                async for event in stream:
+                    kind = getattr(event, "kind", None)
+                    if kind is None:
+                        continue
+                    if kind == "done":
+                        if event.text:
+                            accumulated = event.text
+                        if getattr(event, "structured_output", None) is not None:
+                            structured_output = event.structured_output
+                        break
+                    if kind == "text_delta" and event.text:
+                        accumulated += event.text
+                        self._text_turn_accumulated = accumulated
+                        await self._emit(
+                            AgentDelta(
+                                text=event.text,
+                                session_id=self._session_id,
+                                turn_id=turn_id,
+                            )
+                        )
+                    else:
+                        # tool_started / tool_delta / tool_result share the same
+                        # event-translation as the voice path via emit_tool_event,
+                        # so the two cannot drift.  The per-tool observability span
+                        # is text-path specific and threaded in via tool_span.
+                        await emit_tool_event(
+                            event,
+                            kind,
+                            emit=self._emit,
                             session_id=self._session_id,
                             turn_id=turn_id,
+                            tool_span=lambda: observability.span(
+                                "easycat.agent.tool",
+                                {
+                                    "easycat.stage": "agent",
+                                    "easycat.surface": "agent_bridge",
+                                },
+                            ),
                         )
-                    )
-                else:
-                    # tool_started / tool_delta / tool_result share the same
-                    # event-translation as the voice path via emit_tool_event,
-                    # so the two cannot drift.  The per-tool observability span
-                    # is text-path specific and threaded in via tool_span.
-                    await emit_tool_event(
-                        event,
-                        kind,
-                        emit=self._emit,
-                        session_id=self._session_id,
-                        turn_id=turn_id,
-                        tool_span=lambda: observability.span(
-                            "easycat.agent.tool",
-                            {
-                                "easycat.stage": "agent",
-                                "easycat.surface": "agent_bridge",
-                            },
-                        ),
-                    )
+            finally:
+                await stream.aclose()
             response = accumulated
             elapsed_ms = (time.monotonic() - t0) * 1000
             await self._emit(

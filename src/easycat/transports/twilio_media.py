@@ -216,6 +216,13 @@ class TwilioTransport(_ServerTransportBase):
     # mono stream has no reliable local reference signal for software AEC.
     # Declared explicitly so the choice is intentional, not a getattr fallback.
     default_echo_cancellation_enabled = False
+    # Captured audio is inbound-only: ``_accepted_twilio_media`` drops every
+    # ``outbound``/``outbound_track`` frame at ingest before it reaches STT, so
+    # transcripts derived from this transport are safely the callee's speech.
+    # Session wiring stamps this label onto STTFinal/STTPartial events that the
+    # STT provider leaves unlabeled, letting telephony classifiers (e.g. the
+    # outbound voicemail-pickup guard) trust the inbound track in production.
+    inbound_stt_track = "inbound"
 
     def __init__(
         self,
@@ -370,7 +377,11 @@ class TwilioTransport(_ServerTransportBase):
         try:
             async for raw in ws:
                 if isinstance(raw, bytes):
-                    raw = raw.decode("utf-8")
+                    try:
+                        raw = raw.decode("utf-8")
+                    except UnicodeDecodeError:
+                        logger.warning("Ignoring non-UTF-8 Twilio message")
+                        continue
                 await self._handle_message(raw)
         except websockets.exceptions.ConnectionClosed:
             logger.info("Twilio Media Streams disconnected")
@@ -386,9 +397,12 @@ class TwilioTransport(_ServerTransportBase):
     async def _handle_message(self, raw: str) -> None:
         """Route a Twilio JSON message to the appropriate handler."""
         try:
-            msg: dict[str, Any] = json.loads(raw)
+            msg = json.loads(raw)
         except json.JSONDecodeError:
             logger.warning("Ignoring invalid JSON from Twilio")
+            return
+        if not isinstance(msg, dict):
+            logger.warning("Ignoring non-object JSON from Twilio")
             return
 
         event = msg.get("event", "")
@@ -423,7 +437,11 @@ class TwilioTransport(_ServerTransportBase):
                 event_name="mark",
             ):
                 return
-            mark_name = msg.get("mark", {}).get("name", "")
+            mark = msg.get("mark", {})
+            if not isinstance(mark, dict):
+                logger.debug("Ignoring Twilio mark with non-object payload")
+                return
+            mark_name = mark.get("name", "")
             logger.debug("Twilio mark acknowledged: %s", mark_name)
             if mark_name and self._event_bus is not None:
                 await self._event_bus.emit(PlaybackMarkAck(mark_name=mark_name))
@@ -462,6 +480,9 @@ class TwilioTransport(_ServerTransportBase):
         lifecycle.
         """
         start = msg.get("start", {})
+        if not isinstance(start, dict):
+            logger.debug("Ignoring Twilio start with non-object payload")
+            return
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
@@ -524,6 +545,9 @@ class TwilioTransport(_ServerTransportBase):
         ):
             return
         dtmf_data = msg.get("dtmf", {})
+        if not isinstance(dtmf_data, dict):
+            logger.debug("Ignoring Twilio DTMF with non-object payload")
+            return
         digit = dtmf_data.get("digit", "")
         if digit and self._event_bus is not None:
             logger.debug("DTMF digit received: %s", digit)
@@ -637,6 +661,8 @@ class TwilioConnectionTransport(_AudioQueueMixin):
     # signal, so EasyCat-side AEC defaults off — declared explicitly, not via
     # getattr fallback.
     default_echo_cancellation_enabled = False
+    # Inbound-only capture: see ``TwilioTransport.inbound_stt_track``.
+    inbound_stt_track = "inbound"
 
     def __init__(
         self,
@@ -762,7 +788,11 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         try:
             async for raw in self._ws:
                 if isinstance(raw, bytes):
-                    raw = raw.decode("utf-8")
+                    try:
+                        raw = raw.decode("utf-8")
+                    except UnicodeDecodeError:
+                        logger.warning("Ignoring non-UTF-8 Twilio message")
+                        continue
                 await self._handle_message(raw)
         except websockets.exceptions.ConnectionClosed:
             logger.info("Twilio Media Streams disconnected")
@@ -777,9 +807,12 @@ class TwilioConnectionTransport(_AudioQueueMixin):
 
     async def _handle_message(self, raw: str) -> None:
         try:
-            msg: dict[str, Any] = json.loads(raw)
+            msg = json.loads(raw)
         except json.JSONDecodeError:
             logger.warning("Ignoring invalid JSON from Twilio")
+            return
+        if not isinstance(msg, dict):
+            logger.warning("Ignoring non-object JSON from Twilio")
             return
 
         event = msg.get("event", "")
@@ -806,7 +839,11 @@ class TwilioConnectionTransport(_AudioQueueMixin):
                 event_name="mark",
             ):
                 return
-            mark_name = msg.get("mark", {}).get("name", "")
+            mark = msg.get("mark", {})
+            if not isinstance(mark, dict):
+                logger.debug("Ignoring Twilio mark with non-object payload")
+                return
+            mark_name = mark.get("name", "")
             if mark_name and self._event_bus is not None:
                 await self._event_bus.emit(PlaybackMarkAck(mark_name=mark_name))
         elif event == "dtmf":
@@ -814,6 +851,9 @@ class TwilioConnectionTransport(_AudioQueueMixin):
 
     async def _handle_start(self, msg: dict[str, Any]) -> None:
         start = msg.get("start", {})
+        if not isinstance(start, dict):
+            logger.debug("Ignoring Twilio start with non-object payload")
+            return
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
@@ -872,6 +912,9 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         ):
             return
         dtmf_data = msg.get("dtmf", {})
+        if not isinstance(dtmf_data, dict):
+            logger.debug("Ignoring Twilio DTMF with non-object payload")
+            return
         digit = dtmf_data.get("digit", "")
         if digit and self._event_bus is not None:
             await self._event_bus.emit(DTMF(digit=digit))
