@@ -104,6 +104,13 @@ class SessionWiringContext:
     tts: Callable[[], TTSProvider]
     agent: Callable[[], Agent]
 
+    # Inbound STT track label declared by the transport (e.g. Twilio's
+    # ``"inbound"``), or ``None`` for transports that do not guarantee
+    # inbound-only capture.  The committer stamps it onto STTFinal/STTPartial
+    # events the provider leaves unlabeled so telephony classifiers can trust
+    # the track in production.
+    stt_track_label: Callable[[], str | None]
+
     # ── Session-owned services ───────────────────────────────────
     session_actions: Callable[[], SessionActions | None]
     drain_session_actions: Callable[[], Awaitable[bool]]
@@ -117,6 +124,17 @@ class SessionWiringContext:
     # ── Lifecycle verbs ──────────────────────────────────────────
     cancel_turn: Callable[..., Awaitable[None]]
     stop: Callable[[], Awaitable[None]]
+
+
+def _coerce_track_label(value: Any) -> str | None:
+    """Return a non-empty string track label, else ``None``.
+
+    Guards against a transport declaring a non-string or empty
+    ``inbound_stt_track`` so the committer never stamps a bogus track.
+    """
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
 def build_wiring(session: Session) -> SessionWiringContext:
@@ -153,6 +171,9 @@ def build_wiring(session: Session) -> SessionWiringContext:
         stt=lambda: session.stt,
         tts=lambda: session.tts,
         agent=lambda: session.agent,
+        stt_track_label=lambda: _coerce_track_label(
+            getattr(session.transport, "inbound_stt_track", None)
+        ),
         session_actions=lambda: session._session_actions,
         drain_session_actions=session._drain_session_actions,
         telephony_helpers_present=lambda: bool(session.telephony.helpers),

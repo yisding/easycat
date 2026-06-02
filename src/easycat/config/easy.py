@@ -336,7 +336,9 @@ class OutboundCallConfig:
     classification_gate_hold_audio: str = ""
     max_call_duration_s: int = 300
     late_voicemail_window_s: float = 30.0
-    voicemail_pickup_window_s: float = 60.0
+    # Disabled by default: voicemail-to-human pickup requires explicit opt-in
+    # and reliable inbound STT track metadata in the call state machine.
+    voicemail_pickup_window_s: float = 0.0
     callee_language: str = "en"
     twilio_account_sid: str = field(default="", repr=False)
     twilio_auth_token: str = field(default="", repr=False)

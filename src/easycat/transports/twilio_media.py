@@ -216,6 +216,13 @@ class TwilioTransport(_ServerTransportBase):
     # mono stream has no reliable local reference signal for software AEC.
     # Declared explicitly so the choice is intentional, not a getattr fallback.
     default_echo_cancellation_enabled = False
+    # Captured audio is inbound-only: ``_accepted_twilio_media`` drops every
+    # ``outbound``/``outbound_track`` frame at ingest before it reaches STT, so
+    # transcripts derived from this transport are safely the callee's speech.
+    # Session wiring stamps this label onto STTFinal/STTPartial events that the
+    # STT provider leaves unlabeled, letting telephony classifiers (e.g. the
+    # outbound voicemail-pickup guard) trust the inbound track in production.
+    inbound_stt_track = "inbound"
 
     def __init__(
         self,
@@ -654,6 +661,8 @@ class TwilioConnectionTransport(_AudioQueueMixin):
     # signal, so EasyCat-side AEC defaults off — declared explicitly, not via
     # getattr fallback.
     default_echo_cancellation_enabled = False
+    # Inbound-only capture: see ``TwilioTransport.inbound_stt_track``.
+    inbound_stt_track = "inbound"
 
     def __init__(
         self,

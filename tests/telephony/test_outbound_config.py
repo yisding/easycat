@@ -83,7 +83,7 @@ class TestOutboundCallConfig:
         assert cfg.max_call_duration_s == 300
         assert cfg.callee_language == "en"
         assert cfg.max_screening_turns == 3
-        assert cfg.voicemail_pickup_window_s == 60.0
+        assert cfg.voicemail_pickup_window_s == 0.0
 
     def test_all_fields_configurable(self) -> None:
         async def _dummy_agent(ctx: dict) -> dict:
