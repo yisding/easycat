@@ -1,8 +1,12 @@
 """Smart Turn runtime loading tests."""
 
+import asyncio
 from types import SimpleNamespace
 
-from easycat.smart_turn import SmartTurnONNX
+import pytest
+
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.smart_turn import SmartTurnONNX, SmartTurnResult
 
 
 def test_smart_turn_ensure_loaded_uses_numpy_and_onnxruntime_only(
@@ -92,3 +96,88 @@ def test_predict_above_threshold_is_complete() -> None:
     result = provider._predict_sync(audio)
 
     assert result.prediction == 1
+
+
+def test_chunks_to_float32_16k_truncates_before_concatenate() -> None:
+    """Only the trailing model window should be converted/concatenated."""
+
+    from array import array
+    from types import SimpleNamespace
+
+    class FakeArray(list[float]):
+        def astype(self, _dtype):
+            return self
+
+        def __truediv__(self, divisor: float):
+            return FakeArray(value / divisor for value in self)
+
+    def frombuffer(data: bytes, *, dtype):
+        del dtype
+        samples = array("h")
+        samples.frombytes(data)
+        return FakeArray(float(value) for value in samples)
+
+    fake_np = SimpleNamespace(
+        float32=float,
+        int16=int,
+        frombuffer=frombuffer,
+        zeros=lambda size, dtype: FakeArray([0.0] * size),
+        concatenate=lambda arrays: FakeArray(
+            value for array_values in arrays for value in array_values
+        ),
+    )
+
+    provider = SmartTurnONNX(model_path="unused.onnx")
+    provider._np = fake_np
+    chunks = [
+        AudioChunk(
+            data=array("h", [value] * 16000).tobytes(),
+            format=PCM16_MONO_16K,
+        )
+        for value in range(10)
+    ]
+
+    audio = provider._chunks_to_float32_16k(chunks)
+
+    assert len(audio) == 8 * 16000
+    assert audio[0] == 2 / 32768.0
+    assert audio[-1] == 9 / 32768.0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_detection_keeps_executor_slot_until_worker_finishes() -> None:
+    """Cancellation should not let more executor detections pile up."""
+
+    import threading
+
+    class BlockingSmartTurn(SmartTurnONNX):
+        def __init__(self) -> None:
+            super().__init__(model_path="unused.onnx", timeout_s=0.05)
+            self.started = threading.Event()
+            self.finish = threading.Event()
+            self.calls = 0
+
+        def _detect_sync(self, audio_chunks: list[AudioChunk]) -> SmartTurnResult:
+            self.calls += 1
+            self.started.set()
+            self.finish.wait(timeout=1)
+            return SmartTurnResult(prediction=1, probability=0.9)
+
+    provider = BlockingSmartTurn()
+    chunk = AudioChunk(data=b"\0" * 640, format=PCM16_MONO_16K)
+    first = asyncio.create_task(provider.detect([chunk]))
+    while not provider.started.is_set():
+        await asyncio.sleep(0.01)
+
+    try:
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        result = await provider.detect([chunk])
+
+        assert result == SmartTurnResult(prediction=0, probability=0.0)
+        assert provider.calls == 1
+    finally:
+        provider.finish.set()
+        await asyncio.sleep(0.05)
