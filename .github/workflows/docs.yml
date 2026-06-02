@@ -29,13 +29,8 @@ jobs:
     # mkdocs / hook regressions before they land on main.
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # The build is read-only except for the configure-pages enablement step,
-    # which needs pages: write / id-token: write to flip the Pages source to
-    # GitHub Actions on first run. The deploy job carries its own copy.
     permissions:
       contents: read
-      pages: write
-      id-token: write
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -105,23 +100,33 @@ jobs:
           test -f site/15-operate-in-production/index.html
           test ! -f site/00-hello-audio/README/index.html
 
-      # Flip the repo Pages source to GitHub Actions on the first deploy so
-      # actions/deploy-pages doesn't fail against the legacy gh-pages source.
-      # `enablement: true` is a no-op once Pages is already Actions-backed.
-      # actions/configure-pages v5
-      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        with:
-          enablement: true
       # actions/upload-pages-artifact v3.0.1
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           path: site
 
+  configure-pages:
+    # Keep Pages/OIDC permissions out of the PR-triggered build job. This
+    # push-main-only job flips the repo Pages source to GitHub Actions on the
+    # first deploy so actions/deploy-pages doesn't fail against the legacy
+    # gh-pages source. `enablement: true` is a no-op once Pages is already
+    # Actions-backed.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      # actions/configure-pages v5
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
+        with:
+          enablement: true
+
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
+    needs: [build, configure-pages]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
