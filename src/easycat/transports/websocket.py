@@ -159,6 +159,9 @@ class WebSocketTransport(_ServerTransportBase):
         target_rate = self._config.audio_format.sample_rate
         async for message in ws:
             if isinstance(message, bytes):
+                if not message:
+                    logger.debug("Dropping empty WebSocket audio frame")
+                    continue
                 chunk = AudioChunk(data=message, format=self._audio_format)
                 if chunk.format.sample_rate != target_rate:
                     # Hot path: each inbound binary frame is resampled when the
@@ -301,6 +304,9 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
         try:
             async for message in self._ws:
                 if isinstance(message, bytes):
+                    if not message:
+                        logger.debug("Dropping empty WebSocket audio frame")
+                        continue
                     chunk = AudioChunk(data=message, format=self._audio_format)
                     if chunk.format.sample_rate != target_rate:
                         # Hot path: resampled per inbound frame when the client
