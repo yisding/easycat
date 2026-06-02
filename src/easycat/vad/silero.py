@@ -141,7 +141,6 @@ class SileroVAD(_VADBase):
     def __init__(self) -> None:
         super().__init__()
         self._model: Any = None
-        self._torch: Any = None
         self._backend: str | None = None
 
         # Accumulation buffer for sub-frame chunks
@@ -185,7 +184,6 @@ class SileroVAD(_VADBase):
             raise RuntimeError(str(exc)) from exc
         except Exception as exc:
             raise RuntimeError(f"onnx loader failed: {exc}") from exc
-        self._torch = None
         self._backend = "onnx"
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
@@ -218,15 +216,7 @@ class SileroVAD(_VADBase):
             samples = struct.unpack(f"<{n}h", frame_data)
             float_samples = [s / 32768.0 for s in samples]
 
-            if self._backend == "onnx":
-                speech_prob = self._model.predict(float_samples, target_rate)
-            else:
-                if self._torch is None:
-                    self._torch = require_module(
-                        "torch", purpose="Silero VAD (optional torch backend)"
-                    )
-                tensor = self._torch.FloatTensor(float_samples)
-                speech_prob = self._model(tensor, target_rate).item()
+            speech_prob = self._model.predict(float_samples, target_rate)
             now = time.monotonic()
 
             for event in self._evaluate_speech(speech_prob, now):
@@ -243,27 +233,23 @@ class SileroVAD(_VADBase):
                 pass
 
     def close(self) -> None:
-        """Release the loaded model (onnxruntime session or torch handle)."""
+        """Release the loaded model (onnxruntime session)."""
         super().close()
-        self._torch = None
         self._buffer = b""
 
     def __del__(self) -> None:
         self.close()
 
     def version_info(self) -> dict[str, str]:
-        sdk_package = "torch" if self._backend == "torch" else "onnxruntime"
         sdk_ver = "unknown"
         try:
-            sdk_ver = version(sdk_package)
+            sdk_ver = version("onnxruntime")
         except Exception:
             pass
-        model_name = "silero-vad-torch"
-        if self._backend == "onnx":
-            model_name = "silero-vad-v6.2.1-onnx"
+        model_name = "silero-vad-v6.2.1-onnx" if self._backend == "onnx" else "silero-vad-unknown"
         return {
             "provider": "silero",
-            "model": model_name if self._backend is not None else "silero-vad-unknown",
+            "model": model_name,
             "api_version": "unknown",
             "sdk_version": sdk_ver,
         }
