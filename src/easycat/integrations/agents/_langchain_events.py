@@ -51,13 +51,10 @@ def _custom_event_text(payload: Any) -> str:
     Custom events (``dispatch_custom_event`` from LCEL, ``get_stream_writer``
     from LangGraph forwarded as ``("custom", payload)`` chunks) are
     typically UI telemetry — agents that *want* their custom signal
-    spoken should label it explicitly via a ``"text"`` / ``"speak"``
-    key so we don't accidentally narrate progress dicts or state diffs.
+    spoken must label it explicitly via a ``"text"`` / ``"speak"`` /
+    ``"say"`` key so we don't accidentally narrate progress strings,
+    debug logs, or state diffs.
     """
-    if payload is None:
-        return ""
-    if isinstance(payload, str):
-        return payload
     if isinstance(payload, dict):
         for key in ("text", "speak", "say"):
             value = payload.get(key)

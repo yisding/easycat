@@ -804,8 +804,8 @@ class TestLangGraphBridgeState:
     async def test_get_stream_writer_custom_event_yields_text_delta(self):
         """``get_stream_writer`` writes land as ``("custom", payload)``
         tuples on the top-level graph's ``on_chain_stream``.  Payloads
-        with a ``text`` field should drive TTS; opaque telemetry
-        payloads should stay silent."""
+        with a ``text`` field should drive TTS; opaque telemetry and
+        bare debug/progress strings should stay silent."""
         graph_chunk_text = {
             "event": "on_chain_stream",
             "name": "LangGraph",
@@ -842,9 +842,7 @@ class TestLangGraphBridgeState:
             events.append(ev)
 
         text_deltas = [e.text for e in events if e.kind == "text_delta"]
-        assert "Looking that up..." in text_deltas
-        assert "plain status" in text_deltas
-        assert all("progress" not in t for t in text_deltas)
+        assert text_deltas == ["Looking that up..."]
 
     @pytest.mark.asyncio
     async def test_interrupt_via_updates_channel_raises(self):
