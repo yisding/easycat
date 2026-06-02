@@ -14,8 +14,27 @@ from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_
 
 
 class _MockStreamingResponse:
-    def __init__(self, lines: list[str], status_code: int = 200) -> None:
-        self._lines = lines
+    """Mock streaming response feeding raw bytes via ``aiter_bytes``.
+
+    The provider parses lines off the raw byte stream itself (so the byte
+    caps fire incrementally on network chunks), so this mock joins the
+    supplied lines with newlines and yields them as one or more byte
+    chunks. ``byte_chunks`` lets a test feed an explicit chunk sequence
+    (e.g. a single huge no-newline body) instead.
+    """
+
+    def __init__(
+        self,
+        lines: list[str] | None = None,
+        status_code: int = 200,
+        *,
+        byte_chunks: list[bytes] | None = None,
+    ) -> None:
+        if byte_chunks is not None:
+            self._byte_chunks = byte_chunks
+        else:
+            body = "".join(f"{line}\n" for line in (lines or []))
+            self._byte_chunks = [body.encode("utf-8")] if body else []
         self.status_code = status_code
         self.request = httpx.Request("POST", "https://api.openai.com/v1/audio/transcriptions")
         self.text = "error"
@@ -29,9 +48,9 @@ class _MockStreamingResponse:
             )
             raise httpx.HTTPStatusError("error", request=self.request, response=response)
 
-    async def aiter_lines(self):
-        for line in self._lines:
-            yield line
+    async def aiter_bytes(self):
+        for chunk in self._byte_chunks:
+            yield chunk
 
 
 class _MockStreamContext:
@@ -48,16 +67,20 @@ class _MockStreamContext:
 def _make_mock_client(
     lines: list[str] | None = None,
     status_code: int = 200,
+    *,
+    byte_chunks: list[bytes] | None = None,
 ) -> httpx.AsyncClient:
     """Create a mock httpx.AsyncClient that streams transcription events."""
-    if lines is None:
+    if lines is None and byte_chunks is None:
         lines = [
             'data: {"delta": "hello"}',
             'data: {"delta": " world"}',
             'data: {"text": "hello world", "is_final": true}',
             "data: [DONE]",
         ]
-    mock_response = _MockStreamingResponse(lines=lines, status_code=status_code)
+    mock_response = _MockStreamingResponse(
+        lines=lines, status_code=status_code, byte_chunks=byte_chunks
+    )
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = MagicMock(return_value=_MockStreamContext(mock_response))
     mock_client.aclose = AsyncMock()
@@ -343,6 +366,104 @@ async def test_openai_stt_transcript_limit_aborts_oversized_delta():
 
     with pytest.raises(RuntimeError, match="exceeded 5 characters"):
         await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_line_byte_limit_aborts_unbounded_no_newline_body():
+    """A no-newline body must trip the line cap incrementally, not after buffering it all.
+
+    Each chunk has no newline, so the pending fragment keeps growing. The
+    provider must raise once the pending fragment crosses
+    ``max_stream_line_bytes`` rather than waiting for the (never-arriving)
+    newline and materializing the whole multi-megabyte body.
+    """
+    chunk = b"x" * 1024
+
+    consumed = 0
+
+    async def _counting_chunks():
+        nonlocal consumed
+        # An effectively unbounded stream: if the provider buffered the whole
+        # body before checking the cap, this generator would run forever.
+        while True:
+            consumed += len(chunk)
+            yield chunk
+
+    response = _MockStreamingResponse(byte_chunks=[])
+    response.aiter_bytes = _counting_chunks  # type: ignore[method-assign]
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = MagicMock(return_value=_MockStreamContext(response))
+    mock_client.aclose = AsyncMock()
+
+    config = OpenAISTTConfig(
+        api_key="test-key",
+        http_client=mock_client,
+        max_retries=1,
+        max_stream_line_bytes=4096,
+        max_stream_total_bytes=10_000_000,
+    )
+    stt = OpenAISTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    await stt.start_stream()
+    for c in make_audio_chunks(pcm):
+        await stt.send_audio(c)
+
+    with pytest.raises(RuntimeError, match="line exceeded 4096 bytes"):
+        await stt.end_stream()
+
+    # The cap fired after only a handful of chunks crossed the line limit —
+    # the whole (unbounded) body was never materialized.
+    assert consumed <= 4096 + len(chunk)
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_total_byte_limit_aborts_oversized_stream():
+    """A stream of many small newline-terminated lines trips the total-bytes cap."""
+    # Each line is small (well under the per-line cap) but together they
+    # exceed the total-bytes ceiling; the running total must abort the stream.
+    chunk = b'data: {"delta": "ab"}\n'
+
+    consumed = 0
+
+    async def _counting_chunks():
+        nonlocal consumed
+        while True:
+            consumed += len(chunk)
+            yield chunk
+
+    response = _MockStreamingResponse(byte_chunks=[])
+    response.aiter_bytes = _counting_chunks  # type: ignore[method-assign]
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = MagicMock(return_value=_MockStreamContext(response))
+    mock_client.aclose = AsyncMock()
+
+    config = OpenAISTTConfig(
+        api_key="test-key",
+        http_client=mock_client,
+        max_retries=1,
+        max_stream_total_bytes=4096,
+        # Keep the other caps generous so only the total-bytes cap can fire.
+        max_stream_events=1_000_000,
+        max_partial_events=1_000_000,
+        max_transcript_chars=10_000_000,
+    )
+    stt = OpenAISTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    await stt.start_stream()
+    for c in make_audio_chunks(pcm):
+        await stt.send_audio(c)
+
+    with pytest.raises(RuntimeError, match="exceeded 4096 total bytes"):
+        await stt.end_stream()
+
+    assert consumed <= 4096 + len(chunk)
+
+
+def test_openai_stt_config_rejects_nonpositive_max_stream_total_bytes():
+    with pytest.raises(ValueError, match="max_stream_total_bytes"):
+        OpenAISTTConfig(api_key="test-key", max_stream_total_bytes=0)
 
 
 # ── Mid-stream format change ─────────────────────────────────────
