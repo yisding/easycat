@@ -214,11 +214,32 @@ def translate_stream_event(
         # own ``on_chain_stream`` carries a state dict that
         # ``_dict_output_text`` filters out, so nothing would replace the
         # suppressed tokens and the node would go silent.  Leave those
-        # node-direct runs audible by skipping redaction when the parent
-        # is a tracked LangGraph node root.
+        # node-direct runs audible by skipping redaction only when the
+        # immediate parent is a tracked LangGraph node root.  LangChain v2
+        # ``parent_ids`` contains the full ancestor chain (root first), so
+        # checking every ancestor would misclassify a BaseLLM nested inside
+        # a node's LCEL chain as node-direct and leak its raw tokens before
+        # downstream redaction.
+        #
+        # The immediate-parent check is intentionally strict but
+        # fail-*audible*: a node that invokes a BaseLLM through
+        # ``.with_retry()`` (the sync ``invoke`` path inserts an extra
+        # ``RunnableRetry`` span, so ``parent_ids`` becomes
+        # ``[node, retry]`` and the immediate parent is the retry span,
+        # not the node root) writing to a non-conventional state key is
+        # still recorded here as parented, but its result text is stashed
+        # in ``on_llm_end`` below so :meth:`LangGraphBridge._finalize_done`
+        # can fall back to it when nothing else surfaced — restoring audio
+        # without re-leaking raw tokens whenever the node/chain *did*
+        # compose public-safe text (the secure common path).  The other
+        # common wrappers — ``.with_config()`` / ``.bind()`` /
+        # ``RunnableBinding`` — are inert: they don't insert an
+        # intervening run, so the LLM's immediate parent stays the node
+        # root and those calls remain audible outright.
         node_roots = state.get("langgraph_node_run_ids")
         node_root_ids = node_roots if isinstance(node_roots, set) else set()
-        if parents and not any(str(pid) in node_root_ids for pid in parents):
+        immediate_parent = str(parents[-1]) if parents else ""
+        if parents and immediate_parent not in node_root_ids:
             parented = state.setdefault("parented_llm_run_ids", set())
             if isinstance(parented, set):
                 parented.add(run_id)
@@ -440,14 +461,26 @@ def translate_stream_event(
         # composed stream/final output instead so downstream redaction or
         # output selection is not bypassed.  Skip streaming LLMs so we
         # don't double-emit on top of already-translated bare LLM chunks.
+        output = data.get("output") if isinstance(data, dict) else None
         if state is not None and run_id:
             parented = state.get("parented_llm_run_ids")
             if isinstance(parented, set) and run_id in parented:
+                # Don't yield the raw tokens (downstream redaction stays
+                # authoritative), but stash the result text keyed by
+                # ``run_id`` so :meth:`LangGraphBridge._finalize_done` can
+                # use it as a fail-audible fallback when the node/chain
+                # produced no public-safe text at all (a node-direct LLM
+                # reached through an inert ``.with_retry()`` span writing
+                # to a non-conventional state key).  The secure common
+                # path — node/chain composed text — still wins, so this
+                # never re-leaks raw tokens when redaction did run.
+                suppressed = state.setdefault("suppressed_parented_llm_text", {})
+                if isinstance(suppressed, dict):
+                    suppressed[run_id] = _llm_result_text(output)
                 return
             streamed = state.get("llm_streamed_run_ids")
             if isinstance(streamed, set) and run_id in streamed:
                 return
-        output = data.get("output") if isinstance(data, dict) else None
         text = _llm_result_text(output)
         if text:
             yield AgentBridgeEvent(kind="text_delta", text=text)
