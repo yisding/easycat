@@ -36,6 +36,16 @@ def bind_turn(turn_id: str | None) -> Token[str | None]:
     return _turn_id.set(turn_id)
 
 
+def reset_session(token: Token[str | None]) -> None:
+    """Restore the session id binding represented by *token*."""
+    _session_id.reset(token)
+
+
+def reset_turn(token: Token[str | None]) -> None:
+    """Restore the turn id binding represented by *token*."""
+    _turn_id.reset(token)
+
+
 class CorrelationFilter(logging.Filter):
     """Enrich every record with session/turn ids; never drops a record."""
 
