@@ -235,8 +235,8 @@ async function start() {
 
     var baseUrl = signalingUrl.value.replace(/\/$/, "");
 
-    // 2. Fetch ICE server config from the signaling server so the
-    //    client uses the same STUN/TURN servers as the server side.
+    // 2. Fetch public ICE server URLs from the signaling server.
+    //    TURN credentials are intentionally not exposed by /config.
     var iceConfig = await fetchIceConfig(baseUrl);
     pc = new RTCPeerConnection(iceConfig);
 

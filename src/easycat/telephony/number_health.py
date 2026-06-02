@@ -197,16 +197,22 @@ class NumberHealthMonitor:
         return active
 
     def _resolve_number(self, call_sid: str, event_number: str | None) -> str | None:
-        """Resolve the from-number for a call.
+        """Resolve the outbound caller ID for a call.
 
-        Returns the event's number when present, else the number tracked for
-        this ``call_sid``. Returns ``None`` when neither is available so callers
-        can skip recording rather than filing analytics under an empty or
-        SID-shaped phantom key (e.g. placement failures emit an empty SID).
+        Prefer the number tracked from ``CallInitiated`` for this ``call_sid``
+        so terminal callbacks with callee-oriented fields cannot decrement a
+        different bucket than the one incremented at call start. Fall back to
+        the terminal event's number for events that have no tracked SID.
+        Returns ``None`` when neither is available so callers can skip recording
+        rather than filing analytics under an empty or SID-shaped phantom key
+        (e.g. placement failures emit an empty SID).
         """
+        tracked_number = self._call_sid_to_number.get(call_sid)
+        if tracked_number:
+            return tracked_number
         if event_number:
             return event_number
-        return self._call_sid_to_number.get(call_sid)
+        return None
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
         # Guard against duplicate CallInitiated for the same call_sid
@@ -235,6 +241,12 @@ class NumberHealthMonitor:
                 evicted_number = self._call_sid_to_number.pop(sid, None)
                 if evicted_number:
                     self._decrement_concurrent(evicted_number)
+                # Tombstone the evicted SID so a late terminal callback (now
+                # carrying ``number=From``) cannot be treated as an untracked
+                # caller-ID event and double-decrement the same bucket via
+                # ``_on_call_ended`` / ``_on_call_failed``. ``_mark_terminal``
+                # bounds ``_terminal_call_sids`` so memory stays bounded.
+                self._mark_terminal(sid)
 
     def _decrement_concurrent(self, number: str) -> None:
         prev = self._concurrent.get(number, 0)

@@ -250,12 +250,31 @@ class SmartTurnONNX:
     Requires: numpy, onnxruntime
     """
 
-    def __init__(self, model_path: str, threshold: float = 0.5) -> None:
+    _SAMPLE_RATE = 16000
+    _MAX_AUDIO_SECONDS = 8.0
+    _MAX_AUDIO_SAMPLES = int(_SAMPLE_RATE * _MAX_AUDIO_SECONDS)
+
+    def __init__(
+        self,
+        model_path: str,
+        threshold: float = 0.5,
+        *,
+        timeout_s: float = 2.0,
+        max_audio_seconds: float = _MAX_AUDIO_SECONDS,
+    ) -> None:
+        if timeout_s <= 0:
+            raise ValueError("timeout_s must be positive")
+        if max_audio_seconds <= 0:
+            raise ValueError("max_audio_seconds must be positive")
+
         self._model_path = model_path
         self._threshold = threshold
+        self._timeout_s = timeout_s
+        self._max_audio_samples = int(self._SAMPLE_RATE * max_audio_seconds)
         self._session: Any = None  # ort.InferenceSession (lazy)
         self._feature_extractor: Any = None  # NumPy Whisper frontend (lazy)
         self._np: Any = None  # numpy module (lazy)
+        self._detect_semaphore = asyncio.Semaphore(1)
 
     def _ensure_loaded(self) -> None:
         """Lazy-load model and feature extractor on first inference."""
@@ -283,27 +302,51 @@ class SmartTurnONNX:
         logger.info("Smart-turn model loaded from %s", self._model_path)
 
     def _chunks_to_float32_16k(self, chunks: list[AudioChunk]) -> Any:
-        """Convert AudioChunks to a single float32 numpy array at 16 kHz."""
+        """Convert only the trailing model window to a float32 16 kHz array."""
         np = self._np
         if not chunks:
             return np.zeros(0, dtype=np.float32)
 
-        all_samples: list[Any] = []
-        for chunk in chunks:
-            data = chunk.data
-            if chunk.format.sample_rate != 16000:
-                data = resample(data, chunk.format.sample_rate, 16000)
-            samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-            all_samples.append(samples)
+        remaining_samples = self._max_audio_samples
+        reversed_samples: list[Any] = []
 
-        if not all_samples:
+        for chunk in reversed(chunks):
+            if remaining_samples <= 0:
+                break
+
+            data = chunk.data
+            source_rate = chunk.format.sample_rate
+            frame_size = chunk.format.frame_size
+            if frame_size <= 0 or source_rate <= 0:
+                continue
+
+            source_sample_budget = max(1, int((remaining_samples * source_rate + 15999) // 16000))
+            source_samples = len(data) // frame_size
+            if source_samples > source_sample_budget:
+                data = data[-source_sample_budget * frame_size :]
+
+            if source_rate != 16000:
+                data = resample(data, source_rate, 16000)
+            samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+            if len(samples) > remaining_samples:
+                samples = samples[-remaining_samples:]
+            if len(samples) == 0:
+                continue
+
+            reversed_samples.append(samples)
+            remaining_samples -= len(samples)
+
+        if not reversed_samples:
             return np.zeros(0, dtype=np.float32)
-        return np.concatenate(all_samples)
+        audio = np.concatenate(list(reversed(reversed_samples)))
+        if len(audio) > self._max_audio_samples:
+            audio = audio[-self._max_audio_samples :]
+        return audio
 
     def _predict_sync(self, audio_array: Any) -> SmartTurnResult:
         """Run ONNX inference synchronously.  Called from thread executor."""
         np = self._np
-        max_samples = 8 * 16000  # 8 seconds at 16 kHz
+        max_samples = self._max_audio_samples
 
         if len(audio_array) > max_samples:
             audio_array = audio_array[-max_samples:]
@@ -328,16 +371,61 @@ class SmartTurnONNX:
 
         return SmartTurnResult(prediction=prediction, probability=probability)
 
-    async def detect(self, audio_chunks: list[AudioChunk]) -> SmartTurnResult:
-        """Classify accumulated turn audio as complete or incomplete."""
+    def _detect_sync(self, audio_chunks: list[AudioChunk]) -> SmartTurnResult:
+        """Load, preprocess, and infer synchronously inside the bounded worker."""
         self._ensure_loaded()
         audio_array = self._chunks_to_float32_16k(audio_chunks)
 
         if len(audio_array) == 0:
             return SmartTurnResult(prediction=0, probability=0.0)
 
+        return self._predict_sync(audio_array)
+
+    def _release_detect_semaphore(self, future: asyncio.Future[Any]) -> None:
+        # Consume any exception the worker raised after the coroutine had already
+        # returned its timeout/cancel fallback.  Retrieving ``future.exception()``
+        # clears asyncio's ``_log_traceback`` flag, so a late failure no longer
+        # surfaces as a "Future exception was never retrieved" message at GC.
+        # Guard ``cancelled()`` because ``exception()`` raises ``CancelledError``
+        # on a cancelled future.
+        if not future.cancelled():
+            exc = future.exception()
+            if exc is not None:
+                logger.debug("Smart-turn worker failed after timeout/cancel: %r", exc)
+        self._detect_semaphore.release()
+
+    async def detect(self, audio_chunks: list[AudioChunk]) -> SmartTurnResult:
+        """Classify accumulated turn audio as complete or incomplete.
+
+        Only one smart-turn job may run at a time.  Cancellation or timeout of
+        this coroutine does not stop an already-running executor thread, so the
+        semaphore is released from the executor future's completion callback when
+        that happens.  This prevents repeated VAD stop/start cycles from piling
+        up costly ONNX jobs.
+        """
+        try:
+            await asyncio.wait_for(self._detect_semaphore.acquire(), timeout=self._timeout_s)
+        except TimeoutError:
+            logger.warning("Smart-turn detection skipped while another detection is still running")
+            return SmartTurnResult(prediction=0, probability=0.0)
+
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._predict_sync, audio_array)
+        future = loop.run_in_executor(None, self._detect_sync, list(audio_chunks))
+        release_now = True
+        try:
+            return await asyncio.wait_for(asyncio.shield(future), timeout=self._timeout_s)
+        except TimeoutError:
+            logger.warning("Smart-turn detection timed out after %.2fs", self._timeout_s)
+            release_now = False
+            future.add_done_callback(self._release_detect_semaphore)
+            return SmartTurnResult(prediction=0, probability=0.0)
+        except asyncio.CancelledError:
+            release_now = False
+            future.add_done_callback(self._release_detect_semaphore)
+            raise
+        finally:
+            if release_now:
+                self._detect_semaphore.release()
 
 
 # ── Configuration & factory ────────────────────────────────────────
@@ -366,6 +454,17 @@ class SmartTurnConfig:
     # the manager-level threshold wins and this one is ignored (a warning is
     # logged) — set only one of the two to avoid surprises.
     threshold: float = 0.5
+    # Maximum time spent waiting to start or finish one endpoint detection.
+    # Timeouts fall back to the normal silence timer.
+    timeout_s: float = 2.0
+    # Maximum trailing audio handed to the model, in seconds.
+    max_audio_seconds: float = 8.0
+
+    def __post_init__(self) -> None:
+        if self.timeout_s <= 0:
+            raise ValueError("timeout_s must be positive")
+        if self.max_audio_seconds <= 0:
+            raise ValueError("max_audio_seconds must be positive")
 
 
 def create_smart_turn(
@@ -382,4 +481,6 @@ def create_smart_turn(
     return SmartTurnONNX(
         model_path=config.model_path,
         threshold=config.threshold,
+        timeout_s=config.timeout_s,
+        max_audio_seconds=config.max_audio_seconds,
     )

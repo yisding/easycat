@@ -79,6 +79,12 @@ _VOICEMAIL_ACCEPT_STATES = frozenset(
     }
 )
 
+# Tracks that identify human-side audio strongly enough to allow the optional
+# live-voicemail pickup path.  Missing/unknown track metadata is intentionally
+# not trusted because voicemail greetings and echoed outbound audio are
+# attacker-controlled inputs once a call is classified as VOICEMAIL.
+_INBOUND_STT_TRACKS = frozenset({"inbound", "inbound_track", "caller"})
+
 
 class ClassificationGate:
     """Buffers TTS audio during the CLASSIFYING state.
@@ -635,7 +641,13 @@ class OutboundCallStateMachine:
 
         # Skip non-inbound transcripts (bot's own speech fed back when
         # transcription_track="both").  Applies to all classification states.
-        if event.track is not None and event.track != "inbound":
+        # A track-less event (track is None) is accepted because the Twilio
+        # media transport already drops outbound frames at ingest; an explicit
+        # track must be one of the trusted inbound labels.  Sharing the
+        # ``_INBOUND_STT_TRACKS`` whitelist keeps this filter consistent with
+        # the voicemail-pickup guard below so "inbound_track"/"caller" reach
+        # every classification state rather than only "inbound".
+        if event.track is not None and event.track.lower() not in _INBOUND_STT_TRACKS:
             return
 
         if self._state == OutboundCallState.CLASSIFYING:
@@ -662,6 +674,8 @@ class OutboundCallStateMachine:
             and self._voicemail_pickup_task is not None
             and not self._voicemail_pickup_task.done()
         ):
+            if not self._is_trusted_inbound_stt(event):
+                return
             # Exclude voicemail system prompts from triggering false human detection.
             if self._classify_greeting(text) == "machine":
                 return
@@ -669,6 +683,11 @@ class OutboundCallStateMachine:
                 self._cancel_voicemail_pickup_window()
                 logger.info("Conversational speech during VOICEMAIL — transitioning to HUMAN")
                 await self._transition(OutboundCallState.HUMAN)
+
+    @staticmethod
+    def _is_trusted_inbound_stt(event: STTFinal) -> bool:
+        track = event.track
+        return isinstance(track, str) and track.lower() in _INBOUND_STT_TRACKS
 
     # ── Timers ────────────────────────────────────────────────────
 

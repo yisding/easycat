@@ -8,8 +8,9 @@ provider dependencies, safe to import from tests.
 Naming convention for this module:
 
 - Names in ``__all__`` (``split_at_sentence_boundaries``,
-  ``has_unclosed_markdown_delimiters``) are the supported public surface,
-  re-exported from ``easycat.session`` / consumed by ``_streaming``.
+  ``has_unclosed_markdown_delimiters``, ``markdown_open_state``) are the
+  supported public surface, re-exported from ``easycat.session`` /
+  consumed by ``_streaming``.
 - The leading-underscore helpers (``_truncate_partial_text_to_boundary``,
   ``_text_for_estimation_timeline``, ``_cleanup_estimation_text``,
   ``_chunk_has_speech_energy``) are package-internal cross-module API: they
@@ -17,7 +18,8 @@ Naming convention for this module:
   ``_turn_runner``, ``_audio_router``) but are *not* part of the supported
   public surface, so they keep the underscore. The remaining underscore
   helpers (``_is_word_char``, ``_has_unclosed_single_emphasis``,
-  ``_has_unclosed_markdown_link_or_image``) are file-local.
+  ``_scan_markdown_link_or_image``, ``_has_unclosed_markdown_link_or_image``)
+  are file-local.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ import sentencesplit
 __all__ = [
     "split_at_sentence_boundaries",
     "has_unclosed_markdown_delimiters",
+    "markdown_open_state",
 ]
 
 from easycat.audio_format import AudioChunk
@@ -175,8 +178,21 @@ def _has_unclosed_single_emphasis(text: str, delimiter: str) -> bool:
     return open_count > 0
 
 
-def _has_unclosed_markdown_link_or_image(text: str) -> bool:
-    """Detect incomplete markdown link/image spans in ``text``.
+def _scan_markdown_link_or_image(text: str) -> tuple[bool, bool]:
+    """Scan ``text`` for incomplete markdown link/image spans.
+
+    Returns ``(is_open, awaiting_destination)``:
+
+    - ``is_open`` is ``True`` when a link/image span is still incomplete
+      (an unbalanced label ``[``, a closed label ``[label]`` whose
+      destination has not yet been observed, or an unbalanced destination
+      ``(``).
+    - ``awaiting_destination`` is ``True`` only for the specific case of a
+      trailing closed label ``[label]`` whose next non-space character has
+      not yet arrived — i.e. the span is open *solely* because we cannot
+      yet tell whether a ``(destination)`` follows.  This is the one open
+      case that a non-``(`` continuation can disambiguate, so the streaming
+      path treats it differently from genuinely-open emphasis/code spans.
 
     Intentionally conservative for streaming safety: any trailing
     ``[label]`` without a resolved destination is treated as still-open
@@ -231,18 +247,37 @@ def _has_unclosed_markdown_link_or_image(text: str) -> bool:
             label_depth = 1
         i += 1
 
-    return label_depth > 0 or awaiting_destination or destination_depth > 0
+    is_open = label_depth > 0 or awaiting_destination or destination_depth > 0
+    return is_open, awaiting_destination
 
 
-def has_unclosed_markdown_delimiters(text: str) -> bool:
-    """Best-effort check for unfinished markdown spans in a rolling buffer.
+def _has_unclosed_markdown_link_or_image(text: str) -> bool:
+    """Detect incomplete markdown link/image spans in ``text``."""
+    return _scan_markdown_link_or_image(text)[0]
+
+
+def markdown_open_state(text: str) -> tuple[bool, bool]:
+    """Best-effort markdown openness check for a rolling streaming buffer.
+
+    Returns ``(is_open, awaiting_link_destination)``:
+
+    - ``is_open`` is ``True`` when any markdown span (fenced/inline code,
+      ``**``/``__``/``~~`` runs, single ``*``/``_`` emphasis, or a
+      link/image) is still unfinished, so later deltas could rewrite
+      already-buffered text and emission must be deferred.
+    - ``awaiting_link_destination`` is ``True`` only when the *sole* reason
+      the buffer is open is a trailing closed label ``[label]`` whose
+      ``(destination)`` (or lack thereof) has not yet arrived.  In that
+      case any non-space, non-``(`` continuation disambiguates the span,
+      so the streaming path can recheck eagerly rather than waiting for a
+      markdown-closer character.
 
     The streaming path defers sentence emission while markdown delimiters
     are still open so later deltas cannot rewrite already-emitted text.
     """
     fenced_count = text.count("```")
     if fenced_count % 2 == 1:
-        return True
+        return True, False
 
     # Remove fenced blocks so inline delimiter counts are not distorted.
     normalized = re.sub(r"```[\s\S]*?```", "", text)
@@ -251,7 +286,7 @@ def has_unclosed_markdown_delimiters(text: str) -> bool:
     # above).
     inline_tick_count = normalized.count("`")
     if inline_tick_count % 2 == 1:
-        return True
+        return True, False
 
     # Remove closed inline-code spans so markdown chars inside code do
     # not affect emphasis/link-state tracking.
@@ -259,14 +294,28 @@ def has_unclosed_markdown_delimiters(text: str) -> bool:
 
     for delimiter in ("**", "__", "~~"):
         if normalized.count(delimiter) % 2 == 1:
-            return True
+            return True, False
 
-    if _has_unclosed_markdown_link_or_image(normalized):
-        return True
+    link_open, awaiting_destination = _scan_markdown_link_or_image(normalized)
 
-    return _has_unclosed_single_emphasis(normalized, "*") or _has_unclosed_single_emphasis(
-        normalized, "_"
-    )
+    emphasis_open = _has_unclosed_single_emphasis(
+        normalized, "*"
+    ) or _has_unclosed_single_emphasis(normalized, "_")
+
+    is_open = link_open or emphasis_open
+    # The awaiting-destination shortcut only applies when nothing else
+    # holds the window open; an unclosed emphasis span still needs a
+    # genuine closer.
+    return is_open, awaiting_destination and not emphasis_open
+
+
+def has_unclosed_markdown_delimiters(text: str) -> bool:
+    """Best-effort check for unfinished markdown spans in a rolling buffer.
+
+    The streaming path defers sentence emission while markdown delimiters
+    are still open so later deltas cannot rewrite already-emitted text.
+    """
+    return markdown_open_state(text)[0]
 
 
 # ── TTS payload text normalisation for interruption estimation ──────

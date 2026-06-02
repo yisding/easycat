@@ -323,12 +323,12 @@ def twiml_gather(
     """
     attrs = [
         f"action={quoteattr(action_url)}",
-        f'timeout="{timeout}"',
+        f"timeout={quoteattr(str(timeout))}",
         f"finishOnKey={quoteattr(finish_on_key)}",
         f"input={quoteattr(input_type)}",
     ]
     if num_digits is not None:
-        attrs.append(f'numDigits="{num_digits}"')
+        attrs.append(f"numDigits={quoteattr(str(num_digits))}")
 
     attr_str = " ".join(attrs)
     inner = ""

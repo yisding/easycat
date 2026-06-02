@@ -27,13 +27,31 @@ from easycat.events import (
     ToolCallStarted,
 )
 from easycat.session.text import (
-    has_unclosed_markdown_delimiters,
+    markdown_open_state,
     split_at_sentence_boundaries,
 )
 from easycat.strip_markdown import strip_markdown
 from easycat.tts.input import TTSInput
 
 logger = logging.getLogger(__name__)
+
+# Characters that can make buffered text newly eligible for TTS sentence emission.
+# When markdown stripping is enabled, avoid re-running delimiter checks, markdown
+# regexes, and sentence segmentation on every tiny streamed delta; most deltas
+# cannot complete a sentence and are therefore safe to buffer until one of these
+# characters (or final stream flush) arrives.
+#
+# This MUST stay a strict superset of the sentence segmenter's terminal
+# punctuation (".!?。！？．" — note the fullwidth full stop U+FF0E) so a delta that
+# closes a sentence always triggers a recheck. The invariant is enforced by
+# test_streaming_trigger_chars_superset_of_segmenter_terminators.
+_STREAMING_SENTENCE_TRIGGER_CHARS = frozenset(".!?。！？．\n\r")
+
+# Once a markdown construct is known to be open, sentence punctuation inside it
+# is not enough to safely emit text.  Re-check the rolling markdown window only
+# when a later delta contains a character that can plausibly close or otherwise
+# disambiguate a markdown span.
+_MARKDOWN_RECHECK_CHARS = frozenset("`*_~])")
 
 
 @dataclass
@@ -138,6 +156,12 @@ async def consume_agent_stream(
     text_buffer = ""
     pending_tool_calls = 0
     done_received = False
+    markdown_window_open = False
+    # True when ``markdown_window_open`` is held open solely by a trailing
+    # closed link/image label ``[label]`` awaiting its ``(destination)``.  A
+    # non-space, non-``(`` continuation disambiguates that case, so we recheck
+    # eagerly rather than waiting for a markdown-closer character.
+    awaiting_link_dest = False
 
     async def _flush_buffer() -> None:
         nonlocal text_buffer
@@ -206,8 +230,31 @@ async def consume_agent_stream(
                 # Buffer text and queue complete sentences for TTS
                 if strip_md:
                     text_buffer += event.text
-                    if has_unclosed_markdown_delimiters(text_buffer):
+
+                    # Markdown stripping is regex-heavy and sentence splitting scans the
+                    # whole pending window.  Do not repeat that work for tiny deltas
+                    # that cannot complete a sentence.  If markdown is already known
+                    # to be open, punctuation inside the open span is also not enough;
+                    # wait until a plausible markdown closer arrives before rechecking.
+                    #
+                    # Exception: when the window is open *only* because a trailing
+                    # ``[label]`` is awaiting its ``(destination)``, any non-space,
+                    # non-``(`` character proves it is not a link and re-opens
+                    # streaming.  Recheck eagerly in that case so an ordinary-prose
+                    # continuation does not stall emission until the final flush.
+                    if markdown_window_open:
+                        recheck = any(ch in event.text for ch in _MARKDOWN_RECHECK_CHARS)
+                        if not recheck and awaiting_link_dest:
+                            recheck = any(not ch.isspace() and ch != "(" for ch in event.text)
+                        if not recheck:
+                            continue
+                    elif not any(ch in event.text for ch in _STREAMING_SENTENCE_TRIGGER_CHARS):
                         continue
+
+                    markdown_window_open, awaiting_link_dest = markdown_open_state(text_buffer)
+                    if markdown_window_open:
+                        continue
+
                     stripped_window = strip_markdown(
                         text_buffer, trim=False, normalize_code_spans=True
                     )

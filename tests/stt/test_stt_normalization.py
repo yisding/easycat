@@ -46,9 +46,12 @@ class _MockStreamingResponse:
             )
             raise httpx.HTTPStatusError("error", request=self.request, response=response)
 
-    async def aiter_lines(self):
-        for line in self._lines:
-            yield line
+    async def aiter_bytes(self):
+        # The provider parses lines off the raw byte stream itself, so feed
+        # the supplied lines back as one newline-joined byte chunk.
+        body = "".join(f"{line}\n" for line in self._lines)
+        if body:
+            yield body.encode("utf-8")
 
 
 class _MockStreamContext:

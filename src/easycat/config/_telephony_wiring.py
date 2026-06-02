@@ -345,12 +345,11 @@ def wire_outbound_pipeline(
     async def _on_screening_response(event: ScreeningResponse) -> None:
         if event.mode == "agent" and _screening_detector is not None:
             try:
-                prompt = _screening_detector.accumulated_text
                 response_text = await _run_agent_once(
                     session.agent,
-                    f"The callee's phone is screening this call. "
-                    f'Their screening prompt says: "{prompt}". '
-                    f"Identify yourself briefly.",
+                    "The callee's phone is screening this outbound call. "
+                    "Provide only a brief caller identification for the screening service. "
+                    "Do not use tools or take external actions for this screening reply.",
                 )
                 in_time = _screening_detector.notify_agent_responded()
                 fallback_spoken = not in_time and _screening_detector.screening_response
