@@ -36,6 +36,34 @@ def bind_turn(turn_id: str | None) -> Token[str | None]:
     return _turn_id.set(turn_id)
 
 
+def reset_session(token: Token[str | None]) -> None:
+    """Restore the session id binding represented by *token*; best-effort.
+
+    A logging-correlation reset must never break teardown.  When ``stop()``
+    runs in a different asyncio task than ``start()`` — e.g.
+    ``SessionManager.stop_all()`` gathers each ``stop()`` in a fresh context —
+    ``ContextVar.reset(token)`` raises ``ValueError`` ("Token was created in a
+    different Context").  Fall back to clearing the binding in that case.
+    """
+    try:
+        _session_id.reset(token)
+    except ValueError:
+        _session_id.set(None)
+
+
+def reset_turn(token: Token[str | None]) -> None:
+    """Restore the turn id binding represented by *token*; best-effort.
+
+    See :func:`reset_session` — the reset can run in a different context than
+    the bind (a cross-task ``stop()``), where ``reset(token)`` raises
+    ``ValueError``; fall back to clearing the binding instead of propagating it.
+    """
+    try:
+        _turn_id.reset(token)
+    except ValueError:
+        _turn_id.set(None)
+
+
 class CorrelationFilter(logging.Filter):
     """Enrich every record with session/turn ids; never drops a record."""
 
