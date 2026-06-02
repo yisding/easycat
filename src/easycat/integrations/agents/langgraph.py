@@ -501,7 +501,7 @@ class LangGraphBridge:
         # the node's deeper LCEL children stay deduped (so a node that is
         # ``RunnableLambda(f) | RunnableLambda(g)`` doesn't narrate its
         # intermediate value).  Model double-speak is still handled by
-        # ``chains_with_model_descendants``.
+        # ``chains_with_chat_model_descendants``.
         tool_state: dict[str, Any] = {}
 
         input_payload = self._build_input(turn_input.text, turn_input.context)

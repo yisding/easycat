@@ -457,7 +457,7 @@ class TestStreamEventTranslator:
         ``_stream`` / ``_astream``) only surface their AIMessage via
         ``on_chat_model_end`` — no ``on_chat_model_stream`` events fire and
         the parent chain's stream chunks carrying the same message are
-        suppressed by ``chains_with_model_descendants``.  Without the
+        suppressed by ``chains_with_chat_model_descendants``.  Without the
         ``on_chat_model_end`` fallback the assistant goes silent."""
         state: dict[str, Any] = {}
         start_event = {

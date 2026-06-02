@@ -210,7 +210,18 @@ def translate_stream_event(
                 bag.add(str(pid))
     if state is not None and event_type == "on_llm_start" and run_id:
         parents = event.get("parent_ids") or ()
-        if parents:
+        # Only redact a parented BaseLLM whose parent is an LCEL chain —
+        # there a downstream parser/redactor may transform the raw tokens
+        # before the root chain emits the public-safe text.  A LangGraph
+        # node that *directly* invokes a BaseLLM is different: the node's
+        # own ``on_chain_stream`` carries a state dict that
+        # ``_dict_output_text`` filters out, so nothing would replace the
+        # suppressed tokens and the node would go silent.  Leave those
+        # node-direct runs audible by skipping redaction when the parent
+        # is a tracked LangGraph node root.
+        node_roots = state.get("langgraph_node_run_ids")
+        node_root_ids = node_roots if isinstance(node_roots, set) else set()
+        if parents and not any(str(pid) in node_root_ids for pid in parents):
             parented = state.setdefault("parented_llm_run_ids", set())
             if isinstance(parented, set):
                 parented.add(run_id)
@@ -413,7 +424,7 @@ def translate_stream_event(
         # ``_stream`` / ``_astream``) only surface their AIMessage via
         # ``on_chat_model_end`` — no ``on_chat_model_stream`` events fire
         # and the parent chain's stream chunks carrying the same message
-        # are suppressed by ``chains_with_model_descendants``.  Without
+        # are suppressed by ``chains_with_chat_model_descendants``.  Without
         # this handler the assistant's text is dropped entirely and the
         # voice stays silent.  Skip runs that already streamed text so we
         # don't double-emit on top of their stream chunks.
