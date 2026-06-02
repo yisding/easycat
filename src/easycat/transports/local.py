@@ -29,6 +29,7 @@ _DEFAULT_FRAME_MS = 20
 @dataclass
 class _QueuedOutputChunk:
     chunk: AudioChunk
+    session_id: str | None = None
     turn_id: str | None = None
     turn_ref: object | None = None
 
@@ -226,12 +227,14 @@ class LocalTransport(_AudioQueueMixin):
             logger.warning("Output audio queue full — dropped %d frame(s)", len(slices))
             return False
 
+        session_id = getattr(chunk, "_easycat_session_id", None)
         turn_id = getattr(chunk, "_easycat_turn_id", None)
         turn_ref = getattr(chunk, "_easycat_turn_ref", None)
         for piece in slices:
             self._out_queue.put_nowait(
                 _QueuedOutputChunk(
                     chunk=AudioChunk(data=piece, format=chunk.format, timestamp=chunk.timestamp),
+                    session_id=session_id,
                     turn_id=turn_id,
                     turn_ref=turn_ref,
                 )
@@ -261,6 +264,7 @@ class LocalTransport(_AudioQueueMixin):
                 self._event_bus.emit(
                     TransportAudioDelivered(
                         chunk=queued.chunk,
+                        session_id=queued.session_id,
                         turn_id=queued.turn_id,
                         turn_ref=queued.turn_ref,
                     )

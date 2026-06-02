@@ -119,6 +119,7 @@ class WebRTCTransportConfig:
 class _QueuedOutboundChunk:
     transport_data: bytes
     original_chunk: AudioChunk
+    session_id: str | None = None
     turn_id: str | None = None
     turn_ref: object | None = None
     transport_offset: int = 0
@@ -162,6 +163,7 @@ class _OutboundAudioSource:
         pcm_s16_48k: bytes,
         *,
         original_chunk: AudioChunk,
+        session_id: str | None = None,
         turn_id: str | None = None,
         turn_ref: object | None = None,
     ) -> bool:
@@ -177,6 +179,7 @@ class _OutboundAudioSource:
                 _QueuedOutboundChunk(
                     transport_data=pcm_s16_48k,
                     original_chunk=original_chunk,
+                    session_id=session_id,
                     turn_id=turn_id,
                     turn_ref=turn_ref,
                 )
@@ -243,6 +246,7 @@ class _OutboundAudioSource:
                             format=queued.original_chunk.format,
                             timestamp=queued.original_chunk.timestamp,
                         ),
+                        queued.session_id,
                         queued.turn_id,
                         queued.turn_ref,
                     )
@@ -266,11 +270,12 @@ class _OutboundAudioSource:
 
         self._pts += _FRAME_SAMPLES
         if self._event_bus is not None:
-            for delivered_chunk, turn_id, turn_ref in delivered_chunks:
+            for delivered_chunk, session_id, turn_id, turn_ref in delivered_chunks:
                 if delivered_chunk.data:
                     await self._event_bus.emit(
                         TransportAudioDelivered(
                             chunk=delivered_chunk,
+                            session_id=session_id,
                             turn_id=turn_id,
                             turn_ref=turn_ref,
                         )
@@ -505,6 +510,7 @@ class WebRTCTransport(_AudioQueueMixin):
         accepted = self._outbound.enqueue(
             pcm_data,
             original_chunk=chunk,
+            session_id=getattr(chunk, "_easycat_session_id", None),
             turn_id=getattr(chunk, "_easycat_turn_id", None),
             turn_ref=getattr(chunk, "_easycat_turn_ref", None),
         )

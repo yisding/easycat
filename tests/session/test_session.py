@@ -21,6 +21,7 @@ from easycat.events import (
     Error,
     ErrorStage,
     Event,
+    EventBus,
     Interruption,
     PlaybackMarkAck,
     STTEvent,
@@ -1771,6 +1772,59 @@ async def test_buffered_transport_delivery_is_counted_only_after_report() -> Non
     assert len(seen) == 1
     assert seen[0].chunk is chunk
     assert seen[0].turn_id == "test-turn"
+
+
+@pytest.mark.asyncio
+async def test_buffered_transport_delivery_on_shared_bus_stays_session_scoped() -> None:
+    bus = EventBus()
+    victim = Session(
+        _full_config(
+            transport=ReportingTransport(),
+            event_bus=bus,
+            session_id="victim-session",
+        )
+    )
+    other = Session(
+        _full_config(
+            transport=ReportingTransport(),
+            event_bus=bus,
+            session_id="other-session",
+        )
+    )
+    victim._turn = TurnContext("victim-turn", CancelToken())
+
+    seen: list[AudioOut] = []
+    bus.subscribe(AudioOut, lambda event: seen.append(event))
+    chunk = _make_chunk(16)
+
+    await bus.emit(
+        TransportAudioDelivered(
+            chunk=chunk,
+            turn_id=victim._turn.id,
+            turn_ref=victim._turn,
+        )
+    )
+
+    assert victim._turn.audio_bytes_sent == len(chunk.data)
+    assert len(seen) == 1
+    assert seen[0].session_id == "victim-session"
+    assert seen[0].turn_id == "victim-turn"
+
+    scoped_chunk = _make_chunk(24)
+    await bus.emit(
+        TransportAudioDelivered(
+            chunk=scoped_chunk,
+            session_id=victim.session_id,
+            turn_id=victim._turn.id,
+            turn_ref=victim._turn,
+        )
+    )
+
+    assert victim._turn.audio_bytes_sent == len(chunk.data) + len(scoped_chunk.data)
+    assert len(seen) == 2
+    assert {event.session_id for event in seen} == {"victim-session"}
+    assert all(event.turn_id == "victim-turn" for event in seen)
+    assert other.session_id not in {event.session_id for event in seen}
 
 
 @pytest.mark.asyncio
