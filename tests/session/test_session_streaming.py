@@ -472,6 +472,57 @@ async def test_consume_agent_stream_applies_backpressure_on_bounded_queue():
     assert len(drained) >= 1
 
 
+async def test_consume_agent_stream_strip_markdown_defers_work_until_flush(monkeypatch):
+    """Tiny deltas without sentence boundaries should not re-strip the full buffer."""
+    from easycat.session import _streaming
+    from easycat.session._streaming import consume_agent_stream
+
+    strip_calls: list[str] = []
+    delimiter_calls: list[str] = []
+
+    def _counting_strip_markdown(
+        text: str, *, trim: bool = True, normalize_code_spans: bool = False
+    ) -> str:
+        _ = normalize_code_spans
+        strip_calls.append(text)
+        return text.strip() if trim else text
+
+    def _counting_has_unclosed_markdown_delimiters(text: str) -> bool:
+        delimiter_calls.append(text)
+        return False
+
+    monkeypatch.setattr(_streaming, "strip_markdown", _counting_strip_markdown)
+    monkeypatch.setattr(
+        _streaming,
+        "has_unclosed_markdown_delimiters",
+        _counting_has_unclosed_markdown_delimiters,
+    )
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        for _ in range(128):
+            yield AgentBridgeEvent(kind="text_delta", text="a")
+        yield AgentBridgeEvent(kind="done", text="")
+
+    turn = TurnContext(turn_id="t1", cancel_token=CancelToken())
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+
+    result = await consume_agent_stream(
+        _stream,
+        cancel_token=turn.cancel_token,
+        tts_queue=tts_queue,
+        emit=AsyncMock(),
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=True,
+        turn=turn,
+    )
+
+    assert result.error is None
+    assert len(delimiter_calls) == 0
+    assert strip_calls == ["a" * 128]
+    assert (await tts_queue.get()).text == "a" * 128
+    assert await tts_queue.get() is None
+
+
 async def test_consume_agent_stream_sentinel_skipped_when_consumer_stopped():
     """If the bounded queue is full and the consumer stopped draining, the
     stop sentinel is dropped instead of deadlocking the finally block."""
