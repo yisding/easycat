@@ -3,8 +3,57 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
+
+import pytest
 
 from easycat.strip_markdown import has_markdown, strip_markdown
+
+# ── Adversarial DoS payloads ───────────────────────────────────────
+#
+# These exercise the bracket-scanning paths that were previously quadratic
+# (O(n^2)) on unbalanced input. ``"[" * n`` and ``"[" * n + "]"`` forced
+# ``strip_markdown`` to rescan every opener to end-of-string, and
+# ``"[" * n + ")"`` did the same for ``has_markdown``. The labelled builders
+# are reused by both detection and stripping scaling tests below.
+_ADVERSARIAL_PAYLOADS: tuple[tuple[str, Callable[[int], str]], ...] = (
+    ("open_brackets", lambda n: "[" * n),
+    ("open_brackets_then_paren", lambda n: "[" * n + ")"),
+    ("open_brackets_then_close", lambda n: "[" * n + "]"),
+)
+
+
+def _min_runtime(fn: Callable[[str], object], payload: str, *, repeats: int = 5) -> float:
+    """Return the fastest of *repeats* runs of *fn* on *payload* (seconds).
+
+    Taking the minimum filters out scheduler/GC noise so the size-vs-size
+    ratio reflects algorithmic scaling rather than one-off jitter.
+    """
+    best = float("inf")
+    for _ in range(repeats):
+        start = time.perf_counter()
+        fn(payload)
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+def _assert_subquadratic(
+    fn: Callable[[str], object], build: Callable[[int], str], *, n: int = 4000
+) -> None:
+    """Assert *fn* scales sub-quadratically between sizes ``n`` and ``2n``.
+
+    A quadratic algorithm yields a time(2n)/time(n) ratio near 4; a linear one
+    near 2. We require the ratio to stay comfortably below 3 so the assertion
+    is robust to noise while still catching a regression to O(n^2).
+    """
+    small = _min_runtime(fn, build(n))
+    large = _min_runtime(fn, build(2 * n))
+    # Guard against divide-by-zero on extremely fast (sub-microsecond) runs.
+    if small <= 0:
+        return
+    ratio = large / small
+    assert ratio < 3.0, f"scaling ratio {ratio:.2f} suggests quadratic blowup"
+
 
 # ── has_markdown detection ─────────────────────────────────────────
 
@@ -71,15 +120,19 @@ class TestHasMarkdown:
     def test_empty_string(self) -> None:
         assert not has_markdown("")
 
-    def test_malformed_link_fragments_do_not_rescan_repeatedly(self) -> None:
-        payload = ("[x](" * 1000) + ")"
+    @pytest.mark.parametrize(
+        "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
+    )
+    def test_adversarial_brackets_not_detected(self, build: Callable[[int], str]) -> None:
+        assert has_markdown(build(2000)) is False
 
-        start = time.perf_counter()
-        result = has_markdown(payload)
-        elapsed = time.perf_counter() - start
-
-        assert result is False
-        assert elapsed < 0.5
+    @pytest.mark.parametrize(
+        "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
+    )
+    def test_adversarial_brackets_detection_scales_subquadratically(
+        self, build: Callable[[int], str]
+    ) -> None:
+        _assert_subquadratic(has_markdown, build)
 
 
 # ── strip_markdown ─────────────────────────────────────────────────
@@ -152,15 +205,20 @@ class TestStripMarkdown:
         text = "Diagram: ![plot](https://example.com/a(b))."
         assert strip_markdown(text) == "Diagram: plot."
 
-    def test_malformed_link_fragments_do_not_rescan_repeatedly(self) -> None:
-        payload = ("[x](" * 1000) + ")"
+    @pytest.mark.parametrize(
+        "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
+    )
+    def test_adversarial_brackets_left_intact(self, build: Callable[[int], str]) -> None:
+        payload = build(2000)
+        assert strip_markdown(payload) == payload
 
-        start = time.perf_counter()
-        result = strip_markdown(payload)
-        elapsed = time.perf_counter() - start
-
-        assert result == payload
-        assert elapsed < 0.5
+    @pytest.mark.parametrize(
+        "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
+    )
+    def test_adversarial_brackets_stripping_scales_subquadratically(
+        self, build: Callable[[int], str]
+    ) -> None:
+        _assert_subquadratic(strip_markdown, build)
 
     def test_heading_h1(self) -> None:
         assert strip_markdown("# Main Title") == "Main Title"

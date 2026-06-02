@@ -199,6 +199,48 @@ def _find_balanced_close(text: str, start: int, opener: str, closer: str) -> int
     return None
 
 
+class _LabelScanner:
+    """Resolve the matching ``]`` for every ``[`` in *text* in linear time.
+
+    The former "rescan from the next opener" strategy was O(n^2) on adversarial
+    inputs such as ``"[" * n``, ``"[" * n + ")"``, or ``"[" * n + "]"`` because
+    every unmatched ``[`` triggered a fresh bracket walk to the end of the
+    string. Instead we make a single left-to-right pass with a stack, recording
+    the matching close index for each opener (and ``None`` for openers that
+    never balance). Subsequent lookups are O(1), so total work is O(n).
+
+    Escaped brackets (preceded by an odd run of backslashes) are ignored, and a
+    ``\\`` escapes the following character — matching ``_find_balanced_close``.
+    """
+
+    def __init__(self, text: str) -> None:
+        self._matches: dict[int, int | None] = {}
+        stack: list[int] = []
+        i = 0
+        length = len(text)
+        while i < length:
+            ch = text[i]
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == "[":
+                stack.append(i)
+            elif ch == "]" and stack:
+                self._matches[stack.pop()] = i
+            i += 1
+        # Any opener still on the stack never found a matching close.
+        for unmatched in stack:
+            self._matches[unmatched] = None
+
+    def find_close(self, start: int) -> int | None:
+        """Return the matching ``]`` index for the ``[`` at *start*, or ``None``.
+
+        ``None`` means the label never balances within the rest of the string;
+        callers can treat the bracket as a literal and continue past it.
+        """
+        return self._matches.get(start)
+
+
 def _extract_markdown_destination_url(destination: str) -> str:
     """Extract URL token from markdown destination, dropping optional titles."""
     token = destination.strip()
@@ -231,13 +273,14 @@ def _replace_markdown_links_and_images(text: str) -> str:
     out: list[str] = []
     i = 0
     length = len(text)
+    scanner = _LabelScanner(text)
 
     while i < length:
         ch = text[i]
 
         if ch == "!" and (i + 1) < length and text[i + 1] == "[" and not _is_escaped(text, i):
             label_start = i + 1
-            label_end = _find_balanced_close(text, label_start, "[", "]")
+            label_end = scanner.find_close(label_start)
             if label_end is None:
                 out.append(ch)
                 i += 1
@@ -268,7 +311,7 @@ def _replace_markdown_links_and_images(text: str) -> str:
             continue
 
         if ch == "[" and not _is_escaped(text, i):
-            label_end = _find_balanced_close(text, i, "[", "]")
+            label_end = scanner.find_close(i)
             if label_end is None:
                 out.append(ch)
                 i += 1
@@ -314,10 +357,13 @@ def _has_markdown_link_or_image(text: str) -> bool:
     """Return True when *text* contains a balanced markdown link or image.
 
     This avoids the formerly regex-based ``[label](destination)`` detection,
-    which could repeatedly rescan malformed fragments such as ``[x](``.
+    which could repeatedly rescan malformed fragments such as ``[x](``. Label
+    matching is resolved once in linear time via :class:`_LabelScanner`, keeping
+    detection O(n) on adversarial inputs such as ``"[" * n + ")"``.
     """
     i = 0
     length = len(text)
+    scanner = _LabelScanner(text)
 
     while i < length:
         if text[i] == "!" and (i + 1) < length and text[i + 1] == "[" and not _is_escaped(text, i):
@@ -328,10 +374,7 @@ def _has_markdown_link_or_image(text: str) -> bool:
             i += 1
             continue
 
-        if text.find(")", label_start + 1) == -1:
-            return False
-
-        label_end = _find_balanced_close(text, label_start, "[", "]")
+        label_end = scanner.find_close(label_start)
         if label_end is None:
             i += 1
             continue
