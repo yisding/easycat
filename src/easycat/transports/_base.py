@@ -150,6 +150,11 @@ class _AudioQueueMixin:
             self._degraded_suppressed[key] = self._degraded_suppressed.get(key, 0) + 1
             return
 
+        # Truncate the (attacker-controllable) original detail FIRST, then
+        # append the short, bounded suppression summary.  Appending before
+        # truncating let a padded >256-char detail evict the suppression
+        # count, hiding how many drops were coalesced.
+        detail = _truncate_degraded_detail(detail)
         suppressed = self._degraded_suppressed.pop(key, 0)
         if suppressed:
             detail = (
@@ -157,7 +162,6 @@ class _AudioQueueMixin:
                 if detail
                 else (f"suppressed {suppressed} similar events")
             )
-        detail = _truncate_degraded_detail(detail)
         self._degraded_last_emit[key] = now
         event = TransportDegraded(
             provider=getattr(self, "transport_kind", "unknown"),

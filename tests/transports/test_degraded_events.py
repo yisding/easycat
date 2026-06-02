@@ -125,6 +125,39 @@ class TestSharedEmitSeam:
         assert len(received[0].detail) < _DEGRADED_MAX_DETAIL_CHARS + 50
         assert "truncated 25 chars" in received[0].detail
 
+    @pytest.mark.asyncio
+    async def test_suppression_count_survives_attacker_padded_detail(self) -> None:
+        # A long, attacker-controlled detail must not evict the suppression
+        # summary: truncate the detail first, then append the bounded count so
+        # the "suppressed N similar events" tally always reaches the emit.
+        h = _MixinHarness(max_pending=1)
+        bus, received = _bus_with_collector()
+        h._event_bus = bus
+
+        padded = "x" * (_DEGRADED_MAX_DETAIL_CHARS * 4)
+        # First emit goes through; subsequent emits inside the interval are
+        # coalesced and bump the suppression counter.
+        h._emit_degraded("invalid_sample_rate", padded)
+        h._emit_degraded("invalid_sample_rate", padded)
+        h._emit_degraded("invalid_sample_rate", padded)
+        await _drain_scheduled_emits()
+
+        assert len(received) == 1
+        assert h._degraded_suppressed.get(("invalid_sample_rate", False), 0) == 2
+
+        # Move the last-emit timestamp back so the next emit is allowed and
+        # flushes the suppressed count alongside another padded detail.
+        h._degraded_last_emit[("invalid_sample_rate", False)] -= (
+            _DEGRADED_EMIT_MIN_INTERVAL_SECONDS + 0.1
+        )
+        h._emit_degraded("invalid_sample_rate", padded)
+        await _drain_scheduled_emits()
+
+        assert len(received) == 2
+        emitted = received[-1].detail
+        assert "suppressed 2 similar events" in emitted
+        assert "truncated" in emitted
+
 
 # ── WebSocket-specific paths ──────────────────────────────────────
 
