@@ -337,7 +337,7 @@ class TestWebSocketTransport:
         """Invalid config messages must not poison the negotiated audio format."""
         transport = WebSocketTransport()
 
-        for sample_rate in (True, False, 0, -16000, 384001, 16000.0, "16000", None):
+        for sample_rate in (True, False, 0, 1, 7999, -16000, 384001, 16000.0, "16000", None):
             transport._handle_control_message(
                 json.dumps({"type": "config", "sample_rate": sample_rate})
             )

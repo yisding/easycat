@@ -22,6 +22,7 @@ from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
 
 logger = logging.getLogger(__name__)
+_MIN_NEGOTIATED_SAMPLE_RATE = 8000
 _MAX_NEGOTIATED_SAMPLE_RATE = 384000
 
 # WebSocket-specific ``TransportDegraded.reason`` codes emitted on the session
@@ -39,7 +40,7 @@ def _valid_config_sample_rate(value: object) -> int | None:
     """Return a negotiated sample rate only for sane integer values."""
     if isinstance(value, bool) or not isinstance(value, int):
         return None
-    if value <= 0 or value > _MAX_NEGOTIATED_SAMPLE_RATE:
+    if value < _MIN_NEGOTIATED_SAMPLE_RATE or value > _MAX_NEGOTIATED_SAMPLE_RATE:
         return None
     return value
 
