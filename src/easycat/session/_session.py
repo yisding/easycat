@@ -18,7 +18,7 @@ from uuid import uuid4
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
 from easycat._health_check import PeriodicHealthChecker
-from easycat._log_context import bind_session, bind_turn
+from easycat._log_context import bind_session, bind_turn, reset_session
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -228,6 +228,7 @@ class Session:
         self._observability_active = False
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._session_log_token = None
         # Per-turn state — created fresh at each turn start.
         # _turn_generation is a monotonic counter incremented at turn start
         # so stale callbacks from previous turns are detectable.
@@ -870,7 +871,7 @@ class Session:
         # Tag log records emitted in this context with the session id.  A
         # ContextVar default of None is fine; threading.Thread workers won't
         # inherit it, but EasyCat avoids that boundary.
-        bind_session(self.session_id)
+        self._session_log_token = bind_session(self.session_id)
         transport_connected = False
         self._health_checkers = []
 
@@ -940,6 +941,7 @@ class Session:
 
             if transport_connected:
                 await self.transport.disconnect()
+            self._reset_session_log_context()
             raise
 
     async def stop(self, *, force: bool = False) -> None:
@@ -1067,8 +1069,19 @@ class Session:
             self._destroy()
             self._mark_closed()
         finally:
-            self._mark_observability_inactive()
+            # Clear the stopping flag FIRST so it is always reset even if a
+            # later teardown step (observability / log-context reset) raises.
             self._stopping = False
+            self._mark_observability_inactive()
+            self._reset_session_log_context()
+
+    def _reset_session_log_context(self) -> None:
+        """Restore this task's pre-session logging correlation binding."""
+        token = self._session_log_token
+        if token is None:
+            return
+        self._session_log_token = None
+        reset_session(token)
 
     async def shutdown(self) -> None:
         """Force-cancel in-flight work, then release backend resources.

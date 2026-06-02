@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from easycat import _observability as observability
-from easycat._log_context import bind_turn
+from easycat._log_context import bind_turn, reset_turn
 from easycat._turn_context import TurnContext, TurnHandle
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -165,7 +165,7 @@ class TurnRunner:
         self._turn.set(turn)
         # Tag startup records for this turn without leaving the EventBus task
         # pinned to the turn after this handler returns.
-        bind_turn(turn.id)
+        turn_token = bind_turn(turn.id)
         try:
             self._audio.reset_speech_detection()
             self._tts.set_playback_suppressed(False)
@@ -201,7 +201,7 @@ class TurnRunner:
                 self._reset_turn_state()
             return
         finally:
-            bind_turn(None)
+            reset_turn(turn_token)
 
     def schedule_turn_ended(self, event: TurnEnded) -> None:
         """Schedule end-of-turn processing without blocking other handlers.
@@ -218,7 +218,7 @@ class TurnRunner:
             current_tts_task.cancel()
         gen = self._turn.generation
         turn = self._turn.current
-        bind_turn(event.turn_id)
+        turn_token = bind_turn(event.turn_id)
         try:
             new_task = self._runtime_scope.create_journaled_task(
                 self.on_turn_ended(event, gen, turn=turn),
@@ -227,7 +227,7 @@ class TurnRunner:
                 turn_id=event.turn_id,
             )
         finally:
-            bind_turn(None)
+            reset_turn(turn_token)
         self._tts.current_task = new_task
         new_task.add_done_callback(self._runtime_scope.log_task_exception)
 
@@ -238,6 +238,7 @@ class TurnRunner:
         turn: TurnContext | None = None,
     ) -> None:
         """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
+        turn_token = bind_turn(event.turn_id)
         try:
             if self._turn.generation != generation:
                 return
@@ -249,7 +250,7 @@ class TurnRunner:
                 turn.end_time = event.timestamp
             await self.handle_end_of_speech(turn=turn)
         finally:
-            bind_turn(None)
+            reset_turn(turn_token)
 
     # ── Pipeline ───────────────────────────────────────────────────
 
@@ -613,7 +614,7 @@ class TurnRunner:
         response = ""
         t0 = time.monotonic()
         result_attr = "fail"
-        bind_turn(turn_id)
+        turn_token = bind_turn(turn_id)
         try:
             await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn_id))
             await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn_id))
@@ -728,5 +729,5 @@ class TurnRunner:
                     )
                     await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn_id))
             finally:
-                bind_turn(None)
+                reset_turn(turn_token)
         return response
