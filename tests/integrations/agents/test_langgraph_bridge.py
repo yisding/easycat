@@ -1310,6 +1310,72 @@ class TestLangGraphBridgeState:
         assert done and done[0].text == "completion text"
 
     @pytest.mark.asyncio
+    async def test_nested_lcel_llm_under_node_uses_redacted_node_stream(self):
+        """A BaseLLM nested inside an LCEL chain under a LangGraph node must
+        not be treated as node-direct just because the node run id appears
+        somewhere in LangChain v2's full ancestor chain.  Its raw tokens
+        stay suppressed so the node's composed/redacted output is the only
+        public text."""
+
+        class _GenerationChunk:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        ai_msg = _MockMessage("assistant", "[REDACTED]", message_id="m-1")
+        state = _MockState(
+            values={"messages": [_MockMessage("user", "hi"), ai_msg]},
+            checkpoint_id="cp-final",
+        )
+        scripted = [
+            _node_start("answer", "n1"),
+            {
+                "event": "on_chain_start",
+                "name": "RunnableSequence",
+                "run_id": "seq",
+                "parent_ids": ["n1"],
+                "data": {},
+                "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
+            },
+            {
+                "event": "on_llm_start",
+                "name": "FakeStreamingListLLM",
+                "run_id": "l1",
+                "parent_ids": ["n1", "seq"],
+                "data": {},
+                "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
+            },
+            {
+                "event": "on_llm_stream",
+                "name": "FakeStreamingListLLM",
+                "run_id": "l1",
+                "parent_ids": ["n1", "seq"],
+                "data": {"chunk": _GenerationChunk("SECRET_TOKEN=abc123")},
+                "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
+            },
+            {
+                "event": "on_chain_stream",
+                "name": "answer",
+                "run_id": "n1",
+                "parent_ids": [],
+                "data": {"chunk": {"output": "[REDACTED]"}},
+                "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
+            },
+            _node_end("answer", "n1"),
+        ]
+        graph = _MockCompiledGraph(scripted, state=state)
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for ev in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(ev)
+
+        text = "".join(e.text for e in events if e.kind == "text_delta")
+        done = [e for e in events if e.kind == "done"]
+        assert text == "[REDACTED]"
+        assert "SECRET_TOKEN" not in text
+        assert done and done[0].text == "[REDACTED]"
+
+    @pytest.mark.asyncio
     async def test_dispatch_custom_event_drives_text_delta_by_default(self):
         """A graph node using LangChain's ``dispatch_custom_event`` emits
         ``on_custom_event`` through ``astream_events``.  LangChain keys

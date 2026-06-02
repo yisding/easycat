@@ -217,11 +217,16 @@ def translate_stream_event(
         # own ``on_chain_stream`` carries a state dict that
         # ``_dict_output_text`` filters out, so nothing would replace the
         # suppressed tokens and the node would go silent.  Leave those
-        # node-direct runs audible by skipping redaction when the parent
-        # is a tracked LangGraph node root.
+        # node-direct runs audible by skipping redaction only when the
+        # immediate parent is a tracked LangGraph node root.  LangChain v2
+        # ``parent_ids`` contains the full ancestor chain (root first), so
+        # checking every ancestor would misclassify a BaseLLM nested inside
+        # a node's LCEL chain as node-direct and leak its raw tokens before
+        # downstream redaction.
         node_roots = state.get("langgraph_node_run_ids")
         node_root_ids = node_roots if isinstance(node_roots, set) else set()
-        if parents and not any(str(pid) in node_root_ids for pid in parents):
+        immediate_parent = str(parents[-1]) if parents else ""
+        if parents and immediate_parent not in node_root_ids:
             parented = state.setdefault("parented_llm_run_ids", set())
             if isinstance(parented, set):
                 parented.add(run_id)
