@@ -137,8 +137,17 @@ def _restore_code_spans(text: str, code_spans: list[str]) -> str:
     if not code_spans:
         return text
 
+    # A real placeholder index never has more digits than the largest stashed
+    # index. Token-shaped substrings with an oversized digit run are left
+    # unchanged, which also avoids parsing arbitrarily long ints (Python caps
+    # int(str) at sys.set_int_max_str_digits and raises ValueError otherwise).
+    max_width = len(str(len(code_spans) - 1))
+
     def _replace(match: re.Match[str]) -> str:
-        idx = int(match.group(1))
+        digits = match.group(1)
+        if len(digits) > max_width:
+            return match.group(0)
+        idx = int(digits)
         if idx >= len(code_spans):
             return match.group(0)
         return code_spans[idx]
