@@ -710,8 +710,7 @@ Optional dependencies you may need depending on providers/transports:
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
 - numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
 - ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license)
-- numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad` — runs the bundled ONNX model
-- torch (optional Silero VAD CPU/GPU speed-up; falls back to the bundled ONNX model when absent)
+- numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad` — runs the bundled ONNX model (no torch required)
 - pyrnnoise + requests (RNNoise noise reduction backend)
 - Krisp SDK (krisp_audio)
 - Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs, Cartesia

@@ -82,6 +82,32 @@ async def test_journal_sink_records_transport_degraded() -> None:
 
 
 @pytest.mark.asyncio
+async def test_journal_sink_truncates_transport_degraded_detail() -> None:
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(
+        TransportDegraded(
+            provider="websocket",
+            reason="invalid_sample_rate",
+            detail="x" * 600,
+        )
+    )
+
+    [record] = journal.read()
+    assert len(record.data["detail"]) < 560
+    assert "truncated 88 chars" in record.data["detail"]
+
+
+@pytest.mark.asyncio
 async def test_journal_sink_records_error_code() -> None:
     bus = EventBus()
     journal = InMemoryRingBuffer()

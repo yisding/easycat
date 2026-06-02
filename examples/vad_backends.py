@@ -3,7 +3,7 @@
 ``VADConfig.backend`` accepts ``"silero"``, ``"funasr"``, ``"ten"``,
 ``"krisp"``, or ``"auto"`` (default).  The auto chain tries Silero →
 FunASR → TEN → Krisp in order.  Pin a backend when you want deterministic
-behavior across machines (e.g. CI without torch installed), or when a
+behavior across machines (e.g. forcing a single backend in CI), or when a
 specific backend is known to work better for your audio.
 
 Pass ``--backend`` to select; the script prints which class was actually
@@ -13,7 +13,7 @@ Setup:
   export OPENAI_API_KEY="..."
   uv sync --extra quickstart                        # silero + funasr + krisp
   uv sync --extra quickstart --extra ten-vad        # adds TEN VAD (separate license)
-  uv pip install torch                              # required for Silero
+  uv sync --extra silero-vad                         # Silero runs the bundled ONNX model
   uv run python examples/vad_backends.py --backend silero
   uv run python examples/vad_backends.py --backend ten
 """

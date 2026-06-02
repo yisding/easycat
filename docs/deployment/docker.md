@@ -9,11 +9,20 @@ fetched at first-request time besides the calls to OpenAI.
 
 ```bash
 export OPENAI_API_KEY=sk-...
+export EASYCAT_WS_TOKEN=$(python - <<'PY'
+import secrets
+print(secrets.token_urlsafe(32))
+PY
+)
 docker compose -f docker/compose.yaml up --build
 ```
 
-Open `examples/ws_browser_client.html` in a browser and point it at
-`ws://localhost:8765`.
+The compose service publishes the container only on host loopback
+(`127.0.0.1:8765`) and requires the token above before it creates a
+provider-backed EasyCat session.  Non-browser clients should send
+`Authorization: Bearer $EASYCAT_WS_TOKEN`.  For the browser example,
+open `examples/ws_browser_client.html?token=<EASYCAT_WS_TOKEN>` and point
+it at `ws://localhost:8765`.
 
 To stop:
 
@@ -29,6 +38,8 @@ container's environment) over passing secrets as build args:
 ```bash
 # docker/.env  — git-ignored, never copied into the image
 OPENAI_API_KEY=sk-...
+EASYCAT_WS_TOKEN=<random-long-token>
+# Optional: EASYCAT_WS_MAX_SESSIONS=10
 ```
 
 Then `docker compose -f docker/compose.yaml up` picks it up
@@ -45,7 +56,7 @@ recoverable from image history.
 - EasyCat with extras: `openai-agents`, `silero-vad`, `rnnoise`
 - Bundled Silero VAD and Smart-Turn v3.2 ONNX models
 - Runs as a non-root `easycat` user (uid 1000)
-- Exposes TCP 8765 (WebSocket PCM16 audio)
+- Exposes TCP 8765 (WebSocket PCM16 audio); compose binds it to host loopback by default
 
 Final image size is roughly 450 MB on amd64.
 
@@ -62,7 +73,9 @@ docker build \
 
 Then edit `examples/ws_server.py` (or mount your own server script) to
 wire the providers into `SessionConfig`, and pass the relevant API keys
-as environment variables.
+as environment variables. Keep the WebSocket token gate, session cap, and
+loopback bind (or equivalent ingress controls) when deploying modified
+server scripts.
 
 ## Latency notes
 
@@ -78,8 +91,9 @@ If you extend the example to WebRTC or SIP telephony, switch to
 - Idle session: ~150 MB RAM
 - Active session: ~250 MB RAM + short CPU bursts at each turn boundary
   (VAD / Smart-Turn inference on CPU)
-- One vCPU comfortably handles ~10 concurrent WebSocket sessions as a
-  starting point; measure with `SessionManager` metrics before scaling up
+- The example defaults to `EASYCAT_WS_MAX_SESSIONS=10`. One vCPU comfortably
+  handles ~10 concurrent WebSocket sessions as a starting point; measure with
+  `SessionManager` metrics before scaling up.
 
 ## Not covered
 
@@ -88,5 +102,7 @@ If you extend the example to WebRTC or SIP telephony, switch to
 - **Kubernetes manifests** — the compose file maps directly to a
   Deployment + Service; see upstream `k8s` recipes rather than
   reinventing them here.
-- **TLS termination** — put nginx / Caddy / an ALB in front for
-  `wss://` in production.
+- **TLS termination and public ingress** — put nginx / Caddy / an ALB in front
+  for `wss://` in production. Require authentication / authorization at the
+  edge, preserve rate and session limits, and do not publish this example
+  directly on all host interfaces.

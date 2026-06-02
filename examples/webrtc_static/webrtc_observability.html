@@ -35,14 +35,43 @@
   // Debugger runs on a separate port (default 8090). Point the iframe at the
   // same host the user opened this page on, swapping the port.
   //   ?debugger_port=NNNN  — override the port (matches DASHBOARD_PORT)
-  //   ?debugger=URL        — override the entire URL (debugger on another host)
+  //   ?debugger=URL        — override with a same-host or loopback http(s) URL
   // webrtc_observability_server.py prints a URL that already includes the
   // debugger_port query param, so the typical flow needs no manual editing.
   const params = new URLSearchParams(location.search);
   const override = params.get("debugger");
   const debuggerPort = params.get("debugger_port") || "8090";
-  const url = override || `${location.protocol}//${location.hostname}:${debuggerPort}/`;
-  document.getElementById("debugger-frame").src = url;
+
+  function isLoopbackHost(hostname) {
+    return hostname === "localhost"
+      || hostname === "127.0.0.1"
+      || hostname === "[::1]";
+  }
+
+  function safeDebuggerUrl(value) {
+    try {
+      const parsed = new URL(value, location.href);
+      const safeScheme = parsed.protocol === "http:" || parsed.protocol === "https:";
+      const sameHost = parsed.hostname === location.hostname;
+      const loopbackPair = isLoopbackHost(parsed.hostname)
+        && isLoopbackHost(location.hostname);
+      return safeScheme && (sameHost || loopbackPair) ? parsed.href : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function defaultDebuggerUrl() {
+    const parsedPort = Number(debuggerPort);
+    const port = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535
+      ? String(parsedPort)
+      : "8090";
+    return `${location.protocol}//${location.hostname}:${port}/`;
+  }
+
+  const fallbackUrl = defaultDebuggerUrl();
+  const debuggerUrl = safeDebuggerUrl(override || fallbackUrl) || fallbackUrl;
+  document.getElementById("debugger-frame").src = debuggerUrl;
 </script>
 </body>
 </html>

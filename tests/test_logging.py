@@ -16,8 +16,15 @@ import sys
 
 import pytest
 
+from easycat import Session, SessionConfig
 from easycat._console import color_enabled
-from easycat._log_context import CorrelationFilter, bind_session, bind_turn
+from easycat._log_context import (
+    CorrelationFilter,
+    bind_session,
+    bind_turn,
+    reset_session,
+    reset_turn,
+)
 from easycat._logging import (
     _HANDLER_TAG,
     _coerce_level,
@@ -26,6 +33,7 @@ from easycat._logging import (
     enable_console_logging,
     set_easycat_log_level,
 )
+from easycat.stubs import NoopAgent, NoopSTT, NoopTransport, NoopTTS, NoopVAD
 
 
 @pytest.fixture
@@ -143,8 +151,6 @@ def test_bound_contextvars_enrich_records() -> None:
     )
     filt = CorrelationFilter()
 
-    import easycat._log_context as ctx
-
     session_token = bind_session("sess-42")
     turn_token = bind_turn("turn-7")
     try:
@@ -152,8 +158,144 @@ def test_bound_contextvars_enrich_records() -> None:
         assert record.session_id == "sess-42"
         assert record.turn_id == "turn-7"
     finally:
-        ctx._session_id.reset(session_token)
-        ctx._turn_id.reset(turn_token)
+        reset_session(session_token)
+        reset_turn(turn_token)
+
+
+def test_reset_helpers_restore_previous_correlation_values() -> None:
+    filt = CorrelationFilter()
+    record = logging.LogRecord(
+        name="easycat.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="hello",
+        args=(),
+        exc_info=None,
+    )
+
+    session_token = bind_session("outer-session")
+    turn_token = bind_turn("outer-turn")
+    nested_session = bind_session("inner-session")
+    nested_turn = bind_turn("inner-turn")
+    try:
+        assert filt.filter(record) is True
+        assert record.session_id == "inner-session"
+        assert record.turn_id == "inner-turn"
+
+        reset_session(nested_session)
+        reset_turn(nested_turn)
+        assert filt.filter(record) is True
+        assert record.session_id == "outer-session"
+        assert record.turn_id == "outer-turn"
+    finally:
+        reset_session(session_token)
+        reset_turn(turn_token)
+
+
+class _ActiveSTT(NoopSTT):
+    is_passthrough_provider = False
+
+
+class _ActiveTTS(NoopTTS):
+    is_passthrough_provider = False
+
+
+class _ActiveVAD(NoopVAD):
+    is_passthrough_provider = False
+
+
+class _ActiveTransport(NoopTransport):
+    is_passthrough_provider = False
+
+
+@pytest.mark.asyncio
+async def test_session_stop_restores_session_log_context() -> None:
+    import easycat._log_context as ctx
+
+    outer = bind_session("outer-session")
+    session = Session(
+        SessionConfig(
+            session_id="session-inner",
+            stt=_ActiveSTT(),
+            tts=_ActiveTTS(),
+            vad=_ActiveVAD(),
+            transport=_ActiveTransport(),
+            agent=NoopAgent(),
+        )
+    )
+    try:
+        await session.start()
+        assert ctx._session_id.get() == "session-inner"
+        await session.stop(force=True)
+        assert ctx._session_id.get() == "outer-session"
+    finally:
+        if not session._closed:
+            await session.stop(force=True)
+        reset_session(outer)
+
+
+@pytest.mark.asyncio
+async def test_session_stop_in_different_task_does_not_raise() -> None:
+    """Cross-task ``stop()`` must not break teardown.
+
+    Mirrors ``SessionManager.stop_all()``, which gathers each ``stop()`` as a
+    fresh task: ``start()`` binds the session-log token in one context, and the
+    gathered ``stop()`` runs in another, so ``ContextVar.reset(token)`` would
+    raise ``ValueError`` ("Token was created in a different Context"). The
+    guarded reset must swallow that so ``stop()`` completes and ``_stopping`` is
+    cleared.
+    """
+    session = Session(
+        SessionConfig(
+            session_id="session-cross-task",
+            stt=_ActiveSTT(),
+            tts=_ActiveTTS(),
+            vad=_ActiveVAD(),
+            transport=_ActiveTransport(),
+            agent=NoopAgent(),
+        )
+    )
+
+    async def _start() -> None:
+        await session.start()
+
+    async def _stop() -> None:
+        await session.stop(force=True)
+
+    try:
+        # start() binds the token in its own task context.
+        await asyncio.gather(_start())
+        # stop() runs in a separate, fresh task context (as stop_all does), so
+        # reset(token) sees a token created in a different context.
+        results = await asyncio.gather(_stop(), return_exceptions=True)
+        assert results == [None], f"stop() raised: {results!r}"
+        assert session._stopping is False
+        assert session._closed is True
+    finally:
+        if not session._closed:
+            await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_text_turn_restores_turn_log_context() -> None:
+    import easycat._log_context as ctx
+
+    outer = bind_turn("outer-turn")
+    session = Session(
+        SessionConfig(
+            session_id="session-text",
+            runtime_mode="text_session",
+            agent=NoopAgent(),
+        )
+    )
+    try:
+        response = await session.send_text("hello")
+        assert response == "hello"
+        assert ctx._turn_id.get() == "outer-turn"
+    finally:
+        await session.stop(force=True)
+        reset_turn(outer)
 
 
 def test_unbound_contextvars_default_to_dash() -> None:

@@ -181,7 +181,7 @@ class TestWebSocketConnectionTransport:
     async def test_invalid_sample_rate_config_is_ignored(self):
         transport = WebSocketConnectionTransport(object())  # type: ignore[arg-type]
 
-        for sample_rate in (True, False, 0, -16000, 384001, 16000.0, "16000", None):
+        for sample_rate in (True, False, 0, 1, 7999, -16000, 384001, 16000.0, "16000", None):
             transport._handle_control_message(
                 json.dumps({"type": "config", "sample_rate": sample_rate})
             )

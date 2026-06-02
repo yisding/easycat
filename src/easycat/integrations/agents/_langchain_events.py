@@ -51,13 +51,10 @@ def _custom_event_text(payload: Any) -> str:
     Custom events (``dispatch_custom_event`` from LCEL, ``get_stream_writer``
     from LangGraph forwarded as ``("custom", payload)`` chunks) are
     typically UI telemetry — agents that *want* their custom signal
-    spoken should label it explicitly via a ``"text"`` / ``"speak"``
-    key so we don't accidentally narrate progress dicts or state diffs.
+    spoken must label it explicitly via a ``"text"`` / ``"speak"`` /
+    ``"say"`` key so we don't accidentally narrate progress strings,
+    debug logs, or state diffs.
     """
-    if payload is None:
-        return ""
-    if isinstance(payload, str):
-        return payload
     if isinstance(payload, dict):
         for key in ("text", "speak", "say"):
             value = payload.get(key)
@@ -195,22 +192,57 @@ def translate_stream_event(
     name = event.get("name") or ""
     run_id = event.get("run_id") or ""
 
-    # Track chain run_ids that have a chat_model / non-chat LLM as a
-    # descendant.  Their own ``on_chain_stream`` chunks (and the chunks
-    # of their *downstream sibling* runnables — ``StrOutputParser``,
-    # ``RunnableLambda``, anything LCEL composes after the model) forward
-    # the same tokens already emitted via ``on_chat_model_stream`` /
-    # ``on_llm_stream``.  Without suppression a chain like
-    # ``prompt | model | parser | lambda`` would speak ``abcABC`` —
-    # once from the model stream, once from each downstream stage that
-    # re-yields the parsed string.  This also handles nested LCEL inside
-    # LangGraph nodes (their state ``on_chain_stream`` chunks are
-    # filtered out separately by ``_plain_chunk_text``).
-    if state is not None and event_type in ("on_chat_model_start", "on_llm_start"):
-        bag = state.setdefault("chains_with_model_descendants", set())
+    # Track chain run_ids that have a chat-model descendant.  Chat-model
+    # chunks are safe to stream directly and their parent/sibling chain
+    # streams usually just forward the same tokens, so suppress those
+    # chain streams to avoid double-speak.  Non-chat LLM chunks are *not*
+    # treated the same below: when a BaseLLM sits inside an LCEL chain, a
+    # downstream parser/redactor may transform its raw text before the root
+    # chain output.  In that case the root/node ``on_chain_stream`` is the
+    # first public-safe text source and raw ``on_llm_*`` text is skipped.
+    if state is not None and event_type == "on_chat_model_start":
+        bag = state.setdefault("chains_with_chat_model_descendants", set())
         if isinstance(bag, set):
             for pid in event.get("parent_ids") or ():
                 bag.add(str(pid))
+    if state is not None and event_type == "on_llm_start" and run_id:
+        parents = event.get("parent_ids") or ()
+        # Only redact a parented BaseLLM whose parent is an LCEL chain —
+        # there a downstream parser/redactor may transform the raw tokens
+        # before the root chain emits the public-safe text.  A LangGraph
+        # node that *directly* invokes a BaseLLM is different: the node's
+        # own ``on_chain_stream`` carries a state dict that
+        # ``_dict_output_text`` filters out, so nothing would replace the
+        # suppressed tokens and the node would go silent.  Leave those
+        # node-direct runs audible by skipping redaction only when the
+        # immediate parent is a tracked LangGraph node root.  LangChain v2
+        # ``parent_ids`` contains the full ancestor chain (root first), so
+        # checking every ancestor would misclassify a BaseLLM nested inside
+        # a node's LCEL chain as node-direct and leak its raw tokens before
+        # downstream redaction.
+        #
+        # The immediate-parent check is intentionally strict but
+        # fail-*audible*: a node that invokes a BaseLLM through
+        # ``.with_retry()`` (the sync ``invoke`` path inserts an extra
+        # ``RunnableRetry`` span, so ``parent_ids`` becomes
+        # ``[node, retry]`` and the immediate parent is the retry span,
+        # not the node root) writing to a non-conventional state key is
+        # still recorded here as parented, but its result text is stashed
+        # in ``on_llm_end`` below so :meth:`LangGraphBridge._finalize_done`
+        # can fall back to it when nothing else surfaced — restoring audio
+        # without re-leaking raw tokens whenever the node/chain *did*
+        # compose public-safe text (the secure common path).  The other
+        # common wrappers — ``.with_config()`` / ``.bind()`` /
+        # ``RunnableBinding`` — are inert: they don't insert an
+        # intervening run, so the LLM's immediate parent stays the node
+        # root and those calls remain audible outright.
+        node_roots = state.get("langgraph_node_run_ids")
+        node_root_ids = node_roots if isinstance(node_roots, set) else set()
+        immediate_parent = str(parents[-1]) if parents else ""
+        if parents and immediate_parent not in node_root_ids:
+            parented = state.setdefault("parented_llm_run_ids", set())
+            if isinstance(parented, set):
+                parented.add(run_id)
     # Track the root chain run — the outermost runnable, whose
     # ``on_chain_start`` carries no ``parent_ids``.  For an LCEL chain
     # *without* a model descendant
@@ -220,9 +252,10 @@ def translate_stream_event(
     # intermediate values (``"a"``, ``"ab"``, then the final ``"ab"``
     # again).  Only the root run's stream carries the final composed
     # output, so non-root chain streams are deduped in the
-    # ``on_chain_stream`` branch below.  (A chain *with* a model
-    # descendant is instead deduped by the suppression just below — the
-    # model stream is the canonical token source there.)
+    # ``on_chain_stream`` branch below.  Chains with chat-model
+    # descendants are deduped by the suppression just below; chains with
+    # non-chat LLM descendants still use the root/node chain stream so
+    # downstream transforms and redactors stay authoritative.
     if (
         state is not None
         and event_type == "on_chain_start"
@@ -250,7 +283,7 @@ def translate_stream_event(
             if isinstance(node_roots, set):
                 node_roots.add(run_id)
     if event_type == "on_chain_stream" and state is not None:
-        bag = state.get("chains_with_model_descendants")
+        bag = state.get("chains_with_chat_model_descendants")
         if isinstance(bag, set) and bag:
             parents = event.get("parent_ids") or ()
             if run_id in bag or any(str(pid) in bag for pid in parents):
@@ -363,8 +396,7 @@ def translate_stream_event(
         # children remain deduped (so an ``RunnableLambda(f) |
         # RunnableLambda(g)`` node doesn't narrate its intermediate
         # value).  Model-token double-speak is still prevented by the
-        # ``chains_with_model_descendants`` suppression above, which
-        # applies to both bridges.
+        # ``chains_with_chat_model_descendants`` suppression above.
         if state is not None:
             root = state.get("root_chain_run_id")
             node_roots = state.get("langgraph_node_run_ids")
@@ -377,13 +409,17 @@ def translate_stream_event(
             yield AgentBridgeEvent(kind="text_delta", text=text)
 
     elif event_type == "on_llm_stream":
-        # Non-chat LLM Runnables (``BaseLLM`` subclasses such as
-        # ``OpenAI`` text-completion) emit ``on_llm_stream`` instead of
-        # ``on_chat_model_stream``.  The bridge marks the parent chain
-        # run as having a model descendant so its forwarded
-        # ``on_chain_stream`` chunks are suppressed (avoiding double-
-        # emit); without translating these events the LLM's text would
-        # be silently dropped.
+        # Bare non-chat LLM Runnables (``BaseLLM`` subclasses such as
+        # text-completion models) have no parent chain, so their
+        # ``on_llm_stream`` tokens are the only text source.  When the LLM
+        # is inside an LCEL chain, however, downstream components may
+        # transform or redact the raw generation before the root chain
+        # emits it.  Skip parented raw LLM tokens and let the chain-stream
+        # path below speak the composed output instead.
+        if state is not None and run_id:
+            parented = state.get("parented_llm_run_ids")
+            if isinstance(parented, set) and run_id in parented:
+                return
         chunk = data.get("chunk") if isinstance(data, dict) else None
         text = _generation_chunk_text(chunk)
         if text and state is not None and run_id:
@@ -406,7 +442,7 @@ def translate_stream_event(
         # ``_stream`` / ``_astream``) only surface their AIMessage via
         # ``on_chat_model_end`` — no ``on_chat_model_stream`` events fire
         # and the parent chain's stream chunks carrying the same message
-        # are suppressed by ``chains_with_model_descendants``.  Without
+        # are suppressed by ``chains_with_chat_model_descendants``.  Without
         # this handler the assistant's text is dropped entirely and the
         # voice stays silent.  Skip runs that already streamed text so we
         # don't double-emit on top of their stream chunks.
@@ -420,18 +456,31 @@ def translate_stream_event(
             yield AgentBridgeEvent(kind="text_delta", text=text)
 
     elif event_type == "on_llm_end":
-        # Non-streaming LLMs (``FakeStreamingListLLM``, any ``BaseLLM``
-        # that doesn't override ``_stream``) only surface their output
-        # via ``on_llm_end`` — no ``on_llm_stream`` events fire and the
-        # parent chain's chunks are suppressed by the bridge.  Without
-        # this handler the LLM's result is dropped entirely.  Skip
-        # streaming LLMs so we don't double-emit on top of their
-        # already-translated stream chunks.
+        # Bare non-streaming LLMs only surface their answer via
+        # ``on_llm_end``.  For parented LLMs, use the surrounding chain's
+        # composed stream/final output instead so downstream redaction or
+        # output selection is not bypassed.  Skip streaming LLMs so we
+        # don't double-emit on top of already-translated bare LLM chunks.
+        output = data.get("output") if isinstance(data, dict) else None
         if state is not None and run_id:
+            parented = state.get("parented_llm_run_ids")
+            if isinstance(parented, set) and run_id in parented:
+                # Don't yield the raw tokens (downstream redaction stays
+                # authoritative), but stash the result text keyed by
+                # ``run_id`` so :meth:`LangGraphBridge._finalize_done` can
+                # use it as a fail-audible fallback when the node/chain
+                # produced no public-safe text at all (a node-direct LLM
+                # reached through an inert ``.with_retry()`` span writing
+                # to a non-conventional state key).  The secure common
+                # path — node/chain composed text — still wins, so this
+                # never re-leaks raw tokens when redaction did run.
+                suppressed = state.setdefault("suppressed_parented_llm_text", {})
+                if isinstance(suppressed, dict):
+                    suppressed[run_id] = _llm_result_text(output)
+                return
             streamed = state.get("llm_streamed_run_ids")
             if isinstance(streamed, set) and run_id in streamed:
                 return
-        output = data.get("output") if isinstance(data, dict) else None
         text = _llm_result_text(output)
         if text:
             yield AgentBridgeEvent(kind="text_delta", text=text)
