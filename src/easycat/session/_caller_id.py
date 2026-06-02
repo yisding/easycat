@@ -24,7 +24,10 @@ import re
 from easycat.session._types import CallerIdExposure, CallIdentity
 
 _SYSTEM_PHONE_RE = re.compile(r"^\+?[0-9]{3,15}$")
-_SYSTEM_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 '&.,-]{0,79}$")
+# Disallow "." and "," (and cap the length) so an attacker-controlled
+# Twilio display name cannot smuggle a multi-sentence / directive payload
+# into the system-role message. Legitimate names ("O'Brien & Sons") still pass.
+_SYSTEM_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 '&-]{0,39}$")
 
 
 def _safe_system_phone(value: str) -> str:
@@ -120,7 +123,9 @@ class CallerIdState:
             else:
                 parts.append(f"They dialed {called_number}.")
         if display_name:
-            parts.append(f"Caller ID name: {display_name}.")
+            # Quote the name so even a directive-looking value renders as an
+            # explicitly-quoted untrusted datum rather than as an instruction.
+            parts.append(f'Caller ID name (untrusted, quoted): "{display_name}".')
         if not parts:
             return None
         return (
