@@ -13,6 +13,11 @@ from easycat.events import STTEvent
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_MAX_AUDIO_CHUNK_BYTES = 1 * 1024 * 1024
+DEFAULT_MAX_AUDIO_BUFFER_BYTES = 25 * 1024 * 1024
+DEFAULT_MAX_AUDIO_DURATION_MS = 5 * 60 * 1000.0
+
+
 class STTBase:
     """Concrete base class for STT providers.
 
@@ -107,6 +112,46 @@ class STTBase:
                 "uniform format for the whole utterance"
             )
         return current
+
+    @staticmethod
+    def _validate_positive_limit(name: str, value: int | float | None) -> None:
+        if value is not None and value <= 0:
+            raise ValueError(f"{name} must be > 0 when set (got {value!r})")
+
+    @staticmethod
+    def _extend_limited_audio_buffer(
+        buffer: bytearray,
+        chunk: AudioChunk,
+        *,
+        max_chunk_bytes: int | None,
+        max_buffer_bytes: int | None,
+        max_duration_ms: float | None,
+        provider_label: str,
+    ) -> None:
+        """Append ``chunk`` to ``buffer`` after enforcing batch-audio caps."""
+        chunk_bytes = len(chunk.data)
+        if max_chunk_bytes is not None and chunk_bytes > max_chunk_bytes:
+            raise ValueError(
+                f"{provider_label} audio chunk exceeds the configured limit "
+                f"({chunk_bytes} > {max_chunk_bytes} bytes)"
+            )
+
+        buffered_bytes = len(buffer) + chunk_bytes
+        if max_buffer_bytes is not None and buffered_bytes > max_buffer_bytes:
+            raise ValueError(
+                f"{provider_label} buffered audio exceeds the configured limit "
+                f"({buffered_bytes} > {max_buffer_bytes} bytes)"
+            )
+
+        if max_duration_ms is not None:
+            buffered_duration_ms = (buffered_bytes / chunk.format.bytes_per_second) * 1000
+            if buffered_duration_ms > max_duration_ms:
+                raise ValueError(
+                    f"{provider_label} buffered audio duration exceeds the configured limit "
+                    f"({buffered_duration_ms:.0f} > {max_duration_ms:.0f} ms)"
+                )
+
+        buffer.extend(chunk.data)
 
     def _validate_audio(self, chunk: AudioChunk) -> None:
         if chunk.format.encoding != "pcm":

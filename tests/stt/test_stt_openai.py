@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import STTEventType
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
@@ -85,6 +86,59 @@ async def test_openai_stt_transcribes_audio():
     mock_client.stream.assert_called_once()
     call_kwargs = mock_client.stream.call_args
     assert "audio/transcriptions" in call_kwargs.args[1]
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_rejects_oversized_audio_chunk_before_buffering():
+    config = OpenAISTTConfig(
+        api_key="test-key",
+        max_audio_chunk_bytes=4,
+        max_audio_buffer_bytes=100,
+        http_client=_make_mock_client(),
+    )
+    stt = OpenAISTT(config)
+
+    await stt.start_stream()
+    with pytest.raises(ValueError, match="audio chunk exceeds"):
+        await stt.send_audio(AudioChunk(data=b"\x00" * 6, format=PCM16_MONO_16K))
+
+    assert len(stt._buffer) == 0
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_rejects_audio_buffer_limit_before_growing():
+    config = OpenAISTTConfig(
+        api_key="test-key",
+        max_audio_chunk_bytes=10,
+        max_audio_buffer_bytes=8,
+        http_client=_make_mock_client(),
+    )
+    stt = OpenAISTT(config)
+
+    await stt.start_stream()
+    await stt.send_audio(AudioChunk(data=b"\x00" * 4, format=PCM16_MONO_16K))
+    with pytest.raises(ValueError, match="buffered audio exceeds"):
+        await stt.send_audio(AudioChunk(data=b"\x00" * 6, format=PCM16_MONO_16K))
+
+    assert len(stt._buffer) == 4
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_rejects_audio_duration_limit():
+    config = OpenAISTTConfig(
+        api_key="test-key",
+        max_audio_chunk_bytes=10_000,
+        max_audio_buffer_bytes=10_000,
+        max_audio_duration_ms=1,
+        http_client=_make_mock_client(),
+    )
+    stt = OpenAISTT(config)
+
+    await stt.start_stream()
+    with pytest.raises(ValueError, match="duration exceeds"):
+        await stt.send_audio(AudioChunk(data=b"\x00" * 64, format=PCM16_MONO_16K))
+
+    assert len(stt._buffer) == 0
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,13 @@ from easycat._audio_utils import resample
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType
-from easycat.stt.base import pcm_to_wav
+from easycat.stt.base import (
+    DEFAULT_MAX_AUDIO_BUFFER_BYTES,
+    DEFAULT_MAX_AUDIO_CHUNK_BYTES,
+    DEFAULT_MAX_AUDIO_DURATION_MS,
+    STTBase,
+    pcm_to_wav,
+)
 from easycat.stt.websocket_base import WebSocketSTTBase
 
 logger = logging.getLogger(__name__)
@@ -51,10 +57,24 @@ class ElevenLabsSTTConfig:
     realtime_sample_rate: int = 16000
     realtime_commit_strategy: str = "manual"  # "manual" or "vad"
     realtime_include_timestamps: bool = False
+    max_audio_chunk_bytes: int | None = DEFAULT_MAX_AUDIO_CHUNK_BYTES
+    max_audio_buffer_bytes: int | None = DEFAULT_MAX_AUDIO_BUFFER_BYTES
+    max_audio_duration_ms: float | None = DEFAULT_MAX_AUDIO_DURATION_MS
     # Optional overrides for testing
     http_client: httpx.AsyncClient | None = field(default=None, repr=False)
     ws_connect: Any = field(default=None, repr=False)
     event_bus: Any = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        STTBase._validate_positive_limit(
+            "ElevenLabsSTTConfig.max_audio_chunk_bytes", self.max_audio_chunk_bytes
+        )
+        STTBase._validate_positive_limit(
+            "ElevenLabsSTTConfig.max_audio_buffer_bytes", self.max_audio_buffer_bytes
+        )
+        STTBase._validate_positive_limit(
+            "ElevenLabsSTTConfig.max_audio_duration_ms", self.max_audio_duration_ms
+        )
 
 
 class ElevenLabsSTT(WebSocketSTTBase):
@@ -145,7 +165,14 @@ class ElevenLabsSTT(WebSocketSTTBase):
             self._audio_format = self._latch_uniform_format(
                 self._audio_format, chunk, provider_label="ElevenLabs batch STT"
             )
-            self._buffer.extend(chunk.data)
+            self._extend_limited_audio_buffer(
+                self._buffer,
+                chunk,
+                max_chunk_bytes=self._config.max_audio_chunk_bytes,
+                max_buffer_bytes=self._config.max_audio_buffer_bytes,
+                max_duration_ms=self._config.max_audio_duration_ms,
+                provider_label="ElevenLabs batch STT",
+            )
 
     async def _on_end(self) -> None:
         if self._config.mode == "realtime":

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import STTEventType
 from easycat.stt import elevenlabs_provider
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
@@ -484,6 +485,43 @@ async def test_elevenlabs_batch_rejects_mid_stream_format_change():
     await stt.send_audio(AudioChunk(data=b"\x00\x00" * 160, format=fmt_16k))
     with pytest.raises(ValueError, match="mid-stream audio format change"):
         await stt.send_audio(AudioChunk(data=b"\x00\x00" * 160, format=fmt_8k))
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_rejects_oversized_audio_chunk_before_buffering():
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="batch",
+        max_audio_chunk_bytes=4,
+        max_audio_buffer_bytes=100,
+        http_client=_make_mock_http_client("test"),
+    )
+    stt = ElevenLabsSTT(config)
+
+    await stt.start_stream()
+    with pytest.raises(ValueError, match="audio chunk exceeds"):
+        await stt.send_audio(AudioChunk(data=b"\x00" * 6, format=PCM16_MONO_16K))
+
+    assert len(stt._buffer) == 0
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_rejects_audio_buffer_limit_before_growing():
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="batch",
+        max_audio_chunk_bytes=10,
+        max_audio_buffer_bytes=8,
+        http_client=_make_mock_http_client("test"),
+    )
+    stt = ElevenLabsSTT(config)
+
+    await stt.start_stream()
+    await stt.send_audio(AudioChunk(data=b"\x00" * 4, format=PCM16_MONO_16K))
+    with pytest.raises(ValueError, match="buffered audio exceeds"):
+        await stt.send_audio(AudioChunk(data=b"\x00" * 6, format=PCM16_MONO_16K))
+
+    assert len(stt._buffer) == 4
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,13 @@ import httpx
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType
-from easycat.stt.base import STTBase, pcm_to_wav
+from easycat.stt.base import (
+    DEFAULT_MAX_AUDIO_BUFFER_BYTES,
+    DEFAULT_MAX_AUDIO_CHUNK_BYTES,
+    DEFAULT_MAX_AUDIO_DURATION_MS,
+    STTBase,
+    pcm_to_wav,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +49,9 @@ class OpenAISTTConfig:
     base_url: str = "https://api.openai.com/v1"
     max_retries: int = 3
     timeout: float = 30.0
+    max_audio_chunk_bytes: int | None = DEFAULT_MAX_AUDIO_CHUNK_BYTES
+    max_audio_buffer_bytes: int | None = DEFAULT_MAX_AUDIO_BUFFER_BYTES
+    max_audio_duration_ms: float | None = DEFAULT_MAX_AUDIO_DURATION_MS
     # Optional HTTP client override for testing
     http_client: httpx.AsyncClient | None = field(default=None, repr=False)
 
@@ -53,6 +62,15 @@ class OpenAISTTConfig:
                 f"(got {self.max_retries}); it is the total attempt count, "
                 "where 0 is clamped to a single attempt"
             )
+        STTBase._validate_positive_limit(
+            "OpenAISTTConfig.max_audio_chunk_bytes", self.max_audio_chunk_bytes
+        )
+        STTBase._validate_positive_limit(
+            "OpenAISTTConfig.max_audio_buffer_bytes", self.max_audio_buffer_bytes
+        )
+        STTBase._validate_positive_limit(
+            "OpenAISTTConfig.max_audio_duration_ms", self.max_audio_duration_ms
+        )
 
 
 class OpenAISTT(STTBase):
@@ -85,7 +103,14 @@ class OpenAISTT(STTBase):
         self._audio_format = self._latch_uniform_format(
             self._audio_format, chunk, provider_label="OpenAI STT"
         )
-        self._buffer.extend(chunk.data)
+        self._extend_limited_audio_buffer(
+            self._buffer,
+            chunk,
+            max_chunk_bytes=self._config.max_audio_chunk_bytes,
+            max_buffer_bytes=self._config.max_audio_buffer_bytes,
+            max_duration_ms=self._config.max_audio_duration_ms,
+            provider_label="OpenAI STT",
+        )
 
     async def _on_end(self) -> None:
         if not self._buffer or self._audio_format is None:
