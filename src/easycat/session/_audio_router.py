@@ -372,6 +372,17 @@ class AudioRouter:
                 turn = active
         elif active is not None and event.turn_id is not None and active.id == event.turn_id:
             turn = active
+        elif event.session_id is None and event.turn_id is None and event.turn_ref is None:
+            # Fully-unscoped callback: a custom reporting transport that
+            # declares ``reports_audio_delivery = True`` and emits a bare
+            # ``TransportAudioDelivered(chunk=...)`` with no ownership
+            # metadata.  Fall back to the active turn so single-session /
+            # private-bus apps keep counting bytes and emitting AudioOut.
+            # The shared-bus protections above still hold: a stamped foreign
+            # ``session_id`` returns via the foreign-session guard, and an
+            # unscoped foreign ``TurnContext`` returns because its ``turn_ref``
+            # would be set.
+            turn = active
         else:
             return
 

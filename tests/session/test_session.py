@@ -1828,6 +1828,28 @@ async def test_buffered_transport_delivery_on_shared_bus_stays_session_scoped() 
 
 
 @pytest.mark.asyncio
+async def test_buffered_transport_delivery_unscoped_falls_back_to_active_turn() -> None:
+    # A custom reporting transport on a private (single-session) bus may emit
+    # a bare TransportAudioDelivered with no session_id/turn_id/turn_ref. That
+    # fully-unscoped callback must still count bytes against the active turn
+    # and emit exactly one AudioOut — otherwise older reporting transports
+    # regress to silently dropping buffered-playback accounting.
+    session = Session(_full_config(transport=ReportingTransport()))
+    session._turn = TurnContext("test-turn", CancelToken())
+
+    seen: list[AudioOut] = []
+    session.event_bus.subscribe(AudioOut, lambda event: seen.append(event))
+
+    chunk = _make_chunk(16)
+    await session.event_bus.emit(TransportAudioDelivered(chunk=chunk))
+
+    assert session._turn.audio_bytes_sent == len(chunk.data)
+    assert len(seen) == 1
+    assert seen[0].chunk is chunk
+    assert seen[0].turn_id == "test-turn"
+
+
+@pytest.mark.asyncio
 async def test_failed_send_does_not_emit_audio_out_or_count_bytes() -> None:
     class RejectingTransport(FakePlaybackAckTransport):
         async def send_audio(self, chunk: AudioChunk) -> bool:
