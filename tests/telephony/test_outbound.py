@@ -45,11 +45,18 @@ class TestParseCallStatusCallback:
 
     def test_completed_status(self) -> None:
         result = parse_call_status_callback(
-            {"CallStatus": "completed", "CallSid": "CA123", "Duration": "45"}
+            {
+                "CallStatus": "completed",
+                "CallSid": "CA123",
+                "Duration": "45",
+                "To": "+1555",
+                "From": "+1999",
+            }
         )
         assert isinstance(result, CallEnded)
         assert result.duration_s == 45.0
         assert result.disposition == "completed"
+        assert result.number == "+1999"
 
     def test_completed_status_ignores_malformed_duration(self) -> None:
         result = parse_call_status_callback(
@@ -59,9 +66,12 @@ class TestParseCallStatusCallback:
         assert result.duration_s is None
 
     def test_busy_status(self) -> None:
-        result = parse_call_status_callback({"CallStatus": "busy", "CallSid": "CA123"})
+        result = parse_call_status_callback(
+            {"CallStatus": "busy", "CallSid": "CA123", "To": "+1555", "From": "+1999"}
+        )
         assert isinstance(result, CallFailed)
         assert result.reason == "busy"
+        assert result.number == "+1999"
 
     def test_no_answer_status(self) -> None:
         result = parse_call_status_callback({"CallStatus": "no-answer", "CallSid": "CA123"})

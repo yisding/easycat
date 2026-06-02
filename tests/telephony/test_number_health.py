@@ -10,6 +10,7 @@ from easycat.telephony.number_health import (
     CallDispositionTracker,
     NumberHealthMonitor,
 )
+from easycat.telephony.outbound import emit_call_status
 
 
 class TestNumberHealthMonitor:
@@ -80,8 +81,51 @@ class TestNumberHealthMonitor:
             await bus.emit(CallEnded(call_sid="CA1", duration_s=10.0, number="+15551234567"))
             await bus.emit(CallEnded(call_sid="CA1", duration_s=11.0, number="+15551234567"))
             await bus.emit(CallFailed(call_sid="CA1", reason="busy", number="+15551234567"))
-            assert len(monitor._records["+15551234567"]) == 1
-            assert monitor._records["+15551234567"][0].answered is True
+            assert len(monitor._records["+15557654321"]) == 1
+            assert monitor._records["+15557654321"][0].answered is True
+        finally:
+            monitor.stop()
+
+    @pytest.mark.asyncio
+    async def test_status_callback_terminal_events_release_from_number_capacity(self) -> None:
+        """Twilio terminal callbacks release the caller-ID concurrency bucket."""
+        bus = EventBus()
+        monitor = NumberHealthMonitor(
+            bus,
+            max_concurrent_per_number=2,
+            min_inter_call_delay_s=0.0,
+        )
+        from_number = "+15557654321"
+        to_number = "+15551234567"
+        monitor.start()
+        try:
+            await bus.emit(CallInitiated(call_sid="CA-done", to=to_number, from_=from_number))
+            await bus.emit(CallInitiated(call_sid="CA-fail", to=to_number, from_=from_number))
+            assert not monitor.can_place_call(from_number)
+
+            await emit_call_status(
+                {
+                    "CallStatus": "completed",
+                    "CallSid": "CA-done",
+                    "Duration": "5",
+                    "To": to_number,
+                    "From": from_number,
+                },
+                bus,
+            )
+            await emit_call_status(
+                {
+                    "CallStatus": "busy",
+                    "CallSid": "CA-fail",
+                    "To": to_number,
+                    "From": from_number,
+                },
+                bus,
+            )
+
+            assert monitor.can_place_call(from_number)
+            assert monitor._concurrent[from_number] == 0
+            assert to_number not in monitor._concurrent
         finally:
             monitor.stop()
 
