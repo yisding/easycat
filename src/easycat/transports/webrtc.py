@@ -579,30 +579,12 @@ class WebRTCTransport(_AudioQueueMixin):
                 headers=_CORS_HEADERS,
             )
 
+        # Negotiate the replacement peer against a pending generation first. Do
+        # not make it current or tear down the existing peer until the incoming
+        # SDP has been accepted; otherwise a malformed replacement offer can
+        # strand receive_audio() after the old peer's shutdown sentinel is
+        # intentionally suppressed as stale.
         peer_generation = self._peer_generation + 1
-        self._peer_generation = peer_generation
-        self._client_connected.clear()
-        self._outbound_track = None
-
-        # Close any existing peer connection. Advancing the generation before
-        # teardown keeps late callbacks from the previous peer from ending the
-        # receive_audio() iterator for the replacement peer.
-        if self._consume_task is not None and not self._consume_task.done():
-            self._consume_task.cancel()
-            try:
-                await self._consume_task
-            except asyncio.CancelledError:
-                pass
-        self._consume_task = None
-
-        if self._pc is not None:
-            await self._pc.close()
-            self._pc = None
-
-        # Clear stale audio from the previous peer so it doesn't leak into
-        # the new session's receive_audio() iterator. Do not replace the queue:
-        # Session.receive_audio() may already be blocked on this object.
-        self._drain_audio_queue()
 
         # Build ICE configuration from the shared serializer.
         ice_servers = [RTCIceServer(**entry) for entry in self._ice_servers_as_dicts()]
@@ -618,14 +600,13 @@ class WebRTCTransport(_AudioQueueMixin):
             # half-built PC is discarded if the locking changes in the future.
             if not self._connected:
                 await pc.close()
-                self._pc = None
                 return self._unavailable_response()
-            self._pc = pc
 
-            # Reset outbound track for the new connection.
-            self._outbound = _OutboundAudioSource()
-            self._outbound_track = self._outbound.create_track()
-            pc.addTrack(self._outbound_track)
+            # Prepare an outbound track for the new connection, but keep the
+            # existing peer's source active until negotiation succeeds.
+            outbound = _OutboundAudioSource()
+            outbound_track = outbound.create_track()
+            pc.addTrack(outbound_track)
 
             # Listen for the remote audio track.
             @pc.on("track")
@@ -682,13 +663,40 @@ class WebRTCTransport(_AudioQueueMixin):
             )
             if pc is not None:
                 await pc.close()
-            self._pc = None
             return web.Response(
                 status=400,
                 text=json.dumps({"error": f"SDP negotiation failed: {exc}"}),
                 content_type="application/json",
                 headers=_CORS_HEADERS,
             )
+
+        self._peer_generation = peer_generation
+        self._client_connected.clear()
+        self._outbound_track = None
+
+        # Close any existing peer connection only after the replacement SDP is
+        # proven valid. Advancing the generation before teardown keeps late
+        # callbacks from the previous peer from ending the receive_audio()
+        # iterator for the replacement peer.
+        if self._consume_task is not None and not self._consume_task.done():
+            self._consume_task.cancel()
+            try:
+                await self._consume_task
+            except asyncio.CancelledError:
+                pass
+        self._consume_task = None
+
+        if self._pc is not None:
+            await self._pc.close()
+
+        # Clear stale audio from the previous peer so it doesn't leak into
+        # the new session's receive_audio() iterator. Do not replace the queue:
+        # Session.receive_audio() may already be blocked on this object.
+        self._drain_audio_queue()
+
+        self._pc = pc
+        self._outbound = outbound
+        self._outbound_track = outbound_track
 
         return web.Response(
             content_type="application/json",

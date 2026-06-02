@@ -311,6 +311,44 @@ class TestWebRTCIngressQueueOwnership:
         assert offer_task.done()
 
     @pytest.mark.asyncio
+    async def test_failed_replacement_offer_keeps_existing_peer_and_receiver(self, monkeypatch):
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True  # signaling server live (see tests above)
+
+        first_response = await transport._handle_offer(_FakeOfferRequest())
+        assert first_response.status == 200
+        first_pc = _FakeRTCPeerConnection.instances[0]
+        first_generation = transport._peer_generation
+
+        audio_iter = transport.receive_audio()
+        pending = asyncio.create_task(anext(audio_iter))
+        await asyncio.sleep(0)
+        assert not pending.done()
+
+        async def _boom(self) -> _FakeSessionDescription:  # noqa: ANN001
+            raise RuntimeError("sdp boom")
+
+        monkeypatch.setattr(_FakeRTCPeerConnection, "createAnswer", _boom)
+
+        failed_response = await transport._handle_offer(_FakeOfferRequest())
+
+        assert failed_response.status == 400
+        assert transport._peer_generation == first_generation
+        assert transport._pc is first_pc
+        assert not first_pc.closed
+        assert _FakeRTCPeerConnection.instances[1].closed
+        await asyncio.sleep(0)
+        assert not pending.done()
+
+        new_chunk = make_chunk(12)
+        transport._enqueue_chunk(new_chunk, context="test")
+        received = await asyncio.wait_for(pending, timeout=1.0)
+        assert received is new_chunk
+        await audio_iter.aclose()
+
+    @pytest.mark.asyncio
     async def test_replacing_connected_peer_clears_wait_for_client(self, monkeypatch):
         _install_fake_webrtc_modules(monkeypatch)
         transport = WebRTCTransport()
