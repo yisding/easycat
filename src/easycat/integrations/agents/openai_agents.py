@@ -347,23 +347,19 @@ class OpenAIAgentsBridge:
             break
 
         # When chaining by response_id the server maintains its own
-        # conversation and won't see local history edits.  Queue a
-        # developer note so the next turn informs the model about what
-        # the user actually heard.
+        # conversation and won't see local history edits.  Do not place
+        # the rewritten assistant text in a developer note: the text is
+        # model/user-influenced and would be promoted to higher-priority
+        # instructions on the next turn.  Instead, break the response-id
+        # chain so the next turn sends the locally corrected history.
         if (
             self._use_previous_response_id
             and self._previous_response_id is not None
             and original is not None
             and original != text
         ):
-            note = (
-                "[The assistant's last response was post-processed before delivery. "
-                f'The user heard: "{text}"]'
-            )
-            if self._pending_interruption is not None:
-                self._pending_interruption += "\n" + note
-            else:
-                self._pending_interruption = note
+            self._previous_response_id = None
+            self._pending_interruption = None
 
     def append_interruption_note(self, note: str) -> None:
         """Append an interruption note so the next turn sees it.
