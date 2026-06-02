@@ -17,6 +17,10 @@ from easycat.stt.base import STTBase, pcm_to_wav
 logger = logging.getLogger(__name__)
 
 
+class OpenAISTTStreamLimitError(RuntimeError):
+    """Raised when an OpenAI STT streaming response exceeds configured limits."""
+
+
 @dataclass
 class OpenAISTTConfig:
     """Configuration for the OpenAI STT provider.
@@ -43,6 +47,11 @@ class OpenAISTTConfig:
     base_url: str = "https://api.openai.com/v1"
     max_retries: int = 3
     timeout: float = 30.0
+    stream_timeout: float | None = None
+    max_stream_events: int = 1_000
+    max_stream_line_bytes: int = 65_536
+    max_transcript_chars: int = 131_072
+    max_partial_events: int = 1_000
     # Optional HTTP client override for testing
     http_client: httpx.AsyncClient | None = field(default=None, repr=False)
 
@@ -53,6 +62,18 @@ class OpenAISTTConfig:
                 f"(got {self.max_retries}); it is the total attempt count, "
                 "where 0 is clamped to a single attempt"
             )
+        if self.timeout <= 0:
+            raise ValueError("OpenAISTTConfig.timeout must be positive")
+        if self.stream_timeout is not None and self.stream_timeout <= 0:
+            raise ValueError("OpenAISTTConfig.stream_timeout must be positive when set")
+        if self.max_stream_events <= 0:
+            raise ValueError("OpenAISTTConfig.max_stream_events must be positive")
+        if self.max_stream_line_bytes <= 0:
+            raise ValueError("OpenAISTTConfig.max_stream_line_bytes must be positive")
+        if self.max_transcript_chars <= 0:
+            raise ValueError("OpenAISTTConfig.max_transcript_chars must be positive")
+        if self.max_partial_events <= 0:
+            raise ValueError("OpenAISTTConfig.max_partial_events must be positive")
 
 
 class OpenAISTT(STTBase):
@@ -131,30 +152,63 @@ class OpenAISTT(STTBase):
                         data=data,
                     ) as response:
                         response.raise_for_status()
-                        async for line in response.aiter_lines():
-                            if not line:
-                                continue
-                            payload = line.strip()
-                            if payload.startswith("data:"):
-                                payload = payload[5:].strip()
-                            if payload == "[DONE]":
-                                break
-                            text, is_delta, is_final = self._extract_stream_text(payload)
-                            if not text:
-                                continue
-                            if is_delta:
-                                full_text += text
-                            else:
-                                full_text = text
-                            pending_events.append(
-                                STTEvent(type=STTEventType.PARTIAL, text=full_text)
-                            )
-                            if is_final:
-                                pending_events.append(
-                                    STTEvent(type=STTEventType.FINAL, text=full_text)
-                                )
-                                emitted_final = True
-                                break
+                        stream_timeout = self._config.stream_timeout or self._config.timeout
+                        stream_events = 0
+                        partial_events = 0
+                        try:
+                            async with asyncio.timeout(stream_timeout):
+                                async for line in response.aiter_lines():
+                                    if not line:
+                                        continue
+                                    line_size = len(line.encode("utf-8"))
+                                    if line_size > self._config.max_stream_line_bytes:
+                                        raise OpenAISTTStreamLimitError(
+                                            "OpenAI STT streaming response line exceeded "
+                                            f"{self._config.max_stream_line_bytes} bytes"
+                                        )
+                                    stream_events += 1
+                                    if stream_events > self._config.max_stream_events:
+                                        raise OpenAISTTStreamLimitError(
+                                            "OpenAI STT streaming response exceeded "
+                                            f"{self._config.max_stream_events} events"
+                                        )
+                                    payload = line.strip()
+                                    if payload.startswith("data:"):
+                                        payload = payload[5:].strip()
+                                    if payload == "[DONE]":
+                                        break
+                                    text, is_delta, is_final = self._extract_stream_text(payload)
+                                    if not text:
+                                        continue
+                                    if is_delta:
+                                        next_text = full_text + text
+                                    else:
+                                        next_text = text
+                                    if len(next_text) > self._config.max_transcript_chars:
+                                        raise OpenAISTTStreamLimitError(
+                                            "OpenAI STT transcript exceeded "
+                                            f"{self._config.max_transcript_chars} characters"
+                                        )
+                                    full_text = next_text
+                                    partial_events += 1
+                                    if partial_events > self._config.max_partial_events:
+                                        raise OpenAISTTStreamLimitError(
+                                            "OpenAI STT streaming response exceeded "
+                                            f"{self._config.max_partial_events} partial events"
+                                        )
+                                    pending_events.append(
+                                        STTEvent(type=STTEventType.PARTIAL, text=full_text)
+                                    )
+                                    if is_final:
+                                        pending_events.append(
+                                            STTEvent(type=STTEventType.FINAL, text=full_text)
+                                        )
+                                        emitted_final = True
+                                        break
+                        except TimeoutError as exc:
+                            raise OpenAISTTStreamLimitError(
+                                f"OpenAI STT streaming response exceeded {stream_timeout:.1f}s"
+                            ) from exc
                         if full_text and not emitted_final:
                             pending_events.append(
                                 STTEvent(type=STTEventType.FINAL, text=full_text)

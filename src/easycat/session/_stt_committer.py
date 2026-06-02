@@ -301,7 +301,18 @@ class STTCommitter:
             turn.stt_has_uncommitted_audio = False
             future = asyncio.get_running_loop().create_future()
             turn.pending_stt_segment_futures.append(future)
-        await self._stt_getter().end_stream()
+        timeout = self._timeout_config.stt_timeout if self._timeout_config else None
+        try:
+            if timeout:
+                await asyncio.wait_for(self._stt_getter().end_stream(), timeout=timeout)
+            else:
+                await self._stt_getter().end_stream()
+        except TimeoutError:
+            provider = self._stt_getter()
+            name = resolve_provider_name(provider, "stt")
+            err = STTTimeoutError(name, timeout or 0.0)
+            await self._emit(Error(exception=err, stage=ErrorStage.STT, provider=name))
+            self.resolve_pending(turn, "")
 
     # ── Background STT event consumer ─────────────────────────────
 

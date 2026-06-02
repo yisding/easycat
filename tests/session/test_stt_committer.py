@@ -352,6 +352,55 @@ async def test_end_stream_no_future_when_no_uncommitted_audio() -> None:
 
 
 @pytest.mark.asyncio
+async def test_end_stream_times_out_and_resolves_pending_future() -> None:
+    class _HangingSTT(_RecordingSTT):
+        async def end_stream(self) -> None:
+            self.end_stream_calls += 1
+            await asyncio.Event().wait()
+
+        def version_info(self) -> dict[str, str]:
+            return {"provider": "openai"}
+
+    bus = EventBus()
+    errors: list[Error] = []
+    bus.subscribe(Error, lambda e: errors.append(e))
+    journal = InMemoryRingBuffer(capacity=64)
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="sess",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+
+    async def _emit(event):
+        await bus.emit(event)
+
+    stt = _HangingSTT()
+    no_turn = TurnContext("no-turn", CancelToken())
+    tm = TurnManager(bus, config=TurnManagerConfig())
+    committer = STTCommitter(
+        wiring=make_wiring(stt=lambda: stt, emit=_emit),
+        event_bus=bus,
+        journal_sink=sink,
+        runtime_scope=RuntimeScope(),
+        timeout_config=TimeoutConfig(stt_timeout=0.01),
+        segment_silence_ms=0,
+        no_turn=no_turn,
+        turn_manager=tm,
+    )
+    turn = _new_turn()
+
+    await committer.end_stream(turn)
+
+    assert stt.end_stream_calls == 1
+    assert turn.pending_stt_segment_futures == []
+    stt_errors = [e for e in errors if e.stage == ErrorStage.STT]
+    assert stt_errors
+    assert stt_errors[0].provider == "openai"
+
+
+@pytest.mark.asyncio
 async def test_segment_final_journal_records_confidence_and_word_timestamps() -> None:
     """Provider-captured confidence/word timings reach the journal record."""
 

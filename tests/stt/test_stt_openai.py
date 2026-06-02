@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -283,6 +284,65 @@ async def test_openai_stt_max_retries_zero_raises_underlying_error():
 def test_openai_stt_config_rejects_negative_max_retries():
     with pytest.raises(ValueError, match="max_retries"):
         OpenAISTTConfig(api_key="test-key", max_retries=-1)
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_stream_event_limit_aborts_without_emitting_buffered_partials():
+    mock_client = _make_mock_client(
+        [
+            'data: {"delta": "a"}',
+            'data: {"delta": "b"}',
+            'data: {"delta": "c"}',
+        ]
+    )
+    config = OpenAISTTConfig(
+        api_key="test-key",
+        http_client=mock_client,
+        max_retries=1,
+        max_stream_events=2,
+    )
+    stt = OpenAISTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    await stt.start_stream()
+    for chunk in make_audio_chunks(pcm):
+        await stt.send_audio(chunk)
+
+    with pytest.raises(RuntimeError, match="exceeded 2 events"):
+        await stt.end_stream()
+
+    events = []
+    try:
+        while True:
+            events.append(await asyncio.wait_for(stt._event_queue.get(), timeout=0.01))
+    except TimeoutError:
+        pass
+    assert events == [None]
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_transcript_limit_aborts_oversized_delta():
+    mock_client = _make_mock_client(
+        [
+            'data: {"delta": "abc"}',
+            'data: {"delta": "def"}',
+        ]
+    )
+    config = OpenAISTTConfig(
+        api_key="test-key",
+        http_client=mock_client,
+        max_retries=1,
+        max_transcript_chars=5,
+    )
+    stt = OpenAISTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    await stt.start_stream()
+    for chunk in make_audio_chunks(pcm):
+        await stt.send_audio(chunk)
+
+    with pytest.raises(RuntimeError, match="exceeded 5 characters"):
+        await stt.end_stream()
 
 
 # ── Mid-stream format change ─────────────────────────────────────
