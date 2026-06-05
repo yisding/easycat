@@ -30,6 +30,7 @@ For this repository:
 ```bash
 uv sync --extra quickstart
 export OPENAI_API_KEY="your-api-key"
+uv run easycat doctor
 uv run python examples/openai_agents_voice.py
 ```
 
