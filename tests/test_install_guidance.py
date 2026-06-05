@@ -7,6 +7,8 @@ import re
 import tomllib
 from pathlib import Path
 
+from tests._justfile import just_recipe_names
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEXT_SUFFIXES = {
     ".conf",
@@ -60,7 +62,6 @@ PROVIDER_EXTRA_BY_ENV_VAR = {
 }
 CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 GUIDE_JUST_COMMAND_RE = re.compile(r"\bjust\s+(?P<recipe>[A-Za-z0-9_-]+)\b")
-JUST_RECIPE_RE = re.compile(r"^(?P<name>[A-Za-z0-9_-]+)(?:\s+[^:]*)?:")
 AGENT_GUIDE_SOURCE_PATH_SECTIONS = {
     "AGENTS.md": ("## Project Structure & Module Organization", "## Build, Test"),
     "CLAUDE.md": ("## Architecture", "## Session Lifecycle"),
@@ -129,18 +130,6 @@ def _extract_markdown_section(text: str, start_heading: str, end_heading: str) -
 
 def _clean_code_span_path(code_span: str) -> str:
     return code_span.strip().strip(".,;:()[]")
-
-
-def _just_recipe_names() -> set[str]:
-    recipes: set[str] = set()
-
-    for line in (REPO_ROOT / "justfile").read_text(encoding="utf-8").splitlines():
-        match = JUST_RECIPE_RE.match(line)
-        if match and ":=" not in line and not line.startswith((" ", "\t", "#")):
-            recipes.add(match.group("name"))
-
-    assert recipes, "justfile recipes were not found"
-    return recipes
 
 
 def _source_path_candidates_for_agent_guide(
@@ -338,7 +327,7 @@ def test_agent_guides_use_current_live_marker_name() -> None:
 
 
 def test_agent_guide_command_examples_are_current() -> None:
-    just_recipes = _just_recipe_names()
+    just_recipes = just_recipe_names(REPO_ROOT)
     command_sections = {
         "AGENTS.md": (REPO_ROOT / "AGENTS.md")
         .read_text(encoding="utf-8")

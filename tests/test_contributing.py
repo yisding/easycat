@@ -5,6 +5,8 @@ import shlex
 import tomllib
 from pathlib import Path
 
+from tests._justfile import just_recipe_commands
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEV_LOOP_ROW_RE = re.compile(
     r"^\| (?P<task>[^|]+) \| `just (?P<recipe>[^` ]+)(?P<args>[^`]*)?` "
@@ -13,7 +15,6 @@ _DEV_LOOP_ROW_RE = re.compile(
 _VALIDATION_ROW_RE = re.compile(
     r"^\| `(?P<slice>[^`]+)` \| `(?P<command>[^`]+)` \| (?P<markers>[^|]+) \|$"
 )
-_RECIPE_RE = re.compile(r"^(?P<name>[A-Za-z0-9_-]+)(?:\s+[^:]*)?:(?P<deps>.*)$")
 
 
 def _pytest_marker_names() -> set[str]:
@@ -38,37 +39,6 @@ def _contributing_runbundle_section() -> str:
 
 def _marker_name_is_documented(section: str, marker: str) -> bool:
     return re.search(rf"`{re.escape(marker)}(?:\([^`]*\))?`", section) is not None
-
-
-def _just_recipes() -> dict[str, str]:
-    commands: dict[str, str] = {}
-    dependencies: dict[str, list[str]] = {}
-    current_recipe: str | None = None
-
-    for line in (REPO_ROOT / "justfile").read_text(encoding="utf-8").splitlines():
-        recipe_match = _RECIPE_RE.match(line)
-        if recipe_match and ":=" not in line and not line.startswith((" ", "\t", "#")):
-            current_recipe = recipe_match.group("name")
-            commands[current_recipe] = ""
-            dependencies[current_recipe] = shlex.split(recipe_match.group("deps"))
-            continue
-
-        if current_recipe is not None and line.startswith((" ", "\t")) and line.strip():
-            commands[current_recipe] = line.strip().removeprefix("@")
-            current_recipe = None
-
-    def _resolve(recipe: str, stack: tuple[str, ...] = ()) -> str:
-        if recipe in stack:
-            cycle = " -> ".join((*stack, recipe))
-            raise AssertionError(f"justfile recipe dependency cycle: {cycle}")
-        if commands[recipe]:
-            return commands[recipe]
-        deps = dependencies[recipe]
-        if deps:
-            return " && ".join(_resolve(dep, (*stack, recipe)) for dep in deps)
-        return ""
-
-    return {recipe: _resolve(recipe) for recipe in commands}
 
 
 def _development_loop_rows() -> list[dict[str, str]]:
@@ -113,7 +83,7 @@ def _render_recipe_command(command: str, args_text: str | None) -> str:
 
 
 def test_contributing_development_loop_just_recipes_stay_current() -> None:
-    recipes = _just_recipes()
+    recipes = just_recipe_commands(REPO_ROOT)
     missing: list[str] = []
     stale_raw_commands: list[str] = []
 
@@ -139,7 +109,7 @@ def test_contributing_development_loop_just_recipes_stay_current() -> None:
 
 
 def test_contributing_development_loop_lists_public_just_recipes() -> None:
-    recipes = set(_just_recipes()) - {"default"}
+    recipes = set(just_recipe_commands(REPO_ROOT)) - {"default"}
     documented_recipes = {row["recipe"] for row in _development_loop_rows()}
     missing = sorted(recipes - documented_recipes)
 
@@ -147,7 +117,7 @@ def test_contributing_development_loop_lists_public_just_recipes() -> None:
 
 
 def test_contributing_development_loop_lists_validation_just_recipes() -> None:
-    recipes = _just_recipes()
+    recipes = just_recipe_commands(REPO_ROOT)
     documented_recipes = {row["recipe"] for row in _development_loop_rows()}
     validation_recipes = sorted(name for name in recipes if name.startswith("validate-"))
     missing = [recipe for recipe in validation_recipes if recipe not in documented_recipes]
