@@ -10,6 +10,7 @@
 - [Chapter 8](../08-smart-turn/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`
+- After setting provider keys, run `uv run easycat doctor` from the repo root.
 - **Use headphones.** If you run this on a speaker+mic laptop,
   the bot will interrupt itself every time it hears its own
   voice. Chapter 10 fixes that with AEC; this chapter punts.

@@ -13,6 +13,7 @@
 - RNNoise is included in `quickstart`; Krisp requires its own SDK.
 - For real AEC: `uv sync --extra aec` (LiveKit APM).
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
+- After setting provider keys, run `uv run easycat doctor` from the repo root.
 
 > **Minimum to skip the ladder:** chapter 4 (where VAD sits).
 > NR / AEC are orthogonal to the agent layer — they belong

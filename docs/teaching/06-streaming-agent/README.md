@@ -9,6 +9,7 @@
   diff against them.
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
+- After setting provider keys, run `uv run easycat doctor` from the repo root.
 
 > **Minimum to skip the ladder:** chapter 5 — you need to have
 > felt the blocking-agent gap in your ears for this chapter to

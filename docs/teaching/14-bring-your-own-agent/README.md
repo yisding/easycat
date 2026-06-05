@@ -11,6 +11,7 @@
 - [Chapter 13.](../13-swap-providers-and-transports/)
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
+- After setting provider keys, run `uv run easycat doctor` from the repo root.
 
 > **Minimum to skip the ladder:** chapter 6 (the streaming-agent
 > surface — that's the concept the bridge layer abstracts).

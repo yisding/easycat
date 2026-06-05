@@ -140,6 +140,25 @@ def test_teaching_ladder_prerequisites_run_doctor_after_setup() -> None:
     assert sync_index < key_index < doctor_index
 
 
+def test_teaching_chapter_key_prerequisites_run_doctor() -> None:
+    """Self-contained chapter READMEs with API keys should repeat the preflight."""
+    missing: list[str] = []
+    teaching_root = REPO_ROOT / "docs" / "teaching"
+
+    for path in sorted(teaching_root.glob("[0-9][0-9]-*/README.md")):
+        text = path.read_text(encoding="utf-8")
+        match = MARKDOWN_PREREQS_RE.search(text)
+        if match is None:
+            continue
+        section = match.group("body")
+        if "API_KEY" in section and "uv run easycat doctor" not in section:
+            missing.append(path.relative_to(REPO_ROOT).as_posix())
+
+    assert not missing, "Teaching chapter prerequisites missing doctor preflight:\n" + "\n".join(
+        missing
+    )
+
+
 def test_readme_optional_dependency_list_has_copyable_install_commands() -> None:
     """The optional-dependency list should not name packages without commands."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")

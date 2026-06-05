@@ -9,7 +9,8 @@
 - [Chapter 11](../11-journal/). You need to be comfortable
   opening a bundle and querying records.
 - `uv sync --group dev`. The LLM-judge script additionally
-  wants `OPENAI_API_KEY`.
+  wants `OPENAI_API_KEY`; before running it, run
+  `uv run easycat doctor` from the repo root.
 
 > **Minimum to skip the ladder:** chapter 11 (journal queries).
 > The metrics work on any bundle that follows the teaching shape

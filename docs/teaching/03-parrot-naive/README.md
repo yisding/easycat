@@ -14,6 +14,7 @@ personally heard this fail on your own voice.
 - `OPENAI_API_KEY` (for TTS) and **`DEEPGRAM_API_KEY`** (the
   parrot needs mid-speech partials, which the OpenAI STT default
   does not produce).
+- After setting provider keys, run `uv run easycat doctor` from the repo root.
 
 > **Minimum to skip the ladder:** chapters 1-2 (Transport + STT
 > events). Chapter 0's PCM math isn't needed here.
