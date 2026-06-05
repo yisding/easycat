@@ -540,12 +540,14 @@ Three things bite every voice agent the instant it ships:
    `PhoneticReplacementProcessor` for fixed corrections.
 3. **SSML.** `TTSInput(text=..., format="ssml")` accepts
    `<break time="500ms"/>` and `<phoneme>` tags **when the
-   provider advertises `supports_ssml = True`**. *Heads up:* none
-   of the providers bundled with EasyCat today (OpenAI,
-   ElevenLabs, Deepgram, Cartesia) return `True` from that property
+   provider advertises an `input_policy` that accepts SSML**. *Heads
+   up:* none of the providers bundled with EasyCat today (OpenAI,
+   ElevenLabs, Deepgram, Cartesia) return `True` from the legacy
+   `supports_ssml` compatibility property
    — the `_tts_scheduler` will downgrade SSML to plain text and
    journal `ssml_downgraded: true`. To actually pronounce
-   `<break>` you need a custom provider that returns `True`.
+   `<break>` you need a custom provider with
+   `TTSInputPolicy.native_ssml()`.
    Chapter 14's `PauseProcessor` demonstrates the insertion side;
    the playback side is currently provider-gated.
 

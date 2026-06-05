@@ -23,7 +23,7 @@ from easycat.stages.stt import STTStage
 from easycat.stages.transport import TransportStage
 from easycat.stages.tts import TTSStage
 from easycat.stages.vad import VADStage
-from easycat.tts.input import TTSInput
+from easycat.tts.input import TTSInput, TTSInputPolicy
 from easycat.turn_manager import TurnManager, TurnManagerConfig
 from tests.session._wiring_helpers import make_wiring
 
@@ -64,6 +64,11 @@ class _RecordingTTS:
 
 class _SSMLTTS(_RecordingTTS):
     supports_ssml = True
+
+
+class _PolicySSMLTTS(_RecordingTTS):
+    supports_ssml = False
+    input_policy = TTSInputPolicy.native_ssml()
 
 
 class _FakeTransport:
@@ -268,6 +273,8 @@ def test_prepare_strips_ssml_when_provider_does_not_support_it() -> None:
     assert payload.format == "plain"
     assert "<speak>" not in payload.text
     assert "hello" in payload.text
+    rec = next(r for r in ctx["journal"].read() if r.name == "tts_payload_prepared")
+    assert rec.data["ssml_downgraded"] is True
 
 
 def test_prepare_keeps_ssml_when_provider_supports_it() -> None:
@@ -278,6 +285,14 @@ def test_prepare_keeps_ssml_when_provider_supports_it() -> None:
     assert payload.format == "ssml"
     rec = next(r for r in ctx["journal"].read() if r.name == "tts_payload_prepared")
     assert rec.data["ssml_downgraded"] is False
+
+
+def test_prepare_keeps_ssml_when_input_policy_supports_it() -> None:
+    tts = _PolicySSMLTTS()
+    scheduler, _ = _build_scheduler(tts=tts, output_processors=[_SSMLifyProcessor()])
+
+    payload = scheduler.prepare("hello", is_streaming=False, is_final=True)
+    assert payload.format == "ssml"
 
 
 # ── Tests: synthesize ────────────────────────────────────────

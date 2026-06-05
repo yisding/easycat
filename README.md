@@ -511,7 +511,9 @@ Notes:
 - `strip_markdown=True` still works and is automatically composed with processors.
 - Providers that do not support SSML automatically fall back to plain text.
 - Pause length is adjustable via `pause_ms` for SSML and `ellipsis_count` for ellipsis style.
-- For provider authors, `synthesize` accepts either a legacy `str` or `TTSInput`.
+- For provider authors, `synthesize` accepts either a legacy `str` or `TTSInput`;
+  expose `input_policy` with `TTSInputPolicy.native_ssml()` only when the backend
+  accepts SSML unchanged.
 
 ### Local/open-source speech pipeline
 EasyCat ships with hosted STT/TTS providers (OpenAI, Deepgram, ElevenLabs, and

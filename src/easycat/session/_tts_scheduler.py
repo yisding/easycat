@@ -39,7 +39,7 @@ from easycat.runtime.context import RunContext
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.stages.tts import TTSStage
 from easycat.timeouts import TimeoutConfig
-from easycat.tts.input import TTSInput, strip_ssml_tags
+from easycat.tts.input import TTSInput, resolve_tts_input_policy, strip_ssml_tags
 from easycat.turn_manager import TurnManager
 
 if TYPE_CHECKING:
@@ -150,18 +150,22 @@ class TTSScheduler:
     def prepare(self, text: str, *, is_streaming: bool, is_final: bool) -> TTSInput:
         original_payload = TTSInput(text=text, format="plain")
         payload = original_payload
-        payload = apply_output_processors(
+        processed_payload = apply_output_processors(
             payload,
             self._output_processors,
             is_final=is_final,
             is_streaming=is_streaming,
         )
-        if payload.format == "ssml" and not getattr(self._tts_getter(), "supports_ssml", False):
-            payload = TTSInput(text=strip_ssml_tags(payload.text), format="plain")
+        payload = processed_payload
+        input_policy = resolve_tts_input_policy(self._tts_getter())
+        ssml_downgraded = processed_payload.format == "ssml" and not input_policy.accepts("ssml")
+        if ssml_downgraded:
+            payload = TTSInput(text=strip_ssml_tags(processed_payload.text), format="plain")
         self._record_tts_payload_prepared(
             original_text=original_payload.text,
             original_format=original_payload.format,
             prepared_payload=payload,
+            ssml_downgraded=ssml_downgraded,
             is_streaming=is_streaming,
             is_final=is_final,
         )
@@ -277,6 +281,7 @@ class TTSScheduler:
         original_text: str,
         original_format: str,
         prepared_payload: TTSInput,
+        ssml_downgraded: bool,
         is_streaming: bool,
         is_final: bool,
         turn_id: str | None = None,
@@ -296,8 +301,6 @@ class TTSScheduler:
                 "prepared_text": prepared_payload.text,
                 "prepared_format": prepared_payload.format,
                 "processors": [type(processor).__name__ for processor in self._output_processors],
-                "ssml_downgraded": (
-                    original_format == "ssml" and prepared_payload.format == "plain"
-                ),
+                "ssml_downgraded": ssml_downgraded,
             },
         )

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from easycat.tts.input import TTSInputPolicy
 from easycat.validation.provider_capabilities import (
     ProviderCapabilities,
     ProviderCapabilityReport,
@@ -41,6 +42,7 @@ def test_provider_capability_report_serializes_required_json_shape() -> None:
             markers=False,
             alignment=False,
             ssml=False,
+            tts_input_policy=TTSInputPolicy.plain_text(),
         ),
         models=(ProviderIdentifier("gpt-4o-mini-tts", safe=True),),
         voices=(ProviderIdentifier("voice-user-specific-1234567890"),),
@@ -73,6 +75,15 @@ def test_provider_capability_report_serializes_required_json_shape() -> None:
         "markers": False,
         "alignment": False,
         "ssml": False,
+        "tts_input_policy": {
+            "accepted_formats": ["plain"],
+            "supports_ssml": False,
+            "unsupported_ssml": "strip",
+            "streaming_boundary": "sentence",
+            "pause_support": "none",
+            "pronunciation_support": "none",
+            "marker_support": "none",
+        },
         "api_version_header_behavior": "not_used",
     }
     assert payload["models"] == ["gpt-4o-mini-tts"]
@@ -105,6 +116,9 @@ def test_provider_capability_report_redacts_secret_like_values_inside_capabiliti
             markers=True,
             alignment=True,
             ssml=False,
+            tts_input_policy=TTSInputPolicy.plain_text(
+                provider_options={"endpoint": "https://api.test"}
+            ),
             provider_options={"request_id": "req_abc123456789", "endpoint": "https://api.test"},
         ),
         models=(ProviderIdentifier("eleven_flash_v2_5", safe=True),),
@@ -119,6 +133,9 @@ def test_provider_capability_report_redacts_secret_like_values_inside_capabiliti
     assert payload["capabilities"]["provider_options"] == {
         "endpoint": "[REDACTED_URL]",
         "request_id": "[REDACTED_REQUEST_ID]",
+    }
+    assert payload["capabilities"]["tts_input_policy"]["provider_options"] == {
+        "endpoint": "[REDACTED_URL]",
     }
     assert payload["voices"] == ["[REDACTED_PROVIDER_IDENTIFIER]"]
 

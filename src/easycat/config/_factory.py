@@ -156,7 +156,7 @@ def _create_stt(config: Any, event_bus: EventBus) -> Any:
 def _is_tts_provider_instance(value: Any) -> bool:
     return (
         not isinstance(value, type)
-        and hasattr(value, "supports_ssml")
+        and (hasattr(value, "input_policy") or hasattr(value, "supports_ssml"))
         and all(callable(getattr(value, name, None)) for name in ("synthesize", "stop", "cancel"))
     )
 

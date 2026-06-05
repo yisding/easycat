@@ -16,7 +16,7 @@ from easycat.audio_format import AudioChunk
 from easycat.events import Event, STTEvent, TTSEvent
 
 if TYPE_CHECKING:
-    from easycat.tts.input import TTSInput
+    from easycat.tts.input import TTSInput, TTSInputPolicy
 
 # ── Versioned Provider ─────────────────────────────────────────────
 
@@ -144,7 +144,12 @@ class TTSProvider(VersionedProvider, Protocol):
 
     @property
     def supports_ssml(self) -> bool:
-        """Whether this provider accepts SSML input natively."""
+        """Whether this provider accepts SSML input natively.
+
+        Prefer exposing ``input_policy`` for new providers. The legacy flag
+        remains part of this protocol so existing structural providers keep
+        satisfying ``isinstance(provider, TTSProvider)``.
+        """
         ...
 
     def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
@@ -157,6 +162,16 @@ class TTSProvider(VersionedProvider, Protocol):
 
     async def cancel(self) -> None:
         """Immediately cancel synthesis and discard pending output."""
+        ...
+
+
+@runtime_checkable
+class TTSInputPolicyProvider(Protocol):
+    """Optional TTS-provider capability: report typed input handling."""
+
+    @property
+    def input_policy(self) -> TTSInputPolicy:
+        """Provider-facing input policy for TTS payload preparation."""
         ...
 
 

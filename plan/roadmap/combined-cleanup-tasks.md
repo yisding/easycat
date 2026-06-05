@@ -375,8 +375,9 @@ context. Several bullets are known stale; use the current-state list above and
 ### 3.5 Normalize Audio And TTS Input Policy
 
 - Centralize PCM16 mono validation, frame-size checks, and resampling helpers.
-- Replace `supports_ssml: bool` with a `TTSInputPolicy` describing plain text,
-  native SSML, stripped SSML, pauses, markers, and pronunciation support.
+- Typed `TTSInputPolicy` now describes plain text, native SSML, stripped SSML,
+  pauses, markers, and pronunciation support, while `supports_ssml` remains as
+  a compatibility shim for older providers.
 - Use capabilities to decide when transport output formats should drive TTS
   sample-rate selection.
 

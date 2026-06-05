@@ -74,18 +74,18 @@ the chain ends one stage short of the speaker for now.
    `PauseProcessor` (regex-matched `<break>` insertion). The
    default pause pattern targets phone-number-shaped digit groups.
 2. **Honesty check.** None of the bundled TTS providers currently
-   advertise `supports_ssml = True` (grep `src/easycat/tts/*.py`).
-   That means the session's `_tts_scheduler` calls `strip_ssml_tags`
-   on any SSML payload before sending it to the provider, and
-   journals an `ssml_downgraded: true` record. With today's
-   providers you will hear the same flat reading whether the
-   `PauseProcessor` is registered or not. The exercise is really
-   "watch the journal record the downgrade."
+   expose an `input_policy` that accepts SSML natively. That means
+   the session's `_tts_scheduler` calls `strip_ssml_tags` on any SSML
+   payload before sending it to the provider, and journals an
+   `ssml_downgraded: true` record. With today's providers you will
+   hear the same flat reading whether the `PauseProcessor` is
+   registered or not. The exercise is really "watch the journal record
+   the downgrade."
 3. To actually hear pauses, you'd need to plug in a TTS provider
-   that returns `True` from `supports_ssml` and accepts SSML break
-   tags. None ship with EasyCat as of this writing — a custom
-   provider via `create_tts_provider` is the path. File this as a
-   capability you'd add when a customer needs it.
+   with `TTSInputPolicy.native_ssml()` that accepts SSML break tags.
+   None ship with EasyCat as of this writing — a custom provider via
+   `create_tts_provider` is the path. File this as a capability you'd
+   add when a customer needs it.
 4. The PauseProcessor itself is wired correctly — it inserts
    `<break time="...ms"/>` between matched units (see
    `src/easycat/llm_output_processing.py`). The gap is only in

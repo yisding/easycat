@@ -26,6 +26,7 @@ from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.tts.cartesia_tts import CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
+from easycat.tts.input import TTSInputPolicy
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig, TurnMode
 
@@ -227,6 +228,44 @@ def test_create_session_accepts_custom_provider_instances_without_sessionconfig(
     assert session._config.echo_canceller is echo_canceller
     assert session._enable_noise_reduction is True
     assert session._enable_aec is True
+
+
+def test_create_session_accepts_policy_only_custom_tts(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class _CustomTTS:
+        input_policy = TTSInputPolicy.plain_text()
+
+        async def synthesize(self, payload):
+            if False:
+                yield None
+
+        async def stop(self):
+            pass
+
+        async def cancel(self):
+            pass
+
+        def version_info(self) -> dict[str, str]:
+            return {"provider": "custom-tts"}
+
+    def _fail_tts_factory(*_args, **_kwargs):
+        raise RuntimeError("provider config factory should not be called")
+
+    tts = _CustomTTS()
+    monkeypatch.setattr(
+        "easycat.config._factory.create_tts_provider_from_config", _fail_tts_factory
+    )
+
+    session = create_session(
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=tts,
+            agent=_DummyAgent(),
+        )
+    )
+
+    assert session._config.tts is tts
 
 
 def test_easyconfig_passes_opt_out_detection_settings_to_session_config():

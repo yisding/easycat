@@ -79,6 +79,24 @@ def test_tts_report_populates_voices() -> None:
     assert payload["voices"], "serialized tts report must expose a non-empty voices list"
 
 
+def test_tts_report_populates_input_policy() -> None:
+    spec = _spec("tts")
+    report = build_provider_capability_report(
+        spec,
+        live_checked_at=datetime.now(UTC),
+        credential_present=True,
+        live_status="passed",
+    )
+
+    payload = report.to_dict()
+
+    assert payload["capabilities"]["tts_input_policy"]["accepted_formats"]
+    assert (
+        payload["capabilities"]["tts_input_policy"]["supports_ssml"]
+        == payload["capabilities"]["ssml"]
+    )
+
+
 def test_non_tts_report_has_no_voices() -> None:
     spec = _spec("stt")
     report = build_provider_capability_report(

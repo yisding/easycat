@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from easycat._audio_utils import resample, to_mono
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import TTSEvent, TTSEventType
-from easycat.tts.input import TTSInput
+from easycat.tts.input import TTSInput, TTSInputPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -133,25 +133,38 @@ class TTSBase:
         return data
 
     @property
+    def input_policy(self) -> TTSInputPolicy:
+        """Typed input contract for payloads delivered to ``synthesize``.
+
+        Subclasses should prefer overriding this policy instead of the legacy
+        ``supports_ssml`` flag. If a subclass still overrides only
+        ``supports_ssml``, the base policy mirrors that override.
+        """
+        if getattr(type(self), "supports_ssml", None) is not TTSBase.supports_ssml:
+            if self.supports_ssml:
+                return TTSInputPolicy.native_ssml()
+        return TTSInputPolicy.plain_text()
+
+    @property
     def supports_ssml(self) -> bool:
         """Whether this provider accepts SSML input natively.
 
         The scheduler (:class:`~easycat.session._tts_scheduler.TTSScheduler`)
-        reads this flag *before* calling :meth:`synthesize`: when it is
-        ``False`` (the default for every built-in provider) any ``ssml``
-        payload is downgraded to plain text via ``strip_ssml_tags`` up front.
-        A provider that overrides this to ``True`` opts into receiving the
-        raw SSML markup unchanged and is responsible for forwarding it to
-        its backend.
+        now reads :attr:`input_policy`; this property remains as a compatibility
+        shim for older custom providers and mirrors subclasses that override
+        ``input_policy``.
         """
+        if getattr(type(self), "input_policy", None) is not TTSBase.input_policy:
+            return self.input_policy.supports_ssml
         return False
 
     def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text into streaming TTSEvent objects.
 
-        Subclasses must override this method.  Unless a subclass advertises
-        :attr:`supports_ssml`, the scheduler guarantees the payload is
-        already plain text, so implementations only need ``payload.text``.
+        Subclasses must override this method. Unless a subclass advertises an
+        :attr:`input_policy` that accepts SSML, the scheduler guarantees the
+        payload is already plain text, so implementations only need
+        ``payload.text``.
         """
         raise NotImplementedError
 

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from easycat.tts.input import TTSInputPolicy
 from easycat.validation.report import redact_text
 
 ProviderCapabilityStatus = Literal[
@@ -56,6 +57,7 @@ class ProviderCapabilities:
     markers: bool | None = None
     alignment: bool | None = None
     ssml: bool | None = None
+    tts_input_policy: TTSInputPolicy | Mapping[str, Any] | None = None
     provider_options: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self, *, api_version_header_behavior: str | None = None) -> dict[str, Any]:
@@ -71,6 +73,7 @@ class ProviderCapabilities:
             "markers": self.markers,
             "alignment": self.alignment,
             "ssml": self.ssml,
+            "tts_input_policy": _serialize_tts_input_policy(self.tts_input_policy),
             "api_version_header_behavior": api_version_header_behavior,
         }
         for key, value in optional_fields.items():
@@ -152,6 +155,12 @@ def _serialize_datetime_or_none(value: datetime | str | None) -> str | None:
         value = value.replace(tzinfo=UTC)
     value = value.astimezone(UTC)
     return value.isoformat().replace("+00:00", "Z")
+
+
+def _serialize_tts_input_policy(value: TTSInputPolicy | Mapping[str, Any] | None) -> Any:
+    if isinstance(value, TTSInputPolicy):
+        return value.to_dict()
+    return value
 
 
 def _redact_value(value: Any) -> Any:

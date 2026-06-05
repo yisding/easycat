@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
+from easycat.tts.input import TTSInputPolicy
 from easycat.validation.provider_capabilities import (
     ProviderCapabilities,
     ProviderCapabilityReport,
@@ -289,6 +290,11 @@ def _surface_capabilities(spec: ProviderSurfaceSpec) -> ProviderCapabilities:
             ssml=False,
         )
     if spec.surface == "tts":
+        input_policy = (
+            TTSInputPolicy.native_ssml()
+            if spec.provider == "elevenlabs"
+            else TTSInputPolicy.plain_text()
+        )
         return ProviderCapabilities(
             input_audio_formats=("text",),
             output_audio_formats=("pcm16",),
@@ -298,6 +304,7 @@ def _surface_capabilities(spec: ProviderSurfaceSpec) -> ProviderCapabilities:
             markers=False,
             alignment=spec.provider in {"elevenlabs", "cartesia"},
             ssml=spec.provider == "elevenlabs",
+            tts_input_policy=input_policy,
         )
     return ProviderCapabilities(
         streaming=streaming,
