@@ -247,6 +247,18 @@ def test_ec2_webrtc_deploy_docs_do_not_claim_to_configure_https() -> None:
     assert "Client URL:      http://$EXTERNAL_IP:8080/webrtc_client.html" not in deploy
 
 
+def test_ec2_webrtc_turns_port_is_optional_until_certs_are_configured() -> None:
+    deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
+    coturn = (REPO_ROOT / "examples" / "ec2_webrtc" / "coturn.conf").read_text(encoding="utf-8")
+
+    assert "TURN_SERVER_URL=turn:$EXTERNAL_IP:3478" in deploy
+    assert "TCP 8080, TCP/UDP 3478, UDP 49152-65535" in deploy
+    assert "Optional TURNS: TCP 5349 after coturn cert/pkey are configured" in deploy
+    assert "TCP 5349   — TURNS" not in deploy
+    assert "# tls-listening-port=5349" in coturn
+    assert "\ntls-listening-port=5349" not in coturn
+
+
 def test_ec2_webrtc_turn_template_handles_generated_password_characters() -> None:
     deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
 

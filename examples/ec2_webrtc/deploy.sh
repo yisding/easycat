@@ -9,8 +9,8 @@
 #       TCP 8080   — WebRTC signaling + static files (HTTP)
 #       TCP 3478   — TURN/STUN
 #       UDP 3478   — TURN/STUN
-#       TCP 5349   — TURNS (TLS)
 #       UDP 49152-65535 — TURN relay range
+#     Optional: TCP 5349 only after you configure coturn cert/pkey for TURNS.
 #
 # NOTE: getUserMedia() requires HTTPS for non-localhost origins.  For
 # production, place the server behind an HTTPS reverse proxy (e.g.
@@ -173,7 +173,8 @@ echo "  View logs:       sudo journalctl -u easycat-webrtc -f"
 echo "  TURN logs:       sudo tail -f /var/log/turnserver.log"
 echo ""
 echo "Security Group reminder — ensure these ports are open:"
-echo "  TCP 8080, TCP/UDP 3478, TCP 5349, UDP 49152-65535"
+echo "  TCP 8080, TCP/UDP 3478, UDP 49152-65535"
+echo "  Optional TURNS: TCP 5349 after coturn cert/pkey are configured"
 echo ""
 echo "NOTE: For remote access, getUserMedia() requires HTTPS."
 echo "  Place this server behind nginx/Caddy with a TLS certificate."
