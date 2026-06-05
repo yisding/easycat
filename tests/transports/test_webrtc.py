@@ -536,7 +536,7 @@ class TestWebRTCTransportLifecycle:
         import aiohttp
 
         port = find_free_port()
-        config = WebRTCTransportConfig(host="127.0.0.1", port=port)
+        config = WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=None)
         transport = WebRTCTransport(config)
         await transport.connect()
 
