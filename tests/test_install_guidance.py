@@ -179,6 +179,8 @@ def test_readme_optional_dependency_list_has_copyable_install_commands() -> None
     for command in (
         "uv sync --extra local",
         "uv sync --extra webrtc",
+        "uv sync --extra webtransport",
+        "uv sync --extra telephony",
         "uv sync --extra smart-turn",
         "uv sync --extra ten-vad",
         "uv sync --extra silero-vad",

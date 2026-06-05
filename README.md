@@ -48,6 +48,8 @@ uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --ext
 Optional dependencies you may need depending on providers/transports:
 - sounddevice (LocalTransport): `uv sync --extra local`
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
+- aioquic (WebTransportTransport): `uv sync --extra webtransport`
+- FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony`
 - numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
 - ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license): `uv sync --extra ten-vad`
 - numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad` — runs the bundled ONNX model (no torch required)
