@@ -241,7 +241,7 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     commands = fast_path.split("```bash", 1)[1].split("```", 1)[0].strip().splitlines()
 
     assert commands == [
-        "uv sync --extra quickstart",
+        "uv sync --extra quickstart --group dev",
         'export OPENAI_API_KEY="your-api-key"',
         "uv run easycat doctor",
         "uv run python examples/openai_agents_voice.py",

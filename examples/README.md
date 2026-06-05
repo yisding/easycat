@@ -8,7 +8,7 @@ third-party packages it expects, and the environment variables that must be set.
 For the fastest local mic/speaker path:
 
 ```bash
-uv sync --extra quickstart
+uv sync --extra quickstart --group dev
 export OPENAI_API_KEY="your-api-key"
 uv run easycat doctor
 uv run python examples/openai_agents_voice.py
