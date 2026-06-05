@@ -26,5 +26,6 @@ run(
 #   stt="deepgram/nova-2"          swap STT (needs DEEPGRAM_API_KEY + --extra deepgram)
 #   tools=[...] on your Agent      tools live on YOUR Agent, not on EasyCat
 #   EasyConfig.browser(agent=...)  serve in a browser (needs a server + --extra webrtc)
-#   debug="full"                   record a journal for `easycat inspect`
+#   debug="full"                   record a journal under .easycat/journals/
+#   uv run easycat inspect .easycat/journals/<session_id>.sqlite
 # Full ground-up ladder: docs/teaching/00-hello-audio/
