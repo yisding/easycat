@@ -23,8 +23,8 @@ emit a TTS chunk.
 
 Dependencies:
     uv sync --extra quickstart --group dev
-    For real NR:   uv pip install -e '.[rnnoise]'
-    For real AEC:  uv pip install -e '.[aec]'
+    For real NR:   uv sync --extra rnnoise
+    For real AEC:  uv sync --extra aec
     Otherwise both silently fall back to passthrough — the
     journal tells you which backend is live.
 

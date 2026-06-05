@@ -23,7 +23,7 @@ otherwise there's no echo to cancel and the mis-wiring is invisible.
 
 Dependencies:
     uv sync --extra quickstart --group dev
-    For real NR/AEC: uv pip install -e '.[rnnoise,aec]'
+    For real NR/AEC: uv sync --extra rnnoise --extra aec
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
 """

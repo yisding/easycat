@@ -9,9 +9,9 @@
 ## Prerequisites
 
 - [Chapter 9](../09-interruption/)
-- For real NR: `uv pip install -e '.[rnnoise]'` (permissive
-  RNNoise) or Krisp per its own SDK.
-- For real AEC: `uv pip install -e '.[aec]'` (LiveKit APM).
+- For real NR: `uv sync --extra rnnoise` (permissive RNNoise) or
+  Krisp per its own SDK.
+- For real AEC: `uv sync --extra aec` (LiveKit APM).
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 
 > **Minimum to skip the ladder:** chapter 4 (where VAD sits).
@@ -86,8 +86,8 @@ so you know which one you're actually hearing.
  
  Dependencies:
      uv sync --extra quickstart --group dev
-+    For real NR:   uv pip install -e '.[rnnoise]'
-+    For real AEC:  uv pip install -e '.[aec]'
++    For real NR:   uv sync --extra rnnoise
++    For real AEC:  uv sync --extra aec
 +    Otherwise both silently fall back to passthrough — the
 +    journal tells you which backend is live.
 +

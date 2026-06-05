@@ -33,6 +33,10 @@ STALE_INSTALL_PATTERNS = (
         re.compile(r"\bpip install\s+[`'\"]?easycat\["),
     ),
     (
+        "editable local extra install",
+        re.compile(r"\b(?:uv\s+)?pip\s+install\s+-e\s+[`'\"]?\.\["),
+    ),
+    (
         "unquoted uv add easycat extra",
         re.compile(r"\buv add\s+easycat\["),
     ),
