@@ -2,6 +2,7 @@
 
 Setup: export OPENAI_API_KEY=...; export ELEVENLABS_API_KEY=...
        uv sync --extra quickstart --extra elevenlabs
+       uv run easycat doctor
 Run:   uv run python examples/elevenlabs_voice.py
 """
 

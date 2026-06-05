@@ -5,6 +5,7 @@ docstrings the model reads as descriptions. For tools that drive the
 call (end, transfer, DTMF) see ``session_actions_openai.py``.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+       uv run easycat doctor
 Run:   uv run python examples/function_tools_openai.py
 """
 

@@ -5,6 +5,7 @@ streaming text and every tool call without touching the EventBus
 directly. Reuses the weather/time tools so tool events actually fire.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+       uv run easycat doctor
 Run:   uv run python examples/agent_event_subscription.py
 """
 

@@ -4,6 +4,7 @@ PydanticAI tools access ``SessionActions`` through their deps object.
 For telephony actions (transfer, DTMF, SMS) see ``examples/twilio_app.py``.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai
+       uv run easycat doctor
 Run:   uv run python examples/session_actions_pydantic.py
 """
 

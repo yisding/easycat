@@ -7,6 +7,7 @@ mic re-triggers VAD/STT (the bot listens to itself). The shortcut
 automatically since browser clients always loop transport audio back.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra aec
+       uv run easycat doctor
 Run:   uv run python examples/echo_cancellation.py
 """
 

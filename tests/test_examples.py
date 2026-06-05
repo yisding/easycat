@@ -336,6 +336,24 @@ def test_examples_readme_env_cells_cover_required_env_helpers() -> None:
     assert not stale, "examples/README.md env cells omit require_env vars: " + "; ".join(stale)
 
 
+def test_env_examples_document_doctor_preflight() -> None:
+    stale: list[str] = []
+
+    for row in _example_readme_rows():
+        if row["env"].startswith("None"):
+            continue
+        path = REPO_ROOT / "examples" / row["link"]
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        doc = ast.get_docstring(module) or ""
+        if "uv run easycat doctor" not in doc:
+            stale.append(row["link"])
+
+    assert not stale, (
+        "Example docstrings with required env vars should document "
+        "`uv run easycat doctor`: " + ", ".join(stale)
+    )
+
+
 def test_examples_readme_none_env_rows_are_explicit_in_docstrings() -> None:
     stale: list[str] = []
 

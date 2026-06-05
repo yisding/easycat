@@ -12,6 +12,7 @@ deployments would wire this to a GPIO pin, a UI button, or a hotkey.
 Setup:
   export OPENAI_API_KEY="..."
   uv sync --extra quickstart
+  uv run easycat doctor
   uv run python examples/push_to_talk.py
 """
 

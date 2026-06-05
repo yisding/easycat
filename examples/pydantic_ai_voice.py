@@ -4,6 +4,7 @@ For function tools see ``examples/function_tools_pydantic.py``;
 for multi-agent workflows see ``examples/pydantic_ai_workflow_voice.py``.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai
+       uv run easycat doctor
 Run:   uv run python examples/pydantic_ai_voice.py
 """
 

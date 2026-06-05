@@ -5,6 +5,7 @@ object. For tools that drive the call (end, transfer, DTMF) see
 ``session_actions_pydantic.py``.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai
+       uv run easycat doctor
 Run:   uv run python examples/function_tools_pydantic.py
 """
 

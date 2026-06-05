@@ -8,6 +8,7 @@
 Once running, ask: "What's Siobhan's number?"
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+       uv run easycat doctor
 Run:   uv run python examples/output_processors.py
 """
 

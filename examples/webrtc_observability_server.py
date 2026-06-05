@@ -9,6 +9,7 @@ session ends.
 
 Setup: export OPENAI_API_KEY=...
        uv sync --extra openai-agents --extra webrtc --extra debugger
+       uv run easycat doctor
 Run:   uv run python examples/webrtc_observability_server.py
 
 Open:

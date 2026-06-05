@@ -5,6 +5,7 @@ PydanticAI agent. The workflow decides which specialist handles each
 turn and persists state across turns.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai
+       uv run easycat doctor
 Run:   uv run python examples/pydantic_ai_workflow_voice.py
 """
 

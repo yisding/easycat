@@ -7,6 +7,7 @@ inspector, transcript, and per-turn audio playback update as the
 conversation happens.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra debugger
+       uv run easycat doctor
 Run:   uv run python examples/journal_ui.py
        # then open http://localhost:8765
 """

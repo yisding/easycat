@@ -16,6 +16,7 @@ Setup:
   uv sync --extra quickstart --extra ten-vad        # adds TEN VAD (separate license)
   uv sync --extra silero-vad                         # Silero runs the bundled ONNX model
   uv pip install krisp_audio                         # Krisp SDK, if you use --backend krisp
+  uv run easycat doctor
   uv run python examples/vad_backends.py --backend silero
   uv run python examples/vad_backends.py --backend funasr
   uv run python examples/vad_backends.py --backend ten

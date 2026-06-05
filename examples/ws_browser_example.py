@@ -16,6 +16,7 @@ framework (FastAPI, Django, etc.) or a CDN.
 Setup:
     export OPENAI_API_KEY="..."
     uv sync --extra openai-agents
+    uv run easycat doctor
     uv run python examples/ws_browser_example.py
 
 Then open http://localhost:8080/ws_browser_client.html in your browser.

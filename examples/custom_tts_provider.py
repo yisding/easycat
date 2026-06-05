@@ -12,6 +12,7 @@ each event on its way out.
 Setup:
   export OPENAI_API_KEY="..."
   uv sync --extra quickstart
+  uv run easycat doctor
   uv run python examples/custom_tts_provider.py
 """
 

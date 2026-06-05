@@ -8,6 +8,7 @@ DTMF) see ``session_actions_langchain.py``.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain
        uv pip install "langchain<1" langchain-openai
+       uv run easycat doctor
 Run:   uv run python examples/function_tools_langchain.py
 
 LangChain 1.x removed ``create_tool_calling_agent`` (the recommended

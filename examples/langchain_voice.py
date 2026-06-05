@@ -9,6 +9,7 @@ For stateful multi-node agent workflows see ``langgraph_voice.py``.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain
        uv pip install langchain-openai
+       uv run easycat doctor
 Run:   uv run python examples/langchain_voice.py
 """
 

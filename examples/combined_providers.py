@@ -6,6 +6,7 @@ mixes vendors to show that STT and TTS swap independently.
 
 Setup: export OPENAI_API_KEY=...; export DEEPGRAM_API_KEY=...; export ELEVENLABS_API_KEY=...
        uv sync --extra quickstart --extra deepgram --extra elevenlabs
+       uv run easycat doctor
 Run:   uv run python examples/combined_providers.py
 """
 

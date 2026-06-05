@@ -5,6 +5,7 @@ before ending the turn. Smart-turn classifies captured audio with a ~8 MB
 Whisper-Tiny ONNX model and ends early when confident.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart  # Smart Turn included
+       uv run easycat doctor
 Run:   uv run python examples/smart_turn_demo.py
 """
 

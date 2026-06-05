@@ -11,6 +11,7 @@ TEN → Krisp) with ``LoggingVAD``, which prints each event.
 Setup:
   export OPENAI_API_KEY="..."
   uv sync --extra quickstart
+  uv run easycat doctor
   uv run python examples/custom_vad_provider.py
 """
 

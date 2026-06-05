@@ -6,6 +6,7 @@ session drains them). For telephony actions (transfer, DTMF, SMS) see
 ``examples/twilio_app.py``.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+       uv run easycat doctor
 Run:   uv run python examples/session_actions_openai.py
 """
 

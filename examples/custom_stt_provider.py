@@ -14,6 +14,7 @@ does internally for simple agents.
 Setup:
   export OPENAI_API_KEY="..."
   uv sync --extra quickstart
+  uv run easycat doctor
   uv run python examples/custom_stt_provider.py
 """
 

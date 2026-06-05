@@ -1,6 +1,7 @@
 """Local voice bot demo using a single OpenAI Agents SDK agent.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+       uv run easycat doctor
 Run:   uv run python examples/openai_agents_voice.py
 """
 
