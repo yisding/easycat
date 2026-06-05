@@ -86,7 +86,8 @@ easycat explain --list # list every error code and meta topic
 easycat bundles list      # list captured debug bundles
 easycat bundles show PATH # summarise one captured debug bundle
 easycat inspect PATH      # summarise one captured debug bundle
-easycat validate # run validation lanes and render validation reports
+easycat validate quick       # run deterministic local validation
+easycat validate report PATH # render a saved validation report
 ```
 
 From an empty directory, `easycat init` scaffolds the canonical

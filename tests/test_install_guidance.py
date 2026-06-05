@@ -322,6 +322,16 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
     assert "easycat explain --list" in cli_section
 
 
+def test_readme_cli_validate_examples_are_copyable() -> None:
+    """Bare ``easycat validate`` shows help; the README should show useful subcommands."""
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    cli_section = readme.split("## CLI", 1)[1].split("## Validation Workflow", 1)[0]
+
+    assert not re.search(r"(?m)^easycat validate\s+#", cli_section)
+    assert "easycat validate quick" in cli_section
+    assert "easycat validate report PATH" in cli_section
+
+
 def test_agent_guides_use_current_live_marker_name() -> None:
     stale: list[str] = []
 
