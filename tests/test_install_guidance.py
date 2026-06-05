@@ -58,6 +58,29 @@ PROVIDER_EXTRA_BY_ENV_VAR = {
     "DEEPGRAM_API_KEY": "--extra deepgram",
     "ELEVENLABS_API_KEY": "--extra elevenlabs",
 }
+CODE_SPAN_RE = re.compile(r"`([^`]+)`")
+AGENT_GUIDE_SOURCE_PATH_SECTIONS = {
+    "AGENTS.md": ("## Project Structure & Module Organization", "## Build, Test"),
+    "CLAUDE.md": ("## Architecture", "## Session Lifecycle"),
+}
+REPO_REL_PATH_PREFIXES = ("src/", "tests/", "docs/", "examples/", "plan/", "scripts/")
+SOURCE_REL_PATH_PREFIXES = (
+    "cli/",
+    "config/",
+    "debug/",
+    "debugger/",
+    "integrations/",
+    "models/",
+    "runtime/",
+    "session/",
+    "stages/",
+    "stt/",
+    "telephony/",
+    "transports/",
+    "tts/",
+    "validation/",
+    "vad/",
+)
 BRIDGE_DISPLAY_NAMES = {
     "GenericWorkflowBridge": "your own async workflow",
     "LangChainBridge": "LangChain",
@@ -91,6 +114,49 @@ def _looks_like_placeholder(extra: str) -> bool:
 
 def _normalize_extra(extra: str) -> str:
     return extra.strip().rstrip(".,;:")
+
+
+def _extract_markdown_section(text: str, start_heading: str, end_heading: str) -> tuple[str, int]:
+    start = text.index(start_heading)
+    try:
+        end = text.index(end_heading, start + len(start_heading))
+    except ValueError:
+        end = len(text)
+    return text[start:end], text.count("\n", 0, start) + 1
+
+
+def _clean_code_span_path(code_span: str) -> str:
+    return code_span.strip().strip(".,;:()[]")
+
+
+def _source_path_candidates_for_agent_guide(
+    filename: str,
+    line: str,
+    code_span: str,
+) -> list[Path]:
+    path_text = _clean_code_span_path(code_span)
+    if not path_text or any(char.isspace() for char in path_text):
+        return []
+    if "/" not in path_text and not path_text.endswith(".py"):
+        return []
+
+    if path_text.startswith(REPO_REL_PATH_PREFIXES):
+        return [REPO_ROOT / path_text]
+
+    source_root = REPO_ROOT / "src" / "easycat"
+    if path_text.startswith(SOURCE_REL_PATH_PREFIXES):
+        return [source_root / path_text]
+
+    if filename == "CLAUDE.md" and line.startswith("  - ") and path_text.endswith(".py"):
+        return [source_root / "session" / path_text]
+
+    if filename == "CLAUDE.md" and "Agent bridges" in line and path_text.endswith(".py"):
+        return [source_root / "integrations" / "agents" / path_text]
+
+    if path_text.endswith(".py"):
+        return [source_root / path_text]
+
+    return []
 
 
 def test_optional_extra_guidance_uses_current_uv_commands() -> None:
@@ -301,6 +367,27 @@ def test_agent_guides_reference_config_package_layout() -> None:
     assert not stale_mentions, (
         "Agent guides should reference config/, not config.py: " + ", ".join(stale_mentions)
     )
+
+
+def test_agent_guide_source_path_mentions_exist() -> None:
+    missing: list[str] = []
+
+    for filename, (start_heading, end_heading) in AGENT_GUIDE_SOURCE_PATH_SECTIONS.items():
+        text = (REPO_ROOT / filename).read_text(encoding="utf-8")
+        section, start_line = _extract_markdown_section(text, start_heading, end_heading)
+        for offset, line in enumerate(section.splitlines()):
+            line_number = start_line + offset
+            for match in CODE_SPAN_RE.finditer(line):
+                path_text = _clean_code_span_path(match.group(1))
+                candidates = _source_path_candidates_for_agent_guide(
+                    filename,
+                    line,
+                    path_text,
+                )
+                if candidates and not any(path.exists() for path in candidates):
+                    missing.append(f"{filename}:{line_number}: `{path_text}`")
+
+    assert not missing, "Agent guide source path mentions are stale:\n" + "\n".join(missing)
 
 
 def test_claude_overview_tracks_public_agent_bridges() -> None:
