@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -10,6 +11,8 @@ _CHAPTER_ROW_RE = re.compile(
     r"\| \[`(?P<name>[^`]+)`\]\(\./(?P<link>[^)]+)/\) "
     r"\| (?P<description>[^|]+) \|$"
 )
+_API_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9_]*_API_KEY\b")
+_UV_EXTRA_RE = re.compile(r"--extra\s+(?P<extra>[A-Za-z0-9_.-]+)")
 
 
 def _chapter_dirs() -> list[Path]:
@@ -34,6 +37,25 @@ def _ladder_rows() -> list[dict[str, str]]:
         malformed
     )
     return rows
+
+
+def _chapter_prerequisites(readme: str) -> str:
+    if "## Prerequisites" not in readme:
+        return readme
+    return readme.split("## Prerequisites", 1)[1].split("## ", 1)[0]
+
+
+def _python_docstring_and_key_literals(path: Path) -> tuple[str, set[str]]:
+    source = path.read_text(encoding="utf-8")
+    parsed = ast.parse(source, filename=str(path))
+    doc = ast.get_docstring(parsed) or ""
+    keys: set[str] = set()
+
+    for node in ast.walk(parsed):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            keys.update(_API_KEY_RE.findall(node.value))
+
+    return doc, keys
 
 
 def test_teaching_ladder_index_matches_chapter_directories() -> None:
@@ -80,6 +102,34 @@ def test_teaching_chapter_readmes_include_runnable_commands() -> None:
             missing.append(chapter_dir.name)
 
     assert not missing, "Teaching chapter READMEs missing runnable commands: " + ", ".join(missing)
+
+
+def test_teaching_chapter_prerequisites_cover_script_setup() -> None:
+    stale: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        readme = (chapter_dir / "README.md").read_text(encoding="utf-8")
+        prerequisites = _chapter_prerequisites(readme)
+        readme_extras = set(_UV_EXTRA_RE.findall(prerequisites))
+        readme_keys = set(_API_KEY_RE.findall(prerequisites))
+        script_extras: set[str] = set()
+        script_keys: set[str] = set()
+
+        for script in sorted(chapter_dir.glob("*.py")):
+            doc, literal_keys = _python_docstring_and_key_literals(script)
+            script_extras.update(_UV_EXTRA_RE.findall(doc))
+            script_keys.update(_API_KEY_RE.findall(doc))
+            script_keys.update(literal_keys)
+
+        missing_extras = sorted(script_extras - readme_extras)
+        missing_keys = sorted(script_keys - readme_keys)
+        if missing_extras or missing_keys:
+            stale.append(
+                f"{chapter_dir.name}: missing extras {missing_extras or '-'}, "
+                f"keys {missing_keys or '-'}"
+            )
+
+    assert not stale, "Teaching chapter prerequisites drifted from scripts: " + "; ".join(stale)
 
 
 def test_chapter_13_provider_mix_documents_required_extras() -> None:
