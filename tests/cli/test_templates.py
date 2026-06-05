@@ -182,6 +182,7 @@ def test_cli_test_plan_documents_template_readme_contract() -> None:
 
     assert "four required sections" not in test_plan
     assert "five required sections" in test_plan
+    assert "uv run easycat doctor" in test_plan
     for section in section_names:
         assert section in test_plan
 

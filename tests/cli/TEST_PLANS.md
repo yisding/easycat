@@ -110,6 +110,8 @@ place, substitutions must not leak raw `$VAR` tokens into user code.
 **Risks.** Missing substitution variables; binary/dotfile mishandling
 (`.env.example`, `.gitignore` not copied); `agent.py` line budget
 regression; README sections dropped during rendering.
+OpenAI-key templates missing the `easycat doctor` preflight before the
+first run.
 
 **Checks.**
 - For each of the 3 templates: `init` produces agent.py, .env.example,
@@ -121,6 +123,8 @@ regression; README sections dropped during rendering.
 - `agent.py` stays within its per-template line budget.
 - README contains all five required sections: Install, Configure, Run,
   Check, Next steps.
+- README tells every OpenAI-key template to run `uv run easycat doctor`
+  during setup.
 - `pyproject.toml` pins `easycat[<extra>]`.
 - `.gitignore` contains no placeholders.
 
