@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
-from easycat import Session, SessionConfig, TurnManagerConfig
+from easycat import EasyConfig, TurnManagerConfig, create_session
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
     Event,
@@ -28,7 +28,6 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.tts.input import TTSInput
 
 
@@ -39,11 +38,15 @@ def _chunk(n: int = 320) -> AudioChunk:
 class StubTransport:
     async def connect(self) -> None: ...
     async def disconnect(self) -> None: ...
-    async def send_audio(self, chunk: AudioChunk) -> None: ...
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        return True
 
     async def receive_audio(self) -> AsyncIterator[AudioChunk]:
         for _ in range(3):
             yield _chunk()
+
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "stub-transport"}
 
 
 class StubVAD:
@@ -59,6 +62,9 @@ class StubVAD:
 
     def configure(self, **kwargs: object) -> None: ...
 
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "stub-vad"}
+
 
 class StubSTT:
     def __init__(self) -> None:
@@ -66,6 +72,9 @@ class StubSTT:
 
     async def start_stream(self) -> None: ...
     async def send_audio(self, chunk: AudioChunk) -> None: ...
+
+    async def commit_segment(self) -> bool:
+        return False
 
     async def end_stream(self) -> None:
         await self._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello, how are you?"))
@@ -78,6 +87,9 @@ class StubSTT:
                 break
             yield event
 
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "stub-stt"}
+
 
 class StubAgent:
     async def run(self, text: str) -> str:
@@ -85,6 +97,8 @@ class StubAgent:
 
 
 class StubTTS:
+    supports_ssml = False
+
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
@@ -92,26 +106,21 @@ class StubTTS:
     async def stop(self) -> None: ...
     async def cancel(self) -> None: ...
 
-
-class StubNoiseReducer:
-    async def process(self, chunk: AudioChunk) -> AudioChunk:
-        return chunk
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "stub-tts"}
 
 
 async def main() -> None:
-    journal = InMemoryRingBuffer(capacity=10_000)
-
-    config = SessionConfig(
+    config = EasyConfig.mic(
         transport=StubTransport(),
         vad=StubVAD(),
         stt=StubSTT(),
         agent=StubAgent(),
         tts=StubTTS(),
-        noise_reducer=StubNoiseReducer(),
-        turn_manager_config=TurnManagerConfig(end_of_turn_silence_ms=1),
-        journal=journal,
+        turn_taking=TurnManagerConfig(end_of_turn_silence_ms=1),
+        debug="light",
     )
-    session = Session(config)
+    session = create_session(config)
 
     print("Starting session...")
     await session.start()

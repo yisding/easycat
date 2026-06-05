@@ -952,6 +952,18 @@ def test_vad_backends_example_uses_easyconfig_provider_instance_surface():
     assert "AgentRunner(" not in source
 
 
+def test_journal_demo_uses_easyconfig_provider_instance_surface():
+    source = (REPO_ROOT / "examples/journal_demo.py").read_text(encoding="utf-8")
+
+    assert "EasyConfig.mic(" in source
+    assert 'debug="light"' in source
+    assert "turn_taking=TurnManagerConfig" in source
+    assert "create_session(config)" in source
+    assert "SessionConfig" not in source
+    assert "Session(" not in source
+    assert "InMemoryRingBuffer" not in source
+
+
 def test_reconnecting_ws_client_example_imports():
     import examples.reconnecting_ws_client as reconnecting_ws_client
 
