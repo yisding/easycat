@@ -257,6 +257,15 @@ def test_ec2_webrtc_turn_template_handles_generated_password_characters() -> Non
     assert '.replace("__TURN_PASSWORD__", sys.argv[3])' in deploy
 
 
+def test_ec2_webrtc_deploy_honors_manual_external_ip() -> None:
+    deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert 'EXTERNAL_IP="${EXTERNAL_IP:-$(' in deploy
+    assert "--max-time 2" in deploy
+    assert "export EXTERNAL_IP=1.2.3.4" in deploy
+    assert "EXTERNAL_IP=$(curl" not in deploy
+
+
 def test_examples_readme_fastest_path_verifies_environment_before_running() -> None:
     readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     fast_path = readme.split("For the fastest local mic/speaker path:", 1)[1]

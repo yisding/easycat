@@ -23,7 +23,9 @@
 #
 set -euo pipefail
 
-EXTERNAL_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo "")
+EXTERNAL_IP="${EXTERNAL_IP:-$(
+    curl -fsS --max-time 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true
+)}"
 if [ -z "$EXTERNAL_IP" ]; then
     echo "Could not detect EC2 public IP.  Set EXTERNAL_IP manually."
     echo "  export EXTERNAL_IP=1.2.3.4"
