@@ -26,7 +26,9 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Fast parallel run | `just test-fast` | `uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not slow and not stress and not flaky"` |
 | One file / node | `just test-one tests/test_cancel.py` | `uv run pytest tests/test_cancel.py` |
 | Lint | `just lint` | `uv run ruff check .` |
+| Lint auto-fix | `just lint-fix` | `uv run ruff check --fix .` |
 | Format | `just fmt` | `uv run ruff format .` |
+| Format check | `just fmt-check` | `uv run ruff format --check .` |
 | Type gate (mypy, clean core) | `just typecheck` | `uv run mypy --follow-imports=silent src/easycat/debug` |
 | Type report (mypy, whole repo) | `just typecheck-all` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
@@ -37,6 +39,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Validate (latency smoke) | `just validate-latency-smoke` | `uv run easycat validate latency --smoke` |
 | Validate (live OpenAI) | `just validate-live-openai` | `uv run easycat validate live --provider openai` |
 | Validate report | `just validate-report .easycat/validation/latest.json` | `uv run easycat validate report .easycat/validation/latest.json` |
+| Pre-PR gauntlet | `just check` | `uv run ruff format --check . && uv run ruff check . && uv run pytest` |
 | Pre-commit hooks | `just pre-commit` | `uv run pre-commit run --all-files` |
 
 > `mypy` ships in the `dev` group, so `just typecheck` / `just typecheck-all`

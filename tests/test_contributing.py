@@ -12,25 +12,38 @@ _DEV_LOOP_ROW_RE = re.compile(
 _VALIDATION_ROW_RE = re.compile(
     r"^\| `(?P<slice>[^`]+)` \| `(?P<command>[^`]+)` \| (?P<markers>[^|]+) \|$"
 )
-_RECIPE_RE = re.compile(r"^(?P<name>[A-Za-z0-9_-]+)(?:\s+[^:]*)?:")
+_RECIPE_RE = re.compile(r"^(?P<name>[A-Za-z0-9_-]+)(?:\s+[^:]*)?:(?P<deps>.*)$")
 
 
 def _just_recipes() -> dict[str, str]:
-    recipes: dict[str, str] = {}
+    commands: dict[str, str] = {}
+    dependencies: dict[str, list[str]] = {}
     current_recipe: str | None = None
 
     for line in (REPO_ROOT / "justfile").read_text(encoding="utf-8").splitlines():
         recipe_match = _RECIPE_RE.match(line)
-        if recipe_match and not line.startswith((" ", "\t", "#")):
+        if recipe_match and ":=" not in line and not line.startswith((" ", "\t", "#")):
             current_recipe = recipe_match.group("name")
-            recipes[current_recipe] = ""
+            commands[current_recipe] = ""
+            dependencies[current_recipe] = shlex.split(recipe_match.group("deps"))
             continue
 
         if current_recipe is not None and line.startswith((" ", "\t")) and line.strip():
-            recipes[current_recipe] = line.strip().removeprefix("@")
+            commands[current_recipe] = line.strip().removeprefix("@")
             current_recipe = None
 
-    return recipes
+    def _resolve(recipe: str, stack: tuple[str, ...] = ()) -> str:
+        if recipe in stack:
+            cycle = " -> ".join((*stack, recipe))
+            raise AssertionError(f"justfile recipe dependency cycle: {cycle}")
+        if commands[recipe]:
+            return commands[recipe]
+        deps = dependencies[recipe]
+        if deps:
+            return " && ".join(_resolve(dep, (*stack, recipe)) for dep in deps)
+        return ""
+
+    return {recipe: _resolve(recipe) for recipe in commands}
 
 
 def _development_loop_rows() -> list[dict[str, str]]:
@@ -98,6 +111,14 @@ def test_contributing_development_loop_just_recipes_stay_current() -> None:
     assert not stale_raw_commands, "CONTRIBUTING.md stale raw commands: " + "; ".join(
         stale_raw_commands
     )
+
+
+def test_contributing_development_loop_lists_public_just_recipes() -> None:
+    recipes = set(_just_recipes()) - {"default"}
+    documented_recipes = {row["recipe"] for row in _development_loop_rows()}
+    missing = sorted(recipes - documented_recipes)
+
+    assert not missing, "CONTRIBUTING.md missing just recipes: " + ", ".join(missing)
 
 
 def test_contributing_development_loop_lists_validation_just_recipes() -> None:
