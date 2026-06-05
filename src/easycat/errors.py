@@ -196,7 +196,8 @@ EASYCAT_E104 = register(
     fix=(
         "Check spelling — provider names are lowercased with hyphens "
         "(`deepgram`, `openai-realtime`). Install the provider extra "
-        "if needed: `uv add 'easycat[deepgram]'`."
+        "if needed: `uv add 'easycat[deepgram]'`. From the EasyCat "
+        "repo, use `uv sync --extra deepgram`."
     ),
     example='stt="deepgram/flux"',
     related=["EASYCAT_E203"],
@@ -229,8 +230,11 @@ EASYCAT_E202 = register(
         "The agent or template needs a Python package that is in one "
         "of EasyCat's optional extras, but that extra is not installed."
     ),
-    fix="Install the extra: `uv add 'easycat[{extra}]'`.",
-    example="uv add 'easycat[openai-agents]'",
+    fix=(
+        "Install the extra: `uv add 'easycat[{extra}]'`. From the "
+        "EasyCat repo, use `uv sync --extra {extra}`."
+    ),
+    example="uv add 'easycat[openai-agents]'  # or: uv sync --extra openai-agents",
     related=["EASYCAT_E203"],
 )
 
@@ -276,8 +280,11 @@ EASYCAT_E205 = register(
         "ships in the `smart-turn` extra but is not currently "
         "installed in this environment."
     ),
-    fix="uv add 'easycat[smart-turn]'",
-    example="uv add 'easycat[smart-turn]'",
+    fix=(
+        "Install Smart Turn support: `uv add 'easycat[smart-turn]'`. "
+        "From the EasyCat repo, use `uv sync --extra smart-turn`."
+    ),
+    example="uv add 'easycat[smart-turn]'  # or: uv sync --extra smart-turn",
     related=["EASYCAT_E202"],
 )
 
