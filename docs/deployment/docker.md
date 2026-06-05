@@ -44,8 +44,9 @@ EASYCAT_WS_TOKEN=<random-long-token>
 
 Then `docker compose -f docker/compose.yaml up` picks it up
 automatically.  The repo's `.dockerignore` excludes `.env` and `.env.*`
-from the build context as a second line of defence — if you fork the
-Dockerfile to use a wildcard `COPY . /app`, secrets still won't ship.
+files at any depth from the build context as a second line of defence
+while still allowing `.env.example` templates — if you fork the Dockerfile
+to use a wildcard `COPY . /app`, secrets still won't ship.
 
 Never use `ARG OPENAI_API_KEY=...` in the Dockerfile: build args are
 recoverable from image history.

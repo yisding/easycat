@@ -579,6 +579,20 @@ def test_docker_compose_binds_ws_port_to_loopback_and_requires_token():
     assert '- "8765:8765"' not in compose
 
 
+def test_docker_env_secret_file_is_ignored_but_templates_are_allowed():
+    guide = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
+    gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+
+    assert "# docker/.env" in guide
+    assert ".env" in gitignore
+    assert ".env.*" in gitignore
+    assert "!.env.example" in gitignore
+    assert "**/.env" in dockerignore
+    assert "**/.env.*" in dockerignore
+    assert "!**/.env.example" in dockerignore
+
+
 def test_ws_supervisor_server_example_imports():
     import examples.ws_supervisor_server as ws_supervisor_server
 
