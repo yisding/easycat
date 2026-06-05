@@ -260,10 +260,20 @@ def test_ec2_webrtc_turn_template_handles_generated_password_characters() -> Non
 def test_ec2_webrtc_deploy_honors_manual_external_ip() -> None:
     deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
 
-    assert 'EXTERNAL_IP="${EXTERNAL_IP:-$(' in deploy
+    assert 'EXTERNAL_IP="${EXTERNAL_IP:-$(detect_external_ip)}"' in deploy
     assert "--max-time 2" in deploy
     assert "export EXTERNAL_IP=1.2.3.4" in deploy
     assert "EXTERNAL_IP=$(curl" not in deploy
+
+
+def test_ec2_webrtc_deploy_detects_external_ip_with_imdsv2_first() -> None:
+    deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert "detect_external_ip()" in deploy
+    assert "latest/api/token" in deploy
+    assert "X-aws-ec2-metadata-token-ttl-seconds: 21600" in deploy
+    assert "X-aws-ec2-metadata-token: $token" in deploy
+    assert deploy.count("latest/meta-data/public-ipv4") == 2
 
 
 def test_examples_readme_fastest_path_verifies_environment_before_running() -> None:

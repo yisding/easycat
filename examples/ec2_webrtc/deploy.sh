@@ -23,9 +23,24 @@
 #
 set -euo pipefail
 
-EXTERNAL_IP="${EXTERNAL_IP:-$(
+detect_external_ip() {
+    local token=""
+    token="$(
+        curl -fsS --max-time 2 -X PUT \
+            -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" \
+            http://169.254.169.254/latest/api/token 2>/dev/null || true
+    )"
+    if [ -n "$token" ]; then
+        curl -fsS --max-time 2 \
+            -H "X-aws-ec2-metadata-token: $token" \
+            http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true
+        return
+    fi
+
     curl -fsS --max-time 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true
-)}"
+}
+
+EXTERNAL_IP="${EXTERNAL_IP:-$(detect_external_ip)}"
 if [ -z "$EXTERNAL_IP" ]; then
     echo "Could not detect EC2 public IP.  Set EXTERNAL_IP manually."
     echo "  export EXTERNAL_IP=1.2.3.4"
