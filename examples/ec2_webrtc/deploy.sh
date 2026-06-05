@@ -106,7 +106,21 @@ sudo mkdir -p "$INSTALL_DIR"
 # Clone or copy the repo.  If running from within the repo, copy it.
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 if [ -d "$REPO_ROOT/src/easycat" ]; then
-    sudo cp -a "$REPO_ROOT/." "$INSTALL_DIR/"
+    tar -C "$REPO_ROOT" \
+        --exclude='./.agents' \
+        --exclude='./.claude' \
+        --exclude='./.codex' \
+        --exclude='./.easycat' \
+        --exclude='./.env' \
+        --exclude='./.env.*' \
+        --exclude='./.git' \
+        --exclude='./.mypy_cache' \
+        --exclude='./.pytest_cache' \
+        --exclude='./.ruff_cache' \
+        --exclude='./.venv' \
+        --exclude='__pycache__' \
+        --exclude='*.pyc' \
+        -cf - . | sudo tar -C "$INSTALL_DIR" -xf -
 else
     echo "  Place the easycat repository at $INSTALL_DIR"
 fi

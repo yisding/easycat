@@ -276,6 +276,26 @@ def test_ec2_webrtc_deploy_detects_external_ip_with_imdsv2_first() -> None:
     assert deploy.count("latest/meta-data/public-ipv4") == 2
 
 
+def test_ec2_webrtc_deploy_does_not_copy_local_secret_or_cache_dirs() -> None:
+    deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert 'sudo cp -a "$REPO_ROOT/."' not in deploy
+    assert 'tar -C "$REPO_ROOT"' in deploy
+    for excluded in (
+        "./.agents",
+        "./.claude",
+        "./.codex",
+        "./.easycat",
+        "./.env",
+        "./.env.*",
+        "./.git",
+        "./.venv",
+        "__pycache__",
+        "*.pyc",
+    ):
+        assert f"--exclude='{excluded}'" in deploy
+
+
 def test_examples_readme_fastest_path_verifies_environment_before_running() -> None:
     readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     fast_path = readme.split("For the fastest local mic/speaker path:", 1)[1]
