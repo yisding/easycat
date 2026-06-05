@@ -43,8 +43,9 @@
 +debug bundle to ``runs/``.
  
 -Dependency:
+-    uv sync --extra quickstart --group dev
 +Dependencies:
-     uv sync --extra quickstart --group dev  # add --extra deepgram for Deepgram partials
++    uv sync --extra quickstart --group dev  # add --extra deepgram for Deepgram partials
 +    export OPENAI_API_KEY=...   # or DEEPGRAM_API_KEY for mid-speech partials
  """
  

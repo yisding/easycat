@@ -40,7 +40,7 @@
 ```diff
 --- docs/teaching/13-swap-providers-and-transports/main.py
 +++ docs/teaching/14-bring-your-own-agent/main.py
-@@ -1,134 +1,156 @@
+@@ -1,135 +1,156 @@
 -"""Chapter 13 — swap providers AND transports.
 +"""Chapter 14 — bring your own agent via GenericWorkflowBridge.
  
@@ -279,7 +279,7 @@
          try:
              export_debug_bundle(session, path, overwrite=True)
              print(f"Wrote bundle → {path.relative_to(Path.cwd())}")
-@@ -137,4 +159,7 @@
+@@ -138,4 +159,7 @@
  
  
  if __name__ == "__main__":
