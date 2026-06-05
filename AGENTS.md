@@ -11,11 +11,18 @@
 - `examples/`: runnable reference apps covering local microphone, WebSocket, WebRTC, Twilio, and Cartesia/Deepgram/ElevenLabs provider swaps.
 
 ## Build, Test, and Development Commands
+Prefer the `just` recipes when available; they shell out through `uv` and mirror
+the raw commands below.
+
 - `uv sync --group dev`: install project + dev tools.
 - `uv sync --extra <name>`: install optional provider/transport extras (for example `openai`, `openai-agents`, `webrtc`, `telephony`, `local`, `rnnoise`).
+- `just`: list every developer task.
+- `just check`: run the pre-PR gauntlet (format check, lint, full serial tests).
+- `just validate-quick`: run the deterministic local validation slice.
 - `uv run pytest`: run full test suite.
 - `uv run pytest tests/tts/test_tts_openai.py`: run a focused test file.
 - `uv run pytest tests/transports/test_webrtc.py`: run focused WebRTC transport tests.
+- `uv run easycat validate quick`: run the same deterministic validation lane without `just`.
 - `uv run ruff check .`: lint (imports, style, correctness rules).
 - `uv run ruff format .`: apply formatting.
 - `uv run python examples/ws_server.py`: run a local example.

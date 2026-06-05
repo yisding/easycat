@@ -252,21 +252,31 @@ def test_agent_guides_use_current_live_marker_name() -> None:
     )
 
 
-def test_claude_command_examples_are_current() -> None:
-    text = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    command_block = text.split("## Commands", 1)[1].split("## ", 1)[0]
+def test_agent_guide_command_examples_are_current() -> None:
+    command_sections = {
+        "AGENTS.md": (REPO_ROOT / "AGENTS.md")
+        .read_text(encoding="utf-8")
+        .split("## Build, Test, and Development Commands", 1)[1]
+        .split("## ", 1)[0],
+        "CLAUDE.md": (REPO_ROOT / "CLAUDE.md")
+        .read_text(encoding="utf-8")
+        .split("## Commands", 1)[1]
+        .split("## ", 1)[0],
+    }
 
-    assert "just check" in command_block
-    assert "just validate-quick" in command_block
-    assert "uv run easycat validate quick" in command_block
-    assert "tests/test_metrics.py" not in command_block
+    for filename, command_section in command_sections.items():
+        assert "just check" in command_section
+        assert "just validate-quick" in command_section
+        assert "uv run easycat validate quick" in command_section
+        assert "tests/test_metrics.py" not in command_section, filename
 
     stale_paths: list[str] = []
-    for match in re.finditer(r"uv run pytest\s+(?P<target>tests/\S+)", command_block):
-        path_text = match.group("target").split("::", 1)[0]
-        if not (REPO_ROOT / path_text).exists():
-            stale_paths.append(path_text)
+    for filename, command_section in command_sections.items():
+        for match in re.finditer(r"uv run pytest\s+(?P<target>tests/\S+)", command_section):
+            path_text = match.group("target").split("::", 1)[0].strip("`.,:;")
+            if not (REPO_ROOT / path_text).exists():
+                stale_paths.append(f"{filename}: {path_text}")
 
-    assert not stale_paths, "CLAUDE.md pytest examples point at missing paths: " + ", ".join(
+    assert not stale_paths, "Agent guide pytest examples point at missing paths: " + ", ".join(
         stale_paths
     )
