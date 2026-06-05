@@ -5,7 +5,8 @@
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart  # RNNoise included
        uv run easycat doctor
-Run:   uv run python examples/noise_reduction_backends.py [--backend rnnoise|krisp|auto]
+Run:   uv run python examples/noise_reduction_backends.py --backend rnnoise
+       # Other choices: --backend krisp or --backend auto
 """
 
 try:

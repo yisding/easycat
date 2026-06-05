@@ -282,6 +282,21 @@ def test_examples_readme_rows_are_command_map_entries() -> None:
     assert not stale_rows, "Stale examples/README.md rows: " + "; ".join(stale_rows)
 
 
+def test_examples_readme_run_commands_match_example_docstrings() -> None:
+    stale: list[str] = []
+
+    for row in _example_readme_rows():
+        path = REPO_ROOT / "examples" / row["link"]
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        doc = ast.get_docstring(module) or ""
+        if row["run"] not in doc:
+            stale.append(f"{row['link']}: missing `{row['run']}`")
+
+    assert not stale, "examples/README.md run commands drifted from docstrings: " + "; ".join(
+        stale
+    )
+
+
 def test_examples_readme_references_known_easycat_extras() -> None:
     readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
