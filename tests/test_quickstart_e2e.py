@@ -291,6 +291,23 @@ def test_readme_bring_your_own_agent_tracks_auto_adapt_surface() -> None:
     assert "OpenAI Agents SDK and PydanticAI objects" not in normalized_section
 
 
+def test_readme_langchain_langgraph_section_teaches_auto_adapt_requirements() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("### LangChain and LangGraph", 1)[1].split("### ", 1)[0]
+
+    for term in (
+        "EasyConfig(agent=...)",
+        "LangChainBridge",
+        "uv sync --extra langchain",
+        "LangGraphBridge",
+        "checkpointer",
+        "uv sync --extra langgraph",
+        "examples/langchain_voice.py",
+        "examples/langgraph_voice.py",
+    ):
+        assert term in section
+
+
 def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     from easycat.cli import _app
     from easycat.cli.debug.bundles import bundles_app

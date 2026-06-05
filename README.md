@@ -636,6 +636,22 @@ auto-adapts it to the right bridge. Under the hood, simple single-agent
 assistants use `PydanticAIBridge`, while step-based workflows with
 specialist pinning or programmatic hand-offs use `GenericWorkflowBridge`.
 
+### LangChain and LangGraph
+
+Pass a LangChain `Runnable` directly as `EasyConfig(agent=...)`; EasyCat
+wraps it in `LangChainBridge` and streams text deltas, tool calls, and
+journal cursors from `astream_events()`. Install the repo extra with
+`uv sync --extra langchain`; model packages such as `langchain-openai`
+are installed separately by your app.
+
+Pass a compiled LangGraph graph directly the same way. To be auto-adapted,
+the graph must be compiled with a checkpointer, for example
+`graph.compile(checkpointer=InMemorySaver())`; EasyCat then uses
+`LangGraphBridge` so thread IDs, checkpoints, node cursors, and barge-in
+state edits stay LangGraph-native. Install the repo extra with
+`uv sync --extra langgraph`; see `examples/langchain_voice.py` and
+`examples/langgraph_voice.py` for runnable versions.
+
 ### LlamaAgents / LlamaIndex Workflows
 
 For LlamaAgents' `llama-index-workflows` package, pass a `Workflow`
