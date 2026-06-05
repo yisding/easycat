@@ -36,6 +36,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
 | Validate (socket) | `just validate-socket` | `uv run easycat validate socket` |
 | Validate (stress) | `just validate-stress` | `uv run easycat validate stress` |
+| Validate (contracts) | `just validate-contracts` | `uv run easycat validate contracts` |
 | Validate (latency smoke) | `just validate-latency-smoke` | `uv run easycat validate latency --smoke` |
 | Validate (live OpenAI) | `just validate-live-openai` | `uv run easycat validate live --provider openai` |
 | Validate report | `just validate-report .easycat/validation/latest.json` | `uv run easycat validate report .easycat/validation/latest.json` |
@@ -81,6 +82,7 @@ managed virtualenv. Each slice writes a JSON + JUnit report under
 | `quick` | `uv run easycat validate quick` | not integration_socket / live / slow / stress / flaky |
 | `socket` | `uv run easycat validate socket` | integration_socket, not live, not flaky |
 | `stress` | `uv run easycat validate stress` | stress, not live, not flaky |
+| `contracts` | `uv run easycat validate contracts` | contract, not live, not flaky |
 | `latency` | `uv run easycat validate latency --smoke` | latency probes (live) |
 | `live` | `uv run easycat validate live --provider openai` | integration_live + provider/surface |
 

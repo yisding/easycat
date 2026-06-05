@@ -542,6 +542,22 @@ def test_validation_main_dispatches_stress_slice(tmp_path: Path) -> None:
     assert commands[0][-2:] == ["-m", "stress and not integration_live and not flaky"]
 
 
+def test_validation_main_dispatches_contracts_slice(tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        commands.append(command)
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    exit_code = main(
+        ["contracts", "--artifacts-dir", str(tmp_path)],
+        command_runner=fake_command_runner,
+    )
+
+    assert exit_code == 0
+    assert commands[0][-2:] == ["-m", "contract and not integration_live and not flaky"]
+
+
 def test_validation_runner_can_use_installed_wheel_pytest_command(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -636,6 +652,43 @@ def test_validate_quick_cli_json_uses_standard_stdout_envelope(
     assert payload["command"] == "validate quick"
     assert payload["status"] == "ok"
     assert payload["validation"]["kind"] == "validation_run"
+
+
+def test_validate_contracts_cli_json_uses_standard_stdout_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called: dict[str, object] = {}
+
+    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:  # noqa: ANN003
+        called["slice_name"] = slice_name
+        called.update(kwargs)
+        run = _validation_run(
+            run_id="20260521T120000Z-contracts-12345",
+            checks=[ValidationCheck(name="pytest.contracts", status="pass", duration_s=1.0)],
+        )
+        result_report = tmp_path / "run" / "report.json"
+        result_report.parent.mkdir()
+        result_report.write_text(run.to_json())
+        return ValidationRunResult(
+            run=run,
+            run_dir=result_report.parent,
+            report_path=result_report,
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("easycat.cli.validate.run_validation_slice", fake_run_validation_slice)
+
+    result = cli.invoke(app, ["validate", "contracts", "--json"])
+
+    assert result.exit_code == 0
+    assert called["slice_name"] == "contracts"
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "validate contracts"
+    assert payload["status"] == "ok"
+    assert payload["validation"]["checks"][0]["name"] == "pytest.contracts"
 
 
 def test_validate_socket_cli_returns_validation_exit_code(

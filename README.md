@@ -88,6 +88,7 @@ easycat bundles show PATH # summarise a debug bundle or SQLite journal
 easycat inspect PATH      # summarise a debug bundle or SQLite journal
 easycat replay PATH       # replay a debug bundle or SQLite journal
 easycat validate quick       # run deterministic local validation
+easycat validate contracts   # run offline provider/protocol contract validation
 easycat validate report PATH # render a saved validation report
 ```
 
@@ -124,19 +125,20 @@ command:
 uv run easycat validate quick      # deterministic local validation
 uv run easycat validate socket     # localhost socket / transport integration validation
 uv run easycat validate stress     # local stress validation and saturation-signal capture
+uv run easycat validate contracts  # offline provider/protocol/bridge contracts
 uv run easycat validate latency --smoke # low-cost live latency validation
 uv run easycat validate live       # live provider canaries (filter with --provider / --surface)
 uv run easycat validate report PATH # render a concise summary of a saved report JSON
 ```
 
-`scripts/validate.py` remains as a compatibility shim for quick, socket, and
-stress slice runs, but new docs and local workflows should use
+`scripts/validate.py` remains as a compatibility shim for pytest-backed slice
+runs, but new docs and local workflows should use
 `uv run easycat validate`.
 
 `--json` emits the standard machine-readable stdout envelope, `--report PATH`
 writes a persisted validation report JSON, and `--junit PATH` writes JUnit XML
-(available on the `quick`, `socket`, and `stress` lanes). For the lower-level
-marker/direct entry points, see
+(available on the `quick`, `socket`, `stress`, and `contracts` lanes). For
+the lower-level marker/direct entry points, see
 [`plan/validation/README.md`](plan/validation/README.md).
 
 Flaky quarantine is explicit debt. Use

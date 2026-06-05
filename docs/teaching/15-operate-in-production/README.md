@@ -456,6 +456,8 @@ $ uv run easycat --help
   validation.
 - **`uv run easycat validate stress`** — local stress validation and
   saturation-signal capture.
+- **`uv run easycat validate contracts`** — offline provider,
+  protocol, and bridge contract validation.
 - **`uv run easycat validate latency --smoke`** — low-cost live latency
   probe; use `--sweep` for the broader condition matrix.
 - **`uv run easycat validate live`** — live provider canaries and

@@ -39,8 +39,8 @@ Implemented strengths:
   and manual live-provider tests.
 - `src/easycat/cli/_app.py` registers `init`, `doctor`, `explain`, `bundles`,
   `inspect`, and the `validate` command group.
-- `easycat validate quick`, `socket`, `stress`, `latency`, `live`, and
-  `report` are the public validation entry points.
+- `easycat validate quick`, `socket`, `stress`, `contracts`, `latency`,
+  `live`, and `report` are the public validation entry points.
 - `scripts/validate.py` remains as a compatibility shim over
   `easycat.validation.runner` for slice runs.
 - `src/easycat/validation/report.py` defines the validation JSON envelope,
@@ -73,8 +73,6 @@ Implemented strengths:
 
 Current gaps:
 
-- A dedicated `easycat validate contracts` command does not exist yet; run
-  contract tests directly.
 - A dedicated `easycat validate release` command does not exist yet; release
   validation composes existing public commands in GitHub Actions.
 - CI uploads EasyCat validation JSON, JUnit XML, stdout, stderr, latency, and
@@ -120,6 +118,7 @@ easycat validate socket
 easycat validate live
 easycat validate live --provider openai
 easycat validate live --provider deepgram --provider elevenlabs
+easycat validate contracts
 easycat validate latency --smoke
 easycat validate latency --sweep
 easycat validate stress
@@ -132,12 +131,12 @@ easycat validate report .easycat/validation/latest.json
 uv run python scripts/validate.py quick
 uv run python scripts/validate.py socket
 uv run python scripts/validate.py stress
+uv run python scripts/validate.py contracts
 ```
 
 Remaining planned command wrappers:
 
 ```bash
-easycat validate contracts
 easycat validate release
 ```
 
@@ -165,23 +164,17 @@ machine-readable stdout envelope. Persisted validation reports should use
 
 ### Quick
 
-Planned command:
+Current command:
 
 ```bash
 easycat validate quick
 ```
 
-Script-first selector for PR-local quick validation:
+Runner selector for PR-local quick validation:
 
 ```bash
 uv run pytest -q --junitxml=<run-dir>/junit.xml \
-  -m "not integration_socket and not integration_live and not slow and not flaky"
-```
-
-Current nearest selector:
-
-```bash
-uv run pytest -q -m "not integration_socket and not integration_live"
+  -m "not integration_socket and not integration_live and not slow and not stress and not flaky"
 ```
 
 Expected coverage: unit tests, local integration tests, fake-provider agent
@@ -193,13 +186,13 @@ deterministic local coverage from PR CI.
 
 ### Socket
 
-Planned command:
+Current command:
 
 ```bash
 easycat validate socket
 ```
 
-Script-first selector:
+Runner selector:
 
 ```bash
 uv run pytest -q --junitxml=<run-dir>/junit.xml \
@@ -214,7 +207,7 @@ CI job installs those extras.
 
 ### Contracts
 
-Planned command:
+Current command:
 
 ```bash
 easycat validate contracts
@@ -264,7 +257,7 @@ recorder writes, normalized errors, and optional-extra skips.
 
 ### Live
 
-Planned command:
+Current command:
 
 ```bash
 easycat validate live --provider openai
@@ -314,14 +307,14 @@ headers where applicable.
 
 ### Latency
 
-Planned commands:
+Current commands:
 
 ```bash
 easycat validate latency --smoke
 easycat validate latency --sweep
 ```
 
-Current direct entry point:
+Lower-level direct entry point:
 
 ```bash
 OPENAI_API_KEY=... uv run pytest tests/e2e/test_plan_7_latency_benchmark.py -s -v
@@ -361,7 +354,7 @@ Sample-count rules:
 
 ### Stress
 
-Planned command:
+Current command:
 
 ```bash
 easycat validate stress

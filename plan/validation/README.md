@@ -26,7 +26,7 @@ Implemented:
   declare either side, and enforces flaky quarantine metadata:
   `@pytest.mark.flaky(issue="...", owner="...", review_by="YYYY-MM-DD")`.
 - The public CLI registers `easycat validate` with `quick`, `socket`,
-  `stress`, `latency`, `live`, and `report` subcommands.
+  `stress`, `contracts`, `latency`, `live`, and `report` subcommands.
 - `scripts/validate.py` remains as a compatibility shim over
   `easycat.validation.runner` for slice runs.
 - Validation runs write isolated artifacts under `.easycat/validation/runs/`
@@ -38,6 +38,9 @@ Implemented:
   comparison.
 - `easycat validate live` writes redacted provider capability reports and can
   fail missing required live secrets in strict or release mode.
+- `easycat validate contracts` runs the offline provider, protocol, cassette,
+  and bridge contract suite through the same validation report machinery as
+  quick/socket/stress.
 - `.github/workflows/ci.yml` runs `easycat validate quick` and
   `easycat validate socket` with uploaded JSON, JUnit, stdout, and stderr
   artifacts.
@@ -57,8 +60,6 @@ Remaining backlog:
 
 - HTTP/WebSocket provider cassettes and schema drift fingerprints are still not
   standardized.
-- A dedicated `easycat validate contracts` command is still future work; run
-  contract tests directly today.
 - A dedicated `easycat validate release` wrapper is still future work; the
   release workflow composes existing public validation commands today.
 - Deep acceptance-bullet auditing for the historical milestones in
@@ -97,7 +98,7 @@ These names are the validation vocabulary.
 | stress | `easycat validate stress` | local stress validation and reliability artifacts |
 | latency | `easycat validate latency --smoke` or `--sweep` | live latency probes and structured latency artifacts |
 | live | `easycat validate live --provider openai` | live provider canaries and capability reports |
-| contracts | `uv run pytest tests/contracts -q` | public `easycat validate contracts` is not shipped yet |
+| contracts | `easycat validate contracts` | offline provider, protocol, cassette, and bridge contracts |
 | release | `.github/workflows/release-validation.yml` | composed from public validation commands; no dedicated subcommand yet |
 
 ## Historical First Implementation PR

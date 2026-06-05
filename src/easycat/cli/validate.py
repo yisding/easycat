@@ -162,6 +162,40 @@ def stress(
 
 
 @validate_app.command()
+def contracts(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the standard machine-readable stdout envelope."),
+    ] = False,
+    report: Annotated[
+        Path | None,
+        typer.Option("--report", help="Optional additional validation report JSON path."),
+    ] = None,
+    junit: Annotated[
+        Path | None,
+        typer.Option("--junit", help="Optional JUnit XML output path."),
+    ] = None,
+    artifacts_dir: Annotated[
+        Path,
+        typer.Option("--artifacts-dir", help="Validation artifact root directory."),
+    ] = Path(".easycat/validation"),
+    junit_prefix: Annotated[
+        str | None,
+        typer.Option("--junit-prefix", help="Optional pytest JUnit prefix."),
+    ] = None,
+) -> None:
+    """Run offline provider, protocol, and bridge contract validation."""
+    _run_slice(
+        "contracts",
+        json_output=json_output,
+        report=report,
+        junit=junit,
+        artifacts_dir=artifacts_dir,
+        junit_prefix=junit_prefix,
+    )
+
+
+@validate_app.command()
 def latency(
     smoke: Annotated[
         bool,

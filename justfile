@@ -81,6 +81,10 @@ validate-socket:
 validate-stress:
     uv run easycat validate stress
 
+# Offline provider, protocol, and bridge contract validation.
+validate-contracts:
+    uv run easycat validate contracts
+
 # Low-cost live latency probe. Requires live provider credentials.
 validate-latency-smoke:
     uv run easycat validate latency --smoke

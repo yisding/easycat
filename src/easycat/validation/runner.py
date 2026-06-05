@@ -62,6 +62,7 @@ VALIDATION_SELECTORS = {
     ),
     "socket": "integration_socket and not integration_live and not flaky",
     "stress": "stress and not integration_live and not flaky",
+    "contracts": "contract and not integration_live and not flaky",
 }
 
 PROVIDER_ENV_VARS = (

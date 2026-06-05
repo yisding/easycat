@@ -12,7 +12,7 @@ As of the 2026-05-26 audit, `easycat validate` shipped with public validation
 commands, `scripts/validate.py` became a shim over `easycat.validation.runner`,
 and the validation JSON artifact format lives in `easycat.validation.report`.
 The 2026-06-05 maintenance update confirmed the CLI surface includes
-`quick`, `socket`, `stress`, `latency`, `live`, and `report`. The
+`quick`, `socket`, `stress`, `contracts`, `latency`, `live`, and `report`. The
 per-milestone statuses below have been updated to reflect the audit; see
 [Post-Implementation Audit](#post-implementation-audit-2026-05-26) for the
 remaining followup list.
