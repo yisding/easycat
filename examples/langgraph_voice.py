@@ -7,8 +7,8 @@ snapshots, and barge-in rewrites the last AI message via
 ``graph.update_state`` (LangGraph's ``add_messages`` reducer dedupes
 by message ``id`` so the edited message replaces in place).
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
-       uv add easycat[langgraph] langchain-openai
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langgraph
+       uv pip install langchain-openai
 Run:   uv run python examples/langgraph_voice.py
 """
 
@@ -22,7 +22,8 @@ try:
     from langgraph.graph.message import add_messages
 except ImportError as exc:
     raise SystemExit(
-        "LangGraph is required. Install with: uv add easycat[langgraph] langchain-openai"
+        "LangGraph is required. Install with: "
+        "uv sync --extra quickstart --extra langgraph; uv pip install langchain-openai"
     ) from exc
 
 from easycat import EasyConfig, run

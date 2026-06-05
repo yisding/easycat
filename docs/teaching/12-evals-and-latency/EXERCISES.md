@@ -54,9 +54,10 @@ exceeds 1200 ms. That's the seed of a latency regression suite.
 
 **Hints**
 
-1. `tests/teaching/` doesn't exist yet — start a new test file.
-   Use `easycat.debug.testing.load_bundle` to load each fixture
-   and the same `turn.gap` extraction as `evals.py`.
+1. Start in `tests/teaching/` with a focused test file, for
+   example `test_latency_budget.py`. Use
+   `easycat.debug.testing.load_bundle` to load each fixture and
+   the same `turn.gap` extraction as `evals.py`.
 2. Hard-coded thresholds are fine for the teaching version. For
    production, you'd compare against a baseline file checked into
    the repo and require N standard deviations of regression

@@ -8,7 +8,8 @@ marker/CI design, provider-contract guidance, observability notes, and
 external research links.
 
 Implementation order lives in [tasks.md](tasks.md). The current-state entry
-point lives in [README.md](README.md).
+point lives in [README.md](README.md). This reference preserves planned design
+notes, so command sections distinguish shipped commands from remaining backlog.
 
 ## Goal
 
@@ -27,7 +28,7 @@ The validation surface should answer five questions:
 
 ## Current Repo Inventory
 
-Snapshot: V0 implementation pass on 2026-05-22.
+Snapshot: maintenance update on 2026-06-05.
 
 Implemented strengths:
 
@@ -37,10 +38,12 @@ Implemented strengths:
 - `.github/workflows/ci.yml` has lint, local tests, socket integration tests,
   and manual live-provider tests.
 - `src/easycat/cli/_app.py` registers `init`, `doctor`, `explain`, `bundles`,
-  and `inspect`.
-- `scripts/validate.py quick` and `scripts/validate.py socket` are the V0
-  script-first validation entry points.
-- `src/easycat/validation/report.py` defines the V0 validation JSON envelope,
+  `inspect`, and the `validate` command group.
+- `easycat validate quick`, `socket`, `stress`, `latency`, `live`, and
+  `report` are the public validation entry points.
+- `scripts/validate.py` remains as a compatibility shim over
+  `easycat.validation.runner` for slice runs.
+- `src/easycat/validation/report.py` defines the validation JSON envelope,
   provider credential states, artifact references, and report-boundary
   redaction.
 - Validation artifacts are written under isolated
@@ -53,6 +56,9 @@ Implemented strengths:
 - `tests/integration/test_provider_contract_matrix.py` already validates
   STT/TTS registry dispatch, EventBus injection, and session wiring with fake
   providers.
+- `easycat validate latency` writes structured latency artifacts with samples,
+  percentiles, budget checks, reliability signals, and optional baseline
+  comparison.
 - `tests/e2e/test_plan_7_latency_benchmark.py` is marked `latency` and
   measures user-stops-speaking to first-audio latency and stage breakdowns
   for the live full stack.
@@ -67,11 +73,14 @@ Implemented strengths:
 
 Current gaps:
 
-- There is no `easycat validate` command.
-- CI does not upload EasyCat validation JSON, JUnit XML, latency histories,
-  debug bundles, or provider compatibility summaries.
-- Latency tests print useful results and enforce SLOs, but do not persist a
-  stable artifact for comparison.
+- A dedicated `easycat validate contracts` command does not exist yet; run
+  contract tests directly.
+- A dedicated `easycat validate release` command does not exist yet; release
+  validation composes existing public commands in GitHub Actions.
+- CI uploads EasyCat validation JSON, JUnit XML, stdout, stderr, latency, and
+  provider capability artifacts for the implemented validation lanes. Debug
+  bundle upload remains tied to debug/replay workflows rather than the core
+  validation lanes.
 - Live-provider validation is opt-in and only partially decomposed by provider,
   surface, scenario, cost, and flake risk.
 - HTTP record/replay and WebSocket protocol cassette workflows are not
@@ -101,26 +110,36 @@ Current gaps:
 10. Validation should match user workflows: voice turns, interruption,
     provider swaps, transport modes, debug/replay, and deployment boundaries.
 
-## Planned Command Surface
+## Command Surface
 
-These commands are planned. They do not exist until the V1 tasks land.
+These public validation commands currently ship:
 
 ```bash
 easycat validate quick
 easycat validate socket
-easycat validate contracts
 easycat validate live
 easycat validate live --provider openai
 easycat validate live --provider deepgram --provider elevenlabs
 easycat validate latency --smoke
 easycat validate latency --sweep
 easycat validate stress
-easycat validate release
 easycat validate report .easycat/validation/latest.json
 ```
 
-V0 can start with `uv run python scripts/validate.py quick` and
-`uv run python scripts/validate.py socket` before the public CLI exists.
+`scripts/validate.py` remains available as a compatibility shim for slice runs:
+
+```bash
+uv run python scripts/validate.py quick
+uv run python scripts/validate.py socket
+uv run python scripts/validate.py stress
+```
+
+Remaining planned command wrappers:
+
+```bash
+easycat validate contracts
+easycat validate release
+```
 
 Shared planned options:
 

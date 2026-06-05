@@ -4,7 +4,7 @@ Two tools (``get_weather`` and ``get_time``) registered without a deps
 object. For tools that drive the call (end, transfer, DTMF) see
 ``session_actions_pydantic.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart; uv add easycat[pydantic-ai]
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai
 Run:   uv run python examples/function_tools_pydantic.py
 """
 
@@ -14,7 +14,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 try:
     from pydantic_ai import Agent  # type: ignore[import-untyped]
 except ImportError as exc:
-    raise SystemExit("PydanticAI is required. Install with: uv add easycat[pydantic-ai]") from exc
+    raise SystemExit(
+        "PydanticAI is required. Install with: uv sync --extra quickstart --extra pydantic-ai"
+    ) from exc
 
 from easycat import EasyConfig, require_env, run
 

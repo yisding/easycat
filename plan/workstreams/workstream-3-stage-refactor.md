@@ -5,7 +5,7 @@
 > `CancelOrchestrator`, `TurnRunner`, and `SessionJournalSink`, but the current
 > tree does not contain source files named `InterruptionController`,
 > `VoiceDeliveryLedger`, or `stages/telephony.py`. `_session.py` is roughly
-> 1,773 lines in the 2026-05-21 snapshot, so the historical `<500` target was
+> 1,390 lines in the 2026-06-05 snapshot, so the historical `<500` target was
 > not met.
 
 > **Part of the essential debug-first runtime redesign.** Design rationale

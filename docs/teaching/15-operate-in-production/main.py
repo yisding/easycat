@@ -75,11 +75,11 @@ async def main() -> None:
             await wait_for_shutdown_signal(session)
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
-    # manager.connection exited → session.stop() → session.destroy().
+    # manager.connection exited -> session.stop() -> private teardown.
     print("Session stopped; manager released the slot.")
 
     # ── 2. Post-stop: journal still works, bundle still exports ───
-    # The invariant from CLAUDE.md: after stop()/shutdown(), the
+    # The lifecycle invariant: after stop()/shutdown(), the
     # journal is in a read-only postmortem state. .read() works,
     # export_debug_bundle() works, .append() does not.
     assert session.journal is not None

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -13,6 +16,37 @@ from websockets.datastructures import Headers
 from easycat import EasyConfig, WebSocketTransportConfig, create_session
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+_EXAMPLE_README_ROW_RE = re.compile(
+    r"^\| \[(?P<name>[^\]]+\.py)\]\((?P<link>[^)]+\.py)\) "
+    r"\| (?P<use_when>[^|]+) "
+    r"\| `(?P<run>[^`]+)` "
+    r"\| (?P<install>[^|]+) "
+    r"\| (?P<env>[^|]+) \|$"
+)
+
+
+def _top_level_example_names() -> set[str]:
+    return {
+        path.name for path in (REPO_ROOT / "examples").glob("*.py") if path.name != "__init__.py"
+    }
+
+
+def _example_readme_rows() -> list[dict[str, str]]:
+    readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+    rows: list[dict[str, str]] = []
+    malformed: list[str] = []
+
+    for line_number, line in enumerate(readme.splitlines(), start=1):
+        if not line.startswith("| [") or ".py]" not in line:
+            continue
+        match = _EXAMPLE_README_ROW_RE.match(line)
+        if match is None:
+            malformed.append(f"line {line_number}: {line}")
+            continue
+        rows.append(match.groupdict())
+
+    assert not malformed, "Malformed example rows in examples/README.md: " + "; ".join(malformed)
+    return rows
 
 
 class _DummyAgent:
@@ -53,6 +87,93 @@ def _load_slim_example(
 
 def test_openai_agents_voice_example_imports(monkeypatch: pytest.MonkeyPatch):
     _load_slim_example(monkeypatch, "examples.openai_agents_voice", framework="agents")
+
+
+def test_examples_readme_lists_every_top_level_python_example() -> None:
+    row_names = {row["link"] for row in _example_readme_rows()}
+    missing = sorted(_top_level_example_names() - row_names)
+
+    assert not missing, "examples/README.md missing example rows for: " + ", ".join(missing)
+
+
+def test_examples_readme_rows_are_command_map_entries() -> None:
+    rows = _example_readme_rows()
+    row_names = [row["link"] for row in rows]
+    duplicate_rows = sorted({name for name in row_names if row_names.count(name) > 1})
+    unknown_rows = sorted(set(row_names) - _top_level_example_names())
+
+    assert not duplicate_rows, "examples/README.md has duplicate example rows: " + ", ".join(
+        duplicate_rows
+    )
+    assert not unknown_rows, "examples/README.md links unknown examples: " + ", ".join(
+        unknown_rows
+    )
+
+    stale_rows: list[str] = []
+    for row in rows:
+        link = row["link"]
+        stem = Path(link).stem
+        run_command = row["run"]
+        if row["name"] != link:
+            stale_rows.append(f"{link}: display name is {row['name']}")
+        if not run_command.startswith("uv run "):
+            stale_rows.append(f"{link}: run command does not start with `uv run`")
+        if f"examples/{link}" not in run_command and f"examples.{stem}" not in run_command:
+            stale_rows.append(f"{link}: run command does not reference linked example")
+        if not row["install"].startswith("`uv sync "):
+            stale_rows.append(f"{link}: install cell does not start with `uv sync`")
+        if not row["use_when"].strip():
+            stale_rows.append(f"{link}: missing Use When text")
+        if not row["env"].strip():
+            stale_rows.append(f"{link}: missing Env text")
+
+    assert not stale_rows, "Stale examples/README.md rows: " + "; ".join(stale_rows)
+
+
+def test_examples_readme_references_known_easycat_extras() -> None:
+    readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    known_extras = set(pyproject["project"]["optional-dependencies"])
+
+    referenced_extras = set(re.findall(r"--extra ([A-Za-z0-9_.-]+)", readme))
+    unknown_extras = sorted(referenced_extras - known_extras)
+
+    assert not unknown_extras, (
+        "examples/README.md references unknown EasyCat extras: " + ", ".join(unknown_extras)
+    )
+
+
+def test_top_level_examples_document_setup_and_run_commands() -> None:
+    missing: list[str] = []
+
+    for path in sorted((REPO_ROOT / "examples").glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        doc = ast.get_docstring(module) or ""
+        has_setup = "uv sync" in doc or "uv add" in doc
+        has_run = "uv run" in doc
+        if not has_setup or not has_run:
+            missing.append(
+                f"{path.name} (setup={'yes' if has_setup else 'no'}, "
+                f"run={'yes' if has_run else 'no'})"
+            )
+
+    assert not missing, "Example docstrings missing setup/run guidance: " + ", ".join(missing)
+
+
+def test_top_level_examples_use_repo_local_extra_setup_commands() -> None:
+    stale: list[str] = []
+
+    for example_name in sorted(_top_level_example_names()):
+        path = REPO_ROOT / "examples" / example_name
+        if "uv add easycat[" in path.read_text(encoding="utf-8"):
+            stale.append(example_name)
+
+    assert not stale, (
+        "Top-level examples should use `uv sync --extra ...` for repo extras, not "
+        "`uv add easycat[...]`: " + ", ".join(stale)
+    )
 
 
 def test_pydantic_ai_example_imports(monkeypatch: pytest.MonkeyPatch):

@@ -8,9 +8,11 @@ to make local validation useful before adding live provider, latency, release,
 and observability gates.
 
 Current-state caveat: the static inspection note from 2026-05-21 is stale.
-As of the 2026-05-26 audit, `easycat validate` (quick/socket/live/report)
-ships, `scripts/validate.py` is a shim over `easycat.validation.runner`, and
-the validation JSON artifact format lives in `easycat.validation.report`. The
+As of the 2026-05-26 audit, `easycat validate` shipped with public validation
+commands, `scripts/validate.py` became a shim over `easycat.validation.runner`,
+and the validation JSON artifact format lives in `easycat.validation.report`.
+The 2026-06-05 maintenance update confirmed the CLI surface includes
+`quick`, `socket`, `stress`, `latency`, `live`, and `report`. The
 per-milestone statuses below have been updated to reflect the audit; see
 [Post-Implementation Audit](#post-implementation-audit-2026-05-26) for the
 remaining followup list.
@@ -66,18 +68,18 @@ its implementation, so individual gaps may still exist within shipped
 milestones. Any such gaps should be filed as new tasks rather than reopening
 a milestone wholesale.
 
+### Closed Followups
+
+- **N1 — Replace nightly latency placeholder.** Closed. `nightly-validation.yml`
+  now runs `easycat validate latency --require-samples` and uploads latency
+  validation artifacts.
+- **N2 — Migrate stress test to public sampler.** Closed.
+  `tests/e2e/test_plan_2_sustained_stress.py` imports
+  `EventLoopLagSampler` from `easycat.validation.reliability`, guarded by
+  `tests/validation/test_stress_uses_public_sampler.py`.
+
 ### Outstanding Work
 
-- **N1 — Replace nightly latency placeholder.** `nightly-validation.yml`
-  still has a `latency-placeholder` job whose body reads "Latency validation
-  is a placeholder until V2 lands." V2 has landed; replace with a real
-  `easycat validate latency` invocation that uploads artifacts the same way
-  the other nightly jobs do.
-- **N2 — Migrate stress test to public sampler.** `tests/e2e/test_plan_2_sustained_stress.py`
-  defines a private `_EventLoopLagSampler` inline. V2.4 shipped a public
-  `EventLoopLagSampler` in `easycat.validation.reliability`; the test should
-  consume the public surface so we have a real downstream user of the
-  reliability API.
 - **N3 — Deep acceptance-bullet audit.** For each shipped milestone,
   spot-check the listed acceptance bullets against actual tests and code to
   surface any gaps the file-presence audit missed. File findings as
@@ -277,12 +279,12 @@ Files:
 - `CONTRIBUTING.md` if present, otherwise top-level `README.md`
 - validation README/reference updates as needed
 
-Tasks:
+Historical task scope before V1.1 shipped:
 
-- Document the current script-first command:
+- Document the script-first command used at the time:
   `uv run python scripts/validate.py quick`.
 - Label `easycat validate quick` as the planned public replacement until V1.1
-  lands.
+  landed. Current contributor docs now use `easycat validate quick`.
 - Document `--report PATH` for persisted validation JSON and reserve `--json`
   for stdout machine-readable CLI envelopes.
 - Document when to run socket, live, latency, and release checks.
@@ -292,11 +294,11 @@ Tasks:
   provider surface, extra, env var, default mode/model, contract status,
   cassette status, and live command.
 
-Acceptance:
+Acceptance at the time:
 
 - A new contributor can find the quick command from top-level docs.
 - The docs do not require live provider credentials for normal PR work.
-- The docs do not imply `easycat validate` exists before V1.1.
+- The docs did not imply `easycat validate` existed before V1.1.
 
 ## V1: First-Class CLI And CI Artifacts
 
@@ -589,9 +591,13 @@ Status: completed (verified by 2026-05-26 audit)
 
 Current state:
 
-- There is no `tests/contracts/` directory.
-- The existing provider contract matrix is under `tests/integration/` and is
-  focused on wiring, not protocol cassettes.
+- `tests/contracts/` exists with offline provider, protocol, bridge, cassette,
+  and provider capability report contract tests.
+- The original provider contract matrix remains under `tests/integration/` and
+  is intentionally focused on factory/session wiring, not protocol cassettes.
+- `tests/contracts/provider_surface_matrix.py` records provider, surface,
+  adapter, protocol, mode/model, extra, credential, contract path, cassette
+  status, and live-canary status dimensions.
 
 Files:
 

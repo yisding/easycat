@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+TEACHING_DIR = REPO_ROOT / "docs" / "teaching"
+_CHAPTER_ROW_RE = re.compile(
+    r"^\| (?P<number>\d+) "
+    r"\| \[`(?P<name>[^`]+)`\]\(\./(?P<link>[^)]+)/\) "
+    r"\| (?P<description>[^|]+) \|$"
+)
+
+
+def _chapter_dirs() -> list[Path]:
+    return sorted(path for path in TEACHING_DIR.iterdir() if re.match(r"\d{2}-", path.name))
+
+
+def _ladder_rows() -> list[dict[str, str]]:
+    readme = (TEACHING_DIR / "README.md").read_text(encoding="utf-8")
+    rows: list[dict[str, str]] = []
+    malformed: list[str] = []
+
+    for line_number, line in enumerate(readme.splitlines(), start=1):
+        if not line.startswith("| ") or "](" not in line or "./" not in line:
+            continue
+        match = _CHAPTER_ROW_RE.match(line)
+        if match is None:
+            malformed.append(f"line {line_number}: {line}")
+            continue
+        rows.append(match.groupdict())
+
+    assert not malformed, "Malformed ladder rows in docs/teaching/README.md: " + "; ".join(
+        malformed
+    )
+    return rows
+
+
+def test_teaching_ladder_index_matches_chapter_directories() -> None:
+    chapter_dirs = _chapter_dirs()
+    rows = _ladder_rows()
+
+    expected_names = [path.name for path in chapter_dirs]
+    row_names = [row["link"] for row in rows]
+    row_numbers = [int(row["number"]) for row in rows]
+
+    assert row_names == expected_names
+    assert row_numbers == list(range(len(chapter_dirs)))
+    assert len(set(row_names)) == len(row_names)
+
+    mismatched_display_names = [
+        f"{row['number']}: {row['name']} links to {row['link']}"
+        for row in rows
+        if row["name"] != row["link"]
+    ]
+    assert not mismatched_display_names, "; ".join(mismatched_display_names)
+
+
+def test_teaching_chapters_have_reader_entrypoints() -> None:
+    missing: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        if not (chapter_dir / "README.md").exists():
+            missing.append(f"{chapter_dir.name}: README.md")
+        if not (chapter_dir / "EXERCISES.md").exists():
+            missing.append(f"{chapter_dir.name}: EXERCISES.md")
+        if not list(chapter_dir.glob("*.py")):
+            missing.append(f"{chapter_dir.name}: runnable script")
+
+    assert not missing, "Teaching chapters missing reader entrypoints: " + ", ".join(missing)
+
+
+def test_teaching_chapter_readmes_include_runnable_commands() -> None:
+    missing: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        readme = (chapter_dir / "README.md").read_text(encoding="utf-8")
+        command_prefix = f"uv run python docs/teaching/{chapter_dir.name}/"
+        if command_prefix not in readme:
+            missing.append(chapter_dir.name)
+
+    assert not missing, "Teaching chapter READMEs missing runnable commands: " + ", ".join(missing)
+
+
+def test_chapter_13_provider_mix_documents_required_extras() -> None:
+    readme = (TEACHING_DIR / "13-swap-providers-and-transports" / "README.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--extra deepgram" in readme
+    assert "--extra elevenlabs" in readme
+    assert "--extra webrtc" in readme
+    assert "--extra telephony" in readme
+
+
+def test_chapter_15_teaches_public_session_lifecycle() -> None:
+    chapter_dir = TEACHING_DIR / "15-operate-in-production"
+    files = {
+        "README.md": (chapter_dir / "README.md").read_text(encoding="utf-8"),
+        "EXERCISES.md": (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8"),
+        "main.py": (chapter_dir / "main.py").read_text(encoding="utf-8"),
+    }
+    stale_public_calls: list[str] = []
+
+    for name, text in files.items():
+        for term in ("session.close()", "session.destroy()", "four lifecycle methods"):
+            if term in text:
+                stale_public_calls.append(f"{name}: {term}")
+
+    assert not stale_public_calls, "Stale public lifecycle calls: " + ", ".join(stale_public_calls)
+
+    readme = files["README.md"]
+    assert "async with session:" in readme
+    assert "await session.stop()" in readme
+    assert "await session.stop(force=True)" in readme
+    assert "await session.shutdown()" in readme
+
+
+def test_chapter_15_cli_section_lists_registered_commands() -> None:
+    from easycat.cli import _app
+    from easycat.cli.debug.bundles import bundles_app
+    from easycat.cli.validate import validate_app
+
+    _app._register_commands()
+    readme = (TEACHING_DIR / "15-operate-in-production" / "README.md").read_text(encoding="utf-8")
+    cli_section = readme.split("## The `easycat` CLI", 1)[1].split("## ", 1)[0]
+
+    top_level_commands = {command.name for command in _app.app.registered_commands}
+    top_level_commands.update(group.name for group in _app.app.registered_groups)
+    top_level_commands.discard(None)
+
+    missing_top_level = sorted(
+        command_name
+        for command_name in top_level_commands
+        if f"easycat {command_name}" not in cli_section
+    )
+    assert not missing_top_level, "Chapter 15 CLI section missing commands: " + ", ".join(
+        missing_top_level
+    )
+
+    missing_bundle_commands = sorted(
+        command.name
+        for command in bundles_app.registered_commands
+        if command.name is not None and f"easycat bundles {command.name}" not in cli_section
+    )
+    assert not missing_bundle_commands, "Chapter 15 CLI section missing bundles commands: " + (
+        ", ".join(missing_bundle_commands)
+    )
+
+    missing_validate_commands = sorted(
+        command.name
+        for command in validate_app.registered_commands
+        if command.name is not None and f"easycat validate {command.name}" not in cli_section
+    )
+    assert not missing_validate_commands, "Chapter 15 CLI section missing validate commands: " + (
+        ", ".join(missing_validate_commands)
+    )
+
+
+def test_teaching_docs_do_not_claim_teaching_tests_are_missing() -> None:
+    stale_mentions: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        for filename in ("README.md", "EXERCISES.md"):
+            path = chapter_dir / filename
+            text = path.read_text(encoding="utf-8")
+            if "`tests/teaching/` doesn't exist yet" in text:
+                stale_mentions.append(path.relative_to(REPO_ROOT).as_posix())
+
+    assert not stale_mentions, "Teaching docs claim tests/teaching/ is missing: " + ", ".join(
+        stale_mentions
+    )

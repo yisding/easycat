@@ -30,14 +30,26 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Type gate (mypy, clean core) | `just typecheck` | `uv run mypy --follow-imports=silent src/easycat/debug` |
 | Type report (mypy, whole repo) | `just typecheck-all` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
-| Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "...safe slice..."` |
+| Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not slow and not stress and not flaky"` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
+| Validate (socket) | `just validate-socket` | `uv run easycat validate socket` |
 | Pre-commit hooks | `just pre-commit` | `uv run pre-commit run --all-files` |
 
 > `mypy` ships in the `dev` group, so `just typecheck` / `just typecheck-all`
 > work right after `uv sync --group dev`. `just typecheck-fast` runs Astral
 > `ty` on demand via `uvx` (no install needed; it's advisory, not a gate).
 > `just cov` is plain `pytest --cov` and has no type-checker dependency.
+
+If local tests emit dependency warnings right after a lockfile or Dependabot
+merge, refresh the virtualenv against the lock before debugging test behavior:
+
+```bash
+uv sync --frozen --group dev
+```
+
+`uv sync` removes optional-extra packages that are no longer part of the
+selected environment. Add the extras you are actively working on, for example
+`uv sync --frozen --group dev --extra openai`.
 
 ### Parallel runs and xdist safety
 

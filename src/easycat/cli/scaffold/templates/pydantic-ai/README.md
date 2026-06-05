@@ -43,9 +43,9 @@ Ctrl-C to quit.
   PydanticAI supports, then add the matching API key and provider extra if
   that provider is not part of the default PydanticAI install. For example:
   `uv add "pydantic-ai[groq]<2"` for stable v1, or
-  `uv add "pydantic-ai[groq]==2.0.0b2"` to opt into the v2 beta.
+  `uv add "pydantic-ai[groq]==2.0.0b3"` to opt into the v2 beta.
 - **Need multiple agents?** Extend `agent.py` with PydanticAI's graph or
   handoff patterns; this template keeps the first run intentionally small.
-- **Debug a session:** pass `debug="full"` to `EasyConfig(...)`. EasyCat
-  writes a RunBundle journal under `~/.cache/easycat/journals/` that you can
-  inspect via `RunBundle.load(...)` or load into a coding agent for analysis.
+- **Debug a session:** pass `debug="full"` to `EasyConfig.mic(...)`. EasyCat
+  writes a SQLite journal under `.easycat/journals/`; inspect it with
+  `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.

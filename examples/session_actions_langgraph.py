@@ -9,8 +9,8 @@ than a deps/context parameter.
 For telephony-specific actions (transfer, DTMF, SMS) see
 ``examples/twilio_app.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
-       uv add easycat[langgraph] langchain-openai
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langgraph
+       uv pip install langchain-openai
 Run:   uv run python examples/session_actions_langgraph.py
 """
 
@@ -21,7 +21,8 @@ try:
     from langgraph.prebuilt import create_react_agent
 except ImportError as exc:
     raise SystemExit(
-        "LangGraph is required. Install with: uv add easycat[langgraph] langchain-openai"
+        "LangGraph is required. Install with: "
+        "uv sync --extra quickstart --extra langgraph; uv pip install langchain-openai"
     ) from exc
 
 from easycat import EasyConfig, SessionActions, run

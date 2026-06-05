@@ -9,6 +9,8 @@
 
 - [Chapters 0-12.](../)
 - `uv sync --extra quickstart --group dev` always.
+- Add `--extra deepgram --extra elevenlabs` for the `deepgram-eleven`
+  provider mix.
 - `--extra webrtc` for the WebRTC transport.
 - `--extra telephony` for the Twilio transport.
 - `OPENAI_API_KEY` always; `DEEPGRAM_API_KEY` + `ELEVENLABS_API_KEY`

@@ -40,8 +40,8 @@ Hit Enter on a blank line to exit.
 - **Add tools:** see the OpenAI Agents SDK docs and pass `tools=[...]` to the
   `Agent(...)` constructor.
 - **Swap to a voice agent:** replace `create_text_session` with
-  `easycat.run(EasyConfig(agent=agent))` and add `stt=` / `tts=`. Or run
+  `easycat.run(EasyConfig.mic(agent=agent))` and add `stt=` / `tts=`. Or run
   `easycat init my-voice-agent --template openai-agents` for a voice starter.
 - **Debug a session:** pass `debug="full"` to `create_text_session` to write a
-  RunBundle journal under `~/.cache/easycat/journals/`. Inspect it via
-  `RunBundle.load(...)` or load into a coding agent for analysis.
+  SQLite journal under `.easycat/journals/`; inspect it with
+  `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.

@@ -58,8 +58,10 @@ runnable artifact you can visit independently.
   ONNX Runtime — enough for chapters 0-9 and 11-12. Chapter 10
   additionally wants the `rnnoise` and/or `aec` extras for real
   noise reduction / echo cancellation (falls back silently to
-  passthrough without them). Chapter 13 pulls in Deepgram /
-  ElevenLabs on top.
+  passthrough without them). Chapter 13's `deepgram-eleven`
+  provider mix additionally needs `--extra deepgram --extra
+  elevenlabs`; its WebRTC and Twilio transport variants need
+  `--extra webrtc` and `--extra telephony`, respectively.
 - A mic and speakers for the build chapters. Chapters 11 and 12
   ship checked-in bundles you can read without hardware.
 - API keys, set as environment variables:

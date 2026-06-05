@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
+from easycat.cli.scaffold import init as init_module
 from easycat.cli.scaffold._schema import available_templates
+from easycat.stt.factory import available_providers as available_stt_providers
+from easycat.tts.factory import available_providers as available_tts_providers
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ── --list-templates and basic flows ─────────────────────────────────
 
@@ -320,6 +326,27 @@ def test_init_honors_tts_and_mcp_servers(
     assert "elevenlabs" in pyproject
     env_example = (project / ".env.example").read_text()
     assert "ELEVENLABS_API_KEY" in env_example
+
+
+def test_scaffold_provider_shortcuts_have_install_and_env_mappings() -> None:
+    """Every provider accepted by `easycat init` must scaffold install/env hints."""
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    known_extras = set(pyproject["project"]["optional-dependencies"])
+    provider_names = set(available_stt_providers()) | set(available_tts_providers())
+
+    missing_extras = sorted(provider_names - set(init_module._PROVIDER_TO_EXTRA))
+    missing_env_vars = sorted(provider_names - set(init_module._PROVIDER_TO_ENV_VAR))
+    unknown_extras = sorted(set(init_module._PROVIDER_TO_EXTRA.values()) - known_extras)
+
+    assert not missing_extras, "Scaffold missing provider extra mappings: " + ", ".join(
+        missing_extras
+    )
+    assert not missing_env_vars, "Scaffold missing provider env-var mappings: " + ", ".join(
+        missing_env_vars
+    )
+    assert not unknown_extras, "Scaffold provider maps reference unknown extras: " + ", ".join(
+        unknown_extras
+    )
 
 
 def test_init_default_omits_extra_kwargs(

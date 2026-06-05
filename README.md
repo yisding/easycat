@@ -1,7 +1,8 @@
 # EasyCat
 
-Slim, batteries-included voice bot framework that plugs into idiomatic
-OpenAI Agents SDK, PydanticAI agents, or PydanticAI workflows.
+Slim, batteries-included voice bot framework that runs idiomatic agents and
+workflows from OpenAI Agents SDK, PydanticAI, LangChain, LangGraph,
+LlamaAgents, Remote Responses API, or your own async workflow.
 
 ## Learn the pipeline from scratch
 
@@ -22,22 +23,23 @@ easycat doctor   # check API keys, Python version, optional extras, provider rea
 easycat explain  # look up an EasyCat error code
 easycat bundles  # list captured debug bundles
 easycat inspect  # summarise one captured debug bundle
+easycat validate # run validation lanes and render validation reports
 ```
 
 From an empty directory, `easycat init` scaffolds the canonical
-`run(EasyConfig.mic(agent=...))` shape (the same one shown above), then
+`run(EasyConfig.mic(agent=...))` shape (the same one shown below), then
 `easycat doctor` validates your environment before the first run.
 
 ## Validation Workflow
 
-For normal PR work, run the script-first quick validation:
+For normal PR work, run the public quick validation lane:
 
 ```bash
-uv run python scripts/validate.py quick
+uv run easycat validate quick
 ```
 
 This runs deterministic local tests only: no live credentials, no localhost
-socket lane, no slow tests, and no flaky quarantine. The script writes an
+socket lane, no slow tests, and no flaky quarantine. Each run writes an
 isolated report under `.easycat/validation/runs/<run_id>/report.json`, plus
 JUnit and stdout/stderr logs, and updates `.easycat/validation/latest.json`
 after the report is complete. `.easycat/validation/` is ignored by git; remove
@@ -47,20 +49,23 @@ Use the socket lane when touching WebSocket, transport, or localhost
 integration behavior:
 
 ```bash
-uv run python scripts/validate.py socket
+uv run easycat validate socket
 ```
 
-The same lanes are available through the public `easycat validate` command,
-which is the recommended entry point:
+Other validation lanes use the same `easycat validate` command:
 
 ```bash
-easycat validate quick      # deterministic local validation (same as the script lane)
+easycat validate quick      # deterministic local validation
 easycat validate socket     # localhost socket / transport integration validation
 easycat validate stress     # local stress validation and saturation-signal capture
-easycat validate latency    # live latency validation (add --smoke or --sweep)
+easycat validate latency --smoke # low-cost live latency validation
 easycat validate live       # live provider canaries (filter with --provider / --surface)
 easycat validate report PATH # render a concise summary of a saved report JSON
 ```
+
+`scripts/validate.py` remains as a compatibility shim for quick, socket, and
+stress slice runs, but new docs and local workflows should use
+`easycat validate`.
 
 `--json` emits the standard machine-readable stdout envelope, `--report PATH`
 writes a persisted validation report JSON, and `--junit PATH` writes JUnit XML
@@ -75,9 +80,9 @@ collection. Quick and socket validation exclude flaky tests.
 
 Provider validation scope is tracked with provider and surface markers such as
 `provider_openai` and `surface_stt`. See
-[`plan/validation/reference.md`](plan/validation/reference.md) for the planned
-provider-surface matrix covering extras, credential env vars, contract status,
-cassette status, and live canaries.
+[`plan/validation/reference.md`](plan/validation/reference.md) for the
+provider-surface matrix vocabulary covering extras, credential env vars,
+contract status, cassette status, and live canaries.
 
 ## Current capabilities
 - Session runtime that wires the audio pipeline (noise reduction (opt-in via `enable_noise_reduction=True`) -> VAD -> STT -> agent -> TTS)
@@ -87,11 +92,10 @@ cassette status, and live canaries.
 - TTS providers: OpenAI, Deepgram, ElevenLabs, Cartesia
 - VAD providers: Silero (open-source), FunASR ONNX VAD (open-source), optional TEN VAD (non-permissive license), and Krisp (commercial)
 - Noise reduction: RNNoise (open-source), Krisp (commercial), passthrough fallback
-- Transports: Local (sounddevice), WebSocket server, WebRTC (aiortc), Twilio Media Streams server
+- Transports: Local (sounddevice), WebSocket server, WebRTC (aiortc), WebTransport (aioquic), Twilio Media Streams server
 - Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers, outbound calling (Twilio), screening + IVR navigation, per-number health / retry / compliance gates, caller-ID propagation to the agent or tools
 - Reliability/observability: reconnecting WebSocket, timeouts, bounded queues, metrics/tracing
-- Agent adapters: use OpenAI Agents SDK or PydanticAI directly and wrap with EasyCat
-- Workflow adapter: use a stateful PydanticAI workflow as the session boundary
+- Agent/workflow adapters: OpenAI Agents SDK, PydanticAI, LangChain, LangGraph, LlamaAgents, Remote Responses API, and generic workflows
 
 ## Bring your own agent
 EasyCat does not replace your agent framework. Build your agent or workflow with
@@ -524,7 +528,7 @@ session = Session(SessionConfig(agent=bridge, ...))
 ```
 
 The `pydantic-ai` extra targets stable PydanticAI v1. The
-`pydantic-ai-v2-beta` extra pins `pydantic-ai==2.0.0b2` exactly for local
+`pydantic-ai-v2-beta` extra pins `pydantic-ai==2.0.0b3` exactly for local
 verification and apps that want to opt into the prerelease before it is stable.
 
 ### Workflows (recommended for multi-step voice apps)
@@ -609,56 +613,14 @@ or human-response events, pass `start_event_factory=` or
 `human_response_event_factory=` when constructing the bridge.
 
 ## Examples
-Runnable examples live in the `examples/` directory:
+Runnable examples live in the `examples/` directory. The maintained command
+matrix is [`examples/README.md`](examples/README.md); it lists every runnable
+example with its command, required extras/packages, and environment variables.
 
-**Transports**
-- `openai_agents_voice.py`: local microphone/speaker loop with OpenAI Agents SDK
-- `ws_server.py`: WebSocket server (multi-session)
-- `ws_browser_example.py`: browser mic/speaker over WebSocket + static web client
-- `ws_supervisor_server.py`: browser caller + passive supervisor listen-in over WebSocket
-- `reconnecting_ws_client.py`: resilient client using `ReconnectingWebSocket` against `ws_server.py`
-- `webrtc_server.py`: WebRTC voice chat with browser client
-- `webrtc_observability_server.py`: WebRTC + the bundled debugger UI side-by-side
-  (talk to the bot up top, watch the journal below)
-- `twilio_app.py`: Twilio Media Streams example
-
-**Agents**
-- `pydantic_ai_voice.py`: single-agent PydanticAI example
-- `pydantic_ai_workflow_voice.py`: workflow-level PydanticAI example (multi-agent hand-off)
-- `function_tools_openai.py` / `function_tools_pydantic.py`: agent function-calling tools
-- `session_actions_openai.py` / `session_actions_pydantic.py`: agent-initiated session actions (end-call)
-- `responses_api_bridge.py`: remote agent over the OpenAI Responses API (`RemoteResponsesAPIBridge`)
-
-**Provider swaps**
-- `deepgram_voice.py`: Deepgram for both STT (Nova-2) and TTS (Aura)
-- `elevenlabs_voice.py`: ElevenLabs for both STT (Scribe) and TTS (Flash)
-- `cartesia_voice.py`: Cartesia for both STT (Ink-Whisper) and TTS (Sonic)
-- `combined_providers.py`: Deepgram STT + ElevenLabs TTS together (stages compose)
-
-**Turn-taking**
-- `push_to_talk.py`: manual `start_turn`/`end_turn` instead of VAD
-- `smart_turn_demo.py`: ONNX-based endpoint detection for faster turn transitions
-
-**Advanced**
-- `custom_stt_provider.py` / `custom_tts_provider.py` / `custom_vad_provider.py`: inject a
-  user-written provider via `SessionConfig`
-- `output_processors.py`: pre-TTS `PauseProcessor` + `PhoneticReplacementProcessor` for
-  phone-number pacing and custom pronunciations
-- `agent_event_subscription.py`: attach handlers for agent deltas and tool-call events via
-  `session.subscribe_agent_events`
-- `vad_backends.py`: pin a specific VAD backend (`silero` / `funasr` / `ten` / `krisp`) via
-  `VADConfig.backend`
-- `noise_reduction_backends.py`: pin a specific noise-reduction backend via
-  `NoiseReducerConfig.backend`
-- `echo_cancellation.py`: enable LiveKit WebRTC AEC3 on a local mic/speaker loop
-- `debug_bundle.py`: record with `debug="light"`, export a `RunBundle`, inspect it
-- `journal_demo.py`: one-turn synthetic session that dumps journal records (no API keys)
-- `journal_ui.py`: run `easycat.debugger.serve_session()` alongside a local mic
-  session — open `http://localhost:8765` to tail the journal in a UI
-
-**Telephony**
-- `telephony_helpers.py`: standalone exercise of `DTMFAggregator`, `VoicemailDetector`,
-  and the IVR text classifiers (no live Twilio required)
+Use it to find examples for local mic/speaker bots, WebSocket and browser
+transports, WebRTC and WebTransport, Twilio Media Streams, provider swaps,
+agent bridges, function tools, session actions, turn-taking controls, custom
+providers, debug bundles, and journal inspection.
 
 ### Quickstart: WebRTC in browser (fast path)
 1. Install extras:

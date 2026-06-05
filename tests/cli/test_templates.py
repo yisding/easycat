@@ -19,12 +19,15 @@ belongs in the end-to-end suite.
 from __future__ import annotations
 
 import ast
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from easycat.cli.scaffold._schema import InitConfig, available_templates
 from easycat.cli.scaffold.init import _render_text, _substitutions, _templates_root
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ``agent.py`` line budget per template (counts *all* lines including blanks).
 _LINE_BUDGETS: dict[str, int] = {
@@ -47,6 +50,7 @@ _README_SECTIONS: tuple[str, ...] = (
     "## Run",
     "## Next steps",
 )
+_VOICE_TEMPLATES: tuple[str, ...] = ("openai-agents", "pydantic-ai")
 
 
 @pytest.fixture
@@ -62,6 +66,29 @@ def test_catalog_is_nonempty(templates: list[str]) -> None:
 
 def _template_dir(name: str) -> Path:
     return _templates_root() / name
+
+
+def _uses_run_easyconfig_mic(source: str) -> bool:
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "run":
+            continue
+        if not node.args:
+            continue
+        first_arg = node.args[0]
+        if (
+            isinstance(first_arg, ast.Call)
+            and isinstance(first_arg.func, ast.Attribute)
+            and first_arg.func.attr == "mic"
+            and isinstance(first_arg.func.value, ast.Name)
+            and first_arg.func.value.id == "EasyConfig"
+        ):
+            return True
+
+    return False
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
@@ -129,6 +156,30 @@ def test_readme_has_required_sections(name: str) -> None:
         assert section in readme, f"{name}/README.md missing section: {section}"
 
 
+@pytest.mark.parametrize("name", _VOICE_TEMPLATES)
+def test_voice_templates_use_canonical_mic_quickstart_shape(name: str) -> None:
+    agent = (_template_dir(name) / "agent.py").read_text(encoding="utf-8")
+    assert _uses_run_easyconfig_mic(agent), f"{name}/agent.py must call run(EasyConfig.mic(...))"
+
+    readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    assert "EasyConfig.mic(" in readme or "EasyConfig.mic(...)" in readme
+
+
+def test_text_chat_readme_points_voice_upgrade_to_mic_preset() -> None:
+    readme = (_template_dir("text-chat") / "README.md").read_text(encoding="utf-8")
+    assert "EasyConfig.mic(agent=agent)" in readme
+    assert "EasyConfig(agent=agent)" not in readme
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_template_debug_guidance_points_to_public_inspect_cli(name: str) -> None:
+    readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    assert "~/.cache/easycat" not in readme
+    assert "RunBundle journal" not in readme
+    assert ".easycat/journals/" in readme
+    assert "uv run easycat inspect .easycat/journals/<session_id>.sqlite" in readme
+
+
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_pyproject_pins_easycat_with_extras(name: str) -> None:
     """Every template's pyproject.toml declares an easycat extras dep."""
@@ -150,6 +201,17 @@ def test_env_example_mentions_openai(name: str) -> None:
 def test_pydantic_ai_readme_does_not_reference_missing_workflow_template() -> None:
     readme = (_template_dir("pydantic-ai") / "README.md").read_text(encoding="utf-8")
     assert "pydantic-ai-workflow" not in readme
+
+
+def test_pydantic_ai_template_beta_pin_matches_project_extra() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    deps = pyproject["project"]["optional-dependencies"]["pydantic-ai-v2-beta"]
+    pins = [dep for dep in deps if dep.startswith("pydantic-ai==")]
+    assert len(pins) == 1
+
+    _, version = pins[0].split("==", 1)
+    readme = (_template_dir("pydantic-ai") / "README.md").read_text(encoding="utf-8")
+    assert f"=={version}" in readme
 
 
 def test_no_placeholder_leak_in_non_templated_files() -> None:

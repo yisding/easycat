@@ -11,6 +11,9 @@ harness so it stays hermetic (no API keys, no network).
 
 from __future__ import annotations
 
+import ast
+import re
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -35,10 +38,62 @@ from .integration.harness import (
     patch_provider_factories,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+_PROVIDER_DISPLAY_NAMES = {
+    "cartesia": "Cartesia",
+    "deepgram": "Deepgram",
+    "elevenlabs": "ElevenLabs",
+    "openai": "OpenAI",
+    "openai-realtime": "OpenAI",
+}
+_BRIDGE_DISPLAY_NAMES = {
+    "GenericWorkflowBridge": "your own async workflow",
+    "LangChainBridge": "LangChain",
+    "LangGraphBridge": "LangGraph",
+    "LlamaAgentsBridge": "LlamaAgents",
+    "OpenAIAgentsBridge": "OpenAI Agents SDK",
+    "PydanticAIBridge": "PydanticAI",
+    "RemoteResponsesAPIBridge": "Remote Responses API",
+}
+_QUICKSTART_BLOCK_RE = re.compile(
+    r"### Quickstart \(EasyConfig\).*?```python\n(?P<code>.*?)\n```",
+    re.DOTALL,
+)
+
 
 class EchoAgent:
     async def run(self, text: str) -> str:
         return f"You said: {text}"
+
+
+def _uses_run_easyconfig_mic(source: str) -> bool:
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "run":
+            continue
+        if not node.args:
+            continue
+        first_arg = node.args[0]
+        if (
+            isinstance(first_arg, ast.Call)
+            and isinstance(first_arg.func, ast.Attribute)
+            and first_arg.func.attr == "mic"
+            and isinstance(first_arg.func.value, ast.Name)
+            and first_arg.func.value.id == "EasyConfig"
+        ):
+            return True
+
+    return False
+
+
+def _readme_quickstart_code() -> str:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    match = _QUICKSTART_BLOCK_RE.search(readme)
+    assert match is not None, "README.md Quickstart (EasyConfig) code block not found"
+    return match.group("code")
 
 
 @pytest.mark.integration_local
@@ -118,4 +173,133 @@ async def test_quickstart_public_api_imports_resolve() -> None:
         OpenAIAgentsBridge,
         PydanticAIBridge,
         auto_adapt_agent,
+    )
+
+
+def test_documented_canonical_voice_quickstart_shape_stays_consistent() -> None:
+    """README, first example, and scaffold template all teach the same entry shape."""
+    sources = {
+        "README.md Quickstart": _readme_quickstart_code(),
+        "examples/openai_agents_voice.py": (
+            REPO_ROOT / "examples" / "openai_agents_voice.py"
+        ).read_text(encoding="utf-8"),
+        "openai-agents scaffold template": (
+            REPO_ROOT / "src/easycat/cli/scaffold/templates/openai-agents/agent.py"
+        ).read_text(encoding="utf-8"),
+    }
+    missing = sorted(
+        name for name, source in sources.items() if not _uses_run_easyconfig_mic(source)
+    )
+
+    assert not missing, "Canonical quickstart shape drifted in: " + ", ".join(missing)
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "the same one shown above" not in readme
+    assert "the same one shown below" in readme
+
+
+def test_readme_pydantic_ai_v2_beta_pin_matches_pyproject() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    deps = pyproject["project"]["optional-dependencies"]["pydantic-ai-v2-beta"]
+    pins = [dep for dep in deps if dep.startswith("pydantic-ai==")]
+    assert len(pins) == 1
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "`pydantic-ai-v2-beta` extra pins" in readme
+    assert pins[0] in readme
+
+
+def test_readme_intro_tracks_public_agent_bridge_surface() -> None:
+    from easycat.integrations import agents as agent_integrations
+
+    bridge_names = {
+        name
+        for name in agent_integrations.__all__
+        if name.endswith("Bridge") and name != "ExternalAgentBridge"
+    }
+    missing_display_names = sorted(bridge_names - _BRIDGE_DISPLAY_NAMES.keys())
+    assert not missing_display_names, "README intro bridge display map missing: " + ", ".join(
+        missing_display_names
+    )
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    intro = readme.split("## Learn the pipeline", 1)[0]
+    missing_intro_names = sorted(
+        display_name
+        for bridge_name, display_name in _BRIDGE_DISPLAY_NAMES.items()
+        if bridge_name in bridge_names and display_name not in intro
+    )
+
+    assert not missing_intro_names, (
+        "README intro missing public agent bridge labels: " + ", ".join(missing_intro_names)
+    )
+    assert "OpenAI Agents SDK, PydanticAI agents, or PydanticAI workflows" not in intro
+
+
+def test_readme_cli_section_lists_registered_top_level_commands() -> None:
+    from easycat.cli import _app
+
+    _app._register_commands()
+    command_names = {command.name for command in _app.app.registered_commands}
+    command_names.update(group.name for group in _app.app.registered_groups)
+    command_names.discard(None)
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    cli_section = readme.split("## CLI", 1)[1].split("## ", 1)[0]
+
+    missing = sorted(
+        command_name
+        for command_name in command_names
+        if f"easycat {command_name}" not in cli_section
+    )
+
+    assert not missing, "README.md CLI section missing commands: " + ", ".join(missing)
+
+
+def test_readme_validation_workflow_lists_registered_validate_commands() -> None:
+    from easycat.cli.validate import validate_app
+
+    command_names = {command.name for command in validate_app.registered_commands}
+    command_names.discard(None)
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    validation_section = readme.split("## Validation Workflow", 1)[1].split("## ", 1)[0]
+
+    missing = sorted(
+        command_name
+        for command_name in command_names
+        if f"easycat validate {command_name}" not in validation_section
+    )
+
+    assert not missing, "README.md validation section missing commands: " + ", ".join(missing)
+    assert "easycat validate latency --smoke" in validation_section
+
+
+def test_readme_current_capabilities_track_public_provider_and_bridge_surfaces() -> None:
+    from easycat.integrations import agents as agent_integrations
+    from easycat.stt.factory import available_providers as available_stt_providers
+    from easycat.transports import __all__ as transport_exports
+    from easycat.tts.factory import available_providers as available_tts_providers
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    capabilities = readme.split("## Current capabilities", 1)[1].split("## ", 1)[0]
+
+    for provider in available_stt_providers():
+        assert _PROVIDER_DISPLAY_NAMES[provider] in capabilities
+    for provider in available_tts_providers():
+        assert _PROVIDER_DISPLAY_NAMES[provider] in capabilities
+
+    for transport in ("Local", "WebSocket", "WebRTC", "WebTransport", "Twilio"):
+        if any(name.startswith(transport) for name in transport_exports):
+            assert transport in capabilities
+
+    bridge_names = {
+        name
+        for name in agent_integrations.__all__
+        if name.endswith("Bridge") and name != "ExternalAgentBridge"
+    }
+    missing_bridges = sorted(name for name in bridge_names if name not in readme)
+
+    assert not missing_bridges, "README.md missing public agent bridge names: " + ", ".join(
+        missing_bridges
     )

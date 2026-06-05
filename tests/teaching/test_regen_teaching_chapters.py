@@ -2,7 +2,32 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.regen_teaching_chapters import TEACHING, Chapter, _resolve_child_path, render_diff
+from scripts.regen_teaching_chapters import (
+    ROOT,
+    TEACHING,
+    Chapter,
+    _resolve_child_path,
+    discover_chapters,
+    regen_readme,
+    render_diff,
+)
+
+
+def test_teaching_readmes_match_regenerated_auto_blocks() -> None:
+    stale_readmes: list[str] = []
+
+    for chapter in discover_chapters():
+        readme = chapter.path / "README.md"
+        if not readme.exists():
+            continue
+        original, updated = regen_readme(chapter)
+        if original != updated:
+            stale_readmes.append(readme.relative_to(ROOT).as_posix())
+
+    assert not stale_readmes, (
+        "Teaching README auto blocks are stale. Run "
+        "`uv run python scripts/regen_teaching_chapters.py`: " + ", ".join(stale_readmes)
+    )
 
 
 def test_resolve_child_path_rejects_traversal_outside_base() -> None:

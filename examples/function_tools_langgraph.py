@@ -8,8 +8,8 @@ checkpointer. ``auto_adapt_agent()`` routes the compiled graph through
 snapshot. For tools that drive the call (end, transfer, DTMF) see
 ``session_actions_langgraph.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
-       uv add easycat[langgraph] langchain-openai
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langgraph
+       uv pip install langchain-openai
 Run:   uv run python examples/function_tools_langgraph.py
 """
 
@@ -23,7 +23,8 @@ try:
     from langgraph.prebuilt import create_react_agent
 except ImportError as exc:
     raise SystemExit(
-        "LangGraph is required. Install with: uv add easycat[langgraph] langchain-openai"
+        "LangGraph is required. Install with: "
+        "uv sync --extra quickstart --extra langgraph; uv pip install langchain-openai"
     ) from exc
 
 from easycat import EasyConfig, run

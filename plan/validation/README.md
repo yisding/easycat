@@ -15,7 +15,7 @@ commands unless the current-state section says they exist.
 
 ## Current State
 
-Snapshot: V0 implementation pass on 2026-05-22.
+Snapshot: maintenance update on 2026-06-05.
 
 Implemented:
 
@@ -25,37 +25,44 @@ Implemented:
 - `tests/conftest.py` enforces provider/surface metadata when validation tests
   declare either side, and enforces flaky quarantine metadata:
   `@pytest.mark.flaky(issue="...", owner="...", review_by="YYYY-MM-DD")`.
-- `scripts/validate.py quick` and `scripts/validate.py socket` exist as the V0
-  script-first validation entry points.
+- The public CLI registers `easycat validate` with `quick`, `socket`,
+  `stress`, `latency`, `live`, and `report` subcommands.
+- `scripts/validate.py` remains as a compatibility shim over
+  `easycat.validation.runner` for slice runs.
 - Validation runs write isolated artifacts under `.easycat/validation/runs/`
   and update `.easycat/validation/latest.json` after a complete report exists.
-- `src/easycat/validation/report.py` defines the V0 validation JSON envelope,
+- `src/easycat/validation/report.py` defines the validation JSON envelope,
   provider credential states, artifact references, and report-boundary redaction.
-- `.github/workflows/ci.yml` has `lint`, local tests, socket integration
-  tests, and manual live-provider tests.
-- The public CLI currently registers `init`, `doctor`, `explain`, `bundles`,
-  and `inspect`. There is no `easycat validate` command.
-- The existing provider matrix at
-  `tests/integration/test_provider_contract_matrix.py` validates provider
-  registry, factory, EventBus injection, and session wiring. It is not a
-  protocol cassette suite.
-- `tests/e2e/test_plan_7_latency_benchmark.py` already measures voice-loop
-  latency and stage breakdowns, and is now marked `latency`, but it does not
-  emit a structured latency artifact yet.
-- CLI testing already has a focused plan in `tests/cli/TEST_PLANS.md`.
+- `easycat validate latency` writes structured latency artifacts with samples,
+  percentiles, budget checks, reliability signals, and optional baseline
+  comparison.
+- `easycat validate live` writes redacted provider capability reports and can
+  fail missing required live secrets in strict or release mode.
+- `.github/workflows/ci.yml` runs `easycat validate quick` and
+  `easycat validate socket` with uploaded JSON, JUnit, stdout, and stderr
+  artifacts.
+- `.github/workflows/nightly-validation.yml` runs quick, socket, stress, live,
+  and latency validation lanes with uploaded artifacts.
+- `.github/workflows/release-validation.yml` validates an installed package
+  through the public CLI before release.
+- Provider-surface coverage lives in `tests/contracts/provider_surface_matrix.py`
+  and `src/easycat/validation/provider_reports.py`.
+- CLI testing covers validation commands in `tests/cli/test_validate.py` and
+  `tests/cli/test_latency_validation.py`; CLI test planning lives in
+  `tests/cli/TEST_PLANS.md`.
 - Broader E2E planning in [../testing/](../testing/README.md) is backed by
   concrete tests under `tests/e2e/`.
 
-Planned but not implemented:
+Remaining backlog:
 
-- `easycat validate ...` command group.
-- JUnit and validation artifact upload in CI.
-- HTTP/WebSocket provider cassettes and schema drift fingerprints.
-- a canonical provider-surface matrix for provider, surface, adapter,
-  protocol, extra, credential env var, model/API version, contract path,
-  cassette status, and live-canary status.
-- Live provider capability reports.
-- Release validation workflow.
+- HTTP/WebSocket provider cassettes and schema drift fingerprints are still not
+  standardized.
+- A dedicated `easycat validate contracts` command is still future work; run
+  contract tests directly today.
+- A dedicated `easycat validate release` wrapper is still future work; the
+  release workflow composes existing public validation commands today.
+- Deep acceptance-bullet auditing for the historical milestones in
+  [tasks.md](tasks.md) remains open.
 
 ## Recent Review Gaps
 
@@ -81,20 +88,19 @@ Subagent and local review on 2026-05-21 found these plan hardening items:
 
 ## Target Slices
 
-These names are the validation vocabulary. V0 ships script-first `quick` and
-`socket`; the public `easycat validate ...` commands remain planned.
+These names are the validation vocabulary.
 
-| Slice | Current selector or entry point | Planned command |
+| Slice | Current entry point | Notes |
 |---|---|---|
-| quick | `uv run python scripts/validate.py quick` | `easycat validate quick` |
-| socket | `uv run python scripts/validate.py socket` | `easycat validate socket` |
-| contracts | existing `integration_local` provider matrix only | `easycat validate contracts` |
-| live | manual CI or `uv run pytest -q -m "integration_live"` with credentials | `easycat validate live` |
-| latency | `uv run pytest tests/e2e/test_plan_7_latency_benchmark.py -s -v` | `easycat validate latency --smoke/--sweep` |
-| stress | selected `tests/e2e/` tests, often `slow` and/or socket-gated | `easycat validate stress` |
-| release | manual checklist today | `easycat validate release` |
+| quick | `easycat validate quick` | deterministic local validation |
+| socket | `easycat validate socket` | localhost socket / transport integration |
+| stress | `easycat validate stress` | local stress validation and reliability artifacts |
+| latency | `easycat validate latency --smoke` or `--sweep` | live latency probes and structured latency artifacts |
+| live | `easycat validate live --provider openai` | live provider canaries and capability reports |
+| contracts | `uv run pytest tests/contracts -q` | public `easycat validate contracts` is not shipped yet |
+| release | `.github/workflows/release-validation.yml` | composed from public validation commands; no dedicated subcommand yet |
 
-## First Implementation PR
+## Historical First Implementation PR
 
 V0 in [tasks.md](tasks.md) now covers:
 

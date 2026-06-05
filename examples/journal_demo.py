@@ -5,7 +5,10 @@ No API keys required.  The stubs here implement the provider Protocols
 structurally — inheriting from ``easycat.stubs`` Noop classes would
 trigger Session's noop guard, so each stub stands alone.
 
-Usage:
+Setup:
+    uv sync --group dev
+
+Run:
     uv run python examples/journal_demo.py
 """
 

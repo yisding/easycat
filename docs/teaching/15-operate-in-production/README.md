@@ -4,7 +4,7 @@
 > means running N of them at once, tearing them down cleanly, and
 > being able to debug the one that misbehaved yesterday. This
 > chapter is about the operational surface: `SessionManager`, the
-> lifecycle methods, the debugger UI, and the CLI.
+> public lifecycle, the debugger UI, and the CLI.
 
 ## Prerequisites
 
@@ -20,13 +20,15 @@
 ## Diff from chapter 14
 
 - **Added:** `SessionManager` and its `add` / `remove` /
-  `stop_all` / `connection(...)` surface; the four lifecycle
-  methods (`stop`, `shutdown`, `close`, `destroy`) named and
-  bounded — `start` is unchanged from earlier chapters; the
+  `stop_all` / `connection(...)` surface; the public lifecycle
+  surface (`async with session:`, `stop`, `stop(force=True)`, and
+  the `shutdown` force-stop alias) named and bounded — `start` is
+  unchanged from earlier chapters; the
   debugger entry points (`serve_bundle`,
   `serve_session`); the `easycat` CLI (`init`, `doctor`,
-  `explain`); `translate.py` — the ch 13 (production-shape)
-  → ch 12 (teaching-shape) bundle translator.
+  `explain`, `bundles`, `inspect`, `validate`); `translate.py` —
+  the ch 13 (production-shape) → ch 12 (teaching-shape) bundle
+  translator.
 - **Modified:** the demo runs through `SessionManager.connection`
   instead of `await session.start()` / `stop()` directly.
 
@@ -231,11 +233,11 @@
 +            await wait_for_shutdown_signal(session)
 +        except (KeyboardInterrupt, asyncio.CancelledError):
 +            pass
-+    # manager.connection exited → session.stop() → session.destroy().
++    # manager.connection exited -> session.stop() -> private teardown.
 +    print("Session stopped; manager released the slot.")
 +
 +    # ── 2. Post-stop: journal still works, bundle still exports ───
-+    # The invariant from CLAUDE.md: after stop()/shutdown(), the
++    # The lifecycle invariant: after stop()/shutdown(), the
 +    # journal is in a read-only postmortem state. .read() works,
 +    # export_debug_bundle() works, .append() does not.
 +    assert session.journal is not None
@@ -284,7 +286,7 @@ Talk for a few seconds, Ctrl-C. You should see:
 5. A bundle path.
 6. The one-liner to open the debugger on that bundle.
 
-## The four lifecycle methods
+## The public lifecycle
 
 ```
   ┌─────────────────┐   cfg.agent, providers wired
@@ -295,13 +297,14 @@ Talk for a few seconds, Ctrl-C. You should see:
   ┌─────────────────┐
   │   Session live  │ ──► journal.append() writes records
   └────────┬────────┘
-           │ await session.stop()   (graceful)
-           │ await session.shutdown() (force-cancel)
+           │ await session.stop()           (graceful drain)
+           │ await session.stop(force=True) (force-cancel)
+           │ await session.shutdown()       (force-cancel alias)
            ▼
-  ┌─────────────────┐   stop()/shutdown() both call destroy() internally
+  ┌─────────────────┐   public stop paths run private backend teardown
   │ Session stopped │ ──► journal.read() still works
   └────────┬────────┘ ──► export_debug_bundle() still works
-           │ (implicit) destroy() → close() → journal finalized
+           │ (implicit) journal finalized; read-only view preserved
            ▼
   ┌─────────────────┐
   │   Postmortem    │ ──► SQLite backend closed; JournalView is read-only
@@ -310,16 +313,16 @@ Talk for a few seconds, Ctrl-C. You should see:
 
 | Method | What it does | When to use |
 |---|---|---|
-| `await session.stop()` | Graceful halt. Cancels in-flight turns, drains queues, disconnects transport, then calls `destroy()`. | The normal shutdown path. |
-| `await session.shutdown()` | Force-cancel. Aggressively kills pipeline / STT / TTS / heartbeat tasks, then the same cleanup as `stop()`. | When `stop()` is hung on a misbehaving provider. |
-| `session.close()` | Writes the journal's clean-close marker. Does **not** tear down backends. | You almost never call this directly. `destroy()` calls it for you. |
-| `session.destroy()` | Backend teardown. Closes the SQLite journal and artifact stores, preserves a read-only postmortem view. | You almost never call this directly. `stop()` / `shutdown()` call it for you. |
+| `async with session:` | Starts the session on entry and calls `stop(force=True)` on exit. | Preferred scoped idiom for examples and servers that tie one session to one block. |
+| `await session.stop()` | Public graceful halt. Drains in-flight work, disconnects transport, finalizes private backends, and preserves postmortem journal/bundle access. | The normal shutdown path. |
+| `await session.stop(force=True)` | Public force-cancel path. Cancels pipeline/provider work before the same teardown. | When graceful stop is stuck or the caller is exiting a scope. |
+| `await session.shutdown()` | Compatibility alias for `stop(force=True)`. | Existing callers; new docs should usually show `stop(...)` or `async with session:`. |
 
 The invariant worth memorising: **after `stop()` or `shutdown()`,
 `session.journal.read()` and `session.export_debug_bundle()` must
 still work.** The journal backend is swapped for a read-only
-snapshot during `destroy()`, so the postmortem shape is stable no
-matter when you poke at it.
+snapshot during private teardown, so the postmortem shape is stable
+no matter when you poke at it.
 
 ## `SessionManager`
 
@@ -413,9 +416,12 @@ planted bundles is an instructive follow-up.
 
 ```bash
 $ easycat --help
-  init     scaffold a new project
-  doctor   check environment + provider reachability
-  explain  look up an EasyCat error code
+  init      scaffold a new project
+  doctor    check environment + provider reachability
+  explain   look up an EasyCat error code
+  inspect   summarize one captured debug bundle
+  bundles   list and show captured debug bundles
+  validate  run validation checks and inspect reports
 ```
 
 - **`easycat init`** — scaffolds a new project from a template
@@ -429,6 +435,22 @@ $ easycat --help
   registry (`src/easycat/cli/diagnose/explain.py`). When
   `EasyCatError` raises with `code="EC-STT-001"`, this is where
   you find out what that means.
+- **`easycat bundles list`** / **`easycat bundles show <path>`** —
+  list captured bundles and summarize one bundle from the shell.
+- **`easycat inspect <path>`** — friendly alias for
+  `easycat bundles show <path>`.
+- **`easycat validate quick`** — deterministic local validation
+  for normal PR work.
+- **`easycat validate socket`** — localhost socket integration
+  validation.
+- **`easycat validate stress`** — local stress validation and
+  saturation-signal capture.
+- **`easycat validate latency --smoke`** — low-cost live latency
+  probe; use `--sweep` for the broader condition matrix.
+- **`easycat validate live`** — live provider canaries and
+  capability reports.
+- **`easycat validate report <path>`** — render a concise summary
+  of a saved validation report.
 
 The debugger is intentionally *not* a CLI subcommand — it's imported
 and called from Python, because you usually want to serve it from

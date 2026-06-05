@@ -4,7 +4,7 @@ The EasyCat integration point is the workflow object, not an individual
 PydanticAI agent. The workflow decides which specialist handles each
 turn and persists state across turns.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart; uv add easycat[pydantic-ai]
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai
 Run:   uv run python examples/pydantic_ai_workflow_voice.py
 """
 
@@ -14,7 +14,9 @@ try:
     from pydantic import BaseModel
     from pydantic_ai import Agent, RunUsage  # type: ignore[import-untyped]
 except ImportError as exc:
-    raise SystemExit("PydanticAI is required. Install with: uv add easycat[pydantic-ai]") from exc
+    raise SystemExit(
+        "PydanticAI is required. Install with: uv sync --extra quickstart --extra pydantic-ai"
+    ) from exc
 
 from easycat import EasyConfig, require_env, run
 

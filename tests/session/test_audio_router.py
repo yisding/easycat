@@ -544,9 +544,9 @@ async def test_batch_stt_buffer_cap_does_not_tear_down_session():
         def raise_for_status(self) -> None:
             return None
 
-        async def aiter_lines(self):
-            yield 'data: {"text": "partial", "is_final": true}'
-            yield "data: [DONE]"
+        async def aiter_bytes(self):
+            body = 'data: {"text": "partial", "is_final": true}\ndata: [DONE]\n'
+            yield body.encode("utf-8")
 
     class _MockStreamCtx:
         async def __aenter__(self):
