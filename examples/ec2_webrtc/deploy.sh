@@ -59,11 +59,21 @@ echo "[2/6] Configuring coturn..."
 # Enable coturn daemon.
 sudo sed -i 's/#TURNSERVER_ENABLED=1/TURNSERVER_ENABLED=1/' /etc/default/coturn
 
-# Write config.
+# Write config. Use Python templating so generated base64 TURN passwords
+# containing "/" or "&" cannot break sed replacement syntax.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-sudo cp "$SCRIPT_DIR/coturn.conf" /etc/turnserver.conf
-sudo sed -i "s/__EXTERNAL_IP__/$EXTERNAL_IP/" /etc/turnserver.conf
-sudo sed -i "s/__TURN_PASSWORD__/$TURN_PASSWORD/" /etc/turnserver.conf
+python3.11 - "$SCRIPT_DIR/coturn.conf" "$EXTERNAL_IP" "$TURN_PASSWORD" <<'PY' | sudo tee /etc/turnserver.conf > /dev/null
+import sys
+from pathlib import Path
+
+template = Path(sys.argv[1]).read_text(encoding="utf-8")
+rendered = (
+    template
+    .replace("__EXTERNAL_IP__", sys.argv[2])
+    .replace("__TURN_PASSWORD__", sys.argv[3])
+)
+sys.stdout.write(rendered)
+PY
 
 sudo systemctl restart coturn
 sudo systemctl enable coturn

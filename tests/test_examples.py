@@ -247,6 +247,16 @@ def test_ec2_webrtc_deploy_docs_do_not_claim_to_configure_https() -> None:
     assert "Client URL:      http://$EXTERNAL_IP:8080/webrtc_client.html" not in deploy
 
 
+def test_ec2_webrtc_turn_template_handles_generated_password_characters() -> None:
+    deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert "openssl rand -base64 24" in deploy
+    assert 'sed -i "s/__TURN_PASSWORD__/$TURN_PASSWORD/"' not in deploy
+    assert 'sed -i "s/__EXTERNAL_IP__/$EXTERNAL_IP/"' not in deploy
+    assert "<<'PY' | sudo tee /etc/turnserver.conf" in deploy
+    assert '.replace("__TURN_PASSWORD__", sys.argv[3])' in deploy
+
+
 def test_examples_readme_fastest_path_verifies_environment_before_running() -> None:
     readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     fast_path = readme.split("For the fastest local mic/speaker path:", 1)[1]
