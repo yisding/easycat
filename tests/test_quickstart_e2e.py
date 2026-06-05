@@ -356,6 +356,32 @@ def test_readme_langchain_langgraph_section_teaches_auto_adapt_requirements() ->
         assert term in section
 
 
+def test_readme_llama_agents_local_snippet_uses_easyconfig_auto_adapt() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("### LlamaAgents / LlamaIndex Workflows", 1)[1].split(
+        "## Examples",
+        1,
+    )[0]
+    local_snippet = section.split("To call a workflow mounted", 1)[0]
+
+    for term in (
+        "from easycat import EasyConfig, create_session",
+        'openai_api_key="your-api-key"',
+        "agent=GreetingWorkflow()",
+        "session = create_session(",
+    ):
+        assert term in local_snippet
+
+    for stale_term in (
+        "from easycat.integrations.agents import LlamaAgentsBridge",
+        'input_key="message"',
+        "LlamaAgentsBridge(workflow=GreetingWorkflow()",
+    ):
+        assert stale_term not in local_snippet
+
+    assert "LlamaAgentsBridge(base_url=" in section
+
+
 def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     from easycat.cli import _app
     from easycat.cli.debug.bundles import bundles_app

@@ -690,7 +690,7 @@ turns.
 from workflows import Workflow, step
 from workflows.events import StartEvent, StopEvent
 
-from easycat.integrations.agents import LlamaAgentsBridge
+from easycat import EasyConfig, create_session
 
 
 class GreetingWorkflow(Workflow):
@@ -699,13 +699,20 @@ class GreetingWorkflow(Workflow):
         return StopEvent(result=f"Hello, {ev.message}")
 
 
-bridge = LlamaAgentsBridge(workflow=GreetingWorkflow(), input_key="message")
+session = create_session(
+    EasyConfig(
+        openai_api_key="your-api-key",
+        agent=GreetingWorkflow(),
+    )
+)
 ```
 
 To call a workflow mounted on a LlamaAgents workflow server, construct
 the bridge with a `WorkflowClient` or `base_url`:
 
 ```python
+from easycat.integrations.agents import LlamaAgentsBridge
+
 bridge = LlamaAgentsBridge(base_url="http://localhost:8080", workflow_name="greet")
 ```
 
