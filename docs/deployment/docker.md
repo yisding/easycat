@@ -20,15 +20,27 @@ docker compose -f docker/compose.yaml up --build
 The compose service publishes the container only on host loopback
 (`127.0.0.1:8765`) and requires the token above before it creates a
 provider-backed EasyCat session.  Non-browser clients should send
-`Authorization: Bearer $EASYCAT_WS_TOKEN`.  For the browser example,
-open `examples/ws_browser_client.html?token=<EASYCAT_WS_TOKEN>` and point
-it at `ws://localhost:8765`.
+`Authorization: Bearer $EASYCAT_WS_TOKEN`.
+
+For the browser example, serve the static client from the repo in a
+second terminal:
+
+```bash
+python -m http.server 8080 --directory examples
+```
+
+Then open
+`http://localhost:8080/ws_browser_client.html?token=<EASYCAT_WS_TOKEN>`.
+The page derives the WebSocket host from `localhost` and connects to
+`ws://localhost:8765` automatically.
 
 To stop:
 
 ```bash
 docker compose -f docker/compose.yaml down
 ```
+
+Press `Ctrl-C` in the static-client terminal if you started one.
 
 ## Secrets: use a `.env` file, don't bake them in
 

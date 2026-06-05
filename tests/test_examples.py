@@ -669,6 +669,16 @@ def test_docker_compose_binds_ws_port_to_loopback_and_requires_token():
     assert '- "8765:8765"' not in compose
 
 
+def test_docker_guide_serves_browser_client_from_localhost():
+    guide = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
+    client = (REPO_ROOT / "examples" / "ws_browser_client.html").read_text(encoding="utf-8")
+
+    assert "python -m http.server 8080 --directory examples" in guide
+    assert "http://localhost:8080/ws_browser_client.html?token=<EASYCAT_WS_TOKEN>" in guide
+    assert "`examples/ws_browser_client.html?token=" not in guide
+    assert 'location.hostname + ":8765"' in client
+
+
 def test_docker_env_secret_file_is_ignored_but_templates_are_allowed():
     guide = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
     gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
