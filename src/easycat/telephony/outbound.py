@@ -50,6 +50,10 @@ _CALL_STATUSES: frozenset[str] = frozenset(
 
 # Reason strings that indicate carrier/callee blocking (for number_health).
 BLOCK_REASONS: frozenset[str] = frozenset({"blocked_unwanted", "blocked_rejected"})
+_TELEPHONY_INSTALL_HINT = (
+    "Install with: uv add 'easycat[telephony]'. From the EasyCat repo, use: "
+    "uv sync --extra telephony."
+)
 
 
 def _get_call_sid(params: dict[str, Any]) -> str | None:
@@ -172,7 +176,8 @@ class OutboundCallManagerState(Enum):
 class OutboundCallManager:
     """Orchestrates placing outbound calls via the Twilio REST API.
 
-    Requires the ``twilio`` Python package (``pip install easycat[telephony]``).
+    Requires the ``twilio`` Python package (``uv add 'easycat[telephony]'``;
+    from the EasyCat repo, use ``uv sync --extra telephony``).
 
     Optional pre-call gates (plugged in after construction by
     ``_create_outbound_helpers`` or the caller directly):
@@ -209,7 +214,7 @@ class OutboundCallManager:
         except ImportError:
             raise ImportError(
                 "The 'twilio' package is required for OutboundCallManager. "
-                "Install it with: pip install easycat[telephony]"
+                + _TELEPHONY_INSTALL_HINT
             ) from None
 
         if not twilio_account_sid or not twilio_auth_token:

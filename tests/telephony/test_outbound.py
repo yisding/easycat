@@ -227,8 +227,12 @@ class TestOutboundCallManager:
     def test_twilio_sdk_import_error(self) -> None:
         bus = EventBus()
         with patch.dict("sys.modules", {"twilio": None, "twilio.rest": None}):
-            with pytest.raises(ImportError, match="easycat\\[telephony\\]"):
+            with pytest.raises(ImportError) as exc_info:
                 OutboundCallManager(bus, from_number="+1555")
+        message = str(exc_info.value)
+        assert "uv add 'easycat[telephony]'" in message
+        assert "uv sync --extra telephony" in message
+        assert "pip install easycat[telephony]" not in message
 
     @patch("easycat.telephony.outbound.OutboundCallManager.__init__", return_value=None)
     def test_init_stores_config(self, mock_init: MagicMock) -> None:
