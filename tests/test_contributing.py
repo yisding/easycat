@@ -8,6 +8,9 @@ _DEV_LOOP_ROW_RE = re.compile(
     r"^\| (?P<task>[^|]+) \| `just (?P<recipe>[^` ]+)(?: [^`]*)?` "
     r"\| `(?P<raw>[^`]+)` \|$"
 )
+_VALIDATION_ROW_RE = re.compile(
+    r"^\| `(?P<slice>[^`]+)` \| `(?P<command>[^`]+)` \| (?P<markers>[^|]+) \|$"
+)
 _RECIPE_RE = re.compile(r"^(?P<name>[A-Za-z0-9_-]+)(?:\s+[^:]*)?:")
 
 
@@ -39,6 +42,20 @@ def _development_loop_rows() -> list[dict[str, str]]:
             rows.append(match.groupdict())
 
     assert rows, "CONTRIBUTING.md development-loop table was not found"
+    return rows
+
+
+def _validation_slice_rows() -> list[dict[str, str]]:
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    section = contributing.split("## Validation slices", 1)[1].split("## ", 1)[0]
+    rows: list[dict[str, str]] = []
+
+    for line in section.splitlines():
+        match = _VALIDATION_ROW_RE.match(line)
+        if match is not None:
+            rows.append(match.groupdict())
+
+    assert rows, "CONTRIBUTING.md validation-slices table was not found"
     return rows
 
 
@@ -75,3 +92,13 @@ def test_contributing_development_loop_lists_validation_just_recipes() -> None:
     missing = [recipe for recipe in validation_recipes if recipe not in documented_recipes]
 
     assert not missing, "CONTRIBUTING.md missing validation recipes: " + ", ".join(missing)
+
+
+def test_contributing_validation_slice_commands_use_repo_local_uv_run() -> None:
+    stale = [
+        f"{row['slice']}: {row['command']}"
+        for row in _validation_slice_rows()
+        if not row["command"].startswith("uv run easycat validate ")
+    ]
+
+    assert not stale, "CONTRIBUTING.md validation commands should use uv run: " + "; ".join(stale)

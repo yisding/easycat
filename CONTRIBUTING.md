@@ -64,18 +64,20 @@ xdist.
 
 ## Validation slices and the `easycat validate` CLI
 
-CI runs the same slices you can run locally. Each writes a JSON + JUnit report
-under `.easycat/validation/`:
+CI runs the same slices you can run locally. From a repo checkout, run them
+through `uv run` so the command uses the checked-out EasyCat package and its
+managed virtualenv. Each slice writes a JSON + JUnit report under
+`.easycat/validation/`:
 
 | Slice | Command | Marker selection |
 | --- | --- | --- |
-| `quick` | `easycat validate quick` | not integration_socket / live / slow / stress / flaky |
-| `socket` | `easycat validate socket` | integration_socket, not live, not flaky |
-| `stress` | `easycat validate stress` | stress, not live, not flaky |
-| `latency` | `easycat validate latency --smoke` | latency probes (live) |
-| `live` | `easycat validate live --provider openai` | integration_live + provider/surface |
+| `quick` | `uv run easycat validate quick` | not integration_socket / live / slow / stress / flaky |
+| `socket` | `uv run easycat validate socket` | integration_socket, not live, not flaky |
+| `stress` | `uv run easycat validate stress` | stress, not live, not flaky |
+| `latency` | `uv run easycat validate latency --smoke` | latency probes (live) |
+| `live` | `uv run easycat validate live --provider openai` | integration_live + provider/surface |
 
-`easycat validate report <path>` renders a saved report.
+`uv run easycat validate report <path>` renders a saved report.
 
 ## Marker taxonomy
 
