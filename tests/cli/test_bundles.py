@@ -262,6 +262,28 @@ def test_bundles_show_sqlite_crash_dump(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["turns"] == 1
 
 
+def test_inspect_locked_sqlite_journal_message(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = tmp_path / "live.sqlite"
+    journal.touch()
+
+    def raise_locked(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("easycat.debug.bundle.sqlite3.connect", raise_locked)
+
+    result = cli.invoke(app, ["inspect", str(journal)])
+    assert result.exit_code == 5
+    assert "currently in use" in result.stderr
+    assert "Stop the session before inspecting it" in result.stderr
+    assert "session.export_debug_bundle(...)" in result.stderr
+    assert "Bundle corrupt or unreadable" not in result.stderr
+    assert "bundles list" not in result.stderr
+
+
 def test_bundles_show_missing_path(cli: CliRunner, tmp_path: Path) -> None:
     missing = tmp_path / "nope.zip"
     result = cli.invoke(app, ["bundles", "show", str(missing)])

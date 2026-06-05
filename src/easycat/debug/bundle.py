@@ -5,10 +5,11 @@ manifest metadata into a single ZIP archive (``.zip``, ``.bundle``, or
 ``.easycat-bundle``) that :meth:`RunBundle.load` opens for replay or
 sharing with teammates.
 
-A :class:`RunBundle` can also be reconstructed from a crashed session's
-raw SQLite journal (``.sqlite``) plus its artifact directory via
-:meth:`RunBundle.from_partial_journal`.  Both kinds of file are surfaced
-by :func:`discover_bundles`, so callers must dispatch on the suffix.
+A :class:`RunBundle` can also be reconstructed from a raw SQLite journal
+(``.sqlite``) plus its artifact directory via
+:meth:`RunBundle.from_partial_journal`.  Exported bundles and crash-dump
+journals are surfaced by :func:`discover_bundles`, so callers must
+dispatch on the suffix.
 """
 
 from __future__ import annotations
@@ -463,7 +464,7 @@ class RunBundle:
         journal_path: str | Path,
         artifact_root: str | Path | None = None,
     ) -> RunBundle:
-        """Load from a crashed session's SQLite journal and artifact directory."""
+        """Load from a SQLite journal and optional artifact directory."""
         journal_path = Path(journal_path)
         if not journal_path.exists():
             raise FileNotFoundError(f"Journal not found: {journal_path}")
@@ -475,7 +476,8 @@ class RunBundle:
             if "database is locked" in str(e):
                 raise BundleInUseError(
                     f"Journal {journal_path} is currently in use. "
-                    "Use `bundles list` for running sessions."
+                    "Stop the session before inspecting it, or export a ZIP bundle with "
+                    "`session.export_debug_bundle(...)`."
                 ) from e
             raise BundleRecoveryError(f"Cannot open journal: {e}") from e
 

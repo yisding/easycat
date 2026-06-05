@@ -35,6 +35,7 @@ from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_json, json_envelope, stderr_console, stdout_console
 from easycat.debug.bundle import (
     BundleError,
+    BundleInUseError,
     BundleVersionError,
     RunBundle,
     discover_bundles,
@@ -221,6 +222,9 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
             "upgrade easycat to inspect it."
         )
         raise typer.Exit(6) from None
+    except BundleInUseError as exc:
+        stderr_console.print(f"  [red]✗[/] {exc}")
+        raise typer.Exit(5) from None
     except BundleError as exc:
         stderr_console.print(f"  [red]✗[/] Bundle corrupt or unreadable: {exc}")
         raise typer.Exit(5) from None

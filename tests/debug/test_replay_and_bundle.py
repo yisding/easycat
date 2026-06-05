@@ -537,6 +537,25 @@ class TestBundlePartialJournal:
         with pytest.raises(FileNotFoundError):
             RunBundle.from_partial_journal(tmp_path / "nonexistent.sqlite")
 
+    def test_from_partial_journal_locked_message_is_actionable(self, tmp_path, monkeypatch):
+        """A locked live journal should explain how to get an inspectable file."""
+        db_path = tmp_path / "locked.sqlite"
+        db_path.touch()
+
+        def raise_locked(*args, **kwargs):
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr("easycat.debug.bundle.sqlite3.connect", raise_locked)
+
+        with pytest.raises(BundleInUseError) as exc_info:
+            RunBundle.from_partial_journal(db_path)
+
+        message = str(exc_info.value)
+        assert "currently in use" in message
+        assert "Stop the session before inspecting it" in message
+        assert "session.export_debug_bundle(...)" in message
+        assert "bundles list" not in message
+
     def test_from_partial_journal_surfaces_degradation(self, tmp_path):
         """A bundle loaded from a degraded SQLite file must expose the
         degradation signal — the journal_degraded marker is persisted to disk
