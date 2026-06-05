@@ -685,6 +685,8 @@ def test_docker_env_secret_file_is_ignored_but_templates_are_allowed():
     dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
 
     assert "# docker/.env" in guide
+    assert "docker compose --env-file docker/.env -f docker/compose.yaml up --build" in guide
+    assert "picks it up automatically" not in guide
     assert ".env" in gitignore
     assert ".env.*" in gitignore
     assert "!.env.example" in gitignore

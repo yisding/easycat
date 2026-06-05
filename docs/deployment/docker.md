@@ -44,8 +44,7 @@ Press `Ctrl-C` in the static-client terminal if you started one.
 
 ## Secrets: use a `.env` file, don't bake them in
 
-Prefer compose's `.env` file (read by the client, expanded into the
-container's environment) over passing secrets as build args:
+Prefer an env file passed to Compose over passing secrets as build args:
 
 ```bash
 # docker/.env  — git-ignored, never copied into the image
@@ -54,11 +53,16 @@ EASYCAT_WS_TOKEN=<random-long-token>
 # Optional: EASYCAT_WS_MAX_SESSIONS=10
 ```
 
-Then `docker compose -f docker/compose.yaml up` picks it up
-automatically.  The repo's `.dockerignore` excludes `.env` and `.env.*`
-files at any depth from the build context as a second line of defence
-while still allowing `.env.example` templates — if you fork the Dockerfile
-to use a wildcard `COPY . /app`, secrets still won't ship.
+Then point Compose at that file explicitly:
+
+```bash
+docker compose --env-file docker/.env -f docker/compose.yaml up --build
+```
+
+The repo's `.dockerignore` excludes `.env` and `.env.*` files at any depth
+from the build context as a second line of defence while still allowing
+`.env.example` templates — if you fork the Dockerfile to use a wildcard
+`COPY . /app`, secrets still won't ship.
 
 Never use `ARG OPENAI_API_KEY=...` in the Dockerfile: build args are
 recoverable from image history.
