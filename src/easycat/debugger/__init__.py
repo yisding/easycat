@@ -5,7 +5,8 @@ a single-process aiohttp server with a timeline view, per-turn
 waterfall, record inspector, and audio playback.  Reads the journal +
 artifact store directly — no separate telemetry pipeline.
 
-The UI is opt-in: install ``easycat[debugger]`` to pull aiohttp.
+The UI is opt-in: install with ``uv add 'easycat[debugger]'``. From the
+EasyCat repo, use ``uv sync --extra debugger``.
 
 Typical usage:
 

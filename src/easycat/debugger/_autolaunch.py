@@ -12,6 +12,8 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
+from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
+
 if TYPE_CHECKING:
     from easycat.session._session import Session
 
@@ -22,12 +24,13 @@ def maybe_launch_debugger_ui(session: Session) -> None:
     """Spin up the interactive debugger on localhost when debug="full".
 
     The debugger is an optional extra (``easycat[debugger]`` → aiohttp);
-    when it isn't installed we log once and keep the session usable
-    rather than crashing.  Pytest and CI runs are detected via
-    ``PYTEST_CURRENT_TEST`` so the auto-launch never fights a test
-    harness that already has the port or the loop.  Host/port
-    overrides come from ``EASYCAT_DEBUGGER_PORT`` because the debugger
-    UI is a local-dev convenience, not a production surface.
+    install it with ``uv add 'easycat[debugger]'`` or, from the EasyCat
+    repo, ``uv sync --extra debugger``. When it isn't installed we log
+    once and keep the session usable rather than crashing.  Pytest and CI
+    runs are detected via ``PYTEST_CURRENT_TEST`` so the auto-launch never
+    fights a test harness that already has the port or the loop.  Host/port
+    overrides come from ``EASYCAT_DEBUGGER_PORT`` because the debugger UI is
+    a local-dev convenience, not a production surface.
     """
     if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("EASYCAT_DEBUGGER_DISABLE"):
         return
@@ -38,10 +41,7 @@ def maybe_launch_debugger_ui(session: Session) -> None:
     try:
         import aiohttp  # noqa: F401
     except ImportError:
-        logger.info(
-            "debug='full' requested but easycat[debugger] is not installed; "
-            "skipping auto-launch. `pip install easycat[debugger]` to enable."
-        )
+        logger.info("debug='full' requested but %s Skipping auto-launch.", DEBUGGER_INSTALL_HINT)
         return
 
     try:

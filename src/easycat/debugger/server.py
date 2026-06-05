@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from easycat.debug.bundle import RunBundle
+from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
 
 logger = logging.getLogger(__name__)
 
@@ -889,10 +890,7 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     try:
         from aiohttp import WSMsgType, web
     except ImportError as exc:  # pragma: no cover - optional dep
-        raise RuntimeError(
-            "easycat[debugger] not installed. Install with "
-            "`pip install easycat[debugger]` to use the debugger UI."
-        ) from exc
+        raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
 
     static_dir = Path(__file__).parent / "static"
 
@@ -1375,10 +1373,7 @@ def _serve(
     try:
         from aiohttp import web
     except ImportError as exc:  # pragma: no cover - optional dep
-        raise RuntimeError(
-            "easycat[debugger] not installed. Install with "
-            "`pip install easycat[debugger]` to use the debugger UI."
-        ) from exc
+        raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
 
     app = _make_app(source, allow_remote=allow_remote)
     url = f"http://{host}:{port}/"
@@ -1410,10 +1405,7 @@ async def run_app_async(
     try:
         from aiohttp import web
     except ImportError as exc:  # pragma: no cover - optional dep
-        raise RuntimeError(
-            "easycat[debugger] not installed. Install with "
-            "`pip install easycat[debugger]` to use the debugger UI."
-        ) from exc
+        raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
 
     _check_host(host, allow_remote)
     app = _make_app(source, allow_remote=allow_remote)
@@ -1429,4 +1421,4 @@ def _ensure_aiohttp() -> None:
     try:
         import aiohttp  # noqa: F401
     except ImportError as exc:
-        raise RuntimeError("aiohttp not installed; install easycat[debugger].") from exc
+        raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
