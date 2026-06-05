@@ -32,9 +32,10 @@ Shipped:
 
 Still remaining:
 
-- Example line-count budgets (pydantic_ai_voice.py is 57 lines against
-  an ≤8 target; openai_agents_voice.py is 49 against ≤7). No CI
-  enforcement yet.
+- Example visible-code budgets are CI-enforced for the canonical local
+  examples (`openai_agents_voice.py` ≤7, `pydantic_ai_voice.py` ≤8,
+  excluding setup docstrings and import guards). Broader raw line-count
+  shrinkage and the WebSocket server budget remain open.
 - `EasyCatConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.1 wiring).
 - `ExceptionGroup` + PEP 678 `__notes__` across the pipeline.

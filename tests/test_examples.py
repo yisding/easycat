@@ -77,10 +77,39 @@ def _example_readme_rows() -> list[dict[str, str]]:
     return rows
 
 
+def _is_module_docstring_node(module: ast.Module, node: ast.stmt) -> bool:
+    return bool(
+        module.body
+        and module.body[0] is node
+        and isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+
+
 def _is_import_error_handler(handler: ast.ExceptHandler) -> bool:
     if isinstance(handler.type, ast.Name):
         return handler.type.id == "ImportError"
     return False
+
+
+def _is_import_guard_try(node: ast.stmt) -> bool:
+    return isinstance(node, ast.Try) and any(
+        _is_import_error_handler(handler) for handler in node.handlers
+    )
+
+
+def _visible_code_line_count(path: Path) -> int:
+    module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    line_count = 0
+
+    for node in module.body:
+        if _is_module_docstring_node(module, node) or _is_import_guard_try(node):
+            continue
+        assert node.end_lineno is not None
+        line_count += node.end_lineno - node.lineno + 1
+
+    return line_count
 
 
 def _literal_string(node: ast.AST) -> str | None:
@@ -230,6 +259,22 @@ def _load_slim_example(
 
 def test_openai_agents_voice_example_imports(monkeypatch: pytest.MonkeyPatch):
     _load_slim_example(monkeypatch, "examples.openai_agents_voice", framework="agents")
+
+
+@pytest.mark.parametrize(
+    ("example_name", "budget"),
+    [
+        ("openai_agents_voice.py", 7),
+        ("pydantic_ai_voice.py", 8),
+    ],
+)
+def test_canonical_local_voice_examples_keep_visible_code_budget(
+    example_name: str,
+    budget: int,
+) -> None:
+    path = REPO_ROOT / "examples" / example_name
+
+    assert _visible_code_line_count(path) <= budget
 
 
 def test_examples_readme_lists_every_top_level_python_example() -> None:
