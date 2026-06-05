@@ -282,6 +282,19 @@ def test_examples_readme_rows_are_command_map_entries() -> None:
     assert not stale_rows, "Stale examples/README.md rows: " + "; ".join(stale_rows)
 
 
+def test_examples_readme_repo_sync_install_cells_include_dev_group() -> None:
+    stale: list[str] = []
+
+    for row in _example_readme_rows():
+        install = row["install"]
+        if "uv sync " not in install:
+            continue
+        if "--group dev" not in install:
+            stale.append(f"{row['link']}: {install}")
+
+    assert not stale, "examples/README.md install cells missing --group dev: " + "; ".join(stale)
+
+
 def test_examples_readme_run_commands_match_example_docstrings() -> None:
     stale: list[str] = []
 
