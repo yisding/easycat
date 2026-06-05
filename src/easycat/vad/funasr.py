@@ -225,7 +225,9 @@ def _load_funasr_onnx_vad_online_class() -> Any:
     spec = find_spec("funasr_onnx")
     if spec is None or not spec.submodule_search_locations:
         raise ImportError(
-            "FunASR VAD requires the funasr_onnx package. Install easycat[funasr-vad]."
+            "FunASR VAD requires the funasr_onnx package. Install with: "
+            "uv add 'easycat[funasr-vad]'. From the EasyCat repo, use: "
+            "uv sync --extra funasr-vad."
         )
 
     existing_package = sys.modules.get("funasr_onnx")

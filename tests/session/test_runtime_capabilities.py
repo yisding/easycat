@@ -206,6 +206,8 @@ def test_session_validation_warns_on_custom_passthrough_noise_when_enabled(
         "passthrough" in record.message and "Noise reduction is enabled" in record.message
         for record in caplog.records
     )
+    assert any("uv add 'easycat[rnnoise]'" in record.message for record in caplog.records)
+    assert any("uv sync --extra rnnoise" in record.message for record in caplog.records)
 
 
 def test_custom_passthrough_processors_do_not_auto_enable_features() -> None:

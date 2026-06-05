@@ -214,8 +214,11 @@ def test_factory_auto_fallback_policy_error_raises():
     with patch(
         "easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")
     ):
-        with pytest.raises(RuntimeError, match="easycat\\[rnnoise\\]"):
+        with pytest.raises(RuntimeError) as exc_info:
             create_noise_reducer(NoiseReducerConfig(backend="auto", fallback_policy="error"))
+    message = str(exc_info.value)
+    assert "uv add 'easycat[rnnoise]'" in message
+    assert "uv sync --extra rnnoise" in message
 
 
 def test_factory_auto_fallback_policy_passthrough_warns(caplog: pytest.LogCaptureFixture):
@@ -229,6 +232,8 @@ def test_factory_auto_fallback_policy_passthrough_warns(caplog: pytest.LogCaptur
             reducer = create_noise_reducer(NoiseReducerConfig(backend="auto"))
     assert isinstance(reducer, PassthroughNoiseReducer)
     assert any("passthrough" in record.message.lower() for record in caplog.records)
+    assert any("uv add 'easycat[rnnoise]'" in record.message for record in caplog.records)
+    assert any("uv sync --extra rnnoise" in record.message for record in caplog.records)
 
 
 def test_noise_reducer_config_rejects_unknown_fallback_policy():

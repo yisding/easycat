@@ -35,8 +35,9 @@ _VALID_NOISE_REDUCER_FALLBACK_POLICIES: tuple[NoiseReducerFallbackPolicy, ...] =
 )
 # Actionable hint surfaced when auto-mode finds no real backend installed.
 _NOISE_REDUCER_INSTALL_HINT = (
-    "No noise-reduction backend is installed. Install easycat[rnnoise] "
-    "for the open-source RNNoise backend, or configure Krisp (krisp-audio). "
+    "No noise-reduction backend is installed. Install RNNoise with: "
+    "uv add 'easycat[rnnoise]'. From the EasyCat repo, use: "
+    "uv sync --extra rnnoise. Or configure Krisp (krisp-audio). "
     "Pass NoiseReducerConfig(backend='rnnoise') / backend='krisp' to require a "
     "specific backend, or fallback_policy='error' to fail loudly instead of "
     "passing audio through unchanged."

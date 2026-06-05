@@ -294,8 +294,12 @@ def test_funasr_vad_fails_without_sdk(monkeypatch: pytest.MonkeyPatch):
         lambda name: None if name == "funasr_onnx" else None,
     )
 
-    with pytest.raises(RuntimeError, match="FunASR|funasr_onnx"):
+    with pytest.raises(RuntimeError) as exc_info:
         FunASROnnxVAD()
+    message = str(exc_info.value)
+    assert "FunASR" in message
+    assert "uv add 'easycat[funasr-vad]'" in message
+    assert "uv sync --extra funasr-vad" in message
 
 
 @pytest.mark.asyncio
@@ -603,8 +607,16 @@ def test_vad_factory_no_backends(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(vad_factory_module, "FunASROnnxVAD", _BrokenFunASR)
     monkeypatch.setattr(vad_factory_module, "SileroVAD", _BrokenSilero)
 
-    with pytest.raises(RuntimeError, match="No VAD backend"):
+    with pytest.raises(RuntimeError) as exc_info:
         create_vad(VADConfig(backend="auto"))
+    message = str(exc_info.value)
+    assert "No VAD backend" in message
+    assert "uv add 'easycat[silero-vad]'" in message
+    assert "uv sync --extra silero-vad" in message
+    assert "uv add 'easycat[ten-vad]'" in message
+    assert "uv sync --extra ten-vad" in message
+    assert "uv add 'easycat[funasr-vad]'" in message
+    assert "uv sync --extra funasr-vad" in message
 
 
 def test_vad_factory_explicit_silero_fails(monkeypatch: pytest.MonkeyPatch):

@@ -299,7 +299,8 @@ class Session:
             logger.warning(
                 "Noise reduction is enabled but the configured noise_reducer is a "
                 "passthrough (no real backend); audio will pass through unchanged. "
-                "Install easycat[rnnoise] or configure Krisp, or set "
+                "Install RNNoise with: uv add 'easycat[rnnoise]'. From the "
+                "EasyCat repo, use: uv sync --extra rnnoise. Or configure Krisp. Set "
                 "NoiseReducerConfig(fallback_policy='error') to fail loudly instead."
             )
         if is_passthrough_provider(self.transport):
