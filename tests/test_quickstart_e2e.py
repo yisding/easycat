@@ -16,6 +16,7 @@ import re
 import tomllib
 import zipfile
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -45,6 +46,16 @@ _PROVIDER_DISPLAY_NAMES = {
     "elevenlabs": "ElevenLabs",
     "openai": "OpenAI",
     "openai-realtime": "OpenAI",
+}
+_VAD_DISPLAY_NAMES = {
+    "funasr": "FunASR",
+    "krisp": "Krisp",
+    "silero": "Silero",
+    "ten": "TEN VAD",
+}
+_NOISE_REDUCTION_DISPLAY_NAMES = {
+    "krisp": "Krisp",
+    "rnnoise": "RNNoise",
 }
 _BRIDGE_DISPLAY_NAMES = {
     "GenericWorkflowBridge": "your own async workflow",
@@ -374,9 +385,11 @@ def test_readme_validation_workflow_lists_registered_validate_commands() -> None
 
 def test_readme_current_capabilities_track_public_provider_and_bridge_surfaces() -> None:
     from easycat.integrations import agents as agent_integrations
+    from easycat.noise_reduction import NoiseReducerBackend
     from easycat.stt.factory import available_providers as available_stt_providers
     from easycat.transports import __all__ as transport_exports
     from easycat.tts.factory import available_providers as available_tts_providers
+    from easycat.vad import VADBackend
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     capabilities = readme.split("## Current capabilities", 1)[1].split("## ", 1)[0]
@@ -385,6 +398,23 @@ def test_readme_current_capabilities_track_public_provider_and_bridge_surfaces()
         assert _PROVIDER_DISPLAY_NAMES[provider] in capabilities
     for provider in available_tts_providers():
         assert _PROVIDER_DISPLAY_NAMES[provider] in capabilities
+
+    vad_backends = set(get_args(VADBackend)) - {"auto"}
+    missing_vad_display_map = sorted(vad_backends - _VAD_DISPLAY_NAMES.keys())
+    assert not missing_vad_display_map, "VAD display map missing: " + ", ".join(
+        missing_vad_display_map
+    )
+    for backend in vad_backends:
+        assert _VAD_DISPLAY_NAMES[backend] in capabilities
+
+    noise_backends = set(get_args(NoiseReducerBackend)) - {"auto"}
+    missing_noise_display_map = sorted(noise_backends - _NOISE_REDUCTION_DISPLAY_NAMES.keys())
+    assert not missing_noise_display_map, "Noise reduction display map missing: " + ", ".join(
+        missing_noise_display_map
+    )
+    for backend in noise_backends:
+        assert _NOISE_REDUCTION_DISPLAY_NAMES[backend] in capabilities
+    assert "passthrough fallback" in capabilities
 
     for transport in ("Local", "WebSocket", "WebRTC", "WebTransport", "Twilio"):
         if any(name.startswith(transport) for name in transport_exports):
