@@ -92,7 +92,7 @@ def test_canonical_example_keeps_next_step_breadcrumbs() -> None:
     example = (REPO_ROOT / "examples" / "openai_agents_voice.py").read_text(encoding="utf-8")
 
     assert "uv add 'easycat[quickstart]'" in example
-    assert "uv sync --extra quickstart" in example
+    assert "uv sync --extra quickstart --group dev" in example
     assert "# Next, try" in example
     assert 'stt="deepgram/nova-2"' in example
     assert "DEEPGRAM_API_KEY + --extra deepgram" in example
