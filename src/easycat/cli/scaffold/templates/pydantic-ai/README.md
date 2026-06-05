@@ -33,6 +33,14 @@ You'll see `🎤 Listening…`. Speak, pause, and the agent will reply aloud. As
 
 Ctrl-C to quit.
 
+## Check
+
+After editing `agent.py`, run a quick syntax check:
+
+```bash
+uv run python -m py_compile agent.py
+```
+
 ## Next steps
 
 - **Change the personality:** edit `system_prompt=...` in `agent.py`.

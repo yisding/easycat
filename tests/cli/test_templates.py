@@ -5,7 +5,7 @@ produces a runnable project.  They catch:
 
 * ``agent.py`` exceeding its line budget
 * Missing required files (``pyproject.toml``, ``.env.example``, README)
-* README missing the four required sections (Install, Configure, Run,
+* README missing the required sections (Install, Configure, Run, Check,
   Next steps)
 * ``pyproject.toml`` failing to pin the ``easycat`` extra the template
   advertises
@@ -48,6 +48,7 @@ _README_SECTIONS: tuple[str, ...] = (
     "## Install",
     "## Configure",
     "## Run",
+    "## Check",
     "## Next steps",
 )
 _VOICE_TEMPLATES: tuple[str, ...] = ("openai-agents", "pydantic-ai")
@@ -172,6 +173,12 @@ def test_readme_has_required_sections(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     for section in _README_SECTIONS:
         assert section in readme, f"{name}/README.md missing section: {section}"
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_readme_has_local_syntax_check(name: str) -> None:
+    readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    assert "uv run python -m py_compile agent.py" in readme
 
 
 @pytest.mark.parametrize("name", _VOICE_TEMPLATES)

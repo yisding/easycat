@@ -34,6 +34,14 @@ uv run python agent.py
 You'll get a `you:` prompt. Type something, hit Enter, and the agent responds.
 Hit Enter on a blank line to exit.
 
+## Check
+
+After editing `agent.py`, run a quick syntax check:
+
+```bash
+uv run python -m py_compile agent.py
+```
+
 ## Next steps
 
 - **Change the agent's personality:** edit `instructions=...` in `agent.py`.
