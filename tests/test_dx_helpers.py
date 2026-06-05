@@ -151,6 +151,20 @@ def test_sessionconfig_docstring_steers_to_easyconfig() -> None:
     assert "create_session" in doc
 
 
+def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
+    plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-dx-onboarding.md").read_text(
+        encoding="utf-8"
+    )
+    missing_knobs = plan.split("Advanced knobs promised by the plan", 1)[1].split(
+        "The high-leverage DX wins",
+        1,
+    )[0]
+
+    assert "EasyCatConfig" not in plan
+    assert "EasyConfig(record_to=...)" in plan
+    assert "`record_to=`" not in missing_knobs
+
+
 # ── Debugger auto-launch on debug="full" ─────────────────────────
 
 

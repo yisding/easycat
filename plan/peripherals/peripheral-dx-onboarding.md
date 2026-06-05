@@ -5,7 +5,7 @@
 > however, the most visible user-facing work in the overall redesign, and
 > the one the outside world will judge EasyCat on first.
 
-## Status (2026-05-21)
+## Status (2026-06-05)
 
 Shipped:
 
@@ -22,7 +22,7 @@ Shipped:
 - `debug="light" | "full"`, `export_debug_bundle()` (`config.py:212`,
   `session/_session.py:987`).
 - `async with session:` context-manager support (`session/_session.py`).
-- `EasyCatConfig.mic() / .browser() / .phone()` factory presets
+- `EasyConfig.mic() / .browser() / .phone()` factory presets
   (`config.py`). Text-mode sessions go through `create_text_session()`
   instead of a `.text()` classmethod because the config itself
   requires STT/TTS providers that a text session skips.
@@ -36,16 +36,16 @@ Still remaining:
   examples (`openai_agents_voice.py` ≤7, `pydantic_ai_voice.py` ≤8,
   excluding setup docstrings and import guards). Broader raw line-count
   shrinkage and the WebSocket server budget remain open.
-- `EasyCatConfig.offline()` preset (depends on Kyutai Pocket TTS +
+- `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.1 wiring).
 - `ExceptionGroup` + PEP 678 `__notes__` across the pipeline.
 - Full structlog dev/prod renderer split; today the logger is stdlib-
   only.
-- Config flattening pass: currently 31 top-level `EasyConfig` fields,
+- Config flattening pass: currently 33 top-level `EasyConfig` fields,
   target ≤22.
 - Advanced knobs promised by the plan that aren't yet config fields:
-  `record_to=`, `warmup=`, `max_session_cost_usd=`,
-  `smart_turn_sensitivity=`, `latency_budget=`.
+  `warmup=`, `max_session_cost_usd=`, `smart_turn_sensitivity=`,
+  `latency_budget=`.
 
 The high-leverage DX wins are shipped; the remaining work is either
 ecosystem-gated (offline preset on Kyutai) or mechanical cleanup
@@ -73,7 +73,7 @@ ecosystem-gated (offline preset on Kyutai) or mechanical cleanup
 > that uses them lives in `peripheral-cli.md`), config factory presets,
 > offline preset, error diagnostics (stable codes, fix-suggesting
 > messages, `ExceptionGroup`, exception notes, traceback frame collapse,
-> dev vs prod log rendering), `EasyCatConfig` flattening, quickstart
+> dev vs prod log rendering), `EasyConfig` flattening, quickstart
 > guardrails.
 >
 > **Out of scope:** the `easycat` CLI command catalog, `--help`
@@ -82,11 +82,11 @@ ecosystem-gated (offline preset on Kyutai) or mechanical cleanup
 
 ## Context
 
-Today's simplest examples are 47–62 lines (`examples/local_chat.py` 47,
-`examples/pydantic_ai_voice.py` 62). LiveKit and Pipecat both shipped
-one-command scaffolding in 2026. The single most important success signal
-for onboarding is: `git clone` → working voice agent under 60 seconds with
-one API key.
+The canonical local examples now fit the visible-code budget while keeping
+setup docstrings and import guards in the file. LiveKit and Pipecat both
+shipped one-command scaffolding in 2026. The single most important success
+signal for onboarding is: `git clone` → working voice agent under 60 seconds
+with one API key.
 
 This file owns closing that gap. None of its contents is required to
 deliver the debug-first thesis. All of it is required for EasyCat to hold
@@ -95,10 +95,11 @@ in 2026.
 
 ## Line-Count Budgets on Canonical Examples
 
-Hard ceilings measured against real files in `examples/`, CI-enforced:
+Hard ceilings measured against visible runtime code in `examples/`,
+CI-enforced:
 
-- `examples/local_chat.py` (OpenAI Agents, local mic): **≤ 7 lines** (from 47)
-- `examples/pydantic_ai_voice.py` (PydanticAI, local mic): **≤ 8 lines** (from 62)
+- `examples/openai_agents_voice.py` (OpenAI Agents, local mic): **≤ 7 lines**
+- `examples/pydantic_ai_voice.py` (PydanticAI, local mic): **≤ 8 lines**
 - `examples/ws_server.py` (WebSocket server): **≤ 15 lines**
 
 Enforcement:
@@ -135,11 +136,11 @@ still reach the session object via `create_session()`.
 Target example:
 
 ```python
-# examples/local_chat.py — 7 lines
-from easycat import EasyCatConfig, run
+# examples/openai_agents_voice.py — 7 visible runtime lines
 from agents import Agent
+from easycat import EasyConfig, run
 
-run(EasyCatConfig(
+run(EasyConfig.mic(
     agent=Agent(name="Support", instructions="Help the user."),
 ))
 ```
@@ -151,11 +152,11 @@ Context manager support matching `httpx.AsyncClient`, `asyncpg`, and
 
 ```python
 # 10 lines
-from easycat import EasyCatConfig, create_session
 from agents import Agent
+from easycat import EasyConfig, create_session
 
 async def main():
-    session = create_session(EasyCatConfig(
+    session = create_session(EasyConfig.mic(
         agent=Agent(name="Support", instructions="Help the user."),
     ))
     async with session:
@@ -172,7 +173,7 @@ addressable by string, not by adapter construction. Swapping STT or TTS
 becomes a one-word change.
 
 ```python
-run(EasyCatConfig(
+run(EasyConfig.mic(
     agent=Agent(name="Support", instructions="Help the user."),
     stt="deepgram/flux",
     tts="cartesia/sonic-3",
@@ -241,12 +242,12 @@ must succeed end-to-end under 60 seconds in CI.
 
 ## Config Factory Presets
 
-- `EasyCatConfig.phone(...)`
-- `EasyCatConfig.browser(...)`
-- `EasyCatConfig.mic(...)`
-- `EasyCatConfig.text(...)` — text-mode session, no audio provider
-  wiring
-- `EasyCatConfig.offline(...)`
+- `EasyConfig.mic(...)` — shipped local microphone preset.
+- `EasyConfig.browser(...)` — shipped WebRTC/browser preset.
+- `EasyConfig.phone(...)` — shipped Twilio/PSTN preset.
+- `create_text_session(TextSessionConfig(...))` — shipped text-mode
+  path with no audio provider wiring.
+- `EasyConfig.offline(...)` — still planned.
 
 Match the `easycat init` template set so users can graduate from
 scaffolded code to explicit config without a rewrite.
@@ -259,7 +260,7 @@ agent with zero API keys." 2026 makes this viable: Kyutai Pocket TTS
 any laptop; Smart Turn v3.1 runs on CPU.
 
 ```python
-run(EasyCatConfig.offline(
+run(EasyConfig.offline(
     agent=Agent(name="Support", instructions="Help the user."),
 ))
 ```
@@ -341,18 +342,22 @@ the `LIVEKIT_LOG_LEVEL` / `UVICORN_LOG_LEVEL` convention. Lives alongside
 
 ## Config Audit and Flattening
 
-`EasyCatConfig` currently has 22 top-level fields, each pointing into a
-nested config. Real complexity is in nested surfaces: `TelephonyConfig`,
-`TurnManagerConfig`, `SmartTurnConfig`. Flatten the most common knobs to
-top level, hide the rest behind sensible defaults. Every new config field
-must have a default that keeps the quickstart working.
+`EasyConfig` currently has 33 dataclass fields, including inherited
+agent/journal/runtime fields. Real complexity is in nested surfaces:
+`TelephonyConfig`, `TurnManagerConfig`, and `SmartTurnConfig`. Flatten the
+most common knobs to top level, hide the rest behind sensible defaults, and
+avoid adding new required fields. Every new config field must have a default
+that keeps the quickstart working.
 
-Add runtime/debug presets: `debug="light"`, `debug="full"`.
+Runtime/debug presets are shipped as `debug="light"` and `debug="full"`.
+Always-on recording is shipped as `record_to=...` when debug journaling is
+enabled.
 
-Advanced toggles remain available through config, not low-level internals:
+Candidate advanced toggles should remain available through config, not
+low-level internals:
 
-- `debug_mode="light" | "full"`
-- `export_debug_bundle=True`
+- `debug="light" | "full"`
+- `record_to=...`
 - `redaction_policy=...`
 - `mode="local" | "webrtc" | "telephony"`
 - `runtime_mode="chained_pipeline" | "text_session"`
@@ -383,7 +388,7 @@ Reject any redesign change that violates these:
 |---|---|
 | Line budgets, `run()`, `async with`, string keys | nothing |
 | Error codes, dev/prod log rendering, `EASYCAT_LOG_LEVEL` | nothing |
-| Config factory presets, `EasyCatConfig` flattening | nothing |
+| Config factory presets, `EasyConfig` flattening | nothing |
 | Template content (what `agent.py` looks like) | `run()`, string keys (this file) |
 | Offline preset | Smart Turn promotion (see `peripheral-provider-ecosystem.md`), string-keyed providers, config factory presets |
 
@@ -402,7 +407,7 @@ replay) lives in `peripheral-cli.md`. Library-wrapper commands
    M1 and M2, because each template's `agent.py` must import the
    library DX helpers from this file.
 3. **Last**: offline preset (gated on Smart Turn promotion in the
-   provider ecosystem file), final `EasyCatConfig` flattening pass.
+   provider ecosystem file), final `EasyConfig` flattening pass.
 
 The CLI-facing sequencing (M1–M3 milestones for `init`, `doctor`,
 `explain`, `bundles`, `replay`) lives in `peripheral-cli.md`.
