@@ -329,6 +329,27 @@ def test_examples_readme_env_cells_cover_required_env_helpers() -> None:
     assert not stale, "examples/README.md env cells omit require_env vars: " + "; ".join(stale)
 
 
+def test_examples_readme_none_env_rows_are_explicit_in_docstrings() -> None:
+    stale: list[str] = []
+
+    for row in _example_readme_rows():
+        if not row["env"].startswith("None"):
+            continue
+        path = REPO_ROOT / "examples" / row["link"]
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        doc = ast.get_docstring(module) or ""
+        if "for client" in row["env"]:
+            required = "client; no API keys required"
+            if required not in doc:
+                stale.append(f"{row['link']}: missing {required!r}")
+        elif "No API keys required" not in doc and "does NOT need any API keys" not in doc:
+            stale.append(f"{row['link']}: missing no-API-key note")
+
+    assert not stale, "Example docstrings with None env cells need explicit notes: " + "; ".join(
+        stale
+    )
+
+
 def test_examples_readme_install_cells_cover_docstring_pip_packages() -> None:
     stale: list[str] = []
 

@@ -14,11 +14,13 @@ and restart it — the client logs the reconnect attempts and resumes
 transparently.
 
 Setup:
+  uv sync --extra openai-agents
+
+  # Terminal 1 (server; requires OpenAI credentials):
   export OPENAI_API_KEY="..."
-  uv sync --extra quickstart
-  # Terminal 1:
   uv run python examples/ws_server.py
-  # Terminal 2:
+
+  # Terminal 2 (client; no API keys required):
   uv run python examples/reconnecting_ws_client.py
 """
 
