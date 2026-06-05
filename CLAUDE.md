@@ -41,7 +41,7 @@ uv run python examples/ws_server.py  # Run an example
   - `_wiring.py` — `SessionWiringContext`, a typed frozen dataclass of late-binding getters/setters (current_turn, is_running, enable_* flags, provider/agent getters, emit, drain_session_actions, caller_id_system_message, stop, …) built once from the live Session and passed to every collaborator constructor in place of ~40 inline lambdas. Also holds `_SessionTurnHandle` (the `TurnHandle` adapter). Imports `Session` only under `TYPE_CHECKING`.
   - `_greeting.py` — `GreetingController`. Subscribes itself to `CallAnswered` and speaks the configured greeting once (warm-transfer re-answer ignored) via the bypass synth path.
   - `_opt_out.py` — `OptOutPolicy`. Subscribes to `STTFinal`; on a TCPA opt-out phrase it adds the caller to the DNC list, emits `OptOutDetected`, and enqueues `EndCallAction` (or falls back to scheduling `Session.stop()`). `Session.dnc_list` delegates here.
-  - `_caller_id.py` — `CallerIdState`. Holds the caller/callee identity + exposure policy and renders the caller-ID system message. `Session.call_identity` / `caller_id_exposure` delegate here; `private_identity` is the raw value used by `config.py` and opt-out.
+  - `_caller_id.py` — `CallerIdState`. Holds the caller/callee identity + exposure policy and renders the caller-ID system message. `Session.call_identity` / `caller_id_exposure` delegate here; `private_identity` is the raw value used by `config/` wiring and opt-out.
   - `_telephony_facade.py` — `TelephonyFacade` exposed as `session.telephony`. Wraps the helper list with `.get(type)` plus typed accessors (`outbound_call_manager`, `outbound_call_state_machine`, `number_health_monitor`, `call_disposition_tracker`). `session.get_helper` delegates to it.
   - `_streaming.py` — `consume_agent_stream()` translates agent stream events into TTS payloads on sentence boundaries.
   - `_turn_runner.py` — Drives a single turn end-to-end (agent run → streaming → TTS scheduling), holding the logic that used to be inlined in `_session.py`.
@@ -51,7 +51,7 @@ uv run python examples/ws_server.py  # Run an example
   - `interruption.py` — Audio-byte estimation for barge-in: maps TTS output back to what the user heard.
   - `text.py` — Sentence splitting, markdown checking, speech energy detection, and spoken-text timeline normalization (`_text_for_estimation_timeline`). The audio-byte→text estimation itself (`_estimate_text_spoken`) lives in `interruption.py`.
   - `_types.py` — `SessionConfig`, `TurnState`, `Agent` protocol.
-- `config.py` — `EasyConfig` (simplified, auto-wires OpenAI providers) and `SessionConfig` (advanced, explicit providers). `create_session()` factory builds a wired Session.
+- `config/` — `EasyConfig` (simplified, auto-wires OpenAI providers) and `SessionConfig` (advanced, explicit providers). `create_session()` factory builds a wired Session.
 - `events.py` — `EventBus` pub/sub with sync/async handlers. Two event layers: provider-scoped (`STTEvent`, `TTSEvent`) emitted by providers, mapped to EasyCat-level events (`STTFinal`, `TTSAudio`, `TurnStarted`, etc.) by Session.
 - `providers.py` — `@runtime_checkable` Protocol definitions for all provider interfaces (`STTProvider`, `TTSProvider`, `VADProvider`, `Transport`, `NoiseReducer`, `EchoCanceller`). Providers use duck typing, not inheritance.
 - `turn_manager.py` — 5-state FSM (IDLE → USER_SPEAKING → USER_PAUSED → PROCESSING → BOT_SPEAKING) with pre-roll buffering and interruption detection. Supports VAD (automatic) and PUSH_TO_TALK turn modes.

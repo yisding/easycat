@@ -287,6 +287,22 @@ def test_agent_guide_command_examples_are_current() -> None:
     )
 
 
+def test_agent_guides_reference_config_package_layout() -> None:
+    assert (REPO_ROOT / "src" / "easycat" / "config").is_dir()
+    assert not (REPO_ROOT / "src" / "easycat" / "config.py").exists()
+
+    stale_mentions: list[str] = []
+    for filename in ("AGENTS.md", "CLAUDE.md"):
+        text = (REPO_ROOT / filename).read_text(encoding="utf-8")
+        assert "`config/`" in text, filename
+        if "`config.py`" in text:
+            stale_mentions.append(filename)
+
+    assert not stale_mentions, (
+        "Agent guides should reference config/, not config.py: " + ", ".join(stale_mentions)
+    )
+
+
 def test_claude_overview_tracks_public_agent_bridges() -> None:
     from easycat.integrations import agents as agent_integrations
 
