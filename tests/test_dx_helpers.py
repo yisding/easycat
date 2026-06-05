@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from easycat import EasyConfig, SessionConfig
+from easycat import EasyConfig, SessionConfig, require_env
 from easycat.config import _resolve_easycat_log_level
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransportConfig
@@ -32,6 +32,18 @@ def test_log_level_unknown_falls_back_to_default(monkeypatch: pytest.MonkeyPatch
 def test_log_level_unset_returns_default(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("EASYCAT_LOG_LEVEL", raising=False)
     assert _resolve_easycat_log_level(default=logging.ERROR) == logging.ERROR
+
+
+def test_require_env_missing_value_gives_actionable_hint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(SystemExit) as excinfo:
+        require_env("OPENAI_API_KEY")
+
+    message = str(excinfo.value)
+    assert "OPENAI_API_KEY is required." in message
+    assert "export OPENAI_API_KEY=..." in message
+    assert "uv run easycat doctor" in message
 
 
 # ── Config factory presets ───────────────────────────────────────

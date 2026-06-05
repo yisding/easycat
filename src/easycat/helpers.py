@@ -22,7 +22,10 @@ def require_env(name: str) -> str:
     """Load a required environment variable or exit with a clear message."""
     value = os.getenv(name)
     if not value:
-        raise SystemExit(f"{name} is required.")
+        raise SystemExit(
+            f"{name} is required. Set it before running, for example: "
+            f"export {name}=...; verify provider keys with `uv run easycat doctor`."
+        )
     return value
 
 
