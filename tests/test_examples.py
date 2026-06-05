@@ -129,6 +129,26 @@ def _app_extras_in(message: str) -> set[str]:
     return extras
 
 
+def _required_env_vars(path: Path) -> set[str]:
+    module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    names: set[str] = set()
+
+    for node in ast.walk(module):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Name) or func.id != "require_env":
+            continue
+        if (
+            node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            names.add(node.args[0].value)
+
+    return names
+
+
 class _DummyAgent:
     async def run(self, text: str) -> str:
         return text
@@ -245,6 +265,47 @@ def test_examples_readme_references_known_easycat_extras() -> None:
     assert not unknown_extras, (
         "examples/README.md references unknown EasyCat extras: " + ", ".join(unknown_extras)
     )
+
+
+def test_examples_readme_install_extras_cover_docstring_setup() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = pyproject["project"]["optional-dependencies"]
+    quickstart_deps = set(extras["quickstart"])
+    bundled_by_quickstart = {
+        name
+        for name, deps in extras.items()
+        if name != "quickstart" and deps and set(deps).issubset(quickstart_deps)
+    }
+    stale: list[str] = []
+
+    for row in _example_readme_rows():
+        path = REPO_ROOT / "examples" / row["link"]
+        documented_extras = _documented_setup_extras(path)
+        if not documented_extras:
+            continue
+
+        row_extras = set(_UV_SYNC_EXTRA_RE.findall(row["install"]))
+        optional_if_quickstart = bundled_by_quickstart if "quickstart" in row_extras else set()
+        missing = sorted(documented_extras - row_extras - optional_if_quickstart)
+        if missing:
+            stale.append(f"{row['link']}: missing {missing}")
+
+    assert not stale, "examples/README.md install cells omit setup extras: " + "; ".join(stale)
+
+
+def test_examples_readme_env_cells_cover_required_env_helpers() -> None:
+    stale: list[str] = []
+
+    for row in _example_readme_rows():
+        path = REPO_ROOT / "examples" / row["link"]
+        required = _required_env_vars(path)
+        if not required:
+            continue
+        missing = sorted(name for name in required if name not in row["env"])
+        if missing:
+            stale.append(f"{row['link']}: missing {missing}")
+
+    assert not stale, "examples/README.md env cells omit require_env vars: " + "; ".join(stale)
 
 
 def test_top_level_examples_document_setup_and_run_commands() -> None:
