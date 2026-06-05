@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +14,22 @@ _VALIDATION_ROW_RE = re.compile(
     r"^\| `(?P<slice>[^`]+)` \| `(?P<command>[^`]+)` \| (?P<markers>[^|]+) \|$"
 )
 _RECIPE_RE = re.compile(r"^(?P<name>[A-Za-z0-9_-]+)(?:\s+[^:]*)?:(?P<deps>.*)$")
+
+
+def _pytest_marker_names() -> set[str]:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    declarations = pyproject["tool"]["pytest"]["ini_options"]["markers"]
+
+    return {declaration.split(":", 1)[0].split("(", 1)[0].strip() for declaration in declarations}
+
+
+def _contributing_marker_taxonomy() -> str:
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    return contributing.split("## Marker taxonomy", 1)[1].split("## Flaky-quarantine", 1)[0]
+
+
+def _marker_name_is_documented(section: str, marker: str) -> bool:
+    return re.search(rf"`{re.escape(marker)}(?:\([^`]*\))?`", section) is not None
 
 
 def _just_recipes() -> dict[str, str]:
@@ -138,6 +155,19 @@ def test_contributing_validation_slice_commands_use_repo_local_uv_run() -> None:
     ]
 
     assert not stale, "CONTRIBUTING.md validation commands should use uv run: " + "; ".join(stale)
+
+
+def test_contributing_marker_taxonomy_lists_pytest_markers() -> None:
+    section = _contributing_marker_taxonomy()
+    missing = sorted(
+        marker
+        for marker in _pytest_marker_names()
+        if not _marker_name_is_documented(section, marker)
+    )
+
+    assert not missing, "CONTRIBUTING.md marker taxonomy missing pytest markers: " + ", ".join(
+        missing
+    )
 
 
 def test_validation_plan_matches_contributor_quick_command() -> None:
