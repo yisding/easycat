@@ -1349,7 +1349,7 @@ requires-dist = [
     { name = "llama-agents-client", marker = "extra == 'llama-agents'", specifier = ">=0.3.0,<1.0.0" },
     { name = "llama-index-workflows", marker = "extra == 'all'", specifier = ">=2.15.0,<3.0.0" },
     { name = "llama-index-workflows", marker = "extra == 'llama-agents'", specifier = ">=2.15.0,<3.0.0" },
-    { name = "modelscope", marker = "extra == 'funasr-vad'", specifier = ">=1.17.1" },
+    { name = "modelscope", marker = "extra == 'funasr-vad'", specifier = ">=1.37.1" },
     { name = "numpy", marker = "extra == 'all'", specifier = ">=1.24.0" },
     { name = "numpy", marker = "extra == 'funasr-vad'", specifier = ">=1.24.0" },
     { name = "numpy", marker = "extra == 'quickstart'", specifier = ">=1.24.0" },
@@ -3213,7 +3213,7 @@ wheels = [
 
 [[package]]
 name = "modelscope"
-version = "1.35.4"
+version = "1.37.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -3223,9 +3223,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/80/02/1ae2851caa9249d681001925e9cdf0134b037f7194f9414d1ec90b9deea2/modelscope-1.35.4.tar.gz", hash = "sha256:b787d8d99ddc3fe06e28da0b5ebe394da8341de4b715340ebb1be7bd7c5c8a3a", size = 4566585, upload-time = "2026-04-11T06:18:35.391Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fa/9e/9fd75db9797b9543ce78a646538a3c5537cb6adb015d128b4cbc2b4169e2/modelscope-1.37.1.tar.gz", hash = "sha256:7d9124970b4e53639bebe89f60473dee7d5a80589bf35bfbef4c839933cdaf93", size = 4594233, upload-time = "2026-05-22T05:57:09.621Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e7/52/42859aca8eb123ac6fa1b1a003de873948495f4e86330eaf84a60965d753/modelscope-1.35.4-py3-none-any.whl", hash = "sha256:aaa3a35152856f18bc6773264118c832d0b53c1efac6eeff52f303e537be4698", size = 6060506, upload-time = "2026-04-11T06:18:31.573Z" },
+    { url = "https://files.pythonhosted.org/packages/15/f5/286dd2d21802e4954a28e73913af7bc79e882f23fcd98db2b5810fc590cf/modelscope-1.37.1-py3-none-any.whl", hash = "sha256:7f7af2dd37339188cbd3c18a858b1297b8a75222b9a0fbf176c7df8189cac39a", size = 6089945, upload-time = "2026-05-22T05:57:05.931Z" },
 ]
 
 [[package]]
