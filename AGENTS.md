@@ -34,7 +34,8 @@
 - Framework: `pytest` with `pytest-asyncio` (`asyncio_mode = auto`).
 - Test files use `test_*.py`; test functions use `test_*`.
 - Put tests near related domain folders (audio, session, turns, transports, providers, agents, websocket, telephony).
-- For live API tests, use `@pytest.mark.integration` and skip when credentials are missing.
+- For live API tests, use `@pytest.mark.integration_live`, pair it with provider
+  and surface markers, and skip when credentials are missing.
 - No fixed coverage gate is enforced; add or update tests for every behavior change.
 
 ## Commit & Pull Request Guidelines

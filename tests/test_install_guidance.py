@@ -28,6 +28,7 @@ GUIDANCE_TARGETS = (
     REPO_ROOT / "README.md",
     REPO_ROOT / "CONTRIBUTING.md",
     REPO_ROOT / "AGENTS.md",
+    REPO_ROOT / "CLAUDE.md",
 )
 STALE_INSTALL_PATTERNS = (
     (
@@ -234,4 +235,38 @@ def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
     assert not redundant, (
         "Guidance should not re-add extras that `quickstart` already bundles: "
         + "; ".join(redundant)
+    )
+
+
+def test_agent_guides_use_current_live_marker_name() -> None:
+    stale: list[str] = []
+
+    for filename in ("AGENTS.md", "CLAUDE.md"):
+        text = (REPO_ROOT / filename).read_text(encoding="utf-8")
+        if "@pytest.mark.integration`" in text or "@pytest.mark.integration " in text:
+            stale.append(filename)
+        assert "@pytest.mark.integration_live" in text
+
+    assert not stale, "Agent guides should use integration_live, not integration: " + ", ".join(
+        stale
+    )
+
+
+def test_claude_command_examples_are_current() -> None:
+    text = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    command_block = text.split("## Commands", 1)[1].split("## ", 1)[0]
+
+    assert "just check" in command_block
+    assert "just validate-quick" in command_block
+    assert "uv run easycat validate quick" in command_block
+    assert "tests/test_metrics.py" not in command_block
+
+    stale_paths: list[str] = []
+    for match in re.finditer(r"uv run pytest\s+(?P<target>tests/\S+)", command_block):
+        path_text = match.group("target").split("::", 1)[0]
+        if not (REPO_ROOT / path_text).exists():
+            stale_paths.append(path_text)
+
+    assert not stale_paths, "CLAUDE.md pytest examples point at missing paths: " + ", ".join(
+        stale_paths
     )

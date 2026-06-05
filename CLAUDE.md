@@ -8,11 +8,19 @@ EasyCat is a Python voice bot framework that plugs into OpenAI Agents SDK or Pyd
 
 ## Commands
 
+Prefer the `just` recipes when available; each recipe shells out through `uv`.
+The raw `uv` commands below are the fallback when `just` is not installed.
+
 ```bash
 uv sync --group dev              # Install project + dev tools
+just                             # List every task
+just check                       # Format check + lint + full serial tests
+just test-one tests/stt/test_stt_openai.py  # Run one test file
+just validate-quick              # Deterministic local validation slice
 uv run pytest                    # Run full test suite
 uv run pytest tests/stt/test_stt_openai.py              # Run one test file
-uv run pytest tests/test_metrics.py::TestLatencyStats::test_record_and_stats  # Run one test
+uv run pytest tests/validation/test_latency_percentiles.py::test_latency_percentile_stats_from_values_empty_input  # Run one test
+uv run easycat validate quick    # Repo-local validation CLI
 uv run ruff check .              # Lint
 uv run ruff format .             # Format
 uv run python examples/ws_server.py  # Run an example
@@ -81,5 +89,6 @@ uv run python examples/ws_server.py  # Run an example
 ## Testing
 
 - pytest with pytest-asyncio (`asyncio_mode = auto`)
-- `@pytest.mark.integration` for live API tests (skipped without credentials)
+- `@pytest.mark.integration_live` for live API tests (skipped without credentials);
+  pair live/contract/latency tests with provider and surface markers
 - Tests mirror source structure: `tests/stt/`, `tests/tts/`, `tests/session/`, etc.
