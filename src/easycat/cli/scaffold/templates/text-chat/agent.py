@@ -9,9 +9,9 @@ from easycat import create_text_session
 
 async def main() -> None:
     agent = Agent(name="$AGENT_NAME", instructions="$AGENT_INSTRUCTIONS")
-    session = create_text_session(agent=agent)
-    while user := input("you: ").strip():
-        print(f"bot: {await session.send_text(user)}")
+    async with create_text_session(agent=agent) as session:
+        while user := input("you: ").strip():
+            print(f"bot: {await session.send_text(user)}")
 
 
 if __name__ == "__main__":

@@ -91,6 +91,24 @@ def _uses_run_easyconfig_mic(source: str) -> bool:
     return False
 
 
+def _uses_async_with_create_text_session(source: str) -> bool:
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncWith):
+            continue
+        for item in node.items:
+            expr = item.context_expr
+            if (
+                isinstance(expr, ast.Call)
+                and isinstance(expr.func, ast.Name)
+                and expr.func.id == "create_text_session"
+            ):
+                return True
+
+    return False
+
+
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_required_files_present(name: str) -> None:
     d = _template_dir(name)
@@ -169,6 +187,11 @@ def test_text_chat_readme_points_voice_upgrade_to_mic_preset() -> None:
     readme = (_template_dir("text-chat") / "README.md").read_text(encoding="utf-8")
     assert "EasyConfig.mic(agent=agent)" in readme
     assert "EasyConfig(agent=agent)" not in readme
+
+
+def test_text_chat_template_uses_public_session_lifecycle() -> None:
+    agent = (_template_dir("text-chat") / "agent.py").read_text(encoding="utf-8")
+    assert _uses_async_with_create_text_session(agent)
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
