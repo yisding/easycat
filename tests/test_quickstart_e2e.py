@@ -274,6 +274,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
 
     assert "installed CLI form" in cli_section
     assert "uv run easycat doctor" in cli_section
+    assert "easycat inspect PATH" in cli_section
 
     missing = sorted(
         command_name

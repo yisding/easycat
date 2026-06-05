@@ -73,7 +73,7 @@ easycat doctor   # check API keys, Python version, optional extras, provider rea
 easycat explain  # look up an EasyCat error code
 easycat bundles list      # list captured debug bundles
 easycat bundles show PATH # summarise one captured debug bundle
-easycat inspect  # summarise one captured debug bundle
+easycat inspect PATH      # summarise one captured debug bundle
 easycat validate # run validation lanes and render validation reports
 ```
 
