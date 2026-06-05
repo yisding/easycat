@@ -3,7 +3,7 @@
 ``NoiseReducerConfig.backend`` accepts ``"krisp"``, ``"rnnoise"``, or
 ``"auto"`` (default; tries Krisp → RNNoise → passthrough).
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra rnnoise
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart  # RNNoise included
 Run:   uv run python examples/noise_reduction_backends.py [--backend rnnoise|krisp|auto]
 """
 

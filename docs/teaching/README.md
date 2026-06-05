@@ -58,12 +58,12 @@ runnable artifact you can visit independently.
   ONNX Runtime — enough for chapters 0-2 and 11-12. Chapters 3-10
   use Deepgram streaming STT by default, so run
   `uv sync --extra quickstart --extra deepgram --group dev` for
-  those chapters. Chapter 10 additionally wants the `rnnoise` and/or
-  `aec` extras for real noise reduction / echo cancellation (falls
-  back silently to passthrough without them). Chapter 13's
-  `deepgram-eleven` provider mix additionally needs `--extra deepgram
-  --extra elevenlabs`; its WebRTC and Twilio transport variants need
-  `--extra webrtc` and `--extra telephony`, respectively.
+  those chapters. Chapter 10 gets RNNoise from `quickstart`; add
+  `--extra aec` for real echo cancellation. Chapter 13's
+  `deepgram-eleven` provider mix additionally needs `--extra
+  deepgram --extra elevenlabs`; its WebRTC and Twilio transport
+  variants need `--extra webrtc` and `--extra telephony`,
+  respectively.
 - A mic and speakers for the build chapters. Chapters 11 and 12
   ship checked-in bundles you can read without hardware.
 - API keys, set as environment variables:

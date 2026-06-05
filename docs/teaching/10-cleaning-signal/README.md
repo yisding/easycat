@@ -10,8 +10,7 @@
 
 - [Chapter 9](../09-interruption/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
-- For real NR: `uv sync --extra rnnoise` (permissive RNNoise) or
-  Krisp per its own SDK.
+- RNNoise is included in `quickstart`; Krisp requires its own SDK.
 - For real AEC: `uv sync --extra aec` (LiveKit APM).
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 
@@ -20,9 +19,10 @@
 > upstream of VAD and don't depend on chapters 5-9. The bonus
 > `wrong_order.py` here makes that "where it belongs" tangible.
 
-Both factories **silently fall back to passthrough** when their
-deps are missing. The script prints and journals the live backend
-so you know which one you're actually hearing.
+When a selected backend's deps are missing, the factories
+**silently fall back to passthrough**. The script prints and
+journals the live backend so you know which one you're actually
+hearing.
 
 ## Diff from chapter 9
 
@@ -87,9 +87,9 @@ so you know which one you're actually hearing.
  
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
-+    For real NR:   uv sync --extra rnnoise
++    RNNoise is included in quickstart; Krisp requires its own SDK.
 +    For real AEC:  uv sync --extra aec
-+    Otherwise both silently fall back to passthrough — the
++    Missing selected backends fall back to passthrough — the
 +    journal tells you which backend is live.
 +
      export OPENAI_API_KEY=...
