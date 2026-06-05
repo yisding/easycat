@@ -251,9 +251,12 @@ def test_bundles_show_sqlite_crash_dump(cli: CliRunner, tmp_path: Path) -> None:
         ],
     )
 
-    result = cli.invoke(app, ["bundles", "show", str(crash), "--json"])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
+    show = cli.invoke(app, ["bundles", "show", str(crash), "--json"])
+    inspect = cli.invoke(app, ["inspect", str(crash), "--json"])
+    assert show.exit_code == 0
+    assert inspect.exit_code == 0
+    assert json.loads(inspect.stdout) == json.loads(show.stdout)
+    payload = json.loads(show.stdout)
     assert payload["command"] == "bundles_show"
     assert payload["session_id"] == "sess-crash"
     assert payload["turns"] == 1

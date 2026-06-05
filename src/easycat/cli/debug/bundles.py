@@ -17,9 +17,9 @@ output; it is not a separate bundle file format.
     opening a Python REPL.
 
 ``bundles show <path>`` / ``inspect <path>``
-    Summarize a single bundle: session id, turn count, error count,
-    provider versions, first + last record timestamps. Deliberately
-    avoids printing raw journal lines — that's what
+    Summarize a single bundle or SQLite journal: session id, turn count,
+    error count, provider versions, first + last record timestamps.
+    Deliberately avoids printing raw journal lines — that's what
     ``--json`` is for when a machine-readable summary is needed.
 """
 
@@ -42,7 +42,7 @@ from easycat.debug.bundle import (
 
 bundles_app = typer.Typer(
     name="bundles",
-    help="Inspect captured debug bundles.",
+    help="Inspect captured debug bundles and crash dumps.",
     no_args_is_help=True,
     add_completion=False,
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -67,7 +67,7 @@ def _format_mtime(mtime: float) -> str:
 
 
 def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
-    """Collect the high-signal fields we surface in ``bundles show``."""
+    """Collect the high-signal fields we surface in ``bundles show``/``inspect``."""
     turns: set[str] = set()
     errors = 0
     session_id = ""
@@ -200,7 +200,7 @@ def _crash_dump_artifact_root(sqlite_path: Path) -> Path | None:
 
 
 def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
-    """Load and render the bundle summary used by all inspect aliases."""
+    """Load and render the bundle or SQLite journal summary used by all aliases."""
     if not bundle_path.exists():
         stderr_console.print(f"  [red]✗[/] Bundle not found: [red]{bundle_path}[/]")
         raise typer.Exit(5)
@@ -277,12 +277,12 @@ def show_bundle(
         ...,
         help=(
             "Path to a ZIP bundle archive (``.zip``, ``.bundle``, or "
-            "``.easycat-bundle``) or a crash-dump ``.sqlite`` journal."
+            "``.easycat-bundle``) or a ``.sqlite`` journal."
         ),
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
-    """Summarise a single bundle: turns, errors, timings, provider versions."""
+    """Summarise a debug bundle or SQLite journal."""
     _show_bundle_summary(bundle_path, json_output=json_output)
 
 
@@ -292,19 +292,19 @@ def inspect_bundle(
         ...,
         help=(
             "Path to a ZIP bundle archive (``.zip``, ``.bundle``, or "
-            "``.easycat-bundle``) or a crash-dump ``.sqlite`` journal."
+            "``.easycat-bundle``) or a ``.sqlite`` journal."
         ),
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
-    """Friendly alias for ``easycat bundles show``."""
+    """Friendly alias for ``easycat bundles show`` for bundles and SQLite journals."""
     _show_bundle_summary(bundle_path, json_output=json_output)
 
 
 bundles_app.command(name="list", help="List captured bundles and crash dumps under .easycat/.")(
     list_bundles
 )
-bundles_app.command(name="show", help="Summarise a single bundle.")(show_bundle)
+bundles_app.command(name="show", help="Summarise a debug bundle or SQLite journal.")(show_bundle)
 
 
 __all__: list[str] = ["bundles_app", "inspect_bundle"]

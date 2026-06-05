@@ -333,7 +333,13 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
 
     assert "installed CLI form" in cli_section
     assert "uv run easycat doctor" in cli_section
-    assert "easycat inspect PATH" in cli_section
+    expected_cli_lines = (
+        "easycat bundles list      # list captured debug bundles and crash dumps",
+        "easycat bundles show PATH # summarise a debug bundle or SQLite journal",
+        "easycat inspect PATH      # summarise a debug bundle or SQLite journal",
+    )
+    for line in expected_cli_lines:
+        assert line in cli_section
 
     missing = sorted(
         command_name

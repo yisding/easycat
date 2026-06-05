@@ -424,8 +424,8 @@ $ uv run easycat --help
   init      scaffold a new project
   doctor    check environment + provider reachability
   explain   look up an EasyCat error code
-  inspect   summarize one captured debug bundle
-  bundles   list and show captured debug bundles
+  inspect   summarize a debug bundle or SQLite journal
+  bundles   list and show captured debug bundles and crash dumps
   validate  run validation checks and inspect reports
 ```
 
@@ -441,9 +441,10 @@ $ uv run easycat --help
   `EasyCatError` raises with `code="EASYCAT_E203"`, this is where
   you find out what that means.
 - **`uv run easycat bundles list`** / **`uv run easycat bundles show <path>`** —
-  list captured bundles and summarize one bundle from the shell.
+  list captured bundles and crash dumps, then summarize a debug bundle or
+  SQLite journal from the shell.
 - **`uv run easycat inspect <path>`** — friendly alias for
-  `uv run easycat bundles show <path>`.
+  `uv run easycat bundles show <path>` for bundles and SQLite journals.
 - **`uv run easycat validate quick`** — deterministic local validation
   for normal PR work.
 - **`uv run easycat validate socket`** — localhost socket integration

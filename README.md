@@ -83,9 +83,9 @@ easycat init my-agent    # scaffold a new project from a template
 easycat doctor           # check API keys, Python version, optional extras, provider reachability
 easycat explain E102     # look up an EasyCat error code
 easycat explain --list   # list every error code and meta topic
-easycat bundles list      # list captured debug bundles
-easycat bundles show PATH # summarise one captured debug bundle
-easycat inspect PATH      # summarise one captured debug bundle
+easycat bundles list      # list captured debug bundles and crash dumps
+easycat bundles show PATH # summarise a debug bundle or SQLite journal
+easycat inspect PATH      # summarise a debug bundle or SQLite journal
 easycat validate quick       # run deterministic local validation
 easycat validate report PATH # render a saved validation report
 ```

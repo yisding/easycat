@@ -42,8 +42,8 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
     [green]explain[/]     Look up an error code (like `cargo --explain`)
 
   [cyan]Debug with the journal[/]
-    [green]bundles[/]     List captured debug bundles
-    [green]inspect[/]     Summarise one captured debug bundle
+    [green]bundles[/]     List captured debug bundles and crash dumps
+    [green]inspect[/]     Summarise a debug bundle or SQLite journal
 
   [cyan]Validation[/]
     [green]validate[/]    Run validation checks and inspect reports
@@ -101,7 +101,7 @@ def _register_commands() -> None:
     app.command(name="init", help="Scaffold a new project from a template.")(init_cmd)
     app.command(name="doctor", help="Check environment and provider reachability.")(doctor_cmd)
     app.command(name="explain", help="Look up an error code.")(explain_cmd)
-    app.command(name="inspect", help="Inspect a captured debug bundle.")(inspect_bundle)
+    app.command(name="inspect", help="Inspect a debug bundle or SQLite journal.")(inspect_bundle)
     app.add_typer(bundles_app, name="bundles")
     app.add_typer(validate_app, name="validate")
     _COMMANDS_REGISTERED = True
