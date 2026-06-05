@@ -584,32 +584,36 @@ session.unsubscribe_handlers(registrations)
 ```python
 from agents import Agent
 
-from easycat import Session, SessionConfig
-from easycat.integrations.agents import OpenAIAgentsBridge
+from easycat import EasyConfig, create_session
 
 agent = Agent(
     name="Support",
     instructions="Help customers with account issues.",
 )
 
-bridge = OpenAIAgentsBridge(agent=agent)
-session = Session(SessionConfig(agent=bridge, ...))
+config = EasyConfig(
+    openai_api_key="your-api-key",
+    agent=agent,
+)
+session = create_session(config)
 ```
 
 ### PydanticAI (idiomatic)
 ```python
 from pydantic_ai import Agent as PydanticAgent
 
-from easycat import Session, SessionConfig
-from easycat.integrations.agents import PydanticAIBridge
+from easycat import EasyConfig, create_session
 
 pydantic_agent = PydanticAgent(
     "openai:gpt-5.2",
     system_prompt="Help customers with account issues.",
 )
 
-bridge = PydanticAIBridge(agent=pydantic_agent)
-session = Session(SessionConfig(agent=bridge, ...))
+config = EasyConfig(
+    openai_api_key="your-api-key",
+    agent=pydantic_agent,
+)
+session = create_session(config)
 ```
 
 The `pydantic-ai` extra targets stable PydanticAI v1. The

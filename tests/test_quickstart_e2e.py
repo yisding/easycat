@@ -311,6 +311,34 @@ def test_readme_bring_your_own_agent_tracks_auto_adapt_surface() -> None:
     assert "OpenAI Agents SDK and PydanticAI objects" not in normalized_section
 
 
+def test_readme_agent_framework_snippets_use_easyconfig_auto_adapt_surface() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    snippets = {
+        "### OpenAI Agents SDK (idiomatic)": ("agent=agent",),
+        "### PydanticAI (idiomatic)": ("agent=pydantic_agent",),
+    }
+
+    for heading, expected_terms in snippets.items():
+        section = readme.split(heading, 1)[1].split("### ", 1)[0]
+
+        for term in (
+            "from easycat import EasyConfig, create_session",
+            'openai_api_key="your-api-key"',
+            "session = create_session(config)",
+            *expected_terms,
+        ):
+            assert term in section
+
+        for stale_term in (
+            "from easycat import Session, SessionConfig",
+            "OpenAIAgentsBridge",
+            "PydanticAIBridge",
+            "Session(SessionConfig(",
+            "bridge =",
+        ):
+            assert stale_term not in section
+
+
 def test_readme_langchain_langgraph_section_teaches_auto_adapt_requirements() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     section = readme.split("### LangChain and LangGraph", 1)[1].split("### ", 1)[0]
