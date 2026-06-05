@@ -10,7 +10,7 @@ Responsibilities:
   greeting / opt-out announcements.
 - Track the in-flight synthesis task so cancellation can target it.
 - Reserve the future :meth:`_synthesize_sentences` private hook for
-  sentence-level pipelining (see workstream-tts-pipelining when it lands).
+  sentence-level pipelining.
 
 Outbound queue ownership note: the :class:`BoundedAudioQueue` that
 carries TTS audio out to the transport lives on :class:`Session`
@@ -229,7 +229,7 @@ class TTSScheduler:
         driven by ``TurnRunner._process_tts`` via ``synthesizer.synthesize``.
         Kept private so the scheduler's public surface only advertises
         implemented methods; the hook exists so the pipelining change is a
-        local one when it lands (see workstream-tts-pipelining).
+        local one when it lands.
         """
         raise NotImplementedError("sentence-level TTS pipelining is not implemented yet")
 

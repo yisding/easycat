@@ -115,11 +115,11 @@ class CancelOrchestrator:
     ) -> None:
         """Walk the upstream signal through every stage, late -> early.
 
-        WS3 T3.8: control signals propagate from late stages (TTS,
-        Transport) back toward early stages (VAD, STT) so each one can
-        observe the event in journal order.  Each stage's
-        ``handle_upstream`` writes a ``ControlSignalRecord`` so a replay
-        can see who saw the signal and when.
+        Control signals propagate from late stages (TTS, Transport) back
+        toward early stages (VAD, STT) so each one can observe the event in
+        journal order. Each stage's ``handle_upstream`` writes a
+        ``ControlSignalRecord`` so a replay can see who saw the signal and
+        when.
 
         Errors inside ``handle_upstream`` are isolated per-stage --
         signal propagation must not throw and break the legacy cancel

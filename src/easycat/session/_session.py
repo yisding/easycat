@@ -1169,8 +1169,8 @@ class Session:
         If barge_in is True, emits an Interruption event and delegates
         upstream ``InterruptSignal`` propagation to the
         :class:`CancelOrchestrator` so every stage records its own
-        ``ControlSignalRecord`` (WS3 T3.8 dual-path coexistence: signal
-        flow runs alongside the legacy cancel token).
+        ``ControlSignalRecord``. Signal flow runs alongside the legacy cancel
+        token so older cancellation behavior remains intact.
         """
         turn = self._turn
         if turn:

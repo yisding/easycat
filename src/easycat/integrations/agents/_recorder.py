@@ -28,11 +28,11 @@ logger = logging.getLogger(__name__)
 
 
 class JournalAgentRecorder:
-    """Concrete ``AgentRecorder`` that writes to the WS1 journal.
+    """Concrete ``AgentRecorder`` that writes to the ExecutionJournal.
 
     Bridges receive a fresh instance per ``invoke()`` call, bound to
     the current run/session/turn context.  All writes pass through the
-    WS1 ``apply_write_filter`` hook.
+    journal ``apply_write_filter`` hook before append.
     """
 
     def __init__(

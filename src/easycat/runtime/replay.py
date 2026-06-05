@@ -1,4 +1,4 @@
-"""Replay types and orchestration for WS4.
+"""Replay types and orchestration for ExecutionJournal bundles.
 
 This module is the single source of truth for replay fidelity, tool
 policy, and orchestration primitives.  ``stages.base.ReplaySpec`` used
@@ -103,7 +103,7 @@ class ProviderVersionMismatchError(RuntimeError):
 
     ``error_code`` is ``"PROVIDER_VERSION_MISMATCH"`` for a plain version
     skew and ``"PROVIDER_VERSION_UNKNOWN"`` when either side reports the
-    sentinel ``"unknown"`` string from WS1 ``version_info()``.
+    sentinel ``"unknown"`` string from ``version_info()``.
     """
 
     def __init__(
@@ -256,7 +256,7 @@ def mask_nondeterministic(
     structure; dotted paths match from the root.  The masking walks
     dicts, lists, and tuples; scalars pass through unchanged.
 
-    This is the helper used in byte-determinism tests (AC4.18) and by
+    This is the helper used in byte-determinism tests and by
     :class:`ReplayRunner` when ``spec.timing == "fast"``.
     """
     field_set = frozenset(fields)
@@ -310,7 +310,8 @@ def check_provider_versions(
     policy as the explicit ``"UNKNOWN"`` sentinel.
 
     This function never raises.  Callers decide whether a non-empty list
-    should abort or warn; :class:`ReplayRunner` runs the T4.2 policy:
+    should abort or warn; :class:`ReplayRunner` applies the replay
+    provider-version policy:
 
     * ``ARTIFACT`` + ``force=False`` → raise
       :class:`ProviderVersionMismatchError`
@@ -366,8 +367,9 @@ def check_provider_versions(
 def _stringify_version(value: Any) -> str | None:
     """Normalize a ``version_info()`` result to a comparable string.
 
-    ``version_info()`` returns a dict (``{"sdk_version": ..., "model": ...}``)
-    in WS1, but bundles may store either the dict or a pre-joined string.
+    ``version_info()`` often returns a dict
+    (``{"sdk_version": ..., "model": ...}``), but bundles may store either the
+    dict or a pre-joined string.
     We stringify via ``repr`` for dicts so equality-comparison is stable
     across captures and installs.
     """

@@ -52,7 +52,7 @@ class GenericWorkflowBridge:
     **Deep mode** supports mid-turn barge-in out of the box.  The session's
     streaming path calls :meth:`apply_interruption` at the end of the turn
     and the bridge runs the four-step atomic write ordering (plan -> commit
-    -> mutate -> paired record) as described in WS2B T2B.1.
+    -> mutate -> paired record) used by journaled interruption handling.
 
     **Shallow mode** does **not** support mid-turn interruption by default
     because the bridge has no visibility into the workflow's internal

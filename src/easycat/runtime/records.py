@@ -99,8 +99,8 @@ class JournalRecord:
 class FrameworkTransitionRecord(JournalRecord):
     """Records a boundary crossing between EasyCat and an agent framework.
 
-    Emitted by agent bridges (WS2A) when control enters or leaves the
-    framework (e.g., OpenAI Agents SDK, PydanticAI).
+    Emitted by agent bridges when control enters or leaves the framework
+    (e.g., OpenAI Agents SDK, PydanticAI).
     """
 
     kind: JournalRecordKind = JournalRecordKind.FRAMEWORK_TRANSITION
@@ -113,8 +113,9 @@ class FrameworkTransitionRecord(JournalRecord):
 class ControlSignalRecord(JournalRecord):
     """Records a control signal propagating through the pipeline.
 
-    These five signal_kind values are the complete set WS3 stages emit;
-    additions require a WS1 RFC amendment.
+    These five ``signal_kind`` values are the complete set emitted by
+    pipeline stages. Additions are journal schema changes and must remain
+    backward-compatible with older bundles.
     """
 
     kind: JournalRecordKind = JournalRecordKind.CONTROL
@@ -125,7 +126,7 @@ class ControlSignalRecord(JournalRecord):
     cause: str | None = None  # e.g. "barge_in", "timeout", "user_cancel"
 
 
-# ── WS2A: Framework transition record subtypes ──────────────────
+# ── Framework transition record subtypes ────────────────────────
 
 
 @dataclass(frozen=True)
@@ -157,7 +158,7 @@ class FrameworkUnitExited(FrameworkTransitionRecord):
 class FrameworkStateCommitted(FrameworkTransitionRecord):
     """Emitted *before* mutating framework state in ``apply_interruption``.
 
-    WS2B wraps this in the four-step atomic write ordering.
+    Part of the bridge interruption protocol's four-step atomic write ordering.
     """
 
     mutation_kind: str = ""  # e.g. "interrupt_truncate", "interrupt_drain"
@@ -194,8 +195,8 @@ class FrameworkToolPhaseChanged(FrameworkTransitionRecord):
 class FrameworkCancellationBoundaryReached(FrameworkTransitionRecord):
     """Records that a cancellation boundary was reached.
 
-    ``caused_by_signal_id`` links back to the WS1 ``ControlSignalRecord``
-    that triggered this boundary (see WS1 T1.1 composition note).
+    ``caused_by_signal_id`` links back to the ``ControlSignalRecord`` that
+    triggered this boundary.
     """
 
     cancellation_mode: str = ""
@@ -216,15 +217,15 @@ class InterruptionApplyFailed(FrameworkTransitionRecord):
     failure_error: ErrorInfo | None = None
 
 
-# ── WS1: Recovery and health markers ────────────────────────────
+# ── Recovery and health markers ─────────────────────────────────
 
 
 @dataclass(frozen=True)
 class RecoveredSessionMarker(JournalRecord):
     """Emitted at sequence=0 when a journal is opened from a prior unclean shutdown.
 
-    The post-open journal still starts at sequence=1, so AC1.4's strict
-    monotonicity holds for real records.
+    The post-open journal still starts at sequence=1, so strict monotonicity
+    holds for real records.
 
     On SQLite persistence the typed fields below are mirrored into the base
     ``data`` dict (the journal table has no dedicated columns for them) and

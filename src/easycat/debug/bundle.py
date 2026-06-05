@@ -252,7 +252,7 @@ class RunBundle:
 
         Thin wrapper around :class:`easycat.runtime.replay.ReplayRunner`.
         Pass ``installed_versions`` (``{"stt": "openai-1.2.3", ...}``) to
-        enable the provider-version match check from T4.2; omit it for
+        enable provider-version match checks; omit it for
         offline replay where version skew is acceptable.
         """
         from easycat.runtime.replay import ReplayRunner

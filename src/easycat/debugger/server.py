@@ -521,11 +521,11 @@ def _summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if r.get("name") in ("stage_start", "stt_audio_in"):
                 if isinstance(audio_bytes, int) and stage == "stt":
                     bucket["stt_audio_bytes"] += audio_bytes
-        # T3.8 fans an InterruptSignal across all 8 stages, so a single
-        # barge-in produces 8 ``control_signal`` records (one per stage)
-        # plus the legacy ``interruption`` event.  We bookkeep both
-        # here and resolve the deduped count in the post-pass below
-        # so record order doesn't affect the result.
+        # A single barge-in fans an InterruptSignal across all stages, so it
+        # produces one ``control_signal`` record per stage plus the legacy
+        # ``interruption`` event. We bookkeep both here and resolve the
+        # deduped count in the post-pass below so record order doesn't affect
+        # the result.
         if r.get("name") == "control_signal":
             data = r.get("data") or {}
             if isinstance(data, dict) and data.get("signal_kind") == "interrupt":
@@ -538,7 +538,7 @@ def _summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for turn_id in order:
         bucket = by_turn[turn_id]
         # Prefer the deduped signal-id count; fall back to legacy
-        # ``interruption`` event count for bundles that predate T3.8.
+        # ``interruption`` event count for older bundles.
         signal_count = len(bucket["_interrupt_signal_ids"])
         legacy_count = bucket.pop("_legacy_interruptions", 0)
         bucket["interruption_count"] = signal_count if signal_count else legacy_count
@@ -591,12 +591,12 @@ def _build_timeline(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         name = r.get("name")
         # Skip ``control_signal`` records when computing stage spans.
-        # T3.8 fans an interrupt across all 8 stages, so each stage
-        # gets a ``control_signal`` with ``observed_stage`` set even
-        # when that stage had no real pipeline activity.  Counting
-        # those here would render a synthetic instant-span for stages
-        # the turn never actually touched.  ``stage_counts`` in
-        # ``_summarise_turns`` still accounts for the signals.
+        # Interrupts fan out across all stages, so each stage gets a
+        # ``control_signal`` with ``observed_stage`` set even when that stage
+        # had no real pipeline activity. Counting those here would render a
+        # synthetic instant-span for stages the turn never actually touched.
+        # ``stage_counts`` in ``_summarise_turns`` still accounts for the
+        # signals.
         if name == "control_signal":
             continue
         slot = bucket["stages"].setdefault(

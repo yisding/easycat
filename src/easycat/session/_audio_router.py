@@ -495,9 +495,8 @@ class AudioRouter:
             await self._emit(AudioIn(chunk=chunk))
 
         # Stages 1-2: Noise reduction + Echo cancellation via AudioStage.
-        # AudioStage wraps both so a single journal record covers
-        # the pair — matches WS3 T3.10's intent that Audio is
-        # one stage for replay purposes.
+        # AudioStage wraps both so a single journal record covers the pair
+        # as one replay stage.
         if self._enable_noise_reduction() or self._enable_aec():
             chunk = await self._audio_stage.execute(chunk, self._run_ctx, turn)
 
