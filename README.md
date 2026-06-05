@@ -99,20 +99,21 @@ integration behavior:
 uv run easycat validate socket
 ```
 
-Other validation lanes use the same `easycat validate` command:
+Other validation lanes use the same repo-local `uv run easycat validate`
+command:
 
 ```bash
-easycat validate quick      # deterministic local validation
-easycat validate socket     # localhost socket / transport integration validation
-easycat validate stress     # local stress validation and saturation-signal capture
-easycat validate latency --smoke # low-cost live latency validation
-easycat validate live       # live provider canaries (filter with --provider / --surface)
-easycat validate report PATH # render a concise summary of a saved report JSON
+uv run easycat validate quick      # deterministic local validation
+uv run easycat validate socket     # localhost socket / transport integration validation
+uv run easycat validate stress     # local stress validation and saturation-signal capture
+uv run easycat validate latency --smoke # low-cost live latency validation
+uv run easycat validate live       # live provider canaries (filter with --provider / --surface)
+uv run easycat validate report PATH # render a concise summary of a saved report JSON
 ```
 
 `scripts/validate.py` remains as a compatibility shim for quick, socket, and
 stress slice runs, but new docs and local workflows should use
-`easycat validate`.
+`uv run easycat validate`.
 
 `--json` emits the standard machine-readable stdout envelope, `--report PATH`
 writes a persisted validation report JSON, and `--junit PATH` writes JUnit XML

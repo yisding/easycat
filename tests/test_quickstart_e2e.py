@@ -298,6 +298,16 @@ def test_readme_validation_workflow_lists_registered_validate_commands() -> None
     assert not missing, "README.md validation section missing commands: " + ", ".join(missing)
     assert "easycat validate latency --smoke" in validation_section
 
+    validation_blocks = re.findall(r"```bash\n(.*?)\n```", validation_section, flags=re.DOTALL)
+    commands = [
+        line.strip()
+        for block in validation_blocks
+        for line in block.splitlines()
+        if "easycat validate" in line
+    ]
+    assert commands
+    assert all(command.startswith("uv run easycat validate ") for command in commands)
+
 
 def test_readme_current_capabilities_track_public_provider_and_bridge_surfaces() -> None:
     from easycat.integrations import agents as agent_integrations
