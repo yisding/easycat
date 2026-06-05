@@ -312,6 +312,9 @@ called out; `--json` output diverging from the standard envelope.
   raw pytest exit code.
 - `easycat validate contracts --json` dispatches the contract marker
   slice and emits the standard JSON envelope on stdout.
+- `easycat validate release --json` dispatches the installed-wheel
+  release gate, preserves release options, and emits the standard JSON
+  envelope on stdout.
 - `easycat validate report PATH` renders run status, checks, git dirty
   state, expected skips, failures, artifact paths, and missing artifact
   warnings.

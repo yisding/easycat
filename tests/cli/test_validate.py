@@ -9,7 +9,13 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
-from easycat.validation.latency import ReliabilitySample, ReliabilitySignals
+from easycat.validation.latency import (
+    LatencyMode,
+    LatencySample,
+    LatencyStageDurations,
+    ReliabilitySample,
+    ReliabilitySignals,
+)
 from easycat.validation.report import (
     ArtifactRef,
     GitMetadata,
@@ -26,6 +32,7 @@ from easycat.validation.runner import (
     ValidationRunResult,
     main,
     run_live_validation,
+    run_release_validation,
     run_validation_slice,
 )
 
@@ -510,6 +517,146 @@ def test_validation_runner_creates_isolated_run_directories(tmp_path: Path) -> N
     assert second.run_dir.exists()
 
 
+def test_release_validation_builds_installed_wheel_and_aggregates_reports(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-" + ("c" * 32))
+    commands: list[list[str]] = []
+    command_envs: list[dict[str, str]] = []
+    command_cwds: list[Path | None] = []
+
+    def fake_command_runner(
+        command: list[str],
+        *,
+        env: dict[str, str],
+        cwd: Path | None = None,
+    ) -> CommandResult:
+        commands.append(command)
+        command_envs.append(dict(env))
+        command_cwds.append(cwd)
+        if command[:4] == ["uv", "build", "--sdist", "--wheel"]:
+            out_dir = Path(command[-1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "easycat-0.1.0-py3-none-any.whl").write_text("wheel")
+        for arg in command:
+            if arg.startswith("--junitxml="):
+                Path(arg.removeprefix("--junitxml=")).write_text("<testsuite />")
+        samples_path = env.get("EASYCAT_LATENCY_SAMPLES_PATH")
+        if samples_path:
+            Path(samples_path).write_text(
+                json.dumps(
+                    [
+                        LatencySample(
+                            sample_id="release-latency-1",
+                            condition_id="release",
+                            warmup=False,
+                            timestamp_source="time.monotonic",
+                            stages=LatencyStageDurations(total_ms=1000.0),
+                        ).to_dict()
+                    ]
+                )
+            )
+        return CommandResult(exit_code=0, stdout="ok", stderr="")
+
+    result = run_release_validation(
+        artifacts_dir=tmp_path,
+        python_version="3.12",
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 23, 12, 0, 0, tzinfo=UTC),
+    )
+
+    payload = json.loads(result.report_path.read_text())
+    check_names = {check["name"] for check in payload["checks"]}
+    assert result.exit_code == 0
+    assert payload["status"] == "pass"
+    assert {
+        "release.build",
+        "release.venv",
+        "release.install",
+        "release.import-smoke",
+        "release.doctor",
+        "release.cli-smoke",
+        "release.quick",
+        "release.stress",
+        "release.contracts",
+        "release.live",
+        "release.latency.sweep",
+    } <= check_names
+    assert payload["artifacts"]["quick_report"]["kind"] == "validation_report"
+    assert payload["artifacts"]["latency_sweep_report"]["kind"] == "validation_report"
+    assert (tmp_path / "latest.json").read_text() == result.report_path.read_text()
+    assert any(command[:2] == ["uv", "build"] for command in commands)
+    assert any(command[:2] == ["uv", "venv"] and "--python" in command for command in commands)
+    assert any("doctor" in command for command in commands)
+    assert any(
+        "-m" in command
+        and any(
+            "not integration_socket and not integration_live and not slow" in arg
+            for arg in command
+        )
+        for command in commands
+    )
+    assert any(env.get("PYTHONPATH") == "" for env in command_envs)
+    assert any(cwd is not None and not cwd.is_relative_to(Path.cwd()) for cwd in command_cwds)
+
+
+def test_release_validation_fails_when_child_slice_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-" + ("d" * 32))
+
+    def fake_command_runner(
+        command: list[str],
+        *,
+        env: dict[str, str],
+        cwd: Path | None = None,
+    ) -> CommandResult:
+        if command[:4] == ["uv", "build", "--sdist", "--wheel"]:
+            out_dir = Path(command[-1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "easycat-0.1.0-py3-none-any.whl").write_text("wheel")
+        for arg in command:
+            if arg.startswith("--junitxml="):
+                Path(arg.removeprefix("--junitxml=")).write_text("<testsuite />")
+        samples_path = env.get("EASYCAT_LATENCY_SAMPLES_PATH")
+        if samples_path:
+            Path(samples_path).write_text(
+                json.dumps(
+                    [
+                        LatencySample(
+                            sample_id="release-latency-1",
+                            condition_id="release",
+                            warmup=False,
+                            timestamp_source="time.monotonic",
+                            stages=LatencyStageDurations(total_ms=1000.0),
+                        ).to_dict()
+                    ]
+                )
+            )
+        quick_selector = (
+            "not integration_socket and not integration_live and not slow "
+            "and not stress and not flaky"
+        )
+        if quick_selector in command:
+            return CommandResult(exit_code=1, stdout="", stderr="quick failed")
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    result = run_release_validation(
+        artifacts_dir=tmp_path,
+        python_version="3.12",
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 23, 12, 0, 0, tzinfo=UTC),
+    )
+
+    payload = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert payload["status"] == "fail"
+    assert payload["tool_exit_codes"]["release.quick"] == 1
+    assert payload["failures"][-1]["name"] == "release.quick"
+
+
 def test_validation_main_dispatches_socket_slice(tmp_path: Path) -> None:
     commands: list[list[str]] = []
 
@@ -760,6 +907,76 @@ def test_validate_live_cli_json_uses_standard_stdout_envelope(
     assert payload["command"] == "validate live"
     assert payload["status"] == "ok"
     assert payload["validation"]["kind"] == "validation_run"
+
+
+def test_validate_release_cli_json_uses_standard_stdout_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called: dict[str, object] = {}
+
+    def fake_run_release_validation(**kwargs) -> ValidationRunResult:  # noqa: ANN003
+        called.update(kwargs)
+        run = _validation_run(
+            run_id="20260523T120000Z-release-12345",
+            command=["easycat", "validate", "release"],
+            checks=[ValidationCheck(name="release.quick", status="pass", duration_s=1.0)],
+        )
+        result_report = tmp_path / "run" / "report.json"
+        result_report.parent.mkdir()
+        result_report.write_text(run.to_json())
+        return ValidationRunResult(
+            run=run,
+            run_dir=result_report.parent,
+            report_path=result_report,
+            exit_code=0,
+        )
+
+    monkeypatch.setattr(
+        "easycat.cli.validate.run_release_validation",
+        fake_run_release_validation,
+    )
+
+    result = cli.invoke(
+        app,
+        [
+            "validate",
+            "release",
+            "--python",
+            "3.12",
+            "--extra",
+            "openai",
+            "--provider",
+            "openai",
+            "--surface",
+            "stt",
+            "--latency-smoke",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert called["python_version"] == "3.12"
+    assert called["extras"] == ["openai"]
+    assert called["providers"] == ["openai"]
+    assert called["surfaces"] == ["stt"]
+    assert called["latency_mode"] == LatencyMode.SMOKE
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "validate release"
+    assert payload["status"] == "ok"
+    assert payload["validation"]["checks"][0]["name"] == "release.quick"
+
+
+def test_validate_release_cli_rejects_conflicting_latency_modes(cli: CliRunner) -> None:
+    result = cli.invoke(
+        app,
+        ["validate", "release", "--latency-smoke", "--latency-sweep"],
+    )
+
+    assert result.exit_code == 2
+    assert "choose only one of --latency-smoke or --latency-sweep" in result.stdout
 
 
 def test_validate_report_cli_renders_summary(cli: CliRunner, tmp_path: Path) -> None:

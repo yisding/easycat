@@ -89,6 +89,7 @@ easycat inspect PATH      # summarise a debug bundle or SQLite journal
 easycat replay PATH       # replay a debug bundle or SQLite journal
 easycat validate quick       # run deterministic local validation
 easycat validate contracts   # run offline provider/protocol contract validation
+easycat validate release     # run the strict installed-wheel release gate
 easycat validate report PATH # render a saved validation report
 ```
 
@@ -128,8 +129,15 @@ uv run easycat validate stress     # local stress validation and saturation-sign
 uv run easycat validate contracts  # offline provider/protocol/bridge contracts
 uv run easycat validate latency --smoke # low-cost live latency validation
 uv run easycat validate live       # live provider canaries (filter with --provider / --surface)
+uv run easycat validate release    # build, install, and run release validation
 uv run easycat validate report PATH # render a concise summary of a saved report JSON
 ```
+
+`easycat validate release` builds the sdist and wheel, installs the wheel into
+a clean temporary venv, clears `PYTHONPATH`, verifies the installed package
+outside the source tree, then runs quick, stress, contracts, live, and latency
+release gates through that installed environment. Use `--python`, `--extra`,
+`--provider`, and `--surface` to match the release target.
 
 `scripts/validate.py` remains as a compatibility shim for pytest-backed slice
 runs, but new docs and local workflows should use

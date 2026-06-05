@@ -41,6 +41,10 @@ Implemented:
 - `easycat validate contracts` runs the offline provider, protocol, cassette,
   and bridge contract suite through the same validation report machinery as
   quick/socket/stress.
+- `easycat validate release` builds distributions, installs the wheel into a
+  clean temporary venv, verifies the installed package outside the source tree,
+  and aggregates quick, stress, contracts, live, and latency release gates into
+  one validation report.
 - `.github/workflows/ci.yml` runs `easycat validate quick` and
   `easycat validate socket` with uploaded JSON, JUnit, stdout, and stderr
   artifacts.
@@ -60,8 +64,8 @@ Remaining backlog:
 
 - HTTP/WebSocket provider cassettes and schema drift fingerprints are still not
   standardized.
-- A dedicated `easycat validate release` wrapper is still future work; the
-  release workflow composes existing public validation commands today.
+- The release workflow still owns GitHub environment setup and artifact upload,
+  but the release gate itself now has a dedicated public CLI wrapper.
 - Deep acceptance-bullet auditing for the historical milestones in
   [tasks.md](tasks.md) remains open.
 
@@ -99,7 +103,7 @@ These names are the validation vocabulary.
 | latency | `easycat validate latency --smoke` or `--sweep` | live latency probes and structured latency artifacts |
 | live | `easycat validate live --provider openai` | live provider canaries and capability reports |
 | contracts | `easycat validate contracts` | offline provider, protocol, cassette, and bridge contracts |
-| release | `.github/workflows/release-validation.yml` | composed from public validation commands; no dedicated subcommand yet |
+| release | `easycat validate release` | installed-wheel release gate and aggregate report |
 
 ## Historical First Implementation PR
 

@@ -462,6 +462,9 @@ $ uv run easycat --help
   probe; use `--sweep` for the broader condition matrix.
 - **`uv run easycat validate live`** — live provider canaries and
   capability reports.
+- **`uv run easycat validate release`** — build the package, install the
+  wheel into a clean temporary venv, verify it outside the source tree, and
+  run the release validation gates through the installed package.
 - **`uv run easycat validate report <path>`** — render a concise summary
   of a saved validation report.
 

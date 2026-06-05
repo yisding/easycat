@@ -11,6 +11,7 @@ from easycat.validation.latency import LatencyMode
 from easycat.validation.runner import (
     run_latency_validation,
     run_live_validation,
+    run_release_validation,
     run_validation_slice,
 )
 
@@ -321,6 +322,80 @@ def live(
         )
     else:
         stdout_console.print(f"live: {result.run.status}; report: {report or result.report_path}")
+
+    raise typer.Exit(result.exit_code)
+
+
+@validate_app.command()
+def release(
+    python_version: Annotated[
+        str | None,
+        typer.Option("--python", help="Python version for the clean release venv."),
+    ] = None,
+    extra: Annotated[
+        list[str] | None,
+        typer.Option("--extra", help="Package extra to install; may be repeated."),
+    ] = None,
+    provider: Annotated[
+        list[str] | None,
+        typer.Option("--provider", help="Required live provider; may be repeated."),
+    ] = None,
+    surface: Annotated[
+        list[str] | None,
+        typer.Option("--surface", help="Required live provider surface; may be repeated."),
+    ] = None,
+    latency_smoke: Annotated[
+        bool,
+        typer.Option("--latency-smoke", help="Use latency smoke instead of the sweep gate."),
+    ] = False,
+    latency_sweep: Annotated[
+        bool,
+        typer.Option("--latency-sweep", help="Use the release latency sweep gate."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the standard machine-readable stdout envelope."),
+    ] = False,
+    report: Annotated[
+        Path | None,
+        typer.Option("--report", help="Optional additional validation report JSON path."),
+    ] = None,
+    artifacts_dir: Annotated[
+        Path,
+        typer.Option("--artifacts-dir", help="Validation artifact root directory."),
+    ] = Path(".easycat/validation"),
+) -> None:
+    """Build, install, and run the strict release validation gate."""
+    if latency_smoke and latency_sweep:
+        stdout_console.print("choose only one of --latency-smoke or --latency-sweep")
+        raise typer.Exit(2)
+
+    mode = LatencyMode.SMOKE if latency_smoke else LatencyMode.SWEEP
+    result = run_release_validation(
+        artifacts_dir=artifacts_dir,
+        report_path=report,
+        python_version=python_version,
+        extras=extra,
+        providers=provider,
+        surfaces=surface,
+        latency_mode=mode,
+    )
+
+    if json_output:
+        status = "ok" if result.exit_code == 0 else "error"
+        emit_json(
+            json_envelope(
+                "validate release",
+                status=status,
+                exit_code=result.exit_code,
+                report_path=str(report or result.report_path),
+                validation=result.run.to_dict(),
+            )
+        )
+    else:
+        stdout_console.print(
+            f"release: {result.run.status}; report: {report or result.report_path}"
+        )
 
     raise typer.Exit(result.exit_code)
 

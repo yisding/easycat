@@ -40,7 +40,7 @@ Implemented strengths:
 - `src/easycat/cli/_app.py` registers `init`, `doctor`, `explain`, `bundles`,
   `inspect`, and the `validate` command group.
 - `easycat validate quick`, `socket`, `stress`, `contracts`, `latency`,
-  `live`, and `report` are the public validation entry points.
+  `live`, `release`, and `report` are the public validation entry points.
 - `scripts/validate.py` remains as a compatibility shim over
   `easycat.validation.runner` for slice runs.
 - `src/easycat/validation/report.py` defines the validation JSON envelope,
@@ -73,8 +73,9 @@ Implemented strengths:
 
 Current gaps:
 
-- A dedicated `easycat validate release` command does not exist yet; release
-  validation composes existing public commands in GitHub Actions.
+- `.github/workflows/release-validation.yml` still owns GitHub environment
+  setup and artifact upload, but the installed-wheel release gate now has the
+  dedicated public `easycat validate release` wrapper.
 - CI uploads EasyCat validation JSON, JUnit XML, stdout, stderr, latency, and
   provider capability artifacts for the implemented validation lanes. Debug
   bundle upload remains tied to debug/replay workflows rather than the core
@@ -134,7 +135,7 @@ uv run python scripts/validate.py stress
 uv run python scripts/validate.py contracts
 ```
 
-Remaining planned command wrappers:
+Release gate:
 
 ```bash
 easycat validate release
