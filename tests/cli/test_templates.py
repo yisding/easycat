@@ -53,6 +53,16 @@ _README_SECTIONS: tuple[str, ...] = (
     "## Next steps",
 )
 _VOICE_TEMPLATES: tuple[str, ...] = ("openai-agents", "pydantic-ai")
+_GITIGNORE_PATTERNS: tuple[str, ...] = (
+    ".env",
+    ".venv/",
+    "__pycache__/",
+    "*.pyc",
+    ".ruff_cache/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".easycat/",
+)
 
 
 @pytest.fixture
@@ -284,3 +294,12 @@ def test_no_placeholder_leak_in_non_templated_files() -> None:
     for name in _LINE_BUDGETS:
         gi = (_template_dir(name) / ".gitignore").read_text(encoding="utf-8")
         assert "$" not in gi, f"{name}/.gitignore contains an unintended placeholder"
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_template_gitignore_covers_local_artifacts(name: str) -> None:
+    """Generated projects should not invite local env/cache artifacts into git."""
+    patterns = (_template_dir(name) / ".gitignore").read_text(encoding="utf-8").splitlines()
+
+    for pattern in _GITIGNORE_PATTERNS:
+        assert pattern in patterns, f"{name}/.gitignore missing {pattern!r}"
