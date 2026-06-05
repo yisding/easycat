@@ -23,12 +23,36 @@ _EXAMPLE_README_ROW_RE = re.compile(
     r"\| (?P<install>[^|]+) "
     r"\| (?P<env>[^|]+) \|$"
 )
+_SUPPORT_FILE_LINK_RE = re.compile(
+    r"^- \[(?P<name>[^]]+\.(?:html|sh))\]\((?P<link>[^)]+\.(?:html|sh))\):"
+)
 
 
 def _top_level_example_names() -> set[str]:
     return {
         path.name for path in (REPO_ROOT / "examples").glob("*.py") if path.name != "__init__.py"
     }
+
+
+def _documented_support_file_links() -> set[str]:
+    readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+    links: set[str] = set()
+
+    for line in readme.splitlines():
+        match = _SUPPORT_FILE_LINK_RE.match(line)
+        if match is not None:
+            assert match.group("name") == match.group("link")
+            links.add(match.group("link"))
+
+    return links
+
+
+def _support_files_to_document() -> set[str]:
+    examples_dir = REPO_ROOT / "examples"
+    files = set(examples_dir.glob("*.html"))
+    files.update((examples_dir / "webrtc_static").glob("*.html"))
+    files.add(examples_dir / "ec2_webrtc" / "deploy.sh")
+    return {path.relative_to(examples_dir).as_posix() for path in files if path.exists()}
 
 
 def _example_readme_rows() -> list[dict[str, str]]:
@@ -94,6 +118,17 @@ def test_examples_readme_lists_every_top_level_python_example() -> None:
     missing = sorted(_top_level_example_names() - row_names)
 
     assert not missing, "examples/README.md missing example rows for: " + ", ".join(missing)
+
+
+def test_examples_readme_lists_browser_and_deploy_support_files() -> None:
+    documented = _documented_support_file_links()
+    expected = _support_files_to_document()
+
+    missing = sorted(expected - documented)
+    stale = sorted(documented - expected)
+
+    assert not missing, "examples/README.md missing support-file links for: " + ", ".join(missing)
+    assert not stale, "examples/README.md has stale support-file links for: " + ", ".join(stale)
 
 
 def test_examples_readme_rows_are_command_map_entries() -> None:
