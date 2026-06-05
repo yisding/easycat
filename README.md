@@ -81,7 +81,8 @@ them with `uv run`, for example `uv run easycat doctor`.
 ```bash
 easycat init     # scaffold a new project from a template
 easycat doctor   # check API keys, Python version, optional extras, provider reachability
-easycat explain  # look up an EasyCat error code
+easycat explain E102   # look up an EasyCat error code
+easycat explain --list # list every error code and meta topic
 easycat bundles list      # list captured debug bundles
 easycat bundles show PATH # summarise one captured debug bundle
 easycat inspect PATH      # summarise one captured debug bundle

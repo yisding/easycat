@@ -312,6 +312,16 @@ def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
     )
 
 
+def test_readme_cli_explain_examples_are_copyable() -> None:
+    """``easycat explain`` requires a code or --list; the README should show one."""
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    cli_section = readme.split("## CLI", 1)[1].split("## Validation Workflow", 1)[0]
+
+    assert not re.search(r"(?m)^easycat explain\s+#", cli_section)
+    assert "easycat explain E102" in cli_section
+    assert "easycat explain --list" in cli_section
+
+
 def test_agent_guides_use_current_live_marker_name() -> None:
     stale: list[str] = []
 
