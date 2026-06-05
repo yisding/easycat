@@ -266,6 +266,19 @@ def test_pydantic_ai_template_beta_pin_matches_project_extra() -> None:
     assert f"=={version}" in readme
 
 
+def test_openai_agents_deepgram_swap_mentions_extra_key_and_sync() -> None:
+    readme = (_template_dir("openai-agents") / "README.md").read_text(encoding="utf-8")
+    env_example = (_template_dir("openai-agents") / ".env.example").read_text(encoding="utf-8")
+
+    for text in (readme, env_example):
+        assert "deepgram" in text
+        assert "DEEPGRAM_API_KEY" in text
+    assert "pyproject.toml" in readme
+    assert "uv sync" in readme
+    assert "pyproject.toml" in env_example
+    assert "uv sync" in env_example
+
+
 def test_no_placeholder_leak_in_non_templated_files() -> None:
     """``.gitignore`` is never templated and should contain no ``$VAR``."""
     for name in _LINE_BUDGETS:

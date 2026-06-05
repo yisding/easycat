@@ -48,8 +48,9 @@ uv run python -m py_compile agent.py
   in the `tools=[...]` list. The agent will pick the right tool based on the
   user's request.
 - **Swap STT providers:** add `stt="deepgram/flux"` to the `EasyConfig.mic(...)`
-  call, put `DEEPGRAM_API_KEY` in `.env`. Flux STT collapses VAD + STT +
-  endpointing into one streaming connection for lower latency.
+  call, add `deepgram` to the `easycat[...]` dependency in `pyproject.toml`,
+  run `uv sync`, and put `DEEPGRAM_API_KEY` in `.env`. Flux STT collapses
+  VAD + STT + endpointing into one streaming connection for lower latency.
 - **Try a different TTS voice:** pass `tts="openai"` with a specific voice via
   a typed `OpenAITTSConfig(voice="shimmer")`.
 - **Debug a session:** pass `debug="full"` to `EasyConfig.mic(...)`. EasyCat
