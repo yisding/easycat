@@ -124,6 +124,13 @@ def _documented_setup_extras(path: Path) -> set[str]:
     return set(_UV_SYNC_EXTRA_RE.findall(doc))
 
 
+def _dockerfile_default_extras() -> set[str]:
+    dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    match = re.search(r'^ARG EXTRAS="(?P<extras>[^"]+)"$', dockerfile, re.MULTILINE)
+    assert match is not None, "docker/Dockerfile must declare ARG EXTRAS"
+    return set(_UV_SYNC_EXTRA_RE.findall(match.group("extras")))
+
+
 def _pip_install_packages_in(text: str) -> set[str]:
     packages: set[str] = set()
 
@@ -612,6 +619,20 @@ def test_docker_env_secret_file_is_ignored_but_templates_are_allowed():
     assert "**/.env" in dockerignore
     assert "**/.env.*" in dockerignore
     assert "!**/.env.example" in dockerignore
+
+
+def test_docker_guide_tracks_default_dockerfile_extras() -> None:
+    guide = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
+    image_section = guide.split("## What the image contains", 1)[1].split("## ", 1)[0]
+    extras = _dockerfile_default_extras()
+    known_extras = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]["optional-dependencies"]
+
+    assert extras <= set(known_extras)
+    assert "Dockerfile `EXTRAS` default" in image_section
+    for extra in extras:
+        assert f"`{extra}`" in image_section
 
 
 def test_ws_supervisor_server_example_imports():

@@ -54,7 +54,8 @@ recoverable from image history.
 ## What the image contains
 
 - `python:3.11-slim-bookworm` runtime
-- EasyCat with extras: `openai-agents`, `silero-vad`, `rnnoise`
+- EasyCat installed with the Dockerfile `EXTRAS` default: `openai-agents`,
+  `silero-vad`, `rnnoise`
 - Bundled Silero VAD and Smart-Turn v3.2 ONNX models
 - Runs as a non-root `easycat` user (uid 1000)
 - Exposes TCP 8765 (WebSocket PCM16 audio); compose binds it to host loopback by default
