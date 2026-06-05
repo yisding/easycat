@@ -28,6 +28,14 @@ def _contributing_marker_taxonomy() -> str:
     return contributing.split("## Marker taxonomy", 1)[1].split("## Flaky-quarantine", 1)[0]
 
 
+def _contributing_runbundle_section() -> str:
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    return contributing.split("## RunBundle golden tests", 1)[1].split(
+        "## Adding an STT or TTS provider",
+        1,
+    )[0]
+
+
 def _marker_name_is_documented(section: str, marker: str) -> bool:
     return re.search(rf"`{re.escape(marker)}(?:\([^`]*\))?`", section) is not None
 
@@ -168,6 +176,15 @@ def test_contributing_marker_taxonomy_lists_pytest_markers() -> None:
     assert not missing, "CONTRIBUTING.md marker taxonomy missing pytest markers: " + ", ".join(
         missing
     )
+
+
+def test_contributing_runbundle_helpers_track_public_testing_exports() -> None:
+    from easycat.debug import testing
+
+    section = _contributing_runbundle_section()
+    missing = sorted(name for name in testing.__all__ if f"`{name}`" not in section)
+
+    assert not missing, "CONTRIBUTING.md RunBundle section missing helpers: " + ", ".join(missing)
 
 
 def test_validation_plan_matches_contributor_quick_command() -> None:

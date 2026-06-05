@@ -181,10 +181,10 @@ def test_roundtrip_regression():
     assert_no_error(bundle, turn_id="t1")
 ```
 
-Available assertions: `assert_exact_match`, `assert_regex`,
-`assert_turn_completed`, `assert_no_error`, `assert_tool_called`, plus the
-iteration helpers `iter_records`, `turn_records`, `find_record`. To refresh a
-golden bundle, re-export it from a session run and re-run the test; review the
+Available helpers: `load_bundle`; assertion helpers `assert_exact_match`,
+`assert_regex`, `assert_turn_completed`, `assert_no_error`, `assert_tool_called`;
+and iteration helpers `iter_records`, `turn_records`, `find_record`. To refresh
+a golden bundle, re-export it from a session run and re-run the test; review the
 bundle diff like any other fixture change.
 
 ## Adding an STT or TTS provider
