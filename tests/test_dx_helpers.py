@@ -106,12 +106,21 @@ def test_canonical_example_keeps_next_step_breadcrumbs() -> None:
 
 
 def test_easyconfig_preset_docstrings_explain_next_rungs() -> None:
-    mic_doc = EasyConfig.mic.__doc__ or ""
-    browser_doc = EasyConfig.browser.__doc__ or ""
-    phone_doc = EasyConfig.phone.__doc__ or ""
+    config_doc = " ".join((EasyConfig.__doc__ or "").split())
+    mic_doc = " ".join((EasyConfig.mic.__doc__ or "").split())
+    browser_doc = " ".join((EasyConfig.browser.__doc__ or "").split())
+    phone_doc = " ".join((EasyConfig.phone.__doc__ or "").split())
+
+    assert "provider shortcut" in config_doc
+    assert "provider instances" in config_doc
+    assert "VADConfig" in config_doc
 
     assert "Next:" in mic_doc
     assert "stt=" in mic_doc and "tts=" in mic_doc
+    assert "shortcut string" in mic_doc
+    assert "config dataclass" in mic_doc
+    assert "provider instance" in mic_doc
+    assert "vad=" in mic_doc
     assert "browser()" in mic_doc and "phone()" in mic_doc
     assert "DEEPGRAM_API_KEY" in mic_doc and "easycat[deepgram]" in mic_doc
 
@@ -119,11 +128,15 @@ def test_easyconfig_preset_docstrings_explain_next_rungs() -> None:
     assert "server process" in browser_doc
     assert "easycat[webrtc]" in browser_doc
     assert "examples/webrtc_server.py" in browser_doc
+    assert "provider instances" in browser_doc
+    assert "vad=" in browser_doc
 
     assert "Next:" in phone_doc
     assert "server process" in phone_doc
     assert "easycat[telephony]" in phone_doc
     assert "examples/twilio_app.py" in phone_doc
+    assert "provider instances" in phone_doc
+    assert "vad=" in phone_doc
 
 
 def test_sessionconfig_docstring_steers_to_easyconfig() -> None:

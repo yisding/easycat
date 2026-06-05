@@ -433,6 +433,13 @@ class EasyConfig(_AgentSessionConfig):
     """Top-level configuration for EasyCat sessions.
 
     Fields:
+        stt / tts: Speech provider selection. Accepts provider shortcut
+            strings (for example ``"deepgram/nova-2"``), concrete provider
+            config dataclasses, or already-built provider instances that
+            implement EasyCat's provider Protocols. Leave both unset with
+            ``openai_api_key`` (or ``OPENAI_API_KEY``) to use the default
+            OpenAI realtime STT + TTS chain.
+        vad: A ``VADConfig`` or an already-built VAD provider instance.
         enable_noise_reduction: Opt-in noise reduction. Defaults to
             ``False``, so the out-of-the-box pipeline does **not** denoise
             mic input. Set ``True`` (or pass an explicit ``noise_reduction``
@@ -613,11 +620,13 @@ class EasyConfig(_AgentSessionConfig):
     def mic(cls, **kwargs: Any) -> EasyConfig:
         """Local-microphone preset — the default developer setup.
 
-        Next: pass ``stt=``/``tts=`` to swap providers (each needs that
-        provider's API key **and** its extra, e.g.
+        Next: pass ``stt=``/``tts=`` to swap providers by shortcut string,
+        config dataclass, or provider instance. String/config providers need
+        that provider's API key **and** its extra, e.g.
         ``stt="deepgram/nova-2"`` needs ``DEEPGRAM_API_KEY`` +
-        ``easycat[deepgram]``); use ``browser()``/``phone()`` to serve
-        the same bot on another surface.
+        ``easycat[deepgram]``. Pass ``vad=`` to pin or replace voice activity
+        detection; use ``browser()``/``phone()`` to serve the same bot on
+        another surface.
         """
         kwargs.setdefault("transport", LocalTransportConfig())
         return cls(**kwargs)
@@ -631,9 +640,11 @@ class EasyConfig(_AgentSessionConfig):
 
         Next: browser needs a server process + the ``easycat[webrtc]``
         extra — see ``examples/webrtc_server.py``.  Swapping ``stt=``/
-        ``tts=`` providers needs that provider's API key **and** its
-        extra (e.g. ``stt="deepgram/nova-2"`` → ``DEEPGRAM_API_KEY`` +
-        ``easycat[deepgram]``).
+        ``tts=`` accepts shortcut strings, config dataclasses, or provider
+        instances; string/config providers need that provider's API key
+        **and** its extra (e.g. ``stt="deepgram/nova-2"`` →
+        ``DEEPGRAM_API_KEY`` + ``easycat[deepgram]``). Pass ``vad=`` to
+        pin or replace voice activity detection.
         """
         kwargs.setdefault("transport", WebRTCTransportConfig())
         kwargs.setdefault("enable_echo_cancellation", True)
@@ -648,9 +659,11 @@ class EasyConfig(_AgentSessionConfig):
 
         Next: phone needs a server process + the ``easycat[telephony]``
         extra — see ``examples/twilio_app.py``.  Swapping ``stt=``/
-        ``tts=`` providers needs that provider's API key **and** its
-        extra (e.g. ``stt="deepgram/nova-2"`` → ``DEEPGRAM_API_KEY`` +
-        ``easycat[deepgram]``).
+        ``tts=`` accepts shortcut strings, config dataclasses, or provider
+        instances; string/config providers need that provider's API key
+        **and** its extra (e.g. ``stt="deepgram/nova-2"`` →
+        ``DEEPGRAM_API_KEY`` + ``easycat[deepgram]``). Pass ``vad=`` to
+        pin or replace voice activity detection.
         """
         kwargs.setdefault("transport", TwilioTransportConfig())
         return cls(**kwargs)
