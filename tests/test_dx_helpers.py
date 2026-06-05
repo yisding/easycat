@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import pytest
 
-from easycat import EasyConfig
+from easycat import EasyConfig, SessionConfig
 from easycat.config import _resolve_easycat_log_level
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransportConfig
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # ── EASYCAT_LOG_LEVEL ─────────────────────────────────────────────
 
@@ -63,6 +66,50 @@ def test_preset_still_honors_explicit_overrides(monkeypatch: pytest.MonkeyPatch)
     # default — the preset must not clobber other fields.
     assert isinstance(cfg.stt, OpenAIRealtimeSTTConfig)
     assert cfg.stt.api_key == "override"
+
+
+def test_canonical_example_keeps_next_step_breadcrumbs() -> None:
+    example = (REPO_ROOT / "examples" / "openai_agents_voice.py").read_text(encoding="utf-8")
+
+    assert "# Next, try" in example
+    assert 'stt="deepgram/nova-2"' in example
+    assert "DEEPGRAM_API_KEY + --extra deepgram" in example
+    assert "tools live on YOUR Agent" in example
+    assert "EasyConfig.browser(agent=...)" in example
+    assert "server + --extra webrtc" in example
+    assert 'debug="full"' in example
+    assert "docs/teaching/00-hello-audio/" in example
+
+
+def test_easyconfig_preset_docstrings_explain_next_rungs() -> None:
+    mic_doc = EasyConfig.mic.__doc__ or ""
+    browser_doc = EasyConfig.browser.__doc__ or ""
+    phone_doc = EasyConfig.phone.__doc__ or ""
+
+    assert "Next:" in mic_doc
+    assert "stt=" in mic_doc and "tts=" in mic_doc
+    assert "browser()" in mic_doc and "phone()" in mic_doc
+    assert "DEEPGRAM_API_KEY" in mic_doc and "easycat[deepgram]" in mic_doc
+
+    assert "Next:" in browser_doc
+    assert "server process" in browser_doc
+    assert "easycat[webrtc]" in browser_doc
+    assert "examples/webrtc_server.py" in browser_doc
+
+    assert "Next:" in phone_doc
+    assert "server process" in phone_doc
+    assert "easycat[telephony]" in phone_doc
+    assert "examples/twilio_app.py" in phone_doc
+
+
+def test_sessionconfig_docstring_steers_to_easyconfig() -> None:
+    doc = SessionConfig.__doc__ or ""
+
+    assert "lowest rung of the ladder" in doc
+    assert "provider *instances*" in doc
+    assert "EasyConfig" in doc
+    assert "one rung up" in doc
+    assert "create_session" in doc
 
 
 # ── Debugger auto-launch on debug="full" ─────────────────────────
