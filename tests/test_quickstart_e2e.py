@@ -271,6 +271,9 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     cli_section = readme.split("## CLI", 1)[1].split("## ", 1)[0]
 
+    assert "installed CLI form" in cli_section
+    assert "uv run easycat doctor" in cli_section
+
     missing = sorted(
         command_name
         for command_name in command_names

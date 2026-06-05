@@ -64,6 +64,9 @@ Optional dependencies you may need depending on providers/transports:
 
 ## CLI
 
+The commands below use the installed CLI form. From this repository, prefix
+them with `uv run`, for example `uv run easycat doctor`.
+
 ```bash
 easycat init     # scaffold a new project from a template
 easycat doctor   # check API keys, Python version, optional extras, provider reachability
