@@ -48,10 +48,13 @@ learns that the user started speaking, a turn ended, the bot produced audio, etc
 - `session.subscribe_event(...)` and `EventBus.subscribe(...)` return an
   idempotent subscription token. Keep that token when a component owns a
   callback lifecycle and call `token.unsubscribe()` during teardown.
-- Event handlers run inline in subscription order. Handler exceptions are
-  logged, counted on the bus, and do not stop later handlers from running.
-  Configure `EventBus(slow_handler_threshold_s=...)` when you need warnings
-  for callbacks that might stall audio-critical paths.
+- Event handlers run inline in subscription order. By default, handler
+  exceptions are logged, counted on the bus, and do not stop later handlers from
+  running. Use `EventBus(handler_error_policy="raise")` in tests or strict app
+  code when a handler failure should abort dispatch and propagate to the
+  emitter.
+- Configure `EventBus(slow_handler_threshold_s=...)` when you need warnings for
+  callbacks that might stall audio-critical paths.
 - If you want a durable mirror of what flowed across the bus, that is the
   journal's job (C), which records bus activity (via the session journal sink)
   plus per-stage internal detail the bus never carries.

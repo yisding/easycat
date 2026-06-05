@@ -413,6 +413,56 @@ async def test_eventbus_handler_error_does_not_stop_others():
     assert isinstance(bus.last_handler_error.exception, RuntimeError)
 
 
+def test_eventbus_rejects_unknown_handler_error_policy():
+    with pytest.raises(ValueError, match="handler_error_policy"):
+        EventBus(handler_error_policy="strict")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_eventbus_raise_error_policy_stops_and_propagates():
+    bus = EventBus(handler_error_policy="raise")
+    received: list[STTFinal] = []
+
+    def bad_handler(event: STTFinal) -> None:
+        raise RuntimeError("handler error")
+
+    def good_handler(event: STTFinal) -> None:
+        received.append(event)
+
+    bus.subscribe(STTFinal, bad_handler)
+    bus.subscribe(STTFinal, good_handler)
+
+    with pytest.raises(RuntimeError, match="handler error"):
+        await bus.emit(STTFinal(text="hello"))
+
+    assert received == []
+    assert bus.handler_error_policy == "raise"
+    assert bus.handler_failures == 1
+    assert bus.last_handler_error is not None
+    assert bus.last_handler_error.handler_name == "bad_handler"
+
+
+@pytest.mark.asyncio
+async def test_eventbus_raise_error_policy_propagates_async_handler_error():
+    bus = EventBus(handler_error_policy="raise")
+    received: list[STTFinal] = []
+
+    async def bad_handler(event: STTFinal) -> None:
+        await asyncio.sleep(0)
+        raise RuntimeError("async handler error")
+
+    bus.subscribe(STTFinal, bad_handler)
+    bus.subscribe(STTFinal, received.append)
+
+    with pytest.raises(RuntimeError, match="async handler error"):
+        await bus.emit(STTFinal(text="hello"))
+
+    assert received == []
+    assert bus.handler_failures == 1
+    assert bus.last_handler_error is not None
+    assert bus.last_handler_error.handler_name == "bad_handler"
+
+
 @pytest.mark.asyncio
 async def test_eventbus_handler_error_with_partial_logs_and_continues(
     caplog: pytest.LogCaptureFixture,

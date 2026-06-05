@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Type alias for event handlers
 EventHandler = Callable[..., None] | Callable[..., Coroutine[Any, Any, None]]
+EventHandlerErrorPolicy = Literal["continue", "raise"]
 
 
 def _handler_name(handler: EventHandler) -> str:
@@ -608,24 +609,40 @@ class TTSEvent:
 class EventBus:
     """Publish/subscribe event dispatcher supporting sync and async handlers.
 
-    Dispatch is inline and best-effort: ``emit()`` invokes matching handlers in
-    subscription order, awaits async handlers, logs handler exceptions, and
-    keeps dispatching the remaining handlers.  Use the returned
-    :class:`EventSubscription` when lifecycle ownership matters; the older
-    ``unsubscribe(event_type, handler)`` form remains supported.
+    Dispatch is inline by default: ``emit()`` invokes matching handlers in
+    subscription order and awaits async handlers. The default
+    ``handler_error_policy="continue"`` logs handler exceptions and keeps
+    dispatching remaining handlers. Use ``handler_error_policy="raise"`` in
+    tests or strict app code when a handler failure should abort dispatch and
+    propagate to the emitter. Use the returned :class:`EventSubscription` when
+    lifecycle ownership matters; the older ``unsubscribe(event_type, handler)``
+    form remains supported.
     """
 
-    def __init__(self, *, slow_handler_threshold_s: float | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        slow_handler_threshold_s: float | None = None,
+        handler_error_policy: EventHandlerErrorPolicy = "continue",
+    ) -> None:
+        if handler_error_policy not in {"continue", "raise"}:
+            raise ValueError("handler_error_policy must be either 'continue' or 'raise'")
         self._handlers: defaultdict[type, list[EventHandler]] = defaultdict(list)
         self._all_handlers: list[EventHandler] = []
         self._handler_failures = 0
         self._last_handler_error: HandlerDispatchError | None = None
         self._slow_handler_threshold_s = slow_handler_threshold_s
+        self._handler_error_policy = handler_error_policy
 
     @property
     def handler_failures(self) -> int:
         """Number of handler exceptions observed by this bus."""
         return self._handler_failures
+
+    @property
+    def handler_error_policy(self) -> EventHandlerErrorPolicy:
+        """How ``emit`` handles exceptions raised by event handlers."""
+        return self._handler_error_policy
 
     @property
     def last_handler_error(self) -> HandlerDispatchError | None:
@@ -697,6 +714,8 @@ class EventBus:
                     _handler_name(handler),
                     event_type.__name__,
                 )
+                if self._handler_error_policy == "raise":
+                    raise
             finally:
                 elapsed = time.perf_counter() - started
                 threshold = self._slow_handler_threshold_s
