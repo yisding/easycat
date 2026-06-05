@@ -310,3 +310,22 @@ def test_claude_overview_tracks_public_agent_bridges() -> None:
     assert not missing_display_names, (
         "CLAUDE.md overview missing public bridge labels: " + ", ".join(missing_display_names)
     )
+
+
+def test_claude_provider_registry_guidance_tracks_factory_names() -> None:
+    from easycat.stt import factory as stt_factory
+    from easycat.tts import factory as tts_factory
+
+    key_patterns = (
+        (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8").split("## Session Lifecycle", 1)[0]
+    )
+
+    assert hasattr(stt_factory, "_PROVIDER_TO_CONFIG")
+    assert hasattr(tts_factory, "_PROVIDER_TO_CONFIG")
+    assert tts_factory._PROVIDERS is tts_factory._PROVIDER_TO_CONFIG
+
+    assert "stt/factory.py" in key_patterns
+    assert "tts/factory.py" in key_patterns
+    assert "_PROVIDER_TO_CONFIG" in key_patterns
+    assert "back-compat alias" in key_patterns
+    assert "_PROVIDERS" in key_patterns

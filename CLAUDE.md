@@ -73,7 +73,7 @@ uv run python examples/ws_server.py  # Run an example
 - **Async-first** — all I/O is async; providers are async iterators
 - **Cooperative cancellation** — `CancelToken` (not exceptions) for turn/TTS cancellation
 - **Factory functions** — `create_session()`, `create_vad()`, `create_noise_reducer()`
-- **Provider registries** — `stt/factory.py` has a central `_PROVIDER_TO_CONFIG` dict and `tts/factory.py` has a central `_PROVIDERS` dict, each mapping a provider name to its `(provider class, config class)` pair. To add a new STT/TTS provider: add an entry to the registry and a corresponding config dataclass.
+- **Provider registries** — `stt/factory.py` and `tts/factory.py` each have a central `_PROVIDER_TO_CONFIG` dict mapping a provider name to its `(provider class, config class)` pair. `tts/factory.py` still exposes `_PROVIDERS` as a back-compat alias. To add a new STT/TTS provider: add an entry to the registry and a corresponding config dataclass.
 - **Event bus injection** — Deepgram and ElevenLabs providers require an `EventBus` injected at construction (they emit provider-scoped events). OpenAI providers do not.
 - **Noop stubs** (`stubs.py`) — `NoopSTT`, `NoopTTS`, `NoopVAD`, `NoopTransport` for test isolation
 
