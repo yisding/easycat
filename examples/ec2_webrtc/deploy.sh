@@ -73,8 +73,12 @@ sudo apt-get install -y -qq \
 
 echo "[2/6] Configuring coturn..."
 
-# Enable coturn daemon.
-sudo sed -i 's/#TURNSERVER_ENABLED=1/TURNSERVER_ENABLED=1/' /etc/default/coturn
+# Enable coturn daemon across Ubuntu package default variants.
+if sudo grep -Eq '^#?TURNSERVER_ENABLED=' /etc/default/coturn; then
+    sudo sed -i -E 's/^#?TURNSERVER_ENABLED=.*/TURNSERVER_ENABLED=1/' /etc/default/coturn
+else
+    echo 'TURNSERVER_ENABLED=1' | sudo tee -a /etc/default/coturn > /dev/null
+fi
 
 # Write config. Use Python templating so generated base64 TURN passwords
 # containing "/" or "&" cannot break sed replacement syntax.

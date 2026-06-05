@@ -269,6 +269,15 @@ def test_ec2_webrtc_turn_template_handles_generated_password_characters() -> Non
     assert '.replace("__TURN_PASSWORD__", sys.argv[3])' in deploy
 
 
+def test_ec2_webrtc_deploy_enables_coturn_across_default_variants() -> None:
+    deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert "grep -Eq '^#?TURNSERVER_ENABLED='" in deploy
+    assert "s/^#?TURNSERVER_ENABLED=.*/TURNSERVER_ENABLED=1/" in deploy
+    assert "tee -a /etc/default/coturn" in deploy
+    assert "s/#TURNSERVER_ENABLED=1/TURNSERVER_ENABLED=1/" not in deploy
+
+
 def test_ec2_webrtc_deploy_honors_manual_external_ip() -> None:
     deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
 
