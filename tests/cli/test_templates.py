@@ -7,6 +7,7 @@ produces a runnable project.  They catch:
 * Missing required files (``pyproject.toml``, ``.env.example``, README)
 * README missing the required sections (Install, Configure, Run, Check,
   Next steps)
+* README missing the environment preflight for templates that need OpenAI keys
 * ``pyproject.toml`` failing to pin the ``easycat`` extra the template
   advertises
 * Templated ``agent.py`` failing to parse with Python's AST after
@@ -189,6 +190,16 @@ def test_cli_test_plan_documents_template_readme_contract() -> None:
 def test_readme_has_local_syntax_check(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     assert "uv run python -m py_compile agent.py" in readme
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_readme_has_doctor_preflight_when_template_needs_openai_key(name: str) -> None:
+    env_example = (_template_dir(name) / ".env.example").read_text(encoding="utf-8")
+    if "OPENAI_API_KEY" not in env_example:
+        pytest.skip(f"{name} does not require an OpenAI key")
+
+    readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    assert "uv run easycat doctor" in readme
 
 
 @pytest.mark.parametrize("name", _VOICE_TEMPLATES)
