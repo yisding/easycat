@@ -170,37 +170,23 @@ def test_teaching_chapter_key_prerequisites_run_doctor() -> None:
 
 
 def test_readme_optional_dependency_list_has_copyable_install_commands() -> None:
-    """The optional-dependency list should not name packages without commands."""
+    """The optional-dependency list should expose every non-meta repo extra."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     optional_block = readme.split("Optional dependencies you may need depending on", 1)[1].split(
         "## CLI", 1
     )[0]
+    expected_extras = sorted(_known_extras() - {"all", "quickstart"})
 
-    for command in (
-        "uv sync --extra local",
-        "uv sync --extra webrtc",
-        "uv sync --extra webtransport",
-        "uv sync --extra telephony",
-        "uv sync --extra openai-agents",
-        "uv sync --extra pydantic-ai",
-        "uv sync --extra pydantic-ai-v2-beta",
-        "uv sync --extra langchain",
-        "uv sync --extra langgraph",
-        "uv sync --extra llama-agents",
-        "uv sync --extra aec",
-        "uv sync --extra debugger",
-        "uv sync --extra smart-turn",
-        "uv sync --extra ten-vad",
-        "uv sync --extra silero-vad",
-        "uv sync --extra funasr-vad",
-        "uv sync --extra rnnoise",
-        "uv sync --extra openai",
-        "uv sync --extra deepgram",
-        "uv sync --extra elevenlabs",
-        "uv sync --extra cartesia",
-        "uv pip install krisp_audio",
-    ):
-        assert command in optional_block
+    missing_commands = [
+        f"uv sync --extra {extra}"
+        for extra in expected_extras
+        if f"uv sync --extra {extra}" not in optional_block
+    ]
+
+    assert not missing_commands, "README optional dependency list missing: " + ", ".join(
+        missing_commands
+    )
+    assert "uv pip install krisp_audio" in optional_block
 
 
 def test_teaching_provider_key_setup_names_required_extras() -> None:
