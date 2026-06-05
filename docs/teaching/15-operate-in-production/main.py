@@ -7,6 +7,7 @@ to a teammate, and print the one-liner that opens the debugger UI.
 Dependencies:
     uv sync --extra quickstart --group dev
     export OPENAI_API_KEY=...
+    uv run easycat doctor
 """
 
 from __future__ import annotations

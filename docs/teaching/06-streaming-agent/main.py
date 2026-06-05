@@ -11,6 +11,7 @@ Dependencies:
     uv sync --extra quickstart --extra deepgram --group dev
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
+    uv run easycat doctor
 """
 
 from __future__ import annotations

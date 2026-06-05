@@ -26,6 +26,7 @@ Dependencies:
     For real AEC: uv sync --extra aec  # RNNoise is in quickstart
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
+    uv run easycat doctor
 """
 
 from __future__ import annotations

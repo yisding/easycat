@@ -21,6 +21,7 @@ Three things this script demonstrates:
 Dependencies:
     uv sync --extra quickstart --group dev
     export OPENAI_API_KEY=...
+    uv run easycat doctor
 """
 
 from __future__ import annotations

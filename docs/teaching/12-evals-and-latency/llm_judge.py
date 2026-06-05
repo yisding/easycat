@@ -1,7 +1,8 @@
 """Chapter 12 — LLM-as-judge for conversational quality.
 
 Sends a bundle's transcript to an LLM with a 1-5 rubric and prints
-the structured score. Requires OPENAI_API_KEY.
+the structured score. Requires OPENAI_API_KEY; after setting it, run
+``uv run easycat doctor`` from the repo root.
 
     uv run python docs/teaching/12-evals-and-latency/llm_judge.py \\
         docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle

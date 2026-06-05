@@ -48,7 +48,7 @@ hearing.
 ```diff
 --- docs/teaching/09-interruption/estimate.py
 +++ docs/teaching/10-cleaning-signal/main.py
-@@ -1,39 +1,56 @@
+@@ -1,20 +1,33 @@
 -"""Chapter 9c — cancel + estimate what the user actually heard.
 -
 -Same as ``cancel.py`` plus: we track bytes of TTS audio that made
@@ -95,7 +95,8 @@ hearing.
 +
      export OPENAI_API_KEY=...
      export DEEPGRAM_API_KEY=...
- """
+     uv run easycat doctor
+@@ -22,19 +35,23 @@
  
  from __future__ import annotations
  
@@ -121,7 +122,7 @@ hearing.
  from easycat.events import (
      EventBus,
      STTEventType,
-@@ -41,6 +58,7 @@
+@@ -42,6 +59,7 @@
      VADStartSpeaking,
      VADStopSpeaking,
  )
@@ -129,7 +130,7 @@ hearing.
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.session import split_at_sentence_boundaries
  from easycat.strip_markdown import strip_markdown
-@@ -54,48 +72,23 @@
+@@ -55,48 +73,23 @@
  MODEL = "gpt-4o-mini"
  PREROLL_FRAMES = 15
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -193,7 +194,7 @@ hearing.
  
  
  class MiniTurnDetector:
-@@ -123,13 +116,33 @@
+@@ -124,13 +117,33 @@
                  self._preroll.append(chunk)
  
  
@@ -231,7 +232,7 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -150,95 +163,48 @@
+@@ -151,95 +164,48 @@
      await sentence_queue.put(None)
  
  
@@ -338,7 +339,7 @@ hearing.
              continue
  
          if tag == "speech_started":
-@@ -258,33 +224,56 @@
+@@ -259,33 +225,56 @@
              if not final_text.strip():
                  continue
              print(f"  user: {final_text!r}")
@@ -407,7 +408,7 @@ hearing.
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
-@@ -303,13 +292,14 @@
+@@ -304,13 +293,14 @@
          )
  
      await transport.connect()
@@ -425,7 +426,7 @@ hearing.
          )
      except (KeyboardInterrupt, asyncio.CancelledError):
          pass
-@@ -317,7 +307,7 @@
+@@ -318,7 +308,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)

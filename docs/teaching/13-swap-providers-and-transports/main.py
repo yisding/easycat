@@ -32,6 +32,7 @@ Dependencies:
     OPENAI_API_KEY (always)
     DEEPGRAM_API_KEY, ELEVENLABS_API_KEY (for deepgram-eleven mix)
     TWIML/Twilio credentials (for twilio transport)
+    uv run easycat doctor
 """
 
 from __future__ import annotations

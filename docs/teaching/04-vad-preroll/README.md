@@ -34,7 +34,7 @@
 ```diff
 --- docs/teaching/03-parrot-naive/main.py
 +++ docs/teaching/04-vad-preroll/main.py
-@@ -1,136 +1,183 @@
+@@ -1,137 +1,184 @@
 -"""Chapter 3 — Parrot, the naive way.
 +"""Chapter 4 — VAD + pre-roll.
  
@@ -54,6 +54,7 @@
      export OPENAI_API_KEY=...      # OpenAI TTS
 -    export DEEPGRAM_API_KEY=...    # mid-speech STT partials
 +    export DEEPGRAM_API_KEY=...    # Streaming STT
+     uv run easycat doctor
  """
  
  from __future__ import annotations

@@ -10,6 +10,7 @@ Dependencies:
     uv sync --extra quickstart --extra deepgram --group dev
     export OPENAI_API_KEY=...      # OpenAI TTS
     export DEEPGRAM_API_KEY=...    # mid-speech STT partials
+    uv run easycat doctor
 """
 
 from __future__ import annotations

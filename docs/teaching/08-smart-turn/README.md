@@ -35,7 +35,7 @@
 ```diff
 --- docs/teaching/07-tools/main.py
 +++ docs/teaching/08-smart-turn/main.py
-@@ -1,34 +1,35 @@
+@@ -1,16 +1,18 @@
 -"""Chapter 7 — Tools, mid-stream.
 -
 -Same streaming pipeline as chapter 6, plus two demo tools:
@@ -64,7 +64,8 @@
 +    uv sync --extra quickstart --extra deepgram --group dev     # includes smart-turn
      export OPENAI_API_KEY=...
      export DEEPGRAM_API_KEY=...
- """
+     uv run easycat doctor
+@@ -18,18 +20,17 @@
  
  from __future__ import annotations
  
@@ -85,7 +86,7 @@
  from easycat.audio_format import PCM16_MONO_24K, AudioChunk
  from easycat.debug.export import export_debug_bundle
  from easycat.events import (
-@@ -40,6 +41,7 @@
+@@ -41,6 +42,7 @@
  )
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.session import split_at_sentence_boundaries
@@ -93,7 +94,7 @@
  from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
-@@ -51,221 +53,161 @@
+@@ -52,221 +54,161 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -446,7 +447,7 @@
          synth_start = time.monotonic()
          async for event in tts.synthesize(TTSInput(text=sentence)):
              if event.type == TTSEventType.AUDIO and event.audio is not None:
-@@ -273,51 +215,75 @@
+@@ -274,51 +216,75 @@
          journal.append(
              kind=JournalRecordKind.EVENT,
              name="stage.tts.execute",
@@ -532,7 +533,7 @@
      client = AsyncOpenAI()
      tts = create_tts_provider(
          TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-@@ -333,7 +299,7 @@
+@@ -334,7 +300,7 @@
          )
  
      await transport.connect()
@@ -541,7 +542,7 @@
  
      async def collect_turns():
          stt = None
-@@ -347,7 +313,7 @@
+@@ -348,7 +314,7 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  await stt.end_stream()
@@ -550,7 +551,7 @@
                  stt = None
  
      try:
-@@ -358,7 +324,7 @@
+@@ -359,7 +325,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)

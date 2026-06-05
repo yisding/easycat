@@ -132,6 +132,18 @@ def test_teaching_chapter_prerequisites_cover_script_setup() -> None:
     assert not stale, "Teaching chapter prerequisites drifted from scripts: " + "; ".join(stale)
 
 
+def test_teaching_script_key_docstrings_run_doctor() -> None:
+    stale: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        for script in sorted(chapter_dir.glob("*.py")):
+            doc, _ = _python_docstring_and_key_literals(script)
+            if _API_KEY_RE.search(doc) and "uv run easycat doctor" not in doc:
+                stale.append(script.relative_to(REPO_ROOT).as_posix())
+
+    assert not stale, "Teaching script key setup missing doctor preflight: " + ", ".join(stale)
+
+
 def test_chapter_13_provider_mix_documents_required_extras() -> None:
     readme = (TEACHING_DIR / "13-swap-providers-and-transports" / "README.md").read_text(
         encoding="utf-8"
