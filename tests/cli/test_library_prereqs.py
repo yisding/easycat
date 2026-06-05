@@ -3,7 +3,7 @@
 The CLI's scaffolded templates assume that:
 
 * ``easycat.run(config)`` exists, calls ``create_session``,
-  ``session.start``, ``session.shutdown``, and wires signal handlers.
+  enters the session async context, and wires signal handlers.
 * ``EasyConfig(stt="<provider>/<model>", tts="...")`` resolves
   strings to typed configs using env-var API keys and raises
   ``EASYCAT_E104``/``EASYCAT_E203`` on unknowns / missing keys.
@@ -45,7 +45,7 @@ class _StubSession:
 
     ``run()`` drives teardown through the ``async with session:`` idiom,
     so the stub maps ``__aenter__``/``__aexit__`` onto ``start``/
-    ``shutdown`` the same way the real :class:`Session` does.
+    ``stop(force=True)`` the same way the real :class:`Session` does.
     """
 
     def __init__(self) -> None:
@@ -54,22 +54,22 @@ class _StubSession:
     async def start(self) -> None:
         self.events.append("start")
 
-    async def shutdown(self) -> None:
-        self.events.append("shutdown")
+    async def stop(self, *, force: bool = False) -> None:
+        self.events.append(f"stop(force={force})")
 
     async def __aenter__(self) -> _StubSession:
         await self.start()
         return self
 
     async def __aexit__(self, *exc) -> None:  # noqa: ANN002
-        await self.shutdown()
+        await self.stop(force=True)
 
     def subscribe_event(self, *a, **kw) -> None:  # noqa: ANN002,ANN003
         self.events.append("subscribe")
 
 
-def test_run_calls_start_and_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Happy-path lifecycle: create → start → wait → shutdown."""
+def test_run_uses_session_async_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Happy-path lifecycle: create → async-enter/start → wait → force-stop."""
     session = _StubSession()
 
     # Replace create_session with a stub.
@@ -99,9 +99,9 @@ def test_run_calls_start_and_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
 
     easycat.run(EasyConfig(openai_api_key="stub"))
     assert "start" in session.events
-    assert "shutdown" in session.events
-    # Shutdown must come after start.
-    assert session.events.index("start") < session.events.index("shutdown")
+    assert "stop(force=True)" in session.events
+    # Stop must come after start.
+    assert session.events.index("start") < session.events.index("stop(force=True)")
 
 
 def test_run_does_not_attach_feedback_under_pytest(

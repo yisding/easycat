@@ -319,18 +319,18 @@ called out; `--json` output diverging from the standard envelope.
 ## Plan 13 — Library prereqs — `run()` lifecycle
 
 **Concern.** `easycat.run(config)` is the entry point every template
-uses. If lifecycle is broken (start/stop/shutdown ordering), voice
+uses. If lifecycle is broken (async-enter/start/stop ordering), voice
 agents will hang on Ctrl-C.
 
-**Risks.** `run()` forgetting `session.shutdown()` on exception;
+**Risks.** `run()` bypassing the `async with session` teardown path;
 signal handlers not wired; TTY-vs-non-TTY feedback attachment
 misbehaving; the feedback subscription firing in a pytest session
 and polluting stdout.
 
 **Checks.**
-- `run()` calls `create_session`, `session.start`, waits for
-  shutdown, and calls `session.shutdown` — under a mock that swaps
-  the real Session.
+- `run()` calls `create_session`, enters the session async context,
+  waits for shutdown, and exits through `stop(force=True)` — under a
+  mock that swaps the real Session.
 - `PYTEST_CURRENT_TEST` env var suppresses the TTY feedback hook.
 - `run()` is exposed at `easycat.run` (public attribute).
 - Signal handlers are added for SIGINT and SIGTERM.
