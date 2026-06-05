@@ -4,7 +4,7 @@ Two tools (``get_weather`` and ``get_time``) with typed arguments and
 docstrings the model reads as descriptions. For tools that drive the
 call (end, transfer, DTMF) see ``session_actions_openai.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --group dev
        uv run easycat doctor
 Run:   uv run python examples/function_tools_openai.py
 """
@@ -17,7 +17,7 @@ try:
 except ImportError as exc:
     raise SystemExit(
         "openai-agents is required. For an app, run: "
-        "uv add 'easycat[quickstart]'. In this repo, run: uv sync --extra quickstart"
+        "uv add 'easycat[quickstart]'. In this repo, run: uv sync --extra quickstart --group dev"
     ) from exc
 
 from easycat import EasyConfig, run

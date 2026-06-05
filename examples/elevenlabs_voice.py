@@ -1,7 +1,7 @@
 """Local voice bot using ElevenLabs for both STT (Scribe) and TTS (Flash).
 
 Setup: export OPENAI_API_KEY=...; export ELEVENLABS_API_KEY=...
-       uv sync --extra quickstart --extra elevenlabs
+       uv sync --extra quickstart --extra elevenlabs --group dev
        uv run easycat doctor
 Run:   uv run python examples/elevenlabs_voice.py
 """
@@ -12,7 +12,7 @@ except ImportError as exc:
     raise SystemExit(
         "openai-agents is required. For an app, run: "
         "uv add 'easycat[quickstart,elevenlabs]'. In this repo, run: "
-        "uv sync --extra quickstart --extra elevenlabs"
+        "uv sync --extra quickstart --extra elevenlabs --group dev"
     ) from exc
 
 from easycat import EasyConfig, require_env, run

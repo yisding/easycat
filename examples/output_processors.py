@@ -7,7 +7,7 @@
 
 Once running, ask: "What's Siobhan's number?"
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --group dev
        uv run easycat doctor
 Run:   uv run python examples/output_processors.py
 """
@@ -17,7 +17,7 @@ try:
 except ImportError as exc:
     raise SystemExit(
         "openai-agents is required. For an app, run: "
-        "uv add 'easycat[quickstart]'. In this repo, run: uv sync --extra quickstart"
+        "uv add 'easycat[quickstart]'. In this repo, run: uv sync --extra quickstart --group dev"
     ) from exc
 
 from easycat import EasyConfig, PauseProcessor, PhoneticReplacementProcessor, run

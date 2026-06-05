@@ -19,7 +19,7 @@ Covered here:
     incoming STT transcript is an IVR prompt or a human greeting.
 
 Setup:
-  uv sync --extra quickstart
+  uv sync --extra quickstart --group dev
   uv run python examples/telephony_helpers.py
 
 This example does NOT need any API keys or network access.

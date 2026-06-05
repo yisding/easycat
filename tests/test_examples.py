@@ -507,6 +507,22 @@ def test_example_import_guards_match_documented_pip_packages() -> None:
     assert not stale, "Example import guards omit documented pip packages: " + "; ".join(stale)
 
 
+def test_example_repo_sync_commands_include_dev_group() -> None:
+    stale: list[str] = []
+
+    for example_name in sorted(_top_level_example_names()):
+        path = REPO_ROOT / "examples" / example_name
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        texts = [ast.get_docstring(module) or "", *_import_error_system_exit_messages(path)]
+        for line in "\n".join(texts).splitlines():
+            if "uv sync " not in line or " --extra " not in line:
+                continue
+            if "--group dev" not in line:
+                stale.append(f"{example_name}: {line.strip()}")
+
+    assert not stale, "Example repo sync commands missing --group dev: " + "; ".join(stale)
+
+
 def test_pydantic_ai_example_imports(monkeypatch: pytest.MonkeyPatch):
     _load_slim_example(monkeypatch, "examples.pydantic_ai_voice", framework="pydantic_ai")
 

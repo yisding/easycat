@@ -7,7 +7,7 @@ calls, and cursor transitions into the EasyCat journal.
 
 For stateful multi-node agent workflows see ``langgraph_voice.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain --group dev
        uv pip install langchain-openai
        uv run easycat doctor
 Run:   uv run python examples/langchain_voice.py
@@ -20,7 +20,7 @@ except ImportError as exc:
     raise SystemExit(
         "LangChain is required. For an app, run: "
         "uv add 'easycat[quickstart,langchain]' langchain-openai. In this repo, run: "
-        "uv sync --extra quickstart --extra langchain; uv pip install langchain-openai"
+        "uv sync --extra quickstart --extra langchain --group dev; uv pip install langchain-openai"
     ) from exc
 
 from easycat import EasyConfig, run

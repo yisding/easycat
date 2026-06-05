@@ -9,7 +9,7 @@ End-to-end debug-capture workflow:
 
 Setup:
   export OPENAI_API_KEY="..."
-  uv sync --extra quickstart
+  uv sync --extra quickstart --group dev
   uv run easycat doctor
   uv run python examples/debug_bundle.py
 """

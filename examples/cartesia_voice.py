@@ -1,7 +1,7 @@
 """Local voice bot using Cartesia for both STT (Ink-Whisper) and TTS (Sonic).
 
 Setup: export OPENAI_API_KEY=...; export CARTESIA_API_KEY=...
-       uv sync --extra quickstart --extra cartesia
+       uv sync --extra quickstart --extra cartesia --group dev
        uv run easycat doctor
 Run:   uv run python examples/cartesia_voice.py
 """
@@ -12,7 +12,7 @@ except ImportError as exc:
     raise SystemExit(
         "openai-agents is required. For an app, run: "
         "uv add 'easycat[quickstart,cartesia]'. In this repo, run: "
-        "uv sync --extra quickstart --extra cartesia"
+        "uv sync --extra quickstart --extra cartesia --group dev"
     ) from exc
 
 from easycat import EasyConfig, require_env, run

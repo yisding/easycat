@@ -6,7 +6,7 @@ Two tools (``get_weather`` and ``get_time``) wired through a
 :class:`LangChainBridge`. For tools that drive the call (end, transfer,
 DTMF) see ``session_actions_langchain.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain --group dev
        uv pip install "langchain<1" langchain-openai
        uv run easycat doctor
 Run:   uv run python examples/function_tools_langchain.py
@@ -30,7 +30,7 @@ except ImportError as exc:
     raise SystemExit(
         "LangChain (<1.0) is required. For an app, run: "
         "uv add 'easycat[quickstart,langchain]' 'langchain<1' langchain-openai. "
-        "In this repo, run: uv sync --extra quickstart --extra langchain; "
+        "In this repo, run: uv sync --extra quickstart --extra langchain --group dev; "
         'uv pip install "langchain<1" langchain-openai'
     ) from exc
 

@@ -4,7 +4,7 @@ By default ``TurnManager`` waits ``end_of_turn_silence_ms`` (1 s) of silence
 before ending the turn. Smart-turn classifies captured audio with a ~8 MB
 Whisper-Tiny ONNX model and ends early when confident.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart  # Smart Turn included
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --group dev  # Smart Turn included
        uv run easycat doctor
 Run:   uv run python examples/smart_turn_demo.py
 """
@@ -14,7 +14,7 @@ try:
 except ImportError as exc:
     raise SystemExit(
         "openai-agents is required. For an app, run: "
-        "uv add 'easycat[quickstart]'. In this repo, run: uv sync --extra quickstart"
+        "uv add 'easycat[quickstart]'. In this repo, run: uv sync --extra quickstart --group dev"
     ) from exc
 
 from easycat import EasyConfig, SmartTurnConfig, run

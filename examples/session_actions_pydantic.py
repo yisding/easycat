@@ -3,7 +3,7 @@
 PydanticAI tools access ``SessionActions`` through their deps object.
 For telephony actions (transfer, DTMF, SMS) see ``examples/twilio_app.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai --group dev
        uv run easycat doctor
 Run:   uv run python examples/session_actions_pydantic.py
 """
@@ -16,7 +16,7 @@ except ImportError as exc:
     raise SystemExit(
         "PydanticAI is required. For an app, run: "
         "uv add 'easycat[quickstart,pydantic-ai]'. In this repo, run: "
-        "uv sync --extra quickstart --extra pydantic-ai"
+        "uv sync --extra quickstart --extra pydantic-ai --group dev"
     ) from exc
 
 from easycat import EasyConfig, SessionActions, require_env, run

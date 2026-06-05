@@ -5,7 +5,7 @@ Each per-stage example (``deepgram_voice.py``, ``elevenlabs_voice.py``,
 mixes vendors to show that STT and TTS swap independently.
 
 Setup: export OPENAI_API_KEY=...; export DEEPGRAM_API_KEY=...; export ELEVENLABS_API_KEY=...
-       uv sync --extra quickstart --extra deepgram --extra elevenlabs
+       uv sync --extra quickstart --extra deepgram --extra elevenlabs --group dev
        uv run easycat doctor
 Run:   uv run python examples/combined_providers.py
 """
@@ -16,7 +16,7 @@ except ImportError as exc:
     raise SystemExit(
         "openai-agents is required. For an app, run: "
         "uv add 'easycat[quickstart,deepgram,elevenlabs]'. In this repo, run: "
-        "uv sync --extra quickstart --extra deepgram --extra elevenlabs"
+        "uv sync --extra quickstart --extra deepgram --extra elevenlabs --group dev"
     ) from exc
 
 from easycat import EasyConfig, require_env, run

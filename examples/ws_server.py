@@ -2,7 +2,7 @@
 
 Setup:
   export OPENAI_API_KEY="..."
-  uv sync --extra openai-agents
+  uv sync --extra openai-agents --group dev
   uv run easycat doctor
   uv run python examples/ws_server.py
 

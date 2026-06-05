@@ -6,7 +6,7 @@ mic re-triggers VAD/STT (the bot listens to itself). The shortcut
 ``EchoCancellationConfig``; ``EasyConfig.browser()`` sets it
 automatically since browser clients always loop transport audio back.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra aec
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra aec --group dev
        uv run easycat doctor
 Run:   uv run python examples/echo_cancellation.py
 """
@@ -17,7 +17,7 @@ except ImportError as exc:
     raise SystemExit(
         "openai-agents is required. For an app, run: "
         "uv add 'easycat[quickstart,aec]'. In this repo, run: "
-        "uv sync --extra quickstart --extra aec"
+        "uv sync --extra quickstart --extra aec --group dev"
     ) from exc
 
 from easycat import EasyConfig, run

@@ -6,7 +6,7 @@ agent's TTS response as a real-time Opus stream.
 
 Setup (local):
     export OPENAI_API_KEY="..."
-    uv sync --extra openai-agents --extra webrtc
+    uv sync --extra openai-agents --extra webrtc --group dev
     uv run easycat doctor
     uv run python examples/webrtc_server.py
 

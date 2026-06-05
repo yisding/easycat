@@ -9,7 +9,7 @@ than a deps/context parameter.
 For telephony-specific actions (transfer, DTMF, SMS) see
 ``examples/twilio_app.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langgraph
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langgraph --group dev
        uv pip install langchain-openai
        uv run easycat doctor
 Run:   uv run python examples/session_actions_langgraph.py
@@ -24,7 +24,7 @@ except ImportError as exc:
     raise SystemExit(
         "LangGraph is required. For an app, run: "
         "uv add 'easycat[quickstart,langgraph]' langchain-openai. In this repo, run: "
-        "uv sync --extra quickstart --extra langgraph; uv pip install langchain-openai"
+        "uv sync --extra quickstart --extra langgraph --group dev; uv pip install langchain-openai"
     ) from exc
 
 from easycat import EasyConfig, SessionActions, run

@@ -1,7 +1,7 @@
 """Local voice bot using Deepgram for both STT (Nova-2) and TTS (Aura).
 
 Setup: export OPENAI_API_KEY=...; export DEEPGRAM_API_KEY=...
-       uv sync --extra quickstart --extra deepgram
+       uv sync --extra quickstart --extra deepgram --group dev
        uv run easycat doctor
 Run:   uv run python examples/deepgram_voice.py
 """
@@ -12,7 +12,7 @@ except ImportError as exc:
     raise SystemExit(
         "openai-agents is required. For an app, run: "
         "uv add 'easycat[quickstart,deepgram]'. In this repo, run: "
-        "uv sync --extra quickstart --extra deepgram"
+        "uv sync --extra quickstart --extra deepgram --group dev"
     ) from exc
 
 from easycat import EasyConfig, require_env, run

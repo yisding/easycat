@@ -4,7 +4,7 @@ Two tools (``get_weather`` and ``get_time``) registered without a deps
 object. For tools that drive the call (end, transfer, DTMF) see
 ``session_actions_pydantic.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai --group dev
        uv run easycat doctor
 Run:   uv run python examples/function_tools_pydantic.py
 """
@@ -18,7 +18,7 @@ except ImportError as exc:
     raise SystemExit(
         "PydanticAI is required. For an app, run: "
         "uv add 'easycat[quickstart,pydantic-ai]'. In this repo, run: "
-        "uv sync --extra quickstart --extra pydantic-ai"
+        "uv sync --extra quickstart --extra pydantic-ai --group dev"
     ) from exc
 
 from easycat import EasyConfig, require_env, run

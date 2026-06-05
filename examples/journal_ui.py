@@ -6,7 +6,7 @@ URL in a browser to see the timeline, per-turn waterfall, records
 inspector, transcript, and per-turn audio playback update as the
 conversation happens.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra debugger
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra debugger --group dev
        uv run easycat doctor
 Run:   uv run python examples/journal_ui.py
        # then open http://localhost:8765
@@ -22,7 +22,7 @@ except ImportError as exc:
     raise SystemExit(
         "openai-agents is required. For an app, run: "
         "uv add 'easycat[quickstart,debugger]'. In this repo, run: "
-        "uv sync --extra quickstart --extra debugger"
+        "uv sync --extra quickstart --extra debugger --group dev"
     ) from exc
 
 from easycat import (
