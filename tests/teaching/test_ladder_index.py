@@ -175,6 +175,9 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     readme = (TEACHING_DIR / "15-operate-in-production" / "README.md").read_text(encoding="utf-8")
     cli_section = readme.split("## The `easycat` CLI", 1)[1].split("## ", 1)[0]
 
+    assert "uv run easycat --help" in cli_section
+    assert "drop the `uv run` prefix" in cli_section
+
     top_level_commands = {command.name for command in _app.app.registered_commands}
     top_level_commands.update(group.name for group in _app.app.registered_groups)
     top_level_commands.discard(None)
@@ -200,7 +203,8 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     missing_validate_commands = sorted(
         command.name
         for command in validate_app.registered_commands
-        if command.name is not None and f"easycat validate {command.name}" not in cli_section
+        if command.name is not None
+        and f"uv run easycat validate {command.name}" not in cli_section
     )
     assert not missing_validate_commands, "Chapter 15 CLI section missing validate commands: " + (
         ", ".join(missing_validate_commands)

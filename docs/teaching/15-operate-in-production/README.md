@@ -414,8 +414,12 @@ planted bundles is an instructive follow-up.
 
 ## The `easycat` CLI
 
+From this repo, run CLI commands through `uv run` so they use the
+checked-out EasyCat package and virtualenv. In an installed app
+environment, drop the `uv run` prefix.
+
 ```bash
-$ easycat --help
+$ uv run easycat --help
   init      scaffold a new project
   doctor    check environment + provider reachability
   explain   look up an EasyCat error code
@@ -424,32 +428,32 @@ $ easycat --help
   validate  run validation checks and inspect reports
 ```
 
-- **`easycat init`** — scaffolds a new project from a template
+- **`uv run easycat init`** — scaffolds a new project from a template
   (`src/easycat/cli/scaffold/`). The fastest path from empty dir
   to a running session.
-- **`easycat doctor`** — checks API keys, Python version, optional
+- **`uv run easycat doctor`** — checks API keys, Python version, optional
   extras, and provider reachability
   (`src/easycat/cli/diagnose/doctor.py`). Run it first when
   something's not working.
-- **`easycat explain <code>`** — looks up an error code in the
+- **`uv run easycat explain <code>`** — looks up an error code in the
   registry (`src/easycat/cli/diagnose/explain.py`). When
   `EasyCatError` raises with `code="EC-STT-001"`, this is where
   you find out what that means.
-- **`easycat bundles list`** / **`easycat bundles show <path>`** —
+- **`uv run easycat bundles list`** / **`uv run easycat bundles show <path>`** —
   list captured bundles and summarize one bundle from the shell.
-- **`easycat inspect <path>`** — friendly alias for
-  `easycat bundles show <path>`.
-- **`easycat validate quick`** — deterministic local validation
+- **`uv run easycat inspect <path>`** — friendly alias for
+  `uv run easycat bundles show <path>`.
+- **`uv run easycat validate quick`** — deterministic local validation
   for normal PR work.
-- **`easycat validate socket`** — localhost socket integration
+- **`uv run easycat validate socket`** — localhost socket integration
   validation.
-- **`easycat validate stress`** — local stress validation and
+- **`uv run easycat validate stress`** — local stress validation and
   saturation-signal capture.
-- **`easycat validate latency --smoke`** — low-cost live latency
+- **`uv run easycat validate latency --smoke`** — low-cost live latency
   probe; use `--sweep` for the broader condition matrix.
-- **`easycat validate live`** — live provider canaries and
+- **`uv run easycat validate live`** — live provider canaries and
   capability reports.
-- **`easycat validate report <path>`** — render a concise summary
+- **`uv run easycat validate report <path>`** — render a concise summary
   of a saved validation report.
 
 The debugger is intentionally *not* a CLI subcommand — it's imported
