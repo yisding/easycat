@@ -23,9 +23,9 @@ input — what does the journal show for each?
    `transport.failed` on each session, and any
    `audio.error` records during the fight.
 
-## 2. Run `easycat doctor` twice
+## 2. Run `uv run easycat doctor` twice
 
-**Task.** Run `easycat doctor` once with `OPENAI_API_KEY` unset,
+**Task.** Run `uv run easycat doctor` once with `OPENAI_API_KEY` unset,
 then again with it set. Which health checks change?
 
 **Hints**
@@ -46,10 +46,10 @@ then again with it set. Which health checks change?
    doesn't send the key. The doctor can tell you "key missing"
    but **cannot** tell you "key wrong"; you only learn that by
    making a real authenticated call (i.e. running an example).
-4. `easycat doctor` is the first command to run on a new machine
-   or in a CI container. It's faster than debugging by running
-   the actual app, but it's a *liveness* check, not an *auth*
-   check.
+4. `uv run easycat doctor` is the first command to run from a
+   repo checkout on a new machine or in a CI container. It's
+   faster than debugging by running the actual app, but it's a
+   *liveness* check, not an *auth* check.
 
 ## 3. Translate a ch-13 bundle into a ch-12 eval input
 

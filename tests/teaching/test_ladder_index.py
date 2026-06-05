@@ -211,6 +211,21 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     )
 
 
+def test_chapter_15_doctor_exercise_uses_repo_local_command() -> None:
+    chapter_dir = TEACHING_DIR / "15-operate-in-production"
+    files = {
+        "README.md": (chapter_dir / "README.md").read_text(encoding="utf-8"),
+        "EXERCISES.md": (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8"),
+    }
+    stale_mentions = [name for name, text in files.items() if "`easycat doctor`" in text]
+
+    assert not stale_mentions, "Chapter 15 doctor exercise should use uv run: " + ", ".join(
+        stale_mentions
+    )
+    for text in files.values():
+        assert "`uv run easycat doctor`" in text
+
+
 def test_teaching_docs_do_not_claim_teaching_tests_are_missing() -> None:
     stale_mentions: list[str] = []
 

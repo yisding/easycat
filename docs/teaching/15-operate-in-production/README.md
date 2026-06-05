@@ -498,8 +498,8 @@ the same `Session` you've run since chapter 5.
 1. Add a second session to the manager before the first one stops.
    Two local-transport sessions on the same mic will fight for
    input — what does the journal show for each?
-2. Run `easycat doctor` with `OPENAI_API_KEY` unset. Compare with
-   it set. Which health checks change?
+2. Run `uv run easycat doctor` with `OPENAI_API_KEY` unset.
+   Compare with it set. Which health checks change?
 3. Run `translate.py` against a ch 13 bundle; pipe the output into
    `evals.py` via a small adapter. Do the P50/P95 numbers look
    right?
