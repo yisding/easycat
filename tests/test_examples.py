@@ -4,6 +4,7 @@ import ast
 import importlib.util
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,7 @@ _SUPPORT_FILE_LINK_RE = re.compile(
     r"^- \[(?P<name>[^]]+\.(?:html|sh))\]\((?P<link>[^)]+\.(?:html|sh))\):"
 )
 _EASYCAT_EXTRA_RE = re.compile(r"easycat\[(?P<extras>[^\]]+)\]")
+_UV_PIP_INSTALL_RE = re.compile(r"uv pip install\s+(?P<args>[^\n`|]+)")
 _UV_SYNC_EXTRA_RE = re.compile(r"--extra\s+(?P<extra>[A-Za-z0-9_.-]+)")
 
 
@@ -120,6 +122,25 @@ def _documented_setup_extras(path: Path) -> set[str]:
     module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     doc = ast.get_docstring(module) or ""
     return set(_UV_SYNC_EXTRA_RE.findall(doc))
+
+
+def _pip_install_packages_in(text: str) -> set[str]:
+    packages: set[str] = set()
+
+    for match in _UV_PIP_INSTALL_RE.finditer(text):
+        args = match.group("args").split("#", 1)[0].strip()
+        for token in shlex.split(args):
+            if token.startswith("-"):
+                continue
+            packages.add(token)
+
+    return packages
+
+
+def _documented_pip_packages(path: Path) -> set[str]:
+    module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    doc = ast.get_docstring(module) or ""
+    return _pip_install_packages_in(doc)
 
 
 def _app_extras_in(message: str) -> set[str]:
@@ -308,6 +329,21 @@ def test_examples_readme_env_cells_cover_required_env_helpers() -> None:
     assert not stale, "examples/README.md env cells omit require_env vars: " + "; ".join(stale)
 
 
+def test_examples_readme_install_cells_cover_docstring_pip_packages() -> None:
+    stale: list[str] = []
+
+    for row in _example_readme_rows():
+        path = REPO_ROOT / "examples" / row["link"]
+        packages = _documented_pip_packages(path)
+        if not packages:
+            continue
+        missing = sorted(package for package in packages if package not in row["install"])
+        if missing:
+            stale.append(f"{row['link']}: missing {missing}")
+
+    assert not stale, "examples/README.md install cells omit pip packages: " + "; ".join(stale)
+
+
 def test_top_level_examples_document_setup_and_run_commands() -> None:
     missing: list[str] = []
 
@@ -390,6 +426,24 @@ def test_example_import_guards_match_documented_setup_extras() -> None:
                 )
 
     assert not stale, "Example import guards drifted from documented setup: " + "; ".join(stale)
+
+
+def test_example_import_guards_match_documented_pip_packages() -> None:
+    stale: list[str] = []
+
+    for example_name in sorted(_top_level_example_names()):
+        path = REPO_ROOT / "examples" / example_name
+        packages = _documented_pip_packages(path)
+        if not packages:
+            continue
+        for message in _import_error_system_exit_messages(path):
+            if "uv pip install" not in message:
+                continue
+            missing = sorted(package for package in packages if package not in message)
+            if missing:
+                stale.append(f"{example_name}: missing {missing}")
+
+    assert not stale, "Example import guards omit documented pip packages: " + "; ".join(stale)
 
 
 def test_pydantic_ai_example_imports(monkeypatch: pytest.MonkeyPatch):
