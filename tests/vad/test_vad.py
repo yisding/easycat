@@ -53,8 +53,12 @@ def test_silero_fails_when_only_torch_backend_is_allowed(monkeypatch: pytest.Mon
     """SileroVAD should reject the remote-code-executing torch backend."""
     monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("torch",))
 
-    with pytest.raises(RuntimeError, match="torch backend is disabled"):
+    with pytest.raises(RuntimeError) as exc_info:
         SileroVAD()
+    message = str(exc_info.value)
+    assert "torch backend is disabled" in message
+    assert "uv add 'easycat[silero-vad]'" in message
+    assert "uv sync --extra silero-vad" in message
 
 
 def test_silero_torch_backend_does_not_call_torch_hub(monkeypatch: pytest.MonkeyPatch):
@@ -68,8 +72,12 @@ def test_silero_torch_backend_does_not_call_torch_hub(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(vad_silero_module, "require_module", _require_module)
 
-    with pytest.raises(RuntimeError, match="torch backend is disabled"):
+    with pytest.raises(RuntimeError) as exc_info:
         SileroVAD._load_torch_model(MagicMock())
+    message = str(exc_info.value)
+    assert "torch backend is disabled" in message
+    assert "uv add 'easycat[silero-vad]'" in message
+    assert "uv sync --extra silero-vad" in message
 
     mock_torch.hub.load.assert_not_called()
 

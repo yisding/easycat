@@ -10,9 +10,8 @@ resampled to the pipeline's target rate (default 16 kHz PCM16 mono).
 Outbound audio (pipeline → remote peer) is resampled from whatever the TTS
 provider emits to 48 kHz and sent via an Opus-encoded audio track.
 
-Requires the ``webrtc`` extra::
-
-    uv add easycat[webrtc]
+Requires the ``webrtc`` extra: ``uv add 'easycat[webrtc]'``. From the
+EasyCat repo, use ``uv sync --extra webrtc``.
 """
 
 from __future__ import annotations
