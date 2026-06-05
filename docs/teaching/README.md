@@ -68,6 +68,10 @@ runnable artifact you can visit independently.
   - `OPENAI_API_KEY` — default STT / TTS / agent provider.
   - `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY` — used starting
     chapter 13 to demonstrate provider swap.
+- After setting the keys for a chapter, run `uv run easycat doctor`
+  from the repo root. It catches missing keys, local audio problems,
+  journal path issues, and provider reachability before you debug
+  chapter code.
 
 Each chapter's README lists its own prerequisites up front.
 

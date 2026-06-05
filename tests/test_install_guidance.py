@@ -118,3 +118,14 @@ def test_optional_extra_guidance_references_known_extras() -> None:
     assert not unknown, "Unknown EasyCat optional extras in install guidance:\n" + "\n".join(
         unknown
     )
+
+
+def test_teaching_ladder_prerequisites_run_doctor_after_setup() -> None:
+    """The teaching overview should send readers through the first-run preflight."""
+    readme = (REPO_ROOT / "docs" / "teaching" / "README.md").read_text(encoding="utf-8")
+
+    sync_index = readme.index("uv sync --extra quickstart --group dev")
+    key_index = readme.index("OPENAI_API_KEY")
+    doctor_index = readme.index("uv run easycat doctor")
+
+    assert sync_index < key_index < doctor_index
