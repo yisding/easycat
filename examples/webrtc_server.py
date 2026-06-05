@@ -20,6 +20,9 @@ Environment variables:
     TURN_SERVER_URL       — Optional.  TURN server URL (e.g. turn:1.2.3.4:3478).
     TURN_USERNAME         — Optional.  TURN server username.
     TURN_CREDENTIAL       — Optional.  TURN server credential.
+    WEBRTC_EXPOSE_ICE_CREDENTIALS — Optional. Set to 1 to return TURN
+                                    credentials from /config. Use only with
+                                    trusted demos or short-lived credentials.
     SIGNALING_HOST        — Optional.  Bind address (default 0.0.0.0).
     SIGNALING_PORT        — Optional.  Listen port (default 8080).
 
@@ -66,6 +69,10 @@ def _build_ice_servers() -> list[ICEServer]:
     return servers
 
 
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
@@ -77,6 +84,7 @@ async def main() -> None:
 
     signaling_host = os.getenv("SIGNALING_HOST", "0.0.0.0")
     signaling_port = int(os.getenv("SIGNALING_PORT", "8080"))
+    expose_ice_credentials = _env_flag("WEBRTC_EXPOSE_ICE_CREDENTIALS")
 
     ice_servers = _build_ice_servers()
 
@@ -86,6 +94,7 @@ async def main() -> None:
             host=signaling_host,
             port=signaling_port,
             ice_servers=ice_servers,
+            expose_ice_credentials=expose_ice_credentials,
         ),
         agent=agent,
     )
@@ -95,6 +104,10 @@ async def main() -> None:
     print(f"Open http://localhost:{signaling_port} in your browser")
     if any(any("turn:" in u for u in s.urls) for s in ice_servers):
         print("TURN server:  configured")
+        if expose_ice_credentials:
+            print("TURN auth:    exposed via /config")
+        else:
+            print("TURN auth:    hidden from /config")
     else:
         print("TURN server:  not configured (STUN only — NAT traversal may fail)")
 

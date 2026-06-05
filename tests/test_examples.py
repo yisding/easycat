@@ -247,6 +247,14 @@ def test_ec2_webrtc_deploy_docs_do_not_claim_to_configure_https() -> None:
     assert "Client URL:      http://$EXTERNAL_IP:8080/webrtc_client.html" not in deploy
 
 
+def test_ec2_webrtc_deploy_keeps_browser_turn_credentials_opt_in() -> None:
+    deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert "WEBRTC_EXPOSE_ICE_CREDENTIALS=0" in deploy
+    assert "Browser TURN auth remains hidden from /config by default." in deploy
+    assert "trusted demos or short-lived TURN creds" in deploy
+
+
 def test_ec2_webrtc_turns_port_is_optional_until_certs_are_configured() -> None:
     deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
     coturn = (REPO_ROOT / "examples" / "ec2_webrtc" / "coturn.conf").read_text(encoding="utf-8")

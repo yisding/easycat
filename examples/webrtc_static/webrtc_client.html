@@ -235,8 +235,7 @@ async function start() {
 
     var baseUrl = signalingUrl.value.replace(/\/$/, "");
 
-    // 2. Fetch public ICE server URLs from the signaling server.
-    //    TURN credentials are intentionally not exposed by /config.
+    // 2. Fetch ICE server configuration from the signaling server.
     var iceConfig = await fetchIceConfig(baseUrl);
     pc = new RTCPeerConnection(iceConfig);
 

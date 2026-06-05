@@ -63,6 +63,10 @@ def _build_ice_servers() -> list[ICEServer]:
     return servers
 
 
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @function_tool
 def add_numbers(a: float, b: float) -> float:
     """Return a + b."""
@@ -91,6 +95,7 @@ async def main() -> None:
                 port=signaling_port,
                 ice_servers=_build_ice_servers(),
                 static_dir=_STATIC_DIR,
+                expose_ice_credentials=_env_flag("WEBRTC_EXPOSE_ICE_CREDENTIALS"),
             ),
             agent=Agent(
                 name="assistant",

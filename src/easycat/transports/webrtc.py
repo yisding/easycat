@@ -96,6 +96,11 @@ class WebRTCTransportConfig:
 
         Defaults to a bundled demo client shipped with the package.  Set to
         ``None`` to disable static file serving entirely.
+    expose_ice_credentials:
+        Include ICE ``username`` and ``credential`` fields in the public
+        ``/config`` response.  Leave this disabled for long-lived TURN
+        credentials; enable it only for trusted/internal demos, authenticated
+        config endpoints, or short-lived TURN credentials.
     """
 
     _BUNDLED_STATIC_DIR: ClassVar[str] = str(Path(__file__).parent / "static")
@@ -109,6 +114,7 @@ class WebRTCTransportConfig:
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
     static_dir: str | None = _USE_BUNDLED
+    expose_ice_credentials: bool = False
 
 
 # ── Outbound audio track ─────────────────────────────────────────
@@ -316,9 +322,11 @@ class WebRTCTransport(_AudioQueueMixin):
     ``{"sdp": "...", "type": "answer"}``.  ICE candidates are gathered
     in-band (full ICE) before the answer is returned.
 
-    **GET /config** — Returns public ICE server URLs as JSON so browser
-    clients can configure their ``RTCPeerConnection``. Credentials are
-    intentionally omitted because this endpoint is public.
+    **GET /config** — Returns browser ICE server configuration as JSON so
+    clients can configure their ``RTCPeerConnection``. Credentials are omitted
+    by default because this endpoint is public; set
+    ``WebRTCTransportConfig.expose_ice_credentials`` only when that is
+    appropriate for the deployment.
 
     **GET /health** — Returns ``{"status": "ok"}``.
     """
@@ -367,9 +375,9 @@ class WebRTCTransport(_AudioQueueMixin):
         """Serialize configured ICE servers to plain dicts.
 
         The ``/offer`` handler needs the complete configuration to build
-        server-side ``RTCIceServer`` objects.  The public ``/config`` endpoint
-        must not expose TURN credentials, so callers can request URL-only
-        entries for browser-facing responses.
+        server-side ``RTCIceServer`` objects.  The ``/config`` endpoint is
+        public by default, so callers can request URL-only entries for
+        browser-facing responses unless a deployment explicitly opts in.
         """
         result: list[dict[str, Any]] = []
         for srv in self._config.ice_servers:
@@ -731,18 +739,24 @@ class WebRTCTransport(_AudioQueueMixin):
         )
 
     async def _handle_config(self, request: Any) -> Any:
-        """Return public ICE server URLs for browser clients.
+        """Return ICE server configuration for browser clients.
 
         This endpoint is intentionally unauthenticated so the bundled demo
-        client can bootstrap easily.  Do not include TURN usernames or
-        credentials here; deployments often configure long-lived TURN secrets,
-        and returning them from a public CORS-enabled endpoint would allow
-        arbitrary clients to reuse the relay.
+        client can bootstrap easily.  TURN usernames and credentials stay
+        hidden unless ``expose_ice_credentials`` is enabled; deployments often
+        configure long-lived TURN secrets, and returning them from a public
+        CORS-enabled endpoint would allow arbitrary clients to reuse the relay.
         """
         web = self._web
         return web.Response(
             content_type="application/json",
-            text=json.dumps({"iceServers": self._ice_servers_as_dicts(include_credentials=False)}),
+            text=json.dumps(
+                {
+                    "iceServers": self._ice_servers_as_dicts(
+                        include_credentials=self._config.expose_ice_credentials
+                    )
+                }
+            ),
             headers=_CORS_HEADERS,
         )
 

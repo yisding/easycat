@@ -640,7 +640,7 @@ class TestWebRTCTransportLifecycle:
         await transport.disconnect()
 
     @pytest.mark.asyncio
-    async def test_config_endpoint_omits_turn_credentials(self):
+    async def test_config_endpoint_omits_turn_credentials_by_default(self):
         import aiohttp
 
         port = find_free_port()
@@ -662,11 +662,47 @@ class TestWebRTCTransportLifecycle:
                 data = await resp.json()
                 assert "iceServers" in data
                 assert len(data["iceServers"]) == 2
-                # Public config should include URLs but must not leak TURN credentials.
+                # Public config should include URLs but should not leak TURN credentials by
+                # default.
                 turn = data["iceServers"][1]
                 assert turn["urls"] == ["turn:turn.example.com:3478"]
                 assert "username" not in turn
                 assert "credential" not in turn
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_config_endpoint_can_expose_turn_credentials(self):
+        import aiohttp
+
+        port = find_free_port()
+        servers = [
+            ICEServer(
+                urls=["turn:turn.example.com:3478"],
+                username="user",
+                credential="pass",
+            ),
+        ]
+        config = WebRTCTransportConfig(
+            host="127.0.0.1",
+            port=port,
+            ice_servers=servers,
+            expose_ice_credentials=True,
+        )
+        transport = WebRTCTransport(config)
+        await transport.connect()
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/config") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["iceServers"] == [
+                    {
+                        "urls": ["turn:turn.example.com:3478"],
+                        "username": "user",
+                        "credential": "pass",
+                    }
+                ]
 
         await transport.disconnect()
 

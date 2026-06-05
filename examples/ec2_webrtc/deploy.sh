@@ -148,6 +148,7 @@ SIGNALING_PORT=8080
 TURN_SERVER_URL=turn:$EXTERNAL_IP:3478
 TURN_USERNAME=easycat
 TURN_CREDENTIAL=$TURN_PASSWORD
+WEBRTC_EXPOSE_ICE_CREDENTIALS=0
 EOF
 
 sudo chmod 600 "$INSTALL_DIR/.env"
@@ -171,6 +172,8 @@ echo "  Signaling URL:    https://<your-domain>/offer               (after TLS p
 echo "  TURN server:     turn:$EXTERNAL_IP:3478"
 echo "  TURN user:       easycat"
 echo "  TURN password:   $TURN_PASSWORD"
+echo "  Browser TURN auth remains hidden from /config by default."
+echo "  Set WEBRTC_EXPOSE_ICE_CREDENTIALS=1 only for trusted demos or short-lived TURN creds."
 echo ""
 echo "  Check status:    sudo systemctl status easycat-webrtc"
 echo "  View logs:       sudo journalctl -u easycat-webrtc -f"
