@@ -20,7 +20,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
 
-ARG EXTRAS="--extra openai-agents --extra silero-vad --extra rnnoise"
+ARG EXTRAS="--extra openai --extra openai-agents --extra silero-vad --extra rnnoise"
 
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src

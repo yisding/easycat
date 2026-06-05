@@ -829,6 +829,15 @@ def test_docker_guide_tracks_default_dockerfile_extras() -> None:
         assert f"`{extra}`" in image_section
 
 
+def test_dockerfile_default_extras_cover_ws_server_golden_path() -> None:
+    extras = _dockerfile_default_extras()
+    ws_server = REPO_ROOT / "examples" / "ws_server.py"
+
+    assert _uses_default_openai_providers(ws_server)
+    assert "openai" in extras
+    assert "openai-agents" in extras
+
+
 def test_ws_supervisor_server_example_imports():
     import examples.ws_supervisor_server as ws_supervisor_server
 
