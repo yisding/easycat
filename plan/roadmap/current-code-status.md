@@ -80,12 +80,13 @@ with the codebase. Counts below come from tracked files and exclude
   tests guard against cache/workspace artifacts leaking into release wheels.
   CI now runs `uv build`, and release validation exercises an installed
   package through the public CLI.
-- Connection-policy hardening and deeper provider capability reports remain
-  cleanup backlog items. TTS now has a typed `TTSInputPolicy` surface with
-  legacy `supports_ssml` compatibility, and provider capability reports
-  serialize it. EventBus subscription tokens, handler failure/slow-callback
-  accounting, and configurable handler-error policy now exist for the current
-  inline dispatch model.
+- Connection-policy hardening and deeper live/cassette provider validation
+  remain cleanup backlog items. TTS now has a typed `TTSInputPolicy` surface
+  with legacy `supports_ssml` compatibility, and provider capability reports
+  serialize it while distinguishing SSML input support from native
+  marker/alignment event support. EventBus subscription tokens, handler
+  failure/slow-callback accounting, and configurable handler-error policy now
+  exist for the current inline dispatch model.
 - Full redaction policy and OTel/cost exports remain planned rather than
   implemented.
 - Telephony-native TTS output is not fully implemented. Provider

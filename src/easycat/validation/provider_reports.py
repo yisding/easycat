@@ -21,6 +21,9 @@ LiveStatus = Literal[
     "failed",
 ]
 
+_TTS_DEFAULT_OUTPUT_AUDIO_FORMATS = ("pcm16/24000/mono",)
+_TTS_NATIVE_MARKER_PROVIDERS = frozenset({"cartesia", "elevenlabs"})
+
 
 @dataclass(frozen=True)
 class ProviderSurfaceSpec:
@@ -290,20 +293,17 @@ def _surface_capabilities(spec: ProviderSurfaceSpec) -> ProviderCapabilities:
             ssml=False,
         )
     if spec.surface == "tts":
-        input_policy = (
-            TTSInputPolicy.native_ssml()
-            if spec.provider == "elevenlabs"
-            else TTSInputPolicy.plain_text()
-        )
+        input_policy = TTSInputPolicy.plain_text()
+        native_markers = spec.provider in _TTS_NATIVE_MARKER_PROVIDERS
         return ProviderCapabilities(
             input_audio_formats=("text",),
-            output_audio_formats=("pcm16",),
+            output_audio_formats=_TTS_DEFAULT_OUTPUT_AUDIO_FORMATS,
             streaming=streaming,
             streaming_behavior="streamed_audio_chunks",
             finalization_behavior="audio_stream_exhaustion",
-            markers=False,
-            alignment=spec.provider in {"elevenlabs", "cartesia"},
-            ssml=spec.provider == "elevenlabs",
+            markers=native_markers,
+            alignment=native_markers,
+            ssml=input_policy.supports_ssml,
             tts_input_policy=input_policy,
         )
     return ProviderCapabilities(

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime
 
 import pytest
 
+from easycat.tts.factory import _PROVIDER_TO_CONFIG as _TTS_REGISTRY
+from easycat.tts.input import resolve_tts_input_policy
 from easycat.validation.provider_reports import (
     LIVE_PROVIDER_SURFACES,
     Surface,
@@ -23,6 +26,8 @@ _VALID_STATUSES = {
     "provider_drift",
     "failure",
 }
+_TTS_NATIVE_MARKER_PROVIDERS = {"cartesia", "elevenlabs"}
+_TTS_DEFAULT_OUTPUT_AUDIO_FORMATS = ["pcm16/24000/mono"]
 
 
 def _spec(surface: str):
@@ -30,6 +35,20 @@ def _spec(surface: str):
         if spec.surface == surface:
             return spec
     raise AssertionError(f"no live spec for surface {surface}")
+
+
+def _specs(surface: str):
+    return tuple(spec for spec in LIVE_PROVIDER_SURFACES if spec.surface == surface)
+
+
+def _report_payload(spec):
+    report = build_provider_capability_report(
+        spec,
+        live_checked_at=datetime.now(UTC),
+        credential_present=True,
+        live_status="passed",
+    )
+    return report.to_dict()
 
 
 def test_declared_surfaces_match_live_specs() -> None:
@@ -81,20 +100,50 @@ def test_tts_report_populates_voices() -> None:
 
 def test_tts_report_populates_input_policy() -> None:
     spec = _spec("tts")
-    report = build_provider_capability_report(
-        spec,
-        live_checked_at=datetime.now(UTC),
-        credential_present=True,
-        live_status="passed",
-    )
-
-    payload = report.to_dict()
+    payload = _report_payload(spec)
 
     assert payload["capabilities"]["tts_input_policy"]["accepted_formats"]
     assert (
         payload["capabilities"]["tts_input_policy"]["supports_ssml"]
         == payload["capabilities"]["ssml"]
     )
+
+
+@pytest.mark.parametrize("spec", _specs("tts"), ids=lambda spec: spec.provider)
+@pytest.mark.asyncio
+async def test_tts_report_ssml_matches_builtin_provider_input_policy(spec) -> None:
+    provider_cls, config_cls = _TTS_REGISTRY[spec.provider]
+    provider = provider_cls(config_cls(api_key="test-key"))
+
+    try:
+        expected = resolve_tts_input_policy(provider).supports_ssml
+    finally:
+        close = getattr(provider, "close", None)
+        if close is not None:
+            maybe_awaitable = close()
+            if inspect.isawaitable(maybe_awaitable):
+                await maybe_awaitable
+
+    payload = _report_payload(spec)
+
+    assert payload["capabilities"]["ssml"] is expected
+    assert payload["capabilities"]["tts_input_policy"]["supports_ssml"] is expected
+
+
+@pytest.mark.parametrize("spec", _specs("tts"), ids=lambda spec: spec.provider)
+def test_tts_report_marker_capabilities_match_native_marker_emitters(spec) -> None:
+    expected = spec.provider in _TTS_NATIVE_MARKER_PROVIDERS
+    payload = _report_payload(spec)
+
+    assert payload["capabilities"]["markers"] is expected
+    assert payload["capabilities"]["alignment"] is expected
+
+
+@pytest.mark.parametrize("spec", _specs("tts"), ids=lambda spec: spec.provider)
+def test_tts_report_defaults_to_normalized_pcm16_output(spec) -> None:
+    payload = _report_payload(spec)
+
+    assert payload["capabilities"]["output_audio_formats"] == _TTS_DEFAULT_OUTPUT_AUDIO_FORMATS
 
 
 def test_non_tts_report_has_no_voices() -> None:
