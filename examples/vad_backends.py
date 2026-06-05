@@ -11,10 +11,13 @@ built and then runs a normal local mic/speaker loop with the chosen VAD.
 
 Setup:
   export OPENAI_API_KEY="..."
-  uv sync --extra quickstart                        # silero + funasr + krisp
+  uv sync --extra quickstart                        # Silero via bundled ONNX model
+  uv sync --extra funasr-vad                        # FunASR on Python 3.11-3.12
   uv sync --extra quickstart --extra ten-vad        # adds TEN VAD (separate license)
   uv sync --extra silero-vad                         # Silero runs the bundled ONNX model
+  uv pip install krisp_audio                         # Krisp SDK, if you use --backend krisp
   uv run python examples/vad_backends.py --backend silero
+  uv run python examples/vad_backends.py --backend funasr
   uv run python examples/vad_backends.py --backend ten
 """
 
