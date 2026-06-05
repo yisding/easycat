@@ -181,6 +181,10 @@ Responses API URLs, and your own async workflow objects with
 `on_user_turn(...)` via `auto_adapt_agent`, so you don't have to wrap them
 yourself.
 
+The top-level import surface is intentionally curated and lazy. See the
+[public API contract](docs/public-api.md) before adding or depending on new
+`from easycat import ...` names.
+
 ### Quickstart (EasyConfig)
 A voice bot in three lines — `run(EasyConfig.mic(agent=...))` is the one
 canonical shape, identical in this README, `examples/openai_agents_voice.py`,

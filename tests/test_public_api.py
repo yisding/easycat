@@ -101,6 +101,17 @@ def test_public_api_snapshot() -> None:
     assert len(easycat.__all__) <= 85
 
 
+def test_public_api_contract_doc_tracks_top_level_exports() -> None:
+    doc = Path("docs/public-api.md").read_text(encoding="utf-8")
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    missing = sorted(name for name in easycat.__all__ if f"`{name}`" not in doc)
+
+    assert not missing, "docs/public-api.md missing exports: " + ", ".join(missing)
+    assert "[public API contract](docs/public-api.md)" in readme
+    assert "PUBLIC_API_SNAPSHOT" in doc
+
+
 def test_curated_public_api_lazy_imports() -> None:
     from easycat import (
         EasyConfig,

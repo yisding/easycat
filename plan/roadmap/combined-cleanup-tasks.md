@@ -26,6 +26,8 @@ Some important April findings have since changed:
   TTS scheduling, cancellation, turn running, and journal sinking.
 - `src/easycat/__init__.py` is now 280 lines, not 578.
 - The top-level lazy export list is now 85 symbols, not 195.
+- `tests/test_public_api.py` pins the exact top-level allowlist, and
+  `docs/public-api.md` documents the public API contract.
 - Cartesia, TEN VAD license wording, and quickstart/TEN wording are reflected
   in the README.
 - Shared provider helpers and a shared WebSocket STT base exist.
@@ -192,7 +194,8 @@ context. Several bullets are known stale; use the current-state list above and
   - `RunBundle` or an `inspect` entry point if debug bundles are public.
 - Move rare telephony events, action internals, stage internals, provider
   config dataclasses, debug internals, and test helpers to submodules.
-- Add a golden `__all__` snapshot test and a short public API contract doc.
+- Done: add a golden `__all__` snapshot test and a short public API contract
+  doc.
 
 ### 1.3 Keep `run()`, But Make Feedback Explicit
 

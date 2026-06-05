@@ -72,7 +72,9 @@ with the codebase. Counts below come from tracked files and exclude
 - `Session` is reduced from the older cleanup note but still large at roughly
   1,390 lines.
 - `src/easycat/__init__.py` is smaller than the older cleanup note but still a
-  broad public surface at 280 lines and 85 lazy top-level exports.
+  broad public surface at 280 lines and 85 lazy top-level exports. The surface
+  is now pinned by a golden snapshot and documented in
+  `docs/public-api.md`.
 - A root `LICENSE` remains active release-bar work. Project metadata now
   includes author, keywords, classifiers, and project URLs, and wheel packaging
   tests guard against cache/workspace artifacts leaking into release wheels.
