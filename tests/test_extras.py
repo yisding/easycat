@@ -10,6 +10,11 @@ import pytest
 from easycat._extras import require_module
 
 
+def _assert_extra_hint(message: str, extra: str) -> None:
+    assert f"uv add 'easycat[{extra}]'" in message
+    assert f"uv sync --extra {extra}" in message
+
+
 def test_require_module_returns_installed_module() -> None:
     assert require_module("json").__name__ == "json"
 
@@ -23,7 +28,7 @@ def test_require_module_missing_top_level_raises_with_hint() -> None:
         )
     msg = str(exc_info.value)
     assert "WebRTC transport requires" in msg
-    assert "uv add easycat[webrtc]" in msg
+    _assert_extra_hint(msg, "webrtc")
 
 
 def test_require_module_transitive_import_error_wrapped_with_hint(monkeypatch) -> None:
@@ -54,7 +59,7 @@ def test_require_module_transitive_import_error_wrapped_with_hint(monkeypatch) -
     msg = str(exc_info.value)
     assert "WebRTC transport could not import" in msg
     assert "dependency failed to load" in msg
-    assert "uv add easycat[webrtc]" in msg
+    _assert_extra_hint(msg, "webrtc")
     assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
 
 
@@ -78,7 +83,7 @@ def test_require_module_os_error_wrapped(monkeypatch) -> None:
         require_module(mod_name, extra="webrtc")
     msg = str(exc_info.value)
     assert "could not load" in msg
-    assert "uv add easycat[webrtc]" in msg
+    _assert_extra_hint(msg, "webrtc")
 
     # Avoid leaking the fake module into sys.modules for other tests.
     sys.modules.pop(mod_name, None)

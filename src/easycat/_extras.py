@@ -8,6 +8,15 @@ import sys
 from types import ModuleType
 
 
+def _extra_install_hint(extra: str | None) -> str:
+    if extra is None:
+        return ""
+    return (
+        f" Install with: uv add 'easycat[{extra}]'. "
+        f"From the EasyCat repo, use: uv sync --extra {extra}."
+    )
+
+
 def require_module(
     module_name: str,
     *,
@@ -16,7 +25,7 @@ def require_module(
 ) -> ModuleType:
     """Import and return a module or raise a clear missing-extra error."""
     if module_name not in sys.modules and importlib.util.find_spec(module_name) is None:
-        hint = f" Install with: uv add easycat[{extra}]." if extra else ""
+        hint = _extra_install_hint(extra)
         label = purpose or module_name
         raise ImportError(f"{label} requires the {module_name} package.{hint}")
     try:
@@ -25,12 +34,12 @@ def require_module(
         # The package itself is present (find_spec succeeded above) but importing it
         # failed because one of its own dependencies is missing or broken. This is
         # common for optional extras that pull native/transitive deps.
-        hint = f" Install with: uv add easycat[{extra}]." if extra else ""
+        hint = _extra_install_hint(extra)
         label = purpose or module_name
         raise ImportError(
             f"{label} could not import {module_name} (a dependency failed to load): {exc}.{hint}"
         ) from exc
     except OSError as exc:
-        hint = f" Install with: uv add easycat[{extra}]." if extra else ""
+        hint = _extra_install_hint(extra)
         label = purpose or module_name
         raise ImportError(f"{label} could not load {module_name}: {exc}.{hint}") from exc
