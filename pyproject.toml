@@ -95,7 +95,7 @@ conflicts = [
 
 [dependency-groups]
 dev = [
-    "diff-cover>=9.2",
+    "diff-cover>=10.3.0",
     "hypothesis>=6.100",
     "mutmut>=3.2.3",
     "mypy>=1.18",
