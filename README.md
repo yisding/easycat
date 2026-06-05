@@ -79,10 +79,10 @@ The commands below use the installed CLI form. From this repository, prefix
 them with `uv run`, for example `uv run easycat doctor`.
 
 ```bash
-easycat init     # scaffold a new project from a template
-easycat doctor   # check API keys, Python version, optional extras, provider reachability
-easycat explain E102   # look up an EasyCat error code
-easycat explain --list # list every error code and meta topic
+easycat init my-agent    # scaffold a new project from a template
+easycat doctor           # check API keys, Python version, optional extras, provider reachability
+easycat explain E102     # look up an EasyCat error code
+easycat explain --list   # list every error code and meta topic
 easycat bundles list      # list captured debug bundles
 easycat bundles show PATH # summarise one captured debug bundle
 easycat inspect PATH      # summarise one captured debug bundle
@@ -90,7 +90,7 @@ easycat validate quick       # run deterministic local validation
 easycat validate report PATH # render a saved validation report
 ```
 
-From an empty directory, `easycat init` scaffolds the canonical
+From an empty directory, `easycat init my-agent` scaffolds the canonical
 `run(EasyConfig.mic(agent=...))` shape (the same one shown below), then
 `easycat doctor` validates your environment before the first run.
 
@@ -173,7 +173,7 @@ yourself.
 ### Quickstart (EasyConfig)
 A voice bot in three lines — `run(EasyConfig.mic(agent=...))` is the one
 canonical shape, identical in this README, `examples/openai_agents_voice.py`,
-and the file `easycat init` scaffolds:
+and the scaffold that `easycat init my-agent` writes:
 
 ```python
 from agents import Agent

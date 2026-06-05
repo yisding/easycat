@@ -132,6 +132,11 @@ def _clean_code_span_path(code_span: str) -> str:
     return code_span.strip().strip(".,;:()[]")
 
 
+def _readme_cli_section() -> str:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    return readme.split("## CLI", 1)[1].split("## Validation Workflow", 1)[0]
+
+
 def _source_path_candidates_for_agent_guide(
     filename: str,
     line: str,
@@ -314,8 +319,7 @@ def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
 
 def test_readme_cli_explain_examples_are_copyable() -> None:
     """``easycat explain`` requires a code or --list; the README should show one."""
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    cli_section = readme.split("## CLI", 1)[1].split("## Validation Workflow", 1)[0]
+    cli_section = _readme_cli_section()
 
     assert not re.search(r"(?m)^easycat explain\s+#", cli_section)
     assert "easycat explain E102" in cli_section
@@ -324,12 +328,26 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
 
 def test_readme_cli_validate_examples_are_copyable() -> None:
     """Bare ``easycat validate`` shows help; the README should show useful subcommands."""
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    cli_section = readme.split("## CLI", 1)[1].split("## Validation Workflow", 1)[0]
+    cli_section = _readme_cli_section()
 
     assert not re.search(r"(?m)^easycat validate\s+#", cli_section)
     assert "easycat validate quick" in cli_section
     assert "easycat validate report PATH" in cli_section
+
+
+def test_cli_init_examples_name_target_directory() -> None:
+    """``easycat init`` requires NAME unless listing templates."""
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    cli_section = _readme_cli_section()
+    production_chapter = (
+        REPO_ROOT / "docs" / "teaching" / "15-operate-in-production" / "README.md"
+    ).read_text(encoding="utf-8")
+
+    assert not re.search(r"(?m)^easycat init\s+#", cli_section)
+    assert "easycat init my-agent" in cli_section
+    assert "`easycat init my-agent` scaffolds" in readme
+    assert "`uv run easycat init my-agent`" in production_chapter
+    assert "**`uv run easycat init`**" not in production_chapter
 
 
 def test_agent_guides_use_current_live_marker_name() -> None:

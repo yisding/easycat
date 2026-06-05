@@ -429,7 +429,7 @@ $ uv run easycat --help
   validate  run validation checks and inspect reports
 ```
 
-- **`uv run easycat init`** — scaffolds a new project from a template
+- **`uv run easycat init my-agent`** — scaffolds a new project from a template
   (`src/easycat/cli/scaffold/`). The fastest path from empty dir
   to a running session.
 - **`uv run easycat doctor`** — checks API keys, Python version, optional
