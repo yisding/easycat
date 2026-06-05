@@ -187,6 +187,8 @@ def test_readme_optional_dependency_list_has_copyable_install_commands() -> None
         "uv sync --extra langchain",
         "uv sync --extra langgraph",
         "uv sync --extra llama-agents",
+        "uv sync --extra aec",
+        "uv sync --extra debugger",
         "uv sync --extra smart-turn",
         "uv sync --extra ten-vad",
         "uv sync --extra silero-vad",

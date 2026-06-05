@@ -45,8 +45,8 @@ add extras individually:
 uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad
 ```
 
-Optional dependencies you may need depending on providers, transports, and
-agent frameworks:
+Optional dependencies you may need depending on providers, transports, agent
+frameworks, and debugging/audio-processing features:
 - sounddevice (LocalTransport): `uv sync --extra local`
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
 - aioquic (WebTransportTransport): `uv sync --extra webtransport`
@@ -57,6 +57,8 @@ agent frameworks:
 - LangChain core: `uv sync --extra langchain`
 - LangGraph: `uv sync --extra langgraph`
 - LlamaAgents / LlamaIndex workflows: `uv sync --extra llama-agents`
+- LiveKit AEC3 echo cancellation: `uv sync --extra aec`
+- aiohttp debugger UI: `uv sync --extra debugger`
 - numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
 - ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license): `uv sync --extra ten-vad`
 - numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad` — runs the bundled ONNX model (no torch required)
