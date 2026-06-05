@@ -59,6 +59,8 @@ PROVIDER_EXTRA_BY_ENV_VAR = {
     "ELEVENLABS_API_KEY": "--extra elevenlabs",
 }
 CODE_SPAN_RE = re.compile(r"`([^`]+)`")
+GUIDE_JUST_COMMAND_RE = re.compile(r"\bjust\s+(?P<recipe>[A-Za-z0-9_-]+)\b")
+JUST_RECIPE_RE = re.compile(r"^(?P<name>[A-Za-z0-9_-]+)(?:\s+[^:]*)?:")
 AGENT_GUIDE_SOURCE_PATH_SECTIONS = {
     "AGENTS.md": ("## Project Structure & Module Organization", "## Build, Test"),
     "CLAUDE.md": ("## Architecture", "## Session Lifecycle"),
@@ -127,6 +129,18 @@ def _extract_markdown_section(text: str, start_heading: str, end_heading: str) -
 
 def _clean_code_span_path(code_span: str) -> str:
     return code_span.strip().strip(".,;:()[]")
+
+
+def _just_recipe_names() -> set[str]:
+    recipes: set[str] = set()
+
+    for line in (REPO_ROOT / "justfile").read_text(encoding="utf-8").splitlines():
+        match = JUST_RECIPE_RE.match(line)
+        if match and ":=" not in line and not line.startswith((" ", "\t", "#")):
+            recipes.add(match.group("name"))
+
+    assert recipes, "justfile recipes were not found"
+    return recipes
 
 
 def _source_path_candidates_for_agent_guide(
@@ -324,6 +338,7 @@ def test_agent_guides_use_current_live_marker_name() -> None:
 
 
 def test_agent_guide_command_examples_are_current() -> None:
+    just_recipes = _just_recipe_names()
     command_sections = {
         "AGENTS.md": (REPO_ROOT / "AGENTS.md")
         .read_text(encoding="utf-8")
@@ -341,6 +356,13 @@ def test_agent_guide_command_examples_are_current() -> None:
         assert "uv run easycat validate quick" in command_section
         assert "tests/test_metrics.py" not in command_section, filename
 
+    stale_recipes: list[str] = []
+    for filename, command_section in command_sections.items():
+        for match in GUIDE_JUST_COMMAND_RE.finditer(command_section):
+            recipe = match.group("recipe")
+            if recipe not in just_recipes:
+                stale_recipes.append(f"{filename}: just {recipe}")
+
     stale_paths: list[str] = []
     for filename, command_section in command_sections.items():
         for match in re.finditer(r"uv run pytest\s+(?P<target>tests/\S+)", command_section):
@@ -348,6 +370,9 @@ def test_agent_guide_command_examples_are_current() -> None:
             if not (REPO_ROOT / path_text).exists():
                 stale_paths.append(f"{filename}: {path_text}")
 
+    assert not stale_recipes, "Agent guide just examples point at missing recipes: " + ", ".join(
+        stale_recipes
+    )
     assert not stale_paths, "Agent guide pytest examples point at missing paths: " + ", ".join(
         stale_paths
     )
