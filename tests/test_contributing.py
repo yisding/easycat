@@ -102,3 +102,10 @@ def test_contributing_validation_slice_commands_use_repo_local_uv_run() -> None:
     ]
 
     assert not stale, "CONTRIBUTING.md validation commands should use uv run: " + "; ".join(stale)
+
+
+def test_validation_plan_matches_contributor_quick_command() -> None:
+    rows = {row["slice"]: row["command"] for row in _validation_slice_rows()}
+    tasks = (REPO_ROOT / "plan" / "validation" / "tasks.md").read_text(encoding="utf-8")
+
+    assert rows["quick"] in tasks

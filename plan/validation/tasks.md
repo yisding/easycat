@@ -284,7 +284,8 @@ Historical task scope before V1.1 shipped:
 - Document the script-first command used at the time:
   `uv run python scripts/validate.py quick`.
 - Label `easycat validate quick` as the planned public replacement until V1.1
-  landed. Current contributor docs now use `easycat validate quick`.
+  landed. Current repo contributor docs now use
+  `uv run easycat validate quick`.
 - Document `--report PATH` for persisted validation JSON and reserve `--json`
   for stdout machine-readable CLI envelopes.
 - Document when to run socket, live, latency, and release checks.
