@@ -383,6 +383,27 @@ def test_readme_validation_workflow_lists_registered_validate_commands() -> None
     assert all(command.startswith("uv run easycat validate ") for command in commands)
 
 
+def test_readme_observability_section_teaches_stoppable_journal_tail() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    observability_section = readme.split("## Inspecting conversation flow", 1)[1].split(
+        "## ",
+        1,
+    )[0]
+
+    for term in (
+        "async def main() -> None:",
+        "async with create_session(config) as session:",
+        "stop_tailing = asyncio.Event()",
+        "session.journal.follow(stop=stop_tailing)",
+        "stop_tailing.set()",
+        "await tail_task",
+        "asyncio.run(main())",
+        "uv run easycat inspect .easycat/journals/<session_id>.sqlite",
+    ):
+        assert term in observability_section
+    assert "asyncio.create_task(tail(session))" not in observability_section
+
+
 def test_readme_current_capabilities_track_public_provider_and_bridge_surfaces() -> None:
     from easycat.integrations import agents as agent_integrations
     from easycat.noise_reduction import NoiseReducerBackend

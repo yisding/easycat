@@ -530,19 +530,37 @@ import asyncio
 
 from easycat import EasyConfig, JournalRecordKind, create_session
 
-config = EasyConfig(openai_api_key="your-api-key", debug="light")
-session = create_session(config)
 
-async def tail(session):
-    async for record in session.journal.follow():
+async def tail(session, stop_tailing: asyncio.Event) -> None:
+    async for record in session.journal.follow(stop=stop_tailing):
         if record.kind == JournalRecordKind.EVENT:
             print(f"[{record.name}] {record.data}")
 
-asyncio.create_task(tail(session))
+
+async def main() -> None:
+    config = EasyConfig(openai_api_key="your-api-key", debug="light")
+    async with create_session(config) as session:
+        stop_tailing = asyncio.Event()
+        tail_task = asyncio.create_task(tail(session, stop_tailing))
+        try:
+            await session.wait_closed()
+        finally:
+            stop_tailing.set()
+            await tail_task
+
+
+asyncio.run(main())
 ```
 
 Records carry `session_id`, `turn_id`, and monotonic sequence numbers so
 cross-system traces join cleanly.
+
+Use `debug="full"` when you need durable inspection. EasyCat writes SQLite
+journals under `.easycat/journals/`; after the run, inspect one with:
+
+```bash
+uv run easycat inspect .easycat/journals/<session_id>.sqlite
+```
 
 ### Hook directly into agent/tool events
 You can subscribe to agent stream events (including tool calls) via the session:
