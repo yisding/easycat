@@ -498,26 +498,27 @@ Notes:
 ### Local/open-source speech pipeline
 EasyCat ships with hosted STT/TTS providers (OpenAI, Deepgram, ElevenLabs, and
 Cartesia). To run fully local speech, plug in your own STT/TTS implementations and use
-`SessionConfig` directly:
+the same `EasyConfig` surface:
 
 ```python
-from easycat import Session, SessionConfig
+from easycat import EasyConfig, create_session
 
+from my_local_agent import LocalAgent
 from my_local_stt import LocalSTTProvider
 from my_local_tts import LocalTTSProvider
 
-session = Session(
-    SessionConfig(
+session = create_session(
+    EasyConfig.mic(
         stt=LocalSTTProvider(...),
         tts=LocalTTSProvider(...),
-        # keep using local transport to stay offline
-        ...
+        agent=LocalAgent(...),
     )
 )
 ```
 
 This keeps the pipeline (VAD → STT → agent → TTS) identical while letting you
-swap in open-source models for fully local operation.
+swap in open-source models for fully local operation. `vad=` also accepts a
+provider instance when you have a custom voice activity detector.
 
 ## Inspecting conversation flow
 
@@ -760,7 +761,7 @@ credentials when browser-side relay candidates are required.
 EasyCat supports two complementary factory styles:
 
 - String-based provider selection (`create_stt_provider` / `create_tts_provider`) for dynamic setups.
-- Config-object based provider wiring via `EasyConfig` + `create_session`.
+- Config-object or provider-instance wiring via `EasyConfig` + `create_session`.
 
 Both styles now resolve provider classes through the same central registries in
 `easycat.stt.factory` and `easycat.tts.factory`, so adding providers only

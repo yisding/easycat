@@ -473,6 +473,27 @@ def test_readme_observability_section_teaches_stoppable_journal_tail() -> None:
     assert "asyncio.create_task(tail(session))" not in observability_section
 
 
+def test_readme_local_speech_pipeline_uses_easyconfig_provider_instances() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("### Local/open-source speech pipeline", 1)[1].split(
+        "## Inspecting conversation flow",
+        1,
+    )[0]
+
+    for term in (
+        "from easycat import EasyConfig, create_session",
+        "EasyConfig.mic(",
+        "stt=LocalSTTProvider(...)",
+        "tts=LocalTTSProvider(...)",
+        "agent=LocalAgent(...)",
+        "`vad=` also accepts a",
+    ):
+        assert term in section
+
+    assert "SessionConfig" not in section
+    assert "Session(" not in section
+
+
 def test_readme_current_capabilities_track_public_provider_and_bridge_surfaces() -> None:
     from easycat.integrations import agents as agent_integrations
     from easycat.noise_reduction import NoiseReducerBackend

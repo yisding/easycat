@@ -912,6 +912,21 @@ def test_custom_stt_provider_example_imports():
     assert callable(custom_stt_provider.main)
 
 
+def test_custom_provider_examples_use_easyconfig_surface():
+    for relpath in (
+        "examples/custom_stt_provider.py",
+        "examples/custom_tts_provider.py",
+        "examples/custom_vad_provider.py",
+    ):
+        source = (REPO_ROOT / relpath).read_text(encoding="utf-8")
+
+        assert "EasyConfig.mic(" in source
+        assert "create_session(config)" in source
+        assert "SessionConfig" not in source
+        assert "Session(" not in source
+        assert "AgentRunner(" not in source
+
+
 def test_agent_event_subscription_example_imports():
     pytest.importorskip("agents")
     import examples.agent_event_subscription as agent_event_subscription

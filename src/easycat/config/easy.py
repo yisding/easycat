@@ -25,7 +25,7 @@ from easycat.errors import EASYCAT_E203
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.noise_reduction import NoiseReducerConfig
-from easycat.providers import Transport
+from easycat.providers import STTProvider, Transport, TTSProvider, VADProvider
 from easycat.runtime.capabilities import default_echo_cancellation_enabled
 from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.smart_turn import SmartTurnConfig
@@ -445,9 +445,9 @@ class EasyConfig(_AgentSessionConfig):
     """
 
     openai_api_key: str | None = None
-    stt: STTConfig | str | None = None
-    tts: TTSConfig | str | None = None
-    vad: VADConfig = field(default_factory=VADConfig)
+    stt: STTConfig | STTProvider | str | None = None
+    tts: TTSConfig | TTSProvider | str | None = None
+    vad: VADConfig | VADProvider = field(default_factory=VADConfig)
     noise_reduction: NoiseReducerConfig | None = None
     echo_cancellation: EchoCancellationConfig | None = None
     enable_noise_reduction: bool = False
@@ -544,7 +544,7 @@ class EasyConfig(_AgentSessionConfig):
                 self.stt = OpenAIRealtimeSTTConfig(api_key=self.openai_api_key)
             if self.tts is None:
                 self.tts = OpenAITTSConfig(api_key=self.openai_api_key)
-        if self.tts is not None and self.auto_align_tts_output_to_transport:
+        if isinstance(self.tts, TTSConfig) and self.auto_align_tts_output_to_transport:
             from ._tts_alignment import align_tts_config_to_transport
 
             self.tts = align_tts_config_to_transport(self.tts, self.transport)

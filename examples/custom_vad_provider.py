@@ -1,4 +1,4 @@
-"""Inject a custom VAD provider via SessionConfig.
+"""Inject a custom VAD provider via EasyConfig.
 
 The mirror of ``custom_stt_provider.py`` and ``custom_tts_provider.py``
 for the VAD stage.  Real custom-VAD use cases include: a domain-tuned
@@ -6,7 +6,8 @@ speech detector, a tee that mirrors VAD events to a debug sink, or a
 deterministic stub that fires speech start/stop on schedule for tests.
 
 Here we wrap whichever VAD ``create_vad`` selects (Silero → FunASR →
-TEN → Krisp) with ``LoggingVAD``, which prints each event.
+TEN → Krisp) with ``LoggingVAD``, then pass it as
+``EasyConfig.mic(vad=...)``.
 
 Setup:
   export OPENAI_API_KEY="..."
@@ -21,19 +22,15 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from easycat import (
-    Session,
-    SessionConfig,
+    EasyConfig,
     attach_runtime_feedback,
+    create_session,
     require_env,
     wait_for_shutdown_signal,
 )
 from easycat.audio_format import AudioChunk
-from easycat.events import Event, EventBus
-from easycat.integrations.agents import AgentRunner, AgentRunnerConfig, auto_adapt_agent
+from easycat.events import Event
 from easycat.providers import VADProvider
-from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
-from easycat.transports.local import LocalTransport, LocalTransportConfig
-from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 from easycat.vad import VADConfig, create_vad
 
 
@@ -64,32 +61,23 @@ class LoggingVAD:
             sensitivity=sensitivity,
         )
 
+    def version_info(self) -> dict[str, str]:
+        return {**self._inner.version_info(), "wrapper": "logging"}
+
 
 async def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
 
     from agents import Agent  # type: ignore[import-untyped]
 
-    event_bus = EventBus()
-    stt = OpenAIRealtimeSTT(
-        OpenAIRealtimeSTTConfig(api_key=api_key, event_bus=event_bus),
-    )
-    tts = OpenAITTS(OpenAITTSConfig(api_key=api_key))
-    transport = LocalTransport(LocalTransportConfig())
     vad = LoggingVAD(create_vad(VADConfig()))
 
-    base_agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
-    agent = AgentRunner(auto_adapt_agent(base_agent), AgentRunnerConfig())
-
-    config = SessionConfig(
-        transport=transport,
+    config = EasyConfig.mic(
+        openai_api_key=api_key,
         vad=vad,
-        stt=stt,
-        tts=tts,
-        agent=agent,
-        event_bus=event_bus,
+        agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
     )
-    session = Session(config)
+    session = create_session(config)
     attach_runtime_feedback(session)
 
     await session.start()

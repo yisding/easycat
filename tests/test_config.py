@@ -127,6 +127,74 @@ def test_create_session_binds_custom_identity_sink_capability():
     assert session.call_identity is identity
 
 
+def test_create_session_accepts_custom_provider_instances_without_sessionconfig(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class _CustomSTT:
+        async def start_stream(self):
+            pass
+
+        async def send_audio(self, chunk):
+            pass
+
+        async def commit_segment(self) -> bool:
+            return False
+
+        async def end_stream(self):
+            pass
+
+        async def events(self):
+            if False:
+                yield None
+
+        def version_info(self) -> dict[str, str]:
+            return {"provider": "custom-stt"}
+
+    class _CustomTTS:
+        supports_ssml = False
+
+        async def synthesize(self, payload):
+            if False:
+                yield None
+
+        async def stop(self):
+            pass
+
+        async def cancel(self):
+            pass
+
+        def version_info(self) -> dict[str, str]:
+            return {"provider": "custom-tts"}
+
+    class _CustomVAD:
+        def configure(self, **kwargs):
+            pass
+
+        async def process(self, chunk):
+            if False:
+                yield None
+
+        def version_info(self) -> dict[str, str]:
+            return {"provider": "custom-vad"}
+
+    def _fail_factory(*_args, **_kwargs):
+        raise RuntimeError("provider config factory should not be called")
+
+    stt = _CustomSTT()
+    tts = _CustomTTS()
+    vad = _CustomVAD()
+
+    monkeypatch.setattr("easycat.config._factory.create_stt_provider_from_config", _fail_factory)
+    monkeypatch.setattr("easycat.config._factory.create_tts_provider_from_config", _fail_factory)
+    monkeypatch.setattr("easycat.config._factory.create_vad", _fail_factory)
+
+    session = create_session(EasyConfig(stt=stt, tts=tts, vad=vad, agent=_DummyAgent()))
+
+    assert session._config.stt is stt
+    assert session._config.tts is tts
+    assert session._config.vad is vad
+
+
 def test_easyconfig_passes_opt_out_detection_settings_to_session_config():
     session = create_session(
         EasyConfig(

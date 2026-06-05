@@ -140,6 +140,45 @@ def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
     return factory(config, event_bus)
 
 
+def _is_stt_provider_instance(value: Any) -> bool:
+    return not isinstance(value, type) and all(
+        callable(getattr(value, name, None))
+        for name in ("start_stream", "send_audio", "commit_segment", "end_stream", "events")
+    )
+
+
+def _create_stt(config: Any, event_bus: EventBus) -> Any:
+    if _is_stt_provider_instance(config):
+        return config
+    return create_stt_provider_from_config(config, event_bus)
+
+
+def _is_tts_provider_instance(value: Any) -> bool:
+    return (
+        not isinstance(value, type)
+        and hasattr(value, "supports_ssml")
+        and all(callable(getattr(value, name, None)) for name in ("synthesize", "stop", "cancel"))
+    )
+
+
+def _create_tts(config: Any, event_bus: EventBus) -> Any:
+    if _is_tts_provider_instance(config):
+        return config
+    return create_tts_provider_from_config(config, event_bus)
+
+
+def _is_vad_provider_instance(value: Any) -> bool:
+    return not isinstance(value, type) and all(
+        callable(getattr(value, name, None)) for name in ("process", "configure")
+    )
+
+
+def _create_vad(config: Any) -> Any:
+    if _is_vad_provider_instance(config):
+        return config
+    return create_vad(config)
+
+
 def _create_artifact_store(
     session_id: str, debug: str
 ) -> InMemoryArtifactStore | FilesystemArtifactStore | None:
@@ -299,11 +338,11 @@ def create_session(config: EasyConfig) -> Session:
 
     try:
         event_bus = EventBus()
-        stt = create_stt_provider_from_config(config.stt, event_bus)
-        tts = create_tts_provider_from_config(config.tts, event_bus)
+        stt = _create_stt(config.stt, event_bus)
+        tts = _create_tts(config.tts, event_bus)
         auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
         enable_vad = not auto_turn_from_stt_final
-        vad = create_vad(config.vad) if enable_vad else None
+        vad = _create_vad(config.vad) if enable_vad else None
         noise_reducer = (
             create_noise_reducer(config.noise_reduction or NoiseReducerConfig())
             if config.enable_noise_reduction or config.noise_reduction is not None
