@@ -20,7 +20,8 @@ try:
 except ImportError as exc:
     raise SystemExit(
         "openai-agents is required. For an app, run: "
-        "uv add 'easycat[quickstart]'. In this repo, run: uv sync --extra quickstart"
+        "uv add 'easycat[quickstart,debugger]'. In this repo, run: "
+        "uv sync --extra quickstart --extra debugger"
     ) from exc
 
 from easycat import (

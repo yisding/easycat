@@ -26,6 +26,8 @@ _EXAMPLE_README_ROW_RE = re.compile(
 _SUPPORT_FILE_LINK_RE = re.compile(
     r"^- \[(?P<name>[^]]+\.(?:html|sh))\]\((?P<link>[^)]+\.(?:html|sh))\):"
 )
+_EASYCAT_EXTRA_RE = re.compile(r"easycat\[(?P<extras>[^\]]+)\]")
+_UV_SYNC_EXTRA_RE = re.compile(r"--extra\s+(?P<extra>[A-Za-z0-9_.-]+)")
 
 
 def _top_level_example_names() -> set[str]:
@@ -112,6 +114,19 @@ def _import_error_system_exit_messages(path: Path) -> list[str]:
                     messages.append(message)
 
     return messages
+
+
+def _documented_setup_extras(path: Path) -> set[str]:
+    module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    doc = ast.get_docstring(module) or ""
+    return set(_UV_SYNC_EXTRA_RE.findall(doc))
+
+
+def _app_extras_in(message: str) -> set[str]:
+    extras: set[str] = set()
+    for match in _EASYCAT_EXTRA_RE.finditer(message):
+        extras.update(part.strip() for part in match.group("extras").split(",") if part.strip())
+    return extras
 
 
 class _DummyAgent:
@@ -286,6 +301,34 @@ def test_example_import_guards_include_package_and_repo_install_paths() -> None:
                 stale.append(f"{example_name}: missing {', '.join(missing_bits)}")
 
     assert not stale, "Example import guards missing install paths: " + "; ".join(stale)
+
+
+def test_example_import_guards_match_documented_setup_extras() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    known_extras = set(pyproject["project"]["optional-dependencies"])
+    stale: list[str] = []
+
+    for example_name in sorted(_top_level_example_names()):
+        path = REPO_ROOT / "examples" / example_name
+        documented_extras = _documented_setup_extras(path)
+        if not documented_extras:
+            continue
+
+        documented_app_extras = documented_extras & known_extras
+        for message in _import_error_system_exit_messages(path):
+            if "uv sync --extra" not in message:
+                continue
+            repo_extras = set(_UV_SYNC_EXTRA_RE.findall(message))
+            app_extras = _app_extras_in(message)
+            missing_repo = sorted(documented_extras - repo_extras)
+            missing_app = sorted(documented_app_extras - app_extras)
+            if missing_repo or missing_app:
+                stale.append(
+                    f"{example_name}: repo missing {missing_repo or '-'}, "
+                    f"app missing {missing_app or '-'}"
+                )
+
+    assert not stale, "Example import guards drifted from documented setup: " + "; ".join(stale)
 
 
 def test_pydantic_ai_example_imports(monkeypatch: pytest.MonkeyPatch):
