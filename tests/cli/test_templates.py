@@ -175,6 +175,16 @@ def test_readme_has_required_sections(name: str) -> None:
         assert section in readme, f"{name}/README.md missing section: {section}"
 
 
+def test_cli_test_plan_documents_template_readme_contract() -> None:
+    test_plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
+    section_names = [section.removeprefix("## ") for section in _README_SECTIONS]
+
+    assert "four required sections" not in test_plan
+    assert "five required sections" in test_plan
+    for section in section_names:
+        assert section in test_plan
+
+
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_readme_has_local_syntax_check(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")

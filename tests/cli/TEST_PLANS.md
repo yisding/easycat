@@ -119,7 +119,8 @@ regression; README sections dropped during rendering.
 - `agent.py` does not contain `$AGENT_NAME`, `$AGENT_INSTRUCTIONS`, or
   `$PROJECT_NAME` (substitutions must succeed).
 - `agent.py` stays within its per-template line budget.
-- README contains all four required sections.
+- README contains all five required sections: Install, Configure, Run,
+  Check, Next steps.
 - `pyproject.toml` pins `easycat[<extra>]`.
 - `.gitignore` contains no placeholders.
 

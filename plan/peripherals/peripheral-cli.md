@@ -388,7 +388,7 @@ templates/<name>/
     agent.py              # ≤ 15 lines, runs with one API key
     pyproject.toml        # easycat[<extra>] + minimal deps
     .env.example          # exactly the keys the template needs
-    README.md             # install → configure → run → next steps
+    README.md             # install → configure → run → check → next steps
     .gitignore
     [additional files as needed — e.g., static/ for webrtc]
 ```
@@ -402,8 +402,8 @@ CI enforces for every template:
    demo && uv sync && uv run python agent.py` reaches `TurnStarted`
    within 60s against a stub transport.
 4. `doctor` passes on the scaffolded project with valid test keys.
-5. `README.md` has the four required sections: Install, Configure,
-   Run, Next Steps.
+5. `README.md` has the five required sections: Install, Configure,
+   Run, Check, Next steps.
 
 ### Templates
 
