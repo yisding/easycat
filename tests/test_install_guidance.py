@@ -58,6 +58,15 @@ PROVIDER_EXTRA_BY_ENV_VAR = {
     "DEEPGRAM_API_KEY": "--extra deepgram",
     "ELEVENLABS_API_KEY": "--extra elevenlabs",
 }
+BRIDGE_DISPLAY_NAMES = {
+    "GenericWorkflowBridge": "your own async workflow",
+    "LangChainBridge": "LangChain",
+    "LangGraphBridge": "LangGraph",
+    "LlamaAgentsBridge": "LlamaAgents",
+    "OpenAIAgentsBridge": "OpenAI Agents SDK",
+    "PydanticAIBridge": "PydanticAI",
+    "RemoteResponsesAPIBridge": "Remote Responses API",
+}
 
 
 def _iter_guidance_files() -> list[Path]:
@@ -279,4 +288,29 @@ def test_agent_guide_command_examples_are_current() -> None:
 
     assert not stale_paths, "Agent guide pytest examples point at missing paths: " + ", ".join(
         stale_paths
+    )
+
+
+def test_claude_overview_tracks_public_agent_bridges() -> None:
+    from easycat.integrations import agents as agent_integrations
+
+    bridge_names = {
+        name
+        for name in agent_integrations.__all__
+        if name.endswith("Bridge") and name != "ExternalAgentBridge"
+    }
+    missing_display_map = sorted(bridge_names - set(BRIDGE_DISPLAY_NAMES))
+    assert not missing_display_map, "CLAUDE.md bridge display map missing: " + ", ".join(
+        missing_display_map
+    )
+
+    overview = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8").split("## Commands", 1)[0]
+    missing_display_names = sorted(
+        display_name
+        for bridge_name, display_name in BRIDGE_DISPLAY_NAMES.items()
+        if bridge_name in bridge_names and display_name not in overview
+    )
+
+    assert not missing_display_names, (
+        "CLAUDE.md overview missing public bridge labels: " + ", ".join(missing_display_names)
     )

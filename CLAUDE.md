@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-EasyCat is a Python voice bot framework that plugs into OpenAI Agents SDK or PydanticAI. It handles the full audio pipeline: noise reduction → VAD → STT → agent → TTS, with pluggable providers at each stage.
+EasyCat is a Python voice bot framework that runs idiomatic agents and
+workflows from OpenAI Agents SDK, PydanticAI, LangChain, LangGraph,
+LlamaAgents, Remote Responses API, or your own async workflow. It handles the
+full audio pipeline: noise reduction → VAD → STT → agent → TTS, with pluggable
+providers at each stage.
 
 ## Commands
 
