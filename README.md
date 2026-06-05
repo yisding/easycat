@@ -46,17 +46,21 @@ uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --ext
 ```
 
 Optional dependencies you may need depending on providers/transports:
-- sounddevice (LocalTransport)
+- sounddevice (LocalTransport): `uv sync --extra local`
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
 - numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
-- ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license)
+- ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license): `uv sync --extra ten-vad`
 - numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad` — runs the bundled ONNX model (no torch required)
 - funasr-onnx + onnxruntime (FunASR VAD): `uv sync --extra funasr-vad`
   on Python 3.11-3.12. The current upstream SDK pins NumPy below the
   range needed by the fixed ONNX package on Python 3.13+.
-- pyrnnoise + requests (RNNoise noise reduction backend)
-- Krisp SDK (krisp_audio)
-- Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs, Cartesia
+- pyrnnoise + requests (RNNoise noise reduction backend): `uv sync --extra rnnoise`
+- Krisp SDK (krisp_audio): `uv pip install krisp_audio`
+- Provider SDKs/keys:
+  `uv sync --extra openai`,
+  `uv sync --extra deepgram`,
+  `uv sync --extra elevenlabs`,
+  or `uv sync --extra cartesia` (Cartesia uses EasyCat's core WebSocket stack).
 
 ## CLI
 

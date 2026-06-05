@@ -140,6 +140,30 @@ def test_teaching_ladder_prerequisites_run_doctor_after_setup() -> None:
     assert sync_index < key_index < doctor_index
 
 
+def test_readme_optional_dependency_list_has_copyable_install_commands() -> None:
+    """The optional-dependency list should not name packages without commands."""
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    optional_block = readme.split(
+        "Optional dependencies you may need depending on providers/transports:", 1
+    )[1].split("## CLI", 1)[0]
+
+    for command in (
+        "uv sync --extra local",
+        "uv sync --extra webrtc",
+        "uv sync --extra smart-turn",
+        "uv sync --extra ten-vad",
+        "uv sync --extra silero-vad",
+        "uv sync --extra funasr-vad",
+        "uv sync --extra rnnoise",
+        "uv sync --extra openai",
+        "uv sync --extra deepgram",
+        "uv sync --extra elevenlabs",
+        "uv sync --extra cartesia",
+        "uv pip install krisp_audio",
+    ):
+        assert command in optional_block
+
+
 def test_teaching_provider_key_setup_names_required_extras() -> None:
     """Provider-key setup snippets should include the matching optional extra."""
     missing: list[str] = []
