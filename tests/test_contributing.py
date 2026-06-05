@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEV_LOOP_ROW_RE = re.compile(
-    r"^\| (?P<task>[^|]+) \| `just (?P<recipe>[^` ]+)(?: [^`]*)?` "
+    r"^\| (?P<task>[^|]+) \| `just (?P<recipe>[^` ]+)(?P<args>[^`]*)?` "
     r"\| `(?P<raw>[^`]+)` \|$"
 )
 _VALIDATION_ROW_RE = re.compile(
@@ -59,11 +60,24 @@ def _validation_slice_rows() -> list[dict[str, str]]:
     return rows
 
 
+def _render_recipe_command(command: str, args_text: str | None) -> str:
+    args = shlex.split(args_text or "")
+    rendered = command
+
+    if "{{ prepend('--extra ', EXTRAS) }}" in rendered:
+        extras = " ".join(f"--extra {extra}" for extra in args)
+        return rendered.replace("{{ prepend('--extra ', EXTRAS) }}", extras)
+
+    if args:
+        rendered = re.sub(r'"?\{\{\s*[A-Z_]+\s*\}\}"?', args[0], rendered)
+
+    return rendered
+
+
 def test_contributing_development_loop_just_recipes_stay_current() -> None:
     recipes = _just_recipes()
     missing: list[str] = []
     stale_raw_commands: list[str] = []
-    parameterized = {"sync-extra", "test-one", "validate-report"}
 
     for row in _development_loop_rows():
         recipe = row["recipe"]
@@ -74,9 +88,10 @@ def test_contributing_development_loop_just_recipes_stay_current() -> None:
         if "..." in raw_command:
             stale_raw_commands.append(f"{recipe}: raw command contains placeholder")
             continue
-        if recipe not in parameterized and raw_command != recipes[recipe]:
+        expected_command = _render_recipe_command(recipes[recipe], row.get("args"))
+        if raw_command != expected_command:
             stale_raw_commands.append(
-                f"{recipe}: CONTRIBUTING has {raw_command!r}, justfile has {recipes[recipe]!r}"
+                f"{recipe}: CONTRIBUTING has {raw_command!r}, justfile has {expected_command!r}"
             )
 
     assert not missing, "CONTRIBUTING.md references missing just recipes: " + ", ".join(missing)
