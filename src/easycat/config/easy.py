@@ -484,6 +484,13 @@ class EasyConfig(_AgentSessionConfig):
     # without a database.
     dnc_list: Any | None = None
 
+    # Session-level opt-out auto-detection runs on every STT final.
+    # Keep these high-level knobs alongside ``dnc_list`` so telephony apps
+    # using ``EasyConfig`` do not need to drop to ``SessionConfig`` just to
+    # disable detection or replace the stock phrase list.
+    opt_out_detection: bool = True
+    opt_out_phrases: tuple[str, ...] | None = None
+
     # Telephony caller-ID exposure.  ``"tools_only"`` (default) keeps
     # the caller's phone number out of the LLM prompt but available to
     # tool code via ``session.call_identity``.  ``"system_message"``

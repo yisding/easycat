@@ -379,7 +379,7 @@ off your list"``, ``"opt out"``, …).  On match the session:
 3. enqueues an `EndCallAction(reason="opt_out")` so the call
    terminates after the agent's current utterance finishes.
 
-Set `SessionConfig.opt_out_detection=False` to opt out of the
+Set `EasyConfig.opt_out_detection=False` to opt out of the
 auto-wiring, or pass `opt_out_phrases=("retire me", …)` to replace
 the built-in phrase list (language packs / industry-specific
 terminology).

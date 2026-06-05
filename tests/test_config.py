@@ -127,6 +127,20 @@ def test_create_session_binds_custom_identity_sink_capability():
     assert session.call_identity is identity
 
 
+def test_easyconfig_passes_opt_out_detection_settings_to_session_config():
+    session = create_session(
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            opt_out_detection=False,
+            opt_out_phrases=("retire me",),
+        )
+    )
+
+    assert session._config.opt_out_detection is False
+    assert session._config.opt_out_phrases == ("retire me",)
+
+
 @pytest.mark.asyncio
 async def test_create_session_binds_twilio_connection_identity_sink():
     transport = TwilioConnectionTransport(_DummyWebSocket())
