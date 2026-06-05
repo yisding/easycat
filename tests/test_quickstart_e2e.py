@@ -262,6 +262,7 @@ def test_readme_intro_tracks_public_agent_bridge_surface() -> None:
 
 def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     from easycat.cli import _app
+    from easycat.cli.debug.bundles import bundles_app
 
     _app._register_commands()
     command_names = {command.name for command in _app.app.registered_commands}
@@ -281,6 +282,16 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     )
 
     assert not missing, "README.md CLI section missing commands: " + ", ".join(missing)
+
+    missing_bundle_commands = sorted(
+        command.name
+        for command in bundles_app.registered_commands
+        if command.name is not None and f"easycat bundles {command.name}" not in cli_section
+    )
+
+    assert not missing_bundle_commands, "README.md CLI section missing bundles commands: " + (
+        ", ".join(missing_bundle_commands)
+    )
 
 
 def test_readme_validation_workflow_lists_registered_validate_commands() -> None:
