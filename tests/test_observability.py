@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -309,6 +311,43 @@ def test_observability_doc_explains_journal_redaction_boundary() -> None:
     assert "selected agent-bridge metadata" in caveats
     assert "transcripts, agent output, and tool arguments verbatim" in caveats
     assert "`apply_write_filter` returns records unchanged" in caveats
+
+
+def test_observability_doc_tracks_logging_configuration_vocabulary() -> None:
+    from easycat._logging import _JsonFormatter
+    from easycat.config.easy import _EASYCAT_LOG_LEVELS, _VALID_DEBUG
+
+    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    config = doc.split("## Configuration and orthogonality", 1)[1].split(
+        "### Correlation ids in logs", 1
+    )[0]
+    record = logging.LogRecord(
+        "easycat.tests",
+        logging.INFO,
+        __file__,
+        1,
+        "hello %s",
+        ("world",),
+        None,
+    )
+    record.session_id = "session-1"  # type: ignore[attr-defined]
+    record.turn_id = "turn-1"  # type: ignore[attr-defined]
+    json_fields = set(json.loads(_JsonFormatter().format(record)))
+
+    missing_levels = sorted(level for level in _EASYCAT_LOG_LEVELS if f"`{level}`" not in config)
+    missing_debug_modes = sorted(mode for mode in _VALID_DEBUG if f'"{mode}"' not in config)
+    missing_json_fields = sorted(field for field in json_fields if f"`{field}`" not in config)
+
+    assert not missing_levels, "Observability guide missing log levels: " + ", ".join(
+        missing_levels
+    )
+    assert not missing_debug_modes, "Observability guide missing debug modes: " + ", ".join(
+        missing_debug_modes
+    )
+    assert not missing_json_fields, "Observability guide missing JSON log fields: " + ", ".join(
+        missing_json_fields
+    )
+    assert "`exc`" in config
 
 
 @pytest.mark.parametrize(

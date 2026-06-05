@@ -105,10 +105,11 @@ C for forensics.
 There are two independent knobs, and they control different things:
 
 - **`EASYCAT_LOG_LEVEL`** — controls layer A only (the stdlib `easycat` logger
-  level). Accepts `debug`, `info`, `warning`, `error` (case-insensitive). When a
-  process owner enables console logging, this resolves the level; the default is
-  `INFO`, and `DEBUG` is used only when you explicitly request it. It has the
-  same single meaning in `easycat.run()` and in `debug="light"`/`debug="full"`.
+  level). Accepts `debug`, `info`, `warning`, `warn`, `error`, and `critical`
+  (case-insensitive). When a process owner enables console logging, this
+  resolves the level; the default is `INFO`, and `DEBUG` is used only when you
+  explicitly request it. It has the same single meaning in `easycat.run()` and
+  in `debug="light"`/`debug="full"`.
 - **`EASYCAT_LOG_FORMAT=json`** — switches layer A's console handler from the
   human/Rich format to single-line JSON. This is an **explicit opt-in**: a TTY
   toggles *color* only, never JSON.
