@@ -243,7 +243,10 @@ def test_ec2_webrtc_deploy_docs_do_not_claim_to_configure_https() -> None:
     assert "behind an HTTPS reverse proxy" in server
     assert "Backend HTTP URL: http://$EXTERNAL_IP:8080/webrtc_client.html" in deploy
     assert "Browser URL:      https://<your-domain>/webrtc_client.html" in deploy
-    assert "Signaling URL:    https://<your-domain>/offer" in deploy
+    assert (
+        "Signaling URL:    https://<your-domain>                     (after TLS proxy)" in deploy
+    )
+    assert "Signaling URL:    https://<your-domain>/offer" not in deploy
     assert "Client URL:      http://$EXTERNAL_IP:8080/webrtc_client.html" not in deploy
 
 
