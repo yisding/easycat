@@ -104,6 +104,25 @@ def test_teaching_chapter_readmes_include_runnable_commands() -> None:
     assert not missing, "Teaching chapter READMEs missing runnable commands: " + ", ".join(missing)
 
 
+def test_teaching_script_run_commands_are_documented_in_chapter_docs() -> None:
+    stale: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        docs = "\n".join(
+            (chapter_dir / filename).read_text(encoding="utf-8")
+            for filename in ("README.md", "EXERCISES.md")
+            if (chapter_dir / filename).exists()
+        )
+
+        for script in sorted(chapter_dir.glob("*.py")):
+            doc, _ = _python_docstring_and_key_literals(script)
+            command = f"uv run python docs/teaching/{chapter_dir.name}/{script.name}"
+            if command in doc and command not in docs:
+                stale.append(f"{chapter_dir.name}/{script.name}: missing `{command}`")
+
+    assert not stale, "Teaching script run commands missing from chapter docs: " + "; ".join(stale)
+
+
 def test_teaching_chapter_prerequisites_cover_script_setup() -> None:
     stale: list[str] = []
 
