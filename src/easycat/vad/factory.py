@@ -142,10 +142,10 @@ def create_vad(config: VADConfig | None = None) -> Any:
         logger.info("Krisp VAD not available either")
         raise RuntimeError(
             "No VAD backend available. Install Silero VAD with: "
-            "uv add 'easycat[silero-vad]' (repo: uv sync --extra silero-vad), "
+            "uv add 'easycat[silero-vad]' (repo: uv sync --extra silero-vad --group dev), "
             "TEN VAD with: uv add 'easycat[ten-vad]' "
-            "(repo: uv sync --extra ten-vad), or FunASR VAD with "
+            "(repo: uv sync --extra ten-vad --group dev), or FunASR VAD with "
             "backend='funasr' and uv add 'easycat[funasr-vad]' "
-            "(repo: uv sync --extra funasr-vad). Krisp users can configure "
+            "(repo: uv sync --extra funasr-vad --group dev). Krisp users can configure "
             "krisp-audio."
         )

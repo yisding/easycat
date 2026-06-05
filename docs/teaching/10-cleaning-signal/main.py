@@ -24,7 +24,7 @@ emit a TTS chunk.
 Dependencies:
     uv sync --extra quickstart --extra deepgram --group dev
     RNNoise is included in quickstart; Krisp requires its own SDK.
-    For real AEC:  uv sync --extra aec
+    For real AEC:  uv sync --extra aec --group dev
     Missing selected backends fall back to passthrough — the
     journal tells you which backend is live.
 

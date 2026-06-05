@@ -13,7 +13,7 @@ def _extra_install_hint(extra: str | None) -> str:
         return ""
     return (
         f" Install with: uv add 'easycat[{extra}]'. "
-        f"From the EasyCat repo, use: uv sync --extra {extra}."
+        f"From the EasyCat repo, use: uv sync --extra {extra} --group dev."
     )
 
 

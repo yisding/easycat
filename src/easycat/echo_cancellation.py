@@ -8,7 +8,7 @@ LiveKit APM requires 10 ms int16 PCM frames — the same encoding as EasyCat's
 ``AudioChunk``, just needs frame splitting.
 
 Requires the ``livekit`` package (``uv add 'easycat[aec]'``). From the
-EasyCat repo, use ``uv sync --extra aec``.
+EasyCat repo, use ``uv sync --extra aec --group dev``.
 """
 
 from __future__ import annotations

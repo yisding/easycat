@@ -15,7 +15,7 @@ Prefer the `just` recipes when available; they shell out through `uv` and mirror
 the raw commands below.
 
 - `uv sync --group dev`: install project + dev tools.
-- `uv sync --extra <name>`: install optional provider/transport extras (for example `openai`, `openai-agents`, `webrtc`, `telephony`, `local`, `rnnoise`).
+- `uv sync --extra <name> --group dev`: install optional provider/transport extras while keeping dev tools (for example `openai`, `openai-agents`, `webrtc`, `telephony`, `local`, `rnnoise`).
 - `just`: list every developer task.
 - `just check`: run the pre-PR gauntlet (format check, lint, full serial tests).
 - `just validate-quick`: run the deterministic local validation slice.

@@ -227,7 +227,7 @@ def _load_funasr_onnx_vad_online_class() -> Any:
         raise ImportError(
             "FunASR VAD requires the funasr_onnx package. Install with: "
             "uv add 'easycat[funasr-vad]'. From the EasyCat repo, use: "
-            "uv sync --extra funasr-vad."
+            "uv sync --extra funasr-vad --group dev."
         )
 
     existing_package = sys.modules.get("funasr_onnx")

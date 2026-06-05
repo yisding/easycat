@@ -23,7 +23,7 @@ otherwise there's no echo to cancel and the mis-wiring is invisible.
 
 Dependencies:
     uv sync --extra quickstart --extra deepgram --group dev
-    For real AEC: uv sync --extra aec  # RNNoise is in quickstart
+    For real AEC: uv sync --extra aec --group dev  # RNNoise is in quickstart
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
     uv run easycat doctor

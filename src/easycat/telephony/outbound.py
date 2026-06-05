@@ -52,7 +52,7 @@ _CALL_STATUSES: frozenset[str] = frozenset(
 BLOCK_REASONS: frozenset[str] = frozenset({"blocked_unwanted", "blocked_rejected"})
 _TELEPHONY_INSTALL_HINT = (
     "Install with: uv add 'easycat[telephony]'. From the EasyCat repo, use: "
-    "uv sync --extra telephony."
+    "uv sync --extra telephony --group dev."
 )
 
 
@@ -177,7 +177,7 @@ class OutboundCallManager:
     """Orchestrates placing outbound calls via the Twilio REST API.
 
     Requires the ``twilio`` Python package (``uv add 'easycat[telephony]'``;
-    from the EasyCat repo, use ``uv sync --extra telephony``).
+    from the EasyCat repo, use ``uv sync --extra telephony --group dev``).
 
     Optional pre-call gates (plugged in after construction by
     ``_create_outbound_helpers`` or the caller directly):

@@ -25,7 +25,7 @@ def maybe_launch_debugger_ui(session: Session) -> None:
 
     The debugger is an optional extra (``easycat[debugger]`` → aiohttp);
     install it with ``uv add 'easycat[debugger]'`` or, from the EasyCat
-    repo, ``uv sync --extra debugger``. When it isn't installed we log
+    repo, ``uv sync --extra debugger --group dev``. When it isn't installed we log
     once and keep the session usable rather than crashing.  Pytest and CI
     runs are detected via ``PYTEST_CURRENT_TEST`` so the auto-launch never
     fights a test harness that already has the port or the loop.  Host/port

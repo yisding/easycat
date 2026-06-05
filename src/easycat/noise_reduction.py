@@ -37,7 +37,7 @@ _VALID_NOISE_REDUCER_FALLBACK_POLICIES: tuple[NoiseReducerFallbackPolicy, ...] =
 _NOISE_REDUCER_INSTALL_HINT = (
     "No noise-reduction backend is installed. Install RNNoise with: "
     "uv add 'easycat[rnnoise]'. From the EasyCat repo, use: "
-    "uv sync --extra rnnoise. Or configure Krisp (krisp-audio). "
+    "uv sync --extra rnnoise --group dev. Or configure Krisp (krisp-audio). "
     "Pass NoiseReducerConfig(backend='rnnoise') / backend='krisp' to require a "
     "specific backend, or fallback_policy='error' to fail loudly instead of "
     "passing audio through unchanged."

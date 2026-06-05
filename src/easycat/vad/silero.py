@@ -174,7 +174,7 @@ class SileroVAD(_VADBase):
             "Silero VAD torch backend is disabled because torch.hub loads remote "
             "Python code without repository pinning or hash verification. Use the "
             "bundled ONNX model instead: uv add 'easycat[silero-vad]'. From the "
-            "EasyCat repo, use: uv sync --extra silero-vad."
+            "EasyCat repo, use: uv sync --extra silero-vad --group dev."
         )
 
     def _load_onnx_model(self) -> None:

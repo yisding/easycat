@@ -70,14 +70,14 @@ def transport_config(name: str):
     if name == "local":
         return LocalTransportConfig()
     if name == "webrtc":
-        # Requires `uv sync --extra webrtc`. The browser client connects via
+        # Requires `uv sync --extra webrtc --group dev`. The browser client connects via
         # SDP offer/answer; see `examples/webrtc_server.py` for the HTTP
         # signalling endpoint that pairs with WebRTCTransport.
         from easycat import WebRTCTransportConfig
 
         return WebRTCTransportConfig()
     if name == "twilio":
-        # Requires `uv sync --extra telephony`. A live phone call connects
+        # Requires `uv sync --extra telephony --group dev`. A live phone call connects
         # via Twilio Media Streams over WebSocket; see
         # `examples/twilio_app.py` for the Flask app that wires this up.
         from easycat.transports.twilio_media import TwilioTransportConfig

@@ -6,7 +6,7 @@ waterfall, record inspector, and audio playback.  Reads the journal +
 artifact store directly — no separate telemetry pipeline.
 
 The UI is opt-in: install with ``uv add 'easycat[debugger]'``. From the
-EasyCat repo, use ``uv sync --extra debugger``.
+EasyCat repo, use ``uv sync --extra debugger --group dev``.
 
 Typical usage:
 

@@ -112,7 +112,7 @@ class LlamaAgentsBridge:
                 raise ImportError(
                     "llama-agents-client is required for remote LlamaAgentsBridge: "
                     "uv add 'easycat[llama-agents]'. "
-                    "From the EasyCat repo, use: uv sync --extra llama-agents."
+                    "From the EasyCat repo, use: uv sync --extra llama-agents --group dev."
                 ) from exc
             client = WorkflowClient(base_url=base_url)
 

@@ -42,36 +42,36 @@ in `quickstart`) — no torch required. If you want a leaner install with Silero
 add extras individually:
 
 ```bash
-uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad
+uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad --group dev
 ```
 
 Optional dependencies you may need depending on providers, transports, agent
 frameworks, and debugging/audio-processing features:
-- sounddevice (LocalTransport): `uv sync --extra local`
-- aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
-- aioquic (WebTransportTransport): `uv sync --extra webtransport`
-- FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony`
-- OpenAI Agents SDK: `uv sync --extra openai-agents`
-- PydanticAI stable v1: `uv sync --extra pydantic-ai`
-- PydanticAI v2 beta pin: `uv sync --extra pydantic-ai-v2-beta`
-- LangChain core: `uv sync --extra langchain`
-- LangGraph: `uv sync --extra langgraph`
-- LlamaAgents / LlamaIndex workflows: `uv sync --extra llama-agents`
-- LiveKit AEC3 echo cancellation: `uv sync --extra aec`
-- aiohttp debugger UI: `uv sync --extra debugger`
-- numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
-- ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license): `uv sync --extra ten-vad`
-- numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad` — runs the bundled ONNX model (no torch required)
-- funasr-onnx + onnxruntime (FunASR VAD): `uv sync --extra funasr-vad`
+- sounddevice (LocalTransport): `uv sync --extra local --group dev`
+- aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc --group dev`
+- aioquic (WebTransportTransport): `uv sync --extra webtransport --group dev`
+- FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
+- OpenAI Agents SDK: `uv sync --extra openai-agents --group dev`
+- PydanticAI stable v1: `uv sync --extra pydantic-ai --group dev`
+- PydanticAI v2 beta pin: `uv sync --extra pydantic-ai-v2-beta --group dev`
+- LangChain core: `uv sync --extra langchain --group dev`
+- LangGraph: `uv sync --extra langgraph --group dev`
+- LlamaAgents / LlamaIndex workflows: `uv sync --extra llama-agents --group dev`
+- LiveKit AEC3 echo cancellation: `uv sync --extra aec --group dev`
+- aiohttp debugger UI: `uv sync --extra debugger --group dev`
+- numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn --group dev`
+- ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license): `uv sync --extra ten-vad --group dev`
+- numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad --group dev` — runs the bundled ONNX model (no torch required)
+- funasr-onnx + onnxruntime (FunASR VAD): `uv sync --extra funasr-vad --group dev`
   on Python 3.11-3.12. The current upstream SDK pins NumPy below the
   range needed by the fixed ONNX package on Python 3.13+.
-- pyrnnoise + requests (RNNoise noise reduction backend): `uv sync --extra rnnoise`
+- pyrnnoise + requests (RNNoise noise reduction backend): `uv sync --extra rnnoise --group dev`
 - Krisp SDK (krisp_audio): `uv pip install krisp_audio`
 - Provider SDKs/keys:
-  `uv sync --extra openai`,
-  `uv sync --extra deepgram`,
-  `uv sync --extra elevenlabs`,
-  or `uv sync --extra cartesia` (Cartesia uses EasyCat's core WebSocket stack).
+  `uv sync --extra openai --group dev`,
+  `uv sync --extra deepgram --group dev`,
+  `uv sync --extra elevenlabs --group dev`,
+  or `uv sync --extra cartesia --group dev` (Cartesia uses EasyCat's core WebSocket stack).
 
 ## CLI
 
@@ -663,7 +663,7 @@ specialist pinning or programmatic hand-offs use `GenericWorkflowBridge`.
 Pass a LangChain `Runnable` directly as `EasyConfig(agent=...)`; EasyCat
 wraps it in `LangChainBridge` and streams text deltas, tool calls, and
 journal cursors from `astream_events()`. Install the repo extra with
-`uv sync --extra langchain`; model packages such as `langchain-openai`
+`uv sync --extra langchain --group dev`; model packages such as `langchain-openai`
 are installed separately by your app.
 
 Pass a compiled LangGraph graph directly the same way. To be auto-adapted,
@@ -671,7 +671,7 @@ the graph must be compiled with a checkpointer, for example
 `graph.compile(checkpointer=InMemorySaver())`; EasyCat then uses
 `LangGraphBridge` so thread IDs, checkpoints, node cursors, and barge-in
 state edits stay LangGraph-native. Install the repo extra with
-`uv sync --extra langgraph`; see `examples/langchain_voice.py` and
+`uv sync --extra langgraph --group dev`; see `examples/langchain_voice.py` and
 `examples/langgraph_voice.py` for runnable versions.
 
 ### LlamaAgents / LlamaIndex Workflows
@@ -725,7 +725,7 @@ providers, debug bundles, and journal inspection.
 
 ### Quickstart: WebRTC in browser (fast path)
 1. Install extras:
-   `uv sync --extra webrtc --extra openai --extra openai-agents`
+   `uv sync --extra webrtc --extra openai --extra openai-agents --group dev`
 2. Set your key:
    `export OPENAI_API_KEY="your-api-key"`
 3. Run the server:

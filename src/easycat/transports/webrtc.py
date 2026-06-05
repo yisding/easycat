@@ -11,7 +11,7 @@ Outbound audio (pipeline → remote peer) is resampled from whatever the TTS
 provider emits to 48 kHz and sent via an Opus-encoded audio track.
 
 Requires the ``webrtc`` extra: ``uv add 'easycat[webrtc]'``. From the
-EasyCat repo, use ``uv sync --extra webrtc``.
+EasyCat repo, use ``uv sync --extra webrtc --group dev``.
 """
 
 from __future__ import annotations

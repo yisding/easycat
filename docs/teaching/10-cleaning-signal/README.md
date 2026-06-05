@@ -11,7 +11,7 @@
 - [Chapter 9](../09-interruption/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - RNNoise is included in `quickstart`; Krisp requires its own SDK.
-- For real AEC: `uv sync --extra aec` (LiveKit APM).
+- For real AEC: `uv sync --extra aec --group dev` (LiveKit APM).
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 - After setting provider keys, run `uv run easycat doctor` from the repo root.
 
@@ -89,7 +89,7 @@ hearing.
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
 +    RNNoise is included in quickstart; Krisp requires its own SDK.
-+    For real AEC:  uv sync --extra aec
++    For real AEC:  uv sync --extra aec --group dev
 +    Missing selected backends fall back to passthrough — the
 +    journal tells you which backend is live.
 +
