@@ -72,9 +72,11 @@ with the codebase. Counts below come from tracked files and exclude
   1,390 lines.
 - `src/easycat/__init__.py` is smaller than the older cleanup note but still a
   broad public surface at 280 lines and 85 lazy top-level exports.
-- A root `LICENSE`, richer project metadata, and package contents denylist
-  remain active release-bar work. CI now runs `uv build`, and release
-  validation exercises an installed package through the public CLI.
+- A root `LICENSE` remains active release-bar work. Project metadata now
+  includes author, keywords, classifiers, and project URLs, and wheel packaging
+  tests guard against cache/workspace artifacts leaking into release wheels.
+  CI now runs `uv build`, and release validation exercises an installed
+  package through the public CLI.
 - Connection-policy hardening, EventBus subscription tokens/dispatch policies,
   deeper provider capability reports, and a typed TTS input policy remain
   cleanup backlog items.

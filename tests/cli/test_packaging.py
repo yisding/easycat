@@ -1,17 +1,19 @@
-"""Plan 14 — wheel packaging ships template dotfiles.
+"""Plan 15 — wheel packaging ships template dotfiles and release metadata.
 
 Run with ``pytest -m integration_local tests/cli/test_packaging.py``.
 Skipped by default to keep the fast test suite fast; the wheel build
 takes a few seconds.
 
-See ``TEST_PLANS.md`` §14.
+See ``TEST_PLANS.md`` §15.
 """
 
 from __future__ import annotations
 
+import email
 import shutil
 import subprocess
 import zipfile
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -64,6 +66,14 @@ def _wheel_members(wheel_path: Path) -> list[str]:
         return zf.namelist()
 
 
+def _wheel_metadata(wheel_path: Path) -> Message:
+    with zipfile.ZipFile(wheel_path) as zf:
+        metadata_name = next(
+            name for name in zf.namelist() if name.endswith(".dist-info/METADATA")
+        )
+        return email.message_from_bytes(zf.read(metadata_name))
+
+
 @pytest.mark.parametrize("template", _EXPECTED_TEMPLATES)
 def test_wheel_ships_template_directory(built_wheel: Path, template: str) -> None:
     members = _wheel_members(built_wheel)
@@ -90,3 +100,59 @@ def test_wheel_ships_cli_entry_point(built_wheel: Path) -> None:
     # And the top-level entry point file exists.
     assert "easycat/cli/__init__.py" in members
     assert "easycat/cli/_app.py" in members
+
+
+def test_wheel_metadata_is_useful_for_package_indexes(built_wheel: Path) -> None:
+    """Release artifacts should be understandable before users read the README."""
+    metadata = _wheel_metadata(built_wheel)
+
+    assert metadata["Name"] == "easycat"
+    assert metadata["Requires-Python"] == ">=3.11"
+    assert metadata["Author"] == "EasyCat contributors"
+    assert metadata.get_all("Project-URL") == [
+        "Documentation, https://yisding.github.io/easycat/",
+        "Issues, https://github.com/yisding/easycat/issues",
+        "Repository, https://github.com/yisding/easycat",
+    ]
+    assert metadata.get_all("Keywords") == [
+        "agent-framework,speech-to-text,telephony,text-to-speech,voice-agents,webrtc"
+    ]
+    classifiers = set(metadata.get_all("Classifier") or [])
+    assert {
+        "Development Status :: 3 - Alpha",
+        "Intended Audience :: Developers",
+        "Programming Language :: Python :: 3 :: Only",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.14",
+        "Topic :: Multimedia :: Sound/Audio :: Speech",
+        "Typing :: Typed",
+    } <= classifiers
+
+
+def test_wheel_does_not_ship_cache_or_workspace_artifacts(built_wheel: Path) -> None:
+    """Ignored local artifacts under ``src/`` must not leak into release wheels."""
+    members = _wheel_members(built_wheel)
+    forbidden_parts = {
+        ".easycat",
+        ".git",
+        ".github",
+        ".hypothesis",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "tests",
+    }
+    offenders = []
+    for member in members:
+        parts = set(Path(member).parts)
+        if parts & forbidden_parts or member.endswith((".pyc", ".pyo")):
+            offenders.append(member)
+
+    assert not offenders, "wheel should not ship cache/workspace artifacts: " + ", ".join(
+        offenders
+    )

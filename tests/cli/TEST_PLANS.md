@@ -22,7 +22,7 @@ first, debug second, safety net third, and infrastructure last.
 | 12 | `validate` command and report rendering | `test_validate.py` |
 | 13 | Library prereqs — `run()` lifecycle | `test_library_prereqs.py` |
 | 14 | Library prereqs — string-keyed providers | `test_library_prereqs.py` |
-| 15 | Packaging — wheel ships template dotfiles | `test_packaging.py` (integration) |
+| 15 | Packaging — wheel ships dotfiles and metadata | `test_packaging.py` (integration) |
 | 16 | End-to-end scaffold-and-invoke | `test_cli_e2e.py` (integration) |
 
 Plans 1-9 are fast unit tests. Plans 10-14 add coverage for cross-
@@ -371,16 +371,19 @@ through as a valid key.
 
 ---
 
-## Plan 15 — Packaging — wheel ships template dotfiles
+## Plan 15 — Packaging — wheel ships template dotfiles and metadata
 
 **Concern.** `uvx easycat init my-agent` from a PyPI-installed
 `easycat` must get the full template catalog, including `.env.example`
 and `.gitignore`. Build backends have been known to strip dotfiles
-silently.
+silently. The release artifact also needs useful package-index
+metadata before users read the README, and it must not include local
+cache or workspace artifacts that happen to exist under `src/`.
 
 **Risks.** `uv_build` / hatchling excluding dotfiles; a templates
 subdir missing from the wheel; files copied under a different tree
-structure than the source.
+structure than the source; missing author/project/classifier metadata
+on PyPI; ignored cache directories leaking into the wheel.
 
 **Checks.**
 - `uv build --wheel` succeeds on a clean checkout.
@@ -388,6 +391,11 @@ structure than the source.
   `easycat/cli/scaffold/templates/<name>/{agent.py, pyproject.toml,
   README.md, .env.example, .gitignore}` for each of the three M1
   templates.
+- Wheel metadata includes the package name, Python requirement, author,
+  project URLs, keywords, and core classifiers.
+- Wheel contents reject cache, test, build, VCS, and virtualenv
+  artifacts, including ignored `.ruff_cache` directories under
+  scaffold templates.
 
 **Backed by.** New `tests/cli/test_packaging.py` (marked
 `integration_local` to keep the wheel build out of the fast test

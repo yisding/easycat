@@ -4,6 +4,30 @@ version = "0.1.0"
 description = "Slim, batteries-included voice bot framework for AI Agents"
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [{ name = "EasyCat contributors" }]
+keywords = [
+    "agent-framework",
+    "speech-to-text",
+    "telephony",
+    "text-to-speech",
+    "voice-agents",
+    "webrtc",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Telephony",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "httpx>=0.28.1",
     "rich>=15.0.0",
@@ -14,6 +38,11 @@ dependencies = [
 
 [project.scripts]
 easycat = "easycat.cli:main"
+
+[project.urls]
+Documentation = "https://yisding.github.io/easycat/"
+Issues = "https://github.com/yisding/easycat/issues"
+Repository = "https://github.com/yisding/easycat"
 
 [project.entry-points.pytest11]
 easycat = "easycat.debug._pytest_plugin"
@@ -91,6 +120,17 @@ all = [
 [build-system]
 requires = ["uv_build>=0.11.17,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+source-exclude = [
+    "__pycache__",
+    "*.pyc",
+    "*.pyo",
+    ".hypothesis",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+]
 
 [tool.uv]
 conflicts = [
