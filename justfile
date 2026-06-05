@@ -77,6 +77,22 @@ validate-quick:
 validate-socket:
     uv run easycat validate socket
 
+# Local stress validation and reliability artifacts.
+validate-stress:
+    uv run easycat validate stress
+
+# Low-cost live latency probe. Requires live provider credentials.
+validate-latency-smoke:
+    uv run easycat validate latency --smoke
+
+# OpenAI live provider canary. Requires OPENAI_API_KEY.
+validate-live-openai:
+    uv run easycat validate live --provider openai
+
+# Render a saved validation report. Usage: just validate-report .easycat/validation/latest.json
+validate-report REPORT=".easycat/validation/latest.json":
+    uv run easycat validate report "{{ REPORT }}"
+
 # The pre-PR gauntlet: format check + lint + full serial test suite.
 check: fmt-check lint test
 

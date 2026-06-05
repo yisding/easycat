@@ -63,7 +63,7 @@ def test_contributing_development_loop_just_recipes_stay_current() -> None:
     recipes = _just_recipes()
     missing: list[str] = []
     stale_raw_commands: list[str] = []
-    parameterized = {"sync-extra", "test-one"}
+    parameterized = {"sync-extra", "test-one", "validate-report"}
 
     for row in _development_loop_rows():
         recipe = row["recipe"]

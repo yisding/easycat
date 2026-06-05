@@ -33,6 +33,10 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not slow and not stress and not flaky"` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
 | Validate (socket) | `just validate-socket` | `uv run easycat validate socket` |
+| Validate (stress) | `just validate-stress` | `uv run easycat validate stress` |
+| Validate (latency smoke) | `just validate-latency-smoke` | `uv run easycat validate latency --smoke` |
+| Validate (live OpenAI) | `just validate-live-openai` | `uv run easycat validate live --provider openai` |
+| Validate report | `just validate-report .easycat/validation/latest.json` | `uv run easycat validate report .easycat/validation/latest.json` |
 | Pre-commit hooks | `just pre-commit` | `uv run pre-commit run --all-files` |
 
 > `mypy` ships in the `dev` group, so `just typecheck` / `just typecheck-all`
