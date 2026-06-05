@@ -20,8 +20,8 @@ run(
 )
 
 # Next, try (change one token, or type `easycat.` to browse the surface):
-#   stt="deepgram/nova-2"          swap STT (needs DEEPGRAM_API_KEY + easycat[deepgram])
+#   stt="deepgram/nova-2"          swap STT (needs DEEPGRAM_API_KEY + --extra deepgram)
 #   tools=[...] on your Agent      tools live on YOUR Agent, not on EasyCat
-#   EasyConfig.browser(agent=...)  serve in a browser (needs a server + easycat[webrtc])
+#   EasyConfig.browser(agent=...)  serve in a browser (needs a server + --extra webrtc)
 #   debug="full"                   record a journal for `easycat inspect`
 # Full ground-up ladder: docs/teaching/00-hello-audio/
