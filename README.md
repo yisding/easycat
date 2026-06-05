@@ -161,8 +161,10 @@ contract status, cassette status, and live canaries.
 ## Bring your own agent
 EasyCat does not replace your agent framework. Build your agent or workflow with
 your SDK of choice and hand it to EasyCat — `create_session` auto-detects
-OpenAI Agents SDK and PydanticAI objects via `auto_adapt_agent`, so you don't
-have to wrap them yourself.
+OpenAI Agents SDK, PydanticAI, LangChain, LangGraph, LlamaAgents, Remote
+Responses API URLs, and your own async workflow objects with
+`on_user_turn(...)` via `auto_adapt_agent`, so you don't have to wrap them
+yourself.
 
 ### Quickstart (EasyConfig)
 A voice bot in three lines — `run(EasyConfig.mic(agent=...))` is the one

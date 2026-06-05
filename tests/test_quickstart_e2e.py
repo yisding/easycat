@@ -260,6 +260,37 @@ def test_readme_intro_tracks_public_agent_bridge_surface() -> None:
     assert "OpenAI Agents SDK, PydanticAI agents, or PydanticAI workflows" not in intro
 
 
+def test_readme_bring_your_own_agent_tracks_auto_adapt_surface() -> None:
+    from easycat.integrations.agents._factory import auto_adapt_agent
+
+    doc = auto_adapt_agent.__doc__ or ""
+    auto_detected_bridges = {
+        bridge_name
+        for bridge_name in _BRIDGE_DISPLAY_NAMES
+        if bridge_name in doc and bridge_name != "PydanticAIBridge"
+    }
+    # PydanticAIBridge appears in the pydantic_graph explicit-construction
+    # warning too, so require it separately through the Agent-mode bullet.
+    assert "pydantic_ai.Agent" in doc
+    auto_detected_bridges.add("PydanticAIBridge")
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Bring your own agent", 1)[1].split("### Quickstart", 1)[0]
+    normalized_section = re.sub(r"\s+", " ", section)
+
+    missing_display_names = sorted(
+        display_name
+        for bridge_name, display_name in _BRIDGE_DISPLAY_NAMES.items()
+        if bridge_name in auto_detected_bridges and display_name not in normalized_section
+    )
+
+    assert not missing_display_names, (
+        "README Bring your own agent section missing auto-adapt labels: "
+        + ", ".join(missing_display_names)
+    )
+    assert "OpenAI Agents SDK and PydanticAI objects" not in normalized_section
+
+
 def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     from easycat.cli import _app
     from easycat.cli.debug.bundles import bundles_app
