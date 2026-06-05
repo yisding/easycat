@@ -40,6 +40,14 @@ def test_run_is_exposed_publicly() -> None:
     assert _ is easycat.run
 
 
+def test_run_docstring_teaches_public_context_lifecycle() -> None:
+    doc = easycat.run.__doc__ or ""
+
+    assert "async with session:" in doc
+    assert "stop(force=True)" in doc
+    assert "await session.shutdown()" not in doc
+
+
 class _StubSession:
     """Session double that records lifecycle calls.
 

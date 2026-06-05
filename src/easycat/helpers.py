@@ -100,12 +100,15 @@ def attach_runtime_feedback(session: Session) -> None:
 def run(config: EasyConfig) -> None:
     """Run a voice agent to completion from a synchronous entry point.
 
-    Replaces the ``asyncio.run(main())`` + ``await session.start()`` +
-    signal-handling + ``await session.shutdown()`` ceremony that every
-    example used to carry.  Runtime feedback (``Listening...``, user
-    transcripts, assistant replies) is auto-attached when stderr is a
-    TTY so `easycat init → run` feels alive out of the box; tests and
-    production pipelines that redirect stderr stay quiet.
+    Replaces the ``asyncio.run(main())`` wrapper, manual
+    ``await session.start()``, signal waiting, and teardown ceremony
+    that every example used to carry. Internally it uses the public
+    ``async with session:`` lifecycle: entering starts the session and
+    exiting calls ``stop(force=True)``. Runtime feedback
+    (``Listening...``, user transcripts, assistant replies) is
+    auto-attached when stderr is a TTY so `easycat init → run` feels
+    alive out of the box; tests and production pipelines that redirect
+    stderr stay quiet.
 
     ``EASYCAT_LOG_LEVEL=info`` (or ``debug``/``warning``/``error``) in
     the environment bumps the ``easycat`` logger without needing
