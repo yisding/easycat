@@ -111,7 +111,8 @@ class LlamaAgentsBridge:
             except ImportError as exc:
                 raise ImportError(
                     "llama-agents-client is required for remote LlamaAgentsBridge: "
-                    "pip install 'easycat[llama-agents]'"
+                    "uv add 'easycat[llama-agents]'. "
+                    "From the EasyCat repo, use: uv sync --extra llama-agents."
                 ) from exc
             client = WorkflowClient(base_url=base_url)
 

@@ -90,7 +90,8 @@ class OpenAIAgentsBridge:
     ) -> AsyncIterator[AgentBridgeEvent]:
         if Runner is None:
             raise ImportError(
-                "openai-agents package is required: pip install 'easycat[openai-agents]'"
+                "openai-agents package is required: uv add 'easycat[openai-agents]'. "
+                "From the EasyCat repo, use: uv sync --extra openai-agents."
             )
 
         agent_cursor = ExecutionCursor(
