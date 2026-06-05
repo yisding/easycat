@@ -16,7 +16,7 @@ uv sync
 cp .env.example .env
 ```
 
-Edit `.env` and set `OPENAI_API_KEY`. Run `easycat doctor` to verify:
+Edit `.env` and set `OPENAI_API_KEY`. Run `uv run easycat doctor` to verify:
 
 ```bash
 uv run easycat doctor

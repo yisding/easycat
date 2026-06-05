@@ -16,7 +16,7 @@ Copy the example env file and fill in your API key:
 cp .env.example .env
 ```
 
-Edit `.env` and set `OPENAI_API_KEY`. Run `easycat doctor` to verify:
+Edit `.env` and set `OPENAI_API_KEY`. Run `uv run easycat doctor` to verify:
 
 ```bash
 uv run easycat doctor
@@ -53,7 +53,8 @@ uv run python -m py_compile agent.py
   `Agent(...)` constructor.
 - **Swap to a voice agent:** replace `create_text_session` with
   `easycat.run(EasyConfig.mic(agent=agent))` and add `stt=` / `tts=`. Or run
-  `easycat init my-voice-agent --template openai-agents` for a voice starter.
+  `uv run easycat init my-voice-agent --template openai-agents` for a voice
+  starter.
 - **Debug a session:** pass `debug="full"` to `create_text_session` to write a
   SQLite journal under `.easycat/journals/`; inspect it with
   `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.

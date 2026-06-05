@@ -211,6 +211,7 @@ def test_readme_has_doctor_preflight_when_template_needs_openai_key(name: str) -
 
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     assert "uv run easycat doctor" in readme
+    assert "Run `easycat doctor`" not in readme
 
 
 @pytest.mark.parametrize("name", _VOICE_TEMPLATES)
@@ -226,6 +227,8 @@ def test_text_chat_readme_points_voice_upgrade_to_mic_preset() -> None:
     readme = (_template_dir("text-chat") / "README.md").read_text(encoding="utf-8")
     assert "EasyConfig.mic(agent=agent)" in readme
     assert "EasyConfig(agent=agent)" not in readme
+    assert "uv run easycat init my-voice-agent --template openai-agents" in readme
+    assert "`easycat init my-voice-agent --template openai-agents`" not in readme
 
 
 def test_text_chat_template_uses_public_session_lifecycle() -> None:
