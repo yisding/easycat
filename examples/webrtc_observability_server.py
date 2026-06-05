@@ -29,7 +29,9 @@ try:
     from agents import Agent, function_tool  # type: ignore[import-untyped]
 except ImportError as exc:
     raise SystemExit(
-        "openai-agents is required. Install with: uv sync --extra openai-agents"
+        "openai-agents is required. For an app, run: "
+        "uv add 'easycat[openai-agents,webrtc,debugger]'. In this repo, run: "
+        "uv sync --extra openai-agents --extra webrtc --extra debugger"
     ) from exc
 
 from easycat import (

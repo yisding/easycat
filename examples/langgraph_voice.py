@@ -22,7 +22,8 @@ try:
     from langgraph.graph.message import add_messages
 except ImportError as exc:
     raise SystemExit(
-        "LangGraph is required. Install with: "
+        "LangGraph is required. For an app, run: "
+        "uv add 'easycat[quickstart,langgraph]' langchain-openai. In this repo, run: "
         "uv sync --extra quickstart --extra langgraph; uv pip install langchain-openai"
     ) from exc
 

@@ -73,6 +73,47 @@ def _example_readme_rows() -> list[dict[str, str]]:
     return rows
 
 
+def _is_import_error_handler(handler: ast.ExceptHandler) -> bool:
+    if isinstance(handler.type, ast.Name):
+        return handler.type.id == "ImportError"
+    return False
+
+
+def _literal_string(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _literal_string(node.left)
+        right = _literal_string(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+def _import_error_system_exit_messages(path: Path) -> list[str]:
+    module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    messages: list[str] = []
+
+    for handler in (node for node in ast.walk(module) if isinstance(node, ast.ExceptHandler)):
+        if not _is_import_error_handler(handler):
+            continue
+        for node in ast.walk(handler):
+            if not isinstance(node, ast.Raise):
+                continue
+            call = node.exc
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "SystemExit"
+                and call.args
+            ):
+                message = _literal_string(call.args[0])
+                if message is not None:
+                    messages.append(message)
+
+    return messages
+
+
 class _DummyAgent:
     async def run(self, text: str) -> str:
         return text
@@ -211,6 +252,27 @@ def test_top_level_examples_use_repo_local_extra_setup_commands() -> None:
         "Top-level example setup docstrings should describe repo extras with "
         "`uv sync --extra ...`, not `easycat[...]`: " + ", ".join(stale)
     )
+
+
+def test_example_import_guards_include_package_and_repo_install_paths() -> None:
+    stale: list[str] = []
+
+    for example_name in sorted(_top_level_example_names()):
+        path = REPO_ROOT / "examples" / example_name
+        for message in _import_error_system_exit_messages(path):
+            if "uv sync --extra" not in message:
+                continue
+            missing_bits = [
+                bit
+                for bit in ("For an app, run:", "uv add 'easycat[", "In this repo, run:")
+                if bit not in message
+            ]
+            if "Install with: uv sync" in message:
+                missing_bits.append("no repo-only Install with wording")
+            if missing_bits:
+                stale.append(f"{example_name}: missing {', '.join(missing_bits)}")
+
+    assert not stale, "Example import guards missing install paths: " + "; ".join(stale)
 
 
 def test_pydantic_ai_example_imports(monkeypatch: pytest.MonkeyPatch):

@@ -15,7 +15,9 @@ try:
     from pydantic_ai import Agent  # type: ignore[import-untyped]
 except ImportError as exc:
     raise SystemExit(
-        "PydanticAI is required. Install with: uv sync --extra quickstart --extra pydantic-ai"
+        "PydanticAI is required. For an app, run: "
+        "uv add 'easycat[quickstart,pydantic-ai]'. In this repo, run: "
+        "uv sync --extra quickstart --extra pydantic-ai"
     ) from exc
 
 from easycat import EasyConfig, require_env, run

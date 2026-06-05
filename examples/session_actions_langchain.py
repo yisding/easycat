@@ -27,8 +27,9 @@ try:
     from langchain_openai import ChatOpenAI
 except ImportError as exc:
     raise SystemExit(
-        "LangChain (<1.0) is required. Install with: "
-        "uv sync --extra quickstart --extra langchain; "
+        "LangChain (<1.0) is required. For an app, run: "
+        "uv add 'easycat[quickstart,langchain]' 'langchain<1' langchain-openai. "
+        "In this repo, run: uv sync --extra quickstart --extra langchain; "
         'uv pip install "langchain<1" langchain-openai'
     ) from exc
 

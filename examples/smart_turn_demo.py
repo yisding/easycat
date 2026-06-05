@@ -12,7 +12,8 @@ try:
     from agents import Agent  # type: ignore[import-untyped]
 except ImportError as exc:
     raise SystemExit(
-        "openai-agents is required. Install with: uv sync --extra quickstart"
+        "openai-agents is required. For an app, run: "
+        "uv add 'easycat[quickstart]'. In this repo, run: uv sync --extra quickstart"
     ) from exc
 
 from easycat import EasyConfig, SmartTurnConfig, run
