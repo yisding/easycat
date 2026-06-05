@@ -11,6 +11,7 @@ Setup:
   export TWILIO_CALL_API_TOKEN="dev-only-token"
   export TWILIO_SMS_FROM="+15551234567"  # optional, enables send_sms actions
   uv sync --extra telephony --extra openai-agents
+  uv run easycat doctor
   uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0 --port 8000
 """
 
@@ -37,6 +38,7 @@ from easycat import (
     TwilioSessionActionConfig,
     attach_runtime_feedback,
     create_session,
+    require_env,
 )
 from easycat.telephony import (
     OutboundCallManager,
@@ -47,10 +49,13 @@ from easycat.transports.twilio_media import twiml_connect_stream
 
 
 def create_app(*, api_key: str | None = None, stream_url: str | None = None):
-    api_key = api_key or os.getenv("OPENAI_API_KEY")
+    api_key = api_key or require_env("OPENAI_API_KEY")
     stream_url = stream_url or os.getenv("TWILIO_STREAM_URL")
-    if not api_key or not stream_url:
-        raise RuntimeError("OPENAI_API_KEY and TWILIO_STREAM_URL are required.")
+    if not stream_url:
+        raise RuntimeError(
+            "TWILIO_STREAM_URL is required. Set it to the public wss:// URL Twilio should "
+            "connect to."
+        )
     twilio_account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
     twilio_voice_from = os.getenv("TWILIO_VOICE_FROM", "")

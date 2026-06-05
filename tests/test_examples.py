@@ -730,6 +730,19 @@ def test_twilio_example_factory():
     assert app is not None
 
 
+def test_twilio_example_missing_openai_key_is_actionable(monkeypatch: pytest.MonkeyPatch):
+    import examples.twilio_app as twilio_app
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        twilio_app.create_app(stream_url="wss://example.com/stream")
+
+    message = str(exc_info.value)
+    assert "OPENAI_API_KEY is required." in message
+    assert "uv run easycat doctor" in message
+
+
 def test_example_session_smoke():
     config = EasyConfig(
         openai_api_key="test-key",
