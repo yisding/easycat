@@ -517,8 +517,9 @@ session = create_session(
 ```
 
 This keeps the pipeline (VAD → STT → agent → TTS) identical while letting you
-swap in open-source models for fully local operation. `vad=` also accepts a
-provider instance when you have a custom voice activity detector.
+swap in open-source models for fully local operation. Provider instances are
+accepted by `vad=`, `noise_reduction=`, and `echo_cancellation=` when you have
+custom audio-processing stages.
 
 ## Inspecting conversation flow
 

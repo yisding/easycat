@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from easycat.echo_cancellation import create_echo_canceller
+from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.events import EventBus
 from easycat.integrations.agents import ExternalAgentBridge
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
@@ -177,6 +177,28 @@ def _create_vad(config: Any) -> Any:
     if _is_vad_provider_instance(config):
         return config
     return create_vad(config)
+
+
+def _is_noise_reducer_instance(value: Any) -> bool:
+    return not isinstance(value, type) and callable(getattr(value, "process", None))
+
+
+def _resolve_noise_reducer(config: Any) -> Any:
+    if _is_noise_reducer_instance(config):
+        return config
+    return create_noise_reducer(config)
+
+
+def _is_echo_canceller_instance(value: Any) -> bool:
+    return not isinstance(value, type) and all(
+        callable(getattr(value, name, None)) for name in ("process", "feed_reference")
+    )
+
+
+def _resolve_echo_canceller(config: Any) -> Any:
+    if _is_echo_canceller_instance(config):
+        return config
+    return create_echo_canceller(config)
 
 
 def _create_artifact_store(
@@ -344,17 +366,21 @@ def create_session(config: EasyConfig) -> Session:
         enable_vad = not auto_turn_from_stt_final
         vad = _create_vad(config.vad) if enable_vad else None
         noise_reducer = (
-            create_noise_reducer(config.noise_reduction or NoiseReducerConfig())
+            _resolve_noise_reducer(config.noise_reduction or NoiseReducerConfig())
             if config.enable_noise_reduction or config.noise_reduction is not None
             else None
         )
-        # ``EasyConfig.__post_init__`` always resolves ``echo_cancellation``
-        # to a concrete config (honoring the tri-state ``enable_echo_cancellation``
-        # via ``_default_echo_cancellation_for_transport``), so it is never None
-        # here.
-        echo_cfg = config.echo_cancellation
-        assert echo_cfg is not None
-        echo_canceller = create_echo_canceller(echo_cfg)
+        # ``EasyConfig.__post_init__`` fills the default echo-cancellation
+        # config when the field is unset, but preserves already-built provider
+        # instances. Either way, the field is never None here.
+        echo_cfg_or_provider = config.echo_cancellation
+        assert echo_cfg_or_provider is not None
+        echo_canceller = _resolve_echo_canceller(echo_cfg_or_provider)
+        enable_echo_cancellation = (
+            echo_cfg_or_provider.enabled
+            if isinstance(echo_cfg_or_provider, EchoCancellationConfig)
+            else False
+        )
         transport = _create_transport(config.transport, event_bus)
 
         mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
@@ -461,7 +487,7 @@ def create_session(config: EasyConfig) -> Session:
                 telephony_helpers=telephony_helpers,
                 enable_vad=enable_vad,
                 enable_noise_reduction=config.enable_noise_reduction,
-                enable_echo_cancellation=echo_cfg.enabled,
+                enable_echo_cancellation=enable_echo_cancellation,
                 auto_turn_from_stt_final=auto_turn_from_stt_final,
                 strip_markdown=config.strip_markdown,
                 output_processors=config.output_processors,

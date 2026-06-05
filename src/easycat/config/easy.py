@@ -25,7 +25,14 @@ from easycat.errors import EASYCAT_E203
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.noise_reduction import NoiseReducerConfig
-from easycat.providers import STTProvider, Transport, TTSProvider, VADProvider
+from easycat.providers import (
+    EchoCanceller,
+    NoiseReducer,
+    STTProvider,
+    Transport,
+    TTSProvider,
+    VADProvider,
+)
 from easycat.runtime.capabilities import default_echo_cancellation_enabled
 from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.smart_turn import SmartTurnConfig
@@ -440,6 +447,12 @@ class EasyConfig(_AgentSessionConfig):
             ``openai_api_key`` (or ``OPENAI_API_KEY``) to use the default
             OpenAI realtime STT + TTS chain.
         vad: A ``VADConfig`` or an already-built VAD provider instance.
+        noise_reduction: A ``NoiseReducerConfig`` or an already-built
+            noise reducer instance. Passing an instance opts the audio
+            processing stage in without requiring ``enable_noise_reduction``.
+        echo_cancellation: An ``EchoCancellationConfig`` or an already-built
+            echo canceller instance. Passing an instance opts the audio
+            processing stage in when the provider is not marked passthrough.
         enable_noise_reduction: Opt-in noise reduction. Defaults to
             ``False``, so the out-of-the-box pipeline does **not** denoise
             mic input. Set ``True`` (or pass an explicit ``noise_reduction``
@@ -455,8 +468,8 @@ class EasyConfig(_AgentSessionConfig):
     stt: STTConfig | STTProvider | str | None = None
     tts: TTSConfig | TTSProvider | str | None = None
     vad: VADConfig | VADProvider = field(default_factory=VADConfig)
-    noise_reduction: NoiseReducerConfig | None = None
-    echo_cancellation: EchoCancellationConfig | None = None
+    noise_reduction: NoiseReducerConfig | NoiseReducer | None = None
+    echo_cancellation: EchoCancellationConfig | EchoCanceller | None = None
     enable_noise_reduction: bool = False
     enable_echo_cancellation: bool | None = None
     transport: TransportConfig = field(default_factory=LocalTransportConfig)

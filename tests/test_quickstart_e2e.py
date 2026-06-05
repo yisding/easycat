@@ -486,7 +486,11 @@ def test_readme_local_speech_pipeline_uses_easyconfig_provider_instances() -> No
         "stt=LocalSTTProvider(...)",
         "tts=LocalTTSProvider(...)",
         "agent=LocalAgent(...)",
-        "`vad=` also accepts a",
+        "Provider instances are",
+        "`vad=`",
+        "`noise_reduction=`",
+        "`echo_cancellation=`",
+        "custom audio-processing stages",
     ):
         assert term in section
 
