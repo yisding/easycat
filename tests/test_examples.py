@@ -202,12 +202,14 @@ def test_top_level_examples_use_repo_local_extra_setup_commands() -> None:
 
     for example_name in sorted(_top_level_example_names()):
         path = REPO_ROOT / "examples" / example_name
-        if "easycat[" in path.read_text(encoding="utf-8"):
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        doc = ast.get_docstring(module) or ""
+        if "easycat[" in doc:
             stale.append(example_name)
 
     assert not stale, (
-        "Top-level examples should describe repo extras with `uv sync --extra ...`, not "
-        "`easycat[...]`: " + ", ".join(stale)
+        "Top-level example setup docstrings should describe repo extras with "
+        "`uv sync --extra ...`, not `easycat[...]`: " + ", ".join(stale)
     )
 
 
