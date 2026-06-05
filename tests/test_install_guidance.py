@@ -172,15 +172,21 @@ def test_teaching_chapter_key_prerequisites_run_doctor() -> None:
 def test_readme_optional_dependency_list_has_copyable_install_commands() -> None:
     """The optional-dependency list should not name packages without commands."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    optional_block = readme.split(
-        "Optional dependencies you may need depending on providers/transports:", 1
-    )[1].split("## CLI", 1)[0]
+    optional_block = readme.split("Optional dependencies you may need depending on", 1)[1].split(
+        "## CLI", 1
+    )[0]
 
     for command in (
         "uv sync --extra local",
         "uv sync --extra webrtc",
         "uv sync --extra webtransport",
         "uv sync --extra telephony",
+        "uv sync --extra openai-agents",
+        "uv sync --extra pydantic-ai",
+        "uv sync --extra pydantic-ai-v2-beta",
+        "uv sync --extra langchain",
+        "uv sync --extra langgraph",
+        "uv sync --extra llama-agents",
         "uv sync --extra smart-turn",
         "uv sync --extra ten-vad",
         "uv sync --extra silero-vad",
