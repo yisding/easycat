@@ -17,8 +17,8 @@ with the codebase. Counts below come from tracked files and exclude
   validation, coverage, socket validation, build smoke, and manual
   live-provider tests. Quick validation runs on Python 3.11, 3.12, and 3.14;
   socket validation runs on Python 3.12.
-- CLI support includes `init`, `doctor`, `explain`, `bundles list/show`, and
-  `inspect`; `easycat validate` exposes `quick`, `socket`, `stress`,
+- CLI support includes `init`, `doctor`, `explain`, `bundles list/show`,
+  `inspect`, and `replay`; `easycat validate` exposes `quick`, `socket`, `stress`,
   `latency`, `live`, and `report`; `python -m easycat` is wired through
   `src/easycat/__main__.py`.
 
@@ -66,8 +66,6 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Still Active Gaps
 
-- There is no `easycat replay` CLI wrapper, although `ReplayRunner` and bundle
-  loading/export primitives exist.
 - Validation still has backlog around a dedicated `contracts` command,
   a dedicated `release` command wrapper, deeper protocol cassette coverage,
   and browser-side WebRTC network stats.

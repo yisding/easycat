@@ -1,6 +1,6 @@
-"""``easycat bundles`` — journal-bundle inspection commands.
+"""``easycat bundles`` — journal-bundle inspection and replay commands.
 
-Two commands land here:
+Commands that operate directly on recorded bundles and crash journals land here:
 
 Exported bundle files are ZIP archives regardless of whether they use
 ``.zip``, ``.bundle``, or ``.easycat-bundle``. Crash dumps are instead
@@ -21,12 +21,18 @@ output; it is not a separate bundle file format.
     error count, provider versions, first + last record timestamps.
     Deliberately avoids printing raw journal lines — that's what
     ``--json`` is for when a machine-readable summary is needed.
+
+``replay <path>``
+    Walk a debug bundle or SQLite journal through ``RunBundle.replay``
+    with safe defaults, including artifact fidelity and denied tool
+    side effects.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal, cast
 
 import typer
 from rich.table import Table
@@ -39,6 +45,15 @@ from easycat.debug.bundle import (
     BundleVersionError,
     RunBundle,
     discover_bundles,
+)
+from easycat.runtime.replay import (
+    ProviderVersionMismatchError,
+    ReplayError,
+    ReplayFidelity,
+    ReplayResult,
+    ReplaySideEffectBlocked,
+    ReplaySpec,
+    ToolReplayPolicy,
 )
 
 bundles_app = typer.Typer(
@@ -200,8 +215,8 @@ def _crash_dump_artifact_root(sqlite_path: Path) -> Path | None:
     return artifact_root if artifact_root.is_dir() else None
 
 
-def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
-    """Load and render the bundle or SQLite journal summary used by all aliases."""
+def _load_bundle_or_journal(bundle_path: Path) -> RunBundle:
+    """Load a ZIP bundle or SQLite journal, mapping failures to CLI exits."""
     if not bundle_path.exists():
         stderr_console.print(f"  [red]✗[/] Bundle not found: [red]{bundle_path}[/]")
         raise typer.Exit(5)
@@ -210,12 +225,11 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
         if bundle_path.suffix == ".sqlite":
             # Crash-dump SQLite journals are not ZIP archives; load them
             # via the partial-journal path with their sibling artifacts.
-            bundle = RunBundle.from_partial_journal(
+            return RunBundle.from_partial_journal(
                 bundle_path,
                 artifact_root=_crash_dump_artifact_root(bundle_path),
             )
-        else:
-            bundle = RunBundle.load(bundle_path)
+        return RunBundle.load(bundle_path)
     except BundleVersionError as exc:
         stderr_console.print(
             f"  [red]✗[/] Bundle was written by a newer easycat ({exc}); "
@@ -229,6 +243,10 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
         stderr_console.print(f"  [red]✗[/] Bundle corrupt or unreadable: {exc}")
         raise typer.Exit(5) from None
 
+
+def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
+    """Load and render the bundle or SQLite journal summary used by all aliases."""
+    bundle = _load_bundle_or_journal(bundle_path)
     summary = _summarise_bundle(bundle)
 
     if json_output:
@@ -305,10 +323,147 @@ def inspect_bundle(
     _show_bundle_summary(bundle_path, json_output=json_output)
 
 
+def _render_replay_summary(
+    *,
+    bundle_path: Path,
+    result: ReplayResult,
+    spec: ReplaySpec,
+    json_output: bool,
+) -> None:
+    stages = sorted({frame.stage for frame in result.frames if frame.stage})
+    summary = {
+        "path": str(bundle_path),
+        "fidelity_requested": spec.fidelity.value,
+        "fidelity_effective": result.fidelity_label.value,
+        "frames": len(result.frames),
+        "stages": stages,
+        "side_effecting": result.side_effecting,
+        "tool_policy": spec.tool_policy.value,
+        "blocked_tool_calls": result.blocked_tool_calls,
+        "stubbed_tool_calls": result.stubbed_tool_calls,
+        "allowed_tool_calls": result.allowed_tool_calls,
+        "from_sequence": spec.from_sequence,
+        "to_sequence": spec.to_sequence,
+        "stage_filter": spec.stage_filter or [],
+        "timing": spec.timing,
+        "force": spec.force,
+    }
+
+    if json_output:
+        emit_json(json_envelope("replay", **summary))
+        raise typer.Exit(0)
+
+    stderr_console.print(f"[bold]Replay[/] [cyan]{bundle_path}[/]")
+    stderr_console.print()
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column(style="bold", no_wrap=True)
+    table.add_column()
+    table.add_row("fidelity", str(summary["fidelity_effective"]))
+    if summary["fidelity_effective"] != summary["fidelity_requested"]:
+        table.add_row("requested_fidelity", str(summary["fidelity_requested"]))
+    table.add_row("frames", str(summary["frames"]))
+    table.add_row("stages", ", ".join(stages) if stages else "[dim](none)[/]")
+    table.add_row("tool_policy", str(summary["tool_policy"]))
+    table.add_row("side_effecting", "yes" if result.side_effecting else "no")
+    if result.stubbed_tool_calls:
+        table.add_row("stubbed_tools", ", ".join(result.stubbed_tool_calls))
+    if result.allowed_tool_calls:
+        table.add_row("allowed_tools", ", ".join(result.allowed_tool_calls))
+    stdout_console.print(table)
+
+
+@cli_command
+def replay_bundle(
+    bundle_path: Path = typer.Argument(
+        ...,
+        help=(
+            "Path to a ZIP bundle archive (``.zip``, ``.bundle``, or "
+            "``.easycat-bundle``) or a ``.sqlite`` journal."
+        ),
+    ),
+    fidelity: ReplayFidelity = typer.Option(
+        ReplayFidelity.ARTIFACT,
+        "--fidelity",
+        help="Replay fidelity: artifact, simulated, or live.",
+        case_sensitive=False,
+    ),
+    from_sequence: int | None = typer.Option(
+        None,
+        "--from-sequence",
+        help="Start replay at a committable journal sequence.",
+    ),
+    to_sequence: int | None = typer.Option(
+        None,
+        "--to-sequence",
+        help="Stop replay after this journal sequence.",
+    ),
+    stage: list[str] | None = typer.Option(
+        None,
+        "--stage",
+        help="Restrict replay to one stage; may be repeated.",
+    ),
+    timing: str = typer.Option(
+        "fast",
+        "--timing",
+        help="Timing mode: fast or wall.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Allow version-mismatch downgrades when replay context supplies installed versions.",
+    ),
+    tool_policy: ToolReplayPolicy = typer.Option(
+        ToolReplayPolicy.DENY,
+        "--tool-policy",
+        help="Tool-call policy during replay: deny, stub, or allow.",
+        case_sensitive=False,
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    """Replay a debug bundle or SQLite journal without opening a Python REPL."""
+    if timing not in ("fast", "wall"):
+        raise typer.BadParameter("timing must be 'fast' or 'wall'", param_hint="--timing")
+    timing_value = cast(Literal["fast", "wall"], timing)
+
+    bundle = _load_bundle_or_journal(bundle_path)
+    spec = ReplaySpec(
+        fidelity=fidelity,
+        from_sequence=from_sequence,
+        to_sequence=to_sequence,
+        stage_filter=stage or None,
+        timing=timing_value,
+        force=force,
+        tool_policy=tool_policy,
+    )
+    try:
+        result = bundle.replay(spec)
+    except ReplaySideEffectBlocked as exc:
+        stderr_console.print(f"  [red]✗[/] Replay blocked: {exc}")
+        stderr_console.print(
+            "[dim]Use [cyan]--tool-policy stub[/] to replace tool effects, "
+            "or [cyan]--tool-policy allow[/] only when side effects are safe.[/]"
+        )
+        raise typer.Exit(6) from None
+    except ProviderVersionMismatchError as exc:
+        stderr_console.print(f"  [red]✗[/] Replay provider version check failed: {exc}")
+        stderr_console.print("[dim]Use [cyan]--force[/] to continue with downgraded fidelity.[/]")
+        raise typer.Exit(6) from None
+    except ReplayError as exc:
+        stderr_console.print(f"  [red]✗[/] Replay failed: {exc}")
+        raise typer.Exit(6) from None
+
+    _render_replay_summary(
+        bundle_path=bundle_path,
+        result=result,
+        spec=spec,
+        json_output=json_output,
+    )
+
+
 bundles_app.command(name="list", help="List captured bundles and crash dumps under .easycat/.")(
     list_bundles
 )
 bundles_app.command(name="show", help="Summarise a debug bundle or SQLite journal.")(show_bundle)
 
 
-__all__: list[str] = ["bundles_app", "inspect_bundle"]
+__all__: list[str] = ["bundles_app", "inspect_bundle", "replay_bundle"]

@@ -1,8 +1,8 @@
 # Workstream 4: Replay and Bundle Export
 
 > **Status: historical acceptance record.** `RunBundle`, bundle export/load,
-> `ReplaySpec`, and `ReplayRunner` exist. There is still no `easycat replay`
-> CLI wrapper; use `../roadmap/current-code-status.md` for current gaps.
+> `ReplaySpec`, `ReplayRunner`, and the `easycat replay` CLI wrapper exist;
+> use `../roadmap/current-code-status.md` for current gaps.
 
 > **Part of the essential debug-first runtime redesign.** Design rationale
 > lives in `essential-debug-first-runtime.md`. This file is the
@@ -72,7 +72,7 @@ surprised by non-determinism.
   `../peripherals/peripheral-eval-and-debugger-ui.md`)
 - Full `easycat.testing` module with Simulator + Judge (peripheral)
 - `easycat replay` CLI command wrapper (peripheral —
-  `../peripherals/peripheral-cli.md`)
+  `../peripherals/peripheral-cli.md`; now shipped)
 - `bundle export --for=claude-code` context packs (peripheral)
 - Interactive debugger UI replay controls (peripheral)
 

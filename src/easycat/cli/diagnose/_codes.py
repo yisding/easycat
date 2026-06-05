@@ -47,8 +47,8 @@ parsing CLI output.
   2  - Bad usage (unknown flag, missing argument, unknown template)
   3  - Missing credentials
   4  - Missing optional extra, or bad --config JSON
-  5  - Bundle missing or corrupt
-  6  - Regression detected (`replay --fail-on-regression`)
+  5  - Bundle missing, corrupt, or too new for this EasyCat
+  6  - Replay failed or side effects were blocked
   101 - Target directory exists (`init` without `--force`)
   130 - SIGINT hard exit (second Ctrl-C)
 

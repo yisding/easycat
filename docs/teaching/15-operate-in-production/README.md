@@ -425,6 +425,7 @@ $ uv run easycat --help
   doctor    check environment + provider reachability
   explain   look up an EasyCat error code
   inspect   summarize a debug bundle or SQLite journal
+  replay    replay a debug bundle or SQLite journal
   bundles   list and show captured debug bundles and crash dumps
   validate  run validation checks and inspect reports
 ```
@@ -445,6 +446,10 @@ $ uv run easycat --help
   SQLite journal from the shell.
 - **`uv run easycat inspect <path>`** — friendly alias for
   `uv run easycat bundles show <path>` for bundles and SQLite journals.
+- **`uv run easycat replay <path>`** — replay a debug bundle or SQLite
+  journal from the shell. It defaults to artifact fidelity and denies live
+  tool side effects unless you choose `--tool-policy stub` or
+  `--tool-policy allow`.
 - **`uv run easycat validate quick`** — deterministic local validation
   for normal PR work.
 - **`uv run easycat validate socket`** — localhost socket integration

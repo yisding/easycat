@@ -229,6 +229,82 @@ def test_inspect_alias_matches_bundles_show(cli: CliRunner, tmp_path: Path) -> N
     assert json.loads(inspect.stdout) == json.loads(show.stdout)
 
 
+def test_replay_bundle_json_summary(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "demo.zip"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "kind": "event",
+                "name": "stage_start",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {"stage": "stt"},
+            },
+            {
+                "sequence": 2,
+                "kind": "event",
+                "name": "stage_end",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {"stage": "stt"},
+            },
+        ],
+    )
+
+    result = cli.invoke(app, ["replay", str(bundle), "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "replay"
+    assert payload["fidelity_requested"] == "artifact"
+    assert payload["fidelity_effective"] == "artifact"
+    assert payload["frames"] == 2
+    assert payload["stages"] == ["stt"]
+    assert payload["side_effecting"] is False
+    assert payload["tool_policy"] == "deny"
+
+    human = cli.invoke(app, ["replay", str(bundle)])
+    assert human.exit_code == 0, human.stderr
+    assert "Replay" in human.stderr
+    assert "artifact" in human.stdout
+    assert "frames" in human.stdout
+
+
+def test_replay_bundle_blocks_tool_side_effects_by_default(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "tool.zip"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "kind": "framework_transition",
+                "name": "tool_call_started",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {"phase": "tool_call", "tool_name": "get_weather", "call_id": "c1"},
+            }
+        ],
+    )
+
+    blocked = cli.invoke(app, ["replay", str(bundle)])
+
+    assert blocked.exit_code == 6
+    assert "Replay blocked" in blocked.stderr
+    assert "get_weather(c1)" in blocked.stderr
+    assert "--tool-policy stub" in blocked.stderr
+
+    stubbed = cli.invoke(app, ["replay", str(bundle), "--tool-policy", "stub", "--json"])
+    assert stubbed.exit_code == 0, stubbed.stderr
+    payload = json.loads(stubbed.stdout)
+    assert payload["stubbed_tool_calls"] == ["get_weather(c1)"]
+    assert payload["side_effecting"] is False
+
+
 def test_bundles_show_sqlite_crash_dump(cli: CliRunner, tmp_path: Path) -> None:
     """A ``.sqlite`` crash dump from ``discover_bundles`` is inspectable.
 

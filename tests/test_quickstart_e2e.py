@@ -400,6 +400,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         "easycat bundles list      # list captured debug bundles and crash dumps",
         "easycat bundles show PATH # summarise a debug bundle or SQLite journal",
         "easycat inspect PATH      # summarise a debug bundle or SQLite journal",
+        "easycat replay PATH       # replay a debug bundle or SQLite journal",
     )
     for line in expected_cli_lines:
         assert line in cli_section

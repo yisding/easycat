@@ -20,8 +20,8 @@ Known drift from the records:
   active.
 - `Session` is reduced but still roughly 1,390 lines, so the historical
   `<500` target was not met.
-- `easycat inspect`, `easycat validate`, and `python -m easycat` exist;
-  `easycat replay` does not.
+- `easycat inspect`, `easycat replay`, `easycat validate`, and
+  `python -m easycat` exist.
 
 1. [workstream-1-journal-foundation.md](workstream-1-journal-foundation.md)
 2. [workstream-2a-agent-bridges.md](workstream-2a-agent-bridges.md)

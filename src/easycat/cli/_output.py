@@ -27,8 +27,8 @@ EXIT_CODES: dict[int, tuple[str, str]] = {
     2: ("bad_usage", "Bad usage (unknown flag, missing argument)"),
     3: ("missing_credentials", "Missing credentials"),
     4: ("missing_extra", "Missing optional extra, or bad --config JSON"),
-    5: ("bundle_corrupt", "Bundle missing or corrupt"),
-    6: ("regression", "Regression detected (replay --fail-on-regression)"),
+    5: ("bundle_corrupt", "Bundle missing, corrupt, or too new for this EasyCat"),
+    6: ("replay_failed", "Replay failed or side effects were blocked"),
     101: ("target_exists", "Target directory exists (init without --force)"),
     130: ("sigint_hard_exit", "SIGINT hard exit (second Ctrl-C)"),
 }

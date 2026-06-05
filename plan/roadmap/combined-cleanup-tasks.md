@@ -31,8 +31,8 @@ Some important April findings have since changed:
 - Shared provider helpers and a shared WebSocket STT base exist.
 - The WebRTC offer path drains the existing audio queue rather than replacing
   the object that `receive_audio()` may already be awaiting.
-- `python -m easycat`, `easycat inspect <bundle>`, and `easycat validate`
-  exist. `easycat replay` does not.
+- `python -m easycat`, `easycat inspect <bundle>`, `easycat replay <bundle>`,
+  and `easycat validate` exist.
 - The old root `src/easycat/agent_runner.py` and `src/easycat/agents/` are
   absent, but `easycat.integrations.agents._agent_runner.AgentRunner` remains
   active and is part of the current bridge/runtime path.
@@ -70,9 +70,9 @@ context. Several bullets are known stale; use the current-state list above and
   has `/ws` plus artifact error handling.
 - Historical, now stale in part: CLI basics were already stronger than some
   notes implied, and current code now also has `python -m easycat`,
-  `easycat inspect`, `easycat validate`, CI build smoke, and release
-  validation. Missing pieces include `easycat replay` and any future
-  validation subcommands still called out in `plan/validation/`.
+  `easycat inspect`, `easycat replay`, `easycat validate`, CI build smoke, and
+  release validation. Missing pieces include any future validation subcommands
+  still called out in `plan/validation/`.
 - Historical, now stale: the README drift called out here has been fixed for
   Cartesia, TEN VAD license wording, and the quickstart extra.
 
@@ -209,13 +209,12 @@ context. Several bullets are known stale; use the current-state list above and
 - Done: `src/easycat/__main__.py` supports `python -m easycat`.
 - Done: `easycat inspect <bundle>` is a user-friendly alias around
   `bundles show`.
-- Still open: add `easycat replay <bundle>` once replay behavior is
-  productized.
+- Done: `easycat replay <bundle>` exists as a conservative artifact replay
+  wrapper with safe tool policies.
 - Done: `easycat validate` is in the journey menu with `quick`, `socket`,
   `stress`, `latency`, `live`, and `report` subcommands.
 - Still open: add any future validation subcommands only after they exist, and
-  keep `easycat replay <bundle>` out of help until replay behavior is
-  productized.
+  keep future replay options out of help until their behavior is productized.
 - Keep `easycat demo` out of help unless it runs a real deterministic demo
   without API keys.
 - Keep the journey menu aligned with implemented commands.
@@ -614,7 +613,8 @@ This sequence is the April audit order. Items 2, 3, 5, 6, and parts of 1, 4,
    `TurnRunner`, `SessionJournalSink`) rather than restarting decomposition.
 6. Future validation wrappers/cassettes from `plan/validation/`, if still
    needed after checking current code.
-7. `easycat replay` wrapper once the replay UX is productized.
+7. Future replay UX such as `--diff`, `--fail-on-regression`, and forked
+   replay once those comparison/forking layers are productized.
 
 ## Do Not Implement As Written
 
@@ -643,10 +643,10 @@ This sequence is the April audit order. Items 2, 3, 5, 6, and parts of 1, 4,
   `create_smart_turn()` and `EasyCatConfig.smart_turn` already feed the turn
   manager endpoint detector.
 - Do not add top-level CLI journey menu work as a first task; it already has
-  tests. Do not add `python -m easycat`, `easycat inspect`, or
-  `easycat validate` as if missing. Focus CLI work on `easycat replay` and
-  any future validation wrappers that are still absent after checking
-  `plan/validation/`.
+  tests. Do not add `python -m easycat`, `easycat inspect`, `easycat replay`,
+  or `easycat validate` as if missing. Focus CLI work on future replay
+  comparison/forking options and validation wrappers that are still absent
+  after checking `plan/validation/`.
 - Do not spend cleanup budget adding doc comments to `session_manager.py` and
   `supervisor.py`; both already have clear module docstrings.
 - Do not treat `docs/teaching/14` and `docs/teaching/15` as missing; they now

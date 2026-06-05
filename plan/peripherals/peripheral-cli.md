@@ -50,10 +50,10 @@ M3 (journal debugging) — partial:
   points (rendered with the new `cp_<sequence>` vocabulary).
 - `easycat bundles export --for=claude-code` — not started. Needs the
   redaction pass from `peripheral-redaction.md`.
-- `easycat replay` — not started. The library-level `RunBundle` +
-  replay fidelity classes exist (`debug/bundle.py`,
-  `runtime/replay.py`), so this is pure CLI-shell work but it is the
-  biggest remaining chunk.
+- `easycat replay <path>` — shipped as a conservative wrapper over
+  `RunBundle.replay(...)` with `artifact`/`simulated`/`live` fidelity,
+  safe tool policies, JSON output, sequence windows, and stage filters.
+  `--diff`, `--fail-on-regression`, and forked replay remain future work.
 
 The `uvx` zero-install guarantee, `[project.scripts]` entry, and
 error-code registry-backed `explain` surface all meet the plan's
@@ -641,9 +641,14 @@ fidelity classes from `../workstreams/workstream-4-replay-and-bundle.md`.
 Usage: easycat replay [OPTIONS] BUNDLE
 
 Options:
-      --fidelity [artifact|simulated|live]  [default: simulated]
-      --diff                    Print journal diff vs bundle baseline
-      --fail-on-regression      Nonzero exit on latency/drift detection
+      --fidelity [artifact|simulated|live]  [default: artifact]
+      --from-sequence INTEGER   Start replay at a committable sequence
+      --to-sequence INTEGER     Stop replay after this sequence
+      --stage TEXT              Restrict replay to a stage; repeatable
+      --timing [fast|wall]      Replay timing mode [default: fast]
+      --tool-policy [deny|stub|allow] [default: deny]
+      --force                   Allow version-mismatch downgrades when checked
+      --json                    Emit the standard JSON envelope
       --help                    Show this message and exit
 ```
 
@@ -651,8 +656,8 @@ Options:
 
 - `artifact` — replay recorded artifacts byte-for-byte (fastest,
   deterministic).
-- `simulated` — replay against simulated provider responses (the
-  default; matches pytest fixture behavior).
+- `simulated` — replay against simulated provider responses; useful for
+  pytest fixture behavior.
 - `live` — re-execute against live providers (costs real money, used
   for "did the fix actually work" validation).
 
@@ -661,12 +666,13 @@ depends on the forked_replay fidelity class owned by
 `peripheral-eval-and-debugger-ui.md`. When it lands, it slots in as
 a fourth `--fidelity` value.
 
-`--fail-on-regression` is the CI integration point. Teams wire
-`easycat replay fixtures/*.zip --fail-on-regression` into PR
-pipelines to catch latency regressions from bundle fixtures.
+`--diff` and `--fail-on-regression` remain the future CI integration point.
+Teams will be able to wire `easycat replay fixtures/*.zip --fail-on-regression`
+into PR pipelines to catch latency regressions from bundle fixtures once that
+comparison layer lands.
 
-Exit codes: 0 clean, 1 replay error, 5 bundle missing or corrupt, 6
-regression detected.
+Exit codes: 0 clean, 5 bundle missing/corrupt/too new for this EasyCat, 6
+replay failed or side effects were blocked.
 
 ## Commands NOT in This Plan
 
@@ -748,8 +754,8 @@ Documented under `easycat explain exit-codes`:
 | 2 | Bad usage (unknown flag, missing argument) |
 | 3 | Missing credentials |
 | 4 | Missing optional extra, bad `--config` JSON |
-| 5 | Bundle missing or corrupt |
-| 6 | Regression detected (`replay --fail-on-regression`) |
+| 5 | Bundle missing, corrupt, or too new for this EasyCat |
+| 6 | Replay failed or side effects were blocked |
 | 101 | Target directory exists (`init` without `--force`) |
 
 Codes map one-to-one with `EASYCAT_Exxx` categories. Scripts branch
@@ -914,7 +920,7 @@ Connects scaffolded projects to production debugging.
 - `easycat bundles export --redaction` integration
   (`peripheral-redaction.md`)
 - `easycat replay` with `artifact`/`simulated`/`live` fidelity
-- `easycat replay --fail-on-regression` for CI
+- `easycat replay --fail-on-regression` for CI (future comparison layer)
 
 ### Deferred
 

@@ -44,6 +44,7 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
   [cyan]Debug with the journal[/]
     [green]bundles[/]     List captured debug bundles and crash dumps
     [green]inspect[/]     Summarise a debug bundle or SQLite journal
+    [green]replay[/]      Replay a debug bundle or SQLite journal
 
   [cyan]Validation[/]
     [green]validate[/]    Run validation checks and inspect reports
@@ -92,7 +93,7 @@ def _register_commands() -> None:
     if _COMMANDS_REGISTERED:
         return
 
-    from easycat.cli.debug.bundles import bundles_app, inspect_bundle
+    from easycat.cli.debug.bundles import bundles_app, inspect_bundle, replay_bundle
     from easycat.cli.diagnose.doctor import doctor as doctor_cmd
     from easycat.cli.diagnose.explain import explain as explain_cmd
     from easycat.cli.scaffold.init import init as init_cmd
@@ -102,6 +103,7 @@ def _register_commands() -> None:
     app.command(name="doctor", help="Check environment and provider reachability.")(doctor_cmd)
     app.command(name="explain", help="Look up an error code.")(explain_cmd)
     app.command(name="inspect", help="Inspect a debug bundle or SQLite journal.")(inspect_bundle)
+    app.command(name="replay", help="Replay a debug bundle or SQLite journal.")(replay_bundle)
     app.add_typer(bundles_app, name="bundles")
     app.add_typer(validate_app, name="validate")
     _COMMANDS_REGISTERED = True
