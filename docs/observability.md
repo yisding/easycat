@@ -149,10 +149,12 @@ ids, but EasyCat avoids that boundary.
 
 ## Honesty caveats
 
-- **The journal is currently UNREDACTED.** Bundles contain transcripts, agent
-  output, and tool arguments verbatim. A pluggable `RedactionPolicy` is
-  **planned but not yet implemented** — today the redaction hook is a no-op. Do
-  not attach journal bundles to public issues or send them to third parties
+- **The journal is currently UNREDACTED.** EasyCat scrubs secret-looking keys
+  from safe config/environment snapshots and selected agent-bridge metadata, but
+  normal journal records and bundles still contain transcripts, agent output,
+  and tool arguments verbatim. A pluggable `RedactionPolicy` is **planned but
+  not yet implemented** — today `apply_write_filter` returns records unchanged.
+  Do not attach journal bundles to public issues or send them to third parties
   until you have manually scrubbed them.
 - **Per-stage latency budgets are guidance, not enforcement.** Any latency
   targets you see documented elsewhere are advisory; nothing in the pipeline

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
 from easycat import _observability as observability
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class _FakeSpan:
@@ -296,6 +299,16 @@ def test_metric_definitions_match_validation_reference() -> None:
         "easycat.event_loop.lag": "histogram",
         "easycat.journal.degraded": "observable_gauge",
     }
+
+
+def test_observability_doc_explains_journal_redaction_boundary() -> None:
+    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    caveats = " ".join(doc.split("## Honesty caveats", 1)[1].split())
+
+    assert "safe config/environment snapshots" in caveats
+    assert "selected agent-bridge metadata" in caveats
+    assert "transcripts, agent output, and tool arguments verbatim" in caveats
+    assert "`apply_write_filter` returns records unchanged" in caveats
 
 
 @pytest.mark.parametrize(

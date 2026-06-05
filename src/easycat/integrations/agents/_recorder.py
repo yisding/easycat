@@ -287,10 +287,10 @@ class JournalAgentRecorder:
 def _scrub_secrets(data: dict[str, Any]) -> dict[str, Any]:
     """Remove data keys whose names match secret-adjacent fragments.
 
-    Enforces the WS1 safe-default: no raw API keys, auth headers, or
-    credentials reach the journal via bridge records.  The scrub recurses
-    into nested dicts and lists so secrets buried below the top level
-    (e.g. ``{"headers": {"Authorization": "…"}}``) are dropped too.
+    Keeps bridge metadata from carrying raw API keys, auth headers, or
+    credentials into the journal. The scrub recurses into nested dicts and
+    lists so secrets buried below the top level (e.g.
+    ``{"headers": {"Authorization": "…"}}``) are dropped too.
     """
     from easycat.runtime.safe_defaults import _is_secret_name
 

@@ -1,9 +1,9 @@
 """Config and environment safety defaults.
 
-Hard-coded allowlists that prevent secrets from reaching the journal or
-artifact store.  The ``apply_write_filter`` hook is a no-op in this
-workstream; ``peripheral-redaction.md`` layers a full ``RedactionPolicy``
-onto it later.
+Hard-coded allowlists keep obvious credentials out of generated config and
+environment metadata. They are not a full journal redaction policy:
+``apply_write_filter`` currently preserves records unchanged, so transcripts,
+tool arguments, and provider payload records remain sensitive.
 """
 
 from __future__ import annotations
@@ -184,7 +184,11 @@ def safe_env_snapshot() -> dict[str, str]:
 
 
 def apply_write_filter(record: JournalRecord) -> JournalRecord:
-    """No-op in WS1.  Future ``RedactionPolicy`` plugs in here."""
+    """Journal write-filter hook.
+
+    Currently returns the original record unchanged; callers must treat journal
+    records and exported bundles as sensitive unless they have scrubbed them.
+    """
     return record
 
 
