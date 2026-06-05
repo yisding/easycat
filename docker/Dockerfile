@@ -10,7 +10,7 @@
 #
 # The default extras cover the `examples/ws_server.py` golden path.
 # To swap providers, override EXTRAS at build time, e.g.:
-#   docker build --build-arg EXTRAS="--extra openai-agents --extra silero-vad --extra deepgram" ...
+#   docker build --build-arg EXTRAS="--extra openai-agents --extra silero-vad --extra rnnoise --extra deepgram --extra elevenlabs" ...
 
 # ── builder: resolve the virtualenv with uv ──────────────────────────────────
 FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS builder

@@ -90,7 +90,7 @@ docker build \
 ```
 
 Then edit `examples/ws_server.py` (or mount your own server script) to
-wire the providers into `SessionConfig`, and pass the relevant API keys
+wire the providers into `EasyConfig`, and pass the relevant API keys
 as environment variables. Keep the WebSocket token gate, session cap, and
 loopback bind (or equivalent ingress controls) when deploying modified
 server scripts.

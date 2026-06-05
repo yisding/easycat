@@ -138,6 +138,14 @@ def _dockerfile_default_extras() -> set[str]:
     return set(_UV_SYNC_EXTRA_RE.findall(match.group("extras")))
 
 
+def _docker_build_arg_extra_sets(*texts: str) -> list[set[str]]:
+    return [
+        set(_UV_SYNC_EXTRA_RE.findall(match.group("extras")))
+        for text in texts
+        for match in re.finditer(r'--build-arg EXTRAS="(?P<extras>[^"]+)"', text)
+    ]
+
+
 def _pip_install_packages_in(text: str) -> set[str]:
     packages: set[str] = set()
 
@@ -836,6 +844,25 @@ def test_dockerfile_default_extras_cover_ws_server_golden_path() -> None:
     assert _uses_default_openai_providers(ws_server)
     assert "openai" in extras
     assert "openai-agents" in extras
+
+
+def test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    guide = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
+    swap_section = guide.split("## Swapping STT / TTS providers", 1)[1].split("## ", 1)[0]
+    known_extras = set(
+        tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+            "optional-dependencies"
+        ]
+    )
+
+    build_arg_extra_sets = _docker_build_arg_extra_sets(dockerfile, swap_section)
+    assert build_arg_extra_sets
+    for extras in build_arg_extra_sets:
+        assert extras <= known_extras
+
+    assert "wire the providers into `EasyConfig`" in swap_section
+    assert "wire the providers into `SessionConfig`" not in swap_section
 
 
 def test_ws_supervisor_server_example_imports():
