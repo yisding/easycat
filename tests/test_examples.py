@@ -940,6 +940,18 @@ def test_vad_backends_example_imports():
     assert callable(vad_backends.main)
 
 
+def test_vad_backends_example_uses_easyconfig_provider_instance_surface():
+    source = (REPO_ROOT / "examples/vad_backends.py").read_text(encoding="utf-8")
+
+    assert "vad = create_vad(VADConfig(backend=backend))" in source
+    assert "EasyConfig.mic(" in source
+    assert "vad=vad" in source
+    assert "create_session(config)" in source
+    assert "SessionConfig" not in source
+    assert "Session(" not in source
+    assert "AgentRunner(" not in source
+
+
 def test_reconnecting_ws_client_example_imports():
     import examples.reconnecting_ws_client as reconnecting_ws_client
 
