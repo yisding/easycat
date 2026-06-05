@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from easycat import EasyConfig, SessionConfig, require_env
+from easycat import EasyConfig, SessionConfig, require_env, run
 from easycat.config import _resolve_easycat_log_level
+from easycat.config.easy import _EASYCAT_LOG_LEVELS
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
@@ -32,6 +33,13 @@ def test_log_level_unknown_falls_back_to_default(monkeypatch: pytest.MonkeyPatch
 def test_log_level_unset_returns_default(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("EASYCAT_LOG_LEVEL", raising=False)
     assert _resolve_easycat_log_level(default=logging.ERROR) == logging.ERROR
+
+
+def test_run_docstring_tracks_log_level_env_vocabulary() -> None:
+    doc = run.__doc__ or ""
+    missing = sorted(level for level in _EASYCAT_LOG_LEVELS if level not in doc)
+
+    assert not missing, "run() docstring missing EASYCAT_LOG_LEVEL values: " + ", ".join(missing)
 
 
 def test_require_env_missing_value_gives_actionable_hint(monkeypatch: pytest.MonkeyPatch):

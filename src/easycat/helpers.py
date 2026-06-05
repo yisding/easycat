@@ -110,9 +110,10 @@ def run(config: EasyConfig) -> None:
     alive out of the box; tests and production pipelines that redirect
     stderr stay quiet.
 
-    ``EASYCAT_LOG_LEVEL=info`` (or ``debug``/``warning``/``error``) in
-    the environment bumps the ``easycat`` logger without needing
-    ``debug="light"``, matching the ``LIVEKIT_LOG_LEVEL`` convention.
+    ``EASYCAT_LOG_LEVEL=info`` (or ``debug``/``warning``/``warn``/
+    ``error``/``critical``) in the environment bumps the ``easycat``
+    logger without needing ``debug="light"``, matching the
+    ``LIVEKIT_LOG_LEVEL`` convention.
 
     Advanced users who need custom orchestration should reach for
     :func:`easycat.create_session` directly and manage the lifecycle
