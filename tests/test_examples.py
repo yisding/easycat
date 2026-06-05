@@ -235,6 +235,18 @@ def test_examples_readme_lists_browser_and_deploy_support_files() -> None:
     assert not stale, "examples/README.md has stale support-file links for: " + ", ".join(stale)
 
 
+def test_ec2_webrtc_deploy_docs_do_not_claim_to_configure_https() -> None:
+    server = (REPO_ROOT / "examples" / "webrtc_server.py").read_text(encoding="utf-8")
+    deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert "configures HTTPS" not in server
+    assert "behind an HTTPS reverse proxy" in server
+    assert "Backend HTTP URL: http://$EXTERNAL_IP:8080/webrtc_client.html" in deploy
+    assert "Browser URL:      https://<your-domain>/webrtc_client.html" in deploy
+    assert "Signaling URL:    https://<your-domain>/offer" in deploy
+    assert "Client URL:      http://$EXTERNAL_IP:8080/webrtc_client.html" not in deploy
+
+
 def test_examples_readme_fastest_path_verifies_environment_before_running() -> None:
     readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     fast_path = readme.split("For the fastest local mic/speaker path:", 1)[1]

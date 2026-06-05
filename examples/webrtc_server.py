@@ -12,7 +12,8 @@ Setup (local):
 
 Setup (EC2):
     See examples/ec2_webrtc/deploy.sh for a full deployment script that
-    installs coturn, configures HTTPS, and sets up systemd services.
+    installs coturn and systemd services. For browser microphone access on
+    a public hostname, put the HTTP server behind an HTTPS reverse proxy.
 
 Environment variables:
     OPENAI_API_KEY        — Required.  OpenAI API key for STT/TTS/Agent.
