@@ -235,8 +235,11 @@ agent = Agent(name="Support", instructions="Help customers with account issues."
 
 async def main() -> None:
     async with create_session(EasyConfig.mic(agent=agent)) as session:
-        session.subscribe_event(STTFinal, lambda e: print("You said:", e.text))
-        await session.wait_closed()
+        subscription = session.subscribe_event(STTFinal, lambda e: print("You said:", e.text))
+        try:
+            await session.wait_closed()
+        finally:
+            subscription.unsubscribe()
 
 
 asyncio.run(main())

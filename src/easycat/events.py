@@ -606,27 +606,51 @@ class TTSEvent:
 
 
 class EventBus:
-    """Publish/subscribe event dispatcher supporting sync and async handlers."""
+    """Publish/subscribe event dispatcher supporting sync and async handlers.
 
-    def __init__(self) -> None:
+    Dispatch is inline and best-effort: ``emit()`` invokes matching handlers in
+    subscription order, awaits async handlers, logs handler exceptions, and
+    keeps dispatching the remaining handlers.  Use the returned
+    :class:`EventSubscription` when lifecycle ownership matters; the older
+    ``unsubscribe(event_type, handler)`` form remains supported.
+    """
+
+    def __init__(self, *, slow_handler_threshold_s: float | None = None) -> None:
         self._handlers: defaultdict[type, list[EventHandler]] = defaultdict(list)
         self._all_handlers: list[EventHandler] = []
+        self._handler_failures = 0
+        self._last_handler_error: HandlerDispatchError | None = None
+        self._slow_handler_threshold_s = slow_handler_threshold_s
 
-    def subscribe(self, event_type: type, handler: EventHandler) -> None:
+    @property
+    def handler_failures(self) -> int:
+        """Number of handler exceptions observed by this bus."""
+        return self._handler_failures
+
+    @property
+    def last_handler_error(self) -> HandlerDispatchError | None:
+        """Most recent handler exception metadata, if any."""
+        return self._last_handler_error
+
+    def subscribe(self, event_type: type, handler: EventHandler) -> EventSubscription:
         """Register a handler for a specific event type."""
         self._handlers[event_type].append(handler)
+        return EventSubscription(self, event_type, handler)
 
     def unsubscribe(self, event_type: type, handler: EventHandler) -> None:
         """Remove a handler for a specific event type."""
-        handlers = self._handlers[event_type]
+        handlers = self._handlers.get(event_type)
+        if not handlers:
+            return
         try:
             handlers.remove(handler)
         except ValueError:
             pass
 
-    def subscribe_all(self, handler: EventHandler) -> None:
+    def subscribe_all(self, handler: EventHandler) -> EventSubscription:
         """Register a handler that receives every emitted event."""
         self._all_handlers.append(handler)
+        return EventSubscription(self, None, handler, all_events=True)
 
     def unsubscribe_all(self, handler: EventHandler) -> None:
         """Remove a global handler registered by ``subscribe_all``."""
@@ -656,13 +680,77 @@ class EventBus:
             if cls is Event:
                 break
         for handler in handlers:
+            started = time.perf_counter()
             try:
                 result = handler(event)
                 if asyncio.iscoroutine(result):
                     await result
-            except Exception:
+            except Exception as exc:
+                self._handler_failures += 1
+                self._last_handler_error = HandlerDispatchError(
+                    handler_name=_handler_name(handler),
+                    event_type=event_type.__name__,
+                    exception=exc,
+                )
                 logger.exception(
                     "Error in handler %s for event %s",
                     _handler_name(handler),
                     event_type.__name__,
                 )
+            finally:
+                elapsed = time.perf_counter() - started
+                threshold = self._slow_handler_threshold_s
+                if threshold is not None and elapsed >= threshold:
+                    logger.warning(
+                        "Slow handler %s for event %s took %.3fs",
+                        _handler_name(handler),
+                        event_type.__name__,
+                        elapsed,
+                    )
+
+
+@dataclass(frozen=True)
+class HandlerDispatchError:
+    """Metadata for the most recent EventBus handler exception."""
+
+    handler_name: str
+    event_type: str
+    exception: Exception
+
+
+class EventSubscription:
+    """Handle returned by :meth:`EventBus.subscribe`.
+
+    Calling :meth:`unsubscribe` is idempotent, which makes it safe to keep the
+    token on long-lived collaborators and release it during teardown without
+    tracking whether teardown already ran.
+    """
+
+    def __init__(
+        self,
+        bus: EventBus,
+        event_type: type | None,
+        handler: EventHandler,
+        *,
+        all_events: bool = False,
+    ) -> None:
+        self._bus = bus
+        self.event_type = event_type
+        self.handler = handler
+        self.all_events = all_events
+        self._active = True
+
+    @property
+    def active(self) -> bool:
+        """Whether this token is still subscribed."""
+        return self._active
+
+    def unsubscribe(self) -> None:
+        """Remove this subscription if it is still active."""
+        if not self._active:
+            return
+        if self.all_events:
+            self._bus.unsubscribe_all(self.handler)
+        elif self.event_type is not None:
+            self._bus.unsubscribe(self.event_type, self.handler)
+        self._active = False

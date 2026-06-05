@@ -80,9 +80,10 @@ with the codebase. Counts below come from tracked files and exclude
   tests guard against cache/workspace artifacts leaking into release wheels.
   CI now runs `uv build`, and release validation exercises an installed
   package through the public CLI.
-- Connection-policy hardening, EventBus subscription tokens/dispatch policies,
-  deeper provider capability reports, and a typed TTS input policy remain
-  cleanup backlog items.
+- Connection-policy hardening, broader EventBus dispatch policies, deeper
+  provider capability reports, and a typed TTS input policy remain cleanup
+  backlog items. EventBus subscription tokens and handler failure/slow-callback
+  accounting now exist for the current inline dispatch policy.
 - Full redaction policy and OTel/cost exports remain planned rather than
   implemented.
 - Telephony-native TTS output is not fully implemented. Provider

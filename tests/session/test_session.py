@@ -1498,8 +1498,12 @@ async def test_session_event_bus_accessible():
     session = Session(_full_config())
     assert session.event_bus is not None
     received: list = []
-    session.event_bus.subscribe(STTFinal, lambda e: received.append(e))
+    token = session.subscribe_event(STTFinal, lambda e: received.append(e))
     await session.event_bus.emit(STTFinal(text="test"))
+    token.unsubscribe()
+    await session.event_bus.emit(STTFinal(text="ignored"))
+
+    assert token.active is False
     assert len(received) == 1
 
 

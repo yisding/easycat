@@ -374,6 +374,23 @@ async def test_eventbus_unsubscribe():
 
 
 @pytest.mark.asyncio
+async def test_eventbus_subscription_token_unsubscribes_idempotently():
+    bus = EventBus()
+    received: list[STTFinal] = []
+
+    token = bus.subscribe(STTFinal, received.append)
+    assert token.active is True
+
+    token.unsubscribe()
+    token.unsubscribe()
+
+    await bus.emit(STTFinal(text="hello"))
+
+    assert token.active is False
+    assert received == []
+
+
+@pytest.mark.asyncio
 async def test_eventbus_handler_error_does_not_stop_others():
     bus = EventBus()
     received: list = []
@@ -389,6 +406,11 @@ async def test_eventbus_handler_error_does_not_stop_others():
 
     await bus.emit(STTFinal(text="hello"))
     assert len(received) == 1
+    assert bus.handler_failures == 1
+    assert bus.last_handler_error is not None
+    assert bus.last_handler_error.handler_name == "bad_handler"
+    assert bus.last_handler_error.event_type == "STTFinal"
+    assert isinstance(bus.last_handler_error.exception, RuntimeError)
 
 
 @pytest.mark.asyncio
@@ -462,3 +484,36 @@ async def test_eventbus_unsubscribe_all():
     await bus.emit(STTFinal(text="hello"))
 
     assert not received
+
+
+@pytest.mark.asyncio
+async def test_eventbus_subscribe_all_token_unsubscribes_idempotently():
+    bus = EventBus()
+    received: list[str] = []
+
+    token = bus.subscribe_all(lambda event: received.append(type(event).__name__))
+    token.unsubscribe()
+    token.unsubscribe()
+
+    await bus.emit(STTFinal(text="hello"))
+
+    assert token.active is False
+    assert received == []
+
+
+@pytest.mark.asyncio
+async def test_eventbus_warns_for_slow_handlers(caplog: pytest.LogCaptureFixture):
+    bus = EventBus(slow_handler_threshold_s=0.0)
+
+    def handler(event: STTFinal) -> None:
+        return None
+
+    bus.subscribe(STTFinal, handler)
+
+    with caplog.at_level(logging.WARNING):
+        await bus.emit(STTFinal(text="hello"))
+
+    assert any(
+        "Slow handler handler for event STTFinal took" in record.getMessage()
+        for record in caplog.records
+    )

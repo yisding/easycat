@@ -487,7 +487,7 @@ context. Several bullets are known stale; use the current-state list above and
   `events.core`, `events.provider`, `events.telephony`, `events.actions`,
   `events.errors`.
 - Add typed event union tests for the stable event contract.
-- Add EventBus subscription tokens.
+- Done: add EventBus subscription tokens.
 - Add dispatch policies: inline, task, queue, and best-effort.
 - Track handler latency and failures so user callbacks cannot silently stall
   audio-critical paths.

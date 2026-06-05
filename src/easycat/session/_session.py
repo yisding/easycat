@@ -30,6 +30,7 @@ from easycat.events import (
     Error,
     EventBus,
     EventHandler,
+    EventSubscription,
     Interruption,
     SessionActionCompleted,
     SessionActionFailed,
@@ -465,9 +466,9 @@ class Session:
 
     # ── Properties ─────────────────────────────────────────────
 
-    def subscribe_event(self, event_type: type, handler: EventHandler) -> None:
+    def subscribe_event(self, event_type: type, handler: EventHandler) -> EventSubscription:
         """Subscribe to a session event via the underlying EventBus."""
-        self.event_bus.subscribe(event_type, handler)
+        return self.event_bus.subscribe(event_type, handler)
 
     def unsubscribe_event(self, event_type: type, handler: EventHandler) -> None:
         """Unsubscribe a handler previously attached with ``subscribe_event``."""
