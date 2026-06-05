@@ -198,6 +198,20 @@ def test_documented_canonical_voice_quickstart_shape_stays_consistent() -> None:
     assert "the same one shown below" in readme
 
 
+def test_readme_install_guidance_precedes_first_runnable_quickstart() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert readme.count("## Install") == 1
+    install_index = readme.index("## Install")
+    cli_index = readme.index("## CLI")
+    quickstart_index = readme.index("### Quickstart (EasyConfig)")
+
+    assert install_index < cli_index < quickstart_index
+    assert "uv add 'easycat[quickstart]'" in readme
+    assert "uv sync --extra quickstart" in readme
+    assert "uv run python examples/openai_agents_voice.py" in readme
+
+
 def test_readme_pydantic_ai_v2_beta_pin_matches_pyproject() -> None:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     deps = pyproject["project"]["optional-dependencies"]["pydantic-ai-v2-beta"]

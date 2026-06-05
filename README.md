@@ -15,6 +15,48 @@ one stage per chapter (echo → transcribe → VAD → blocking agent →
 streaming agent → tools → smart-turn → interruption → noise/AEC →
 journal → evals → swap providers → BYO agent → operate in production).
 
+## Install
+
+Python 3.11+ is required.
+
+For an application that depends on the published package:
+
+```bash
+uv add 'easycat[quickstart]'
+```
+
+For this repository:
+
+```bash
+uv sync --extra quickstart
+export OPENAI_API_KEY="your-api-key"
+uv run python examples/openai_agents_voice.py
+```
+
+The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
+SDK, RNNoise dependencies, numpy, and onnxruntime. It does not include TEN VAD;
+install that optional extra separately only if you accept its non-permissive
+license. Silero VAD runs on its bundled ONNX model via `onnxruntime` (already
+in `quickstart`) — no torch required. If you want a leaner install with Silero,
+add extras individually:
+
+```bash
+uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad
+```
+
+Optional dependencies you may need depending on providers/transports:
+- sounddevice (LocalTransport)
+- aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
+- numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
+- ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license)
+- numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad` — runs the bundled ONNX model (no torch required)
+- funasr-onnx + onnxruntime (FunASR VAD): `uv sync --extra funasr-vad`
+  on Python 3.11-3.12. The current upstream SDK pins NumPy below the
+  range needed by the fixed ONNX package on Python 3.13+.
+- pyrnnoise + requests (RNNoise noise reduction backend)
+- Krisp SDK (krisp_audio)
+- Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs, Cartesia
+
 ## CLI
 
 ```bash
@@ -639,46 +681,6 @@ TURN (`TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`) for reliable NAT tr
 ## Repo layout
 - src/easycat: library code
 - tests: unit/integration tests (some are skipped without API keys)
-
-## Install
-Python 3.11+ is required.
-
-```
-uv sync
-```
-
-### Quickstart (local mic/speaker + OpenAI STT/TTS + OpenAI Agents SDK)
-The fastest path to a working end-to-end pipeline on your machine:
-
-```
-uv sync --extra quickstart
-export OPENAI_API_KEY="your-api-key"
-uv run python examples/openai_agents_voice.py
-```
-
-The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
-SDK, RNNoise dependencies, numpy, and onnxruntime. It does not include TEN VAD;
-install that optional extra separately only if you accept its non-permissive
-license. Silero VAD runs on its bundled ONNX model via `onnxruntime` (already
-in `quickstart`) — no torch required. If you want a leaner install with Silero,
-add extras individually:
-
-```
-uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad
-```
-
-Optional dependencies you may need depending on providers/transports:
-- sounddevice (LocalTransport)
-- aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc`
-- numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn`
-- ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license)
-- numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad` — runs the bundled ONNX model (no torch required)
-- funasr-onnx + onnxruntime (FunASR VAD): `uv sync --extra funasr-vad`
-  on Python 3.11-3.12. The current upstream SDK pins NumPy below the
-  range needed by the fixed ONNX package on Python 3.13+.
-- pyrnnoise + requests (RNNoise noise reduction backend)
-- Krisp SDK (krisp_audio)
-- Provider SDKs/keys for OpenAI, Deepgram, ElevenLabs, Cartesia
 
 ## Factory APIs
 
