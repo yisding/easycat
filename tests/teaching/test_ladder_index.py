@@ -78,6 +78,22 @@ def test_teaching_ladder_index_matches_chapter_directories() -> None:
     assert not mismatched_display_names, "; ".join(mismatched_display_names)
 
 
+def test_public_teaching_ladder_entrypoints_advertise_actual_chapter_count() -> None:
+    chapter_count = len(_chapter_dirs())
+    expected_phrase = f"{chapter_count}-chapter"
+    docs = {
+        "README.md": (REPO_ROOT / "README.md").read_text(encoding="utf-8"),
+        "docs/teaching/README.md": (TEACHING_DIR / "README.md").read_text(encoding="utf-8"),
+    }
+    missing = [name for name, text in docs.items() if expected_phrase not in text]
+
+    assert chapter_count == len(_ladder_rows())
+    assert not missing, (
+        "Teaching ladder entrypoints should advertise the actual chapter count: "
+        + ", ".join(missing)
+    )
+
+
 def test_teaching_chapters_have_reader_entrypoints() -> None:
     missing: list[str] = []
 
