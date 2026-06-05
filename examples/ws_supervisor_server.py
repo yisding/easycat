@@ -15,7 +15,7 @@ supervisors that subscribe by ``session_id``.
 
 Setup:
     export OPENAI_API_KEY="..."
-    uv sync --extra openai-agents --group dev
+    uv sync --extra openai --extra openai-agents --group dev
     uv run easycat doctor
     uv run python examples/ws_supervisor_server.py
 

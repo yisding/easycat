@@ -10,7 +10,7 @@ Setup:
   export TWILIO_STATUS_CALLBACK_URL="https://your-public-host/status"
   export TWILIO_CALL_API_TOKEN="dev-only-token"
   export TWILIO_SMS_FROM="+15551234567"  # optional, enables send_sms actions
-  uv sync --extra telephony --extra openai-agents --group dev
+  uv sync --extra openai --extra telephony --extra openai-agents --group dev
   uv run easycat doctor
   uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0 --port 8000
 """

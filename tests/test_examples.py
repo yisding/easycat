@@ -124,6 +124,13 @@ def _documented_setup_extras(path: Path) -> set[str]:
     return set(_UV_SYNC_EXTRA_RE.findall(doc))
 
 
+def _uses_default_openai_providers(path: Path) -> bool:
+    module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return any(
+        isinstance(node, ast.keyword) and node.arg == "openai_api_key" for node in ast.walk(module)
+    )
+
+
 def _dockerfile_default_extras() -> set[str]:
     dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
     match = re.search(r'^ARG EXTRAS="(?P<extras>[^"]+)"$', dockerfile, re.MULTILINE)
@@ -440,6 +447,26 @@ def test_examples_readme_install_extras_cover_docstring_setup() -> None:
             stale.append(f"{row['link']}: missing {missing}")
 
     assert not stale, "examples/README.md install cells omit setup extras: " + "; ".join(stale)
+
+
+def test_default_openai_provider_examples_install_openai_sdk() -> None:
+    stale: list[str] = []
+
+    for row in _example_readme_rows():
+        path = REPO_ROOT / "examples" / row["link"]
+        if not _uses_default_openai_providers(path):
+            continue
+
+        install_extras = set(_UV_SYNC_EXTRA_RE.findall(row["install"]))
+        docstring_extras = _documented_setup_extras(path)
+        for label, extras in (
+            ("examples/README.md install", install_extras),
+            ("example docstring setup", docstring_extras),
+        ):
+            if "quickstart" not in extras and "openai" not in extras:
+                stale.append(f"{row['link']}: {label} missing --extra openai")
+
+    assert not stale, "Default OpenAI provider examples omit the OpenAI SDK: " + "; ".join(stale)
 
 
 def test_examples_readme_env_cells_cover_required_env_helpers() -> None:

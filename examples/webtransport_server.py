@@ -2,7 +2,7 @@
 
 Setup:
 
-  uv sync --extra openai-agents --extra webtransport --group dev
+  uv sync --extra openai --extra openai-agents --extra webtransport --group dev
   # Generate a local self-signed cert (any tool works; openssl shown):
   openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem \
       -days 1 -nodes -subj "/CN=localhost"

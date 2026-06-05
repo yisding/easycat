@@ -14,7 +14,7 @@ and restart it — the client logs the reconnect attempts and resumes
 transparently.
 
 Setup:
-  uv sync --extra openai-agents --group dev
+  uv sync --extra openai --extra openai-agents --group dev
 
   # Terminal 1 (server; requires OpenAI credentials):
   export OPENAI_API_KEY="..."
