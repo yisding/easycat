@@ -438,7 +438,7 @@ $ uv run easycat --help
   something's not working.
 - **`uv run easycat explain <code>`** — looks up an error code in the
   registry (`src/easycat/cli/diagnose/explain.py`). When
-  `EasyCatError` raises with `code="EC-STT-001"`, this is where
+  `EasyCatError` raises with `code="EASYCAT_E203"`, this is where
   you find out what that means.
 - **`uv run easycat bundles list`** / **`uv run easycat bundles show <path>`** —
   list captured bundles and summarize one bundle from the shell.

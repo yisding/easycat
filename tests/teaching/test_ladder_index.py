@@ -273,6 +273,30 @@ def test_chapter_15_doctor_exercise_uses_repo_local_command() -> None:
         assert "`uv run easycat doctor`" in text
 
 
+def test_teaching_cli_error_code_examples_use_current_namespace() -> None:
+    from easycat.errors import REGISTRY
+
+    stale_mentions: list[str] = []
+    unknown_mentions: list[str] = []
+
+    for path in sorted(TEACHING_DIR.rglob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        if re.search(r"\bEC-[A-Z0-9-]+\b", text):
+            stale_mentions.append(path.relative_to(REPO_ROOT).as_posix())
+        for match in re.finditer(r"\bEASYCAT_E\d{3}\b", text):
+            code = match.group(0)
+            if code not in REGISTRY:
+                line = text.count("\n", 0, match.start()) + 1
+                unknown_mentions.append(f"{path.relative_to(REPO_ROOT).as_posix()}:{line}: {code}")
+
+    assert not stale_mentions, "Teaching docs use legacy EC-* error codes: " + ", ".join(
+        stale_mentions
+    )
+    assert not unknown_mentions, "Teaching docs reference unknown EasyCat errors: " + ", ".join(
+        unknown_mentions
+    )
+
+
 def test_teaching_docs_do_not_claim_teaching_tests_are_missing() -> None:
     stale_mentions: list[str] = []
 
