@@ -86,7 +86,7 @@ Support files:
 | Example | Use When | Run | Install | Env |
 | --- | --- | --- | --- | --- |
 | [push_to_talk.py](push_to_talk.py) | Manually call `start_turn()` / `end_turn()` instead of VAD. | `uv run python examples/push_to_talk.py` | `uv sync --extra quickstart` | `OPENAI_API_KEY` |
-| [smart_turn_demo.py](smart_turn_demo.py) | ONNX endpoint classifier for faster turn completion. | `uv run python examples/smart_turn_demo.py` | `uv sync --extra quickstart --extra smart-turn` | `OPENAI_API_KEY` |
+| [smart_turn_demo.py](smart_turn_demo.py) | ONNX endpoint classifier for faster turn completion. | `uv run python examples/smart_turn_demo.py` | `uv sync --extra quickstart` | `OPENAI_API_KEY` |
 | [vad_backends.py](vad_backends.py) | Pin VAD backend (`silero`, `funasr`, `ten`, `krisp`, or `auto`). | `uv run python examples/vad_backends.py --backend silero` | `uv sync --extra quickstart`; `--extra funasr-vad` on Python 3.11-3.12, `--extra ten-vad`, or `uv pip install krisp_audio` for those backends | `OPENAI_API_KEY` |
 | [noise_reduction_backends.py](noise_reduction_backends.py) | Pin noise-reduction backend (`rnnoise`, `krisp`, or `auto`). | `uv run python examples/noise_reduction_backends.py --backend rnnoise` | `uv sync --extra quickstart`; `uv pip install krisp_audio` for Krisp | `OPENAI_API_KEY` |
 | [echo_cancellation.py](echo_cancellation.py) | Enable LiveKit AEC3 on local mic/speaker. | `uv run python examples/echo_cancellation.py` | `uv sync --extra quickstart --extra aec` | `OPENAI_API_KEY` |

@@ -170,14 +170,17 @@ def test_teaching_provider_key_setup_names_required_extras() -> None:
     assert not missing, "Teaching setup docs missing provider extras:\n" + "\n".join(missing)
 
 
-def test_quickstart_guidance_does_not_readd_bundled_rnnoise_extra() -> None:
-    """``quickstart`` already includes RNNoise; avoid redundant copy-paste setup."""
+def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
+    """``quickstart`` already includes common local extras; avoid redundant setup."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     extras = pyproject["project"]["optional-dependencies"]
-    assert set(extras["rnnoise"]).issubset(set(extras["quickstart"]))
+    bundled_extras = ("rnnoise", "smart-turn")
+    for extra in bundled_extras:
+        assert set(extras[extra]).issubset(set(extras["quickstart"]))
 
     redundant: list[str] = []
-    pattern = re.compile(r"--extra\s+quickstart[^\n`|]*--extra\s+rnnoise")
+    extra_pattern = "|".join(re.escape(extra) for extra in bundled_extras)
+    pattern = re.compile(rf"--extra\s+quickstart[^\n`|]*--extra\s+(?:{extra_pattern})")
     for path in _iter_guidance_files():
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(REPO_ROOT).as_posix()
@@ -186,6 +189,6 @@ def test_quickstart_guidance_does_not_readd_bundled_rnnoise_extra() -> None:
             redundant.append(f"{rel}:{line}")
 
     assert not redundant, (
-        "Guidance should not add `--extra rnnoise` when `--extra quickstart` is already "
-        "present because quickstart bundles RNNoise: " + "; ".join(redundant)
+        "Guidance should not re-add extras that `quickstart` already bundles: "
+        + "; ".join(redundant)
     )
