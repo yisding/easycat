@@ -12,7 +12,7 @@ Two modes:
 Run with each and compare the bundle timings.
 
 Dependencies:
-    uv sync --extra quickstart --group dev     # includes smart-turn
+    uv sync --extra quickstart --extra deepgram --group dev     # includes smart-turn
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
 """

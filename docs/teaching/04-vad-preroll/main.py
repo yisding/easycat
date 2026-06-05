@@ -8,7 +8,7 @@ Run with ``--no-preroll`` to hear the start-of-utterance truncation
 this chapter was designed to fix.
 
 Dependencies:
-    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev
     export OPENAI_API_KEY=...      # OpenAI TTS
     export DEEPGRAM_API_KEY=...    # Streaming STT
 """

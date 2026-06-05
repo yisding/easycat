@@ -22,7 +22,7 @@ Run on speakerphone (no headphones) for the AEC mode to land —
 otherwise there's no echo to cancel and the mis-wiring is invisible.
 
 Dependencies:
-    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev
     For real NR/AEC: uv sync --extra rnnoise --extra aec
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...

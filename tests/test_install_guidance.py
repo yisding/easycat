@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import tomllib
 from pathlib import Path
@@ -48,6 +49,14 @@ STALE_INSTALL_PATTERNS = (
 )
 UV_EXTRA_RE = re.compile(r"--extra\s+(?P<extra>[A-Za-z0-9_.-]+)")
 EASYCAT_EXTRA_RE = re.compile(r"easycat\[(?P<extras>[^\]]+)\]")
+MARKDOWN_PREREQS_RE = re.compile(
+    r"^## Prerequisites\n(?P<body>.*?)(?=^## |\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+PROVIDER_EXTRA_BY_ENV_VAR = {
+    "DEEPGRAM_API_KEY": "--extra deepgram",
+    "ELEVENLABS_API_KEY": "--extra elevenlabs",
+}
 
 
 def _iter_guidance_files() -> list[Path]:
@@ -129,3 +138,33 @@ def test_teaching_ladder_prerequisites_run_doctor_after_setup() -> None:
     doctor_index = readme.index("uv run easycat doctor")
 
     assert sync_index < key_index < doctor_index
+
+
+def test_teaching_provider_key_setup_names_required_extras() -> None:
+    """Provider-key setup snippets should include the matching optional extra."""
+    missing: list[str] = []
+    teaching_root = REPO_ROOT / "docs" / "teaching"
+
+    for path in sorted(teaching_root.rglob("*.py")):
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        doc = ast.get_docstring(module) or ""
+        if "Dependencies:" not in doc:
+            continue
+        rel = path.relative_to(REPO_ROOT)
+        for env_var, extra in PROVIDER_EXTRA_BY_ENV_VAR.items():
+            if env_var in doc and extra not in doc:
+                missing.append(f"{rel}: {env_var} setup missing {extra}")
+
+    readme_paths = sorted({*teaching_root.rglob("README.md"), teaching_root / "README.md"})
+    for path in readme_paths:
+        text = path.read_text(encoding="utf-8")
+        match = MARKDOWN_PREREQS_RE.search(text)
+        if match is None:
+            continue
+        section = match.group("body")
+        rel = path.relative_to(REPO_ROOT)
+        for env_var, extra in PROVIDER_EXTRA_BY_ENV_VAR.items():
+            if env_var in section and extra not in section:
+                missing.append(f"{rel}: {env_var} prerequisites missing {extra}")
+
+    assert not missing, "Teaching setup docs missing provider extras:\n" + "\n".join(missing)

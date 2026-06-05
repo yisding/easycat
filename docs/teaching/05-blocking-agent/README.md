@@ -9,6 +9,7 @@ build movement (chapters 6-9) exists to close this gap.
 ## Prerequisites
 
 - [Chapter 4](../04-vad-preroll/)
+- `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY` (LLM + TTS) and `DEEPGRAM_API_KEY` (STT)
 
 > **Minimum to skip the ladder:** chapter 4 alone (VAD-gated
@@ -47,7 +48,7 @@ build movement (chapters 6-9) exists to close this gap.
 +That silence is the whole point of this chapter.
  
  Dependencies:
-     uv sync --extra quickstart --group dev
+     uv sync --extra quickstart --extra deepgram --group dev
 -    export OPENAI_API_KEY=...      # OpenAI TTS
 -    export DEEPGRAM_API_KEY=...    # Streaming STT
 +    export OPENAI_API_KEY=...

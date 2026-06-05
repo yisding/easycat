@@ -22,7 +22,7 @@ we sent to the speaker). We feed the reference every time we
 emit a TTS chunk.
 
 Dependencies:
-    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev
     For real NR:   uv sync --extra rnnoise
     For real AEC:  uv sync --extra aec
     Otherwise both silently fall back to passthrough — the

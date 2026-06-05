@@ -14,7 +14,7 @@ think next turn that it said its whole response. Version 9c fixes
 that.
 
 Dependencies:
-    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
 """

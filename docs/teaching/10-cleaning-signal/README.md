@@ -9,6 +9,7 @@
 ## Prerequisites
 
 - [Chapter 9](../09-interruption/)
+- `uv sync --extra quickstart --extra deepgram --group dev`
 - For real NR: `uv sync --extra rnnoise` (permissive RNNoise) or
   Krisp per its own SDK.
 - For real AEC: `uv sync --extra aec` (LiveKit APM).
@@ -85,7 +86,7 @@ so you know which one you're actually hearing.
 +emit a TTS chunk.
  
  Dependencies:
-     uv sync --extra quickstart --group dev
+     uv sync --extra quickstart --extra deepgram --group dev
 +    For real NR:   uv sync --extra rnnoise
 +    For real AEC:  uv sync --extra aec
 +    Otherwise both silently fall back to passthrough — the

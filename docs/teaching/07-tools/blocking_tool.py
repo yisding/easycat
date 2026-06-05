@@ -12,7 +12,7 @@ turn. Then run `main.py` and notice the filler phrase covering
 that same gap.
 
 Dependencies:
-    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
 """

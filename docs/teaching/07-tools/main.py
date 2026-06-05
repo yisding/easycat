@@ -10,7 +10,7 @@ a void. The fast one doesn't — fillers only help when the gap
 would otherwise feel broken.
 
 Dependencies:
-    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
 """

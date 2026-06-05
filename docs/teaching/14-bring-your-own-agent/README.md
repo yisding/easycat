@@ -85,6 +85,7 @@
  
  Dependencies:
      uv sync --extra quickstart --group dev
+-    For deepgram-eleven: --extra deepgram --extra elevenlabs
 -    For WebRTC: --extra webrtc
 -    For Twilio: --extra telephony
 -    OPENAI_API_KEY (always)

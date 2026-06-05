@@ -55,19 +55,21 @@ runnable artifact you can visit independently.
 - Python 3.11+.
 - `uv sync --extra quickstart --group dev` from the repo root.
   The `quickstart` extra bundles mic I/O, OpenAI, NumPy, and
-  ONNX Runtime — enough for chapters 0-9 and 11-12. Chapter 10
-  additionally wants the `rnnoise` and/or `aec` extras for real
-  noise reduction / echo cancellation (falls back silently to
-  passthrough without them). Chapter 13's `deepgram-eleven`
-  provider mix additionally needs `--extra deepgram --extra
-  elevenlabs`; its WebRTC and Twilio transport variants need
+  ONNX Runtime — enough for chapters 0-2 and 11-12. Chapters 3-10
+  use Deepgram streaming STT by default, so run
+  `uv sync --extra quickstart --extra deepgram --group dev` for
+  those chapters. Chapter 10 additionally wants the `rnnoise` and/or
+  `aec` extras for real noise reduction / echo cancellation (falls
+  back silently to passthrough without them). Chapter 13's
+  `deepgram-eleven` provider mix additionally needs `--extra deepgram
+  --extra elevenlabs`; its WebRTC and Twilio transport variants need
   `--extra webrtc` and `--extra telephony`, respectively.
 - A mic and speakers for the build chapters. Chapters 11 and 12
   ship checked-in bundles you can read without hardware.
 - API keys, set as environment variables:
   - `OPENAI_API_KEY` — default STT / TTS / agent provider.
-  - `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY` — used starting
-    chapter 13 to demonstrate provider swap.
+  - `DEEPGRAM_API_KEY` — used in chapters 3-10 for streaming STT.
+  - `ELEVENLABS_API_KEY` — used in chapter 13's provider-swap mix.
 - After setting the keys for a chapter, run `uv run easycat doctor`
   from the repo root. It catches missing keys, local audio problems,
   journal path issues, and provider reachability before you debug

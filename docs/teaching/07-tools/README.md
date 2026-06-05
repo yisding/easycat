@@ -7,6 +7,7 @@
 ## Prerequisites
 
 - [Chapter 6](../06-streaming-agent/)
+- `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 
 > **Minimum to skip the ladder:** chapter 6 (the streaming-agent
@@ -51,7 +52,7 @@
 +would otherwise feel broken.
  
  Dependencies:
-     uv sync --extra quickstart --group dev
+     uv sync --extra quickstart --extra deepgram --group dev
 @@ -17,7 +19,9 @@
  
  import asyncio

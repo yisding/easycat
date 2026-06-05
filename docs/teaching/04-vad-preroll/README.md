@@ -7,7 +7,7 @@
 
 - [Chapter 3](../03-parrot-naive/) (ideally with breaker recordings
   in your ears)
-- `uv sync --extra quickstart --group dev` — the `quickstart`
+- `uv sync --extra quickstart --extra deepgram --group dev` — the `quickstart`
   extra pulls in `onnxruntime`, which Silero VAD needs.
 - `OPENAI_API_KEY` (TTS) and `DEEPGRAM_API_KEY` (STT).
 
@@ -49,7 +49,7 @@
 +this chapter was designed to fix.
  
  Dependencies:
-     uv sync --extra quickstart --group dev
+     uv sync --extra quickstart --extra deepgram --group dev
      export OPENAI_API_KEY=...      # OpenAI TTS
 -    export DEEPGRAM_API_KEY=...    # mid-speech STT partials
 +    export DEEPGRAM_API_KEY=...    # Streaming STT

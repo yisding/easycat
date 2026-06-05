@@ -9,7 +9,7 @@ just deliberately do nothing about it. Chapter 9b / 9c will act on
 the same signal.
 
 Dependencies:
-    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
 """

@@ -8,6 +8,7 @@
 ## Prerequisites
 
 - [Chapter 8](../08-smart-turn/)
+- `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`
 - **Use headphones.** If you run this on a speaker+mic laptop,
   the bot will interrupt itself every time it hears its own

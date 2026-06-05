@@ -14,7 +14,7 @@ about silence, SSML, markdown, and playback-ack fudge factors —
 read it after you understand the toy.
 
 Dependencies:
-    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
 """

@@ -6,7 +6,7 @@
 ## Prerequisites
 
 - [Chapter 7](../07-tools/)
-- `uv sync --extra quickstart --group dev` — the `quickstart`
+- `uv sync --extra quickstart --extra deepgram --group dev` — the `quickstart`
   extra installs `numpy` + `onnxruntime`, which smart-turn needs.
   The 8 MB ONNX model ships bundled in `src/easycat/models/`.
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
@@ -59,8 +59,8 @@
 +Run with each and compare the bundle timings.
  
  Dependencies:
--    uv sync --extra quickstart --group dev
-+    uv sync --extra quickstart --group dev     # includes smart-turn
+-    uv sync --extra quickstart --extra deepgram --group dev
++    uv sync --extra quickstart --extra deepgram --group dev     # includes smart-turn
      export OPENAI_API_KEY=...
      export DEEPGRAM_API_KEY=...
  """

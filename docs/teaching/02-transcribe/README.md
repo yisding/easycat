@@ -8,7 +8,8 @@
 - [Chapter 1](../01-echo/)
 - `uv sync --extra quickstart --group dev`
 - `export OPENAI_API_KEY=sk-...` (or any other provider from
-  `src/easycat/stt/factory.py`).
+  `src/easycat/stt/factory.py`; add that provider's extra, such as
+  `--extra deepgram`, when you switch).
 
 > **Minimum to skip the ladder:** chapter 1 for the `Transport`
 > protocol. You can read this chapter without chapter 0's PCM math.
@@ -42,7 +43,7 @@
  
 -Dependency:
 +Dependencies:
-     uv sync --extra quickstart --group dev
+     uv sync --extra quickstart --group dev  # add --extra deepgram for Deepgram partials
 +    export OPENAI_API_KEY=...   # or DEEPGRAM_API_KEY for mid-speech partials
  """
  

@@ -7,6 +7,7 @@
 
 - [Chapter 5](../05-blocking-agent/) and its bundles — we will
   diff against them.
+- `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 
 > **Minimum to skip the ladder:** chapter 5 — you need to have
@@ -48,7 +49,7 @@
 +First-audio latency drops by ~3× versus chapter 5.
  
  Dependencies:
-     uv sync --extra quickstart --group dev
+     uv sync --extra quickstart --extra deepgram --group dev
 @@ -28,24 +30,28 @@
  from easycat.events import (
      EventBus,

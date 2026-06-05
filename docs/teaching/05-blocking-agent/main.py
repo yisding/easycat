@@ -6,7 +6,7 @@ handing it to TTS. The bot falls silent for 2-4 seconds per turn.
 That silence is the whole point of this chapter.
 
 Dependencies:
-    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
 """

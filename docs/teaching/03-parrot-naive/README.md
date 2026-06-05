@@ -10,7 +10,7 @@ personally heard this fail on your own voice.
 ## Prerequisites
 
 - [Chapter 2](../02-transcribe/)
-- `uv sync --extra quickstart --group dev`
+- `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY` (for TTS) and **`DEEPGRAM_API_KEY`** (the
   parrot needs mid-speech partials, which the OpenAI STT default
   does not produce).
@@ -50,7 +50,7 @@ personally heard this fail on your own voice.
 +the canonical killer. Chapter 4 replaces this with a real VAD.
  
  Dependencies:
-     uv sync --extra quickstart --group dev
+     uv sync --extra quickstart --extra deepgram --group dev
 -    export OPENAI_API_KEY=...   # or DEEPGRAM_API_KEY for mid-speech partials
 +    export OPENAI_API_KEY=...      # OpenAI TTS
 +    export DEEPGRAM_API_KEY=...    # mid-speech STT partials

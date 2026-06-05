@@ -7,7 +7,7 @@ Run it and break it — "The capital of France is... uh... Paris" is
 the canonical killer. Chapter 4 replaces this with a real VAD.
 
 Dependencies:
-    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev
     export OPENAI_API_KEY=...      # OpenAI TTS
     export DEEPGRAM_API_KEY=...    # mid-speech STT partials
 """

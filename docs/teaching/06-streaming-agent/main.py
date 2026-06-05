@@ -8,7 +8,7 @@ sentence N is still playing.
 First-audio latency drops by ~3× versus chapter 5.
 
 Dependencies:
-    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
 """
