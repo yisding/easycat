@@ -48,6 +48,17 @@ such as `uv sync --extra quickstart --group dev`; anything after a semicolon is
 an additional third-party package to install in the same environment with
 `uv pip install`.
 
+## Choose An Example
+
+| You need | Start with | Why |
+| --- | --- | --- |
+| No API keys | [journal_demo.py](journal_demo.py) or [telephony_helpers.py](telephony_helpers.py) | Both run offline; one teaches journal records, the other teaches telephony helper logic. |
+| First local voice bot | [openai_agents_voice.py](openai_agents_voice.py) | It matches the README quickstart and `quickstart` extra. |
+| Your preferred agent framework | [pydantic_ai_voice.py](pydantic_ai_voice.py), [langchain_voice.py](langchain_voice.py), or [langgraph_voice.py](langgraph_voice.py) | These show framework-specific bridge wiring with the same voice loop shape. |
+| Browser or server transport | [ws_browser_example.py](ws_browser_example.py) or [webrtc_server.py](webrtc_server.py) | These move the same voice loop into browser/WebSocket/WebRTC surfaces. |
+| Provider comparison | [deepgram_voice.py](deepgram_voice.py), [elevenlabs_voice.py](elevenlabs_voice.py), or [combined_providers.py](combined_providers.py) | These make provider extras and required API keys explicit. |
+| Debugging and replay | [debug_bundle.py](debug_bundle.py) or [journal_ui.py](journal_ui.py) | These show `RunBundle` export, journal inspection, and the debugger UI. |
+
 ## Core Voice Loops
 
 | Example | Use When | Run | Install | Env |

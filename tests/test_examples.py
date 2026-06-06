@@ -463,6 +463,43 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     )
 
 
+def test_examples_readme_choose_example_table_tracks_matrix() -> None:
+    readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+    table = readme.split("## Choose An Example", 1)[1].split("## Core Voice Loops", 1)[0]
+    normalized_table = re.sub(r"\s+", " ", table)
+    rows = {row["link"]: row for row in _example_readme_rows()}
+    linked_examples = set(re.findall(r"\[([^]]+\.py)\]\(([^)]+\.py)\)", table))
+    linked_paths = {link for display, link in linked_examples}
+
+    assert linked_paths <= set(rows), "Chooser links missing from example matrix"
+    for display, link in linked_examples:
+        assert display == link
+    for phrase in (
+        "No API keys",
+        "First local voice bot",
+        "Your preferred agent framework",
+        "Browser or server transport",
+        "Provider comparison",
+        "Debugging and replay",
+        "`quickstart` extra",
+        "framework-specific bridge wiring",
+        "browser/WebSocket/WebRTC surfaces",
+        "provider extras and required API keys",
+        "`RunBundle` export",
+        "debugger UI",
+    ):
+        assert phrase in normalized_table
+    for example in ("journal_demo.py", "telephony_helpers.py"):
+        assert rows[example]["env"] == "None"
+    assert "OPENAI_API_KEY" in rows["openai_agents_voice.py"]["env"]
+    assert "--extra quickstart" in rows["openai_agents_voice.py"]["install"]
+    for example in ("deepgram_voice.py", "elevenlabs_voice.py", "combined_providers.py"):
+        assert "OPENAI_API_KEY" in rows[example]["env"]
+        assert "--extra" in rows[example]["install"]
+    assert "debug_bundle.py" in linked_paths
+    assert "journal_ui.py" in linked_paths
+
+
 def test_examples_readme_rows_are_command_map_entries() -> None:
     rows = _example_readme_rows()
     row_names = [row["link"] for row in rows]
