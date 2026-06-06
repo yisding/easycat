@@ -15,6 +15,9 @@ Use this page as the map for the maintained docs. Planning notes live under
   [root README](../README.md#cli).
 - Maintaining public imports: review the
   [public API contract](public-api.md) before changing `easycat.__all__`.
+- Contributing code or tests: use the
+  [contributor guide](../CONTRIBUTING.md) for the development loop, validation
+  slices, marker taxonomy, cassettes, and provider-addition checklist.
 - Operating sessions in production: read
   [deployment with Docker](deployment/docker.md) and
   [observability](observability.md).

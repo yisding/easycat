@@ -63,6 +63,7 @@ _DOCS_MENU = """[bold]EasyCat documentation[/]
   [cyan]Docs map[/]         docs/README.md
   [cyan]Teaching ladder[/]  docs/teaching/
   [cyan]Public API[/]       docs/public-api.md
+  [cyan]Contributing[/]     CONTRIBUTING.md
   [cyan]Validation[/]       README.md#validation-workflow
 
 Online source: [cyan]https://github.com/yisding/easycat[/]
@@ -74,6 +75,7 @@ _DOCS_LINKS = [
     {"label": "Docs map", "path": "docs/README.md"},
     {"label": "Teaching ladder", "path": "docs/teaching/"},
     {"label": "Public API", "path": "docs/public-api.md"},
+    {"label": "Contributing", "path": "CONTRIBUTING.md"},
     {"label": "Validation", "path": "README.md#validation-workflow"},
 ]
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"

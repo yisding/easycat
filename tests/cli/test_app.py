@@ -60,6 +60,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "docs/README.md" in result.stdout
     assert "docs/teaching" in result.stdout
     assert "docs/public-api.md" in result.stdout
+    assert "CONTRIBUTING.md" in result.stdout
     assert "#validation-workflow" in result.stdout
 
 
@@ -73,6 +74,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     paths = {entry["path"] for entry in payload["entries"]}
     assert "docs/README.md" in paths
     assert "docs/teaching/" in paths
+    assert "CONTRIBUTING.md" in paths
     assert payload["source_url"] == "https://github.com/yisding/easycat"
 
 
