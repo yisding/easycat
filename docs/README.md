@@ -27,7 +27,8 @@ command hints, such as `PATH`, before running them.
   including command-specific success and error fields. Replace uppercase
   placeholders in command hints, such as `PATH`, before running them. Each
   docs route entry includes an `audience` label for choosing the right starting
-  point without scraping descriptions.
+  point without scraping descriptions, and the top-level `command_note`
+  distinguishes installed CLI hints from repo-local `uv run` hints.
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.

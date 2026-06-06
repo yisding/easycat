@@ -86,6 +86,8 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "command-specific success and error fields" in normalized
     assert "standard `--json` envelope" in text
     assert "`audience`" in text
+    assert "top-level `command_note`" in text
+    assert "installed CLI hints from repo-local `uv run` hints" in normalized
     assert "uv run easycat validate quick" in text
     assert "uv run easycat validate report .easycat/validation/latest.json" in text
 
@@ -267,6 +269,10 @@ def test_cli_docs_command_placeholders_are_explained() -> None:
 
     assert not missing, "command_note missing placeholders: " + ", ".join(missing)
     assert "placeholder" in _DOCS_COMMAND_NOTE.lower()
+    assert "Bare easycat commands use installed CLI form" in _DOCS_COMMAND_NOTE
+    assert "prefix them with uv run" in _DOCS_COMMAND_NOTE
+    assert "Commands already starting with uv run are repo-local" in _DOCS_COMMAND_NOTE
+    assert "repository root" in _DOCS_COMMAND_NOTE
 
 
 def test_cli_docs_routes_have_online_urls() -> None:

@@ -244,8 +244,9 @@ _DOCS_LINKS: list[_DocsLink] = [
 ]
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
 _DOCS_COMMAND_NOTE = (
-    "EasyCat CLI hints use installed form; from this repo, prefix non-uv EasyCat hints "
-    "with uv run. Replace uppercase placeholders such as PATH before running."
+    "Bare easycat commands use installed CLI form; from this repo, prefix them with uv run. "
+    "Commands already starting with uv run are repo-local and should run from the repository "
+    "root. Replace uppercase placeholders such as PATH before running."
 )
 
 

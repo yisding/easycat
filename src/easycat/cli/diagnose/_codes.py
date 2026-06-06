@@ -124,8 +124,8 @@ entry points include:
                             `description`, `url`, and optional `commands`
                             in onboarding order; `audience`
                             labels the intended reader, and `command_note`
-                            explains installed vs repo-local `uv run` for
-                            EasyCat CLI hints and uppercase placeholders such
+                            explains bare installed CLI hints, repo-local
+                            `uv run` hints, and uppercase placeholders such
                             as PATH
   `templates`, `catalog`, `command_note` -
                          `easycat init --list-templates --json`;
