@@ -235,6 +235,161 @@ def test_provider_states_distinguish_expected_skip_from_required_secret_failure(
     ]
 
 
+def test_validation_tasks_v02_current_state_tracks_report_model_contract() -> None:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V0.2 Define Validation Report Model", 1)[1].split(
+        "### V0.3 Create `scripts/validate.py quick/socket`",
+        1,
+    )[0]
+    report_source = (REPO_ROOT / "src/easycat/validation/report.py").read_text(encoding="utf-8")
+    redaction_source = (REPO_ROOT / "src/easycat/validation/redaction.py").read_text(
+        encoding="utf-8"
+    )
+    test_source = (REPO_ROOT / "tests/cli/test_validate.py").read_text(encoding="utf-8")
+    redaction_property_source = (
+        REPO_ROOT / "tests/validation/test_redaction_property.py"
+    ).read_text(encoding="utf-8")
+
+    assert "Current verified state:" in section
+    for symbol in (
+        "ValidationRun",
+        "ValidationCheck",
+        "ValidationSkip",
+        "ValidationFailure",
+        "ArtifactRef",
+        "GitMetadata",
+        "ValidationEnvironment",
+        "ProviderCheck",
+        "ProviderCheckState",
+        "schema_version",
+        "redaction_version",
+        "run_id",
+        "command",
+        "tool_exit_codes",
+        "git",
+        "environment",
+        "checks",
+        "skips",
+        "failures",
+        "latency",
+        "reliability",
+        "providers",
+        "provider_reports",
+        "extras",
+        "artifacts",
+        "not_requested",
+        "skipped_missing_secret",
+        "failed_missing_required_secret",
+        "passed",
+        "failed",
+    ):
+        assert symbol in report_source
+        assert f"`{symbol}`" in section
+    for symbol in (
+        "redact_text",
+        "redact_runtime_secrets",
+        "redact_value",
+        "redact_command",
+        "UNSAFE_TEXT_FIELDS",
+    ):
+        assert symbol in redaction_source
+        assert f"`{symbol}`" in section
+    for test_name in (
+        "test_validation_run_serializes_required_fields_deterministically",
+        "test_validation_report_redacts_secret_like_and_unsafe_values",
+        "test_validation_schema_represents_pass_fail_and_expected_skip",
+        "test_provider_states_distinguish_expected_skip_from_required_secret_failure",
+    ):
+        assert test_name in test_source
+    for test_name in (
+        "test_redact_text_is_idempotent",
+        "test_runtime_secret_is_removed",
+        "test_key_based_redaction_catches_short_secret_values",
+        "test_unsafe_text_fields_use_domain_specific_placeholders",
+        "test_shared_detector_flags_cassette_sensitive_patterns",
+        "test_redact_command_redacts_split_secret_flags",
+    ):
+        assert test_name in redaction_property_source
+    for token in (
+        "src/easycat/validation/report.py",
+        "src/easycat/validation/redaction.py",
+        "tests/cli/test_validate.py",
+        "tests/validation/test_redaction_property.py",
+    ):
+        assert f"`{token}`" in section
+
+
+def test_validation_tasks_v03_current_state_tracks_script_shim_and_slice_runner() -> None:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V0.3 Create `scripts/validate.py quick/socket`", 1)[1].split(
+        "### V0.4 Add Flaky Quarantine Metadata Check",
+        1,
+    )[0]
+    script_source = (REPO_ROOT / "scripts/validate.py").read_text(encoding="utf-8")
+    runner_source = (REPO_ROOT / "src/easycat/validation/runner.py").read_text(encoding="utf-8")
+    test_source = (REPO_ROOT / "tests/cli/test_validate.py").read_text(encoding="utf-8")
+    quick_selector = (
+        "not integration_socket and not integration_live and not slow and not stress and not flaky"
+    )
+    socket_selector = "integration_socket and not integration_live and not flaky"
+
+    assert "Current verified state:" in section
+    assert "from easycat.validation.runner import main" in script_source
+    assert "raise SystemExit(main())" in script_source
+    for token in (
+        "run_validation_slice",
+        "VALIDATION_SELECTORS",
+        '"quick"',
+        '"socket"',
+        '"stress"',
+        '"contracts"',
+        quick_selector,
+        socket_selector,
+        'run_dir = artifacts_root / "runs" / run_id',
+        "junit.xml",
+        "stdout.log",
+        "stderr.log",
+        "report.json",
+        "latest.json",
+        "tool_exit_codes",
+        "redact_text",
+        "redact_runtime_secrets",
+    ):
+        assert token in runner_source
+    for test_name in (
+        "test_validation_runner_quick_writes_report_junit_logs_and_latest",
+        "test_validation_runner_failed_pytest_still_writes_report",
+        "test_validation_runner_creates_isolated_run_directories",
+        "test_validation_main_dispatches_socket_slice",
+        "test_validation_main_dispatches_stress_slice",
+        "test_validation_main_dispatches_contracts_slice",
+    ):
+        assert test_name in test_source
+    for token in (
+        "scripts/validate.py",
+        "easycat.validation.runner.main",
+        "src/easycat/validation/runner.py",
+        "run_validation_slice(...)",
+        "VALIDATION_SELECTORS",
+        "quick",
+        "socket",
+        "stress",
+        "contracts",
+        quick_selector,
+        socket_selector,
+        ".easycat/validation/runs/<run_id>/",
+        "junit.xml",
+        "stdout.log",
+        "stderr.log",
+        "report.json",
+        "latest.json",
+        "exit_code",
+        'tool_exit_codes["pytest"]',
+        "tests/cli/test_validate.py",
+    ):
+        assert f"`{token}`" in section
+
+
 def test_live_validation_skips_missing_secret_in_non_strict_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

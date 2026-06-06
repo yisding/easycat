@@ -147,6 +147,32 @@ uv run pytest -q -m "not integration_socket and not integration_live and not slo
 
 Status: completed
 
+Current verified state:
+
+- `src/easycat/validation/report.py` defines the validation JSON report model:
+  `ValidationRun`, `ValidationCheck`, `ValidationSkip`, `ValidationFailure`,
+  `ArtifactRef`, `GitMetadata`, `ValidationEnvironment`, `ProviderCheck`, and
+  `ProviderCheckState`.
+- `ValidationRun.to_dict()` / `ValidationRun.to_json()` serialize
+  `schema_version`, `redaction_version`, `kind`, `run_id`, `command`,
+  timestamps, `duration_s`, `status`, `exit_code`, `tool_exit_codes`, `git`,
+  `environment`, `checks`, `skips`, `failures`, `latency`, `reliability`,
+  `providers`, `provider_reports`, `extras`, and `artifacts`.
+- `ProviderCheckState` represents `not_requested`, `skipped_missing_secret`,
+  `failed_missing_required_secret`, `passed`, and `failed`.
+- `ValidationEnvironment` serializes environment metadata as env-var presence
+  booleans only; it does not serialize environment variable values.
+- `src/easycat/validation/redaction.py` owns report-boundary redaction through
+  `redact_text`, `redact_runtime_secrets`, `redact_value`, `redact_command`,
+  `UNSAFE_TEXT_FIELDS`, and secret-like key detection.
+- `tests/cli/test_validate.py` verifies deterministic required-field
+  serialization, secret-like and unsafe-value redaction, pass/fail/expected
+  skip representation, and the difference between expected missing-secret
+  skips and required-secret failures.
+- `tests/validation/test_redaction_property.py` verifies redaction idempotence,
+  runtime-secret removal, key-based redaction, domain-specific unsafe text
+  placeholders, sensitive-pattern detection, and split secret-flag redaction.
+
 Files:
 
 - reusable validation module chosen for V0, or `src/easycat/cli/validate.py`
@@ -189,6 +215,27 @@ uv run pytest tests/cli/test_validate.py -q
 ### V0.3 Create `scripts/validate.py quick/socket`
 
 Status: completed
+
+Current verified state:
+
+- `scripts/validate.py` is a compatibility shim that imports
+  `easycat.validation.runner.main` and exits with its return code.
+- `src/easycat/validation/runner.py` owns reusable slice execution through
+  `run_validation_slice(...)`; `VALIDATION_SELECTORS` currently includes
+  `quick`, `socket`, `stress`, and `contracts`.
+- The current `quick` selector is
+  `not integration_socket and not integration_live and not slow and not stress and not flaky`;
+  the current `socket` selector is
+  `integration_socket and not integration_live and not flaky`.
+- `run_validation_slice(...)` creates isolated
+  `.easycat/validation/runs/<run_id>/` directories, writes `junit.xml`,
+  `stdout.log`, `stderr.log`, and `report.json`, atomically updates
+  `latest.json`, stores public validation `exit_code` separately from
+  `tool_exit_codes["pytest"]`, and redacts stdout/stderr/JUnit content.
+- `tests/cli/test_validate.py` verifies quick slice command selection,
+  report/JUnit/log/latest artifact writes, failed-pytest report writes,
+  isolated run directories, and `main(...)` dispatch for socket/stress/contracts
+  slices.
 
 Files:
 
