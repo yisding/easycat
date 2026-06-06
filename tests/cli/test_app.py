@@ -146,6 +146,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "docs/observability.md" in result.stdout
     assert "src/easycat/runtime/DURABILITY.md" in result.stdout
     assert "#validation-workflow" in result.stdout
+    assert ".easycat/validation/latest.json" in result.stdout
     assert "plan/validation/reference.md" in result.stdout
     assert "https://github.com/yisding/easycat/blob/main/docs/README.md" in result.stdout
     assert "https://github.com/yisding/easycat/tree/main/docs/teaching" in result.stdout
@@ -180,6 +181,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         entry["path"] for entry in _DOCS_LINKS
     ]
     paths = {entry["path"] for entry in payload["entries"]}
+    descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
     assert "README.md#cli" in paths
     assert "docs/README.md" in paths
     assert "docs/teaching/" in paths
@@ -189,6 +191,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "docs/deployment/docker.md" in paths
     assert "docs/observability.md" in paths
     assert "src/easycat/runtime/DURABILITY.md" in paths
+    assert ".easycat/validation/latest.json" in descriptions["README.md#validation-workflow"]
     assert "plan/validation/reference.md" in paths
     assert all(entry.get("description") for entry in payload["entries"])
     assert all(entry.get("url") for entry in payload["entries"])

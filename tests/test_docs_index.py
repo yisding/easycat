@@ -73,6 +73,8 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "uv run easycat explain json-schema" in text
     assert "command-specific success and error fields" in normalized
     assert "standard `--json` envelope" in text
+    assert "uv run easycat validate quick" in text
+    assert "uv run easycat validate report .easycat/validation/latest.json" in text
 
 
 def test_cli_docs_routes_are_represented_in_docs_index() -> None:

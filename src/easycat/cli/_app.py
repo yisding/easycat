@@ -181,7 +181,9 @@ _DOCS_LINKS: list[_DocsLink] = [
     {
         "label": "Validation",
         "path": "README.md#validation-workflow",
-        "description": "Pick the right pytest and CLI checks for a change.",
+        "description": (
+            "Run the right validation lane and inspect .easycat/validation/latest.json."
+        ),
     },
     {
         "label": "Validation reference",

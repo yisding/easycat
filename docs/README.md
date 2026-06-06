@@ -36,10 +36,11 @@ installed app environment, use `easycat docs`. Use
   [observability](observability.md), then review the
   [journal durability contract](../src/easycat/runtime/DURABILITY.md) for
   persistence, recovery, and storage layout.
-- Validating a change: use the validation workflow in the
-  [root README](../README.md#validation-workflow), then consult the
-  [validation reference](../plan/validation/reference.md) for provider and
-  report vocabulary.
+- Validating a change: run `uv run easycat validate quick`, inspect
+  `uv run easycat validate report .easycat/validation/latest.json`, then use
+  the validation workflow in the [root README](../README.md#validation-workflow)
+  and the [validation reference](../plan/validation/reference.md) for provider
+  and report vocabulary.
 
 ## Maintainer Notes
 
