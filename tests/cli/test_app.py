@@ -13,7 +13,7 @@ import sys
 
 from typer.testing import CliRunner
 
-from easycat.cli._app import _COMMAND_TEXT, _JOURNEY_SECTIONS, _register_commands, app
+from easycat.cli._app import _COMMAND_TEXT, _DOCS_LINKS, _JOURNEY_SECTIONS, _register_commands, app
 
 
 def _registered_top_level_command_names() -> set[str]:
@@ -165,6 +165,12 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert payload["schema_version"] == 1
     assert payload["command"] == "docs"
     assert payload["status"] == "ok"
+    assert [entry["label"] for entry in payload["entries"]] == [
+        entry["label"] for entry in _DOCS_LINKS
+    ]
+    assert [entry["path"] for entry in payload["entries"]] == [
+        entry["path"] for entry in _DOCS_LINKS
+    ]
     paths = {entry["path"] for entry in payload["entries"]}
     assert "README.md#cli" in paths
     assert "docs/README.md" in paths
