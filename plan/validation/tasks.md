@@ -654,6 +654,39 @@ Dependencies:
 
 - V2.2
 
+Current verified state:
+
+- `ReliabilitySample.to_dict()` serializes `sample_id`, `condition_id`,
+  `mode`, `informational`, `eligible`, and nested `signals`;
+  `ReliabilitySignals.to_dict()` includes present `event_loop_lag_ms`,
+  `queue_depth`, `dropped_frames`, `journal_degraded`, `active_sessions`,
+  `memory_growth_kib`, and `unavailable_reason` values.
+- Public `capture_reliability_sample(...)` marks `smoke` samples
+  informational and ineligible, marks non-smoke modes such as `sweep` and
+  `stress` eligible, and sets `unavailable_reason` when no probe returns a
+  value.
+- `build_latency_artifact(...)` embeds `reliability_samples`;
+  `build_reliability_artifact(...)` emits `schema_version`, `kind` value
+  `reliability_validation`, `generated_at`, `samples`, `summary`, and
+  `budget_violations`.
+- `evaluate_reliability_budgets(...)` evaluates only `eligible` samples,
+  reports overall and `condition:<condition_id>` scopes, and the default
+  budgets cover `event_loop_lag_ms`, `memory_growth_kib`, `dropped_frames`,
+  and `journal_degraded`.
+- `run_latency_validation(...)` passes `EASYCAT_RELIABILITY_SAMPLES_PATH` to
+  the latency benchmark at `runs/<run_id>/latency/reliability.json`, embeds
+  parsed samples in the latency artifact, treats malformed reliability JSON as
+  `reliability.samples`, and records `reliability.budget` /
+  `reliability_budget` for eligible budget violations.
+- `run_validation_slice(...)` passes `EASYCAT_RELIABILITY_SAMPLES_PATH` to
+  quick/socket/stress slices at `runs/<run_id>/reliability/samples.json`,
+  emits a top-level reliability artifact when samples are present, and attaches
+  a `reliability` artifact reference to the validation check.
+- `tests/e2e/test_plan_2_sustained_stress.py` imports the public
+  `EventLoopLagSampler` and appends stress reliability samples with condition
+  IDs; those current e2e stress samples are still informational/ineligible, so
+  they document saturation signals without gating the legacy stress tests.
+
 Files:
 
 - latency/stress helper module

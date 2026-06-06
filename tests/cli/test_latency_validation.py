@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from easycat.cli._app import app
 from easycat.validation.latency import (
+    DEFAULT_RELIABILITY_BUDGETS,
     LatencyComparisonThresholds,
     LatencyMode,
     LatencySample,
@@ -17,8 +18,10 @@ from easycat.validation.latency import (
     ReliabilitySignals,
     append_reliability_sample,
     build_latency_artifact,
+    build_reliability_artifact,
     classify_latency_failure,
     compare_latency_baseline,
+    evaluate_reliability_budgets,
     latency_pytest_args,
 )
 from easycat.validation.report import ValidationRun
@@ -203,6 +206,146 @@ def test_validation_tasks_v23_current_state_tracks_baseline_comparison_contract(
     assert "`baseline.conditions[<condition_id>].version`" in section
     assert "non-warmup" in section
     assert "failing eligible regressions" in section
+
+
+def test_validation_tasks_v24_current_state_tracks_reliability_sampling_contract() -> None:
+    from easycat.validation import capture_reliability_sample
+
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V2.4 Add Reliability Sampling To Latency/Stress Runs", 1)[1].split(
+        "## V3: Provider And Protocol Contracts", 1
+    )[0]
+    runner_source = (REPO_ROOT / "src/easycat/validation/runner.py").read_text(encoding="utf-8")
+    stress_source = (REPO_ROOT / "tests/e2e/test_plan_2_sustained_stress.py").read_text(
+        encoding="utf-8"
+    )
+    latency_sample = LatencySample(
+        sample_id="latency-1",
+        condition_id="baseline",
+        warmup=False,
+        timestamp_source="event_monotonic",
+        stages=LatencyStageDurations(total_ms=750.0),
+    )
+    reliability_sample = ReliabilitySample(
+        sample_id="sample-1",
+        condition_id="baseline",
+        mode="stress",
+        informational=False,
+        eligible=True,
+        signals=ReliabilitySignals(
+            event_loop_lag_ms=12.5,
+            queue_depth=3,
+            dropped_frames=0,
+            journal_degraded=False,
+            active_sessions=2,
+            memory_growth_kib=1024,
+        ),
+    )
+    latency_artifact = build_latency_artifact(
+        mode=LatencyMode.SWEEP,
+        samples=[latency_sample],
+        reliability_samples=[reliability_sample],
+    )
+    reliability_artifact = build_reliability_artifact(samples=[reliability_sample])
+    smoke_sample = capture_reliability_sample(
+        sample_id="smoke-1",
+        condition_id="baseline",
+        mode=LatencyMode.SMOKE,
+        event_loop_lag_ms=12.5,
+    )
+    sweep_sample = capture_reliability_sample(
+        sample_id="sweep-1",
+        condition_id="baseline",
+        mode=LatencyMode.SWEEP,
+        event_loop_lag_ms=12.5,
+    )
+    unavailable_sample = capture_reliability_sample(
+        sample_id="empty-1",
+        condition_id="baseline",
+        mode="stress",
+    )
+    ineligible_bad_sample = ReliabilitySample(
+        sample_id="bad-informational",
+        condition_id="baseline",
+        mode="smoke",
+        informational=True,
+        eligible=False,
+        signals=ReliabilitySignals(event_loop_lag_ms=10_000.0, dropped_frames=99),
+    )
+    eligible_bad_sample = ReliabilitySample(
+        sample_id="bad-eligible",
+        condition_id="baseline",
+        mode="stress",
+        informational=False,
+        eligible=True,
+        signals=ReliabilitySignals(event_loop_lag_ms=10_000.0, dropped_frames=99),
+    )
+    violations = evaluate_reliability_budgets(
+        [eligible_bad_sample],
+        DEFAULT_RELIABILITY_BUDGETS,
+    )
+
+    assert smoke_sample.informational is True
+    assert smoke_sample.eligible is False
+    assert sweep_sample.informational is False
+    assert sweep_sample.eligible is True
+    assert unavailable_sample.signals.unavailable_reason
+    assert latency_artifact["reliability_samples"][0]["sample_id"] == "sample-1"
+    assert reliability_artifact["kind"] == "reliability_validation"
+    assert (
+        evaluate_reliability_budgets(
+            [ineligible_bad_sample],
+            DEFAULT_RELIABILITY_BUDGETS,
+        )
+        == []
+    )
+    assert {violation.scope for violation in violations} == {
+        "overall",
+        "condition:baseline",
+    }
+    assert {violation.signal for violation in violations} >= {
+        "event_loop_lag_ms",
+        "dropped_frames",
+    }
+
+    assert "Current verified state:" in section
+    for field in reliability_sample.to_dict():
+        assert f"`{field}`" in section
+    for field in reliability_sample.signals.to_dict():
+        assert f"`{field}`" in section
+    for field in reliability_artifact:
+        assert f"`{field}`" in section
+    for token in (
+        "ReliabilitySample.to_dict()",
+        "ReliabilitySignals.to_dict()",
+        "capture_reliability_sample(...)",
+        "build_latency_artifact(...)",
+        "build_reliability_artifact(...)",
+        "evaluate_reliability_budgets(...)",
+        "EASYCAT_RELIABILITY_SAMPLES_PATH",
+        "runs/<run_id>/latency/reliability.json",
+        "runs/<run_id>/reliability/samples.json",
+        "reliability_validation",
+        "reliability_samples",
+        "reliability.samples",
+        "reliability.budget",
+        "reliability_budget",
+        "EventLoopLagSampler",
+        "event_loop_lag_ms",
+        "memory_growth_kib",
+        "dropped_frames",
+        "journal_degraded",
+        "condition:<condition_id>",
+    ):
+        assert f"`{token}`" in section
+    assert "informational and ineligible" in section
+    assert "non-smoke modes such as `sweep` and" in section
+    assert "informational/ineligible" in section
+    assert 'run_dir / "latency" / "reliability.json"' in runner_source
+    assert 'run_dir / "reliability" / "samples.json"' in runner_source
+    assert "EventLoopLagSampler" in stress_source
+    assert "informational=True" in stress_source
+    assert "eligible=False" in stress_source
 
 
 def test_latency_sample_serializes_canonical_fields() -> None:
