@@ -5,10 +5,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+from unittest.mock import patch
 
 import pytest
 
 from easycat.session.actions import (
+    EndCallAction,
     SendDTMFAction,
     SendSMSAction,
     TransferCallAction,
@@ -72,6 +74,21 @@ class _FakeWebSocket:
 
     async def close(self) -> None:
         return None
+
+
+@pytest.mark.asyncio
+async def test_twilio_session_action_missing_sdk_install_hint() -> None:
+    executor = TwilioSessionActionExecutor(
+        TwilioSessionActionConfig(account_sid="AC123", auth_token="token")
+    )
+
+    with patch.dict("sys.modules", {"twilio": None, "twilio.rest": None}):
+        with pytest.raises(RuntimeError) as exc_info:
+            await executor.execute(_FakeSession(), EndCallAction())
+
+    message = str(exc_info.value)
+    assert "uv add 'easycat[telephony]'" in message
+    assert "From the EasyCat repo, use: uv sync --extra telephony --group dev" in message
 
 
 def test_twilio_webhook_signature_validation_groups_duplicate_form_values() -> None:

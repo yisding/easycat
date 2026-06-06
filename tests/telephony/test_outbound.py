@@ -231,7 +231,7 @@ class TestOutboundCallManager:
                 OutboundCallManager(bus, from_number="+1555")
         message = str(exc_info.value)
         assert "uv add 'easycat[telephony]'" in message
-        assert "uv sync --extra telephony" in message
+        assert "From the EasyCat repo, use: uv sync --extra telephony --group dev" in message
         assert "pip install easycat[telephony]" not in message
 
     @patch("easycat.telephony.outbound.OutboundCallManager.__init__", return_value=None)

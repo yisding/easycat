@@ -25,6 +25,7 @@ from easycat.events import (
     EventBus,
     VoicemailDetected,
 )
+from easycat.telephony._install import TELEPHONY_INSTALL_HINT
 from easycat.telephony.voicemail import TWILIO_AMD_MAP
 
 logger = logging.getLogger(__name__)
@@ -50,10 +51,6 @@ _CALL_STATUSES: frozenset[str] = frozenset(
 
 # Reason strings that indicate carrier/callee blocking (for number_health).
 BLOCK_REASONS: frozenset[str] = frozenset({"blocked_unwanted", "blocked_rejected"})
-_TELEPHONY_INSTALL_HINT = (
-    "Install with: uv add 'easycat[telephony]'. From the EasyCat repo, use: "
-    "uv sync --extra telephony --group dev."
-)
 
 
 def _get_call_sid(params: dict[str, Any]) -> str | None:
@@ -214,7 +211,7 @@ class OutboundCallManager:
         except ImportError:
             raise ImportError(
                 "The 'twilio' package is required for OutboundCallManager. "
-                + _TELEPHONY_INSTALL_HINT
+                + TELEPHONY_INSTALL_HINT
             ) from None
 
         if not twilio_account_sid or not twilio_auth_token:

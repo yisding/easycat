@@ -16,6 +16,7 @@ from easycat.session.actions import (
     SessionActionResult,
     TransferCallAction,
 )
+from easycat.telephony._install import TELEPHONY_INSTALL_HINT
 from easycat.telephony.twiml import twiml_dial_number, twiml_play_digits
 
 logger = logging.getLogger(__name__)
@@ -96,7 +97,8 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
             from twilio.rest import Client as TwilioClient
         except ImportError as exc:  # pragma: no cover - exercised via config tests
             raise RuntimeError(
-                "The 'twilio' package is required for Twilio session actions"
+                "The 'twilio' package is required for Twilio session actions. "
+                + TELEPHONY_INSTALL_HINT
             ) from exc
         self._client = TwilioClient(self._config.account_sid, self._config.auth_token)
         return self._client
