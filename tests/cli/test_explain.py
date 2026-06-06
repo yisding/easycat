@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 from easycat.cli._app import app
 from easycat.cli.diagnose._codes import META_ENTRIES
 from easycat.cli.scaffold._schema import SCHEMA_V1_KEYS, available_templates
-from easycat.errors import REGISTRY
+from easycat.errors import REGISTRY, register
 
 
 def test_explain_help_names_meta_topics(cli: CliRunner) -> None:
@@ -73,6 +73,19 @@ def test_explain_list(cli: CliRunner) -> None:
     assert "EASYCAT_E101" in result.stdout
     assert "EASYCAT_E501" in result.stdout
     assert "Meta topics" in result.stdout
+
+
+def test_explain_list_preserves_bracketed_headlines(cli: CliRunner) -> None:
+    code = "EASYCAT_TEST_LIST"
+    register(code, "Install easycat[openai-agents] for {extra}", cause="c", fix="f")
+    try:
+        result = cli.invoke(app, ["explain", "--list"])
+    finally:
+        REGISTRY.pop(code, None)
+
+    assert result.exit_code == 0
+    assert "Install easycat[openai-agents] for <extra>" in result.stdout
+    assert "Install easycat for <extra>" not in result.stdout
 
 
 def test_explain_list_json(cli: CliRunner) -> None:

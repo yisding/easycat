@@ -95,7 +95,7 @@ def _print_list() -> None:
     table.add_column("Headline", overflow="fold")
     for code in all_codes():
         entry = REGISTRY[code]
-        table.add_row(code, _list_headline(entry.headline))
+        table.add_row(code, escape(_list_headline(entry.headline)))
     stdout_console.print(table)
     stdout_console.print()
     stdout_console.print("[dim]Meta topics:[/]")
