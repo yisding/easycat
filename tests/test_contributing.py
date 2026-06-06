@@ -88,9 +88,12 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
         "## The development loop",
         1,
     )[0]
+    normalized = re.sub(r"\s+", " ", quick_start)
 
     assert "uv run easycat docs" in quick_start
+    assert "uv run easycat docs --json" in quick_start
     assert "maintained reader-facing map" in quick_start
+    assert "script or coding agent needs the same route map" in normalized
     assert "CLI and scaffold commands" in quick_start
     assert "uv run easycat doctor" in quick_start
     assert "before debugging tests or examples" in quick_start
