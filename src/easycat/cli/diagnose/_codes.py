@@ -131,11 +131,12 @@ entry points include:
                             as PATH
   `templates`, `catalog`, `command_note` -
                          `easycat init --list-templates --json`;
-                         catalog entries include `best_for`, `base_extras`,
-                         `base_requirement`, `required_env`, `optional_env`,
-                         `files`, `create_command`, `repo_create_command`,
-                         `next_step_commands`, `run_command`, and
-                         `check_command`;
+                         catalog entries include `name`, `mode`, `transport`,
+                         `framework`, `best_for`, `description`,
+                         `base_extras`, `base_requirement`, `required_env`,
+                         `optional_env`, `files`, `create_command`,
+                         `repo_create_command`, `next_step_commands`,
+                         `run_command`, and `check_command`;
                          `command_note` explains installed creation, repo-root
                          creation, and post-scaffold check/run context
   `path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`,

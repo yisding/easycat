@@ -13,6 +13,17 @@ from easycat.cli.scaffold._schema import SCHEMA_V1_KEYS, available_templates
 from easycat.errors import REGISTRY, register
 
 
+def _json_schema_catalog_block(body: str) -> str:
+    return body.split("catalog entries include", 1)[1].split("; `command_note`", 1)[0]
+
+
+def _catalog_entry_keys_from_cli(cli: CliRunner) -> set[str]:
+    result = cli.invoke(app, ["init", "--list-templates", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    return set(payload["catalog"][0])
+
+
 def test_explain_help_names_meta_topics(cli: CliRunner) -> None:
     result = cli.invoke(app, ["explain", "--help"])
 
@@ -172,7 +183,15 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "`templates`, `catalog`, `command_note`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
     assert "catalog entries include" in result.stdout
+    catalog_block = _json_schema_catalog_block(result.stdout)
+    for key in _catalog_entry_keys_from_cli(cli):
+        assert f"`{key}`" in catalog_block
+    assert "`name`" in stdout
+    assert "`mode`" in stdout
+    assert "`transport`" in stdout
+    assert "`framework`" in stdout
     assert "`best_for`" in stdout
+    assert "`description`" in stdout
     assert "`base_extras`" in stdout
     assert "`base_requirement`" in stdout
     assert "`required_env`" in stdout
@@ -219,7 +238,15 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "bare installed CLI hints, repo-local `uv run` hints" in normalized_body
     assert "uppercase placeholders such as PATH" in normalized_body
     assert "`templates`, `catalog`, `command_note`" in payload["body"]
+    catalog_block = _json_schema_catalog_block(payload["body"])
+    for key in _catalog_entry_keys_from_cli(cli):
+        assert f"`{key}`" in catalog_block
+    assert "`name`" in payload["body"]
+    assert "`mode`" in payload["body"]
+    assert "`transport`" in payload["body"]
+    assert "`framework`" in payload["body"]
     assert "`best_for`" in payload["body"]
+    assert "`description`" in payload["body"]
     assert "`base_extras`" in payload["body"]
     assert "`base_requirement`" in payload["body"]
     assert "`required_env`" in payload["body"]
