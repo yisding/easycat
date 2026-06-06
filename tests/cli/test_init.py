@@ -50,6 +50,9 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "Create uses installed CLI form" in result.stdout
     assert "Repo create is for this repository" in result.stdout
     assert "Run after cd are run inside the scaffolded project" in result.stdout
+    assert "Machine-readable template catalog: easycat init --list-templates --json" in (
+        result.stdout
+    )
     for template in available_templates():
         assert f"Create: easycat init my-agent --template {template}" in result.stdout
         assert f"Repo create: uv run easycat init my-agent --template {template}" in result.stdout

@@ -153,6 +153,9 @@ _INIT_HUMAN_COMMAND_NOTE = (
     "Command note: Create uses installed CLI form; Repo create is for this repository; "
     "Check after cd and Run after cd are run inside the scaffolded project."
 )
+_INIT_MACHINE_READABLE_HINT = (
+    "Machine-readable template catalog: easycat init --list-templates --json"
+)
 
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
@@ -244,7 +247,11 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
             f"  [dim]Check after cd:[/] {entry['check_command']}\n"
             f"  [dim]Run after cd:[/] {entry['run_command']}"
         )
-    return "\n".join(rows) + f"\n\n[dim]{_INIT_HUMAN_COMMAND_NOTE}[/]"
+    return (
+        "\n".join(rows)
+        + f"\n\n[dim]{_INIT_HUMAN_COMMAND_NOTE}[/]"
+        + f"\n[dim]{_INIT_MACHINE_READABLE_HINT}[/]"
+    )
 
 
 def _next_step_run_command(template: str) -> str:
