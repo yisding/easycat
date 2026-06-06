@@ -422,9 +422,14 @@ def test_ec2_webrtc_deploy_does_not_copy_local_secret_or_cache_dirs() -> None:
 def test_examples_readme_fastest_path_verifies_environment_before_running() -> None:
     readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     intro = readme.split("For the fastest local mic/speaker path:", 1)[0]
+    normalized_intro = re.sub(r"\s+", " ", intro)
     fast_path = readme.split("For the fastest local mic/speaker path:", 1)[1]
     commands = fast_path.split("```bash", 1)[1].split("```", 1)[0].strip().splitlines()
 
+    assert "uv run easycat docs" in intro
+    assert "uv run easycat docs --json" in intro
+    assert "maintained docs map" in intro
+    assert "script or coding agent needs the same route map" in normalized_intro
     assert "uv run easycat init --list-templates" in intro
     assert "copyable create commands" in intro
     assert "browser WebRTC" in intro

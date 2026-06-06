@@ -4,6 +4,9 @@ Use this directory as a runnable map after reading the top-level
 [README](../README.md) or the [teaching ladder](../docs/teaching/). Each row
 below names what the example teaches, the command to run, the extras or
 third-party packages it expects, and the environment variables that must be set.
+Run `uv run easycat docs` for the maintained docs map; use
+`uv run easycat docs --json` when a script or coding agent needs the same route
+map.
 To scaffold a fresh app instead of running an example in-place, compare
 templates with `uv run easycat init --list-templates`; the list includes
 copyable create commands for local mic, browser WebRTC, Twilio, and text-chat
