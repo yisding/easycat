@@ -143,7 +143,10 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "README.md#cli" in result.stdout
     assert "copyable create/check/run commands" in result.stdout
     assert "learn CLI JSON envelopes" in result.stdout
-    assert "Commands: easycat init --list-templates" in result.stdout
+    assert "Commands:" in result.stdout
+    assert "uv run python examples/openai_agents_voice.py" in result.stdout
+    assert "easycat init --list-templates" in result.stdout
+    assert "docker compose -f docker/compose.yaml up --build" in result.stdout
     assert "easycat validate report .easycat/validation/latest.json" in result.stdout
     assert "docs/README.md" in result.stdout
     assert "docs/teaching" in result.stdout

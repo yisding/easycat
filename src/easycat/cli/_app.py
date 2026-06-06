@@ -247,7 +247,11 @@ def _format_docs_entry(entry: _DocsEntry, *, label_width: int) -> str:
     commands = entry.get("commands")
     command_line = ""
     if commands:
-        command_line = f"    [dim]Commands: {'; '.join(commands)}[/]\n"
+        if len(commands) == 1:
+            command_line = f"    [dim]Commands: {commands[0]}[/]\n"
+        else:
+            command_items = "\n".join(f"      [dim]{command}[/]" for command in commands)
+            command_line = f"    [dim]Commands:[/]\n{command_items}\n"
     return (
         f"  [cyan]{entry['label']}[/]{' ' * (label_width - len(entry['label']) + 2)}"
         f"{entry['path']}\n"
