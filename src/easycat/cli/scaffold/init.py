@@ -133,6 +133,12 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
     },
 }
 
+_TEMPLATE_RUN_COMMANDS: dict[str, str] = {
+    "twilio-phone": (
+        "uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port 8000"
+    ),
+}
+
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
 # the audio pipeline entirely, so those fields are rejected up front.
@@ -201,6 +207,11 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
         metadata = f"{entry['mode']}; {entry['transport']}; {entry['framework']}"
         rows.append(f"[cyan]{entry['name']}[/]\n  {entry['description']}\n  [dim]{metadata}[/]")
     return "\n".join(rows)
+
+
+def _next_step_run_command(template: str) -> str:
+    """Return the primary run command for the scaffold success footer."""
+    return _TEMPLATE_RUN_COMMANDS.get(template, "uv run --env-file .env python agent.py")
 
 
 def _provider_name(spec: str) -> str:
@@ -613,7 +624,7 @@ def init(
     stderr_console.print("  uv sync")
     stderr_console.print("  uv run easycat doctor --env-file .env [dim]# verify your setup[/]")
     stderr_console.print("  uv run easycat docs [dim]# find examples and guides[/]")
-    stderr_console.print("  uv run --env-file .env python agent.py")
+    stderr_console.print(f"  {_next_step_run_command(cfg.template)}", soft_wrap=True)
 
 
 __all__: list[str] = ["init"]
