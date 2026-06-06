@@ -6,7 +6,8 @@ below names what the example teaches, the command to run, the extras or
 third-party packages it expects, and the environment variables that must be set.
 Run `uv run easycat docs` for the maintained docs map; use
 `uv run easycat docs --json` when a script or coding agent needs the same route
-map with command hints.
+map with command hints. Replace uppercase placeholders such as `PATH` before
+running those hints.
 To scaffold a fresh app instead of running an example in-place, compare
 templates with `uv run easycat init --list-templates`; the list includes
 copyable create/check/run commands for local mic, browser WebRTC, Twilio, and

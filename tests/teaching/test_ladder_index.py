@@ -102,6 +102,9 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "uv run easycat docs --json" in readme
     assert "maintained docs map" in normalized
     assert "script or coding agent needs the same route map with command hints" in normalized
+    assert "replace uppercase placeholders such as `PATH` before running those hints" in (
+        normalized
+    )
     assert "uv run easycat doctor" in readme
     assert "uv run easycat doctor --env-file .env" in readme
 
@@ -255,12 +258,15 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "`uv run easycat docs`" in cli_section
     assert "`uv run easycat docs --json`" in cli_section
     assert "`uv run easycat init --list-templates`" in cli_section
-    assert "copyable create/check/run commands" in re.sub(r"\s+", " ", cli_section)
-    assert "same route map with command hints" in re.sub(r"\s+", " ", cli_section)
+    normalized_cli_section = re.sub(r"\s+", " ", cli_section)
+    assert "copyable create/check/run commands" in normalized_cli_section
+    assert "same route map with command hints" in normalized_cli_section
+    assert "replace uppercase placeholders such as `PATH` before running those hints" in (
+        normalized_cli_section
+    )
     assert "`uv run easycat doctor --env-file .env`" in cli_section
     assert "`uv run easycat explain json-schema`" in cli_section
     assert "standard `--json` envelope" in cli_section
-    normalized_cli_section = re.sub(r"\s+", " ", cli_section)
     assert "command-specific success and error fields" in normalized_cli_section
     assert "validate report .easycat/validation/latest.json" in cli_section
     assert ".easycat/validation/runs/<run_id>/report.json" in cli_section

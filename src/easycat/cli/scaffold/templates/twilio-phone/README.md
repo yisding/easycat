@@ -60,4 +60,5 @@ uv run python -m py_compile agent.py server.py
   `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
 - **Explore docs and examples:** run `uv run easycat docs`; use
   `uv run easycat docs --json` when a script or coding agent needs the route
-  map with command hints.
+  map with command hints. Replace uppercase placeholders such as `PATH` before
+  running those hints.
