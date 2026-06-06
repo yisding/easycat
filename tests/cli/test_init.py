@@ -58,7 +58,7 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "WebRTC audio" in result.stdout
     assert "Command note:" in result.stdout
     assert "Create uses installed CLI form" in result.stdout
-    assert "Repo create is for this repository" in result.stdout
+    assert "Repo create runs from this repository root" in result.stdout
     assert "Run after cd are run inside the scaffolded project" in result.stdout
     assert "Machine-readable template catalog: easycat init --list-templates --json" in (
         result.stdout
@@ -100,6 +100,7 @@ def test_list_templates_json(cli: CliRunner) -> None:
     payload = json.loads(result.stdout)
     assert set(payload["templates"]) == set(available_templates())
     assert "installed CLI form" in payload["command_note"]
+    assert "repo_create_command runs from this repository root" in payload["command_note"]
     assert "after cd into the scaffolded project" in payload["command_note"]
     catalog = {entry["name"]: entry for entry in payload["catalog"]}
     assert set(catalog) == set(available_templates())

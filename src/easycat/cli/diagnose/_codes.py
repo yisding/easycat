@@ -93,7 +93,8 @@ explains installed vs repo-local creation and post-scaffold check/run
 context. Each `catalog` row includes:
 `name`, `mode`, `transport`, `framework`, `description`,
 `create_command` (installed CLI form), `repo_create_command`
-(repo-local `uv run` form), `run_command`, and `check_command`.
+(repo-local `uv run` form from the repository root), `run_command`,
+and `check_command`.
 Successful `easycat init NAME --json` also includes
 `next_step_commands`, an ordered copy/sync/doctor/check/docs/run
 sequence matching the human success footer.
@@ -130,8 +131,8 @@ entry points include:
   `templates`, `catalog`, `command_note` -
                          `easycat init --list-templates --json`;
                          catalog entries include `run_command` and
-                         `check_command`; `command_note` explains
-                         installed vs repo-local creation and post-scaffold
+                         `check_command`; `command_note` explains installed
+                         creation, repo-root creation, and post-scaffold
                          check/run context
   `path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`,
   `run_command`, `check_command`, `next_step_commands`, `command_note` -

@@ -129,6 +129,7 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "`create_command`" in result.stdout
     assert "`repo_create_command`" in result.stdout
     assert "top-level `command_note`" in result.stdout
+    assert "repository root" in stdout
     assert "post-scaffold check/run context" in stdout
     assert "`next_step_commands`" in result.stdout
     assert "copy/sync/doctor/check/docs/run" in stdout
@@ -164,6 +165,7 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "`templates`, `catalog`, `command_note`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
     assert "catalog entries include" in result.stdout
+    assert "repo-root creation" in stdout
     assert "`path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`" in result.stdout
     assert "`run_command`, `check_command`" in result.stdout
     assert "`next_step_commands`" in result.stdout

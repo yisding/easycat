@@ -149,11 +149,11 @@ _TEMPLATE_CHECK_FILES: dict[str, tuple[str, ...]] = {
     "twilio-phone": ("agent.py", "server.py"),
 }
 _INIT_COMMAND_NOTE = (
-    "create_command uses installed CLI form; repo_create_command is for this repository; "
-    "run_command and check_command are run after cd into the scaffolded project."
+    "create_command uses installed CLI form; repo_create_command runs from this repository "
+    "root; run_command and check_command run after cd into the scaffolded project."
 )
 _INIT_HUMAN_COMMAND_NOTE = (
-    "Command note: Create uses installed CLI form; Repo create is for this repository; "
+    "Command note: Create uses installed CLI form; Repo create runs from this repository root; "
     "Check after cd and Run after cd are run inside the scaffolded project."
 )
 _INIT_MACHINE_READABLE_HINT = (

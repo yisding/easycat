@@ -182,6 +182,7 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
     assert isinstance(payload["templates"], list)
     assert isinstance(payload["catalog"], list)
     assert "installed CLI form" in payload["command_note"]
+    assert "repository root" in payload["command_note"]
     assert "after cd into the scaffolded project" in payload["command_note"]
     required_keys = {
         "name",
