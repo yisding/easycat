@@ -397,6 +397,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     cli_section = readme.split("## CLI", 1)[1].split("## ", 1)[0]
 
     assert "installed CLI form" in cli_section
+    assert "copyable create commands" in cli_section
     assert "uv run easycat doctor" in cli_section
     assert "easycat doctor --env-file .env" in cli_section
     expected_cli_lines = (

@@ -85,6 +85,8 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "stdio://" in result.stdout
     assert "filesystem" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
+    assert "`create_command`" in result.stdout
+    assert "`repo_create_command`" in result.stdout
     assert "EASYCAT_E102" in result.stdout
     assert "agent.py" in result.stdout
 

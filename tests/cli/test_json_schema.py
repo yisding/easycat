@@ -166,8 +166,21 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
     _assert_envelope(payload, "init")
     assert isinstance(payload["templates"], list)
     assert isinstance(payload["catalog"], list)
-    required_keys = {"name", "mode", "transport", "framework", "description"}
-    assert all(required_keys <= set(entry) for entry in payload["catalog"])
+    required_keys = {
+        "name",
+        "mode",
+        "transport",
+        "framework",
+        "description",
+        "create_command",
+        "repo_create_command",
+    }
+    for entry in payload["catalog"]:
+        assert required_keys <= set(entry)
+        assert entry["create_command"] == f"easycat init my-agent --template {entry['name']}"
+        assert entry["repo_create_command"] == (
+            f"uv run easycat init my-agent --template {entry['name']}"
+        )
 
 
 def test_init_error_envelope(

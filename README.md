@@ -108,8 +108,9 @@ easycat validate report PATH # render a saved validation report
 ```
 
 From an empty directory, `easycat init --list-templates` shows the available
-scaffolds with their transport and framework. `easycat init my-agent` scaffolds
-the same one shown below: the canonical `run(EasyConfig.mic(agent=...))` shape.
+scaffolds with their transport, framework, and copyable create commands.
+`easycat init my-agent` scaffolds the same one shown below: the canonical
+`run(EasyConfig.mic(agent=...))` shape.
 Then `easycat doctor` validates your environment before the first run. If your
 provider keys live in a project `.env`, use `easycat doctor --env-file .env`.
 For coding agents and scripts, `easycat explain json-schema` documents the

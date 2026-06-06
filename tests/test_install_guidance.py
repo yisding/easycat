@@ -395,6 +395,7 @@ def test_cli_init_examples_name_target_directory() -> None:
     assert "easycat init --list-templates" in cli_section
     assert "`easycat init my-agent` scaffolds" in readme
     assert "`easycat init --list-templates` shows" in readme
+    assert "copyable create commands" in readme
     assert "`uv run easycat init my-agent`" in production_chapter
     assert "`uv run easycat init --list-templates`" in production_chapter
     assert "**`uv run easycat init`**" not in production_chapter

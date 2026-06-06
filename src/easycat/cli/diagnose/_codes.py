@@ -88,7 +88,10 @@ callers get a stable EASYCAT_E102 explanation; this release does not
 wire them into templates yet. Add LLM or tool setup directly in the
 generated `agent.py` for now.
 Run `easycat init --list-templates --json` for the current
-machine-readable template catalog.
+machine-readable template catalog.  Each `catalog` row includes:
+`name`, `mode`, `transport`, `framework`, `description`,
+`create_command` (installed CLI form), and `repo_create_command`
+(repo-local `uv run` form).
 Bump `schema_version` when the shape changes; keep older schemas
 documented before accepting a newer version.
 """
