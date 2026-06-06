@@ -22,6 +22,9 @@ def _maintained_markdown_files() -> list[Path]:
     for directory in (REPO_ROOT / "docs", REPO_ROOT / "plan"):
         files.update(directory.rglob("*.md"))
     files.update(
+        (REPO_ROOT / "src" / "easycat" / "cli" / "scaffold" / "templates").rglob("README.md")
+    )
+    files.update(
         {
             REPO_ROOT / "examples" / "README.md",
             REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md",
