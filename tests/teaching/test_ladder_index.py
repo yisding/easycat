@@ -228,6 +228,8 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "`uv run easycat docs`" in cli_section
     assert "`uv run easycat init --list-templates`" in cli_section
     assert "`uv run easycat doctor --env-file .env`" in cli_section
+    assert "`uv run easycat explain json-schema`" in cli_section
+    assert "standard `--json` envelope" in cli_section
     assert "validate report <path>" in cli_section
     assert "Add `--json` when a coding agent or script" in cli_section
 

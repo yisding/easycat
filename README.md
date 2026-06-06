@@ -86,6 +86,7 @@ easycat init --list-templates # compare scaffold templates
 easycat doctor           # check API keys, Python version, optional extras, provider reachability
 easycat docs             # show documentation entry points
 easycat explain E102     # look up an EasyCat error code
+easycat explain json-schema # document the --json envelope and error metadata
 easycat explain --list   # list every error code and meta topic
 easycat bundles list      # list captured debug bundles and crash dumps
 easycat bundles show PATH # summarise a debug bundle or SQLite journal
@@ -103,6 +104,9 @@ scaffolds with their transport and framework. `easycat init my-agent` scaffolds
 the same one shown below: the canonical `run(EasyConfig.mic(agent=...))` shape.
 Then `easycat doctor` validates your environment before the first run. If your
 provider keys live in a project `.env`, use `easycat doctor --env-file .env`.
+For coding agents and scripts, `easycat explain json-schema` documents the
+standard `--json` envelope, including command-specific error fields such as
+`report_path`, `path`, and `output_path`.
 
 ## Validation Workflow
 

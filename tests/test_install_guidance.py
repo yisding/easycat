@@ -340,7 +340,9 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
 
     assert not re.search(r"(?m)^easycat explain\s+#", cli_section)
     assert "easycat explain E102" in cli_section
+    assert "easycat explain json-schema" in cli_section
     assert "easycat explain --list" in cli_section
+    assert "standard `--json` envelope" in (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
 
 def test_readme_cli_validate_examples_are_copyable() -> None:
