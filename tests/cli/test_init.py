@@ -777,6 +777,7 @@ def test_init_next_steps_load_env_for_doctor(
     assert "uv run easycat docs" in result.stderr
     assert "uv run easycat docs --json" in result.stderr
     assert "route map with command hints" in result.stderr
+    assert "audience labels" in result.stderr
     assert "uvx easycat doctor" not in result.stderr
 
 

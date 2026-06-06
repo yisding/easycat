@@ -334,6 +334,7 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     assert "script or coding agent needs the route map with command hints" in (
         normalized_next_steps
     )
+    assert "audience labels" in normalized_next_steps
     assert "Replace uppercase placeholders such as `PATH` before running those hints" in (
         normalized_next_steps
     )

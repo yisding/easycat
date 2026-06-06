@@ -113,6 +113,7 @@ def test_journey_sections_cover_command_text_table_once() -> None:
 def test_journey_menu(cli: CliRunner) -> None:
     """Bare ``easycat`` prints the journey menu listing implemented commands."""
     result = cli.invoke(app, [])
+    normalized = re.sub(r"\s+", " ", result.stdout)
     assert result.exit_code == 0
     assert "Scaffold" in result.stdout
     assert "Debug with the journal" in result.stdout
@@ -131,7 +132,7 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "easycat docs" in result.stdout
     assert "easycat docs --json" in result.stdout
     assert "learning, validation, and operations routes" in result.stdout
-    assert "machine-readable docs routes and command hints" in result.stdout
+    assert "machine-readable docs routes, audiences, and command hints" in normalized
     assert "easycat explain json-schema" in result.stdout
     missing = sorted(
         command_name
@@ -177,7 +178,9 @@ def test_docs_command(cli: CliRunner) -> None:
         "https://github.com/yisding/easycat/blob/main/src/easycat/runtime/DURABILITY.md"
         in result.stdout
     )
-    assert "Machine-readable routes and command hints: easycat docs --json" in result.stdout
+    assert "Machine-readable routes, audiences, and command hints: easycat docs --json" in (
+        result.stdout
+    )
     assert _DOCS_COMMAND_NOTE in result.stdout
     assert "DURABILITY.\nmd" not in result.stdout
 
@@ -210,6 +213,7 @@ def test_docs_help_names_primary_routes(cli: CliRunner) -> None:
     assert "Show docs for learning, validation, and operations" in result.stdout
     assert "--json" in result.stdout
     assert "machine-readable docs route map" in result.stdout
+    assert "audiences and command hints" in help_text
     assert "command hints" in help_text
 
 

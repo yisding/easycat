@@ -120,11 +120,13 @@ Successful commands may add command-specific fields. Common automation
 entry points include:
 
   `entries`, `source_url`, `command_note` - `easycat docs --json`;
-                            each docs entry has `label`, `path`,
+                            each docs entry has `label`, `path`, `audience`,
                             `description`, `url`, and optional `commands`
-                            in onboarding order; `command_note` explains
-                            installed vs repo-local `uv run` for EasyCat CLI
-                            hints and uppercase placeholders such as PATH
+                            in onboarding order; `audience`
+                            labels the intended reader, and `command_note`
+                            explains installed vs repo-local `uv run` for
+                            EasyCat CLI hints and uppercase placeholders such
+                            as PATH
   `templates`, `catalog`, `command_note` -
                          `easycat init --list-templates --json`;
                          catalog entries include `run_command` and

@@ -102,6 +102,7 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "uv run easycat docs --json" in readme
     assert "maintained docs map" in normalized
     assert "script or coding agent needs the same route map with command hints" in normalized
+    assert "audience labels" in normalized
     assert "replace uppercase placeholders such as `PATH` before running those hints" in (
         normalized
     )
@@ -261,6 +262,7 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     normalized_cli_section = re.sub(r"\s+", " ", cli_section)
     assert "copyable create/check/run commands" in normalized_cli_section
     assert "same route map with command hints" in normalized_cli_section
+    assert "audience labels" in normalized_cli_section
     assert "replace uppercase placeholders such as `PATH` before running those hints" in (
         normalized_cli_section
     )

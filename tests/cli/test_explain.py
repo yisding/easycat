@@ -153,12 +153,14 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "Successful commands may add command-specific fields" in result.stdout
     assert "`entries`, `source_url`, `command_note`" in result.stdout
     assert "easycat docs --json" in result.stdout
-    assert "`label`, `path`" in result.stdout
-    assert "`description`, `url`, and optional `commands`" in result.stdout
-    assert "optional `commands`" in result.stdout
+    assert "`label`, `path`, `audience`" in stdout
+    assert "`description`, `url`, and optional `commands`" in stdout
+    assert "`commands` in onboarding order" in stdout
+    assert "`audience` labels the intended reader" in stdout
+    assert "optional `commands`" in stdout
     assert "in onboarding order" in result.stdout
-    assert "installed vs repo-local `uv run` for EasyCat CLI" in result.stdout
-    assert "uppercase placeholders such as PATH" in result.stdout
+    assert "installed vs repo-local `uv run` for EasyCat CLI" in stdout
+    assert "uppercase placeholders such as PATH" in stdout
     assert "`templates`, `catalog`, `command_note`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
     assert "catalog entries include" in result.stdout
@@ -189,12 +191,15 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert payload["command"] == "explain"
     assert payload["slug"] == "json-schema"
     assert "`entries`, `source_url`, `command_note`" in payload["body"]
-    assert "`label`, `path`" in payload["body"]
+    assert "`label`, `path`, `audience`" in payload["body"]
     assert "`description`, `url`, and optional `commands`" in payload["body"]
+    normalized_body = re.sub(r"\s+", " ", payload["body"])
+    assert "`commands` in onboarding order" in normalized_body
+    assert "`audience` labels the intended reader" in normalized_body
     assert "optional `commands`" in payload["body"]
     assert "in onboarding order" in payload["body"]
-    assert "installed vs repo-local `uv run` for EasyCat CLI" in payload["body"]
-    assert "uppercase placeholders such as PATH" in payload["body"]
+    assert "installed vs repo-local `uv run` for EasyCat CLI" in normalized_body
+    assert "uppercase placeholders such as PATH" in normalized_body
     assert "`templates`, `catalog`, `command_note`" in payload["body"]
     assert "`path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`" in payload["body"]
     assert "`run_command`, `check_command`" in payload["body"]
