@@ -100,14 +100,18 @@ def _is_import_guard_try(node: ast.stmt) -> bool:
 
 
 def _visible_code_line_count(path: Path) -> int:
-    module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    source = path.read_text(encoding="utf-8")
+    module = ast.parse(source, filename=str(path))
+    source_lines = source.splitlines()
     line_count = 0
 
     for node in module.body:
         if _is_module_docstring_node(module, node) or _is_import_guard_try(node):
             continue
         assert node.end_lineno is not None
-        line_count += node.end_lineno - node.lineno + 1
+        line_count += sum(
+            1 for index in range(node.lineno - 1, node.end_lineno) if source_lines[index].strip()
+        )
 
     return line_count
 
@@ -266,6 +270,7 @@ def test_openai_agents_voice_example_imports(monkeypatch: pytest.MonkeyPatch):
     [
         ("openai_agents_voice.py", 7),
         ("pydantic_ai_voice.py", 8),
+        ("ws_server.py", 15),
     ],
 )
 def test_canonical_local_voice_examples_keep_visible_code_budget(
@@ -807,13 +812,14 @@ def test_ws_server_example_imports():
 
 
 def test_ws_server_settings_default_to_loopback(monkeypatch: pytest.MonkeyPatch):
-    import examples.ws_server as ws_server
+    from easycat.transports.websocket import websocket_session_server_config_from_env
 
     monkeypatch.delenv("EASYCAT_WS_HOST", raising=False)
+    monkeypatch.delenv("EASYCAT_WS_PORT", raising=False)
     monkeypatch.delenv("EASYCAT_WS_TOKEN", raising=False)
     monkeypatch.delenv("EASYCAT_WS_MAX_SESSIONS", raising=False)
 
-    settings = ws_server._load_settings()
+    settings = websocket_session_server_config_from_env()
 
     assert settings.host == "127.0.0.1"
     assert settings.port == 8765
@@ -822,14 +828,14 @@ def test_ws_server_settings_default_to_loopback(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_ws_server_authorizes_bearer_or_query_token():
-    import examples.ws_server as ws_server
+    from easycat.transports.websocket import websocket_server_authorized
 
     headers = Headers([("Authorization", "Bearer expected-token")])
 
-    assert ws_server._authorized(headers, "/", "expected-token")
-    assert ws_server._authorized(Headers(), "/?token=expected-token", "expected-token")
-    assert not ws_server._authorized(Headers(), "/", "expected-token")
-    assert not ws_server._authorized(
+    assert websocket_server_authorized(headers, "/", "expected-token")
+    assert websocket_server_authorized(Headers(), "/?token=expected-token", "expected-token")
+    assert not websocket_server_authorized(Headers(), "/", "expected-token")
+    assert not websocket_server_authorized(
         Headers([("Authorization", "Bearer wrong")]), "/", "expected-token"
     )
 

@@ -32,10 +32,10 @@ Shipped:
 
 Still remaining:
 
-- Example visible-code budgets are CI-enforced for the canonical local
-  examples (`openai_agents_voice.py` ≤7, `pydantic_ai_voice.py` ≤8,
-  excluding setup docstrings and import guards). Broader raw line-count
-  shrinkage and the WebSocket server budget remain open.
+- Example visible-code budgets are CI-enforced for the canonical examples:
+  `openai_agents_voice.py` ≤7, `pydantic_ai_voice.py` ≤8, and
+  `ws_server.py` ≤15, excluding setup docstrings and import guards. Broader
+  raw line-count shrinkage remains open.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.1 wiring).
 - `ExceptionGroup` + PEP 678 `__notes__` across the pipeline.
@@ -49,7 +49,7 @@ Still remaining:
 
 The high-leverage DX wins are shipped; the remaining work is either
 ecosystem-gated (offline preset on Kyutai) or mechanical cleanup
-(line budgets, structlog, field flattening).
+(structlog, field flattening).
 
 >
 > **Sibling peripheral docs:**

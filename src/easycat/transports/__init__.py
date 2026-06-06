@@ -26,6 +26,10 @@ _LAZY_ATTR: dict[str, str] = {
     "WebSocketTransport": "easycat.transports.websocket",
     "WebSocketTransportConfig": "easycat.transports.websocket",
     "WebSocketConnectionTransport": "easycat.transports.websocket",
+    "WebSocketSessionServerConfig": "easycat.transports.websocket",
+    "serve_websocket_sessions": "easycat.transports.websocket",
+    "websocket_server_authorized": "easycat.transports.websocket",
+    "websocket_session_server_config_from_env": "easycat.transports.websocket",
     "WebTransportTransport": "easycat.transports.webtransport",
     "WebTransportTransportConfig": "easycat.transports.webtransport",
     "WebTransportConnectionTransport": "easycat.transports.webtransport",
@@ -45,8 +49,12 @@ if TYPE_CHECKING:
     from easycat.transports.webrtc import ICEServer, WebRTCTransport, WebRTCTransportConfig
     from easycat.transports.websocket import (
         WebSocketConnectionTransport,
+        WebSocketSessionServerConfig,
         WebSocketTransport,
         WebSocketTransportConfig,
+        serve_websocket_sessions,
+        websocket_server_authorized,
+        websocket_session_server_config_from_env,
     )
     from easycat.transports.webtransport import (
         WebTransportConnectionTransport,

@@ -11,15 +11,29 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import signal
 from dataclasses import dataclass, field
-from typing import ClassVar
+from hmac import compare_digest
+from http import HTTPStatus
+from typing import TYPE_CHECKING, ClassVar
+from urllib.parse import parse_qs, urlsplit
 
 import websockets
 from websockets.asyncio.server import ServerConnection
+from websockets.datastructures import Headers
+from websockets.http11 import Request, Response
 
 from easycat._audio_utils import resample_chunk
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.helpers import attach_runtime_feedback
+from easycat.session_manager import SessionManager
 from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from easycat.session._session import Session
 
 logger = logging.getLogger(__name__)
 _MIN_NEGOTIATED_SAMPLE_RATE = 8000
@@ -55,6 +69,122 @@ class WebSocketTransportConfig:
     port: int = 8765
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
+
+
+@dataclass(frozen=True)
+class WebSocketSessionServerConfig:
+    """Settings for :func:`serve_websocket_sessions`."""
+
+    host: str = "127.0.0.1"
+    port: int = 8765
+    auth_token: str | None = None
+    max_sessions: int = 10
+
+
+def websocket_session_server_config_from_env(
+    prefix: str = "EASYCAT_WS",
+) -> WebSocketSessionServerConfig:
+    """Load WebSocket session-server settings from environment variables."""
+    return WebSocketSessionServerConfig(
+        host=os.getenv(f"{prefix}_HOST", "127.0.0.1"),
+        port=int(os.getenv(f"{prefix}_PORT", "8765")),
+        auth_token=os.getenv(f"{prefix}_TOKEN"),
+        max_sessions=int(os.getenv(f"{prefix}_MAX_SESSIONS", "10")),
+    )
+
+
+def websocket_server_authorized(headers: Headers, path: str, token: str | None) -> bool:
+    """Authorize a WebSocket request against an optional bearer/query token."""
+    if token is None:
+        return True
+    value = headers.get("Authorization")
+    if value is not None:
+        scheme, separator, credential = value.partition(" ")
+        if separator == " " and scheme.lower() == "bearer":
+            return compare_digest(credential, token)
+
+    query_token = parse_qs(urlsplit(path).query).get("token", [None])[0]
+    return query_token is not None and compare_digest(query_token, token)
+
+
+def _plain_response(status: HTTPStatus, body: str) -> Response:
+    payload = body.encode()
+    return Response(
+        status.value,
+        status.phrase,
+        Headers(
+            [
+                ("Content-Type", "text/plain; charset=utf-8"),
+                ("Content-Length", str(len(payload))),
+            ]
+        ),
+        payload,
+    )
+
+
+async def serve_websocket_sessions(
+    session_factory: Callable[[ServerConnection], Session],
+    config: WebSocketSessionServerConfig | None = None,
+    *,
+    stop_event: asyncio.Event | None = None,
+    runtime_feedback: bool = True,
+    announce: bool = True,
+) -> None:
+    """Serve one EasyCat session per accepted WebSocket connection.
+
+    ``session_factory`` receives the accepted ``ServerConnection`` and returns
+    a created, not-yet-started :class:`~easycat.Session`. This helper owns
+    session start/stop, optional bearer-token auth, session-limit rejection,
+    and process shutdown.
+    """
+    settings = config or WebSocketSessionServerConfig()
+    manager: SessionManager[int] = SessionManager()
+    session_slots = asyncio.Semaphore(settings.max_sessions)
+
+    def process_request(_ws: ServerConnection, request: Request) -> Response | None:
+        if not websocket_server_authorized(request.headers, request.path, settings.auth_token):
+            return _plain_response(HTTPStatus.UNAUTHORIZED, "Missing or invalid bearer token.\n")
+        return None
+
+    async def handle_connection(ws: ServerConnection) -> None:
+        if session_slots.locked():
+            await ws.close(code=1013, reason="Server is at the configured session limit")
+            return
+        async with session_slots:
+            session = session_factory(ws)
+            if runtime_feedback:
+                attach_runtime_feedback(session)
+            async with manager.connection(id(ws), session):
+                await ws.wait_closed()
+
+    server = await websockets.serve(
+        handle_connection,
+        settings.host,
+        settings.port,
+        process_request=process_request,
+    )
+    if announce:
+        print(f"\nServer ready. Connect WebSocket clients to ws://{settings.host}:{settings.port}")
+        print("Press Ctrl+C to stop.\n")
+
+    event = stop_event or asyncio.Event()
+    if stop_event is None:
+        _install_shutdown_handlers(event)
+    try:
+        await event.wait()
+    finally:
+        server.close()
+        await server.wait_closed()
+        await manager.stop_all()
+
+
+def _install_shutdown_handlers(stop_event: asyncio.Event) -> None:
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except (NotImplementedError, RuntimeError, ValueError):
+            pass
 
 
 class WebSocketTransport(_ServerTransportBase):
