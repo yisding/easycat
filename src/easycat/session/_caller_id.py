@@ -87,7 +87,7 @@ class CallerIdState:
     def private_identity(self) -> CallIdentity | None:
         """The raw identity regardless of exposure.
 
-        Internal telephony policy (Twilio identity merge in ``config.py``,
+        Internal telephony policy (Twilio identity merge in ``easycat.config``,
         opt-out / DNC) reads this so ``"off"`` exposure still feeds DNC
         state without leaking the number to tools or the LLM.
         """

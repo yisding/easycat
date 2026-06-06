@@ -6,6 +6,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPO_ROOT / "src" / "easycat"
 PLANNING_LABEL_RE = re.compile(r"\b(?:WS\d+[A-Z]?|AC\d+(?:\.\d+)?|T\d+(?:\.\d+)?)\b|workstream-")
+REMOVED_CONFIG_MODULE_RE = re.compile(r"\bconfig\.py\b")
 TEST_PLAN_TEST_REF_RE = re.compile(
     r"`(?P<ref>(?:tests/)?[A-Za-z0-9_./-]*test_[A-Za-z0-9_./-]+\.py(?:::[A-Za-z0-9_]+)?)`"
 )
@@ -22,6 +23,21 @@ def test_library_source_does_not_reference_internal_planning_labels() -> None:
                 stale.append(f"{rel}:{line_number}: {line.strip()}")
 
     assert not stale, "Library source contains stale planning labels:\n" + "\n".join(stale)
+
+
+def test_library_source_references_config_package_not_removed_module() -> None:
+    """The config surface is a package now; comments should not teach ``config.py``."""
+    stale: list[str] = []
+
+    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+        rel = path.relative_to(REPO_ROOT)
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if REMOVED_CONFIG_MODULE_RE.search(line):
+                stale.append(f"{rel}:{line_number}: {line.strip()}")
+
+    assert not stale, "Library source should reference config/, not config.py:\n" + "\n".join(
+        stale
+    )
 
 
 def test_cli_test_plan_references_existing_test_files() -> None:

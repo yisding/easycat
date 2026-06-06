@@ -170,7 +170,7 @@ def run(config: EasyConfig) -> None:
 
 
 # Transport-config type -> human label for the "what got wired" summary.
-# There is no transport-name registry (``config.py``'s transport map is
+# There is no transport-name registry (``easycat.config`` maps config types
 # type -> factory), so the summary owns this small lookup itself.
 _TRANSPORT_LABELS: dict[str, str] = {
     "LocalTransportConfig": "local-mic",
@@ -208,7 +208,7 @@ def _wired_summary(config: EasyConfig) -> str:
 
     # Noise reduction is opt-in: a reducer is only wired when
     # ``enable_noise_reduction`` is set or an explicit config is provided
-    # (mirrors the create_session gating in config.py).
+    # (mirrors the create_session gating in ``easycat.config``).
     nr_on = config.enable_noise_reduction or config.noise_reduction is not None
     nr_label = "on" if nr_on else "off"
 

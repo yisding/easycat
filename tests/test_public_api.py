@@ -186,7 +186,7 @@ def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
     in the telephony runtime stack or heavy transport SDKs.
 
     Runs in a fresh interpreter so the test process's own imports don't
-    pollute ``sys.modules``. ``config.py`` may load the two telephony
+    pollute ``sys.modules``. ``easycat.config`` may load the two telephony
     *config-only* submodules (``dtmf`` / ``voicemail``) for its dataclass
     defaults, but the runtime classifiers (state machines, IVR navigator,
     outbound manager, screening, number health, retries, twiml, session
