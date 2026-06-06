@@ -20,7 +20,7 @@ Status from static inspection on 2026-06-06:
 
 | Plan | Status | Notes |
 |---|---|---|
-| [peripheral-cli.md](peripheral-cli.md) | Partially landed | `init`, `doctor`, `explain`, `bundles list/show`, and `inspect` exist; replay/export remain planned. |
+| [peripheral-cli.md](peripheral-cli.md) | Partially landed | `init`, `doctor`, `explain`, `bundles list/show`, `inspect`, and the `webrtc-browser` scaffold exist; replay/export and remaining templates remain planned. |
 | [peripheral-dx-onboarding.md](peripheral-dx-onboarding.md) | Partially landed | `run`, string-keyed providers, config presets, error codes, `record_to`, and log-level env support exist; line-budget/config cleanup remains. |
 | [peripheral-redaction.md](peripheral-redaction.md) | Mostly planned | Safe default snapshots exist; full `RedactionPolicy` and export policies remain planned. |
 | [peripheral-observability-and-cost.md](peripheral-observability-and-cost.md) | Mostly planned | Debugger cost endpoint degrades to zero; real `CostRecord`, OTel export, and latency-budget objects remain planned. |

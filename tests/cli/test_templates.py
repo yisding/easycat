@@ -35,6 +35,7 @@ _LINE_BUDGETS: dict[str, int] = {
     "openai-agents": 25,
     "pydantic-ai": 22,
     "text-chat": 18,
+    "webrtc-browser": 23,
 }
 
 _REQUIRED_FILES: tuple[str, ...] = (
@@ -52,7 +53,11 @@ _README_SECTIONS: tuple[str, ...] = (
     "## Check",
     "## Next steps",
 )
-_VOICE_TEMPLATES: tuple[str, ...] = ("openai-agents", "pydantic-ai")
+_VOICE_TEMPLATE_PRESETS: dict[str, str] = {
+    "openai-agents": "mic",
+    "pydantic-ai": "mic",
+    "webrtc-browser": "browser",
+}
 _GITIGNORE_PATTERNS: tuple[str, ...] = (
     ".env",
     ".venv/",
@@ -71,8 +76,8 @@ def templates() -> list[str]:
 
 
 def test_catalog_is_nonempty(templates: list[str]) -> None:
-    assert len(templates) >= 3
-    for required in ("openai-agents", "pydantic-ai", "text-chat"):
+    assert len(templates) >= 4
+    for required in ("openai-agents", "pydantic-ai", "text-chat", "webrtc-browser"):
         assert required in templates, f"missing template: {required}"
 
 
@@ -80,7 +85,7 @@ def _template_dir(name: str) -> Path:
     return _templates_root() / name
 
 
-def _uses_run_easyconfig_mic(source: str) -> bool:
+def _uses_run_easyconfig_preset(source: str, preset: str) -> bool:
     tree = ast.parse(source)
 
     for node in ast.walk(tree):
@@ -94,7 +99,7 @@ def _uses_run_easyconfig_mic(source: str) -> bool:
         if (
             isinstance(first_arg, ast.Call)
             and isinstance(first_arg.func, ast.Attribute)
-            and first_arg.func.attr == "mic"
+            and first_arg.func.attr == preset
             and isinstance(first_arg.func.value, ast.Name)
             and first_arg.func.value.id == "EasyConfig"
         ):
@@ -166,7 +171,7 @@ def test_agent_py_escapes_string_literal_substitutions(name: str) -> None:
     ast.parse(rendered)
 
 
-@pytest.mark.parametrize("name", ["openai-agents", "pydantic-ai"])
+@pytest.mark.parametrize("name", ["openai-agents", "pydantic-ai", "webrtc-browser"])
 def test_agent_py_escapes_provider_shortcut_substitutions(name: str) -> None:
     cfg = InitConfig(
         template=name,
@@ -214,13 +219,16 @@ def test_readme_has_doctor_preflight_when_template_needs_openai_key(name: str) -
     assert "Run `easycat doctor`" not in readme
 
 
-@pytest.mark.parametrize("name", _VOICE_TEMPLATES)
-def test_voice_templates_use_canonical_mic_quickstart_shape(name: str) -> None:
+@pytest.mark.parametrize("name", sorted(_VOICE_TEMPLATE_PRESETS))
+def test_voice_templates_use_canonical_preset_shape(name: str) -> None:
+    preset = _VOICE_TEMPLATE_PRESETS[name]
     agent = (_template_dir(name) / "agent.py").read_text(encoding="utf-8")
-    assert _uses_run_easyconfig_mic(agent), f"{name}/agent.py must call run(EasyConfig.mic(...))"
+    assert _uses_run_easyconfig_preset(agent, preset), (
+        f"{name}/agent.py must call run(EasyConfig.{preset}(...))"
+    )
 
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
-    assert "EasyConfig.mic(" in readme or "EasyConfig.mic(...)" in readme
+    assert f"EasyConfig.{preset}(" in readme or f"EasyConfig.{preset}(...)" in readme
 
 
 def test_text_chat_readme_points_voice_upgrade_to_mic_preset() -> None:

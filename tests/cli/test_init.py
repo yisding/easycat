@@ -27,6 +27,7 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "openai-agents" in names
     assert "pydantic-ai" in names
     assert "text-chat" in names
+    assert "webrtc-browser" in names
 
 
 def test_list_templates_json(cli: CliRunner) -> None:
@@ -159,6 +160,34 @@ def test_init_renders_non_ascii_instructions_intact(
     assert instructions in text
     assert "\\u" not in text
     compile(text, str(agent_py), "exec")
+
+
+def test_init_webrtc_browser_template(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "webrtc-browser",
+            "transport": "browser",
+            "agent_name": "BrowserBot",
+            "agent_instructions": "Help people test browser audio.",
+        }
+    )
+
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+    agent_py = (project / "agent.py").read_text()
+    assert "EasyConfig.browser(" in agent_py
+    assert 'name="BrowserBot"' in agent_py
+    assert "Help people test browser audio." in agent_py
+    pyproject = (project / "pyproject.toml").read_text()
+    assert "openai-agents,webrtc" in pyproject
+    readme = (project / "README.md").read_text()
+    assert "http://localhost:8080" in readme
 
 
 def test_init_omits_cache_artifacts(
@@ -384,6 +413,25 @@ def test_init_rejects_not_yet_wired_string_fields(
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     assert result.exit_code == 4
     assert "EASYCAT_E102" in result.stderr
+
+
+def test_init_rejects_local_transport_for_webrtc_template(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "webrtc-browser",
+            "transport": "local",
+        }
+    )
+
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+
+    assert result.exit_code == 4
+    assert "EASYCAT_E102" in result.stderr
+    assert "webrtc" in result.stderr
 
 
 def test_init_rejects_tools_field(

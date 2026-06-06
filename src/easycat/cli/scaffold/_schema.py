@@ -43,7 +43,7 @@ class InitConfig:
     stt: str | None = None
     tts: str | None = None
     llm: str | None = None
-    transport: str = "local"
+    transport: str | None = None
     agent_name: str | None = None
     agent_instructions: str | None = None
     tools: list[str] = field(default_factory=list)
@@ -130,7 +130,7 @@ def parse_config(raw: str) -> InitConfig:
         stt=_as_optional_str("stt"),
         tts=_as_optional_str("tts"),
         llm=_as_optional_str("llm"),
-        transport=_as_optional_str("transport") or "local",
+        transport=_as_optional_str("transport"),
         agent_name=_as_optional_str("agent_name"),
         agent_instructions=_as_optional_str("agent_instructions"),
         tools=_as_str_list("tools"),

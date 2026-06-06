@@ -30,7 +30,12 @@ def _project_root() -> Path:
     raise RuntimeError("could not locate project root")
 
 
-_EXPECTED_TEMPLATES: tuple[str, ...] = ("openai-agents", "pydantic-ai", "text-chat")
+_EXPECTED_TEMPLATES: tuple[str, ...] = (
+    "openai-agents",
+    "pydantic-ai",
+    "text-chat",
+    "webrtc-browser",
+)
 _EXPECTED_FILES: tuple[str, ...] = (
     "agent.py",
     "pyproject.toml",

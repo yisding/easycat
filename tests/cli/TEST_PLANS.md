@@ -114,7 +114,7 @@ OpenAI-key templates missing the `easycat doctor` preflight before the
 first run.
 
 **Checks.**
-- For each of the 3 templates: `init` produces agent.py, .env.example,
+- For each shipped template: `init` produces agent.py, .env.example,
   .gitignore, pyproject.toml, README.md.
 - `agent.py` parses with `ast` after substitution with a representative
   config.

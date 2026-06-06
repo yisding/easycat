@@ -78,7 +78,8 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert result.exit_code == 0
     assert "schema_version" in result.stdout
     assert "template" in result.stdout
-    assert '"transport": "local"' in result.stdout
+    assert '"transport": "local" | "webrtc"' in result.stdout
+    assert "webrtc-browser" in result.stdout
     assert "stdio://" in result.stdout
     assert "filesystem" in result.stdout
 

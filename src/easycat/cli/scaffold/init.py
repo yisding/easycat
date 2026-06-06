@@ -74,13 +74,25 @@ _PROVIDER_TO_ENV_VAR: dict[str, str] = {
 _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
     "openai-agents": ("openai-agents", "local"),
     "pydantic-ai": ("pydantic-ai", "local"),
+    "webrtc-browser": ("openai-agents", "webrtc"),
     "text-chat": ("openai-agents",),
 }
 
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
 # the audio pipeline entirely, so those fields are rejected up front.
-_VOICE_TEMPLATES: frozenset[str] = frozenset({"openai-agents", "pydantic-ai"})
+_VOICE_TEMPLATES: frozenset[str] = frozenset({"openai-agents", "pydantic-ai", "webrtc-browser"})
+
+_TEMPLATE_TRANSPORTS: dict[str, str] = {
+    "openai-agents": "local",
+    "pydantic-ai": "local",
+    "webrtc-browser": "webrtc",
+}
+
+_TRANSPORT_ALIASES: dict[str, str] = {
+    "browser": "webrtc",
+    "local-mic": "local",
+}
 
 # Directory names that may sit in the live template source at install time
 # (cache artifacts from running ruff/pytest/mypy against the templates) but
@@ -99,6 +111,12 @@ def _templates_root() -> Path:
 def _provider_name(spec: str) -> str:
     """Extract the provider name from a ``"provider/model"`` spec."""
     return spec.partition("/")[0].strip().lower()
+
+
+def _transport_name(value: str) -> str:
+    """Normalize scaffold transport aliases used in ``--config``."""
+    normalized = value.strip().lower()
+    return _TRANSPORT_ALIASES.get(normalized, normalized)
 
 
 def _validate_for_template(cfg: InitConfig) -> None:
@@ -125,14 +143,26 @@ def _validate_for_template(cfg: InitConfig) -> None:
                 "the generated `agent.py` for now."
             )
         )
-    if cfg.transport != "local":
-        raise EASYCAT_E102(
-            problem=(
-                f"transport={cfg.transport!r} is not yet supported by "
-                "`easycat init` — only the default 'local' transport is "
-                "scaffolded in this release."
+
+    expected_transport = _TEMPLATE_TRANSPORTS.get(cfg.template)
+    if cfg.transport is not None:
+        requested_transport = _transport_name(cfg.transport)
+        if expected_transport is None:
+            raise EASYCAT_E102(
+                problem=(
+                    f"template {cfg.template!r} does not use an audio transport; "
+                    "remove 'transport' from --config."
+                )
             )
-        )
+        if requested_transport != expected_transport:
+            aliases = " or 'browser'" if expected_transport == "webrtc" else ""
+            raise EASYCAT_E102(
+                problem=(
+                    f"template {cfg.template!r} uses transport={expected_transport!r}; "
+                    f"remove 'transport' or set it to {expected_transport!r}{aliases}."
+                )
+            )
+
     if cfg.template not in _VOICE_TEMPLATES:
         for field_name in ("stt", "tts"):
             if getattr(cfg, field_name) is not None:

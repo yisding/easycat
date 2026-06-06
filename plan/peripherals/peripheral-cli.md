@@ -6,7 +6,7 @@
 > design win into something a developer actually uses on their first
 > hour with EasyCat and on their worst hour with EasyCat.
 
-## Status (2026-05-21)
+## Status (2026-06-06)
 
 M1 (scaffolding) is effectively done:
 
@@ -26,18 +26,18 @@ M1 (scaffolding) is effectively done:
   unknown codes.
 - Output contract (`--json`, stdout/stderr split, exit-code mapping)
   and top-level `EasyCatError` handler.
-- Three templates: `openai-agents`, `pydantic-ai`, `text-chat`.
+- Four templates: `openai-agents`, `pydantic-ai`, `text-chat`,
+  `webrtc-browser`.
 
 M2 gaps:
 
-- Templates `pydantic-ai-workflow`, `twilio-phone`, `webrtc-browser`
-  not shipped.
+- Templates `pydantic-ai-workflow` and `twilio-phone` are not shipped.
 - Template `agent.py` line budgets overshoot: `openai-agents` 24 lines
   (target ≤15), `pydantic-ai` 21 lines (target ≤12), `text-chat` 18
-  lines (target ≤8). Templates currently wire a `current_time` tool
-  instead of the plan's `calculator` + `filesystem` MCP; the tool is
-  working, but the plan text should be updated to match the shipped
-  content or vice-versa.
+  lines (target ≤8), and `webrtc-browser` 23 lines (target ≤12).
+  Templates currently wire simple Python tools instead of the plan's
+  `calculator` + `filesystem` MCP; the tools are working, but the plan
+  text should be updated to match the shipped content or vice-versa.
 
 M3 (journal debugging) — partial:
 
@@ -304,6 +304,9 @@ documented under `easycat explain init-schema`.
 }
 ```
 
+`transport` is optional and must match the selected template: local voice
+templates accept `local`; `webrtc-browser` accepts `webrtc` or `browser`.
+
 Rules:
 
 - `schema_version` is required. Missing or unknown bumps reject
@@ -452,10 +455,11 @@ local testing.
 
 **`webrtc-browser`**
 
-WebRTC server + a single-file `static/index.html` client. The agent
-greets the user and answers basic questions. Shows: WebRTC
-transport, browser integration, single-file client-side JS. Target
-`agent.py` ≤ 12 lines; HTML client is separate.
+Shipped as a localhost browser voice template using
+`run(EasyConfig.browser(...))` and EasyCat's bundled WebRTC client.
+The separate `examples/webrtc_server.py` remains the path for custom
+TURN/HTTPS deployment settings. Target `agent.py` ≤ 12 lines remains
+open.
 
 **`text-chat`**
 
@@ -889,8 +893,8 @@ agent.py` end-to-end in under 60 seconds.
 - `easycat --version`, `easycat --help`, journey menu
 - `easycat explain` + error-code registry (with `exit-codes` and
   `init-schema` meta-entries)
-- `easycat init` with three templates: `openai-agents`,
-  `pydantic-ai`, `text-chat`
+- `easycat init` with four templates: `openai-agents`, `pydantic-ai`,
+  `text-chat`, `webrtc-browser`
 - `easycat init --config` non-interactive path with schema v1
   validator
 - `easycat doctor` with checks 1–5 (env, extras, provider
@@ -902,8 +906,7 @@ agent.py` end-to-end in under 60 seconds.
 
 Finishes the scaffolding surface.
 
-- Remaining templates: `pydantic-ai-workflow`, `twilio-phone`,
-  `webrtc-browser`
+- Remaining templates: `pydantic-ai-workflow`, `twilio-phone`
 - `easycat doctor` checks 6–8 (microphone, journal, disk)
 - `easycat doctor --fix` for safe auto-fixes
 - E2E scaffold matrix: init → sync → run per template against stub
