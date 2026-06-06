@@ -330,6 +330,32 @@ uv run pytest -q -m "not flaky and not integration_live"
 
 Status: completed
 
+Current verified state:
+
+- `CONTRIBUTING.md` is the contributor entry point. Its quick start uses
+  `uv sync --group dev`, `just`, `just check`, `uv run easycat docs`,
+  `uv run easycat docs --json`, `uv run easycat explain json-schema`,
+  `uv run easycat doctor`, `uv run easycat doctor --json`, and
+  `uv run easycat doctor --env-file .env --json`.
+- The development-loop table maps every public `justfile` recipe to its raw
+  command, including test, lint, format, type, coverage, validation, report,
+  pre-PR, and pre-commit tasks.
+- The validation-slices table lists the current public `easycat validate` lanes
+  with repo-local `uv run easycat validate` commands, including
+  `uv run easycat validate report .easycat/validation/latest.json` and
+  `uv run easycat validate report .easycat/validation/latest.json --json`.
+- The marker taxonomy documents strict pytest markers from `pyproject.toml`,
+  provider/surface pairing, flaky quarantine metadata, and the rule that
+  validation slices deselect `flaky`.
+- The RunBundle golden-test section tracks public helpers exported by
+  `easycat.debug.testing`.
+- `tests/test_contributing.py` verifies quick-start CLI commands, report
+  commands, `justfile` parity, public validation lanes, repo-local `uv run`
+  validation commands, marker taxonomy coverage, RunBundle helper coverage, and
+  that this plan still includes the contributor quick command.
+- `tests/test_docs_index.py` verifies the `CONTRIBUTING.md` docs route exposes
+  validation report commands with `uv run` prefixes.
+
 Files:
 
 - `CONTRIBUTING.md` if present, otherwise top-level `README.md`

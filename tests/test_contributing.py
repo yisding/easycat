@@ -232,3 +232,76 @@ def test_validation_plan_matches_contributor_quick_command() -> None:
     tasks = (REPO_ROOT / "plan" / "validation" / "tasks.md").read_text(encoding="utf-8")
 
     assert rows["quick"] in tasks
+
+
+def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> None:
+    from typer.main import get_command
+
+    from easycat.cli.validate import validate_app
+
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V0.5 Document Contributor Workflow", 1)[1].split(
+        "## V1: First-Class CLI And CI Artifacts",
+        1,
+    )[0]
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    docs_index_tests = (REPO_ROOT / "tests/test_docs_index.py").read_text(encoding="utf-8")
+    test_source = (REPO_ROOT / "tests/test_contributing.py").read_text(encoding="utf-8")
+    recipes = set(just_recipe_commands(REPO_ROOT)) - {"default"}
+    documented_recipes = {row["recipe"] for row in _development_loop_rows()}
+    documented_slices = {row["slice"] for row in _validation_slice_rows()}
+    public_lanes = set(get_command(validate_app).commands) - {"report"}
+
+    assert "Current verified state:" in section
+    assert recipes <= documented_recipes
+    assert public_lanes == documented_slices
+    for command in (
+        "uv sync --group dev",
+        "just",
+        "just check",
+        "uv run easycat docs",
+        "uv run easycat docs --json",
+        "uv run easycat explain json-schema",
+        "uv run easycat doctor",
+        "uv run easycat doctor --json",
+        "uv run easycat doctor --env-file .env --json",
+        "uv run easycat validate report .easycat/validation/latest.json",
+        "uv run easycat validate report .easycat/validation/latest.json --json",
+    ):
+        assert command in contributing
+        assert f"`{command}`" in section
+    for token in (
+        "CONTRIBUTING.md",
+        "justfile",
+        "easycat validate",
+        "uv run easycat validate",
+        "pyproject.toml",
+        "flaky",
+        "easycat.debug.testing",
+        "tests/test_contributing.py",
+        "tests/test_docs_index.py",
+    ):
+        assert f"`{token}`" in section
+    for phrase in (
+        "development-loop table",
+        "validation-slices table",
+        "strict pytest markers",
+        "provider/surface pairing",
+        "flaky quarantine metadata",
+        "validation slices deselect `flaky`",
+        "RunBundle golden-test section",
+    ):
+        assert phrase in section
+    for test_name in (
+        "test_contributing_quick_start_points_to_docs_command",
+        "test_contributing_validation_report_points_to_latest_artifact",
+        "test_contributing_development_loop_just_recipes_stay_current",
+        "test_contributing_development_loop_lists_public_just_recipes",
+        "test_contributing_validation_slices_track_public_validate_lanes",
+        "test_contributing_validation_slice_commands_use_repo_local_uv_run",
+        "test_contributing_marker_taxonomy_lists_pytest_markers",
+        "test_contributing_runbundle_helpers_track_public_testing_exports",
+        "test_validation_plan_matches_contributor_quick_command",
+    ):
+        assert test_name in test_source
+    assert "test_contributing_docs_route_matches_validation_report_commands" in docs_index_tests
