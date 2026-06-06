@@ -1323,9 +1323,31 @@ Acceptance:
 
 Status: completed (verified by 2026-05-26 audit)
 
-Current state:
+Current verified state:
 
-- `perf/bench_journal.py` exists outside pytest.
+- `perf/bench_journal.py` remains a standalone benchmark script: its default
+  usage is still `uv run python perf/bench_journal.py`, and `main()` writes the
+  raw benchmark JSON to `--output`, defaulting to `perf/baseline.json`.
+- `run_benchmarks()` exercises both `InMemoryRingBuffer` and `SqliteJournal`
+  backends and records `append_latency`, `sustained_rate`, and
+  `turn_simulation` metrics for each backend.
+- `build_validation_artifact()` wraps a raw run in a validation-compatible
+  JSON envelope with `kind=journal_benchmark_validation`, `schema_version=1`,
+  `redaction_version=1`, `generated_at`, `summary`, `baseline`, and `raw_run`.
+- The summary includes backend-level append latency p50/p90/p99/mean/total,
+  sustained-rate actual/dropped/pass state, turn-simulation per-event/total
+  timings, run count, and failure entries when sustained-rate targets are not
+  met.
+- Optional `--artifact`, `--baseline`, and `--max-regression-percent` flags let
+  the standalone script write the validation artifact and compare higher-is-worse,
+  lower-is-worse, count, and sustained-boolean metrics against a raw or wrapped
+  baseline.
+- `tests/perf/test_bench_journal.py` verifies raw-run embedding, summary shape,
+  baseline regression reporting, and `main()` writing both raw output and the
+  validation artifact with `run_benchmarks` monkeypatched.
+- V5.1 currently covers a validation-compatible benchmark artifact produced by
+  the standalone `perf/bench_journal.py` script; it is not wired into
+  `easycat validate stress`.
 
 Files:
 

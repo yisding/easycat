@@ -5,6 +5,8 @@ from pathlib import Path
 
 from perf import bench_journal
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _raw_run(
     *,
@@ -173,3 +175,85 @@ def test_main_writes_raw_output_and_validation_artifact(
     assert artifact["kind"] == "journal_benchmark_validation"
     assert artifact["raw_run"] == raw_run
     assert artifact["summary"]["status"] == "pass"
+
+
+def test_validation_tasks_v51_current_state_tracks_journal_benchmark_artifact() -> None:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V5.1 Wrap Journal Benchmark In Validation Artifacts", 1)[1].split(
+        "### V5.2 Add Stress Saturation Signals", 1
+    )[0]
+    normalized_section = " ".join(section.split())
+    source = (REPO_ROOT / "perf/bench_journal.py").read_text(encoding="utf-8")
+    tests = (REPO_ROOT / "tests/perf/test_bench_journal.py").read_text(encoding="utf-8")
+    validate_source = (REPO_ROOT / "src/easycat/cli/validate.py").read_text(encoding="utf-8")
+
+    for symbol in (
+        "run_benchmarks",
+        "InMemoryRingBuffer",
+        "SqliteJournal",
+        "append_latency",
+        "sustained_rate",
+        "turn_simulation",
+        "build_validation_artifact",
+        "journal_benchmark_validation",
+        "--output",
+        "perf/baseline.json",
+        "--artifact",
+        "--baseline",
+        "--max-regression-percent",
+        "_higher_is_worse_regression",
+        "_lower_is_worse_regression",
+        "_count_regression",
+    ):
+        assert symbol in source
+    for test_name in (
+        "test_validation_artifact_includes_raw_run_and_summary",
+        "test_validation_artifact_compares_against_baseline",
+        "test_main_writes_raw_output_and_validation_artifact",
+    ):
+        assert test_name in tests
+    assert "bench_journal" not in validate_source
+
+    assert "Current verified state:" in section
+    for token in (
+        "perf/bench_journal.py",
+        "uv run python perf/bench_journal.py",
+        "main()",
+        "--output",
+        "perf/baseline.json",
+        "run_benchmarks()",
+        "InMemoryRingBuffer",
+        "SqliteJournal",
+        "append_latency",
+        "sustained_rate",
+        "turn_simulation",
+        "build_validation_artifact()",
+        "kind=journal_benchmark_validation",
+        "schema_version=1",
+        "redaction_version=1",
+        "generated_at",
+        "summary",
+        "baseline",
+        "raw_run",
+        "--artifact",
+        "--baseline",
+        "--max-regression-percent",
+        "tests/perf/test_bench_journal.py",
+        "run_benchmarks",
+        "easycat validate stress",
+    ):
+        assert f"`{token}`" in section
+    for phrase in (
+        "standalone benchmark script",
+        "raw benchmark JSON",
+        "validation-compatible JSON envelope",
+        "append latency p50/p90/p99/mean/total",
+        "sustained-rate actual/dropped/pass state",
+        "failure entries when sustained-rate targets are not met",
+        "higher-is-worse",
+        "lower-is-worse",
+        "sustained-boolean",
+        "raw or wrapped baseline",
+        "not wired into",
+    ):
+        assert phrase in normalized_section
