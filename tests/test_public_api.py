@@ -105,9 +105,12 @@ def test_public_api_contract_doc_tracks_top_level_exports() -> None:
     doc = Path("docs/public-api.md").read_text(encoding="utf-8")
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    missing = sorted(name for name in easycat.__all__ if f"`{name}`" not in doc)
+    documented = _documented_top_level_allowlist(doc)
+    missing = sorted(set(easycat.__all__) - documented)
+    extra = sorted(documented - set(easycat.__all__))
 
     assert not missing, "docs/public-api.md missing exports: " + ", ".join(missing)
+    assert not extra, "docs/public-api.md lists non-exported names: " + ", ".join(extra)
     assert "[public API contract](docs/public-api.md)" in readme
     assert "PUBLIC_API_SNAPSHOT" in doc
 
@@ -254,6 +257,21 @@ def _easycat_imports_from_markdown(path: Path) -> Iterable[tuple[int, str]]:
                     name = part.strip().split(" as ", 1)[0]
                     if name:
                         yield offset, name
+
+
+def _documented_top_level_allowlist(doc: str) -> set[str]:
+    try:
+        section = doc.split("## Top-Level Allowlist", maxsplit=1)[1]
+    except IndexError as exc:
+        raise AssertionError("docs/public-api.md is missing the Top-Level Allowlist") from exc
+
+    names: set[str] = set()
+    for line in section.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("- `") or not stripped.endswith("`"):
+            continue
+        names.add(stripped.removeprefix("- `").removesuffix("`"))
+    return names
 
 
 def test_docs_and_examples_use_only_public_top_level_imports() -> None:

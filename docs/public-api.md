@@ -19,6 +19,8 @@ changes to this page and the snapshot should be reviewed together.
   modules.
 - Any top-level addition or removal must update this page and the
   `PUBLIC_API_SNAPSHOT` in `tests/test_public_api.py`.
+- The `Top-Level Allowlist` bullets below must exactly match `easycat.__all__`;
+  CI parses this section rather than accepting incidental mentions elsewhere.
 
 ## Preferred Imports
 
