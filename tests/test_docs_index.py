@@ -337,6 +337,28 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     assert "easycat validate report .easycat/validation/latest.json --json" not in route_commands
 
 
+def test_contributing_docs_route_matches_validation_report_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    validation_section = contributing.split(
+        "## Validation slices and the `easycat validate` CLI",
+        1,
+    )[1].split("## ", 1)[0]
+    route_commands = entries["CONTRIBUTING.md"].get("commands", ())
+
+    for command in (
+        "uv run easycat validate quick",
+        "uv run easycat validate report .easycat/validation/latest.json",
+        "uv run easycat validate report .easycat/validation/latest.json --json",
+    ):
+        assert command in validation_section
+        assert command in route_commands
+
+    assert "easycat validate quick" not in route_commands
+    assert "easycat validate report .easycat/validation/latest.json" not in route_commands
+    assert "easycat validate report .easycat/validation/latest.json --json" not in route_commands
+
+
 def test_validation_reference_docs_route_matches_json_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     reference = (REPO_ROOT / "plan" / "validation" / "reference.md").read_text(encoding="utf-8")

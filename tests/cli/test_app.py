@@ -279,6 +279,13 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run easycat validate report .easycat/validation/latest.json",
         "uv run easycat validate report .easycat/validation/latest.json --json",
     ]
+    assert commands["CONTRIBUTING.md"] == [
+        "uv run pytest",
+        "uv run ruff check .",
+        "uv run easycat validate quick",
+        "uv run easycat validate report .easycat/validation/latest.json",
+        "uv run easycat validate report .easycat/validation/latest.json --json",
+    ]
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
     assert "JSON envelopes" in descriptions["README.md#cli"]
     assert "base package requirements" in descriptions["README.md#cli"]

@@ -226,7 +226,13 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "CONTRIBUTING.md",
         "audience": "contributors",
         "description": "Follow the development loop and validation slices.",
-        "commands": ("uv run pytest", "uv run ruff check .", "uv run easycat validate quick"),
+        "commands": (
+            "uv run pytest",
+            "uv run ruff check .",
+            "uv run easycat validate quick",
+            "uv run easycat validate report .easycat/validation/latest.json",
+            "uv run easycat validate report .easycat/validation/latest.json --json",
+        ),
     },
     {
         "label": "Deployment",
